@@ -35,15 +35,6 @@
       "type": "approval_timeout",
       "v": 1
     },
-    "event_ingest_checkpoint": {
-      "kind": "event",
-      "last_seq_per_thread": {
-        "thr_abc": 7,
-        "thr_def": 3
-      },
-      "type": "ingest_checkpoint",
-      "v": 1
-    },
     "event_paired": {
       "kind": "event",
       "peer_device_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
@@ -78,7 +69,10 @@
       "ui": {
         "kind": "text_delta",
         "message_id": "msg_def",
-        "text": "Hi"
+        "text": {
+          "kind": "inline",
+          "text": "Hi"
+        }
       },
       "v": 1
     },
@@ -129,7 +123,6 @@
         "event_agent_error",
         "event_approval_request",
         "event_approval_timeout",
-        "event_ingest_checkpoint",
         "event_paired",
         "event_peer_offline",
         "event_peer_online",
@@ -151,7 +144,6 @@
         "event_agent_error",
         "event_approval_request",
         "event_approval_timeout",
-        "event_ingest_checkpoint",
         "event_paired",
         "event_peer_offline",
         "event_peer_online",

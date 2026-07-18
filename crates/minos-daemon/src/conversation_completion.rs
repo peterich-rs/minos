@@ -25,9 +25,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use minos_agent_runtime::{AgentManager, ThreadState};
-use minos_chat_store::{
-    TeamworkSourceDeliveryStatus, TeamworkStore,
-};
+use minos_chat_store::{TeamworkSourceDeliveryStatus, TeamworkStore};
 use minos_domain::AgentName;
 use minos_protocol::{ConversationMention, LocalConversationEvent};
 use minos_ui_protocol::{MessageRole, UiEventMessage};
@@ -141,8 +139,7 @@ impl ThreadProjection {
                         let rendered = text.render_preview();
                         match event {
                             UiEventMessage::TextReplace { .. } => {
-                                self.assistant_text
-                                    .insert(message_id.clone(), rendered);
+                                self.assistant_text.insert(message_id.clone(), rendered);
                             }
                             _ => {
                                 self.assistant_text
@@ -269,9 +266,7 @@ impl ConversationCompletion {
 
     pub(crate) async fn on_thread_state(&self, thread_id: &str, state: &ThreadState) {
         match state {
-            ThreadState::Starting
-            | ThreadState::Resuming
-            | ThreadState::Running { .. } => {
+            ThreadState::Starting | ThreadState::Resuming | ThreadState::Running { .. } => {
                 let mut projections = self.projections.lock().await;
                 projections
                     .entry(thread_id.to_owned())
@@ -340,13 +335,7 @@ impl ConversationCompletion {
         }
 
         if let Err(error) = self
-            .write_result(
-                &conversation_id,
-                thread_id,
-                &durable_id,
-                &text,
-                agent,
-            )
+            .write_result(&conversation_id, thread_id, &durable_id, &text, agent)
             .await
         {
             warn!(
@@ -378,7 +367,8 @@ impl ConversationCompletion {
         text: &str,
         agent: Option<AgentName>,
     ) -> anyhow::Result<()> {
-        let teamwork = open_teamwork_store(&self.store, conversation_id, &self.default_workspace).await?;
+        let teamwork =
+            open_teamwork_store(&self.store, conversation_id, &self.default_workspace).await?;
         let delegation = teamwork
             .running_delegation_for_thread(conversation_id, thread_id)
             .await?;
@@ -386,36 +376,36 @@ impl ConversationCompletion {
         // durable_id is turn-scoped (claimed once) so concurrent try_record paths
         // upsert the same chat_messages row instead of inserting siblings.
         let message_id = format!("agent-result:{conversation_id}:{thread_id}:{durable_id}");
-        let (body, reply_to, mentions, delegation_id) = if let Some(delegation) = delegation.as_ref()
-        {
-            let source_agent = delegation.source_agent;
-            let source_thread = delegation.source_thread_id.clone();
-            let short = source_thread
-                .as_deref()
-                .map(short_thread_id)
-                .unwrap_or_else(|| "unknown".into());
-            let body = match source_agent {
-                Some(source) => format!("@{}#{} {}", source.bin_name(), short, text.trim()),
-                None => text.trim().to_owned(),
+        let (body, reply_to, mentions, delegation_id) =
+            if let Some(delegation) = delegation.as_ref() {
+                let source_agent = delegation.source_agent;
+                let source_thread = delegation.source_thread_id.clone();
+                let short = source_thread
+                    .as_deref()
+                    .map(short_thread_id)
+                    .unwrap_or_else(|| "unknown".into());
+                let body = match source_agent {
+                    Some(source) => format!("@{}#{} {}", source.bin_name(), short, text.trim()),
+                    None => text.trim().to_owned(),
+                };
+                let mentions = source_agent
+                    .map(|source| {
+                        vec![ConversationMention {
+                            agent: source,
+                            thread_id: source_thread.clone(),
+                            thread_short_id: Some(short),
+                        }]
+                    })
+                    .unwrap_or_default();
+                (
+                    body,
+                    delegation.request_message_id.clone(),
+                    mentions,
+                    Some(delegation.delegation_id.clone()),
+                )
+            } else {
+                (text.trim().to_owned(), None, Vec::new(), None)
             };
-            let mentions = source_agent
-                .map(|source| {
-                    vec![ConversationMention {
-                        agent: source,
-                        thread_id: source_thread.clone(),
-                        thread_short_id: Some(short),
-                    }]
-                })
-                .unwrap_or_default();
-            (
-                body,
-                delegation.request_message_id.clone(),
-                mentions,
-                Some(delegation.delegation_id.clone()),
-            )
-        } else {
-            (text.trim().to_owned(), None, Vec::new(), None)
-        };
 
         let agent_label = agent.map(|a| a.bin_name().to_owned());
         let mentions_json = serde_json::to_string(&mentions).unwrap_or_else(|_| "[]".into());
@@ -435,19 +425,16 @@ impl ConversationCompletion {
                 &mentions_json,
             )
             .await?;
-        let _ = self.local_conversation_event_tx.send(LocalConversationEvent::ConversationMessageAppended {
-            conversation_id: conversation_id.to_owned(),
-            message_seq,
-        });
+        let _ = self.local_conversation_event_tx.send(
+            LocalConversationEvent::ConversationMessageAppended {
+                conversation_id: conversation_id.to_owned(),
+                message_seq,
+            },
+        );
 
         if delegation.is_some() {
             match teamwork
-                .complete_delegation_for_thread(
-                    conversation_id,
-                    thread_id,
-                    Some(&message_id),
-                    text,
-                )
+                .complete_delegation_for_thread(conversation_id, thread_id, Some(&message_id), text)
                 .await
             {
                 Ok(Some(completed)) => {
@@ -495,7 +482,10 @@ impl ConversationCompletion {
             visible_body
         );
 
-        match self.try_send_to_source(source_thread_id, &source_body).await {
+        match self
+            .try_send_to_source(source_thread_id, &source_body)
+            .await
+        {
             Ok(()) => {
                 if let Ok(delivery) = teamwork
                     .enqueue_source_delivery(
@@ -698,18 +688,17 @@ mod tests {
             ],
         );
         assert!(!p.should_try_record_on_ingest(true, false));
-        assert_eq!(
-            p.last_completed().map(|(_, t)| t),
-            Some("partial".into())
-        );
+        assert_eq!(p.last_completed().map(|(_, t)| t), Some("partial".into()));
         assert!(!p.turn_recorded);
     }
 
     #[test]
     fn non_opencode_idle_first_then_completed_allows_record() {
-        let mut p = ThreadProjection::default();
-        p.agent = Some(AgentName::Codex);
-        p.pending_boundary = true; // Idle latched first
+        let mut p = ThreadProjection {
+            agent: Some(AgentName::Codex),
+            pending_boundary: true, // Idle latched first
+            ..Default::default()
+        };
         p.apply_events(
             AgentName::Codex,
             &[
@@ -753,11 +742,7 @@ mod tests {
         let mut p = ThreadProjection::default();
         p.apply_events(
             AgentName::Opencode,
-            &[
-                assistant_start("m1"),
-                delta("m1", "done"),
-                completed("m1"),
-            ],
+            &[assistant_start("m1"), delta("m1", "done"), completed("m1")],
         );
         assert!(p.should_try_record_on_ingest(true, false));
     }
@@ -787,11 +772,7 @@ mod tests {
         let mut p = ThreadProjection::default();
         p.apply_events(
             AgentName::Gemini,
-            &[
-                assistant_start("m1"),
-                delta("m1", "old"),
-                completed("m1"),
-            ],
+            &[assistant_start("m1"), delta("m1", "old"), completed("m1")],
         );
         p.pending_boundary = true;
         p.turn_recorded = true;
@@ -806,15 +787,13 @@ mod tests {
 
     #[test]
     fn thread_closed_on_ingest_always_allows_try_record() {
-        let mut p = ThreadProjection::default();
-        p.agent = Some(AgentName::Codex);
+        let mut p = ThreadProjection {
+            agent: Some(AgentName::Codex),
+            ..Default::default()
+        };
         p.apply_events(
             AgentName::Codex,
-            &[
-                assistant_start("m1"),
-                delta("m1", "bye"),
-                completed("m1"),
-            ],
+            &[assistant_start("m1"), delta("m1", "bye"), completed("m1")],
         );
         assert!(!p.should_try_record_on_ingest(true, false));
         assert!(p.should_try_record_on_ingest(false, true));
@@ -825,11 +804,7 @@ mod tests {
         let mut p = ThreadProjection::default();
         p.apply_events(
             AgentName::Opencode,
-            &[
-                assistant_start("m1"),
-                delta("m1", "final"),
-                completed("m1"),
-            ],
+            &[assistant_start("m1"), delta("m1", "final"), completed("m1")],
         );
         let first = p.claim_write().expect("first claim");
         assert_eq!(first.1, "final");
@@ -880,11 +855,7 @@ mod tests {
         let mut p = ThreadProjection::default();
         p.apply_events(
             AgentName::Opencode,
-            &[
-                assistant_start("m1"),
-                delta("m1", "one"),
-                completed("m1"),
-            ],
+            &[assistant_start("m1"), delta("m1", "one"), completed("m1")],
         );
         assert!(p.should_try_record_on_ingest(true, false));
         let _ = p.claim_write();
@@ -892,11 +863,7 @@ mod tests {
 
         p.apply_events(
             AgentName::Opencode,
-            &[
-                assistant_start("m2"),
-                delta("m2", "two"),
-                completed("m2"),
-            ],
+            &[assistant_start("m2"), delta("m2", "two"), completed("m2")],
         );
         // Ingest may still *want* to try, but claim blocks a second write.
         assert!(p.should_try_record_on_ingest(true, false));

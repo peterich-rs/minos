@@ -128,16 +128,75 @@ impl LocalStore {
     }
 
     /// Flip every thread whose status is neither `closed` nor `suspended`
-    /// to `suspended { daemon_restart }`. Returns the number of rows
-    /// affected so callers can log the recovery footprint.
+    /// to `suspended { daemon_restart }`. Sets `needs_continue` for rows that
+    /// were mid-flight (`running` / `starting` / `resuming`); idle orphans get
+    /// `needs_continue = 0`. Already-suspended / closed rows are untouched.
+    /// Returns the number of rows flipped so callers can log recovery footprint.
     pub async fn mark_orphans_suspended(&self) -> anyhow::Result<u64> {
         let r = sqlx::query(
-            "UPDATE threads SET status = 'suspended', last_pause_reason = 'daemon_restart' \
+            "UPDATE threads SET \
+                needs_continue = CASE \
+                    WHEN status IN ('running', 'starting', 'resuming') THEN 1 \
+                    ELSE 0 \
+                END, \
+                status = 'suspended', \
+                last_pause_reason = 'daemon_restart', \
+                last_close_reason = NULL, \
+                ended_at = NULL \
              WHERE status NOT IN ('closed', 'suspended')",
         )
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected())
+    }
+
+    /// Synchronously stamp a thread suspended for daemon stop / process death.
+    /// Used by the stop path so status survives process exit (async event bridge
+    /// is racy on shutdown).
+    pub async fn suspend_thread_for_daemon_restart(
+        &self,
+        thread_id: &str,
+        needs_continue: bool,
+        ts_ms: i64,
+    ) -> anyhow::Result<u64> {
+        let result = sqlx::query(
+            "UPDATE threads SET status = 'suspended', last_pause_reason = 'daemon_restart', \
+                                last_close_reason = NULL, ended_at = NULL, \
+                                needs_continue = ?, last_activity_at = ? \
+             WHERE thread_id = ? AND status != 'closed'",
+        )
+        .bind(i64::from(needs_continue))
+        .bind(ts_ms)
+        .bind(thread_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    /// Atomically clear `needs_continue` and return whether it was set.
+    /// Used so user-send and auto-continue cannot both inject a continue turn.
+    pub async fn take_needs_continue(&self, thread_id: &str) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            "UPDATE threads SET needs_continue = 0 \
+             WHERE thread_id = ? AND needs_continue != 0",
+        )
+        .bind(thread_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn set_needs_continue(
+        &self,
+        thread_id: &str,
+        needs_continue: bool,
+    ) -> anyhow::Result<()> {
+        sqlx::query("UPDATE threads SET needs_continue = ? WHERE thread_id = ?")
+            .bind(i64::from(needs_continue))
+            .bind(thread_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     /// Idempotent workspace upsert. The `threads.workspace_root` FK requires
@@ -374,6 +433,7 @@ impl LocalStore {
 
     // ── Conversation CRUD ──────────────────────────────────────────────
 
+    /// Optional product metadata at create time (git snapshot, tags).
     pub async fn create_conversation(
         &self,
         conversation_id: &str,
@@ -381,16 +441,44 @@ impl LocalStore {
         title: &str,
         ts_ms: i64,
     ) -> anyhow::Result<()> {
+        self.create_conversation_with_meta(
+            conversation_id,
+            project_id,
+            title,
+            ts_ms,
+            &ConversationCreateMeta::default(),
+        )
+        .await
+    }
+
+    pub async fn create_conversation_with_meta(
+        &self,
+        conversation_id: &str,
+        project_id: &str,
+        title: &str,
+        ts_ms: i64,
+        meta: &ConversationCreateMeta,
+    ) -> anyhow::Result<()> {
+        let progress = meta
+            .progress
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("todo");
         sqlx::query(
             "INSERT INTO conversations( \
-                conversation_id, project_id, title, created_at_ms, updated_at_ms \
-             ) VALUES (?, ?, ?, ?, ?)",
+                conversation_id, project_id, title, created_at_ms, updated_at_ms, \
+                priority, progress, branch, worktree_path \
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(conversation_id)
         .bind(project_id)
         .bind(title)
         .bind(ts_ms)
         .bind(ts_ms)
+        .bind(meta.priority.as_deref())
+        .bind(progress)
+        .bind(meta.branch.as_deref())
+        .bind(meta.worktree_path.as_deref())
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -400,12 +488,73 @@ impl LocalStore {
         &self,
         conversation_id: &str,
     ) -> anyhow::Result<Option<ConversationRow>> {
-        Ok(sqlx::query_as::<_, ConversationRow>(
-            "SELECT * FROM conversations WHERE conversation_id = ?",
-        )
+        Ok(sqlx::query_as::<_, ConversationRow>(&format!(
+            "SELECT {} FROM conversations c WHERE c.conversation_id = ?",
+            CONVERSATION_SELECT_COLS
+        ))
         .bind(conversation_id)
         .fetch_optional(&self.pool)
         .await?)
+    }
+
+    pub async fn update_conversation_fields(
+        &self,
+        conversation_id: &str,
+        title: Option<&str>,
+        priority: Option<Option<&str>>,
+        progress: Option<&str>,
+        ts_ms: i64,
+    ) -> anyhow::Result<bool> {
+        // priority: None = leave; Some(None) = clear; Some(Some(v)) = set
+        let mut sets = Vec::new();
+        if title.is_some() {
+            sets.push("title = ?");
+        }
+        if priority.is_some() {
+            sets.push("priority = ?");
+        }
+        if progress.is_some() {
+            sets.push("progress = ?");
+        }
+        if sets.is_empty() {
+            return Ok(false);
+        }
+        sets.push("updated_at_ms = ?");
+        let sql = format!(
+            "UPDATE conversations SET {} WHERE conversation_id = ?",
+            sets.join(", ")
+        );
+        let mut query = sqlx::query(&sql);
+        if let Some(t) = title {
+            query = query.bind(t);
+        }
+        if let Some(p) = priority {
+            query = query.bind(p);
+        }
+        if let Some(pr) = progress {
+            query = query.bind(pr);
+        }
+        query = query.bind(ts_ms).bind(conversation_id);
+        let result = query.execute(&self.pool).await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Bump progress from `todo` → `in_progress` once work actually starts.
+    pub async fn promote_conversation_in_progress_if_todo(
+        &self,
+        conversation_id: &str,
+        ts_ms: i64,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE conversations \
+             SET progress = 'in_progress', updated_at_ms = ? \
+             WHERE conversation_id = ? AND progress = 'todo'",
+        )
+        .bind(ts_ms)
+        .bind(conversation_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     pub async fn list_conversations_by_project(
@@ -417,28 +566,14 @@ impl LocalStore {
         let limit = limit.unwrap_or(50).min(500) as i64;
         let rows = match before_updated_at_ms {
             Some(ts) => {
-                sqlx::query_as::<_, ConversationRow>(
+                sqlx::query_as::<_, ConversationRow>(&format!(
                     "SELECT * FROM ( \
-                        SELECT c.conversation_id, c.project_id, c.title, \
-                               (SELECT m.body FROM chat_messages m \
-                                LEFT JOIN threads t ON t.thread_id = m.thread_id \
-                                WHERE m.conversation_id = c.conversation_id \
-                                  AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL) \
-                                ORDER BY m.message_seq DESC LIMIT 1) AS last_message_preview, \
-                               (SELECT COUNT(*) FROM chat_messages m \
-                                LEFT JOIN threads t ON t.thread_id = m.thread_id \
-                                WHERE m.conversation_id = c.conversation_id \
-                                  AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL)) AS message_count, \
-                               c.agent_session_count, c.created_at_ms, \
-                               COALESCE((SELECT MAX(m.created_at_ms) FROM chat_messages m \
-                                         LEFT JOIN threads t ON t.thread_id = m.thread_id \
-                                         WHERE m.conversation_id = c.conversation_id \
-                                           AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL)), c.created_at_ms) AS updated_at_ms \
+                        SELECT {CONVERSATION_SELECT_COLS} \
                         FROM conversations c \
                         WHERE c.project_id = ? \
                      ) WHERE updated_at_ms < ? \
-                     ORDER BY updated_at_ms DESC, conversation_id LIMIT ?",
-                )
+                     ORDER BY updated_at_ms DESC, conversation_id LIMIT ?"
+                ))
                 .bind(project_id)
                 .bind(ts)
                 .bind(limit)
@@ -446,28 +581,14 @@ impl LocalStore {
                 .await?
             }
             None => {
-                sqlx::query_as::<_, ConversationRow>(
+                sqlx::query_as::<_, ConversationRow>(&format!(
                     "SELECT * FROM ( \
-                        SELECT c.conversation_id, c.project_id, c.title, \
-                               (SELECT m.body FROM chat_messages m \
-                                LEFT JOIN threads t ON t.thread_id = m.thread_id \
-                                WHERE m.conversation_id = c.conversation_id \
-                                  AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL) \
-                                ORDER BY m.message_seq DESC LIMIT 1) AS last_message_preview, \
-                               (SELECT COUNT(*) FROM chat_messages m \
-                                LEFT JOIN threads t ON t.thread_id = m.thread_id \
-                                WHERE m.conversation_id = c.conversation_id \
-                                  AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL)) AS message_count, \
-                               c.agent_session_count, c.created_at_ms, \
-                               COALESCE((SELECT MAX(m.created_at_ms) FROM chat_messages m \
-                                         LEFT JOIN threads t ON t.thread_id = m.thread_id \
-                                         WHERE m.conversation_id = c.conversation_id \
-                                           AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL)), c.created_at_ms) AS updated_at_ms \
+                        SELECT {CONVERSATION_SELECT_COLS} \
                         FROM conversations c \
                         WHERE c.project_id = ? \
                      ) \
-                     ORDER BY updated_at_ms DESC, conversation_id LIMIT ?",
-                )
+                     ORDER BY updated_at_ms DESC, conversation_id LIMIT ?"
+                ))
                 .bind(project_id)
                 .bind(limit)
                 .fetch_all(&self.pool)
@@ -484,8 +605,7 @@ impl LocalStore {
         if conversation_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let placeholders = std::iter::repeat("?")
-            .take(conversation_ids.len())
+        let placeholders = std::iter::repeat_n("?", conversation_ids.len())
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
@@ -740,10 +860,12 @@ pub struct ThreadRow {
     pub started_at: i64,
     pub last_activity_at: i64,
     pub ended_at: Option<i64>,
+    pub needs_continue: bool,
 }
 
 impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for ThreadRow {
     fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+        let needs_continue_i: i64 = row.try_get("needs_continue").unwrap_or(0);
         Ok(Self {
             thread_id: row.try_get("thread_id")?,
             conversation_id: row.try_get("conversation_id")?,
@@ -758,8 +880,46 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for ThreadRow {
             started_at: row.try_get("started_at")?,
             last_activity_at: row.try_get("last_activity_at")?,
             ended_at: row.try_get("ended_at")?,
+            needs_continue: needs_continue_i != 0,
         })
     }
+}
+
+/// Shared SELECT list for conversation rows (list + get).
+/// Includes live thread aggregates for board / attention chips.
+const CONVERSATION_SELECT_COLS: &str = "\
+    c.conversation_id, c.project_id, c.title, \
+    (SELECT m.body FROM chat_messages m \
+     LEFT JOIN threads t ON t.thread_id = m.thread_id \
+     WHERE m.conversation_id = c.conversation_id \
+       AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL) \
+     ORDER BY m.message_seq DESC LIMIT 1) AS last_message_preview, \
+    (SELECT COUNT(*) FROM chat_messages m \
+     LEFT JOIN threads t ON t.thread_id = m.thread_id \
+     WHERE m.conversation_id = c.conversation_id \
+       AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL)) AS message_count, \
+    c.agent_session_count, c.created_at_ms, \
+    COALESCE((SELECT MAX(m.created_at_ms) FROM chat_messages m \
+              LEFT JOIN threads t ON t.thread_id = m.thread_id \
+              WHERE m.conversation_id = c.conversation_id \
+                AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL)), c.created_at_ms) AS updated_at_ms, \
+    c.priority, \
+    COALESCE(c.progress, 'todo') AS progress, \
+    c.branch, \
+    c.worktree_path, \
+    (SELECT COUNT(*) FROM threads th \
+     WHERE th.conversation_id = c.conversation_id \
+       AND th.status IN ('starting', 'running', 'resuming')) AS running_count, \
+    (SELECT COUNT(*) FROM threads th \
+     WHERE th.conversation_id = c.conversation_id \
+       AND th.status = 'suspended') AS needs_attention_count";
+
+#[derive(Debug, Clone, Default)]
+pub struct ConversationCreateMeta {
+    pub priority: Option<String>,
+    pub progress: Option<String>,
+    pub branch: Option<String>,
+    pub worktree_path: Option<String>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -772,6 +932,12 @@ pub struct ConversationRow {
     pub agent_session_count: i64,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+    pub priority: Option<String>,
+    pub progress: String,
+    pub branch: Option<String>,
+    pub worktree_path: Option<String>,
+    pub running_count: i64,
+    pub needs_attention_count: i64,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -832,6 +998,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn conversation_metadata_create_and_update() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = LocalStore::open(&tmp.path().join("meta.sqlite"))
+            .await
+            .unwrap();
+        store
+            .create_project("p", "Project", "project", Some("/w"), 0)
+            .await
+            .unwrap();
+        store
+            .create_conversation_with_meta(
+                "c1",
+                "p",
+                "JWT work",
+                10,
+                &ConversationCreateMeta {
+                    priority: Some("high".into()),
+                    progress: Some("todo".into()),
+                    branch: Some("feature/jwt".into()),
+                    worktree_path: Some("/tmp/wt/jwt".into()),
+                },
+            )
+            .await
+            .unwrap();
+
+        let row = store.get_conversation("c1").await.unwrap().unwrap();
+        assert_eq!(row.title, "JWT work");
+        assert_eq!(row.priority.as_deref(), Some("high"));
+        assert_eq!(row.progress, "todo");
+        assert_eq!(row.branch.as_deref(), Some("feature/jwt"));
+        assert_eq!(row.worktree_path.as_deref(), Some("/tmp/wt/jwt"));
+
+        store
+            .update_conversation_fields(
+                "c1",
+                Some("JWT auth refactor"),
+                Some(Some("medium")),
+                Some("in_progress"),
+                20,
+            )
+            .await
+            .unwrap();
+        let row = store.get_conversation("c1").await.unwrap().unwrap();
+        assert_eq!(row.title, "JWT auth refactor");
+        assert_eq!(row.priority.as_deref(), Some("medium"));
+        assert_eq!(row.progress, "in_progress");
+
+        store
+            .promote_conversation_in_progress_if_todo("c1", 30)
+            .await
+            .unwrap();
+        // already in_progress — unchanged
+        let row = store.get_conversation("c1").await.unwrap().unwrap();
+        assert_eq!(row.progress, "in_progress");
+
+        store
+            .create_conversation("c2", "p", "Other", 40)
+            .await
+            .unwrap();
+        store
+            .promote_conversation_in_progress_if_todo("c2", 50)
+            .await
+            .unwrap();
+        let row = store.get_conversation("c2").await.unwrap().unwrap();
+        assert_eq!(row.progress, "in_progress");
+        assert!(row.branch.is_none());
+    }
+
+    #[tokio::test]
     async fn mark_orphans_suspended_flips_running_idle() {
         let tmp = tempfile::tempdir().unwrap();
         let store = LocalStore::open(&tmp.path().join("t.sqlite"))
@@ -842,9 +1077,16 @@ mod tests {
             .await
             .unwrap();
         seed_conversation(&store).await;
-        for (i, status) in ["running", "idle", "closed", "suspended"]
-            .iter()
-            .enumerate()
+        for (i, status) in [
+            "running",
+            "idle",
+            "closed",
+            "suspended",
+            "starting",
+            "resuming",
+        ]
+        .iter()
+        .enumerate()
         {
             sqlx::query("INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, 'c', '/w', 'codex', ?, 0, ?, ?)")
                 .bind(format!("t{i}"))
@@ -856,7 +1098,54 @@ mod tests {
                 .unwrap();
         }
         let n = store.mark_orphans_suspended().await.unwrap();
-        assert_eq!(n, 2);
+        // running, idle, starting, resuming — not closed/suspended
+        assert_eq!(n, 4);
+        let running = store.get_thread("t0").await.unwrap().unwrap();
+        assert_eq!(running.status, "suspended");
+        assert!(running.needs_continue);
+        let idle = store.get_thread("t1").await.unwrap().unwrap();
+        assert_eq!(idle.status, "suspended");
+        assert!(!idle.needs_continue);
+        let closed = store.get_thread("t2").await.unwrap().unwrap();
+        assert_eq!(closed.status, "closed");
+        let already = store.get_thread("t3").await.unwrap().unwrap();
+        assert_eq!(already.status, "suspended");
+        assert!(!already.needs_continue);
+        let starting = store.get_thread("t4").await.unwrap().unwrap();
+        assert!(starting.needs_continue);
+        let resuming = store.get_thread("t5").await.unwrap().unwrap();
+        assert!(resuming.needs_continue);
+    }
+
+    #[tokio::test]
+    async fn take_needs_continue_is_one_shot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = LocalStore::open(&tmp.path().join("t.sqlite"))
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO workspaces(root, first_seen_at, last_seen_at) VALUES ('/w',0,0)")
+            .execute(store.pool())
+            .await
+            .unwrap();
+        seed_conversation(&store).await;
+        sqlx::query(
+            "INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, \
+             last_seq, started_at, last_activity_at, needs_continue) \
+             VALUES ('t-nc', 'c', '/w', 'codex', 'suspended', 0, 0, 0, 1)",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
+        assert!(store.take_needs_continue("t-nc").await.unwrap());
+        assert!(!store.take_needs_continue("t-nc").await.unwrap());
+        assert!(
+            !store
+                .get_thread("t-nc")
+                .await
+                .unwrap()
+                .unwrap()
+                .needs_continue
+        );
     }
 
     #[tokio::test]

@@ -156,13 +156,13 @@ pub(crate) fn render_tool_read_body(
                     spans.extend(line_spans.iter().cloned());
                 } else {
                     spans.push(Span::styled(
-                        raw_lines.get(i).unwrap_or(&"").to_string(),
+                        (*raw_lines.get(i).unwrap_or(&"")).to_string(),
                         styles.code_block,
                     ));
                 }
             } else {
                 spans.push(Span::styled(
-                    raw_lines.get(i).unwrap_or(&"").to_string(),
+                    (*raw_lines.get(i).unwrap_or(&"")).to_string(),
                     styles.code_block,
                 ));
             }
@@ -264,12 +264,11 @@ impl Renderer {
                         table.current_cell.push(' ');
                         return;
                     }
-                    Event::Start(Tag::Emphasis | Tag::Strong | Tag::Strikethrough | Tag::Link { .. })
+                    Event::Start(
+                        Tag::Emphasis | Tag::Strong | Tag::Strikethrough | Tag::Link { .. },
+                    )
                     | Event::End(
-                        TagEnd::Emphasis
-                        | TagEnd::Strong
-                        | TagEnd::Strikethrough
-                        | TagEnd::Link,
+                        TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link,
                     ) => {
                         // Skip style wrappers inside cells; keep text only.
                         return;
@@ -690,10 +689,7 @@ fn diff_style(line: &str, styles: MarkdownStyles) -> Style {
         styles.diff_add
     } else if line.starts_with('-') && !line.starts_with("---") {
         styles.diff_del
-    } else if line.starts_with("@@")
-        || line.starts_with("diff --git")
-        || line.starts_with("*** ")
-    {
+    } else if line.starts_with("@@") || line.starts_with("diff --git") || line.starts_with("*** ") {
         styles.diff_hunk
     } else {
         styles.code_block
@@ -812,12 +808,7 @@ fn parse_hunk_header(line: &str) -> Option<(u32, u32)> {
     let rest = rest.trim_start();
     let rest = rest.strip_prefix('-')?;
     let (old_part, rest) = rest.split_once('+')?;
-    let old_start = old_part
-        .split(',')
-        .next()?
-        .trim()
-        .parse::<u32>()
-        .ok()?;
+    let old_start = old_part.split(',').next()?.trim().parse::<u32>().ok()?;
     let new_start = rest
         .split_whitespace()
         .next()?
@@ -890,15 +881,21 @@ mod tests {
         let rendered = lines.iter().map(text).collect::<Vec<_>>();
 
         assert!(
-            rendered.iter().any(|line| line.contains("Name") && line.contains("Role")),
+            rendered
+                .iter()
+                .any(|line| line.contains("Name") && line.contains("Role")),
             "header row missing: {rendered:?}"
         );
         assert!(
-            rendered.iter().any(|line| line.contains("Alice") && line.contains("Eng")),
+            rendered
+                .iter()
+                .any(|line| line.contains("Alice") && line.contains("Eng")),
             "body row missing: {rendered:?}"
         );
         assert!(
-            rendered.iter().any(|line| line.contains('┼') || line.contains('─')),
+            rendered
+                .iter()
+                .any(|line| line.contains('┼') || line.contains('─')),
             "separator missing: {rendered:?}"
         );
     }
@@ -959,28 +956,19 @@ mod tests {
             .iter()
             .find(|line| line.contains("+new line"))
             .expect("added");
-        assert!(
-            added.contains("  21"),
-            "add gutter missing: {added:?}"
-        );
+        assert!(added.contains("  21"), "add gutter missing: {added:?}");
     }
 
     #[test]
     fn tool_diff_is_unbordered_single_gutter() {
-        let lines = render_tool_diff(
-            "@@ -1 +1 @@\n-old\n+new\n",
-            styles(),
-        );
+        let lines = render_tool_diff("@@ -1 +1 @@\n-old\n+new\n", styles());
         let rendered = lines.iter().map(text).collect::<Vec<_>>();
         assert!(!rendered.iter().any(|line| line.contains("┌─")));
         let added = rendered
             .iter()
             .find(|line| line.contains("+new"))
             .expect("+new");
-        assert!(
-            added.starts_with("  "),
-            "expected indent: {added:?}"
-        );
+        assert!(added.starts_with("  "), "expected indent: {added:?}");
         // single gutter only (no dual old|new pair with border bars)
         assert!(
             !added.contains('│'),

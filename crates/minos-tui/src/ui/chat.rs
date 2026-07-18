@@ -9,7 +9,6 @@ use crate::translation::{
     find_runs, header_label, paint_mode_with_runs, parse_diffstat, ChatItem, ChatSelection,
     ChatState, PaintMode, TextPart, ToolKind, VerbGroupRun,
 };
-use std::collections::HashSet;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -17,6 +16,7 @@ use ratatui::{
     widgets::Paragraph,
     Frame,
 };
+use std::collections::HashSet;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::theme::{
@@ -235,11 +235,7 @@ pub fn selected_text(chat: &ChatState, width: u16, _cache: &RenderCache) -> Opti
     }
 
     let lines = visual_lines(
-        build_lines(
-            chat.items.as_slice(),
-            &chat.verb_group_expanded,
-            width,
-        ),
+        build_lines(chat.items.as_slice(), &chat.verb_group_expanded, width),
         width,
     );
     selected_text_from_lines(lines.as_slice(), selection)
@@ -295,12 +291,8 @@ pub(super) fn build_segment_visual_lines(
 
     let mut lines = Vec::new();
     // Gap only when a previous *visible* segment exists.
-    let has_prior_visible = (0..item_index).any(|i| {
-        !matches!(
-            paint_mode_with_runs(items, i, runs),
-            PaintMode::Hidden
-        )
-    });
+    let has_prior_visible =
+        (0..item_index).any(|i| !matches!(paint_mode_with_runs(items, i, runs), PaintMode::Hidden));
     if has_prior_visible {
         lines.push(item_gap_line());
     }
@@ -360,9 +352,7 @@ pub(super) fn streaming_text_source(item: &ChatItem) -> Option<(String, bool)> {
             ..
         } => Some((plain_parts_to_string(text_parts), *is_streaming)),
         ChatItem::Reasoning {
-            text,
-            is_streaming,
-            ..
+            text, is_streaming, ..
         } => {
             // Collapsed thinking skips the streaming commit path; header-only render.
             if !item.is_fold_expanded() {
@@ -396,9 +386,7 @@ fn streaming_role_label(item: &ChatItem) -> Option<Line<'static>> {
     match item {
         // User prefix is painted with the first body line in the non-streaming path;
         // streaming commit path uses a bare arrow row before the body.
-        ChatItem::UserMessage { .. } => {
-            Some(Line::from(Span::styled(PROMPT_ARROW, USER_PREFIX)))
-        }
+        ChatItem::UserMessage { .. } => Some(Line::from(Span::styled(PROMPT_ARROW, USER_PREFIX))),
         // Grok agent messages have no role chrome.
         ChatItem::AssistantText { .. } => None,
         ChatItem::Reasoning { is_streaming, .. } => Some(thinking_header_line(*is_streaming)),
@@ -449,12 +437,8 @@ pub(super) fn build_streaming_segment_with_commit(
     };
 
     let mut header_logical: Vec<Line<'static>> = Vec::new();
-    let has_prior_visible = (0..item_index).any(|i| {
-        !matches!(
-            paint_mode_with_runs(items, i, runs),
-            PaintMode::Hidden
-        )
-    });
+    let has_prior_visible =
+        (0..item_index).any(|i| !matches!(paint_mode_with_runs(items, i, runs), PaintMode::Hidden));
     if has_prior_visible {
         header_logical.push(item_gap_line());
     }
@@ -490,7 +474,9 @@ pub(super) fn build_streaming_segment_with_commit(
 }
 
 /// Frozen stable-source commit state for one streaming chat segment.
+/// Fields are stored for the layout cache / test helpers.
 #[derive(Clone, Default)]
+#[allow(dead_code)]
 pub(super) struct StreamCommitSnapshot {
     pub stable_source: String,
     pub body_visual_lines: Vec<VisualLine>,
@@ -532,22 +518,11 @@ fn build_item_lines<S: LineSink>(sink: &mut S, item: &ChatItem) {
             }
         }
         ChatItem::Reasoning {
-            text,
-            is_streaming,
-            ..
+            text, is_streaming, ..
         } => {
             let expanded = item.is_fold_expanded();
             sink.push_line(thinking_header_line(*is_streaming));
-            if !expanded {
-                // Collapsed: header only (Grok). Optional one-line dim preview.
-                let summary = collapsed_thinking_summary(text);
-                if !summary.is_empty() {
-                    sink.push_line(Line::from(vec![
-                        Span::styled("│ ", THINKING_BAR),
-                        Span::styled(summary, MUTED),
-                    ]));
-                }
-            } else {
+            if expanded {
                 let render_text = if *is_streaming {
                     holdback_streaming_unstable_suffix(text)
                 } else {
@@ -558,6 +533,15 @@ fn build_item_lines<S: LineSink>(sink: &mut S, item: &ChatItem) {
                     sink.push_line(Line::from(vec![
                         Span::styled("│ ", THINKING_BAR),
                         Span::styled("▍", STREAMING_CURSOR),
+                    ]));
+                }
+            } else {
+                // Collapsed: header only (Grok). Optional one-line dim preview.
+                let summary = collapsed_thinking_summary(text);
+                if !summary.is_empty() {
+                    sink.push_line(Line::from(vec![
+                        Span::styled("│ ", THINKING_BAR),
+                        Span::styled(summary, MUTED),
                     ]));
                 }
             }
@@ -604,8 +588,8 @@ fn build_item_lines<S: LineSink>(sink: &mut S, item: &ChatItem) {
             is_streaming,
             ..
         } => {
-            let running = matches!(status, minos_ui_protocol::SubagentStatus::Running)
-                || *is_streaming;
+            let running =
+                matches!(status, minos_ui_protocol::SubagentStatus::Running) || *is_streaming;
             let verb = if running { "Running" } else { "Ran" };
             let status_style = match status {
                 minos_ui_protocol::SubagentStatus::Completed => TOOL_SUCCESS,
@@ -657,10 +641,10 @@ fn tool_header_line(
     let verb_style = if muted { TOOL_VERB_MUTED } else { TOOL_VERB };
     let path_style = if muted { TOOL_PATH_MUTED } else { TOOL_PATH };
 
-    let target = if !args_summary.is_empty() {
-        args_summary.to_owned()
-    } else {
+    let target = if args_summary.is_empty() {
         "…".to_owned()
+    } else {
+        args_summary.to_owned()
     };
 
     let mut spans = vec![
@@ -998,15 +982,7 @@ fn visual_lines(lines: Vec<Line<'static>>, width: u16) -> Vec<VisualLine> {
                 // When the row is empty but the char itself is wider than `width`
                 // (e.g. emoji on a 1-col pane), place it alone then wrap after.
                 if ch_width > 0 && current_width + ch_width > width {
-                    if current_width > 0 {
-                        push_span(&mut current.line, &mut span_buf, style);
-                        out.push(current);
-                        current = VisualLine {
-                            line: Line::default(),
-                            text: String::new(),
-                        };
-                        current_width = 0;
-                    } else if !current.text.is_empty() || !span_buf.is_empty() {
+                    if current_width > 0 || !current.text.is_empty() || !span_buf.is_empty() {
                         push_span(&mut current.line, &mut span_buf, style);
                         out.push(current);
                         current = VisualLine {

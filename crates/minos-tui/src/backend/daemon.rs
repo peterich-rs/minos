@@ -15,12 +15,12 @@ use minos_agent_runtime::{
 use minos_domain::{AgentDescriptor, AgentName};
 use minos_protocol::{
     AppendConversationMessageParams, ApprovalDecisionRequest, CloseReason as ProtoCloseReason,
-    CloseThreadRequest, CreateConversationParams, GetThreadParams, InterruptThreadRequest,
-    ListClisResponse, ListConversationAgentSessionsParams, ListConversationMessagesParams,
-    ListConversationsParams, LocalConversationEvent, LocalIngestFrame, LocalManagerEvent,
-    LocalThreadSnapshot, PauseReason as ProtoPauseReason, ReadThreadParams,
-    ReadThreadRawHistoryResponse, RespondOpencodePermissionRequest, RespondOpencodeQuestionRequest,
-    SendUserMessageRequest, StartAgentInConversationRequest, StartAgentRequest, StartAgentResponse,
+    CloseThreadRequest, CreateConversationParams, InterruptThreadRequest, ListClisResponse,
+    ListConversationAgentSessionsParams, ListConversationMessagesParams, ListConversationsParams,
+    LocalConversationEvent, LocalIngestFrame, LocalManagerEvent, LocalThreadSnapshot,
+    PauseReason as ProtoPauseReason, ReadThreadParams, ReadThreadRawHistoryResponse,
+    RespondOpencodePermissionRequest, RespondOpencodeQuestionRequest, SendUserMessageRequest,
+    StartAgentInConversationRequest, StartAgentRequest, StartAgentResponse,
     ThreadState as ProtoThreadState,
 };
 use serde_json::Value;
@@ -326,43 +326,6 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn project_rpc_requests_have_expected_values() {
-        assert_eq!(
-            serde_json::to_value(create_project_request("Fire", Path::new("/tmp/fire"))).unwrap(),
-            serde_json::json!({
-                "name": "Fire",
-                "workspace_slug": "fire",
-                "workspace_path": "/tmp/fire"
-            })
-        );
-        assert_eq!(
-            serde_json::to_value(list_conversations_request("project-1")).unwrap(),
-            serde_json::json!({
-                "project_id": "project-1",
-                "limit": 100
-            })
-        );
-        assert_eq!(
-            serde_json::to_value(start_agent_in_conversation_request(
-                "conversation-1",
-                AgentName::Codex,
-                Path::new("/tmp/fire")
-            ))
-            .unwrap(),
-            serde_json::json!({
-                "conversation_id": "conversation-1",
-                "agent": "codex",
-                "workspace": "/tmp/fire"
-            })
-        );
-    }
-}
-
 #[async_trait]
 impl AgentBackend for DaemonBackend {
     async fn detect_clis(&self) -> Result<Vec<AgentDescriptor>> {
@@ -509,9 +472,14 @@ impl AgentBackend for DaemonBackend {
             .collect())
     }
 
-    async fn resume_thread(&self, thread_id: &str) -> Result<StartAgentOutcome> {
-        let request = GetThreadParams {
+    async fn resume_thread(
+        &self,
+        thread_id: &str,
+        auto_continue: bool,
+    ) -> Result<StartAgentOutcome> {
+        let request = minos_protocol::ResumeThreadRequest {
             thread_id: thread_id.to_owned(),
+            auto_continue,
         };
         let response: StartAgentResponse = self
             .client
@@ -788,5 +756,42 @@ fn proto_close_reason_to_runtime(reason: &ProtoCloseReason) -> RuntimeCloseReaso
     match reason {
         ProtoCloseReason::UserClose => RuntimeCloseReason::UserClose,
         ProtoCloseReason::TerminalError => RuntimeCloseReason::TerminalError,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_rpc_requests_have_expected_values() {
+        assert_eq!(
+            serde_json::to_value(create_project_request("Fire", Path::new("/tmp/fire"))).unwrap(),
+            serde_json::json!({
+                "name": "Fire",
+                "workspace_slug": "fire",
+                "workspace_path": "/tmp/fire"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(list_conversations_request("project-1")).unwrap(),
+            serde_json::json!({
+                "project_id": "project-1",
+                "limit": 100
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(start_agent_in_conversation_request(
+                "conversation-1",
+                AgentName::Codex,
+                Path::new("/tmp/fire")
+            ))
+            .unwrap(),
+            serde_json::json!({
+                "conversation_id": "conversation-1",
+                "agent": "codex",
+                "workspace": "/tmp/fire"
+            })
+        );
     }
 }

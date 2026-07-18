@@ -311,7 +311,8 @@ impl App {
         anyhow::ensure!(
             self.ui
                 .conversations
-                .items.iter()
+                .items
+                .iter()
                 .any(|conversation| conversation.conversation_id == conversation_id)
                 || self.ui.nav_level().conversation_id() == Some(conversation_id),
             "MCP request conversation_id does not match a loaded TUI conversation"
@@ -323,14 +324,16 @@ impl App {
         let Some(conversation) = self
             .ui
             .conversations
-            .items.iter()
+            .items
+            .iter()
             .find(|conversation| conversation.conversation_id == conversation_id)
         else {
             return self.state.workspace.clone();
         };
         self.ui
             .projects
-            .items.iter()
+            .items
+            .iter()
             .find(|project| project.project_id == conversation.project_id)
             .map(|project| project.workspace_path.clone())
             .unwrap_or_else(|| self.state.workspace.clone())

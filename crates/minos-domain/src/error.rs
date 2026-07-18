@@ -128,7 +128,9 @@ impl ErrorKind {
             (Self::CodexConnectFailed, Lang::En) => "Could not reach codex app-server",
             (Self::CodexProtocolError, Lang::Zh) => "Codex 返回错误，请查看日志",
             (Self::CodexProtocolError, Lang::En) => "Codex returned an error — see log",
-            (Self::GeminiSpawnFailed, Lang::Zh) => "无法启动 ACP Agent CLI（Gemini/Grok）；请确认已安装",
+            (Self::GeminiSpawnFailed, Lang::Zh) => {
+                "无法启动 ACP Agent CLI（Gemini/Grok）；请确认已安装"
+            }
             (Self::GeminiSpawnFailed, Lang::En) => {
                 "Failed to launch ACP agent CLI (Gemini/Grok); is it installed?"
             }

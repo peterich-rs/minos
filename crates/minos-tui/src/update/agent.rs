@@ -129,7 +129,10 @@ pub fn handle_submit(_state: &mut AppState, ui: &mut UiState) -> (StateChange, V
         );
     }
 
-    if let Some(pending) = ui.thread_panel.chat_states.get(&thread_id)
+    if let Some(pending) = ui
+        .thread_panel
+        .chat_states
+        .get(&thread_id)
         .and_then(ChatState::active_pending_request)
         .cloned()
     {
@@ -165,15 +168,22 @@ pub fn handle_submit(_state: &mut AppState, ui: &mut UiState) -> (StateChange, V
 fn thread_agent_and_state<'a>(
     ui: &'a UiState,
     thread_id: &str,
-) -> Option<(minos_domain::AgentName, &'a minos_agent_runtime::ThreadState)> {
+) -> Option<(
+    minos_domain::AgentName,
+    &'a minos_agent_runtime::ThreadState,
+)> {
     if let Some(session) = ui
-        .conversation.agent_sessions.items
+        .conversation
+        .agent_sessions
+        .items
         .iter()
         .find(|session| session.thread_id == thread_id)
     {
         return Some((session.agent, &session.state));
     }
-    ui.thread_panel.list.items
+    ui.thread_panel
+        .list
+        .items
         .iter()
         .find(|thread| thread.thread_id == thread_id)
         .map(|thread| (thread.agent, &thread.state))

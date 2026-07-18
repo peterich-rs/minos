@@ -218,7 +218,8 @@ async fn open_project_dialog_with_n_key() {
     app.handle_key(press(KeyCode::Char('n'))).await;
     let dialog = app
         .ui
-        .overlays.project_create
+        .overlays
+        .project_create
         .as_ref()
         .expect("project dialog opens");
     assert_eq!(dialog.name, "newproj");
@@ -234,7 +235,8 @@ async fn init_opens_project_dialog_for_unmatched_workspace() {
 
     let dialog = app
         .ui
-        .overlays.project_create
+        .overlays
+        .project_create
         .as_ref()
         .expect("startup opens project create dialog");
     assert_eq!(dialog.name, "fire");
@@ -252,7 +254,8 @@ async fn create_project_dialog_types_and_confirms() {
     app.handle_key(press(KeyCode::Char('M'))).await;
     assert!(app
         .ui
-        .overlays.project_create
+        .overlays
+        .project_create
         .as_ref()
         .map(|d| d.name.ends_with('M'))
         .unwrap_or(false));
@@ -304,7 +307,9 @@ async fn start_new_session_via_input_transitions_to_conversation_level() {
     );
     assert!(
         app.ui
-            .conversation.agent_sessions.items
+            .conversation
+            .agent_sessions
+            .items
             .iter()
             .any(|s| s.agent == AgentName::Codex),
         "new session must appear in conversation.agent_sessions.items"
@@ -379,6 +384,7 @@ async fn open_existing_session_bridges_into_thread_list() {
         ended_at_ms: None,
         parent_thread_id: None,
         state: minos_agent_runtime::ThreadState::Idle,
+        needs_continue: false,
     };
     let backend = Arc::new(
         TestBackend::new()
@@ -417,13 +423,18 @@ async fn open_existing_session_bridges_into_thread_list() {
     );
     let bridged = app
         .ui
-        .thread_panel.list.items
+        .thread_panel
+        .list
+        .items
         .iter()
         .find(|t| t.thread_id == "existing-session-1")
         .expect("bridged thread exists");
     assert_eq!(bridged.workspace, project.workspace_path);
     assert!(
-        app.ui.thread_panel.chat_states.contains_key("existing-session-1"),
+        app.ui
+            .thread_panel
+            .chat_states
+            .contains_key("existing-session-1"),
         "bridged conversation session must create chat state before hydration"
     );
 }

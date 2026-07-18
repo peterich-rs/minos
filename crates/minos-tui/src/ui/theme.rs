@@ -130,5 +130,3 @@ pub const PROMPT_ARROW: &str = "❯ ";
 pub fn border_block<'a>() -> ratatui::widgets::Block<'a> {
     ratatui::widgets::Block::bordered().border_style(Style::new().fg(BORDER_FG))
 }
-
-

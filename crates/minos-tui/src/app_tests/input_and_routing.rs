@@ -141,6 +141,7 @@ fn thread_short_id_in_conversation_resolves_conversation_session_only() {
             ended_at_ms: None,
             parent_thread_id: None,
             state: ThreadState::Idle,
+            needs_continue: false,
         },
         crate::backend::ThreadSummaryEntry {
             thread_id: "conv-closed-9999".into(),
@@ -154,6 +155,7 @@ fn thread_short_id_in_conversation_resolves_conversation_session_only() {
             state: ThreadState::Closed {
                 reason: minos_agent_runtime::CloseReason::UserClose,
             },
+            needs_continue: false,
         },
     ];
 
@@ -193,6 +195,7 @@ fn thread_short_id_outside_conversation_does_not_resolve_global_threads() {
         ended_at_ms: None,
         parent_thread_id: None,
         state: ThreadState::Idle,
+        needs_continue: false,
     }];
 
     assert_eq!(
@@ -221,6 +224,7 @@ async fn conversations_input_does_not_route_stale_session_short_id() {
         ended_at_ms: None,
         parent_thread_id: None,
         state: ThreadState::Idle,
+        needs_continue: false,
     }];
     app.ui.focus.focus(PaneId::Input);
     app.ui.inputs.conversation.content = "@opencode#conv-ope hello".into();
@@ -322,7 +326,10 @@ async fn conversation_input_paste_inserts_multiline_text_without_submitting() {
     );
 
     assert_eq!(app.ui.inputs.conversation.content, "first\nsecond\nthird");
-    assert_eq!(app.ui.inputs.conversation.cursor_pos, "first\nsecond\nthird".len());
+    assert_eq!(
+        app.ui.inputs.conversation.cursor_pos,
+        "first\nsecond\nthird".len()
+    );
     assert!(backend
         .sent_messages
         .lock()

@@ -1210,6 +1210,7 @@ pub struct _ThreadSummary {
     pub end_reason: Option<ThreadEndReason>,
     pub parent_thread_id: Option<String>,
     pub state: ThreadState,
+    pub needs_continue: bool,
 }
 
 pub struct AgentSessionSummaryDto {

@@ -160,9 +160,7 @@ fn interleaved_reasoning_opens_new_item_after_tool() {
     assert_eq!(cs.items.len(), 3);
     match &cs.items[0] {
         ChatItem::Reasoning {
-            text,
-            is_streaming,
-            ..
+            text, is_streaming, ..
         } => {
             assert_eq!(text, "first");
             assert!(!*is_streaming);
@@ -172,9 +170,7 @@ fn interleaved_reasoning_opens_new_item_after_tool() {
     assert!(matches!(cs.items[1], ChatItem::ToolCall { .. }));
     match &cs.items[2] {
         ChatItem::Reasoning {
-            text,
-            is_streaming,
-            ..
+            text, is_streaming, ..
         } => {
             assert_eq!(text, "second");
             assert!(*is_streaming);
@@ -236,9 +232,7 @@ fn intermediate_and_final_assistant_text_split_across_tools() {
     assert!(matches!(cs.items[1], ChatItem::ToolCall { .. }));
     match &cs.items[2] {
         ChatItem::Reasoning {
-            text,
-            is_streaming,
-            ..
+            text, is_streaming, ..
         } => {
             assert_eq!(text, "found the issue");
             assert!(!*is_streaming);

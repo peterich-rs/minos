@@ -349,8 +349,7 @@ async fn register_acp_permission_request(
         serde_json::Value::String(s) => s.clone(),
         other => other.to_string(),
     };
-    let (allow_option_id, reject_option_id) =
-        crate::approvals::acp_permission_option_ids(&params);
+    let (allow_option_id, reject_option_id) = crate::approvals::acp_permission_option_ids(&params);
 
     // Surface both the approval overlay envelope and a tool-shaped server
     // request for translators that still render tool call chrome.

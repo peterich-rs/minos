@@ -7,10 +7,10 @@ pub mod delete_confirm;
 pub mod input_bar;
 pub mod list_panel;
 pub mod panels;
-pub mod stream_holdback;
 pub mod project_create_dialog;
 pub mod project_list;
 pub mod status_bar;
+pub mod stream_holdback;
 pub mod theme;
 
 use crate::agent_route::short_thread_id;
@@ -24,9 +24,7 @@ use crate::ui::chat::{AgentChatRenderable, AgentChatTarget};
 pub use crate::ui::delete_confirm::DeleteConfirmState;
 use crate::ui::input_bar::{AgentMentionCandidate, InputState};
 pub use crate::ui::list_panel::ListPanel;
-pub use crate::ui::panels::{
-    ConversationPanel, InputsPanel, NavPanel, OverlaysPanel, ThreadPanel,
-};
+pub use crate::ui::panels::{ConversationPanel, InputsPanel, NavPanel, OverlaysPanel, ThreadPanel};
 use crate::ui::status_bar::StatusBarState;
 use minos_agent_runtime::ThreadState;
 use minos_domain::AgentName;
@@ -193,10 +191,8 @@ impl UiState {
 
     pub fn selected_flat_agent_session_thread_id(&self) -> Option<&str> {
         let selected = self.conversation.agent_sessions.selected?;
-        let source_index = flat_agent_session_source_index(
-            &self.conversation.agent_sessions.items,
-            selected,
-        )?;
+        let source_index =
+            flat_agent_session_source_index(&self.conversation.agent_sessions.items, selected)?;
         self.conversation
             .agent_sessions
             .items
@@ -205,22 +201,18 @@ impl UiState {
     }
 
     pub fn flat_session_index_for_thread(&self, thread_id: &str) -> Option<usize> {
-        self.flat_agent_sessions()
-            .into_iter()
-            .position(|flat| {
-                self.conversation
-                    .agent_sessions
-                    .items
-                    .get(flat.source_index)
-                    .is_some_and(|session| session.thread_id == thread_id)
-            })
+        self.flat_agent_sessions().into_iter().position(|flat| {
+            self.conversation
+                .agent_sessions
+                .items
+                .get(flat.source_index)
+                .is_some_and(|session| session.thread_id == thread_id)
+        })
     }
 
     pub fn flat_session_entry(&self, flat_index: usize) -> Option<&ThreadSummaryEntry> {
-        let source_index = flat_agent_session_source_index(
-            &self.conversation.agent_sessions.items,
-            flat_index,
-        )?;
+        let source_index =
+            flat_agent_session_source_index(&self.conversation.agent_sessions.items, flat_index)?;
         self.conversation.agent_sessions.items.get(source_index)
     }
 
@@ -360,160 +352,6 @@ fn push_flat_session(
         source_index,
         depth,
     });
-}
-
-#[cfg(test)]
-mod subagent_tests {
-    use super::*;
-    use crate::ui::input_bar::AgentMentionCandidateKind;
-
-    fn session(thread_id: &str, parent_thread_id: Option<&str>) -> ThreadSummaryEntry {
-        ThreadSummaryEntry {
-            thread_id: thread_id.into(),
-            agent: AgentName::Codex,
-            title: None,
-            first_ts_ms: 0,
-            last_ts_ms: 0,
-            message_count: 0,
-            ended_at_ms: None,
-            parent_thread_id: parent_thread_id.map(str::to_string),
-            state: ThreadState::Idle,
-        }
-    }
-
-    fn existing_thread_ids(state: &UiState) -> Vec<String> {
-        state
-            .conversation_agent_mention_candidates()
-            .into_iter()
-            .filter_map(|candidate| match candidate.kind {
-                AgentMentionCandidateKind::Existing { thread_id } => Some(thread_id),
-                AgentMentionCandidateKind::Installed { .. } => None,
-            })
-            .collect()
-    }
-
-    #[test]
-    fn flat_agent_sessions_groups_children_under_parent() {
-        let sessions = [
-            session("parent-a", None),
-            session("parent-b", None),
-            session("sub-a", Some("parent-a")),
-            session("orphan", Some("missing")),
-        ];
-        let flat = flat_agent_sessions(&sessions);
-
-        assert_eq!(
-            flat.iter()
-                .map(|entry| {
-                    (
-                        sessions[entry.source_index].thread_id.as_str(),
-                        entry.depth,
-                    )
-                })
-                .collect::<Vec<_>>(),
-            vec![
-                ("parent-a", 0),
-                ("sub-a", 1),
-                ("parent-b", 0),
-                ("orphan", 0),
-            ]
-        );
-    }
-
-    #[test]
-    fn conversation_mentions_in_conversation_use_conversation_sessions_only() {
-        let mut state = UiState::new(false);
-        state.thread_panel.list.items.push(ThreadEntry {
-            thread_id: "global-opencode-1234".into(),
-            agent: AgentName::Opencode,
-            workspace: PathBuf::from("/tmp"),
-            state: ThreadState::Idle,
-            parent_thread_id: None,
-        });
-        state.conversation.agent_sessions.items = vec![
-            ThreadSummaryEntry {
-                thread_id: "conv-opencode-5678".into(),
-                agent: AgentName::Opencode,
-                title: None,
-                first_ts_ms: 0,
-                last_ts_ms: 0,
-                message_count: 0,
-                ended_at_ms: None,
-                parent_thread_id: None,
-                state: ThreadState::Idle,
-            },
-            ThreadSummaryEntry {
-                thread_id: "conv-closed-9999".into(),
-                agent: AgentName::Codex,
-                title: None,
-                first_ts_ms: 0,
-                last_ts_ms: 0,
-                message_count: 0,
-                ended_at_ms: None,
-                parent_thread_id: None,
-                state: ThreadState::Closed {
-                    reason: minos_agent_runtime::CloseReason::UserClose,
-                },
-            },
-            ThreadSummaryEntry {
-                thread_id: "conv-child-0000".into(),
-                agent: AgentName::Gemini,
-                title: None,
-                first_ts_ms: 0,
-                last_ts_ms: 0,
-                message_count: 0,
-                ended_at_ms: None,
-                parent_thread_id: Some("conv-opencode-5678".into()),
-                state: ThreadState::Idle,
-            },
-        ];
-        state.nav.stack = vec![
-            NavLevel::Projects,
-            NavLevel::Conversations {
-                project_id: "p".into(),
-            },
-            NavLevel::Conversation {
-                project_id: "p".into(),
-                conversation_id: "c".into(),
-            },
-        ];
-
-        assert_eq!(
-            existing_thread_ids(&state),
-            vec!["conv-opencode-5678".to_owned()]
-        );
-    }
-
-    #[test]
-    fn conversation_mentions_outside_conversation_hide_existing_threads() {
-        let mut state = UiState::new(false);
-        state.thread_panel.list.items.push(ThreadEntry {
-            thread_id: "global-codex-1234".into(),
-            agent: AgentName::Codex,
-            workspace: PathBuf::from("/tmp"),
-            state: ThreadState::Idle,
-            parent_thread_id: None,
-        });
-        state.conversation.agent_sessions.items = vec![ThreadSummaryEntry {
-            thread_id: "conv-codex-5678".into(),
-            agent: AgentName::Codex,
-            title: None,
-            first_ts_ms: 0,
-            last_ts_ms: 0,
-            message_count: 0,
-            ended_at_ms: None,
-            parent_thread_id: None,
-            state: ThreadState::Idle,
-        }];
-        state.nav.stack = vec![
-            NavLevel::Projects,
-            NavLevel::Conversations {
-                project_id: "p".into(),
-            },
-        ];
-
-        assert_eq!(existing_thread_ids(&state), Vec::<String>::new());
-    }
 }
 
 pub fn render_ui(f: &mut Frame, state: &mut UiState) {
@@ -997,4 +835,156 @@ fn agent_input_title(pending_agent_request: bool, multiline: bool) -> &'static s
     }
 }
 
+#[cfg(test)]
+mod subagent_tests {
+    use super::*;
+    use crate::ui::input_bar::AgentMentionCandidateKind;
 
+    fn session(thread_id: &str, parent_thread_id: Option<&str>) -> ThreadSummaryEntry {
+        ThreadSummaryEntry {
+            thread_id: thread_id.into(),
+            agent: AgentName::Codex,
+            title: None,
+            first_ts_ms: 0,
+            last_ts_ms: 0,
+            message_count: 0,
+            ended_at_ms: None,
+            parent_thread_id: parent_thread_id.map(str::to_string),
+            state: ThreadState::Idle,
+            needs_continue: false,
+        }
+    }
+
+    fn existing_thread_ids(state: &UiState) -> Vec<String> {
+        state
+            .conversation_agent_mention_candidates()
+            .into_iter()
+            .filter_map(|candidate| match candidate.kind {
+                AgentMentionCandidateKind::Existing { thread_id } => Some(thread_id),
+                AgentMentionCandidateKind::Installed { .. } => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn flat_agent_sessions_groups_children_under_parent() {
+        let sessions = [
+            session("parent-a", None),
+            session("parent-b", None),
+            session("sub-a", Some("parent-a")),
+            session("orphan", Some("missing")),
+        ];
+        let flat = flat_agent_sessions(&sessions);
+
+        assert_eq!(
+            flat.iter()
+                .map(|entry| { (sessions[entry.source_index].thread_id.as_str(), entry.depth,) })
+                .collect::<Vec<_>>(),
+            vec![
+                ("parent-a", 0),
+                ("sub-a", 1),
+                ("parent-b", 0),
+                ("orphan", 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn conversation_mentions_in_conversation_use_conversation_sessions_only() {
+        let mut state = UiState::new(false);
+        state.thread_panel.list.items.push(ThreadEntry {
+            thread_id: "global-opencode-1234".into(),
+            agent: AgentName::Opencode,
+            workspace: PathBuf::from("/tmp"),
+            state: ThreadState::Idle,
+            parent_thread_id: None,
+        });
+        state.conversation.agent_sessions.items = vec![
+            ThreadSummaryEntry {
+                thread_id: "conv-opencode-5678".into(),
+                agent: AgentName::Opencode,
+                title: None,
+                first_ts_ms: 0,
+                last_ts_ms: 0,
+                message_count: 0,
+                ended_at_ms: None,
+                parent_thread_id: None,
+                state: ThreadState::Idle,
+                needs_continue: false,
+            },
+            ThreadSummaryEntry {
+                thread_id: "conv-closed-9999".into(),
+                agent: AgentName::Codex,
+                title: None,
+                first_ts_ms: 0,
+                last_ts_ms: 0,
+                message_count: 0,
+                ended_at_ms: None,
+                parent_thread_id: None,
+                state: ThreadState::Closed {
+                    reason: minos_agent_runtime::CloseReason::UserClose,
+                },
+                needs_continue: false,
+            },
+            ThreadSummaryEntry {
+                thread_id: "conv-child-0000".into(),
+                agent: AgentName::Gemini,
+                title: None,
+                first_ts_ms: 0,
+                last_ts_ms: 0,
+                message_count: 0,
+                ended_at_ms: None,
+                parent_thread_id: Some("conv-opencode-5678".into()),
+                state: ThreadState::Idle,
+                needs_continue: false,
+            },
+        ];
+        state.nav.stack = vec![
+            NavLevel::Projects,
+            NavLevel::Conversations {
+                project_id: "p".into(),
+            },
+            NavLevel::Conversation {
+                project_id: "p".into(),
+                conversation_id: "c".into(),
+            },
+        ];
+
+        assert_eq!(
+            existing_thread_ids(&state),
+            vec!["conv-opencode-5678".to_owned()]
+        );
+    }
+
+    #[test]
+    fn conversation_mentions_outside_conversation_hide_existing_threads() {
+        let mut state = UiState::new(false);
+        state.thread_panel.list.items.push(ThreadEntry {
+            thread_id: "global-codex-1234".into(),
+            agent: AgentName::Codex,
+            workspace: PathBuf::from("/tmp"),
+            state: ThreadState::Idle,
+            parent_thread_id: None,
+        });
+        state.conversation.agent_sessions.items = vec![ThreadSummaryEntry {
+            thread_id: "conv-codex-5678".into(),
+            agent: AgentName::Codex,
+            title: None,
+            first_ts_ms: 0,
+            last_ts_ms: 0,
+            message_count: 0,
+            ended_at_ms: None,
+            parent_thread_id: None,
+            state: ThreadState::Idle,
+            needs_continue: false,
+        }];
+        state.nav.stack = vec![
+            NavLevel::Projects,
+            NavLevel::Conversations {
+                project_id: "p".into(),
+            },
+        ];
+
+        assert_eq!(existing_thread_ids(&state), Vec::<String>::new());
+    }
+}

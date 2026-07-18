@@ -70,6 +70,7 @@ pub struct ThreadSummaryEntry {
     pub ended_at_ms: Option<i64>,
     pub parent_thread_id: Option<String>,
     pub state: RuntimeThreadState,
+    pub needs_continue: bool,
 }
 
 impl ThreadSummaryEntry {
@@ -84,6 +85,7 @@ impl ThreadSummaryEntry {
             ended_at_ms: s.ended_at_ms,
             parent_thread_id: s.parent_thread_id.clone(),
             state: protocol_thread_state_to_runtime(&s.state),
+            needs_continue: s.needs_continue,
         }
     }
 }
@@ -264,7 +266,13 @@ pub trait AgentBackend: Send + Sync {
         body: &str,
     ) -> Result<()>;
 
-    async fn resume_thread(&self, thread_id: &str) -> Result<StartAgentOutcome>;
+    /// Reattach a persisted/suspended thread. When `auto_continue` is true and
+    /// the store has `needs_continue`, injects a one-shot CONTINUE prompt.
+    async fn resume_thread(
+        &self,
+        thread_id: &str,
+        auto_continue: bool,
+    ) -> Result<StartAgentOutcome>;
 
     async fn read_thread_raw_history(
         &self,

@@ -868,10 +868,7 @@ mod tests {
         }
 
         let store = TeamworkStore::open(&path).await.unwrap();
-        store
-            .ensure_conversation("c1", "c1", "/tmp")
-            .await
-            .unwrap();
+        store.ensure_conversation("c1", "c1", "/tmp").await.unwrap();
         let delegation = store
             .create_delegation(
                 "c1",

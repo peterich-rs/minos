@@ -54,6 +54,7 @@ impl FocusManager {
         self.current()
     }
 
+    #[allow(clippy::unused_self)] // reserved for future layout modes
     pub fn switch_layout(&mut self, _detail: bool) {}
 }
 

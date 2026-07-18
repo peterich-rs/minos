@@ -163,22 +163,30 @@ fn main_list_key_to_mapping(_ui: &UiState, key: KeyEvent) -> KeyMapping {
 
 fn conversation_chat_key_to_mapping(key: KeyEvent) -> KeyMapping {
     match key.code {
-        KeyCode::Up => KeyMapping::action(Action::Conversation(ConversationAction::Scroll(ScrollDirection::Up, 1))),
-        KeyCode::Down => {
-            KeyMapping::action(Action::Conversation(ConversationAction::Scroll(ScrollDirection::Down, 1)))
-        }
-        KeyCode::PageUp => {
-            KeyMapping::action(Action::Conversation(ConversationAction::Scroll(ScrollDirection::Up, 5)))
-        }
-        KeyCode::PageDown => {
-            KeyMapping::action(Action::Conversation(ConversationAction::Scroll(ScrollDirection::Down, 5)))
-        }
-        KeyCode::Home => {
-            KeyMapping::action(Action::Conversation(ConversationAction::Scroll(ScrollDirection::Top, 0)))
-        }
-        KeyCode::End => {
-            KeyMapping::action(Action::Conversation(ConversationAction::Scroll(ScrollDirection::Bottom, 0)))
-        }
+        KeyCode::Up => KeyMapping::action(Action::Conversation(ConversationAction::Scroll(
+            ScrollDirection::Up,
+            1,
+        ))),
+        KeyCode::Down => KeyMapping::action(Action::Conversation(ConversationAction::Scroll(
+            ScrollDirection::Down,
+            1,
+        ))),
+        KeyCode::PageUp => KeyMapping::action(Action::Conversation(ConversationAction::Scroll(
+            ScrollDirection::Up,
+            5,
+        ))),
+        KeyCode::PageDown => KeyMapping::action(Action::Conversation(ConversationAction::Scroll(
+            ScrollDirection::Down,
+            5,
+        ))),
+        KeyCode::Home => KeyMapping::action(Action::Conversation(ConversationAction::Scroll(
+            ScrollDirection::Top,
+            0,
+        ))),
+        KeyCode::End => KeyMapping::action(Action::Conversation(ConversationAction::Scroll(
+            ScrollDirection::Bottom,
+            0,
+        ))),
         KeyCode::Enter => KeyMapping::action(Action::Global(GlobalAction::Enter)),
         KeyCode::Tab => KeyMapping::action(Action::Global(GlobalAction::CycleFocus)),
         KeyCode::BackTab => KeyMapping::action(Action::Global(GlobalAction::CycleFocusPrev)),
@@ -202,12 +210,16 @@ fn agent_list_key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
     }
     match key.code {
         KeyCode::Up => ui
-            .thread_panel.list.selected
+            .thread_panel
+            .list
+            .selected
             .map(|selected| Action::Agent(AgentAction::Select(selected.saturating_sub(1))))
             .map(KeyMapping::action)
             .unwrap_or_else(|| KeyMapping::action(Action::Global(GlobalAction::RequestRedraw))),
         KeyCode::Down => ui
-            .thread_panel.list.selected
+            .thread_panel
+            .list
+            .selected
             .map(|selected| {
                 let last = ui.thread_panel.list.items.len().saturating_sub(1);
                 Action::Agent(AgentAction::Select((selected + 1).min(last)))

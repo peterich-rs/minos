@@ -619,10 +619,7 @@ fn translate_tool_part(
             }
             "complete" => {
                 state.tool_calls.remove(&tool_call_id);
-                let name = part
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
+                let name = part.get("name").and_then(Value::as_str).unwrap_or("");
                 let output = part
                     .get("output")
                     .and_then(Value::as_str)

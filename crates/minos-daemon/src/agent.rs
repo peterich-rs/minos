@@ -444,6 +444,16 @@ impl AgentGlue {
     }
 
     pub async fn send_user_message(&self, req: SendUserMessageRequest) -> Result<(), MinosError> {
+        // User text always wins over a pending auto-continue: claim the flag
+        // so open-time inject cannot race a second CONTINUE turn.
+        if let Err(e) = self.store.take_needs_continue(&req.session_id).await {
+            tracing::warn!(
+                target: "minos_daemon::agent",
+                error = %e,
+                thread_id = %req.session_id,
+                "take_needs_continue failed before send_user_message",
+            );
+        }
         self.manager
             .send_user_message(&req.session_id, req.text)
             .await
@@ -659,7 +669,14 @@ impl AgentGlue {
             .map_err(map_anyhow)
     }
 
-    pub async fn resume_thread(&self, thread_id: &str) -> Result<StartAgentResponse, MinosError> {
+    /// Register + provider reattach. When `auto_continue` is true and the
+    /// store still has `needs_continue`, inject CONTINUE once (open path).
+    /// Send paths must pass `auto_continue = false` so user text wins.
+    pub async fn resume_thread(
+        &self,
+        thread_id: &str,
+        auto_continue: bool,
+    ) -> Result<StartAgentResponse, MinosError> {
         let row = self
             .store
             .get_thread(thread_id)
@@ -674,6 +691,30 @@ impl AgentGlue {
         }
         let agent = parse_agent_label(&row.agent)?;
         let provider_session_id = self.resolve_provider_session_id(&row, agent).await?;
+        // Register as Suspended when DB says so so reattach can run; live
+        // Idle/Running rows also register with their persisted state.
+        let register_state = match row_state_to_runtime(&row)? {
+            minos_agent_runtime::ThreadState::Closed { reason } => {
+                minos_agent_runtime::ThreadState::Closed { reason }
+            }
+            // Prefer Suspended for rehydrate so reattach path is used even if
+            // status was idle in an older partial write (defensive).
+            other
+                if matches!(
+                    other,
+                    minos_agent_runtime::ThreadState::Idle
+                        | minos_agent_runtime::ThreadState::Running { .. }
+                        | minos_agent_runtime::ThreadState::Starting
+                        | minos_agent_runtime::ThreadState::Resuming
+                ) && !self.manager.has_thread(thread_id).await =>
+            {
+                // Not live yet after daemon restart — treat as suspended rehydrate.
+                minos_agent_runtime::ThreadState::Suspended {
+                    reason: minos_agent_runtime::PauseReason::DaemonRestart,
+                }
+            }
+            other => other,
+        };
         self.manager
             .register_persisted_thread(
                 row.thread_id.clone(),
@@ -682,11 +723,57 @@ impl AgentGlue {
                 provider_session_id,
                 row.parent_thread_id.clone(),
                 Some(row.conversation_id.clone()),
-                row_state_to_runtime(&row)?,
+                register_state,
                 u64::try_from(row.last_seq.max(0)).unwrap_or(u64::MAX),
             )
             .await
             .map_err(map_anyhow)?;
+
+        // Idle/Running already live → no-op. Suspended → provider reattach → Idle.
+        // Provider spawn may fail (missing CLI / no fake server in unit tests);
+        // keep the row registered so a later send can re-try reattach.
+        if let Err(e) = self.manager.reattach_suspended_thread(thread_id).await {
+            tracing::warn!(
+                target: "minos_daemon::agent",
+                error = %e,
+                thread_id = %thread_id,
+                auto_continue,
+                "reattach_suspended_thread failed; thread registered, reattach deferred",
+            );
+            if auto_continue {
+                // Cannot continue without a live provider session.
+                return Err(map_anyhow(e));
+            }
+        }
+
+        if auto_continue {
+            match self.store.take_needs_continue(thread_id).await {
+                Ok(true) => {
+                    if let Err(e) = self.manager.inject_continue_prompt(thread_id).await {
+                        // Restore flag so a later open/send can retry.
+                        let _ = self.store.set_needs_continue(thread_id, true).await;
+                        tracing::warn!(
+                            target: "minos_daemon::agent",
+                            error = %e,
+                            thread_id = %thread_id,
+                            "inject_continue_prompt failed; needs_continue restored",
+                        );
+                        return Err(map_anyhow(e));
+                    }
+                    self.persist_current_provider_session_id(thread_id).await;
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        target: "minos_daemon::agent",
+                        error = %e,
+                        thread_id = %thread_id,
+                        "take_needs_continue failed during resume",
+                    );
+                }
+            }
+        }
+
         Ok(StartAgentResponse {
             session_id: row.thread_id,
             cwd: row.workspace_root,
@@ -927,11 +1014,36 @@ impl AgentGlue {
     }
 
     pub async fn shutdown(&self) -> Result<(), MinosError> {
-        // Best-effort: walk every thread and request close. The detailed
-        // shutdown sequence (SIGTERM + grace) lands in C20.
+        // Suspend (not close) every live thread so the next daemon start can
+        // rehydrate sessions. Persist status synchronously — the manager event
+        // bridge is async and races process exit.
         let snap = self.manager.list_threads().await;
+        let now_ms = current_unix_ms();
         for s in snap {
-            let _ = self.manager.close_thread(&s.thread_id).await;
+            match self.manager.suspend_for_daemon_stop(&s.thread_id).await {
+                Ok(needs_continue) => {
+                    if let Err(e) = self
+                        .store
+                        .suspend_thread_for_daemon_restart(&s.thread_id, needs_continue, now_ms)
+                        .await
+                    {
+                        tracing::warn!(
+                            target: "minos_daemon::agent",
+                            error = %e,
+                            thread_id = %s.thread_id,
+                            "suspend_thread_for_daemon_restart failed during shutdown",
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "minos_daemon::agent",
+                        error = %e,
+                        thread_id = %s.thread_id,
+                        "suspend_for_daemon_stop failed during shutdown",
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -1079,14 +1191,35 @@ impl AgentGlue {
         }
         let conversation_id = uuid::Uuid::new_v4().to_string();
         let now_ms = current_unix_ms();
+
+        // Snapshot git context from the project workspace at create time.
+        let (branch, worktree_path) = project
+            .workspace_path
+            .as_deref()
+            .map(|p| crate::git_snapshot::detect_git_snapshot(std::path::Path::new(p)))
+            .unwrap_or((None, None));
+        let meta = crate::store::ConversationCreateMeta {
+            priority: None,
+            progress: Some("todo".into()),
+            branch,
+            worktree_path,
+        };
+
         self.store
-            .create_conversation(&conversation_id, &project.project_id, title, now_ms)
+            .create_conversation_with_meta(
+                &conversation_id,
+                &project.project_id,
+                title,
+                now_ms,
+                &meta,
+            )
             .await
             .map_err(|e| map_store_error("create_conversation", e))?;
         tracing::info!(
             target: "minos_daemon::agent",
             project_id = %project.project_id,
             conversation_id = %conversation_id,
+            branch = ?meta.branch,
             "conversation created",
         );
         let row = self
@@ -1097,6 +1230,124 @@ impl AgentGlue {
             .expect("conversation inserted above");
         Ok(minos_protocol::CreateConversationResponse {
             conversation: conversation_summary_from_row(row, Vec::new())?,
+        })
+    }
+
+    pub async fn update_conversation(
+        &self,
+        req: minos_protocol::UpdateConversationParams,
+    ) -> Result<minos_protocol::UpdateConversationResponse, MinosError> {
+        let existing = self
+            .store
+            .get_conversation(&req.conversation_id)
+            .await
+            .map_err(|e| map_store_error("update_conversation.get", e))?
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "update_conversation".into(),
+                message: format!("conversation not found: {}", req.conversation_id),
+            })?;
+
+        let title = match req.title.as_deref() {
+            Some(t) => {
+                let trimmed = t.trim();
+                if trimmed.is_empty() {
+                    return Err(MinosError::CodexProtocolError {
+                        method: "update_conversation".into(),
+                        message: "conversation title cannot be empty".into(),
+                    });
+                }
+                Some(trimmed.to_owned())
+            }
+            None => None,
+        };
+
+        let priority_patch: Option<Option<&str>> = match req.priority.as_deref() {
+            None => None,
+            Some("") => Some(None),
+            Some(p) => {
+                let normalized = p.trim().to_ascii_lowercase();
+                match normalized.as_str() {
+                    "high" | "medium" | "low" => Some(Some(match normalized.as_str() {
+                        "high" => "high",
+                        "medium" => "medium",
+                        "low" => "low",
+                        _ => unreachable!(),
+                    })),
+                    other => {
+                        return Err(MinosError::CodexProtocolError {
+                            method: "update_conversation".into(),
+                            message: format!(
+                                "invalid priority '{other}'; expected high|medium|low or empty"
+                            ),
+                        });
+                    }
+                }
+            }
+        };
+
+        let progress_patch: Option<&str> = match req.progress.as_deref() {
+            None => None,
+            Some(p) => {
+                let normalized = p.trim().to_ascii_lowercase();
+                match normalized.as_str() {
+                    "todo" | "in_progress" | "in_review" | "done" => {
+                        Some(match normalized.as_str() {
+                            "todo" => "todo",
+                            "in_progress" => "in_progress",
+                            "in_review" => "in_review",
+                            "done" => "done",
+                            _ => unreachable!(),
+                        })
+                    }
+                    other => {
+                        return Err(MinosError::CodexProtocolError {
+                            method: "update_conversation".into(),
+                            message: format!(
+                                "invalid progress '{other}'; expected todo|in_progress|in_review|done"
+                            ),
+                        });
+                    }
+                }
+            }
+        };
+
+        if title.is_none() && priority_patch.is_none() && progress_patch.is_none() {
+            return Ok(minos_protocol::UpdateConversationResponse {
+                conversation: conversation_summary_from_row(existing, Vec::new())?,
+            });
+        }
+
+        let now_ms = current_unix_ms();
+        self.store
+            .update_conversation_fields(
+                &req.conversation_id,
+                title.as_deref(),
+                priority_patch,
+                progress_patch,
+                now_ms,
+            )
+            .await
+            .map_err(|e| map_store_error("update_conversation", e))?;
+
+        let row = self
+            .store
+            .get_conversation(&req.conversation_id)
+            .await
+            .map_err(|e| map_store_error("update_conversation.reload", e))?
+            .expect("conversation updated above");
+        let agents = self
+            .store
+            .list_agents_for_conversations(&[req.conversation_id.clone()])
+            .await
+            .map_err(|e| map_store_error("update_conversation.agents", e))?;
+        let participating_agents = agents
+            .get(&req.conversation_id)
+            .into_iter()
+            .flatten()
+            .map(|agent| parse_agent_label(agent))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(minos_protocol::UpdateConversationResponse {
+            conversation: conversation_summary_from_row(row, participating_agents)?,
         })
     }
 
@@ -1271,6 +1522,19 @@ impl AgentGlue {
             outcome.provider_session_id.as_deref(),
         )
         .await;
+        // First real work: promote workflow progress out of todo.
+        if let Err(e) = self
+            .store
+            .promote_conversation_in_progress_if_todo(&req.conversation_id, current_unix_ms())
+            .await
+        {
+            tracing::warn!(
+                target: "minos_daemon::agent",
+                error = %e,
+                conversation_id = %req.conversation_id,
+                "failed to promote conversation progress to in_progress",
+            );
+        }
         let _ = self.state_tx.send(ThreadState::Idle);
         tracing::info!(
             target: "minos_daemon::agent",
@@ -1433,6 +1697,7 @@ fn thread_summary_from_row(row: crate::store::ThreadRow) -> Result<ThreadSummary
         end_reason,
         parent_thread_id: row.parent_thread_id,
         state,
+        needs_continue: row.needs_continue,
     })
 }
 
@@ -1450,6 +1715,16 @@ fn conversation_summary_from_row(
         message_count: u32::try_from(row.message_count.max(0)).unwrap_or(u32::MAX),
         agent_session_count: u32::try_from(row.agent_session_count.max(0)).unwrap_or(u32::MAX),
         participating_agents,
+        priority: row.priority.filter(|p| !p.is_empty()),
+        progress: if row.progress.is_empty() {
+            "todo".into()
+        } else {
+            row.progress
+        },
+        branch: row.branch.filter(|b| !b.is_empty()),
+        worktree_path: row.worktree_path.filter(|w| !w.is_empty()),
+        running_count: u32::try_from(row.running_count.max(0)).unwrap_or(u32::MAX),
+        needs_attention_count: u32::try_from(row.needs_attention_count.max(0)).unwrap_or(u32::MAX),
     })
 }
 
@@ -3122,10 +3397,49 @@ mod tests {
         .await
         .unwrap();
 
-        let response = test.glue.resume_thread("thr-r").await.unwrap();
+        let response = test.glue.resume_thread("thr-r", false).await.unwrap();
         assert_eq!(response.session_id, "thr-r");
         assert_eq!(response.cwd, "/w");
         assert!(test.glue.manager.has_thread("thr-r").await);
+    }
+
+    #[tokio::test]
+    async fn shutdown_suspends_threads_instead_of_closing() {
+        let test = test_glue().await;
+        seed_thread(&test.glue, "thr-stop", "codex", 10, 20).await;
+        test.glue
+            .manager
+            .register_persisted_thread(
+                "thr-stop".into(),
+                PathBuf::from("/w"),
+                minos_domain::AgentName::Codex,
+                Some("thr-stop".into()),
+                None,
+                Some("c-thr-stop".into()),
+                ThreadState::Idle,
+                0,
+            )
+            .await
+            .unwrap();
+
+        test.glue.shutdown().await.unwrap();
+
+        let row = test
+            .glue
+            .store
+            .get_thread("thr-stop")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.status, "suspended");
+        assert_eq!(row.last_pause_reason.as_deref(), Some("daemon_restart"));
+        assert!(!row.needs_continue);
+        assert!(matches!(
+            test.glue.manager.list_threads().await[0].state,
+            ThreadState::Suspended {
+                reason: minos_agent_runtime::PauseReason::DaemonRestart
+            }
+        ));
     }
 
     #[tokio::test]
@@ -3154,7 +3468,7 @@ mod tests {
         .await
         .unwrap();
 
-        let response = test.glue.resume_thread("thr-g").await.unwrap();
+        let response = test.glue.resume_thread("thr-g", false).await.unwrap();
 
         assert_eq!(response.session_id, "thr-g");
         assert_eq!(

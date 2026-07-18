@@ -131,12 +131,17 @@ pub(crate) fn holdback_streaming_source(text: &str) -> &str {
     let mut cut = match scanner.state() {
         TableHoldbackState::None => None,
         TableHoldbackState::PendingHeader { header_start }
-        | TableHoldbackState::Confirmed { table_start: header_start } => Some(header_start),
+        | TableHoldbackState::Confirmed {
+            table_start: header_start,
+        } => Some(header_start),
     };
 
     // Open fence: odd fence markers outside Other? FenceTracker ends open.
     // Scan complete region for last open fence start when fence still open.
-    if matches!(scanner.fence_tracker.kind(), FenceKind::Other | FenceKind::Markdown) {
+    if matches!(
+        scanner.fence_tracker.kind(),
+        FenceKind::Other | FenceKind::Markdown
+    ) {
         if let Some(fence_start) = last_open_fence_start(complete) {
             cut = Some(match cut {
                 Some(c) => c.min(fence_start),

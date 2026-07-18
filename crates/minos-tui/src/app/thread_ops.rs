@@ -35,13 +35,17 @@ impl App {
     pub(super) fn remove_thread_from_ui(&mut self, selected: usize, thread_id: &str) {
         let index = self
             .ui
-            .thread_panel.list.items
+            .thread_panel
+            .list
+            .items
             .get(selected)
             .filter(|entry| entry.thread_id == thread_id)
             .map(|_| selected)
             .or_else(|| {
                 self.ui
-                    .thread_panel.list.items
+                    .thread_panel
+                    .list
+                    .items
                     .iter()
                     .position(|entry| entry.thread_id == thread_id)
             });
@@ -72,7 +76,9 @@ impl App {
 
     pub(super) fn current_thread_is_interruptible(&self) -> bool {
         self.ui
-            .thread_panel.list.selected
+            .thread_panel
+            .list
+            .selected
             .and_then(|index| self.ui.thread_panel.list.items.get(index))
             .is_some_and(|thread| {
                 matches!(

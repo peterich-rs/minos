@@ -37,7 +37,10 @@ impl App {
         target: InputTarget,
     ) -> bool {
         let (input, area) = match target {
-            InputTarget::Conversation => (&self.ui.inputs.conversation, self.ui.panel_areas.conversation_input),
+            InputTarget::Conversation => (
+                &self.ui.inputs.conversation,
+                self.ui.panel_areas.conversation_input,
+            ),
             InputTarget::Agent => (&self.ui.inputs.agent, self.ui.panel_areas.agent_input),
         };
         let width = area.width.saturating_sub(2).max(1);
@@ -138,12 +141,18 @@ impl App {
                 agent,
                 text,
                 message_body,
-            } => self.dispatch_prompt_to_agent(agent, text, message_body).await,
+            } => {
+                self.dispatch_prompt_to_agent(agent, text, message_body)
+                    .await
+            }
             Effect::SendTextToThread {
                 thread_id,
                 text,
                 message_body,
-            } => self.send_text_to_thread(thread_id, text, message_body).await,
+            } => {
+                self.send_text_to_thread(thread_id, text, message_body)
+                    .await
+            }
             Effect::SubmitPendingAgentRequest {
                 thread_id,
                 pending,
@@ -313,6 +322,20 @@ impl App {
                                 return;
                             }
                         };
+                        if let Some(session) =
+                            conversation_ops::pick_auto_continue_session(&sessions)
+                        {
+                            if let Err(error) =
+                                backend.resume_thread(&session.thread_id, true).await
+                            {
+                                tracing::warn!(
+                                    target: "minos_tui::app",
+                                    error = %error,
+                                    thread_id = %session.thread_id,
+                                    "auto-continue resume_thread failed on open"
+                                );
+                            }
+                        }
                         let _ = tx.send(AppEvent::ConversationOpened {
                             project_id,
                             conversation_id,
@@ -656,5 +679,3 @@ fn wheel_lines(mouse: MouseEvent) -> u16 {
     let ticks = u16::from(mouse.modifiers.bits()).max(1);
     LINES_PER_TICK.saturating_mul(ticks)
 }
-
-

@@ -160,8 +160,8 @@ impl RenderCache {
         if self.is_valid(thread_id, version, width) {
             return;
         }
-        let same_surface = self.indexed_thread_id.as_deref() == Some(thread_id)
-            && self.indexed_width == width;
+        let same_surface =
+            self.indexed_thread_id.as_deref() == Some(thread_id) && self.indexed_width == width;
 
         if same_surface
             && self.indexed_structure_version == structure_version
@@ -315,8 +315,8 @@ impl RenderCache {
 
             // Fast path: nothing to do — pure scroll stays O(1).
             let visible_needs = (first_vis..=last_vis).any(|idx| self.needs_measure(idx));
-            let margin_needs = (last_vis.saturating_add(1)..=end_margin)
-                .any(|idx| self.needs_measure(idx));
+            let margin_needs =
+                (last_vis.saturating_add(1)..=end_margin).any(|idx| self.needs_measure(idx));
             if !visible_needs && !margin_needs {
                 break;
             }
@@ -342,7 +342,7 @@ impl RenderCache {
             // Follow/bottom: measure high indices first so the live tail is exact.
             let mut measured_any = false;
             if visible_needs {
-                let mut vis_budget = (*budget).min(MAX_VISIBLE_EXACT_PER_FRAME).max(1);
+                let mut vis_budget = (*budget).clamp(1, MAX_VISIBLE_EXACT_PER_FRAME);
                 let before = vis_budget;
                 if follow_mode {
                     measured_any |= self.measure_range_exact_rev(
@@ -432,7 +432,8 @@ impl RenderCache {
             .saturating_sub(1)
             .min(self.segments.len().saturating_sub(1))
             .max(first);
-        let end = (last_visible + MEASURE_MARGIN_ENTRIES).min(self.segments.len().saturating_sub(1));
+        let end =
+            (last_visible + MEASURE_MARGIN_ENTRIES).min(self.segments.len().saturating_sub(1));
         Some((first, last_visible, end))
     }
 
@@ -505,14 +506,7 @@ impl RenderCache {
             return false;
         }
         let prev = self.segments[idx].stream_commit.clone();
-        let built = build_exact_segment(
-            idx,
-            &items[idx],
-            items,
-            width,
-            runs,
-            prev.as_ref(),
-        );
+        let built = build_exact_segment(idx, &items[idx], items, width, runs, prev.as_ref());
         self.segments[idx].visual_lines = built.visual_lines;
         self.segments[idx].height = built.height;
         self.segments[idx].stream_commit = built.stream_commit;
@@ -550,13 +544,7 @@ impl RenderCache {
             .expect("thread_id set by rebuild_if_stale before warm");
         let runs = self.runs_snapshot(&thread_id, items, structure_version, verb_group_expanded);
         let _ = self.measure_range_exact(
-            items,
-            width,
-            &runs,
-            start,
-            end,
-            budget,
-            /*required=*/ false,
+            items, width, &runs, start, end, budget, /*required=*/ false,
         );
         if (start..=end).any(|idx| self.needs_measure(idx)) {
             self.needs_followup_frame = true;
@@ -680,14 +668,7 @@ impl RenderCache {
             let streaming = item_is_streaming(item);
             if self.measured[idx] || streaming || near_tail {
                 let prev = self.segments[idx].stream_commit.clone();
-                let built = build_exact_segment(
-                    idx,
-                    item,
-                    items,
-                    width,
-                    &runs,
-                    prev.as_ref(),
-                );
+                let built = build_exact_segment(idx, item, items, width, &runs, prev.as_ref());
                 self.segments[idx] = built;
                 self.measured[idx] = true;
             } else {
@@ -824,10 +805,8 @@ impl RenderCache {
 
         let runs = find_runs(items, verb_group_expanded);
         let mode = paint_mode_with_runs(items, idx, &runs);
-        let is_group_header = matches!(
-            mode,
-            PaintMode::CollapsedHeader | PaintMode::ExpandedHeader
-        );
+        let is_group_header =
+            matches!(mode, PaintMode::CollapsedHeader | PaintMode::ExpandedHeader);
         if !items[idx].is_foldable() && !is_group_header {
             return None;
         }
@@ -836,12 +815,8 @@ impl RenderCache {
         }
 
         let segment_start = self.item_starts[idx];
-        let has_prior_visible = (0..idx).any(|i| {
-            !matches!(
-                paint_mode_with_runs(items, i, &runs),
-                PaintMode::Hidden
-            )
-        });
+        let has_prior_visible =
+            (0..idx).any(|i| !matches!(paint_mode_with_runs(items, i, &runs), PaintMode::Hidden));
         let header_row = if has_prior_visible {
             segment_start.saturating_add(1)
         } else {
@@ -975,11 +950,7 @@ fn estimate_height(item: &ChatItem, mode: PaintMode, has_gap: bool, width: u16) 
 
     let (chars, newlines) = rough_text_metrics(item);
     let cols = usize::from(width.max(1));
-    let wrapped = chars
-        .saturating_add(newlines.saturating_mul(cols))
-        / cols
-        + newlines
-        + 1;
+    let wrapped = chars.saturating_add(newlines.saturating_mul(cols)) / cols + newlines + 1;
     let body = wrapped.clamp(1, MAX_ESTIMATE_BODY_LINES);
     gap + body
 }
@@ -993,7 +964,8 @@ fn rough_text_metrics(item: &ChatItem) -> (usize, usize) {
                 match part {
                     crate::translation::TextPart::Plain(t) => {
                         chars = chars.saturating_add(t.len());
-                        newlines = newlines.saturating_add(t.bytes().filter(|&b| b == b'\n').count());
+                        newlines =
+                            newlines.saturating_add(t.bytes().filter(|&b| b == b'\n').count());
                     }
                     crate::translation::TextPart::Code { code, .. } => {
                         chars = chars.saturating_add(code.len());
@@ -1006,10 +978,9 @@ fn rough_text_metrics(item: &ChatItem) -> (usize, usize) {
         }
         ChatItem::Reasoning { text, .. }
         | ChatItem::SystemMessage { text }
-        | ChatItem::Error { text, .. } => (
-            text.len(),
-            text.bytes().filter(|&b| b == b'\n').count(),
-        ),
+        | ChatItem::Error { text, .. } => {
+            (text.len(), text.bytes().filter(|&b| b == b'\n').count())
+        }
         ChatItem::ToolCall {
             args_summary,
             output_summary,
@@ -1038,10 +1009,9 @@ fn rough_text_metrics(item: &ChatItem) -> (usize, usize) {
             }
             (chars, newlines)
         }
-        ChatItem::SubagentCall {
-            prompt_summary,
-            ..
-        } => (prompt_summary.as_ref().map_or(24, String::len), 0),
+        ChatItem::SubagentCall { prompt_summary, .. } => {
+            (prompt_summary.as_ref().map_or(24, String::len), 0)
+        }
     }
 }
 

@@ -656,6 +656,17 @@ pub struct GetThreadParams {
     pub thread_id: String,
 }
 
+/// Parameters for local `resume_thread`. Reattach only by default; optional
+/// `auto_continue` injects a one-shot CONTINUE prompt when the store flag is set.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResumeThreadRequest {
+    pub thread_id: String,
+    /// When true, after reattach, if `needs_continue` is set, inject CONTINUE once.
+    /// Send paths must leave this false so user text wins.
+    #[serde(default)]
+    pub auto_continue: bool,
+}
+
 /// Mirror of `minos_agent_runtime::ThreadState` published over the wire for
 /// the host's JSON-RPC surface. Kept structurally identical to the runtime
 /// enum (same `tag = "kind"` / `snake_case` shape) so the two serialise
@@ -748,6 +759,9 @@ pub struct ThreadSummary {
     pub end_reason: Option<ThreadEndReason>,
     pub parent_thread_id: Option<String>,
     pub state: ThreadState,
+    /// Host should offer a one-shot continue turn after process-death recovery.
+    #[serde(default)]
+    pub needs_continue: bool,
 }
 
 /// Parameters for `list_threads`. `before_ts_ms` paginates older entries;
@@ -867,6 +881,10 @@ pub struct ListProjectsResponse {
     pub projects: Vec<ProjectSummary>,
 }
 
+fn default_conversation_progress() -> String {
+    "todo".to_string()
+}
+
 /// Local TUI conversation list item. This is separate from the social/cloud
 /// `ConversationSummary` type near the top of this file.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -882,6 +900,24 @@ pub struct LocalConversationSummary {
     pub agent_session_count: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub participating_agents: Vec<AgentName>,
+    /// User priority: `high` | `medium` | `low`. Absent = unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<String>,
+    /// Workflow progress: `todo` | `in_progress` | `in_review` | `done`.
+    #[serde(default = "default_conversation_progress")]
+    pub progress: String,
+    /// Git branch snapshot captured when the conversation was created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Linked worktree path snapshot at create (when workspace is a git worktree).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    /// Live agent sessions in starting/running/resuming (list-time aggregate).
+    #[serde(default)]
+    pub running_count: u32,
+    /// Live agent sessions needing human attention (suspended / approval).
+    #[serde(default)]
+    pub needs_attention_count: u32,
 }
 
 /// Agent/thread mention attached to a local conversation message.
@@ -936,6 +972,26 @@ pub struct CreateConversationParams {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct CreateConversationResponse {
+    pub conversation: LocalConversationSummary,
+}
+
+/// Patch conversation product metadata (title / priority / progress).
+/// Omitted fields are left unchanged. For `priority`, send empty string to clear.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct UpdateConversationParams {
+    pub conversation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// `high` | `medium` | `low`, or empty string to clear. Absent = leave unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<String>,
+    /// `todo` | `in_progress` | `in_review` | `done`. Absent = leave unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct UpdateConversationResponse {
     pub conversation: LocalConversationSummary,
 }
 
@@ -1337,6 +1393,7 @@ mod new_type_tests {
             state: ThreadState::Closed {
                 reason: CloseReason::UserClose,
             },
+            needs_continue: false,
         };
         let back: ThreadSummary =
             serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
@@ -1356,6 +1413,7 @@ mod new_type_tests {
             end_reason: None,
             parent_thread_id: Some("parent".into()),
             state: ThreadState::Idle,
+            needs_continue: true,
         };
         let back: ThreadSummary =
             serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
@@ -1400,6 +1458,7 @@ mod new_type_tests {
                 end_reason: None,
                 parent_thread_id: None,
                 state: ThreadState::Idle,
+                needs_continue: false,
             }],
             next_before_ts_ms: Some(1),
         };

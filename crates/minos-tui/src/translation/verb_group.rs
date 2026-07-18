@@ -40,7 +40,11 @@ impl VerbBucket {
             Self::WebFetch => ("Fetched", "Fetching"),
             Self::Subagent => ("Ran", "Running"),
         };
-        if running { present } else { past }
+        if running {
+            present
+        } else {
+            past
+        }
     }
 
     pub fn noun(self, count: usize) -> &'static str {
@@ -52,7 +56,11 @@ impl VerbBucket {
             Self::WebFetch | Self::WebSearch => ("website", "websites"),
             Self::Subagent => ("subagent", "subagents"),
         };
-        if count == 1 { one } else { many }
+        if count == 1 {
+            one
+        } else {
+            many
+        }
     }
 }
 
@@ -164,9 +172,7 @@ pub fn find_runs(items: &[ChatItem], expanded_ids: &HashSet<String>) -> Vec<Verb
         match scan_run_forward(items, i) {
             Some(scan) if scan.members >= 1 => {
                 let anchor = run_anchor_id(items, scan.start);
-                let expanded = anchor
-                    .as_ref()
-                    .is_some_and(|id| expanded_ids.contains(id));
+                let expanded = anchor.as_ref().is_some_and(|id| expanded_ids.contains(id));
                 runs.push(VerbGroupRun {
                     start: scan.start,
                     end: scan.end,
@@ -243,11 +249,7 @@ pub fn paint_mode(items: &[ChatItem], index: usize, expanded_ids: &HashSet<Strin
     paint_mode_with_runs(items, index, &runs)
 }
 
-pub fn paint_mode_with_runs(
-    items: &[ChatItem],
-    index: usize,
-    runs: &[VerbGroupRun],
-) -> PaintMode {
+pub fn paint_mode_with_runs(items: &[ChatItem], index: usize, runs: &[VerbGroupRun]) -> PaintMode {
     let Some(run) = runs.iter().find(|r| r.contains(index)) else {
         return PaintMode::Normal;
     };
@@ -316,9 +318,7 @@ pub fn header_label(items: &[ChatItem], start: usize, end: usize) -> HeaderLabel
                 if matches!(status, minos_ui_protocol::SubagentStatus::Failed) {
                     failed += 1;
                 }
-                if *is_streaming
-                    || matches!(status, minos_ui_protocol::SubagentStatus::Running)
-                {
+                if *is_streaming || matches!(status, minos_ui_protocol::SubagentStatus::Running) {
                     running = true;
                 }
             }
@@ -445,7 +445,10 @@ mod tests {
 
         let label = header_label(&items, 0, 3);
         assert_eq!(label.plain_text(), "Read 3 files");
-        assert_eq!(paint_mode(&items, 0, &HashSet::new()), PaintMode::CollapsedHeader);
+        assert_eq!(
+            paint_mode(&items, 0, &HashSet::new()),
+            PaintMode::CollapsedHeader
+        );
         assert_eq!(paint_mode(&items, 1, &HashSet::new()), PaintMode::Hidden);
         assert_eq!(paint_mode(&items, 2, &HashSet::new()), PaintMode::Hidden);
     }
@@ -507,8 +510,14 @@ mod tests {
         expanded.insert("1".into());
         let runs = find_runs(&items, &expanded);
         assert!(runs[0].expanded);
-        assert_eq!(paint_mode_with_runs(&items, 0, &runs), PaintMode::ExpandedHeader);
-        assert_eq!(paint_mode_with_runs(&items, 1, &runs), PaintMode::ExpandedMember);
+        assert_eq!(
+            paint_mode_with_runs(&items, 0, &runs),
+            PaintMode::ExpandedHeader
+        );
+        assert_eq!(
+            paint_mode_with_runs(&items, 1, &runs),
+            PaintMode::ExpandedMember
+        );
     }
 
     #[test]

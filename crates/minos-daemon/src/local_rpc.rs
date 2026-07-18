@@ -10,8 +10,8 @@ use minos_domain::MinosError;
 use minos_protocol::{
     AppendConversationMessageParams, AppendConversationMessageResponse, ApprovalDecisionRequest,
     CloseThreadRequest, CreateConversationParams, CreateConversationResponse, CreateProjectRequest,
-    CreateProjectResponse, GetThreadParams, HealthResponse, InterruptThreadRequest,
-    ListClisResponse, ListConversationAgentSessionsParams, ListConversationAgentSessionsResponse,
+    CreateProjectResponse, HealthResponse, InterruptThreadRequest, ListClisResponse,
+    ListConversationAgentSessionsParams, ListConversationAgentSessionsResponse,
     ListConversationMessagesParams, ListConversationMessagesResponse, ListConversationsParams,
     ListConversationsResponse, ListProjectsResponse, LocalConversationEvent, LocalDaemonRpcServer,
     LocalIngestFrame, LocalManagerEvent, LocalThreadSnapshot, ReadArtifactRangeRequest,
@@ -29,6 +29,15 @@ use crate::rpc_server::rpc_err;
 pub struct LocalRpcConfig {
     pub addr: SocketAddr,
     pub discovery_path: PathBuf,
+}
+
+/// Result of starting the local JSON-RPC WebSocket server.
+pub struct LocalRpcServer {
+    pub handle: jsonrpsee::server::ServerHandle,
+    pub addr: SocketAddr,
+    /// Canonical client URL (`ws://127.0.0.1:PORT`). Prefer this over re-reading
+    /// the discovery file so in-process managed clients never race on stale paths.
+    pub url: String,
 }
 
 pub struct LocalRpcImpl {
@@ -111,10 +120,10 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
 
     async fn resume_thread(
         &self,
-        req: GetThreadParams,
+        req: minos_protocol::ResumeThreadRequest,
     ) -> jsonrpsee::core::RpcResult<StartAgentResponse> {
         self.agent
-            .resume_thread(&req.thread_id)
+            .resume_thread(&req.thread_id, req.auto_continue)
             .await
             .map_err(rpc_err)
     }
@@ -178,6 +187,21 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
             "local RPC create_conversation",
         );
         self.agent.create_conversation(req).await.map_err(rpc_err)
+    }
+
+    async fn update_conversation(
+        &self,
+        req: minos_protocol::UpdateConversationParams,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::UpdateConversationResponse> {
+        tracing::info!(
+            target: "minos_daemon::local_rpc",
+            conversation_id = %req.conversation_id,
+            has_title = req.title.is_some(),
+            has_priority = req.priority.is_some(),
+            has_progress = req.progress.is_some(),
+            "local RPC update_conversation",
+        );
+        self.agent.update_conversation(req).await.map_err(rpc_err)
     }
 
     async fn list_conversation_messages(
@@ -340,7 +364,7 @@ pub async fn start_local_rpc_server(
     config: LocalRpcConfig,
     runner: Arc<dyn CommandRunner>,
     agent: Arc<AgentGlue>,
-) -> Result<jsonrpsee::server::ServerHandle, MinosError> {
+) -> Result<LocalRpcServer, MinosError> {
     let (ingest_tx, _) = broadcast::channel(256);
     let (mgr_evt_tx, _) = broadcast::channel(256);
     let (conversation_evt_tx, _) = broadcast::channel(256);
@@ -370,9 +394,10 @@ pub async fn start_local_rpc_server(
             message: e.to_string(),
         })?;
 
+    let url = format!("ws://{local_addr}");
     let handle = server.start(impl_.into_rpc());
 
-    write_discovery_file(&config.discovery_path, local_addr);
+    write_discovery_file(&config.discovery_path, &url);
 
     spawn_ingest_bridge(agent.clone(), ingest_tx);
 
@@ -382,28 +407,46 @@ pub async fn start_local_rpc_server(
     tracing::info!(
         target: "minos_daemon::local_rpc",
         addr = %local_addr,
+        url = %url,
         "local RPC server started",
     );
 
-    Ok(handle)
+    Ok(LocalRpcServer {
+        handle,
+        addr: local_addr,
+        url,
+    })
 }
 
-fn write_discovery_file(path: &PathBuf, addr: SocketAddr) {
+fn write_discovery_file(path: &PathBuf, url: &str) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let payload = json!({
-        "url": format!("ws://{addr}")
-    });
+    let payload = json!({ "url": url });
     match serde_json::to_string_pretty(&payload) {
         Ok(content) => {
-            if let Err(e) = std::fs::write(path, content) {
+            // Atomic replace so readers never see a partial JSON blob.
+            let tmp = path.with_extension("json.tmp");
+            if let Err(e) = std::fs::write(&tmp, &content) {
                 tracing::warn!(
                     target: "minos_daemon::local_rpc",
                     error = %e,
-                    path = %path.display(),
-                    "failed to write discovery file",
+                    path = %tmp.display(),
+                    "failed to write discovery temp file",
                 );
+                return;
+            }
+            if let Err(e) = std::fs::rename(&tmp, path) {
+                // Fall back to direct write if rename fails (cross-device).
+                if let Err(e2) = std::fs::write(path, content) {
+                    tracing::warn!(
+                        target: "minos_daemon::local_rpc",
+                        error = %e,
+                        fallback_error = %e2,
+                        path = %path.display(),
+                        "failed to publish discovery file",
+                    );
+                }
             }
         }
         Err(e) => {

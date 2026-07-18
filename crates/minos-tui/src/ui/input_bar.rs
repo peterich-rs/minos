@@ -10,9 +10,9 @@ pub use render::{
     visual_cursor_row, InputBarRenderable, InputLayoutMetrics,
 };
 // Re-export so UI callers can keep importing from input_bar.
-pub use crate::path_complete::PathCandidate;
 #[cfg(test)]
 pub use crate::path_complete::list_path_candidates;
+pub use crate::path_complete::PathCandidate;
 
 #[cfg(test)]
 use render::agent_picker_status_label;

@@ -14,9 +14,7 @@ use minos_daemon::local_rpc::{start_local_rpc_server, LocalRpcConfig};
 use minos_daemon::store::event_writer::EventWriter;
 use minos_daemon::store::LocalStore;
 use minos_domain::AgentName;
-use minos_protocol::{
-    AgentLaunchMode, GetThreadParams, ReadThreadParams, StartAgentRequest, StartAgentResponse,
-};
+use minos_protocol::{AgentLaunchMode, ReadThreadParams, StartAgentRequest, StartAgentResponse};
 
 use async_trait::async_trait;
 use minos_cli_detect::CommandOutcome;
@@ -72,11 +70,11 @@ async fn setup() -> (
         addr: "127.0.0.1:0".parse().unwrap(),
         discovery_path,
     };
-    let handle = start_local_rpc_server(config, Arc::new(NoopRunner), glue.clone())
+    let started = start_local_rpc_server(config, Arc::new(NoopRunner), glue.clone())
         .await
         .unwrap();
 
-    (glue, handle, tmp, fake)
+    (glue, started.handle, tmp, fake)
 }
 
 fn discovery_addr(tmp: &tempfile::TempDir) -> String {
@@ -96,7 +94,8 @@ async fn detect_clis_returns_empty_with_noop_runner() {
         .await
         .unwrap();
 
-    assert!(response.len() <= 4);
+    // One descriptor per known agent (installed or not); NoopRunner still enumerates.
+    assert!(response.len() <= minos_domain::AgentName::all().len());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -207,25 +206,23 @@ async fn resume_thread_and_read_history() {
         "raw history should only contain events for the requested thread"
     );
 
-    glue.close_thread(minos_protocol::CloseThreadRequest {
-        thread_id: thread_id.clone(),
-    })
-    .await
-    .ok();
-
-    sqlx::query(
-        "UPDATE threads SET status = 'suspended', last_pause_reason = 'daemon_restart' WHERE thread_id = ?",
-    )
-    .bind(&thread_id)
-    .execute(glue.store().pool())
-    .await
-    .unwrap();
+    let needs = glue
+        .manager
+        .suspend_for_daemon_stop(&thread_id)
+        .await
+        .unwrap();
+    assert!(!needs);
+    glue.store()
+        .suspend_thread_for_daemon_restart(&thread_id, false, 1)
+        .await
+        .unwrap();
 
     let resume_resp: StartAgentResponse = client
         .request(
             "minos_local_resume_thread",
-            [GetThreadParams {
+            [minos_protocol::ResumeThreadRequest {
                 thread_id: thread_id.clone(),
+                auto_continue: false,
             }],
         )
         .await

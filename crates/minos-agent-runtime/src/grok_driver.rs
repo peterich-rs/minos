@@ -17,7 +17,12 @@ use tracing::info;
 use crate::acp_client::AcpClient;
 use crate::config::RawIngest;
 use crate::manager::IngestSink;
+use crate::manager_event::ManagerEvent;
+use crate::state_machine::ThreadState;
+use crate::thread_handle::ThreadHandle;
 use minos_domain::AgentName;
+use serde_json::Value;
+use tracing::info as log_info;
 
 #[allow(dead_code)]
 const KILL_ESCALATION: Duration = Duration::from_secs(3);
@@ -256,11 +261,29 @@ pub(crate) fn spawn_acp_pump(
     thread_id: String,
     events_tx: IngestSink,
     pending_approvals: crate::manager::PendingApprovals,
+    threads: Arc<
+        tokio::sync::Mutex<std::collections::HashMap<String, crate::thread_handle::ThreadHandle>>,
+    >,
+    manager_tx: tokio::sync::broadcast::Sender<crate::manager_event::ManagerEvent>,
+    workspace: std::path::PathBuf,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             match client.next_inbound().await {
                 Some(crate::acp_client::Inbound::Notification { method, params }) => {
+                    // Register Grok background subagents into the Minos thread tree
+                    // before durable ingest, so list_conversation_agent_sessions can
+                    // show parent → child like Codex/Opencode.
+                    if method == "session/update" {
+                        register_grok_subagent_from_session_update(
+                            &thread_id,
+                            &params,
+                            &threads,
+                            &manager_tx,
+                            &workspace,
+                        )
+                        .await;
+                    }
                     if let Err(error) = events_tx
                         .emit(RawIngest::from_json(
                             AgentName::Grok,
@@ -415,8 +438,7 @@ async fn register_acp_permission_request(
         serde_json::Value::String(s) => s.clone(),
         other => other.to_string(),
     };
-    let (allow_option_id, reject_option_id) =
-        crate::approvals::acp_permission_option_ids(&params);
+    let (allow_option_id, reject_option_id) = crate::approvals::acp_permission_option_ids(&params);
 
     // Surface both the approval overlay envelope and a tool-shaped server
     // request for translators that still render tool call chrome.
@@ -473,7 +495,10 @@ async fn register_acp_permission_request(
 /// the pump strips the leading `_` before calling this, so the argument here is
 /// the bare `x.ai/...` name.
 pub(crate) fn is_known_grok_ext_method(nested_method: &str) -> bool {
-    matches!(nested_method, "x.ai/exit_plan_mode" | "x.ai/ask_user_question")
+    matches!(
+        nested_method,
+        "x.ai/exit_plan_mode" | "x.ai/ask_user_question"
+    )
 }
 
 /// Immediate auto-reply for ext_methods that Minos does not park on UI yet.
@@ -643,6 +668,104 @@ async fn reply_to_unsupported_acp_server_request(
                 .await
         }
     }
+}
+
+/// When Grok emits `subagent_progress` / `subagent_finished` (or a completed
+/// `spawn_subagent` tool), register a Minos child thread under the parent so
+/// Desktop/TUI session trees match Codex/Opencode.
+async fn register_grok_subagent_from_session_update(
+    parent_thread_id: &str,
+    params: &Value,
+    threads: &Arc<Mutex<HashMap<String, ThreadHandle>>>,
+    manager_tx: &tokio::sync::broadcast::Sender<ManagerEvent>,
+    workspace: &Path,
+) {
+    let update = params.get("update").unwrap_or(params);
+    let session_update = update
+        .get("sessionUpdate")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let child_id = match session_update {
+        "subagent_progress" | "subagent_finished" => update
+            .get("child_session_id")
+            .or_else(|| update.get("subagent_id"))
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned),
+        "tool_call_update" if update.get("status").and_then(Value::as_str) == Some("completed") => {
+            // Fall back: parse "subagent_id: …" from spawn_subagent tool output.
+            let content = update
+                .get("content")
+                .map(|c| c.to_string())
+                .unwrap_or_default();
+            content.lines().find_map(|line| {
+                line.trim()
+                    .strip_prefix("subagent_id:")
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+            })
+        }
+        _ => None,
+    };
+    let Some(child_id) = child_id else {
+        return;
+    };
+    if child_id == parent_thread_id {
+        return;
+    }
+
+    let finished = session_update == "subagent_finished";
+    let mut guard = threads.lock().await;
+    if let Some(handle) = guard.get(&child_id) {
+        // Already registered — only flip terminal state on finish.
+        if finished {
+            let _ = handle.transition(ThreadState::Closed {
+                reason: crate::state_machine::CloseReason::UserClose,
+            });
+        }
+        return;
+    }
+    let ws = guard
+        .get(parent_thread_id)
+        .map(|h| h.workspace.clone())
+        .unwrap_or_else(|| workspace.to_path_buf());
+    let initial = if finished {
+        ThreadState::Closed {
+            reason: crate::state_machine::CloseReason::UserClose,
+        }
+    } else {
+        ThreadState::Running {
+            turn_started_at_ms: chrono::Utc::now().timestamp_millis(),
+        }
+    };
+    guard.insert(
+        child_id.clone(),
+        ThreadHandle::new_subagent(
+            child_id.clone(),
+            ws.clone(),
+            AgentName::Grok,
+            parent_thread_id.to_owned(),
+            Some(child_id.clone()),
+            initial,
+            0,
+        ),
+    );
+    drop(guard);
+    let _ = manager_tx.send(ManagerEvent::ThreadAdded {
+        thread_id: child_id.clone(),
+        workspace: ws.clone(),
+        agent: AgentName::Grok,
+        parent_thread_id: Some(parent_thread_id.to_owned()),
+    });
+    log_info!(
+        target: "minos_agent_runtime::grok_driver",
+        parent_thread_id = %parent_thread_id,
+        sub_thread_id = %child_id,
+        finished,
+        workspace = %ws.display(),
+        "registered grok subagent thread",
+    );
 }
 
 #[cfg(test)]

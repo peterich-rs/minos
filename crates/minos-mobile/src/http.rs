@@ -298,6 +298,7 @@ impl FormalAgentSessionSummary {
             end_reason: self.end_reason,
             parent_thread_id: None,
             state,
+            needs_continue: false,
         })
     }
 }

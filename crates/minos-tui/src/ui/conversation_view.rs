@@ -189,7 +189,7 @@ impl ConversationChatRenderCache {
                 }
             }
             // Last message body updated in place (same count).
-            if messages.len() == self.indexed_count && messages.len() > 0 {
+            if messages.len() == self.indexed_count && !messages.is_empty() {
                 let without_last = messages_fingerprint(&messages[..messages.len() - 1]);
                 if without_last == self.indexed_prefix_fingerprint {
                     self.rebuild_last_message(messages, width);
@@ -309,7 +309,9 @@ impl ConversationChatRenderCache {
     }
 }
 
-fn message_index(messages: &[ConversationMessageEntry]) -> HashMap<&str, &ConversationMessageEntry> {
+fn message_index(
+    messages: &[ConversationMessageEntry],
+) -> HashMap<&str, &ConversationMessageEntry> {
     let mut map = HashMap::with_capacity(messages.len());
     for message in messages {
         map.insert(message.message_id.as_str(), message);
@@ -364,7 +366,11 @@ fn build_message_segment(
     let (label, style) = label_for_message(message);
     lines.push(Line::from(Span::styled(label, style)));
     if let Some(reply_to) = message.reply_to_message_id.as_deref() {
-        lines.extend(reply_preview_lines(by_id.get(reply_to).copied(), reply_to, width));
+        lines.extend(reply_preview_lines(
+            by_id.get(reply_to).copied(),
+            reply_to,
+            width,
+        ));
     }
     for raw_line in message.body.split('\n') {
         lines.extend(wrap_body_line_with_mentions(raw_line, width));
@@ -430,7 +436,10 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         return text.to_owned();
     }
-    let mut out = text.chars().take(max_chars.saturating_sub(1)).collect::<String>();
+    let mut out = text
+        .chars()
+        .take(max_chars.saturating_sub(1))
+        .collect::<String>();
     out.push('…');
     out
 }
@@ -453,8 +462,7 @@ fn apply_selection_highlight(
     for (local_row, line) in lines.iter_mut().enumerate() {
         let absolute_row = base_row + local_row;
         let plain = line_to_plain(line);
-        if let Some((start_col, end_col)) = selected_cols_for_row(selection, absolute_row, &plain)
-        {
+        if let Some((start_col, end_col)) = selected_cols_for_row(selection, absolute_row, &plain) {
             *line = highlight_line(std::mem::take(line), start_col, end_col);
         }
     }
@@ -779,7 +787,9 @@ mod tests {
         let lines = reply_preview_lines(Some(&parent), &parent.message_id, 80);
         let plain: Vec<String> = lines.iter().map(line_to_plain).collect();
         assert_eq!(plain[0], "  ↳ [Codex@thread-c]");
-        assert!(plain.iter().any(|line| line.contains("please inspect auth")));
+        assert!(plain
+            .iter()
+            .any(|line| line.contains("please inspect auth")));
         assert!(plain.iter().any(|line| line.starts_with("  │ ")));
     }
 

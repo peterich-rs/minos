@@ -238,9 +238,7 @@ fn submit_conversation_input(state: &mut AppState, ui: &mut UiState) -> (StateCh
         Some((target, body)) => (target.agent, body.clone()),
         None => {
             let Some(agent) = ui.status.agents.first().map(|a| a.name) else {
-                ui.set_error(
-                    "No agents detected. Install codex/claude/gemini/opencode.".into(),
-                );
+                ui.set_error("No agents detected. Install codex/claude/gemini/opencode.".into());
                 return (StateChange::redraw(), vec![]);
             };
             (agent, text.clone())
@@ -337,7 +335,8 @@ fn submit_conversation_input(state: &mut AppState, ui: &mut UiState) -> (StateCh
 }
 
 fn project_workspace(state: &AppState, ui: &UiState, project_id: &str) -> std::path::PathBuf {
-    ui.projects.items
+    ui.projects
+        .items
         .iter()
         .find(|project| project.project_id == project_id)
         .map(|project| project.workspace_path.clone())
@@ -351,7 +350,9 @@ fn find_conversation_thread(
 ) -> Option<String> {
     ui.nav_level().conversation_id()?;
     let short_id = short_id.to_ascii_lowercase();
-    ui.conversation.agent_sessions.items
+    ui.conversation
+        .agent_sessions
+        .items
         .iter()
         .filter(|session| session.parent_thread_id.is_none())
         .filter(|session| crate::agent_route::thread_can_receive_message(&session.state))

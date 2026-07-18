@@ -58,6 +58,8 @@ struct DaemonInner {
     #[allow(dead_code)]
     local_rpc_handle: Option<jsonrpsee::server::ServerHandle>,
     local_rpc_discovery_path: Option<PathBuf>,
+    /// Bound local RPC WebSocket URL when `local_rpc_config` was provided.
+    local_rpc_url: Option<String>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
@@ -216,14 +218,14 @@ impl DaemonHandle {
             .as_ref()
             .map(|config| config.discovery_path.clone());
 
-        let local_rpc_handle = if let Some(lr_config) = local_rpc_config {
+        let (local_rpc_handle, local_rpc_url) = if let Some(lr_config) = local_rpc_config {
             let runner = Arc::new(minos_cli_detect::RealCommandRunner::new(
                 subprocess_env.clone(),
             ));
-            let handle = start_local_rpc_server(lr_config, runner, agent.clone()).await?;
-            Some(handle)
+            let started = start_local_rpc_server(lr_config, runner, agent.clone()).await?;
+            (Some(started.handle), Some(started.url))
         } else {
-            None
+            (None, None)
         };
 
         Ok(Arc::new(Self {
@@ -239,8 +241,15 @@ impl DaemonHandle {
                 rt_handle: Handle::current(),
                 local_rpc_handle,
                 local_rpc_discovery_path,
+                local_rpc_url,
             }),
         }))
+    }
+
+    /// WebSocket URL of the in-process local JSON-RPC server, if started.
+    #[must_use]
+    pub fn local_rpc_url(&self) -> Option<String> {
+        self.inner.local_rpc_url.clone()
     }
 }
 
@@ -321,11 +330,14 @@ impl DaemonHandle {
     /// Stop the relay client + the embedded agent runtime. Idempotent —
     /// calling twice is a benign no-op after the first success.
     ///
-    /// C20 shutdown sequence:
-    /// 1. Best-effort `shutdown` on AgentGlue (closes every open thread).
-    /// 2. Flip orphan threads in the local DB to `suspended { daemon_restart }`.
-    /// 3. SIGTERM every codex child with a 5s grace, then SIGKILL.
-    /// 4. Tear down the relay WS client.
+    /// Shutdown sequence:
+    /// 1. Best-effort `AgentGlue::shutdown` — suspend (not close) every live
+    ///    thread and **synchronously** persist `suspended` + `needs_continue`.
+    /// 2. SIGTERM every provider child with a 5s grace, then SIGKILL.
+    /// 3. Tear down local RPC discovery + the relay WS client.
+    ///
+    /// Orphan recovery for unclean kills runs on the **next** start via
+    /// `mark_orphans_suspended` (not here).
     #[allow(clippy::missing_errors_doc)]
     pub async fn stop(&self) -> Result<(), MinosError> {
         match self.inner.agent.shutdown().await {

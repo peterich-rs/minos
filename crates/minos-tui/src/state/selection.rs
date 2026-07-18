@@ -63,12 +63,7 @@ pub(crate) fn begin_conversation_selection(ui: &mut UiState, column: u16, row: u
         return false;
     }
 
-    let point = chat_selection_point(
-        content_area,
-        ui.conversation.active_scroll(),
-        column,
-        row,
-    );
+    let point = chat_selection_point(content_area, ui.conversation.active_scroll(), column, row);
     ui.conversation.begin_selection(point);
     true
 }
@@ -124,10 +119,7 @@ pub(crate) fn handle_chat_selection_mouse(
     handle_agent_chat_selection_mouse(ui, mouse)
 }
 
-fn handle_agent_chat_selection_mouse(
-    ui: &mut UiState,
-    mouse: MouseEvent,
-) -> SelectionMouseResult {
+fn handle_agent_chat_selection_mouse(ui: &mut UiState, mouse: MouseEvent) -> SelectionMouseResult {
     let content_area = chat_content_area(ui.panel_areas.agent_chat);
     let Some((chat, cache)) = ui.current_chat_and_cache_mut() else {
         return SelectionMouseResult {

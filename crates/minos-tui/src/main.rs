@@ -4,8 +4,7 @@ use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use crossterm::{
     event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
-    execute,
-    SynchronizedUpdate,
+    execute, SynchronizedUpdate,
 };
 use minos_daemon::local_rpc::LocalRpcConfig;
 use minos_domain::AgentName;
@@ -255,7 +254,10 @@ async fn connect_or_start_daemon_backend(
     }
 
     let handle = start_managed_daemon_for_tui().await?;
-    let url = resolve_daemon_url(None)?;
+    let url = handle
+        .local_rpc_url()
+        .or_else(|| resolve_daemon_url(None).ok())
+        .ok_or_else(|| anyhow::anyhow!("managed daemon has no local RPC URL"))?;
     let backend = crate::backend::DaemonBackend::connect(&url).await?;
     Ok((Arc::new(backend), Some(handle)))
 }
@@ -268,11 +270,7 @@ fn setup_terminal() -> Result<DefaultTerminal> {
 }
 
 fn restore_terminal(terminal: &mut DefaultTerminal) -> Result<()> {
-    execute!(
-        stdout(),
-        DisableBracketedPaste,
-        DisableMouseCapture
-    )?;
+    execute!(stdout(), DisableBracketedPaste, DisableMouseCapture)?;
     terminal.show_cursor()?;
     ratatui::try_restore()?;
     Ok(())

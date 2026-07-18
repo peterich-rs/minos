@@ -442,6 +442,7 @@ fn decode_thread_summary_row(
         end_reason,
         parent_thread_id: None,
         state,
+        needs_continue: false,
     })
 }
 

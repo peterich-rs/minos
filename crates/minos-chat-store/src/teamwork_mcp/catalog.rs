@@ -4,8 +4,8 @@ use serde_json::Value;
 
 use super::permissions::TeamworkMcpPermissions;
 use super::tools::{
-    CancelDelegationTool, DelegateToAgentTool, GetDelegationStatusTool, ListConversationMessagesTool,
-    PostConversationUpdateTool, TeamworkMcpTool, WaitDelegationTool,
+    CancelDelegationTool, DelegateToAgentTool, GetDelegationStatusTool,
+    ListConversationMessagesTool, PostConversationUpdateTool, TeamworkMcpTool, WaitDelegationTool,
 };
 use crate::mcp_socket::SocketRequest;
 

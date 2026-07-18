@@ -13,7 +13,9 @@ impl App {
     ) {
         let is_opencode = self
             .ui
-            .thread_panel.list.items
+            .thread_panel
+            .list
+            .items
             .iter()
             .find(|thread| thread.thread_id == thread_id)
             .is_some_and(|thread| thread.agent == AgentName::Opencode);
@@ -34,7 +36,9 @@ impl App {
         #[allow(unreachable_code)]
         let Some(thread) = self
             .ui
-            .thread_panel.list.items
+            .thread_panel
+            .list
+            .items
             .iter()
             .find(|thread| thread.thread_id == thread_id)
         else {
@@ -95,7 +99,8 @@ impl App {
         if visible
             && self
                 .ui
-                .conversation.messages
+                .conversation
+                .messages
                 .iter()
                 .any(|message| message.message_id == message_id)
         {
@@ -114,7 +119,9 @@ impl App {
         }
         let agent = self
             .ui
-            .thread_panel.list.items
+            .thread_panel
+            .list
+            .items
             .iter()
             .find(|thread| thread.thread_id == thread_id)
             .map(|thread| thread.agent);
@@ -156,7 +163,8 @@ impl App {
         }
         let now = chrono::Utc::now().timestamp_millis();
         self.ui
-            .conversation.messages
+            .conversation
+            .messages
             .push(ConversationMessageEntry {
                 message_seq: now,
                 message_id: message_id.clone(),
@@ -174,7 +182,8 @@ impl App {
         if let Some(conversation) = self
             .ui
             .conversations
-            .items.iter_mut()
+            .items
+            .iter_mut()
             .find(|conversation| conversation.conversation_id == conversation_id)
         {
             conversation.message_count = conversation.message_count.saturating_add(1);
@@ -268,7 +277,9 @@ impl App {
                     .conversation_id()
                     .filter(|_| {
                         self.ui
-                            .conversation.agent_sessions.items
+                            .conversation
+                            .agent_sessions
+                            .items
                             .iter()
                             .any(|session| session.thread_id == thread_id)
                     })

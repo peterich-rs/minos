@@ -47,6 +47,11 @@ pub fn validate_transition(from: &ThreadState, to: &ThreadState) -> Result<(), I
             | (Running { .. }, Idle)
             | (Running { .. }, Suspended { .. })
             | (Idle, Suspended { .. })
+            // Daemon stop / process-death recovery may suspend mid-flight.
+            | (Starting, Suspended { .. })
+            | (Resuming, Suspended { .. })
+            // Allow pause-reason rewrite (e.g. UserInterrupt → DaemonRestart on stop).
+            | (Suspended { .. }, Suspended { .. })
             | (Suspended { .. }, Resuming)
             | (Resuming, Idle)
             | (
@@ -124,6 +129,33 @@ mod tests {
             },
             &ThreadState::Closed {
                 reason: CloseReason::UserClose,
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn starting_and_resuming_can_suspend_for_daemon_stop() {
+        validate_transition(
+            &ThreadState::Starting,
+            &ThreadState::Suspended {
+                reason: PauseReason::DaemonRestart,
+            },
+        )
+        .unwrap();
+        validate_transition(
+            &ThreadState::Resuming,
+            &ThreadState::Suspended {
+                reason: PauseReason::DaemonRestart,
+            },
+        )
+        .unwrap();
+        validate_transition(
+            &ThreadState::Suspended {
+                reason: PauseReason::UserInterrupt,
+            },
+            &ThreadState::Suspended {
+                reason: PauseReason::DaemonRestart,
             },
         )
         .unwrap();

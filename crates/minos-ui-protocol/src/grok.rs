@@ -1,5 +1,8 @@
 use crate::error::TranslationError;
-use crate::message::{DisplayPayload, MessageRole, ThreadEndReason, UiEventMessage};
+use crate::message::{
+    DisplayPayload, MessageRole, SubagentStatus, ThreadEndReason, UiEventMessage,
+};
+use minos_domain::AgentName;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
@@ -12,12 +15,20 @@ pub struct GrokTranslatorState {
     open_user_message_id: Option<String>,
     emitted_message_ids: HashSet<String>,
     tool_calls: HashMap<String, OpenGrokToolCall>,
+    /// Grok ACP background subagents already projected as `SubagentSpawned`.
+    known_subagents: HashMap<String, GrokSubagentMeta>,
 }
 
 #[allow(dead_code)]
 struct OpenGrokToolCall {
     message_id: String,
     name: String,
+}
+
+#[allow(dead_code)]
+struct GrokSubagentMeta {
+    tool_call_id: String,
+    title: Option<String>,
 }
 
 impl GrokTranslatorState {
@@ -30,6 +41,7 @@ impl GrokTranslatorState {
             open_user_message_id: None,
             emitted_message_ids: HashSet::new(),
             tool_calls: HashMap::new(),
+            known_subagents: HashMap::new(),
         }
     }
 }
@@ -332,12 +344,25 @@ fn translate_acp_notification(
                     })
                     .unwrap_or_default();
 
-                state.tool_calls.remove(&tool_call_id);
-                Ok(vec![UiEventMessage::ToolCallCompleted {
-                    tool_call_id,
-                    output: DisplayPayload::inline(content),
+                let open = state.tool_calls.remove(&tool_call_id);
+                let mut events = vec![UiEventMessage::ToolCallCompleted {
+                    tool_call_id: tool_call_id.clone(),
+                    output: DisplayPayload::inline(content.clone()),
                     is_error: false,
-                }])
+                }];
+                // `spawn_subagent` completion text carries subagent_id + description.
+                if open
+                    .as_ref()
+                    .is_some_and(|t| t.name.to_ascii_lowercase().contains("spawn_subagent"))
+                    || content.contains("subagent_id:")
+                {
+                    if let Some(spawned) =
+                        maybe_spawn_from_tool_output(state, &tool_call_id, &content)
+                    {
+                        events.push(spawned);
+                    }
+                }
+                Ok(events)
             } else {
                 Ok(vec![])
             }
@@ -376,12 +401,147 @@ fn translate_acp_notification(
             kind: "grok/session_info".into(),
             payload_json: serde_json::to_string(&update).unwrap_or_default(),
         }]),
+        // Background subagents (spawn_subagent tool + progress/finish notifications).
+        "subagent_progress" => Ok(translate_subagent_progress(state, &update)),
+        "subagent_finished" => Ok(translate_subagent_finished(state, &update)),
         "" => Ok(vec![]),
         other => Ok(vec![UiEventMessage::Raw {
             kind: format!("grok/acp/{other}"),
             payload_json: serde_json::to_string(&update).unwrap_or_default(),
         }]),
     }
+}
+
+fn child_session_id(update: &Value) -> Option<String> {
+    update
+        .get("child_session_id")
+        .or_else(|| update.get("subagent_id"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
+fn maybe_spawn_subagent(
+    state: &mut GrokTranslatorState,
+    sub_thread_id: String,
+    tool_call_id: String,
+    title: Option<String>,
+    prompt: Option<String>,
+) -> Option<UiEventMessage> {
+    if state.known_subagents.contains_key(&sub_thread_id) {
+        return None;
+    }
+    state.known_subagents.insert(
+        sub_thread_id.clone(),
+        GrokSubagentMeta {
+            tool_call_id: tool_call_id.clone(),
+            title: title.clone(),
+        },
+    );
+    Some(UiEventMessage::SubagentSpawned {
+        parent_thread_id: state.thread_id.clone(),
+        sub_thread_id,
+        tool_call_id,
+        agent: AgentName::Grok,
+        model: None,
+        prompt,
+        title,
+    })
+}
+
+fn maybe_spawn_from_tool_output(
+    state: &mut GrokTranslatorState,
+    tool_call_id: &str,
+    content: &str,
+) -> Option<UiEventMessage> {
+    let sub_id = content.lines().find_map(|line| {
+        let line = line.trim();
+        line.strip_prefix("subagent_id:")
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    })?;
+    let description = content.lines().find_map(|line| {
+        let line = line.trim();
+        line.strip_prefix("description:")
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    });
+    maybe_spawn_subagent(
+        state,
+        sub_id,
+        tool_call_id.to_owned(),
+        description.clone(),
+        description,
+    )
+}
+
+fn translate_subagent_progress(
+    state: &mut GrokTranslatorState,
+    update: &Value,
+) -> Vec<UiEventMessage> {
+    let Some(sub_id) = child_session_id(update) else {
+        return Vec::new();
+    };
+    let title = update
+        .get("description")
+        .or_else(|| update.get("title"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let mut events = Vec::new();
+    if let Some(spawned) = maybe_spawn_subagent(state, sub_id.clone(), String::new(), title, None) {
+        events.push(spawned);
+    }
+    events.push(UiEventMessage::SubagentStatusUpdated {
+        sub_thread_id: sub_id,
+        status: SubagentStatus::Running,
+    });
+    // Keep a compact raw for clients that want progress metrics.
+    events.push(UiEventMessage::Raw {
+        kind: "grok/acp/subagent_progress".into(),
+        payload_json: serde_json::to_string(update).unwrap_or_default(),
+    });
+    events
+}
+
+fn translate_subagent_finished(
+    state: &mut GrokTranslatorState,
+    update: &Value,
+) -> Vec<UiEventMessage> {
+    let Some(sub_id) = child_session_id(update) else {
+        return Vec::new();
+    };
+    let title = update
+        .get("description")
+        .or_else(|| update.get("title"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let mut events = Vec::new();
+    if let Some(spawned) = maybe_spawn_subagent(state, sub_id.clone(), String::new(), title, None) {
+        events.push(spawned);
+    }
+    let failed = update
+        .get("error_count")
+        .and_then(Value::as_u64)
+        .is_some_and(|n| n > 0)
+        || update
+            .get("is_error")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    events.push(UiEventMessage::SubagentStatusUpdated {
+        sub_thread_id: sub_id,
+        status: if failed {
+            SubagentStatus::Failed
+        } else {
+            SubagentStatus::Completed
+        },
+    });
+    events.push(UiEventMessage::Raw {
+        kind: "grok/acp/subagent_finished".into(),
+        payload_json: serde_json::to_string(update).unwrap_or_default(),
+    });
+    events
 }
 
 #[allow(clippy::unnecessary_wraps)]
@@ -534,6 +694,75 @@ mod tests {
         assert!(out
             .iter()
             .any(|e| matches!(e, UiEventMessage::MessageCompleted { .. })));
+    }
+
+    #[test]
+    fn subagent_progress_emits_spawned_and_status() {
+        let mut s = GrokTranslatorState::new("parent-thr".into());
+        let out = translate(
+            &mut s,
+            &val(
+                r#"{"kind":"acp_notification","params":{"update":{"sessionUpdate":"subagent_progress","child_session_id":"child-1","description":"Explore lifecycle"}}}"#,
+            ),
+        )
+        .unwrap();
+        assert!(out.iter().any(|e| matches!(
+            e,
+            UiEventMessage::SubagentSpawned {
+                parent_thread_id,
+                sub_thread_id,
+                agent: AgentName::Grok,
+                title: Some(t),
+                ..
+            } if parent_thread_id == "parent-thr"
+                && sub_thread_id == "child-1"
+                && t == "Explore lifecycle"
+        )));
+        assert!(out.iter().any(|e| matches!(
+            e,
+            UiEventMessage::SubagentStatusUpdated {
+                sub_thread_id,
+                status: SubagentStatus::Running,
+            } if sub_thread_id == "child-1"
+        )));
+        // Second progress for same child must not re-spawn.
+        let out2 = translate(
+            &mut s,
+            &val(
+                r#"{"kind":"acp_notification","params":{"update":{"sessionUpdate":"subagent_progress","child_session_id":"child-1"}}}"#,
+            ),
+        )
+        .unwrap();
+        assert!(!out2
+            .iter()
+            .any(|e| matches!(e, UiEventMessage::SubagentSpawned { .. })));
+    }
+
+    #[test]
+    fn subagent_finished_emits_completed_status() {
+        let mut s = GrokTranslatorState::new("parent-thr".into());
+        let out = translate(
+            &mut s,
+            &val(
+                r#"{"kind":"acp_notification","params":{"update":{"sessionUpdate":"subagent_finished","child_session_id":"child-2","output":"done"}}}"#,
+            ),
+        )
+        .unwrap();
+        assert!(out.iter().any(|e| matches!(
+            e,
+            UiEventMessage::SubagentSpawned {
+                sub_thread_id,
+                agent: AgentName::Grok,
+                ..
+            } if sub_thread_id == "child-2"
+        )));
+        assert!(out.iter().any(|e| matches!(
+            e,
+            UiEventMessage::SubagentStatusUpdated {
+                sub_thread_id,
+                status: SubagentStatus::Completed,
+            } if sub_thread_id == "child-2"
+        )));
     }
 
     #[test]

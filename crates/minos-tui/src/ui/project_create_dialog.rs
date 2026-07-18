@@ -34,7 +34,7 @@ pub fn render(f: &mut Frame, area: Rect, state: &ProjectCreateDialogState) {
     f.render_widget(Clear, dialog_area);
 
     let name_cursor = if state.editing_name { "█" } else { "" };
-    let path_cursor = if !state.editing_name { "█" } else { "" };
+    let path_cursor = if state.editing_name { "" } else { "█" };
 
     let lines = vec![
         Line::raw(""),

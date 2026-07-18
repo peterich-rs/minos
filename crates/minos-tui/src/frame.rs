@@ -33,9 +33,7 @@ impl FrameRequester {
 
     /// Request a draw as soon as the frame scheduler allows.
     pub fn schedule_frame(&self) {
-        let _ = self.tx.send(FrameRequest {
-            at: Instant::now(),
-        });
+        let _ = self.tx.send(FrameRequest { at: Instant::now() });
     }
 
     /// Request a draw no earlier than `delay` from now (animations, flash expiry).
@@ -47,9 +45,7 @@ impl FrameRequester {
 
     /// Streaming / high-churn updates — same coalescer, explicit call site.
     pub fn schedule_frame_streaming(&self) {
-        let _ = self.tx.send(FrameRequest {
-            at: Instant::now(),
-        });
+        let _ = self.tx.send(FrameRequest { at: Instant::now() });
         let _ = STREAMING_FRAME_INTERVAL; // documented companion constant
     }
 }

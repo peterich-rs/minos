@@ -17,10 +17,10 @@ use minos_daemon::store::LocalStore;
 use minos_domain::AgentName;
 use minos_protocol::{
     AgentLaunchMode, AppendConversationMessageParams, AppendConversationMessageResponse,
-    ApprovalDecisionRequest, CloseThreadRequest, CreateProjectRequest, GetThreadParams,
-    HealthResponse, ListConversationMessagesParams, ListConversationMessagesResponse,
-    ListConversationsParams, ListConversationsResponse, ListProjectsResponse,
-    LocalConversationEvent, ReadThreadParams, StartAgentRequest, StartAgentResponse,
+    ApprovalDecisionRequest, CloseThreadRequest, CreateProjectRequest, HealthResponse,
+    ListConversationMessagesParams, ListConversationMessagesResponse, ListConversationsParams,
+    ListConversationsResponse, ListProjectsResponse, LocalConversationEvent, ReadThreadParams,
+    StartAgentRequest, StartAgentResponse,
 };
 
 use async_trait::async_trait;
@@ -77,11 +77,11 @@ async fn setup() -> (
         addr: "127.0.0.1:0".parse().unwrap(),
         discovery_path,
     };
-    let handle = start_local_rpc_server(config, Arc::new(NoopRunner), glue.clone())
+    let started = start_local_rpc_server(config, Arc::new(NoopRunner), glue.clone())
         .await
         .unwrap();
 
-    (glue, handle, tmp, fake)
+    (glue, started.handle, tmp, fake)
 }
 
 fn discovery_addr(tmp: &tempfile::TempDir) -> String {
@@ -449,6 +449,9 @@ async fn append_conversation_message_publishes_conversation_event() {
                 sender_role: "user".into(),
                 agent: None,
                 body: "visible update".into(),
+                reply_to_message_id: None,
+                delegation_id: None,
+                mentions: vec![],
             }],
         )
         .await
@@ -488,25 +491,24 @@ async fn resume_thread_returns_thread_info() {
 
     let thread_id = start_resp.session_id.clone();
 
-    glue.close_thread(minos_protocol::CloseThreadRequest {
-        thread_id: thread_id.clone(),
-    })
-    .await
-    .ok();
-
-    sqlx::query(
-        "UPDATE threads SET status = 'suspended', last_pause_reason = 'daemon_restart' WHERE thread_id = ?",
-    )
-    .bind(&thread_id)
-    .execute(glue.store().pool())
-    .await
-    .unwrap();
+    // Stop-path suspend (not close) so the session stays resumable.
+    let needs = glue
+        .manager
+        .suspend_for_daemon_stop(&thread_id)
+        .await
+        .unwrap();
+    assert!(!needs);
+    glue.store()
+        .suspend_thread_for_daemon_restart(&thread_id, false, 1)
+        .await
+        .unwrap();
 
     let resume_resp: StartAgentResponse = client
         .request(
             "minos_local_resume_thread",
-            [GetThreadParams {
+            [minos_protocol::ResumeThreadRequest {
                 thread_id: thread_id.clone(),
+                auto_continue: false,
             }],
         )
         .await

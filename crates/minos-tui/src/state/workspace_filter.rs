@@ -78,12 +78,16 @@ pub(crate) fn remove_thread_local_state(
     state.recorded_agent_results.remove(thread_id);
     state.thread_conversations.remove(thread_id);
 
-    let next = ui.thread_panel.list.selected.and_then(|selected| match selected.cmp(&index) {
-        std::cmp::Ordering::Less => Some(selected),
-        std::cmp::Ordering::Equal => (!ui.thread_panel.list.items.is_empty())
-            .then_some(index.min(ui.thread_panel.list.items.len() - 1)),
-        std::cmp::Ordering::Greater => Some(selected - 1),
-    });
+    let next = ui
+        .thread_panel
+        .list
+        .selected
+        .and_then(|selected| match selected.cmp(&index) {
+            std::cmp::Ordering::Less => Some(selected),
+            std::cmp::Ordering::Equal => (!ui.thread_panel.list.items.is_empty())
+                .then_some(index.min(ui.thread_panel.list.items.len() - 1)),
+            std::cmp::Ordering::Greater => Some(selected - 1),
+        });
     ui.thread_panel.list.select(next);
     true
 }

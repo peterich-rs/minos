@@ -41,14 +41,7 @@ pub(super) async fn append_user_message_and_load(
 ) -> Result<(Vec<ConversationMessageEntry>, Vec<ThreadSummaryEntry>), String> {
     if !message_body.trim().is_empty() {
         backend
-            .append_conversation_message(
-                conversation_id,
-                None,
-                None,
-                "user",
-                None,
-                message_body,
-            )
+            .append_conversation_message(conversation_id, None, None, "user", None, message_body)
             .await
             .map_err(|error| format!("Failed to save conversation message: {error}"))?;
     }
@@ -61,7 +54,28 @@ pub(super) async fn append_user_message_and_load(
         .list_conversation_agent_sessions(conversation_id)
         .await
         .map_err(|error| format!("Failed to load agent sessions: {error}"))?;
+    // At most one top-level interrupted session auto-continues on open.
+    if let Some(session) = pick_auto_continue_session(&sessions) {
+        if let Err(error) = backend.resume_thread(&session.thread_id, true).await {
+            tracing::warn!(
+                target: "minos_tui::app",
+                error = %error,
+                thread_id = %session.thread_id,
+                "auto-continue resume_thread failed"
+            );
+        }
+    }
     Ok((messages, sessions))
+}
+
+/// Prefer most recently active top-level session with `needs_continue`.
+pub(super) fn pick_auto_continue_session(
+    sessions: &[ThreadSummaryEntry],
+) -> Option<&ThreadSummaryEntry> {
+    sessions
+        .iter()
+        .filter(|s| s.parent_thread_id.is_none() && s.needs_continue && s.ended_at_ms.is_none())
+        .max_by_key(|s| s.last_ts_ms)
 }
 
 pub(super) async fn create_conversation_and_start_agent(

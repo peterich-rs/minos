@@ -148,7 +148,9 @@ impl App {
     ) -> bool {
         if let Some(index) = self
             .ui
-            .thread_panel.list.items
+            .thread_panel
+            .list
+            .items
             .iter()
             .position(|thread| thread.thread_id == thread_id)
         {
@@ -197,7 +199,7 @@ impl App {
                         return;
                     }
                 }
-                if let Err(e) = backend.resume_thread(&thread_id).await {
+                if let Err(e) = backend.resume_thread(&thread_id, false).await {
                     tracing::debug!(
                         target: "minos_tui::app",
                         error = %e,
@@ -236,7 +238,7 @@ impl App {
                     .set_error(format!("Failed to record conversation message: {error}"));
             }
         }
-        if let Err(e) = self.backend.resume_thread(&thread_id).await {
+        if let Err(e) = self.backend.resume_thread(&thread_id, false).await {
             tracing::debug!(
                 target: "minos_tui::app",
                 error = %e,
@@ -298,7 +300,8 @@ impl App {
         };
         self.ui
             .projects
-            .items.iter()
+            .items
+            .iter()
             .find(|project| project.project_id == project_id)
             .map(|project| project.workspace_path.clone())
             .unwrap_or_else(|| self.state.workspace.clone())
@@ -325,7 +328,9 @@ impl App {
     ) {
         if let Some(index) = self
             .ui
-            .thread_panel.list.items
+            .thread_panel
+            .list
+            .items
             .iter()
             .position(|thread| thread.thread_id == thread_id)
         {
@@ -361,11 +366,11 @@ impl App {
         short_id: &str,
     ) -> Option<String> {
         let short_id = short_id.to_ascii_lowercase();
-        if self.ui.nav_level().conversation_id().is_none() {
-            return None;
-        }
+        self.ui.nav_level().conversation_id()?;
         self.ui
-            .conversation.agent_sessions.items
+            .conversation
+            .agent_sessions
+            .items
             .iter()
             .filter(|session| session.parent_thread_id.is_none())
             .filter(|session| thread_can_receive_message(&session.state))
@@ -383,7 +388,8 @@ impl App {
     pub(super) fn sync_input_agent_picker(&mut self) {
         let candidates = self.ui.conversation_agent_mention_candidates();
         self.ui
-            .inputs.conversation
+            .inputs
+            .conversation
             .sync_agent_picker(candidates.as_slice(), self.ui.focus.is(PaneId::Input));
     }
 }

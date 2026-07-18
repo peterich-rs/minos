@@ -232,6 +232,13 @@
     },
     {
       "method": "POST",
+      "path": "/v1/host-commands/list-workspaces",
+      "probe_path": "/v1/host-commands/list-workspaces",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
       "path": "/v1/host-commands/write-host-skill-config",
       "probe_path": "/v1/host-commands/write-host-skill-config",
       "surface": "account_api",
@@ -451,6 +458,13 @@
       "method": "POST",
       "path": "/v1/conversations/group",
       "probe_path": "/v1/conversations/group",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/conversations/:conversation_id",
+      "probe_path": "/v1/conversations/conv_probe",
       "surface": "account_api",
       "auth": "account_bearer"
     },

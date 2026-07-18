@@ -355,6 +355,7 @@ impl AgentBackend for TestBackend {
                 ended_at_ms: None,
                 parent_thread_id: None,
                 state: ThreadState::Idle,
+                needs_continue: false,
             });
         Ok(outcome)
     }
@@ -391,7 +392,11 @@ impl AgentBackend for TestBackend {
         Ok(())
     }
 
-    async fn resume_thread(&self, _thread_id: &str) -> Result<StartAgentOutcome> {
+    async fn resume_thread(
+        &self,
+        _thread_id: &str,
+        _auto_continue: bool,
+    ) -> Result<StartAgentOutcome> {
         Ok(StartAgentOutcome {
             thread_id: String::new(),
             cwd: PathBuf::new(),
@@ -477,12 +482,16 @@ fn set_test_conversation_nav(app: &mut App, project_id: &str, conversation_id: &
 fn set_test_agent_detail_nav(app: &mut App, project_id: &str, conversation_id: &str) {
     let (thread_id, agent) = app
         .ui
-        .thread_panel.list.selected
+        .thread_panel
+        .list
+        .selected
         .and_then(|index| app.ui.thread_panel.list.items.get(index))
         .map(|thread| (thread.thread_id.clone(), thread.agent))
         .or_else(|| {
             app.ui
-                .thread_panel.list.items
+                .thread_panel
+                .list
+                .items
                 .first()
                 .map(|thread| (thread.thread_id.clone(), thread.agent))
         })

@@ -6352,6 +6352,7 @@ impl SseDecode for crate::api::minos::ThreadSummary {
             <Option<crate::api::minos::ThreadEndReason>>::sse_decode(deserializer);
         let mut var_parentThreadId = <Option<String>>::sse_decode(deserializer);
         let mut var_state = <crate::api::minos::ThreadState>::sse_decode(deserializer);
+        let mut var_needsContinue = <bool>::sse_decode(deserializer);
         return crate::api::minos::ThreadSummary {
             thread_id: var_threadId,
             agent: var_agent,
@@ -6363,6 +6364,7 @@ impl SseDecode for crate::api::minos::ThreadSummary {
             end_reason: var_endReason,
             parent_thread_id: var_parentThreadId,
             state: var_state,
+            needs_continue: var_needsContinue,
         };
     }
 }
@@ -10319,6 +10321,7 @@ impl SseEncode for crate::api::minos::ThreadSummary {
         <Option<crate::api::minos::ThreadEndReason>>::sse_encode(self.end_reason, serializer);
         <Option<String>>::sse_encode(self.parent_thread_id, serializer);
         <crate::api::minos::ThreadState>::sse_encode(self.state, serializer);
+        <bool>::sse_encode(self.needs_continue, serializer);
     }
 }
 

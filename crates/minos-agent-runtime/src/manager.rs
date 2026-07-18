@@ -34,6 +34,12 @@ Treat the Minos conversation as coordination context, not as a generic terminal 
 When conversation history, teammate output, mentions, current chat state, or cross-agent coordination matters, use the `minos_teamwork` MCP server to inspect the bound conversation before answering. \
 Use `list_conversation_messages` for recent conversation history, `delegate_to_agent` with `wait_delegation` when blocked on the result (or `get_delegation_status`/`cancel_delegation` for tracking), and `post_conversation_update` only for concise user-visible updates.";
 
+/// Host-owned one-shot prompt injected when a turn was interrupted by process
+/// death. Synthesized as a normal user message for history consistency.
+pub const CONTINUE_PROMPT: &str = "\
+Continue from where you left off. The previous host process exited while this turn was in progress; \
+resume any incomplete work without restarting from scratch.";
+
 #[derive(Clone, Debug)]
 pub struct InstanceCaps {
     pub max_instances: usize,
@@ -45,7 +51,7 @@ pub struct InstanceCaps {
 pub(crate) enum PendingApprovalTarget {
     Codex {
         request_id: Value,
-        request: ServerRequest,
+        request: Box<ServerRequest>,
         client: Arc<CodexClient>,
     },
     /// ACP `session/request_permission` (Gemini / Grok).
@@ -798,7 +804,6 @@ impl AgentManager {
         Ok(provider_session_id)
     }
 
-
     async fn start_grok_agent(
         &self,
         agent: AgentKind,
@@ -930,6 +935,9 @@ impl AgentManager {
             thread_id.to_string(),
             self.events_tx.clone(),
             self.pending_approvals.clone(),
+            self.threads.clone(),
+            self.manager_tx.clone(),
+            workspace.to_path_buf(),
         );
         self.grok_instances
             .lock()
@@ -1326,65 +1334,8 @@ impl AgentManager {
             .ok_or_else(|| anyhow::anyhow!("thread not found: {thread_id}"))?;
         match handle.current_state() {
             ThreadState::Idle => {
-                let now_ms = chrono::Utc::now().timestamp_millis();
-                let new_state = ThreadState::Running {
-                    turn_started_at_ms: now_ms,
-                };
-                handle.transition(new_state.clone())?;
-                let _ = self.manager_tx.send(ManagerEvent::ThreadStateChanged {
-                    thread_id: thread_id.to_string(),
-                    old: ThreadState::Idle,
-                    new: new_state,
-                    at_ms: now_ms,
-                });
-                self.synth_user_message_ingest(thread_id, &text, handle.agent)
-                    .await?;
-                match handle.agent {
-                    AgentName::Codex => {
-                        let key = InstanceKey::for_handle(&handle);
-                        let inst = self
-                            .instances
-                            .lock()
-                            .await
-                            .get(&key)
-                            .cloned()
-                            .ok_or_else(|| anyhow::anyhow!("instance for conversation gone"))?;
-                        inst.touch().await;
-                        let provider_thread_id = codex_provider_thread_id(thread_id, &handle);
-                        let turn_id = inst.send_user_message(&provider_thread_id, &text).await?;
-                        handle.set_active_turn_id_if_absent(turn_id);
-                    }
-                    AgentName::Claude => {
-                        self.start_claude_turn(thread_id, &text, &handle).await?;
-                    }
-                    AgentName::Opencode => {
-                        let oc_session_id = self
-                            .ensure_opencode_session_for_thread(thread_id, &handle)
-                            .await?;
-                        let key = InstanceKey::for_handle(&handle);
-                        let instance = self
-                            .opencode_instances
-                            .lock()
-                            .await
-                            .get(&key)
-                            .cloned()
-                            .ok_or_else(|| anyhow::anyhow!("opencode instance not found"))?;
-                        instance
-                            .lock()
-                            .await
-                            .send_prompt(&oc_session_id, &text)
-                            .await?;
-                    }
-                    AgentName::Gemini => {
-                        self.spawn_gemini_prompt_task(thread_id.to_string(), text, handle.clone())
-                            .await?;
-                    }
-                    AgentName::Grok => {
-                        self.spawn_grok_prompt_task(thread_id.to_string(), text, handle.clone())
-                            .await?;
-                    }
-                }
-                Ok(())
+                self.send_user_message_while_idle(thread_id, text, &handle)
+                    .await
             }
             ThreadState::Running { .. } => match handle.agent {
                 AgentName::Codex => self.steer_turn(thread_id, text).await,
@@ -1394,64 +1345,278 @@ impl AgentManager {
                 AgentName::Grok => anyhow::bail!("grok turn is already running"),
             },
             ThreadState::Suspended { .. } => {
-                match handle.agent {
-                    AgentName::Codex => return self.implicit_resume(thread_id, text).await,
-                    AgentName::Claude => {
-                        self.resume_claude_thread(thread_id, &text, &handle).await?
-                    }
-                    AgentName::Opencode => {
-                        self.resume_opencode_thread(thread_id, &handle).await?;
-                    }
-                    AgentName::Gemini => self.resume_gemini_thread(thread_id, &handle).await?,
-                    AgentName::Grok => self.resume_grok_thread(thread_id, &handle).await?,
-                }
-                let now_ms = chrono::Utc::now().timestamp_millis();
-                let new_state = ThreadState::Running {
-                    turn_started_at_ms: now_ms,
-                };
-                handle.transition(new_state.clone())?;
-                let _ = self.manager_tx.send(ManagerEvent::ThreadStateChanged {
-                    thread_id: thread_id.to_string(),
-                    old: ThreadState::Idle,
-                    new: new_state,
-                    at_ms: now_ms,
-                });
-                self.synth_user_message_ingest(thread_id, &text, handle.agent)
-                    .await?;
-                match handle.agent {
-                    AgentName::Claude => self.start_claude_turn(thread_id, &text, &handle).await,
-                    AgentName::Opencode => {
-                        let oc_session_id = self
-                            .ensure_opencode_session_for_thread(thread_id, &handle)
-                            .await?;
-                        let key = InstanceKey::for_handle(&handle);
-                        let instance = self
-                            .opencode_instances
-                            .lock()
-                            .await
-                            .get(&key)
-                            .cloned()
-                            .ok_or_else(|| anyhow::anyhow!("opencode instance not found"))?;
-                        let result = instance
-                            .lock()
-                            .await
-                            .send_prompt(&oc_session_id, &text)
-                            .await;
-                        result
-                    }
-                    AgentName::Gemini => {
-                        self.spawn_gemini_prompt_task(thread_id.to_string(), text, handle)
-                            .await
-                    }
-                    AgentName::Grok => {
-                        self.spawn_grok_prompt_task(thread_id.to_string(), text, handle)
-                            .await
-                    }
-                    AgentName::Codex => unreachable!("codex suspended branch returns above"),
-                }
+                // Reattach to Idle, then send as a normal idle turn (user text wins;
+                // CONTINUE is never injected on this path).
+                self.reattach_suspended_thread(thread_id).await?;
+                let handle = self
+                    .threads
+                    .lock()
+                    .await
+                    .get(thread_id)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("thread not found: {thread_id}"))?;
+                self.send_user_message_while_idle(thread_id, text, &handle)
+                    .await
             }
             other => anyhow::bail!("send_user_message rejected: state={other:?}"),
         }
+    }
+
+    async fn send_user_message_while_idle(
+        &self,
+        thread_id: &str,
+        text: String,
+        handle: &ThreadHandle,
+    ) -> anyhow::Result<()> {
+        if !matches!(handle.current_state(), ThreadState::Idle) {
+            anyhow::bail!(
+                "send_user_message_while_idle rejected: state={:?}",
+                handle.current_state()
+            );
+        }
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let new_state = ThreadState::Running {
+            turn_started_at_ms: now_ms,
+        };
+        handle.transition(new_state.clone())?;
+        let _ = self.manager_tx.send(ManagerEvent::ThreadStateChanged {
+            thread_id: thread_id.to_string(),
+            old: ThreadState::Idle,
+            new: new_state,
+            at_ms: now_ms,
+        });
+        self.synth_user_message_ingest(thread_id, &text, handle.agent)
+            .await?;
+        match handle.agent {
+            AgentName::Codex => {
+                let key = InstanceKey::for_handle(handle);
+                let inst = self
+                    .instances
+                    .lock()
+                    .await
+                    .get(&key)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("instance for conversation gone"))?;
+                inst.touch().await;
+                let provider_thread_id = codex_provider_thread_id(thread_id, handle);
+                let turn_id = inst.send_user_message(&provider_thread_id, &text).await?;
+                handle.set_active_turn_id_if_absent(turn_id);
+            }
+            AgentName::Claude => {
+                self.start_claude_turn(thread_id, &text, handle).await?;
+            }
+            AgentName::Opencode => {
+                let oc_session_id = self
+                    .ensure_opencode_session_for_thread(thread_id, handle)
+                    .await?;
+                let key = InstanceKey::for_handle(handle);
+                let instance = self
+                    .opencode_instances
+                    .lock()
+                    .await
+                    .get(&key)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("opencode instance not found"))?;
+                instance
+                    .lock()
+                    .await
+                    .send_prompt(&oc_session_id, &text)
+                    .await?;
+            }
+            AgentName::Gemini => {
+                self.spawn_gemini_prompt_task(thread_id.to_string(), text, handle.clone())
+                    .await?;
+            }
+            AgentName::Grok => {
+                self.spawn_grok_prompt_task(thread_id.to_string(), text, handle.clone())
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Provider reattach for a suspended thread; ends in Idle. No user text, no CONTINUE.
+    pub async fn reattach_suspended_thread(&self, thread_id: &str) -> anyhow::Result<()> {
+        let handle = self
+            .threads
+            .lock()
+            .await
+            .get(thread_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("thread not found: {thread_id}"))?;
+        match handle.current_state() {
+            ThreadState::Idle | ThreadState::Running { .. } => Ok(()),
+            ThreadState::Closed { .. } => {
+                anyhow::bail!("reattach rejected: thread is closed")
+            }
+            ThreadState::Starting | ThreadState::Resuming => {
+                anyhow::bail!("reattach rejected: thread is {:?}", handle.current_state())
+            }
+            ThreadState::Suspended { .. } => {
+                let result = match handle.agent {
+                    AgentName::Codex => self.reattach_codex_suspended(thread_id, &handle).await,
+                    AgentName::Claude => self.resume_claude_thread(thread_id, "", &handle).await,
+                    AgentName::Opencode => self.resume_opencode_thread(thread_id, &handle).await,
+                    AgentName::Gemini => self.resume_gemini_thread(thread_id, &handle).await,
+                    AgentName::Grok => self.resume_grok_thread(thread_id, &handle).await,
+                };
+                if result.is_err() {
+                    // Roll back mid-flight Resuming (or other non-terminal) so a later
+                    // send can re-try from Suspended rather than stuck Resuming.
+                    let cur = handle.current_state();
+                    if matches!(cur, ThreadState::Resuming | ThreadState::Starting) {
+                        let suspended = ThreadState::Suspended {
+                            reason: PauseReason::DaemonRestart,
+                        };
+                        if handle.transition(suspended.clone()).is_ok() {
+                            let _ = self.manager_tx.send(ManagerEvent::ThreadStateChanged {
+                                thread_id: thread_id.to_string(),
+                                old: cur,
+                                new: suspended,
+                                at_ms: chrono::Utc::now().timestamp_millis(),
+                            });
+                        }
+                    }
+                }
+                result
+            }
+        }
+    }
+
+    /// Inject [`CONTINUE_PROMPT`] after reattach. Caller must have already
+    /// claimed `needs_continue` in the store (one-shot). Ends with a Running turn.
+    pub async fn inject_continue_prompt(&self, thread_id: &str) -> anyhow::Result<()> {
+        self.reattach_suspended_thread(thread_id).await?;
+        self.send_user_message(thread_id, CONTINUE_PROMPT.to_string())
+            .await
+    }
+
+    /// Best-effort cancel + transition to `Suspended { DaemonRestart }`.
+    /// Returns whether auto-continue should be offered on next resume.
+    /// Does **not** close provider sessions (unlike [`Self::close_thread`]).
+    pub async fn suspend_for_daemon_stop(&self, thread_id: &str) -> anyhow::Result<bool> {
+        let handle = self
+            .threads
+            .lock()
+            .await
+            .get(thread_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("thread not found: {thread_id}"))?;
+        let from = handle.current_state();
+        if matches!(from, ThreadState::Closed { .. }) {
+            return Ok(false);
+        }
+        let needs_continue = matches!(
+            from,
+            ThreadState::Running { .. } | ThreadState::Starting | ThreadState::Resuming
+        );
+        if matches!(from, ThreadState::Running { .. }) {
+            self.best_effort_cancel_turn(thread_id, &handle).await;
+        }
+        handle.set_active_turn_id(None);
+        let new = ThreadState::Suspended {
+            reason: PauseReason::DaemonRestart,
+        };
+        if from != new {
+            handle.transition(new.clone())?;
+            let _ = self.manager_tx.send(ManagerEvent::ThreadStateChanged {
+                thread_id: thread_id.to_string(),
+                old: from,
+                new,
+                at_ms: chrono::Utc::now().timestamp_millis(),
+            });
+        }
+        Ok(needs_continue)
+    }
+
+    async fn best_effort_cancel_turn(&self, thread_id: &str, handle: &ThreadHandle) {
+        match handle.agent {
+            AgentName::Codex => {
+                let key = InstanceKey::for_handle(handle);
+                if let Some(inst) = self.instances.lock().await.get(&key).cloned() {
+                    let provider_thread_id = codex_provider_thread_id(thread_id, handle);
+                    let _ = inst.interrupt_turn(&provider_thread_id).await;
+                }
+            }
+            AgentName::Claude => {
+                if let Some(session) = self.claude_sessions.lock().await.get_mut(thread_id) {
+                    if let Some(child) = session.current_turn_child.as_mut() {
+                        let _ = child.start_kill();
+                    }
+                }
+            }
+            AgentName::Opencode => {
+                let oc_session_id = self
+                    .opencode_session_map
+                    .lock()
+                    .await
+                    .get(thread_id)
+                    .cloned();
+                if let Some(oc_sid) = oc_session_id {
+                    let key = InstanceKey::for_handle(handle);
+                    let instance = self.opencode_instances.lock().await.get(&key).cloned();
+                    if let Some(inst) = instance {
+                        let _ = inst.lock().await.abort_session(&oc_sid).await;
+                    }
+                }
+            }
+            AgentName::Gemini => {
+                if let Some(instance) = self.gemini_instances.lock().await.get(thread_id).cloned() {
+                    let _ = instance.cancel().await;
+                }
+            }
+            AgentName::Grok => {
+                if let Some(instance) = self.grok_instances.lock().await.get(thread_id).cloned() {
+                    let _ = instance.cancel().await;
+                }
+            }
+        }
+    }
+
+    async fn reattach_codex_suspended(
+        &self,
+        thread_id: &str,
+        handle: &ThreadHandle,
+    ) -> anyhow::Result<()> {
+        let from_state = handle.current_state();
+        handle.transition(ThreadState::Resuming)?;
+        let _ = self.manager_tx.send(ManagerEvent::ThreadStateChanged {
+            thread_id: thread_id.to_string(),
+            old: from_state,
+            new: ThreadState::Resuming,
+            at_ms: chrono::Utc::now().timestamp_millis(),
+        });
+        let workspace = handle.workspace.clone();
+        let codex_session_id = handle.codex_session_id.clone();
+        let source_thread_id = handle.mcp_conversation_id.as_ref().map(|_| thread_id);
+
+        let inst = self
+            .ensure_instance(
+                &workspace,
+                None,
+                handle.mcp_conversation_id.as_deref(),
+                source_thread_id,
+            )
+            .await?;
+        if let Some(sid) = codex_session_id {
+            let provider_thread_id = sid.clone();
+            inst.add_thread(thread_id.to_string()).await;
+            inst.start_thread_resume(&provider_thread_id, &sid).await?;
+        } else {
+            let _ = handle.transition(ThreadState::Closed {
+                reason: crate::state_machine::CloseReason::TerminalError,
+            });
+            anyhow::bail!("resume failed: no codex_session_id");
+        }
+        handle.transition(ThreadState::Idle)?;
+        let _ = self.manager_tx.send(ManagerEvent::ThreadStateChanged {
+            thread_id: thread_id.to_string(),
+            old: ThreadState::Resuming,
+            new: ThreadState::Idle,
+            at_ms: chrono::Utc::now().timestamp_millis(),
+        });
+        inst.touch().await;
+        Ok(())
     }
 
     async fn start_claude_turn(
@@ -1695,7 +1860,6 @@ impl AgentManager {
         Ok(())
     }
 
-
     async fn resume_grok_thread(
         &self,
         thread_id: &str,
@@ -1844,67 +2008,6 @@ impl AgentManager {
         };
         let ingest = RawIngest::from_json(agent, thread_id.to_string(), payload, current_unix_ms());
         self.events_tx.emit(ingest).await?;
-        Ok(())
-    }
-
-    async fn implicit_resume(&self, thread_id: &str, text: String) -> anyhow::Result<()> {
-        let handle = self
-            .threads
-            .lock()
-            .await
-            .get(thread_id)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("thread not found"))?;
-        let from_state = handle.current_state();
-        handle.transition(ThreadState::Resuming)?;
-        let _ = self.manager_tx.send(ManagerEvent::ThreadStateChanged {
-            thread_id: thread_id.to_string(),
-            old: from_state,
-            new: ThreadState::Resuming,
-            at_ms: chrono::Utc::now().timestamp_millis(),
-        });
-        let workspace = handle.workspace.clone();
-        let codex_session_id = handle.codex_session_id.clone();
-        let source_thread_id = handle.mcp_conversation_id.as_ref().map(|_| thread_id);
-
-        let inst = self
-            .ensure_instance(
-                &workspace,
-                None,
-                handle.mcp_conversation_id.as_deref(),
-                source_thread_id,
-            )
-            .await?;
-        if let Some(sid) = codex_session_id {
-            let provider_thread_id = sid.clone();
-            inst.add_thread(thread_id.to_string()).await;
-            inst.start_thread_resume(&provider_thread_id, &sid).await?;
-        } else {
-            let _ = handle.transition(ThreadState::Closed {
-                reason: crate::state_machine::CloseReason::TerminalError,
-            });
-            anyhow::bail!("resume failed: no codex_session_id");
-        }
-        handle.transition(ThreadState::Idle)?;
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let new_state = ThreadState::Running {
-            turn_started_at_ms: now_ms,
-        };
-        handle.transition(new_state.clone())?;
-        let _ = self.manager_tx.send(ManagerEvent::ThreadStateChanged {
-            thread_id: thread_id.to_string(),
-            old: ThreadState::Idle,
-            new: new_state,
-            at_ms: now_ms,
-        });
-        inst.touch().await;
-        // Same synth-then-forward pattern as the Idle path; resume races
-        // shouldn't change persistence semantics.
-        self.synth_user_message_ingest(thread_id, &text, handle.agent)
-            .await?;
-        let provider_thread_id = codex_provider_thread_id(thread_id, &handle);
-        let turn_id = inst.send_user_message(&provider_thread_id, &text).await?;
-        handle.set_active_turn_id_if_absent(turn_id);
         Ok(())
     }
 
@@ -2073,7 +2176,7 @@ impl AgentManager {
 
         let reply = match &pending.target {
             PendingApprovalTarget::Codex { request, .. } => {
-                crate::approvals::validate_decision(request, &decision)?
+                crate::approvals::validate_decision(request.as_ref(), &decision)?
             }
             PendingApprovalTarget::Acp {
                 allow_option_id,
@@ -2093,22 +2196,16 @@ impl AgentManager {
         };
         match pending.target {
             PendingApprovalTarget::Codex {
-                request_id,
-                client,
-                ..
+                request_id, client, ..
             } => client
                 .reply(request_id, reply)
                 .await
                 .map_err(|error| anyhow::anyhow!("approval reply failed: {error}")),
             PendingApprovalTarget::Acp {
-                request_id,
-                client,
-                ..
+                request_id, client, ..
             }
             | PendingApprovalTarget::GrokExtMethod {
-                request_id,
-                client,
-                ..
+                request_id, client, ..
             } => client
                 .reply(request_id, reply)
                 .await
@@ -2753,6 +2850,7 @@ fn request_turn_id(params: &Value) -> String {
 }
 
 #[derive(Debug)]
+#[allow(clippy::struct_field_names)] // domain ids: parent/sub thread + tool call
 struct CodexSubagentRegistration {
     parent_thread_id: String,
     sub_thread_id: String,
@@ -3073,7 +3171,7 @@ async fn event_pump_loop(
                                 thread_id: thread_id.clone(),
                                 target: PendingApprovalTarget::Codex {
                                     request_id: id.clone(),
-                                    request: req,
+                                    request: Box::new(req),
                                     client: client.clone(),
                                 },
                             },
@@ -4156,7 +4254,6 @@ done
         mgr.close_thread(&thread_id).await.unwrap();
     }
 
-
     #[cfg(unix)]
     #[tokio::test]
     async fn gemini_suspended_thread_recreates_acp_instance_before_prompt() {
@@ -4641,7 +4738,7 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
     }
 
     #[tokio::test]
-    async fn implicit_resume_from_suspended() {
+    async fn reattach_and_send_from_suspended() {
         let tmp = tempfile::tempdir().unwrap();
         let (fake, url) = FakeCodexBackend::install().await;
         let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
@@ -4660,12 +4757,62 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
             })
         ));
 
+        mgr.reattach_suspended_thread(&started.thread_id)
+            .await
+            .unwrap();
+        assert!(matches!(
+            mgr.thread_state(&started.thread_id).await,
+            Some(ThreadState::Idle)
+        ));
+
         mgr.send_user_message(&started.thread_id, "resume".into())
             .await
             .unwrap();
         assert!(matches!(
             mgr.thread_state(&started.thread_id).await,
             Some(ThreadState::Running { .. })
+        ));
+        fake.stop().await;
+    }
+
+    #[tokio::test]
+    async fn suspend_for_daemon_stop_sets_continue_only_when_running() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (fake, url) = FakeCodexBackend::install().await;
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(url);
+        let mgr = Arc::new(AgentManager::new(cfg, InstanceCaps::default()));
+
+        let idle = mgr
+            .start_agent(AgentKind::Codex, "/w-stop-idle".into())
+            .await
+            .unwrap();
+        let needs = mgr.suspend_for_daemon_stop(&idle.thread_id).await.unwrap();
+        assert!(!needs);
+        assert!(matches!(
+            mgr.thread_state(&idle.thread_id).await,
+            Some(ThreadState::Suspended {
+                reason: PauseReason::DaemonRestart
+            })
+        ));
+
+        let running = mgr
+            .start_agent(AgentKind::Codex, "/w-stop-run".into())
+            .await
+            .unwrap();
+        mgr.send_user_message(&running.thread_id, "go".into())
+            .await
+            .unwrap();
+        let needs = mgr
+            .suspend_for_daemon_stop(&running.thread_id)
+            .await
+            .unwrap();
+        assert!(needs);
+        assert!(matches!(
+            mgr.thread_state(&running.thread_id).await,
+            Some(ThreadState::Suspended {
+                reason: PauseReason::DaemonRestart
+            })
         ));
         fake.stop().await;
     }
@@ -5420,18 +5567,13 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
         );
 
         // Explicit reject still works.
-        mgr.resolve_approval(
-            &request_id,
-            thread_id,
-            json!({ "decision": "decline" }),
-        )
-        .await
-        .unwrap();
+        mgr.resolve_approval(&request_id, thread_id, json!({ "decision": "decline" }))
+            .await
+            .unwrap();
         assert!(!mgr.pending_approvals.contains_key(&request_id));
 
         server.stop().await;
     }
-
 
     #[tokio::test(flavor = "multi_thread")]
     async fn resolve_approval_replies_to_codex_and_clears_pending_entry() {

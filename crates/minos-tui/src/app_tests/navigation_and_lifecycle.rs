@@ -68,6 +68,7 @@ async fn daemon_tick_replays_history_without_tui_result_writeback() {
         ended_at_ms: None,
         parent_thread_id: None,
         state: ThreadState::Idle,
+        needs_continue: false,
     }];
 
     assert!(app.handle_event(AppEvent::Tick).await);
@@ -76,11 +77,13 @@ async fn daemon_tick_replays_history_without_tui_result_writeback() {
     // agent-result rows are written by daemon completion, not TUI.
     assert!(app.ui.conversation.messages.is_empty());
     let chat = app
-        .ui.thread_panel.chat_states.get("thread-opencode-1234")
+        .ui
+        .thread_panel
+        .chat_states
+        .get("thread-opencode-1234")
         .expect("opencode chat hydrated");
     assert_eq!(
-        chat.last_completed_assistant_text()
-            .map(|(_, text)| text),
+        chat.last_completed_assistant_text().map(|(_, text)| text),
         Some("在的，有什么可以帮你的？".into())
     );
 }
@@ -133,6 +136,7 @@ async fn post_conversation_update_uses_source_identity_and_delivers_target_menti
             ended_at_ms: None,
             parent_thread_id: None,
             state: ThreadState::Idle,
+            needs_continue: false,
         },
         crate::backend::ThreadSummaryEntry {
             thread_id: "thread-opencode-1234".into(),
@@ -144,6 +148,7 @@ async fn post_conversation_update_uses_source_identity_and_delivers_target_menti
             ended_at_ms: None,
             parent_thread_id: None,
             state: ThreadState::Idle,
+            needs_continue: false,
         },
     ];
     let backend =
@@ -253,6 +258,7 @@ async fn delegate_to_agent_send_failure_does_not_record_visible_message() {
         ended_at_ms: None,
         parent_thread_id: None,
         state: ThreadState::Idle,
+        needs_continue: false,
     }];
     let backend = Arc::new(
         TestBackend::new()
@@ -323,6 +329,7 @@ async fn delegated_agent_cannot_delegate_to_third_agent() {
         ended_at_ms: None,
         parent_thread_id: None,
         state: ThreadState::Idle,
+        needs_continue: false,
     }];
     let backend =
         Arc::new(TestBackend::new().with_conversation_sessions("conversation-1", sessions.clone()));
@@ -394,7 +401,10 @@ async fn delegated_agent_result_writeback_is_daemon_owned_not_tui() {
             finished_at_ms: 2,
         },
     ]);
-    app.ui.thread_panel.chat_states.insert("thread-codex-1234".into(), chat);
+    app.ui
+        .thread_panel
+        .chat_states
+        .insert("thread-codex-1234".into(), chat);
 
     app.record_agent_conversation_result_if_done("thread-codex-1234")
         .await;
@@ -455,6 +465,7 @@ async fn hidden_project_agent_ingest_does_not_write_conversation_from_tui() {
                 ended_at_ms: None,
                 parent_thread_id: None,
                 state: ThreadState::Idle,
+                needs_continue: false,
             }],
         },
     ))
@@ -527,6 +538,7 @@ async fn subagent_result_is_not_recorded_to_conversation_timeline() {
             ended_at_ms: None,
             parent_thread_id: None,
             state: ThreadState::Idle,
+            needs_continue: false,
         },
         crate::backend::ThreadSummaryEntry {
             thread_id: "sub-thread".into(),
@@ -538,6 +550,7 @@ async fn subagent_result_is_not_recorded_to_conversation_timeline() {
             ended_at_ms: None,
             parent_thread_id: Some("parent-thread".into()),
             state: ThreadState::Idle,
+            needs_continue: false,
         },
     ];
     app.apply_action(Action::EffectCompleted(
@@ -616,7 +629,10 @@ async fn idle_thread_state_finishes_streaming_assistant_cursor() {
             text: "partial".into(),
         },
     ]);
-    app.ui.thread_panel.chat_states.insert("thread-codex-1234".into(), chat);
+    app.ui
+        .thread_panel
+        .chat_states
+        .insert("thread-codex-1234".into(), chat);
 
     assert!(
         app.handle_event(AppEvent::ManagerEvent(ManagerEvent::ThreadStateChanged {
@@ -674,6 +690,7 @@ async fn enter_on_agent_list_opens_detail_and_esc_uplevels() {
         ended_at_ms: None,
         parent_thread_id: None,
         state: ThreadState::Idle,
+        needs_continue: false,
     }];
     app.ui.conversation.agent_sessions.select(Some(0));
     app.select_thread(0);
@@ -718,6 +735,7 @@ async fn live_subagent_spawn_appears_in_sidebar_and_opens_readonly_detail() {
         ended_at_ms: None,
         parent_thread_id: None,
         state: ThreadState::Idle,
+        needs_continue: false,
     }];
     app.ui.conversation.agent_sessions.select(Some(0));
 
@@ -890,7 +908,10 @@ async fn mouse_selection_copies_chat_text_on_release() {
             finished_at_ms: 1,
         },
     ]);
-    app.ui.thread_panel.chat_states.insert("thread-1".into(), chat);
+    app.ui
+        .thread_panel
+        .chat_states
+        .insert("thread-1".into(), chat);
     app.select_thread(0);
     set_test_agent_detail_nav(&mut app, "test", "conversation-1");
     app.ui.focus.switch_layout(true);
@@ -949,8 +970,9 @@ async fn mouse_selection_copies_conversation_text_on_release() {
     set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui.focus.switch_layout(true);
     app.ui.panel_areas.conversation_chat = Rect::new(0, 0, 40, 12);
-    app.ui.conversation.set_messages(vec![
-        crate::backend::ConversationMessageEntry {
+    app.ui
+        .conversation
+        .set_messages(vec![crate::backend::ConversationMessageEntry {
             message_seq: 1,
             message_id: "m1".into(),
             conversation_id: "conversation-1".into(),
@@ -962,8 +984,7 @@ async fn mouse_selection_copies_conversation_text_on_release() {
             reply_to_message_id: None,
             delegation_id: None,
             mentions: Vec::new(),
-        },
-    ]);
+        }]);
     super::TEST_CLIPBOARD
         .lock()
         .expect("test clipboard lock")
@@ -1001,7 +1022,8 @@ async fn mouse_selection_copies_conversation_text_on_release() {
         .expect("test clipboard lock")
         .clone();
     assert!(
-        clip.iter().any(|s| s.contains("hello") || s.contains("world") || s.contains('h')),
+        clip.iter()
+            .any(|s| s.contains("hello") || s.contains("world") || s.contains('h')),
         "expected selected conversation text on clipboard, got {clip:?}"
     );
     assert!(app.ui.conversation.selection.is_none());
@@ -1130,7 +1152,10 @@ async fn init_hydrates_connected_daemon_threads_with_agent_and_paginated_history
     assert_eq!(app.ui.thread_panel.list.items[0].agent, AgentName::Claude);
     assert_eq!(app.ui.thread_panel.list.selected, Some(0));
     assert_eq!(
-        app.ui.thread_panel.chat_states.get("thread-1")
+        app.ui
+            .thread_panel
+            .chat_states
+            .get("thread-1")
             .expect("chat state")
             .agent,
         AgentName::Claude
@@ -1308,14 +1333,13 @@ async fn daemon_threads_listed_event_stays_metadata_only() {
         ),
         "DaemonThreadsListed must still apply state metadata"
     );
-    assert!(
-        app.ui
-            .thread_panel
-            .list
-            .items
-            .iter()
-            .any(|t| t.thread_id == "thread-new")
-    );
+    assert!(app
+        .ui
+        .thread_panel
+        .list
+        .items
+        .iter()
+        .any(|t| t.thread_id == "thread-new"));
     assert!(!app.state.hydrated_threads.contains("thread-new"));
     assert!(
         backend

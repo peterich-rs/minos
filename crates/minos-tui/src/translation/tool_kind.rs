@@ -80,7 +80,11 @@ impl ToolKind {
             Self::Edit => ("Edited", "Editing"),
             Self::Execute | Self::Other => ("Ran", "Running"),
         };
-        if running { present } else { past }
+        if running {
+            present
+        } else {
+            past
+        }
     }
 
     /// Skill uses "Skill" for both tenses (matches Grok skill header).

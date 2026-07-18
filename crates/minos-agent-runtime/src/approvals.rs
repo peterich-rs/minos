@@ -314,10 +314,7 @@ pub(crate) fn validate_grok_ext_method_decision(
             // Already a full wire response.
             if let Some(outcome) = decision.get("outcome").and_then(Value::as_str) {
                 let allowed = matches!(outcome, "approved" | "cancelled" | "abandoned");
-                anyhow::ensure!(
-                    allowed,
-                    "invalid exit_plan_mode outcome: {outcome}"
-                );
+                anyhow::ensure!(allowed, "invalid exit_plan_mode outcome: {outcome}");
                 return Ok(decision.clone());
             }
             let token = decision
@@ -438,10 +435,7 @@ mod acp_permission_tests {
             Some("cancel"),
         )
         .unwrap();
-        assert_eq!(
-            reply["outcome"]["outcome"].as_str(),
-            Some("selected")
-        );
+        assert_eq!(reply["outcome"]["outcome"].as_str(), Some("selected"));
         assert_eq!(reply["outcome"]["optionId"].as_str(), Some("proceed_once"));
     }
 
@@ -501,19 +495,25 @@ mod tests {
 
     #[test]
     fn grok_exit_plan_decision_maps_tokens_to_outcomes() {
-        let approved =
-            validate_grok_ext_method_decision("x.ai/exit_plan_mode", &json!({ "decision": "approve" }))
-                .unwrap();
+        let approved = validate_grok_ext_method_decision(
+            "x.ai/exit_plan_mode",
+            &json!({ "decision": "approve" }),
+        )
+        .unwrap();
         assert_eq!(approved["outcome"], "approved");
 
-        let revise =
-            validate_grok_ext_method_decision("x.ai/exit_plan_mode", &json!({ "decision": "revise" }))
-                .unwrap();
+        let revise = validate_grok_ext_method_decision(
+            "x.ai/exit_plan_mode",
+            &json!({ "decision": "revise" }),
+        )
+        .unwrap();
         assert_eq!(revise["outcome"], "cancelled");
 
-        let abandon =
-            validate_grok_ext_method_decision("x.ai/exit_plan_mode", &json!({ "decision": "abandon" }))
-                .unwrap();
+        let abandon = validate_grok_ext_method_decision(
+            "x.ai/exit_plan_mode",
+            &json!({ "decision": "abandon" }),
+        )
+        .unwrap();
         assert_eq!(abandon["outcome"], "abandoned");
 
         let passthrough = validate_grok_ext_method_decision(
@@ -683,7 +683,6 @@ mod tests {
         .expect("tool/requestUserInput params decode");
         assert!(auto_resolve_non_approval(&req, NonApprovalContext::default()).is_none());
     }
-
 
     #[test]
     fn validate_decision_accepts_tool_request_user_input_answer_shape() {

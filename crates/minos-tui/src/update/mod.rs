@@ -1,9 +1,9 @@
 //! Update layer skeleton: consume actions, mutate state, return effects.
 
 mod agent;
+mod conversation;
 mod global;
 mod nav;
-mod conversation;
 
 use crate::action::{Action, EffectResult, InputAction, InputTarget};
 use crate::agent_route::short_thread_id;
@@ -102,7 +102,8 @@ fn handle_effect_result(
                     project_id: project_id.clone(),
                 },
             ];
-            ui.projects.select(Some(ui.projects.items.len().saturating_sub(1)));
+            ui.projects
+                .select(Some(ui.projects.items.len().saturating_sub(1)));
             (
                 StateChange::redraw(),
                 vec![Effect::LoadConversations { project_id }],
@@ -171,18 +172,24 @@ fn handle_effect_result(
             state
                 .thread_conversations
                 .insert(thread_id.clone(), conversation_id.clone());
-            let inserted_session = if !ui
-                .conversation.agent_sessions.items
+            let inserted_session = if ui
+                .conversation
+                .agent_sessions
+                .items
                 .iter()
                 .any(|s| s.thread_id == thread_id)
             {
+                false
+            } else {
                 let first_line = text.lines().next().unwrap_or("").trim();
                 let title = if first_line.is_empty() {
                     None
                 } else {
                     Some(first_line.chars().take(80).collect::<String>())
                 };
-                ui.conversation.agent_sessions.items
+                ui.conversation
+                    .agent_sessions
+                    .items
                     .push(crate::backend::ThreadSummaryEntry {
                         thread_id: thread_id.clone(),
                         agent,
@@ -193,12 +200,13 @@ fn handle_effect_result(
                         ended_at_ms: None,
                         parent_thread_id: None,
                         state: minos_agent_runtime::ThreadState::Starting,
+                        needs_continue: false,
                     });
                 true
-            } else {
-                false
             };
-            ui.conversation.agent_sessions.select(ui.flat_session_index_for_thread(&thread_id));
+            ui.conversation
+                .agent_sessions
+                .select(ui.flat_session_index_for_thread(&thread_id));
             if inserted_session {
                 if let Some(conversation) = ui
                     .conversations
@@ -242,7 +250,8 @@ pub(super) fn select_thread(ui: &mut UiState, index: usize) -> StateChange {
 
 pub(super) fn sync_conversation_agent_picker(ui: &mut UiState) {
     let candidates = ui.conversation_agent_mention_candidates();
-    ui.inputs.conversation
+    ui.inputs
+        .conversation
         .sync_agent_picker(candidates.as_slice(), ui.focus.is(PaneId::Input));
 }
 
@@ -252,12 +261,16 @@ pub(super) fn group_user_text_for_thread(
     text: &str,
 ) -> Option<String> {
     let agent = ui
-        .conversation.agent_sessions.items
+        .conversation
+        .agent_sessions
+        .items
         .iter()
         .find(|session| session.thread_id == thread_id)
         .map(|session| session.agent)
         .or_else(|| {
-            ui.thread_panel.list.items
+            ui.thread_panel
+                .list
+                .items
                 .iter()
                 .find(|thread| thread.thread_id == thread_id)
                 .map(|thread| thread.agent)
@@ -277,12 +290,16 @@ pub(super) fn thread_runtime_state<'a>(
     ui: &'a UiState,
     thread_id: &str,
 ) -> Option<&'a minos_agent_runtime::ThreadState> {
-    ui.conversation.agent_sessions.items
+    ui.conversation
+        .agent_sessions
+        .items
         .iter()
         .find(|session| session.thread_id == thread_id)
         .map(|session| &session.state)
         .or_else(|| {
-            ui.thread_panel.list.items
+            ui.thread_panel
+                .list
+                .items
                 .iter()
                 .find(|thread| thread.thread_id == thread_id)
                 .map(|thread| &thread.state)
@@ -295,11 +312,13 @@ pub(super) fn push_pending_conversation_user_message(
     body: &str,
 ) {
     let message_seq = ui
-        .conversation.messages
+        .conversation
+        .messages
         .last()
         .map(|message| message.message_seq.saturating_add(1))
         .unwrap_or(1);
-    ui.conversation.messages
+    ui.conversation
+        .messages
         .push(crate::backend::ConversationMessageEntry {
             message_seq,
             message_id: format!("pending-{conversation_id}-{message_seq}"),
@@ -316,7 +335,8 @@ pub(super) fn push_pending_conversation_user_message(
     ui.conversation.auto_scroll = true;
     if let Some(conversation) = ui
         .conversations
-        .items.iter_mut()
+        .items
+        .iter_mut()
         .find(|conversation| conversation.conversation_id == conversation_id)
     {
         conversation.message_count = conversation.message_count.saturating_add(1);
@@ -384,7 +404,9 @@ pub(super) fn request_delete_current_thread(ui: &mut UiState) -> StateChange {
         return StateChange::none();
     };
     let Some(selected) = ui
-        .thread_panel.list.items
+        .thread_panel
+        .list
+        .items
         .iter()
         .position(|thread| thread.thread_id == thread_id)
     else {
@@ -412,13 +434,15 @@ pub(super) fn scroll_conversation(
         crate::action::ScrollDirection::Up => {
             ui.conversation.auto_scroll = false;
             ui.conversation.scroll_offset = ui
-                .conversation.scroll_offset
+                .conversation
+                .scroll_offset
                 .saturating_sub(u32::from(lines));
         }
         crate::action::ScrollDirection::Down => {
             ui.conversation.auto_scroll = false;
             ui.conversation.scroll_offset = ui
-                .conversation.scroll_offset
+                .conversation
+                .scroll_offset
                 .saturating_add(u32::from(lines))
                 .min(ui.conversation.max_scroll);
         }

@@ -212,13 +212,17 @@ fn handle_mouse_scroll(
                 match direction {
                     ScrollDirection::Up => {
                         if let Some(selected) = ui.conversation.agent_sessions.selected {
-                            ui.conversation.agent_sessions.select(Some(selected.saturating_sub(1)));
+                            ui.conversation
+                                .agent_sessions
+                                .select(Some(selected.saturating_sub(1)));
                         }
                     }
                     ScrollDirection::Down => {
                         if let Some(selected) = ui.conversation.agent_sessions.selected {
                             let last = ui.flat_agent_session_count().saturating_sub(1);
-                            ui.conversation.agent_sessions.select(Some((selected + 1).min(last)));
+                            ui.conversation
+                                .agent_sessions
+                                .select(Some((selected + 1).min(last)));
                         }
                     }
                     ScrollDirection::Top | ScrollDirection::Bottom => {}

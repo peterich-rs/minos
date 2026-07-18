@@ -34,7 +34,7 @@ impl TeamworkMcpTool for WaitDelegationTool {
             json!({
                 "type": "integer",
                 "minimum": 1000,
-                "maximum": 600000,
+                "maximum": 600_000,
                 "description": "Maximum time to wait in milliseconds. Defaults to 30000."
             }),
         );

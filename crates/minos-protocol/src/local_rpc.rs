@@ -152,7 +152,7 @@ pub trait LocalDaemonRpc {
     #[method(name = "resume_thread")]
     async fn resume_thread(
         &self,
-        req: crate::GetThreadParams,
+        req: crate::ResumeThreadRequest,
     ) -> jsonrpsee::core::RpcResult<crate::StartAgentResponse>;
 
     #[method(name = "list_local_threads")]
@@ -178,6 +178,12 @@ pub trait LocalDaemonRpc {
         &self,
         req: crate::CreateConversationParams,
     ) -> jsonrpsee::core::RpcResult<crate::CreateConversationResponse>;
+
+    #[method(name = "update_conversation")]
+    async fn update_conversation(
+        &self,
+        req: crate::UpdateConversationParams,
+    ) -> jsonrpsee::core::RpcResult<crate::UpdateConversationResponse>;
 
     #[method(name = "list_conversation_messages")]
     async fn list_conversation_messages(

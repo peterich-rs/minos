@@ -308,8 +308,9 @@ fn format_approval_prompt(method: &str, params: &serde_json::Value) -> String {
                 (false, false) => format!("{kind}: {title}"),
                 (false, true) => title,
                 (true, false) => kind,
-                (true, true) => find_string_by_keys(params, &["reason", "message", "title"])
-                    .unwrap_or_default(),
+                (true, true) => {
+                    find_string_by_keys(params, &["reason", "message", "title"]).unwrap_or_default()
+                }
             }
         }
         _ => find_string_by_keys(params, &["reason", "message", "title"]).unwrap_or_default(),

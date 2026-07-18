@@ -11,7 +11,6 @@ fn lines_of(items: &[ChatItem], width: u16) -> Vec<Line<'static>> {
     build_lines(items, &empty_groups(), width)
 }
 
-
 fn user_item(text: &str, is_streaming: bool) -> ChatItem {
     ChatItem::UserMessage {
         message_id: "m1".into(),
@@ -152,7 +151,10 @@ fn foldable_header_hit_test_finds_tool_and_thinking() {
     cache.rebuild_if_stale("t1", &items, 1, 1, 80, &empty_groups());
 
     // item 0 header at row 0
-    assert_eq!(cache.foldable_header_item_at_row(&items, 0, &empty_groups()), Some(0));
+    assert_eq!(
+        cache.foldable_header_item_at_row(&items, 0, &empty_groups()),
+        Some(0)
+    );
     // item 1: separator at item_starts[1], header at +1
     let tool_start = cache.item_starts()[1];
     assert_eq!(
@@ -160,7 +162,10 @@ fn foldable_header_hit_test_finds_tool_and_thinking() {
         Some(1)
     );
     // body/separator rows are not fold headers
-    assert_eq!(cache.foldable_header_item_at_row(&items, tool_start, &empty_groups()), None);
+    assert_eq!(
+        cache.foldable_header_item_at_row(&items, tool_start, &empty_groups()),
+        None
+    );
 }
 
 #[test]
@@ -175,7 +180,9 @@ fn item_gap_is_blank_not_full_width_rule() {
     // Exactly one blank gap line between the two items' content blocks.
     let texts: Vec<String> = lines.iter().map(line_text).collect();
     assert!(
-        !texts.iter().any(|t| t.contains('─') && t.chars().count() > 4),
+        !texts
+            .iter()
+            .any(|t| t.contains('─') && t.chars().count() > 4),
         "full-width rule separators should be gone: {texts:?}"
     );
     assert!(
@@ -443,7 +450,9 @@ fn tool_call_user_toggle_overrides_auto_expansion() {
 
     assert!(!rendered.iter().any(|line| line.contains("hidden detail")));
     assert!(
-        rendered.iter().any(|line| line.contains("Ran") && line.contains("patch")),
+        rendered
+            .iter()
+            .any(|line| line.contains("Ran") && line.contains("patch")),
         "expected collapsed Ran header: {rendered:?}"
     );
 }
@@ -521,7 +530,10 @@ fn tool_call_collapsed_edit_shows_colored_diffstat() {
         .find(|line| line_text(line).contains("Edited"))
         .expect("header");
     let text = line_text(header);
-    assert!(text.contains("x.rs") && text.contains("+3") && text.contains("-1"), "{text}");
+    assert!(
+        text.contains("x.rs") && text.contains("+3") && text.contains("-1"),
+        "{text}"
+    );
     assert!(
         header
             .spans
@@ -577,7 +589,9 @@ fn tool_call_execute_expanded_shows_shell_line() {
     );
     let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
     assert!(
-        rendered.iter().any(|line| line.contains("$ ") && line.contains("cargo test")),
+        rendered
+            .iter()
+            .any(|line| line.contains("$ ") && line.contains("cargo test")),
         "expected $ command line: {rendered:?}"
     );
     assert!(
@@ -596,8 +610,12 @@ fn markdown_table_renders_in_assistant_text() {
         80,
     );
     let rendered = lines.iter().map(line_text).collect::<Vec<_>>();
-    assert!(rendered.iter().any(|line| line.contains('A') && line.contains('B')));
-    assert!(rendered.iter().any(|line| line.contains('1') && line.contains('2')));
+    assert!(rendered
+        .iter()
+        .any(|line| line.contains('A') && line.contains('B')));
+    assert!(rendered
+        .iter()
+        .any(|line| line.contains('1') && line.contains('2')));
 }
 
 #[test]
@@ -712,9 +730,7 @@ fn render_cache_settles_viewport_and_leaves_far_history_estimated() {
     let mut cache = RenderCache::default();
     // Enough short rows that warm-up (3 viewports) cannot cover the top.
     let items: Vec<_> = (0..400)
-        .map(|i| {
-            assistant_item(&format!("message body number {i} with enough text"), false)
-        })
+        .map(|i| assistant_item(&format!("message body number {i} with enough text"), false))
         .collect();
     // Bottom-pinned prepare: bottom window (+ warm band) is exact; far history not.
     let _scroll = cache.prepare_layout(super::LayoutPass {
@@ -1115,7 +1131,10 @@ fn render_cache_reuses_runs_across_settle_frames_into_history() {
         follow_mode: true,
         scroll_offset: 0,
     });
-    assert!(!cache.is_measured(5), "far history stays estimated after follow");
+    assert!(
+        !cache.is_measured(5),
+        "far history stays estimated after follow"
+    );
 
     // Manual scroll to top amortizes exact measure; layout must stay consistent.
     let mut frames = 0u32;
@@ -1188,7 +1207,10 @@ fn build_segment_visual_lines_uses_provided_runs_without_recomputing() {
         },
     ];
     let runs = crate::translation::find_runs(&items, &empty_groups());
-    assert!(!runs.is_empty(), "two sequential file tools form a fold run");
+    assert!(
+        !runs.is_empty(),
+        "two sequential file tools form a fold run"
+    );
 
     let header = build_segment_visual_lines(0, &items[0], &items, 80, &runs);
     assert!(!header.is_empty(), "collapsed header paints");

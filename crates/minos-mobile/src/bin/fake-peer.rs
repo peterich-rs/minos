@@ -200,7 +200,9 @@ fn parse_agent(s: &str) -> Result<AgentName> {
         "gemini" => Ok(AgentName::Gemini),
         "opencode" => Ok(AgentName::Opencode),
         "grok" => Ok(AgentName::Grok),
-        other => anyhow::bail!("unknown agent {other:?}; want one of codex/claude/gemini/opencode/grok"),
+        other => {
+            anyhow::bail!("unknown agent {other:?}; want one of codex/claude/gemini/opencode/grok")
+        }
     }
 }
 

@@ -28,14 +28,17 @@ impl App {
             crate::state::workspace_path_belongs_to_current_workspace(&cwd, &p.workspace_path)
         });
         self.ui.projects.items = projects;
-        self.ui.projects.selected = matched_index.or_else(|| {
+        self.ui.projects.selected = matched_index.or({
             if self.ui.projects.items.is_empty() {
                 None
             } else {
                 Some(0)
             }
         });
-        self.ui.projects.list_state.select(self.ui.projects.selected);
+        self.ui
+            .projects
+            .list_state
+            .select(self.ui.projects.selected);
 
         match matched_index {
             Some(index) => {
@@ -55,7 +58,8 @@ impl App {
                     Some(0)
                 };
                 self.ui
-                    .conversations.list_state
+                    .conversations
+                    .list_state
                     .select(self.ui.conversations.selected);
                 self.ui.nav.stack = vec![
                     crate::nav::NavLevel::Projects,
@@ -224,7 +228,12 @@ impl App {
     }
 
     pub(super) async fn handle_ingest(&mut self, ingest: minos_protocol::LocalIngestFrame) -> bool {
-        if !self.ui.thread_panel.chat_states.contains_key(&ingest.thread_id) {
+        if !self
+            .ui
+            .thread_panel
+            .chat_states
+            .contains_key(&ingest.thread_id)
+        {
             debug!(
                 agent = %ingest.agent.bin_name(),
                 thread_id = %ingest.thread_id,
@@ -385,15 +394,17 @@ impl App {
             return false;
         }
         let now = Instant::now();
-        !self
-            .state
+        self.state
             .last_daemon_history_sync
-            .is_some_and(|last| now.duration_since(last) < Duration::from_secs(2))
+            .is_none_or(|last| now.duration_since(last) >= Duration::from_secs(2))
     }
 
     pub(super) async fn sync_daemon_threads_from_backend(&mut self, incremental: bool) -> bool {
         match self.backend.list_threads().await {
-            Ok(threads) => self.apply_daemon_thread_snapshots(threads, incremental).await,
+            Ok(threads) => {
+                self.apply_daemon_thread_snapshots(threads, incremental)
+                    .await
+            }
             Err(e) => {
                 tracing::warn!(
                     target: "minos_tui::app",
@@ -594,11 +605,19 @@ impl App {
     }
 
     pub(super) async fn ensure_conversation_agent_session_visible(&mut self, thread_id: &str) {
-        let was_visible = self.ui.thread_panel.list.items.iter().any(|t| t.thread_id == thread_id);
+        let was_visible = self
+            .ui
+            .thread_panel
+            .list
+            .items
+            .iter()
+            .any(|t| t.thread_id == thread_id);
         if !was_visible {
             if let Some((agent, state)) = self
                 .ui
-                .conversation.agent_sessions.items
+                .conversation
+                .agent_sessions
+                .items
                 .iter()
                 .find(|s| s.thread_id == thread_id)
                 .map(|session| (session.agent, session.state.clone()))
@@ -610,7 +629,8 @@ impl App {
                     .and_then(|project_id| {
                         self.ui
                             .projects
-                            .items.iter()
+                            .items
+                            .iter()
                             .find(|project| project.project_id == project_id)
                     })
                     .map(|project| project.workspace_path.clone())
@@ -618,7 +638,9 @@ impl App {
                 self.ensure_thread_visible(thread_id.to_owned(), agent, workspace);
                 if let Some(entry) = self
                     .ui
-                    .thread_panel.list.items
+                    .thread_panel
+                    .list
+                    .items
                     .iter_mut()
                     .find(|thread| thread.thread_id == thread_id)
                 {
@@ -692,7 +714,9 @@ impl App {
                 }
                 if let Some(index) = self
                     .ui
-                    .thread_panel.list.items
+                    .thread_panel
+                    .list
+                    .items
                     .iter()
                     .position(|t| t.thread_id == thread_id)
                 {
@@ -723,7 +747,10 @@ impl App {
                     parent_thread_id: parent_thread_id.clone(),
                 };
                 self.ui.thread_panel.list.items.push(entry);
-                self.ui.thread_panel.chat_states.insert(thread_id.clone(), ChatState::new(thread_id.clone(), agent));
+                self.ui
+                    .thread_panel
+                    .chat_states
+                    .insert(thread_id.clone(), ChatState::new(thread_id.clone(), agent));
                 if let Some(parent_thread_id) = parent_thread_id.as_deref() {
                     upsert_subagent_session(
                         &mut self.ui,
@@ -740,10 +767,18 @@ impl App {
                 true
             }
             ManagerEvent::ThreadStateChanged { thread_id, new, .. } => {
-                let known_thread = self.ui.thread_panel.list.items.iter().any(|t| t.thread_id == thread_id);
+                let known_thread = self
+                    .ui
+                    .thread_panel
+                    .list
+                    .items
+                    .iter()
+                    .any(|t| t.thread_id == thread_id);
                 let known_session = self
                     .ui
-                    .conversation.agent_sessions.items
+                    .conversation
+                    .agent_sessions
+                    .items
                     .iter()
                     .any(|s| s.thread_id == thread_id);
                 if !known_thread && !known_session {
@@ -751,7 +786,9 @@ impl App {
                 }
                 if let Some(session) = self
                     .ui
-                    .conversation.agent_sessions.items
+                    .conversation
+                    .agent_sessions
+                    .items
                     .iter_mut()
                     .find(|s| s.thread_id == thread_id)
                 {
@@ -763,13 +800,17 @@ impl App {
                 );
                 let thread_agent = self
                     .ui
-                    .thread_panel.list.items
+                    .thread_panel
+                    .list
+                    .items
                     .iter()
                     .find(|t| t.thread_id == thread_id)
                     .map(|thread| thread.agent);
                 if let Some(entry) = self
                     .ui
-                    .thread_panel.list.items
+                    .thread_panel
+                    .list
+                    .items
                     .iter_mut()
                     .find(|t| t.thread_id == thread_id)
                 {
@@ -787,10 +828,18 @@ impl App {
                 true
             }
             ManagerEvent::ThreadClosed { thread_id, reason } => {
-                let known_thread = self.ui.thread_panel.list.items.iter().any(|t| t.thread_id == thread_id);
+                let known_thread = self
+                    .ui
+                    .thread_panel
+                    .list
+                    .items
+                    .iter()
+                    .any(|t| t.thread_id == thread_id);
                 let known_session = self
                     .ui
-                    .conversation.agent_sessions.items
+                    .conversation
+                    .agent_sessions
+                    .items
                     .iter()
                     .any(|s| s.thread_id == thread_id);
                 if !known_thread && !known_session {
@@ -799,7 +848,9 @@ impl App {
                 let closed_state = ThreadState::Closed { reason };
                 if let Some(session) = self
                     .ui
-                    .conversation.agent_sessions.items
+                    .conversation
+                    .agent_sessions
+                    .items
                     .iter_mut()
                     .find(|s| s.thread_id == thread_id)
                 {
@@ -807,13 +858,17 @@ impl App {
                 }
                 let thread_agent = self
                     .ui
-                    .thread_panel.list.items
+                    .thread_panel
+                    .list
+                    .items
                     .iter()
                     .find(|t| t.thread_id == thread_id)
                     .map(|thread| thread.agent);
                 if let Some(entry) = self
                     .ui
-                    .thread_panel.list.items
+                    .thread_panel
+                    .list
+                    .items
                     .iter_mut()
                     .find(|t| t.thread_id == thread_id)
                 {
@@ -842,13 +897,22 @@ impl App {
                     };
                     if let Some(session) = self
                         .ui
-                        .conversation.agent_sessions.items
+                        .conversation
+                        .agent_sessions
+                        .items
                         .iter_mut()
                         .find(|s| s.thread_id == tid)
                     {
                         session.state = suspended_state.clone();
                     }
-                    if let Some(entry) = self.ui.thread_panel.list.items.iter_mut().find(|t| t.thread_id == tid) {
+                    if let Some(entry) = self
+                        .ui
+                        .thread_panel
+                        .list
+                        .items
+                        .iter_mut()
+                        .find(|t| t.thread_id == tid)
+                    {
                         entry.state = suspended_state;
                     }
                     if let Some(chat) = self.ui.thread_panel.chat_states.get_mut(&tid) {
@@ -908,7 +972,9 @@ fn conversation_id_for_parent(
             ui.nav_level()
                 .conversation_id()
                 .filter(|_| {
-                    ui.conversation.agent_sessions.items
+                    ui.conversation
+                        .agent_sessions
+                        .items
                         .iter()
                         .any(|session| session.thread_id == parent_thread_id)
                 })
@@ -926,7 +992,9 @@ fn upsert_subagent_session(
 ) -> bool {
     if sub_thread_id.is_empty()
         || !ui
-            .conversation.agent_sessions.items
+            .conversation
+            .agent_sessions
+            .items
             .iter()
             .any(|session| session.thread_id == parent_thread_id)
     {
@@ -934,7 +1002,9 @@ fn upsert_subagent_session(
     }
 
     if let Some(session) = ui
-        .conversation.agent_sessions.items
+        .conversation
+        .agent_sessions
+        .items
         .iter_mut()
         .find(|session| session.thread_id == sub_thread_id)
     {
@@ -954,7 +1024,9 @@ fn upsert_subagent_session(
         return changed;
     }
 
-    ui.conversation.agent_sessions.items
+    ui.conversation
+        .agent_sessions
+        .items
         .push(crate::backend::ThreadSummaryEntry {
             thread_id: sub_thread_id.to_owned(),
             agent,
@@ -965,6 +1037,7 @@ fn upsert_subagent_session(
             ended_at_ms: None,
             parent_thread_id: Some(parent_thread_id.to_owned()),
             state: ThreadState::Idle,
+            needs_continue: false,
         });
     if ui.conversation.agent_sessions.selected.is_none() {
         ui.conversation.agent_sessions.select(Some(0));
