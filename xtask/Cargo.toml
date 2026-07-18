@@ -23,6 +23,7 @@ syn = { version = "2", features = ["full", "parsing"] }
 quote = "1"
 proc-macro2 = "1"
 schemars = "0.8"
+regex = "1"
 
 [lints]
 workspace = true

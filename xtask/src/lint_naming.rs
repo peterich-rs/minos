@@ -5,8 +5,13 @@
 //! HTTP/store/migration surfaces. This lint catches regressions by scanning
 //! the listed roots for the offending identifier patterns. Run as part of
 //! `cargo xtask check-all`.
+//!
+//! Implemented in pure Rust (no external `rg`) so Linux/macOS CI runners do not
+//! need ripgrep installed.
+use std::fs;
 use std::path::Path;
-use std::process::Command;
+
+use regex::Regex;
 
 const TARGETS: &[&str] = &[
     "crates/minos-protocol/src",
@@ -37,29 +42,14 @@ const HISTORICAL_MIGRATIONS: &[&str] = &[
 ];
 
 pub fn run(repo_root: &Path) -> anyhow::Result<()> {
+    let re = Regex::new(PATTERN).expect("lint-naming pattern must compile");
     let mut hits: Vec<String> = Vec::new();
     for t in TARGETS {
         let dir = repo_root.join(t);
         if !dir.exists() {
             continue;
         }
-        let mut args: Vec<String> = vec![
-            "-n".into(),
-            "--no-heading".into(),
-            "-e".into(),
-            PATTERN.into(),
-        ];
-        for excluded in HISTORICAL_MIGRATIONS {
-            args.push("-g".into());
-            args.push(format!("!{excluded}"));
-        }
-        args.push(dir.to_str().unwrap().to_string());
-        let out = Command::new("rg")
-            .args(args.iter().map(String::as_str))
-            .output()?;
-        if !out.stdout.is_empty() {
-            hits.push(String::from_utf8_lossy(&out.stdout).into_owned());
-        }
+        scan_dir(&dir, &re, &mut hits)?;
     }
     if hits.is_empty() {
         println!("lint-naming: clean");
@@ -70,7 +60,48 @@ pub fn run(repo_root: &Path) -> anyhow::Result<()> {
         }
         anyhow::bail!(
             "lint-naming: {} hits in protocol/FFI/HTTP/SQL surfaces",
-            hits.iter().map(|s| s.lines().count()).sum::<usize>()
+            hits.len()
         )
     }
+}
+
+fn scan_dir(dir: &Path, re: &Regex, hits: &mut Vec<String>) -> anyhow::Result<()> {
+    let entries = fs::read_dir(dir).map_err(|e| {
+        anyhow::anyhow!("lint-naming: cannot read {}: {e}", dir.display())
+    })?;
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            scan_dir(&path, re, hits)?;
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if HISTORICAL_MIGRATIONS.contains(&name) {
+            continue;
+        }
+        // Only text sources that historically carried the rename surface.
+        let is_source = name.ends_with(".rs")
+            || name.ends_with(".sql")
+            || name.ends_with(".swift")
+            || name.ends_with(".dart");
+        if !is_source {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        for (idx, line) in content.lines().enumerate() {
+            if re.is_match(line) {
+                hits.push(format!("{}:{}:{line}", path.display(), idx + 1));
+            }
+        }
+    }
+    Ok(())
 }
