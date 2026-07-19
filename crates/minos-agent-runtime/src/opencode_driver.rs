@@ -145,12 +145,23 @@ impl OpencodeServerInstance {
     }
 
     pub async fn create_session(&mut self) -> anyhow::Result<String> {
+        self.create_session_with_model(None).await
+    }
+
+    pub async fn create_session_with_model(
+        &mut self,
+        model: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let body = match model.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(m) => serde_json::json!({ "model": m }).to_string(),
+            None => "{}".to_string(),
+        };
         let resp = self
             .http_client
             .post(format!("{}/session", self.base_url))
             .header("Authorization", &self.auth_header)
             .header("Content-Type", "application/json")
-            .body("{}")
+            .body(body)
             .send()
             .await?
             .error_for_status()?;

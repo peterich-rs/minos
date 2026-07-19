@@ -59,8 +59,8 @@ pub use grok_driver::GrokAcpInstance;
 pub use ingest::{Ingestor, IngestorHandle};
 pub use instance::AppServerInstance;
 pub use manager::{
-    AgentManager, DispatchOutcome, IngestSink, InstanceCaps, SessionPolicies, StartAgentOutcome,
-    CONTINUE_PROMPT,
+    AgentLaunchOptions, AgentManager, DispatchOutcome, IngestSink, InstanceCaps, SessionPolicies,
+    StartAgentOutcome, CONTINUE_PROMPT,
 };
 pub use manager_event::ManagerEvent;
 pub use minos_domain::AgentName as AgentKind;

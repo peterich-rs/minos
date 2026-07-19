@@ -374,10 +374,23 @@ impl AgentManager {
         text: String,
         policies: Option<SessionPolicies>,
     ) -> anyhow::Result<DispatchOutcome> {
+        self.dispatch_message_with_options(agent, workspace, session_id, text, policies, None)
+            .await
+    }
+
+    pub async fn dispatch_message_with_options(
+        &self,
+        agent: AgentKind,
+        workspace: PathBuf,
+        session_id: Option<String>,
+        text: String,
+        policies: Option<SessionPolicies>,
+        launch: Option<AgentLaunchOptions>,
+    ) -> anyhow::Result<DispatchOutcome> {
         match session_id {
             None => {
                 let outcome = self
-                    .start_agent_with_policies(agent, workspace, policies)
+                    .start_agent_with_policies(agent, workspace, policies, launch)
                     .await?;
                 self.send_user_message(&outcome.thread_id, text).await?;
                 Ok(DispatchOutcome {
@@ -418,7 +431,8 @@ impl AgentManager {
         agent: AgentKind,
         workspace: PathBuf,
     ) -> anyhow::Result<StartAgentOutcome> {
-        self.start_agent_with_policies(agent, workspace, None).await
+        self.start_agent_with_policies(agent, workspace, None, None)
+            .await
     }
 
     pub async fn start_agent_in_conversation(
@@ -431,6 +445,24 @@ impl AgentManager {
             agent,
             workspace,
             None,
+            None,
+            Some(conversation_id),
+        )
+        .await
+    }
+
+    pub async fn start_agent_in_conversation_with_options(
+        &self,
+        agent: AgentKind,
+        workspace: PathBuf,
+        conversation_id: String,
+        launch: Option<AgentLaunchOptions>,
+    ) -> anyhow::Result<StartAgentOutcome> {
+        self.start_agent_with_policies_and_conversation(
+            agent,
+            workspace,
+            None,
+            launch,
             Some(conversation_id),
         )
         .await
@@ -441,8 +473,9 @@ impl AgentManager {
         agent: AgentKind,
         workspace: PathBuf,
         policies: Option<SessionPolicies>,
+        launch: Option<AgentLaunchOptions>,
     ) -> anyhow::Result<StartAgentOutcome> {
-        self.start_agent_with_policies_and_conversation(agent, workspace, policies, None)
+        self.start_agent_with_policies_and_conversation(agent, workspace, policies, launch, None)
             .await
     }
 
@@ -451,27 +484,40 @@ impl AgentManager {
         agent: AgentKind,
         workspace: PathBuf,
         policies: Option<SessionPolicies>,
+        launch: Option<AgentLaunchOptions>,
         conversation_id: Option<String>,
     ) -> anyhow::Result<StartAgentOutcome> {
         match agent {
             AgentName::Codex => {
-                self.start_codex_agent(agent, workspace, policies, conversation_id.as_deref())
-                    .await
+                self.start_codex_agent(
+                    agent,
+                    workspace,
+                    policies,
+                    launch,
+                    conversation_id.as_deref(),
+                )
+                .await
             }
             AgentName::Claude => {
-                self.start_claude_agent(agent, workspace, None, conversation_id)
+                self.start_claude_agent(agent, workspace, None, conversation_id, launch)
                     .await
             }
             AgentName::Opencode => {
-                self.start_opencode_agent(agent, workspace, None, conversation_id.as_deref())
-                    .await
+                self.start_opencode_agent(
+                    agent,
+                    workspace,
+                    None,
+                    conversation_id.as_deref(),
+                    launch,
+                )
+                .await
             }
             AgentName::Gemini => {
-                self.start_gemini_agent(agent, workspace, None, conversation_id.as_deref())
+                self.start_gemini_agent(agent, workspace, None, conversation_id.as_deref(), launch)
                     .await
             }
             AgentName::Grok => {
-                self.start_grok_agent(agent, workspace, None, conversation_id.as_deref())
+                self.start_grok_agent(agent, workspace, None, conversation_id.as_deref(), launch)
                     .await
             }
         }
@@ -483,6 +529,18 @@ impl AgentManager {
         workspace: PathBuf,
         thread_id: String,
         policies: Option<SessionPolicies>,
+    ) -> anyhow::Result<StartAgentOutcome> {
+        self.start_agent_with_thread_id_and_options(agent, workspace, thread_id, policies, None)
+            .await
+    }
+
+    pub async fn start_agent_with_thread_id_and_options(
+        &self,
+        agent: AgentKind,
+        workspace: PathBuf,
+        thread_id: String,
+        policies: Option<SessionPolicies>,
+        launch: Option<AgentLaunchOptions>,
     ) -> anyhow::Result<StartAgentOutcome> {
         if let Some(handle) = self.threads.lock().await.get(&thread_id).cloned() {
             return Ok(StartAgentOutcome {
@@ -498,25 +556,26 @@ impl AgentManager {
                     agent,
                     workspace,
                     policies,
+                    launch,
                     Some(thread_id),
                     None,
                 )
                 .await
             }
             AgentName::Claude => {
-                self.start_claude_agent(agent, workspace, Some(thread_id), None)
+                self.start_claude_agent(agent, workspace, Some(thread_id), None, launch)
                     .await
             }
             AgentName::Opencode => {
-                self.start_opencode_agent(agent, workspace, Some(thread_id), None)
+                self.start_opencode_agent(agent, workspace, Some(thread_id), None, launch)
                     .await
             }
             AgentName::Gemini => {
-                self.start_gemini_agent(agent, workspace, Some(thread_id), None)
+                self.start_gemini_agent(agent, workspace, Some(thread_id), None, launch)
                     .await
             }
             AgentName::Grok => {
-                self.start_grok_agent(agent, workspace, Some(thread_id), None)
+                self.start_grok_agent(agent, workspace, Some(thread_id), None, launch)
                     .await
             }
         }
@@ -527,10 +586,18 @@ impl AgentManager {
         agent: AgentKind,
         workspace: PathBuf,
         policies: Option<SessionPolicies>,
+        launch: Option<AgentLaunchOptions>,
         conversation_id: Option<&str>,
     ) -> anyhow::Result<StartAgentOutcome> {
-        self.start_codex_agent_with_thread_id(agent, workspace, policies, None, conversation_id)
-            .await
+        self.start_codex_agent_with_thread_id(
+            agent,
+            workspace,
+            policies,
+            launch,
+            None,
+            conversation_id,
+        )
+        .await
     }
 
     async fn start_codex_agent_with_thread_id(
@@ -538,6 +605,7 @@ impl AgentManager {
         agent: AgentKind,
         workspace: PathBuf,
         policies: Option<SessionPolicies>,
+        launch: Option<AgentLaunchOptions>,
         logical_thread_id: Option<String>,
         conversation_id: Option<&str>,
     ) -> anyhow::Result<StartAgentOutcome> {
@@ -552,7 +620,27 @@ impl AgentManager {
         // Allocate a fresh thread on the codex app-server. The
         // `thread/started` notification arrives later via the event pump and
         // populates `codex_session_id` + flips state Starting -> Idle.
-        let resp = instance.start_thread(&canon).await?;
+        let model = launch.as_ref().and_then(|l| l.model.clone());
+        let effort = launch.as_ref().and_then(|l| l.reasoning_effort.clone());
+        let instructions = launch.as_ref().and_then(|l| l.instructions.clone());
+        let developer = match instructions.as_deref() {
+            Some(extra) if !extra.trim().is_empty() => {
+                format!(
+                    "{}\n\n{}",
+                    MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS,
+                    extra.trim()
+                )
+            }
+            _ => MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS.to_string(),
+        };
+        let resp = instance
+            .start_thread_with_options(
+                &canon,
+                model.as_deref(),
+                effort.as_deref(),
+                Some(developer.as_str()),
+            )
+            .await?;
         let thread_id = preallocated_thread_id.unwrap_or_else(|| resp.codex_session_id.clone());
         instance.add_thread(thread_id.clone()).await;
         instance.touch().await;
@@ -563,7 +651,8 @@ impl AgentManager {
             agent,
             ThreadState::Starting,
             0,
-        );
+        )
+        .with_full_launch_options(model, effort, instructions);
         handle.mcp_conversation_id = conversation_id.map(str::to_owned);
         handle.codex_session_id = Some(resp.codex_session_id.clone());
         let _ = handle.transition(ThreadState::Idle);
@@ -595,6 +684,7 @@ impl AgentManager {
         workspace: PathBuf,
         logical_thread_id: Option<String>,
         conversation_id: Option<String>,
+        launch: Option<AgentLaunchOptions>,
     ) -> anyhow::Result<StartAgentOutcome> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
         let thread_id = logical_thread_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -605,6 +695,11 @@ impl AgentManager {
             agent,
             ThreadState::Starting,
             0,
+        )
+        .with_full_launch_options(
+            launch.as_ref().and_then(|l| l.model.clone()),
+            launch.as_ref().and_then(|l| l.reasoning_effort.clone()),
+            launch.as_ref().and_then(|l| l.instructions.clone()),
         );
         handle.codex_session_id = Some(provider_session_id.clone());
         handle.mcp_conversation_id = conversation_id;
@@ -637,6 +732,7 @@ impl AgentManager {
         workspace: PathBuf,
         logical_thread_id: Option<String>,
         conversation_id: Option<&str>,
+        launch: Option<AgentLaunchOptions>,
     ) -> anyhow::Result<StartAgentOutcome> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
         let thread_id = logical_thread_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -644,7 +740,12 @@ impl AgentManager {
         let instance = self
             .ensure_opencode_instance(&canon, conversation_id, source_thread_id)
             .await?;
-        let oc_session_id = instance.lock().await.create_session().await?;
+        let model = launch.as_ref().and_then(|l| l.model.clone());
+        let oc_session_id = instance
+            .lock()
+            .await
+            .create_session_with_model(model.as_deref())
+            .await?;
         self.opencode_session_map
             .lock()
             .await
@@ -655,6 +756,11 @@ impl AgentManager {
             agent,
             ThreadState::Idle,
             0,
+        )
+        .with_full_launch_options(
+            model,
+            launch.as_ref().and_then(|l| l.reasoning_effort.clone()),
+            launch.as_ref().and_then(|l| l.instructions.clone()),
         );
         handle.codex_session_id = Some(oc_session_id.clone());
         handle.mcp_conversation_id = conversation_id.map(str::to_owned);
@@ -678,11 +784,19 @@ impl AgentManager {
         workspace: PathBuf,
         logical_thread_id: Option<String>,
         conversation_id: Option<&str>,
+        launch: Option<AgentLaunchOptions>,
     ) -> anyhow::Result<StartAgentOutcome> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
         let thread_id = logical_thread_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let model = launch.as_ref().and_then(|l| l.model.clone());
         let provider_session_id = self
-            .ensure_gemini_instance_for_thread(&thread_id, &canon, None, conversation_id)
+            .ensure_gemini_instance_for_thread(
+                &thread_id,
+                &canon,
+                None,
+                conversation_id,
+                model.as_deref(),
+            )
             .await?;
         let mut handle = ThreadHandle::new(
             thread_id.clone(),
@@ -690,6 +804,11 @@ impl AgentManager {
             agent,
             ThreadState::Idle,
             0,
+        )
+        .with_full_launch_options(
+            model,
+            launch.as_ref().and_then(|l| l.reasoning_effort.clone()),
+            launch.as_ref().and_then(|l| l.instructions.clone()),
         );
         handle.codex_session_id = Some(provider_session_id.clone());
         handle.mcp_conversation_id = conversation_id.map(str::to_owned);
@@ -713,6 +832,7 @@ impl AgentManager {
         workspace: &Path,
         resume_session_id: Option<&str>,
         conversation_id: Option<&str>,
+        model: Option<&str>,
     ) -> anyhow::Result<String> {
         if let Some(existing) = self.gemini_instances.lock().await.get(thread_id).cloned() {
             return existing.get_session_id().await.ok_or_else(|| {
@@ -726,11 +846,12 @@ impl AgentManager {
             .clone()
             .unwrap_or_else(|| PathBuf::from(AgentName::Gemini.bin_name()));
         let (crash_tx, _crash_rx) = tokio::sync::mpsc::channel::<()>(1);
-        let instance = crate::gemini_driver::GeminiAcpInstance::spawn(
+        let instance = crate::gemini_driver::GeminiAcpInstance::spawn_with_model(
             &bin_path,
             workspace,
             &self.config.subprocess_env,
             crash_tx,
+            model,
         )
         .await
         .map_err(|error| anyhow::anyhow!("gemini ACP spawn failed: {error}"))?;
@@ -810,11 +931,23 @@ impl AgentManager {
         workspace: PathBuf,
         logical_thread_id: Option<String>,
         conversation_id: Option<&str>,
+        launch: Option<AgentLaunchOptions>,
     ) -> anyhow::Result<StartAgentOutcome> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
         let thread_id = logical_thread_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let model = launch.as_ref().and_then(|l| l.model.clone());
+        let effort = launch.as_ref().and_then(|l| l.reasoning_effort.clone());
+        let instructions = launch.as_ref().and_then(|l| l.instructions.clone());
         let provider_session_id = self
-            .ensure_grok_instance_for_thread(&thread_id, &canon, None, conversation_id)
+            .ensure_grok_instance_for_thread(
+                &thread_id,
+                &canon,
+                None,
+                conversation_id,
+                model.as_deref(),
+                effort.as_deref(),
+                instructions.as_deref(),
+            )
             .await?;
         let mut handle = ThreadHandle::new(
             thread_id.clone(),
@@ -822,7 +955,8 @@ impl AgentManager {
             agent,
             ThreadState::Idle,
             0,
-        );
+        )
+        .with_full_launch_options(model, effort, instructions);
         handle.codex_session_id = Some(provider_session_id.clone());
         handle.mcp_conversation_id = conversation_id.map(str::to_owned);
         self.threads.lock().await.insert(thread_id.clone(), handle);
@@ -845,6 +979,9 @@ impl AgentManager {
         workspace: &Path,
         resume_session_id: Option<&str>,
         conversation_id: Option<&str>,
+        model: Option<&str>,
+        reasoning_effort: Option<&str>,
+        instructions: Option<&str>,
     ) -> anyhow::Result<String> {
         if let Some(existing) = self.grok_instances.lock().await.get(thread_id).cloned() {
             return existing.get_session_id().await.ok_or_else(|| {
@@ -861,15 +998,29 @@ impl AgentManager {
         // Conversation-bound sessions get teamwork guidance via top-level
         // `grok --rules ...` (appended to the system prompt), matching Claude's
         // `--append-system-prompt` / Codex developerInstructions.
-        let teamwork_rules = conversation_id
-            .is_some()
-            .then_some(MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS);
-        let instance = crate::grok_driver::GrokAcpInstance::spawn(
+        // Profile instructions are always layered on when present.
+        let rules_owned = {
+            let mut parts: Vec<&str> = Vec::new();
+            if conversation_id.is_some() {
+                parts.push(MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS);
+            }
+            if let Some(extra) = instructions.map(str::trim).filter(|s| !s.is_empty()) {
+                parts.push(extra);
+            }
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join("\n\n"))
+            }
+        };
+        let instance = crate::grok_driver::GrokAcpInstance::spawn_with_model(
             &bin_path,
             workspace,
             &self.config.subprocess_env,
             crash_tx,
-            teamwork_rules,
+            rules_owned.as_deref(),
+            model,
+            reasoning_effort,
         )
         .await
         .map_err(|error| anyhow::anyhow!("grok ACP spawn failed: {error}"))?;
@@ -1660,6 +1811,8 @@ impl AgentManager {
             self.events_tx.clone(),
             &self.config.subprocess_env,
             claude_mcp_config.as_deref(),
+            handle.model.as_deref(),
+            handle.instructions.as_deref(),
         )
         .await?;
         self.claude_sessions
@@ -1803,6 +1956,7 @@ impl AgentManager {
                 &handle.workspace,
                 provider_resume_session_id(thread_id, handle),
                 handle.mcp_conversation_id.as_deref(),
+                handle.model.as_deref(),
             )
             .await?;
         self.set_thread_provider_session_id(thread_id, provider_session_id)
@@ -1871,6 +2025,9 @@ impl AgentManager {
                 &handle.workspace,
                 provider_resume_session_id(thread_id, handle),
                 handle.mcp_conversation_id.as_deref(),
+                handle.model.as_deref(),
+                handle.reasoning_effort.as_deref(),
+                handle.instructions.as_deref(),
             )
             .await?;
         self.set_thread_provider_session_id(thread_id, provider_session_id)
@@ -2380,6 +2537,61 @@ pub struct StartAgentOutcome {
 pub struct SessionPolicies {
     pub approval_policy: Option<String>,
     pub sandbox_policy: Option<String>,
+}
+
+/// Create-time model / effort / instructions binding (not mid-session switch).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AgentLaunchOptions {
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    /// Extra system / developer instructions appended at session start.
+    pub instructions: Option<String>,
+}
+
+impl AgentLaunchOptions {
+    pub fn from_parts(model: Option<String>, reasoning_effort: Option<String>) -> Option<Self> {
+        Self::from_parts_full(model, reasoning_effort, None)
+    }
+
+    pub fn from_parts_full(
+        model: Option<String>,
+        reasoning_effort: Option<String>,
+        instructions: Option<String>,
+    ) -> Option<Self> {
+        let model = model.and_then(|m| {
+            let t = m.trim().to_owned();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
+        });
+        let reasoning_effort = reasoning_effort.and_then(|m| {
+            let t = m.trim().to_owned();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
+        });
+        let instructions = instructions.and_then(|m| {
+            let t = m.trim().to_owned();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
+        });
+        if model.is_none() && reasoning_effort.is_none() && instructions.is_none() {
+            None
+        } else {
+            Some(Self {
+                model,
+                reasoning_effort,
+                instructions,
+            })
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3327,11 +3539,29 @@ pub(crate) async fn rpc_start_thread(
     cwd: &Path,
     timeout: Duration,
     developer_instructions: Option<&str>,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
 ) -> anyhow::Result<StartThreadResult> {
     let cwd_str = cwd.display().to_string();
+    let mut config = serde_json::Map::new();
+    if let Some(effort) = reasoning_effort.map(str::trim).filter(|s| !s.is_empty()) {
+        config.insert(
+            "model_reasoning_effort".into(),
+            serde_json::Value::String(effort.to_owned()),
+        );
+    }
     let start_params = ThreadStartParams {
         cwd: Some(cwd_str),
         developer_instructions: developer_instructions.map(str::to_owned),
+        model: model
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned),
+        config: if config.is_empty() {
+            None
+        } else {
+            Some(config)
+        },
         ..Default::default()
     };
     let resp: ThreadStartResponse = tokio::time::timeout(timeout, client.call_typed(start_params))

@@ -68,15 +68,43 @@ impl AppServerInstance {
     }
 
     /// Issue `thread/start` and return the provider id used for resume.
+    #[allow(dead_code)]
     pub(crate) async fn start_thread(
         &self,
         cwd: &Path,
+    ) -> anyhow::Result<crate::manager::StartThreadResult> {
+        self.start_thread_with_model(cwd, None, None).await
+    }
+
+    pub(crate) async fn start_thread_with_model(
+        &self,
+        cwd: &Path,
+        model: Option<&str>,
+        reasoning_effort: Option<&str>,
+    ) -> anyhow::Result<crate::manager::StartThreadResult> {
+        self.start_thread_with_options(
+            cwd,
+            model,
+            reasoning_effort,
+            Some(crate::manager::MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS),
+        )
+        .await
+    }
+
+    pub(crate) async fn start_thread_with_options(
+        &self,
+        cwd: &Path,
+        model: Option<&str>,
+        reasoning_effort: Option<&str>,
+        developer_instructions: Option<&str>,
     ) -> anyhow::Result<crate::manager::StartThreadResult> {
         crate::manager::rpc_start_thread(
             &self.client,
             cwd,
             self.thread_start_timeout,
-            Some(crate::manager::MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS),
+            developer_instructions,
+            model,
+            reasoning_effort,
         )
         .await
     }

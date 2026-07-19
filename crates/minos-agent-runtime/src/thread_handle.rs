@@ -13,6 +13,12 @@ pub struct ThreadHandle {
     pub codex_session_id: Option<String>,
     pub parent_thread_id: Option<String>,
     pub mcp_conversation_id: Option<String>,
+    /// Create-time model binding (fixed for the life of this session).
+    pub model: Option<String>,
+    /// Create-time reasoning effort (when the runtime supports it).
+    pub reasoning_effort: Option<String>,
+    /// Extra system / developer instructions for this session.
+    pub instructions: Option<String>,
     pub active_turn_id: Arc<Mutex<Option<String>>>,
     pub state_tx: Arc<watch::Sender<ThreadState>>,
     pub state_rx: watch::Receiver<ThreadState>,
@@ -35,11 +41,38 @@ impl ThreadHandle {
             codex_session_id: None,
             parent_thread_id: None,
             mcp_conversation_id: None,
+            model: None,
+            reasoning_effort: None,
+            instructions: None,
             active_turn_id: Arc::new(Mutex::new(None)),
             state_tx: Arc::new(tx),
             state_rx: rx,
             last_seq: Arc::new(AtomicU64::new(last_seq)),
         }
+    }
+
+    #[must_use]
+    pub fn with_launch_options(
+        mut self,
+        model: Option<String>,
+        reasoning_effort: Option<String>,
+    ) -> Self {
+        self.model = model;
+        self.reasoning_effort = reasoning_effort;
+        self
+    }
+
+    #[must_use]
+    pub fn with_full_launch_options(
+        mut self,
+        model: Option<String>,
+        reasoning_effort: Option<String>,
+        instructions: Option<String>,
+    ) -> Self {
+        self.model = model;
+        self.reasoning_effort = reasoning_effort;
+        self.instructions = instructions;
+        self
     }
 
     pub fn new_subagent(

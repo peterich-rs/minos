@@ -39,8 +39,23 @@ impl GeminiAcpInstance {
         subprocess_env: &Arc<HashMap<String, String>>,
         crash_signal: mpsc::Sender<()>,
     ) -> Result<Self, MinosError> {
+        Self::spawn_with_model(cli_path, workspace, subprocess_env, crash_signal, None).await
+    }
+
+    pub async fn spawn_with_model(
+        cli_path: &Path,
+        workspace: &Path,
+        subprocess_env: &Arc<HashMap<String, String>>,
+        crash_signal: mpsc::Sender<()>,
+        model: Option<&str>,
+    ) -> Result<Self, MinosError> {
         let mut cmd = Command::new(cli_path);
-        cmd.args(["--acp"])
+        let mut args = vec!["--acp".to_string()];
+        if let Some(m) = model.map(str::trim).filter(|s| !s.is_empty()) {
+            args.push("--model".to_string());
+            args.push(m.to_owned());
+        }
+        cmd.args(&args)
             .current_dir(workspace)
             .env_clear()
             .envs(subprocess_env.iter())

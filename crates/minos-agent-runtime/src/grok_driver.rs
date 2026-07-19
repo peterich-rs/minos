@@ -41,9 +41,12 @@ pub struct GrokAcpInstance {
 ///
 /// `--rules` is a top-level `grok` flag (not under `agent`), so it must come
 /// before the `agent` subcommand: `grok --rules "..." agent --no-leader stdio`.
+/// Model/effort are options on `grok agent` (before the `stdio` mode name).
 pub(crate) fn build_grok_spawn_args(
     always_approve: bool,
     extra_rules: Option<&str>,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
 ) -> Vec<String> {
     let mut args = Vec::new();
     if let Some(rules) = extra_rules.map(str::trim).filter(|rules| !rules.is_empty()) {
@@ -52,11 +55,16 @@ pub(crate) fn build_grok_spawn_args(
     }
     // Prefer isolated stdio ACP (same capability surface as `grok agent serve`,
     // without sharing the machine-wide leader socket).
-    args.extend([
-        "agent".to_string(),
-        "--no-leader".to_string(),
-        "stdio".to_string(),
-    ]);
+    args.extend(["agent".to_string(), "--no-leader".to_string()]);
+    if let Some(m) = model.map(str::trim).filter(|s| !s.is_empty()) {
+        args.push("-m".to_string());
+        args.push(m.to_owned());
+    }
+    if let Some(e) = reasoning_effort.map(str::trim).filter(|s| !s.is_empty()) {
+        args.push("--reasoning-effort".to_string());
+        args.push(e.to_owned());
+    }
+    args.push("stdio".to_string());
     if always_approve {
         // Optional auto-approve for unattended local runs via MINOS_GROK_ALWAYS_APPROVE=1.
         args.push("--always-approve".to_string());
@@ -72,12 +80,33 @@ impl GrokAcpInstance {
         crash_signal: mpsc::Sender<()>,
         extra_rules: Option<&str>,
     ) -> Result<Self, MinosError> {
+        Self::spawn_with_model(
+            cli_path,
+            workspace,
+            subprocess_env,
+            crash_signal,
+            extra_rules,
+            None,
+            None,
+        )
+        .await
+    }
+
+    pub async fn spawn_with_model(
+        cli_path: &Path,
+        workspace: &Path,
+        subprocess_env: &Arc<HashMap<String, String>>,
+        crash_signal: mpsc::Sender<()>,
+        extra_rules: Option<&str>,
+        model: Option<&str>,
+        reasoning_effort: Option<&str>,
+    ) -> Result<Self, MinosError> {
         let mut cmd = Command::new(cli_path);
         let always_approve = subprocess_env
             .get("MINOS_GROK_ALWAYS_APPROVE")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
-        let args = build_grok_spawn_args(always_approve, extra_rules);
+        let args = build_grok_spawn_args(always_approve, extra_rules, model, reasoning_effort);
         cmd.args(args)
             .current_dir(workspace)
             .env_clear()

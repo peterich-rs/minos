@@ -581,6 +581,15 @@ pub struct StartAgentRequest {
     /// it is silently treated as `Server`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<AgentLaunchMode>,
+    /// Fixed model id for this session (create-time only; not mid-session switch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Fixed reasoning effort when the runtime supports it (e.g. low/medium/high).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    /// Extra system / developer instructions for this session (create-time).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
 }
 
 /// Result of a successful `start_agent` RPC — carries the codex `thread_id`
@@ -620,6 +629,10 @@ pub struct AgentDispatchRequest {
     pub conversation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 /// Host → Server response for [`AgentDispatchRequest`].
@@ -1025,6 +1038,95 @@ pub struct StartAgentInConversationRequest {
     pub conversation_id: String,
     pub agent: AgentName,
     pub workspace: String,
+    /// Fixed model id for this session (create-time only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Fixed reasoning effort when the runtime supports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    /// Extra system / developer instructions for this session (create-time).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+}
+
+// ── Host agent profiles (desktop local-first personalized agents) ─────────
+
+/// One model entry returned by `list_models` for a runtime CLI.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelInfo {
+    pub id: String,
+    pub display_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub is_default: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_reasoning_efforts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_reasoning_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListModelsRequest {
+    pub runtime: AgentName,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListModelsResponse {
+    pub runtime: AgentName,
+    pub models: Vec<ModelInfo>,
+    /// Discovery path: app_server | acp | cli | static
+    pub source: String,
+}
+
+/// Host-local personalized agent (fixed runtime + model + effort at create).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentProfileSummary {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub runtime_agent: AgentName,
+    pub model: String,
+    pub reasoning_effort: String,
+    /// Extra system prompt / developer instructions appended at session start.
+    #[serde(default)]
+    pub instructions: String,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreateAgentProfileRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub runtime_agent: AgentName,
+    pub model: String,
+    #[serde(default)]
+    pub reasoning_effort: String,
+    #[serde(default)]
+    pub instructions: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpdateAgentProfileRequest {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// Allowed to revise instructions after create (model/runtime/effort stay fixed).
+    #[serde(default)]
+    pub instructions: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeleteAgentProfileRequest {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListAgentProfilesResponse {
+    pub profiles: Vec<AgentProfileSummary>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -1208,6 +1310,9 @@ mod tests {
             agent: AgentName::Codex,
             workspace: "/Users/fan/dev".into(),
             mode: None,
+            model: None,
+            reasoning_effort: None,
+            instructions: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         // Default-mode payload omits the optional `mode` field.
@@ -1224,6 +1329,9 @@ mod tests {
             agent: AgentName::Codex,
             workspace: "/Users/fan/dev".into(),
             mode: Some(AgentLaunchMode::Server),
+            model: None,
+            reasoning_effort: None,
+            instructions: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"mode\":\"server\""));
@@ -1273,6 +1381,8 @@ mod tests {
             sandbox_policy: Some("workspace_write".into()),
             conversation_id: Some("conv-123".into()),
             origin_message_id: Some("msg-456".into()),
+            model: Some("gpt-5.4".into()),
+            reasoning_effort: Some("high".into()),
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: AgentDispatchRequest = serde_json::from_str(&json).unwrap();
@@ -1290,6 +1400,8 @@ mod tests {
             sandbox_policy: None,
             conversation_id: None,
             origin_message_id: None,
+            model: None,
+            reasoning_effort: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1300,6 +1412,8 @@ mod tests {
         assert!(value.get("sandbox_policy").is_none());
         assert!(value.get("conversation_id").is_none());
         assert!(value.get("origin_message_id").is_none());
+        assert!(value.get("model").is_none());
+        assert!(value.get("reasoning_effort").is_none());
     }
 
     #[test]

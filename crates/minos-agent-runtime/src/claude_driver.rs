@@ -44,8 +44,17 @@ impl ClaudeNdjsonSession {
         events_tx: IngestSink,
         subprocess_env: &Arc<HashMap<String, String>>,
         mcp_config_json: Option<&str>,
+        model: Option<&str>,
+        extra_instructions: Option<&str>,
     ) -> anyhow::Result<Self> {
-        let args = build_claude_args(user_text, session_id, resume_session_id, mcp_config_json);
+        let args = build_claude_args(
+            user_text,
+            session_id,
+            resume_session_id,
+            mcp_config_json,
+            model,
+            extra_instructions,
+        );
 
         let mut cmd = Command::new(cli_path);
         cmd.args(&args)
@@ -222,6 +231,8 @@ fn build_claude_args(
     session_id: Option<&str>,
     resume_session_id: Option<&str>,
     mcp_config_json: Option<&str>,
+    model: Option<&str>,
+    extra_instructions: Option<&str>,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "-p".into(),
@@ -231,6 +242,10 @@ fn build_claude_args(
         "--verbose".into(),
         "--include-partial-messages".into(),
     ];
+    if let Some(m) = model.map(str::trim).filter(|s| !s.is_empty()) {
+        args.push("--model".into());
+        args.push(m.into());
+    }
     if let Some(sid) = resume_session_id {
         args.push("--resume".into());
         args.push(sid.into());
@@ -243,8 +258,16 @@ fn build_claude_args(
         args.push(config_json.into());
         args.push("--strict-mcp-config".into());
     }
+    let system = match extra_instructions.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(extra) => format!(
+            "{}\n\n{}",
+            crate::manager::MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS,
+            extra
+        ),
+        None => crate::manager::MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS.to_string(),
+    };
     args.push("--append-system-prompt".into());
-    args.push(crate::manager::MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS.into());
+    args.push(system);
     args
 }
 
@@ -315,7 +338,13 @@ mod tests {
             Some("session-1"),
             None,
             Some(r#"{"mcpServers":{"minos_teamwork":{"command":"minos-teamwork-mcp"}}}"#),
+            Some("sonnet"),
+            Some("Be concise."),
         );
+        assert!(args.windows(2).any(|pair| pair == ["--model", "sonnet"]));
+        assert!(args.windows(2).any(|pair| {
+            pair[0] == "--append-system-prompt" && pair[1].contains("Be concise.")
+        }));
 
         assert!(args.windows(2).any(|pair| pair == ["-p", "hello"]));
         assert!(args
