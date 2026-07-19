@@ -91,6 +91,8 @@ pub struct ConversationDto {
 #[serde(rename_all = "camelCase")]
 pub struct MessageDto {
     pub id: String,
+    /// Durable timeline sort key (`chat_messages.message_seq`). UI uses ASC.
+    pub message_seq: i64,
     pub role: String,
     pub agent: Option<String>,
     pub session_id: Option<String>,
@@ -98,6 +100,22 @@ pub struct MessageDto {
     pub time: String,
     pub created_at_ms: i64,
     pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to_message_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentions: Vec<MentionDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MentionDto {
+    pub agent: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_short_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -574,9 +592,11 @@ impl DaemonBridge {
             .request("minos_local_list_conversation_messages", [params])
             .await
             .context("minos_local_list_conversation_messages")?;
+        // Daemon returns newest-first (message_seq DESC); UI needs chronological ASC.
         let mut messages: Vec<MessageDto> =
             response.messages.into_iter().map(map_message).collect();
         messages.reverse();
+        messages.sort_by_key(|m| m.message_seq);
         Ok(messages)
     }
 
@@ -616,25 +636,60 @@ impl DaemonBridge {
         thread_id: String,
         from_seq: Option<u64>,
         limit: Option<u32>,
+        full: bool,
     ) -> Result<TranscriptPageDto> {
         let client = self.client().await?;
-        let req = ReadThreadParams {
-            thread_id: thread_id.clone(),
-            from_seq,
-            limit: limit.unwrap_or(500),
-        };
-        let response: ReadThreadRawHistoryResponse = client
-            .request("minos_local_read_thread_raw_history", [req])
-            .await
-            .context("minos_local_read_thread_raw_history")?;
+        // One assembler across all pages so TextDelta that spans RPC pages
+        // still merges into a single transcript item.
         let mut assembler = TranscriptAssembler::new(thread_id.clone());
-        for frame in response.events {
-            assembler.ingest_frame(frame.seq, frame.ts_ms, frame.ui_events);
+        let page_limit: u32 = if full {
+            1000
+        } else {
+            limit.unwrap_or(500).clamp(1, 1000)
+        };
+        let mut cursor = from_seq;
+        let mut pages = 0u32;
+        // Safety cap: 1000 * 100 = 100k raw frames max per full open.
+        const MAX_FULL_PAGES: u32 = 100;
+        loop {
+            let req = ReadThreadParams {
+                thread_id: thread_id.clone(),
+                from_seq: cursor,
+                limit: page_limit,
+            };
+            let response: ReadThreadRawHistoryResponse = client
+                .request("minos_local_read_thread_raw_history", [req])
+                .await
+                .context("minos_local_read_thread_raw_history")?;
+            for frame in response.events {
+                assembler.ingest_frame(frame.seq, frame.ts_ms, frame.ui_events);
+            }
+            pages += 1;
+            if !full {
+                return Ok(TranscriptPageDto {
+                    thread_id,
+                    items: assembler.finish(),
+                    next_seq: response.next_seq,
+                });
+            }
+            let Some(next) = response.next_seq else {
+                break;
+            };
+            if pages >= MAX_FULL_PAGES {
+                // Truncated full load — surface next_seq so UI can offer "load more".
+                return Ok(TranscriptPageDto {
+                    thread_id,
+                    items: assembler.finish(),
+                    next_seq: Some(next),
+                });
+            }
+            // Daemon from_seq is exclusive; next_seq is the next start seq → from = next - 1.
+            cursor = Some(next.saturating_sub(1));
         }
         Ok(TranscriptPageDto {
             thread_id,
             items: assembler.finish(),
-            next_seq: response.next_seq,
+            next_seq: None,
         })
     }
 
@@ -725,6 +780,9 @@ impl DaemonBridge {
         conversation_id: String,
         agent: String,
         workspace: String,
+        model: Option<String>,
+        reasoning_effort: Option<String>,
+        instructions: Option<String>,
     ) -> Result<StartAgentResultDto> {
         let client = self.client().await?;
         let agent = parse_agent_name(&agent).ok_or_else(|| anyhow!("unknown agent: {agent}"))?;
@@ -732,6 +790,9 @@ impl DaemonBridge {
             conversation_id,
             agent,
             workspace,
+            model,
+            reasoning_effort,
+            instructions,
         };
         let response: StartAgentResponse = client
             .request("minos_local_start_agent_in_conversation", [req])
@@ -741,6 +802,48 @@ impl DaemonBridge {
             thread_id: response.session_id,
             cwd: response.cwd,
         })
+    }
+
+    pub async fn list_models(&self, runtime: String) -> Result<minos_protocol::ListModelsResponse> {
+        let client = self.client().await?;
+        let agent =
+            parse_agent_name(&runtime).ok_or_else(|| anyhow!("unknown runtime: {runtime}"))?;
+        let req = minos_protocol::ListModelsRequest { runtime: agent };
+        client
+            .request("minos_local_list_models", [req])
+            .await
+            .context("minos_local_list_models")
+    }
+
+    pub async fn list_agent_profiles(&self) -> Result<minos_protocol::ListAgentProfilesResponse> {
+        let client = self.client().await?;
+        client
+            .request::<minos_protocol::ListAgentProfilesResponse, [(); 0]>(
+                "minos_local_list_agent_profiles",
+                [],
+            )
+            .await
+            .context("minos_local_list_agent_profiles")
+    }
+
+    pub async fn create_agent_profile(
+        &self,
+        req: minos_protocol::CreateAgentProfileRequest,
+    ) -> Result<minos_protocol::AgentProfileSummary> {
+        let client = self.client().await?;
+        client
+            .request("minos_local_create_agent_profile", [req])
+            .await
+            .context("minos_local_create_agent_profile")
+    }
+
+    pub async fn delete_agent_profile(&self, id: String) -> Result<()> {
+        let client = self.client().await?;
+        let req = minos_protocol::DeleteAgentProfileRequest { id };
+        client
+            .request("minos_local_delete_agent_profile", [req])
+            .await
+            .context("minos_local_delete_agent_profile")
     }
 
     pub async fn send_user_message(&self, thread_id: String, text: String) -> Result<()> {
@@ -993,14 +1096,32 @@ fn map_conversation(c: LocalConversationSummary) -> ConversationDto {
     }
 }
 
+/// Conversation timeline kind for durable `chat_messages` rows.
+///
+/// Real agent approvals are **session reverse-requests** (permission / plan /
+/// opencode question) with a `request_id` on the transcript — never free text
+/// on the conversation timeline. Do **not** infer `"approval"` from body
+/// substrings like `"approval"` / `"Permission:"`: agent prose about plans
+/// ("plan-approval", "needs approval") would false-positive and render a dead
+/// Allow/Deny card (TUI never does this).
+fn conversation_timeline_kind(_body: &str) -> &'static str {
+    "text"
+}
+
 fn map_message(m: LocalConversationMessage) -> MessageDto {
-    let kind = if m.body.starts_with("Permission:") || m.body.contains("approval") {
-        "approval"
-    } else {
-        "text"
-    };
+    let kind = conversation_timeline_kind(&m.body);
+    let mentions = m
+        .mentions
+        .into_iter()
+        .map(|mention| MentionDto {
+            agent: agent_label(mention.agent),
+            thread_id: mention.thread_id,
+            thread_short_id: mention.thread_short_id,
+        })
+        .collect();
     MessageDto {
         id: m.message_id,
+        message_seq: m.message_seq,
         role: m.sender_role,
         agent: m.agent.map(agent_label),
         session_id: m.thread_id,
@@ -1008,6 +1129,9 @@ fn map_message(m: LocalConversationMessage) -> MessageDto {
         time: clock_time(m.created_at_ms),
         created_at_ms: m.created_at_ms,
         kind: kind.into(),
+        reply_to_message_id: m.reply_to_message_id,
+        delegation_id: m.delegation_id,
+        mentions,
     }
 }
 
@@ -1415,6 +1539,9 @@ fn approval_item_from_payload(
         .unwrap_or(serde_json::Value::Null);
 
     let (title, text, detail) = if method == "x.ai/exit_plan_mode" {
+        // Keep the full plan body on the item (reviewers must not lose content).
+        // Desktop `ApprovalModal` reveals it in coarse IncrementalText windows
+        // so opening "View plan" does not paint a 50–200KB <pre> in one frame.
         let plan = params
             .get("planContent")
             .or_else(|| params.get("plan"))
@@ -1426,7 +1553,7 @@ fn approval_item_from_payload(
             if plan.is_empty() {
                 None
             } else {
-                Some(truncate_str(plan, 6000))
+                Some(plan.to_owned())
             },
         )
     } else if method == "session/request_permission" {
@@ -1817,7 +1944,7 @@ fn agent_label(agent: AgentName) -> String {
 }
 
 fn thread_status_label(t: &ThreadSummary) -> String {
-    use minos_protocol::ThreadState;
+    use minos_protocol::{PauseReason, ThreadState};
     if t.ended_at_ms.is_some() {
         return "done".into();
     }
@@ -1825,7 +1952,12 @@ fn thread_status_label(t: &ThreadSummary) -> String {
         ThreadState::Starting | ThreadState::Resuming => "running".into(),
         ThreadState::Idle => "idle".into(),
         ThreadState::Running { .. } => "running".into(),
-        // Paused / process-death recovery — distinct from approval attention.
+        // Between-turn daemon death was historically stored as
+        // Suspended{DaemonRestart} + needs_continue=0. That is not a user pause —
+        // show Idle (ready to reattach). Mid-flight recovery keeps Paused.
+        ThreadState::Suspended {
+            reason: PauseReason::DaemonRestart,
+        } if !t.needs_continue => "idle".into(),
         ThreadState::Suspended { .. } => "suspended".into(),
         ThreadState::Closed { .. } => "done".into(),
     }
@@ -2124,5 +2256,130 @@ mod tool_present_tests {
     #[test]
     fn tool_kind_classifies_edit() {
         assert_eq!(ToolKind::from_tool_name("search_replace"), ToolKind::Edit);
+    }
+}
+
+#[cfg(test)]
+mod thread_status_label_tests {
+    use super::*;
+    use minos_domain::AgentName;
+    use minos_protocol::{PauseReason, ThreadState, ThreadSummary};
+
+    fn summary(state: ThreadState, needs_continue: bool) -> ThreadSummary {
+        ThreadSummary {
+            thread_id: "t1".into(),
+            agent: AgentName::Codex,
+            title: None,
+            first_ts_ms: 0,
+            last_ts_ms: 0,
+            message_count: 0,
+            ended_at_ms: None,
+            end_reason: None,
+            parent_thread_id: None,
+            state,
+            needs_continue,
+        }
+    }
+
+    #[test]
+    fn daemon_restart_without_needs_continue_displays_idle() {
+        let s = summary(
+            ThreadState::Suspended {
+                reason: PauseReason::DaemonRestart,
+            },
+            false,
+        );
+        assert_eq!(thread_status_label(&s), "idle");
+    }
+
+    #[test]
+    fn daemon_restart_with_needs_continue_displays_suspended() {
+        let s = summary(
+            ThreadState::Suspended {
+                reason: PauseReason::DaemonRestart,
+            },
+            true,
+        );
+        assert_eq!(thread_status_label(&s), "suspended");
+    }
+
+    #[test]
+    fn user_interrupt_displays_suspended_even_without_needs_continue() {
+        let s = summary(
+            ThreadState::Suspended {
+                reason: PauseReason::UserInterrupt,
+            },
+            false,
+        );
+        assert_eq!(thread_status_label(&s), "suspended");
+    }
+}
+
+#[cfg(test)]
+mod conversation_message_kind_tests {
+    use super::*;
+
+    #[test]
+    fn conversation_timeline_does_not_infer_approval_from_body_text() {
+        // Agent prose often mentions "approval" / plans without being a reverse-request.
+        let bodies = [
+            "Permission: apply_patch → src/foo.rs",
+            "needs approval to exit plan mode",
+            "Updating architecture docs with the plan-approval full-content contract",
+            "Regression tests: `plan_approval_keeps_full_plan_content`",
+            "Normal agent result with no special tokens",
+        ];
+        for body in bodies {
+            assert_eq!(
+                conversation_timeline_kind(body),
+                "text",
+                "body={body:?} must stay text on conversation timeline"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod approval_item_tests {
+    use super::*;
+
+    #[test]
+    fn plan_approval_keeps_full_plan_content() {
+        // Regression: previously truncated at 6000 bytes with "…", so "View plan"
+        // could not show the complete plan document.
+        let long_plan = format!("{}\n## Tail section that must remain", "x".repeat(7000));
+        let payload = serde_json::json!({
+            "request_id": "req-plan-1",
+            "method": "x.ai/exit_plan_mode",
+            "params": {
+                "planContent": long_plan,
+            }
+        });
+        let item = approval_item_from_payload(1, 1_700_000_000_000, &payload.to_string())
+            .expect("approval item");
+        assert_eq!(item.kind, "approval");
+        assert_eq!(item.approval_method.as_deref(), Some("x.ai/exit_plan_mode"));
+        let detail = item.detail.expect("plan detail");
+        assert_eq!(detail, long_plan);
+        assert!(!detail.ends_with('…'));
+        assert!(detail.contains("## Tail section that must remain"));
+    }
+
+    #[test]
+    fn permission_approval_still_truncates_large_params() {
+        let big = "y".repeat(3000);
+        let payload = serde_json::json!({
+            "request_id": "req-perm-1",
+            "method": "session/request_permission",
+            "params": {
+                "toolCall": { "title": "write_file", "kind": "edit" },
+                "blob": big,
+            }
+        });
+        let item = approval_item_from_payload(2, 1_700_000_000_001, &payload.to_string())
+            .expect("approval item");
+        let detail = item.detail.expect("permission detail");
+        assert!(detail.ends_with('…'));
+        assert!(detail.chars().count() <= 2001);
     }
 }

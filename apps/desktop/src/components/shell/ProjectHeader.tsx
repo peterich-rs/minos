@@ -1,6 +1,10 @@
 import { Bot, Columns3, List, Plus, Search } from "lucide-react";
 import { useUiStore, type ProjectView } from "@/store/ui-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
+import {
+  projectHostLabel,
+  projectHostPillClass,
+} from "@/lib/host-status";
 import { cn } from "@/lib/utils";
 
 const views: { id: ProjectView; label: string; icon: typeof List }[] = [
@@ -18,8 +22,6 @@ export function ProjectHeader({ projectId }: { projectId?: string }) {
   const projects = useWorkspaceStore((s) => s.projects);
   const conversations = useWorkspaceStore((s) => s.conversations);
   const createConversation = useWorkspaceStore((s) => s.createConversation);
-  const source = useWorkspaceStore((s) => s.source);
-  const connection = useWorkspaceStore((s) => s.connection);
   const listStatus = useWorkspaceStore((s) =>
     resolvedProjectId
       ? s.conversationsStatusByProject[resolvedProjectId]
@@ -27,6 +29,7 @@ export function ProjectHeader({ projectId }: { projectId?: string }) {
   );
 
   const project = projects.find((p) => p.id === resolvedProjectId);
+  const hostLabel = projectHostLabel(project?.hostName);
   // Prefer loaded list length; only fall back to project metadata while idle/loading
   // and the list has not arrived yet — never mask a successful empty list as "3".
   const loadedCount = conversations.filter(
@@ -133,17 +136,12 @@ export function ProjectHeader({ projectId }: { projectId?: string }) {
           ) : null}
           <span
             className={cn(
-              "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-              source === "daemon" && connection?.connected
-                ? "bg-emerald-100 text-emerald-800"
-                : "bg-amber-100 text-amber-800",
+              "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide",
+              projectHostPillClass(hostLabel),
             )}
+            title="Host that owns this project"
           >
-            {source === "daemon" && connection?.connected
-              ? connection.managed
-                ? "managed"
-                : "daemon"
-              : "mock"}
+            {hostLabel}
           </span>
         </div>
       </div>

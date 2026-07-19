@@ -147,8 +147,10 @@ function SessionTree({
   onSelect: (id: string) => void;
 }) {
   const children = all.filter((s) => s.parentId === session.id);
-  const meta = agentMeta[session.agent];
+  const meta = agentMeta[session.agent as keyof typeof agentMeta];
   const selected = selectedId === session.id;
+  const label = meta?.label ?? session.agent ?? "Agent";
+  const tone = meta?.tone ?? "slate";
 
   return (
     <div>
@@ -161,11 +163,11 @@ function SessionTree({
           selected ? "bg-accent-soft" : "hover:bg-surface-hover",
         )}
       >
-        <Avatar name={meta.label} tone={meta.tone} size="sm" />
+        <Avatar name={label} tone={tone} size="sm" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <span className="truncate text-[12px] font-semibold text-ink">
-              {meta.label}
+              {label}
             </span>
             <span className="font-mono text-[10px] text-ink-muted">
               #{session.shortId}
@@ -199,7 +201,9 @@ function SessionDetail({
   onBack: () => void;
 }) {
   const openSessionTranscript = useUiStore((s) => s.openSessionTranscript);
-  const meta = agentMeta[session.agent];
+  const meta = agentMeta[session.agent as keyof typeof agentMeta];
+  const label = meta?.label ?? session.agent ?? "Agent";
+  const tone = meta?.tone ?? "slate";
   return (
     <div className="space-y-4">
       <button
@@ -210,10 +214,10 @@ function SessionDetail({
         ← Back to conversation
       </button>
       <div className="flex items-center gap-3">
-        <Avatar name={meta.label} tone={meta.tone} size="lg" />
+        <Avatar name={label} tone={tone} size="lg" />
         <div>
           <div className="text-[14px] font-semibold text-ink">
-            {meta.label}{" "}
+            {label}{" "}
             <span className="font-mono text-[12px] font-normal text-ink-muted">
               #{session.shortId}
             </span>

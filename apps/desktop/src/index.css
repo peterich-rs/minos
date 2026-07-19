@@ -57,3 +57,67 @@ textarea {
   background: rgba(120, 113, 108, 0.55);
   background-clip: content-box;
 }
+
+/* ── Markdown bubble tones (used by MarkdownText + react-markdown) ── */
+
+.markdown-tone-light .md-a {
+  color: #92400e;
+  text-decoration-color: rgba(146, 64, 14, 0.3);
+}
+.markdown-tone-light .md-a:hover {
+  text-decoration-color: #92400e;
+}
+.markdown-tone-light .md-code-inline {
+  background: rgba(28, 25, 23, 0.06);
+  color: #44403c;
+}
+.markdown-tone-light .md-pre {
+  border-color: rgba(28, 25, 23, 0.1);
+  background: rgba(28, 25, 23, 0.04);
+  color: #44403c;
+}
+.markdown-tone-light .md-quote {
+  border-color: rgba(28, 25, 23, 0.2);
+  color: #57534e;
+}
+.markdown-tone-light .md-hr {
+  border-color: rgba(28, 25, 23, 0.12);
+}
+.markdown-tone-light .md-th,
+.markdown-tone-light .md-td {
+  border-color: rgba(28, 25, 23, 0.12);
+}
+.markdown-tone-light .md-th {
+  background: rgba(28, 25, 23, 0.04);
+}
+
+.markdown-tone-dark .md-a {
+  color: #fff;
+  text-decoration-color: rgba(255, 255, 255, 0.4);
+}
+.markdown-tone-dark .md-a:hover {
+  text-decoration-color: #fff;
+}
+.markdown-tone-dark .md-code-inline {
+  background: rgba(0, 0, 0, 0.25);
+  color: rgba(255, 255, 255, 0.9);
+}
+.markdown-tone-dark .md-pre {
+  border-color: rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.25);
+  color: rgba(255, 255, 255, 0.9);
+}
+.markdown-tone-dark .md-quote {
+  border-color: rgba(255, 255, 255, 0.3);
+  color: rgba(255, 255, 255, 0.85);
+}
+.markdown-tone-dark .md-hr {
+  border-color: rgba(255, 255, 255, 0.2);
+}
+.markdown-tone-dark .md-th,
+.markdown-tone-dark .md-td {
+  border-color: rgba(255, 255, 255, 0.15);
+}
+.markdown-tone-dark .md-th {
+  background: rgba(0, 0, 0, 0.2);
+}

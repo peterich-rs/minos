@@ -10,6 +10,11 @@ import {
 import { CreateProjectEmpty } from "./CreateProjectEmpty";
 import { useUiStore, type PrimaryNav } from "@/store/ui-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
+import {
+  deriveHostPresence,
+  presenceDotClass,
+  projectHostLabel,
+} from "@/lib/host-status";
 import { cn } from "@/lib/utils";
 
 const navItems: {
@@ -32,13 +37,12 @@ export function Sidebar() {
   const connection = useWorkspaceStore((s) => s.connection);
   const source = useWorkspaceStore((s) => s.source);
   const attention = projects.reduce((sum, p) => sum + p.needsAttention, 0);
-  const connected =
-    source === "daemon" && connection?.connected === true;
-  const statusLabel = connected
-    ? connection?.managed
-      ? "Daemon · managed"
-      : "Daemon · online"
-    : `Data · ${source}`;
+  // v1: only local daemon is wired; relayLinked stays false → "Local only".
+  const presence = deriveHostPresence({
+    source,
+    daemonConnected: source === "daemon" && connection?.connected === true,
+    relayLinked: false,
+  });
 
   return (
     <aside className="flex w-[240px] shrink-0 flex-col border-r border-ink/5 bg-surface">
@@ -46,19 +50,24 @@ export function Sidebar() {
         <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-ink text-white">
           <Sparkles className="h-4 w-4" strokeWidth={2.2} />
         </div>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="text-[13px] font-semibold tracking-tight text-ink">
             Minos
           </div>
-          <div className="flex items-center gap-1 text-[11px] text-ink-muted">
+          <button
+            type="button"
+            onClick={() => setPrimaryNav("host")}
+            title="Open Host status"
+            className="mt-0.5 flex max-w-full items-center gap-1 rounded-md text-left text-[11px] text-ink-muted transition-colors hover:text-ink-secondary"
+          >
             <Circle
               className={cn(
-                "h-2 w-2 fill-current",
-                connected ? "text-emerald-500" : "text-amber-500",
+                "h-2 w-2 shrink-0 fill-current",
+                presenceDotClass(presence.tone),
               )}
             />
-            {statusLabel}
-          </div>
+            <span className="truncate">{presence.label}</span>
+          </button>
         </div>
       </div>
 
@@ -143,6 +152,11 @@ export function Sidebar() {
                 >
                   {project.workspacePath.replace(/^~\//, "")}
                 </div>
+                {project.hostName ? (
+                  <div className="mt-0.5 truncate text-[10px] text-ink-muted/90">
+                    {projectHostLabel(project.hostName)}
+                  </div>
+                ) : null}
               </div>
             </button>
           );

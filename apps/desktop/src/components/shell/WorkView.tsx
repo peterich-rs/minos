@@ -10,6 +10,7 @@ import { SessionInspector } from "./SessionInspector";
 import { ProjectBoard } from "./ProjectBoard";
 import { SessionsView } from "./SessionsView";
 import { CreateProjectEmpty } from "./CreateProjectEmpty";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useUiStore } from "@/store/ui-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 
@@ -92,7 +93,9 @@ export function WorkView() {
       {projectView === "board" ? (
         <ProjectBoard key={resolvedProjectId} projectId={resolvedProjectId} />
       ) : projectView === "sessions" ? (
-        <SessionsView key={resolvedProjectId} projectId={resolvedProjectId} />
+        <ErrorBoundary label="sessions">
+          <SessionsView key={resolvedProjectId} projectId={resolvedProjectId} />
+        </ErrorBoundary>
       ) : (
         <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           {listCollapsed ? (

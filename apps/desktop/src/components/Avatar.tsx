@@ -15,17 +15,19 @@ const sizes = {
 } as const;
 
 export function Avatar({ name, tone, size = "md", className }: AvatarProps) {
+  const safeName = name?.trim() ? name : "?";
+  const safeTone = toneClasses[tone] ? tone : "slate";
   return (
     <div
       className={cn(
         "inline-flex shrink-0 items-center justify-center rounded-full font-semibold",
         sizes[size],
-        toneClasses[tone],
+        toneClasses[safeTone],
         className,
       )}
       aria-hidden
     >
-      {initials(name)}
+      {initials(safeName)}
     </div>
   );
 }

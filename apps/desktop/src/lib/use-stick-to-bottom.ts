@@ -18,6 +18,9 @@ type Options = {
  *
  * Attach `scrollRef` to the overflow container and `contentRef` to the
  * growing content root (for ResizeObserver on expand/stream height).
+ *
+ * Scroll-up must win over programmatic pin: wheel/trackpad up immediately
+ * unfollows so long transcripts stay readable while content is still growing.
  */
 export function useStickToBottom({
   contentKey,
@@ -29,33 +32,43 @@ export function useStickToBottom({
   const [following, setFollowing] = useState(true);
   const followingRef = useRef(true);
   const programmaticRef = useRef(false);
+  const programmaticClearTimer = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+
+  const setFollowingBoth = useCallback((next: boolean) => {
+    if (followingRef.current === next) return;
+    followingRef.current = next;
+    setFollowing(next);
+  }, []);
 
   const pinBottom = useCallback(() => {
     const el = scrollRef.current;
-    if (!el) return;
+    if (!el || !followingRef.current) return;
     programmaticRef.current = true;
     el.scrollTop = el.scrollHeight;
-    // Let the scroll event from this write settle before re-enabling user detection.
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        programmaticRef.current = false;
-      });
-    });
+    // WKWebView can deliver the synthetic scroll event after double-rAF;
+    // hold the guard a bit longer so pin does not re-arm follow incorrectly.
+    if (programmaticClearTimer.current) {
+      clearTimeout(programmaticClearTimer.current);
+    }
+    programmaticClearTimer.current = setTimeout(() => {
+      programmaticRef.current = false;
+      programmaticClearTimer.current = null;
+    }, 50);
   }, []);
 
   const jumpToLatest = useCallback(() => {
-    followingRef.current = true;
-    setFollowing(true);
+    setFollowingBoth(true);
     pinBottom();
-  }, [pinBottom]);
+  }, [setFollowingBoth, pinBottom]);
 
   // Session / conversation change → re-enter follow.
   useEffect(() => {
-    followingRef.current = true;
-    setFollowing(true);
-  }, [resetKey]);
+    setFollowingBoth(true);
+  }, [resetKey, setFollowingBoth]);
 
-  // User scroll drives follow on/off (never while we are programmatically pinning).
+  // User scroll / wheel drives follow on/off.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -63,15 +76,29 @@ export function useStickToBottom({
     const onScroll = () => {
       if (programmaticRef.current) return;
       const next = followAfterUserScroll(distanceFromBottom(el), threshold);
-      if (next !== followingRef.current) {
-        followingRef.current = next;
-        setFollowing(next);
+      setFollowingBoth(next);
+    };
+
+    // Wheel/trackpad: unfollow *before* scroll settles so pin/ResizeObserver
+    // cannot yank the viewport back to bottom mid-gesture.
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0 && followingRef.current) {
+        programmaticRef.current = false;
+        setFollowingBoth(false);
       }
     };
 
     el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
-  }, [threshold, resetKey]);
+    el.addEventListener("wheel", onWheel, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("wheel", onWheel);
+      if (programmaticClearTimer.current) {
+        clearTimeout(programmaticClearTimer.current);
+        programmaticClearTimer.current = null;
+      }
+    };
+  }, [threshold, resetKey, setFollowingBoth]);
 
   // Content identity / body growth while following.
   useEffect(() => {

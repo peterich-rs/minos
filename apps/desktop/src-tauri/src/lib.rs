@@ -152,10 +152,86 @@ async fn daemon_start_agent_in_conversation(
     conversation_id: String,
     agent: String,
     workspace: String,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+    instructions: Option<String>,
 ) -> Result<StartAgentResultDto, String> {
     state
         .daemon
-        .start_agent_in_conversation(conversation_id, agent, workspace)
+        .start_agent_in_conversation(
+            conversation_id,
+            agent,
+            workspace,
+            model,
+            reasoning_effort,
+            instructions,
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn daemon_list_models(
+    state: State<'_, AppState>,
+    runtime: String,
+) -> Result<minos_protocol::ListModelsResponse, String> {
+    state
+        .daemon
+        .list_models(runtime)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn daemon_list_agent_profiles(
+    state: State<'_, AppState>,
+) -> Result<minos_protocol::ListAgentProfilesResponse, String> {
+    state
+        .daemon
+        .list_agent_profiles()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn daemon_create_agent_profile(
+    state: State<'_, AppState>,
+    name: String,
+    description: String,
+    runtime_agent: String,
+    model: String,
+    reasoning_effort: String,
+    instructions: Option<String>,
+) -> Result<minos_protocol::AgentProfileSummary, String> {
+    use minos_domain::AgentName;
+    let runtime = match runtime_agent.as_str() {
+        "codex" => AgentName::Codex,
+        "claude" => AgentName::Claude,
+        "gemini" => AgentName::Gemini,
+        "opencode" => AgentName::Opencode,
+        "grok" => AgentName::Grok,
+        other => return Err(format!("unknown runtime: {other}")),
+    };
+    let req = minos_protocol::CreateAgentProfileRequest {
+        name,
+        description,
+        runtime_agent: runtime,
+        model,
+        reasoning_effort,
+        instructions: instructions.unwrap_or_default(),
+    };
+    state
+        .daemon
+        .create_agent_profile(req)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn daemon_delete_agent_profile(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state
+        .daemon
+        .delete_agent_profile(id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -218,10 +294,11 @@ async fn daemon_read_transcript(
     thread_id: String,
     from_seq: Option<u64>,
     limit: Option<u32>,
+    full: Option<bool>,
 ) -> Result<TranscriptPageDto, String> {
     state
         .daemon
-        .read_transcript(thread_id, from_seq, limit)
+        .read_transcript(thread_id, from_seq, limit, full.unwrap_or(false))
         .await
         .map_err(|e| e.to_string())
 }
@@ -260,6 +337,10 @@ pub fn run() {
             daemon_append_user_message,
             daemon_list_clis,
             daemon_start_agent_in_conversation,
+            daemon_list_models,
+            daemon_list_agent_profiles,
+            daemon_create_agent_profile,
+            daemon_delete_agent_profile,
             daemon_send_user_message,
             daemon_resume_thread,
             daemon_resolve_approval,

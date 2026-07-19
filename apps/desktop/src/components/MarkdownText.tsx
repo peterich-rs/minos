@@ -1,140 +1,159 @@
-import type { ReactNode } from "react";
+import type { Components } from "react-markdown";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
 
 /**
- * Lightweight markdown for agent transcripts (TUI parity, no heavy deps).
- * Supports: fenced code, inline code, **bold**, *italic*, paragraphs, bare links.
+ * Markdown for conversation timeline + agent transcripts.
+ *
+ * `react-markdown` + `remark-gfm`. Raw HTML off by default.
+ * Keep component overrides minimal: only tone-aware colors / type scale.
+ * Do **not** restyle block `code` as inline chips (bare fences have no
+ * `language-*` class — that bug produced a gray bar under code blocks).
  */
 export function MarkdownText({
   text,
   className,
   streaming,
+  tone = "default",
 }: {
   text: string;
   className?: string;
   streaming?: boolean;
+  tone?: "default" | "onDark";
 }) {
-  const blocks = splitBlocks(text);
+  const onDark = tone === "onDark";
+  // Guard wire/IPC nulls — react-markdown throws on non-string children.
+  const body = typeof text === "string" ? text : text == null ? "" : String(text);
+
   return (
     <div
       className={cn(
-        "markdown-body space-y-2 text-[13.5px] leading-relaxed text-ink",
+        "markdown-body text-[13.5px] leading-relaxed",
+        onDark ? "text-white markdown-tone-dark" : "text-ink markdown-tone-light",
         className,
       )}
     >
-      {blocks.map((block, i) => {
-        if (block.type === "code") {
-          return (
-            <pre
-              key={i}
-              className="overflow-x-auto rounded-lg border border-ink/10 bg-surface-muted/70 px-3 py-2 font-mono text-[12px] leading-relaxed text-ink-secondary"
-            >
-              <code>{block.content}</code>
-            </pre>
-          );
-        }
-        return (
-          <p key={i} className="whitespace-pre-wrap break-words">
-            {renderInline(block.content)}
-            {streaming && i === blocks.length - 1 ? (
-              <span className="ml-0.5 inline-block animate-pulse text-ink-muted">
-                █
-              </span>
-            ) : null}
-          </p>
-        );
-      })}
-      {streaming && blocks.length === 0 ? (
-        <span className="inline-block animate-pulse text-ink-muted">█</span>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        {body}
+      </ReactMarkdown>
+      {streaming ? (
+        <span
+          className={cn(
+            "inline-block animate-pulse",
+            onDark ? "text-white/60" : "text-ink-muted",
+          )}
+          aria-hidden
+        >
+          █
+        </span>
       ) : null}
     </div>
   );
 }
 
-type Block =
-  | { type: "text"; content: string }
-  | { type: "code"; content: string; lang?: string };
-
-function splitBlocks(source: string): Block[] {
-  const blocks: Block[] = [];
-  const re = /```([^\n`]*)\n?([\s\S]*?)```/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(source)) !== null) {
-    if (m.index > last) {
-      const chunk = source.slice(last, m.index).trimEnd();
-      if (chunk) blocks.push({ type: "text", content: chunk });
+/**
+ * Shared element map. Visual differences for user bubbles use parent
+ * `.markdown-tone-dark` / `.markdown-tone-light` (see index.css) so we do not
+ * duplicate two full component trees that drift apart.
+ */
+const components: Components = {
+  h1: ({ children }) => (
+    <h1 className="mb-1.5 mt-3 text-[15px] font-semibold first:mt-0">
+      {children}
+    </h1>
+  ),
+  h2: ({ children }) => (
+    <h2 className="mb-1.5 mt-3 text-[14px] font-semibold first:mt-0">
+      {children}
+    </h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="mb-1 mt-2.5 text-[13.5px] font-semibold first:mt-0">
+      {children}
+    </h3>
+  ),
+  h4: ({ children }) => (
+    <h4 className="mb-1 mt-2 text-[13px] font-semibold first:mt-0">
+      {children}
+    </h4>
+  ),
+  p: ({ children }) => (
+    <p className="mb-2 break-words last:mb-0 [overflow-wrap:anywhere]">
+      {children}
+    </p>
+  ),
+  a: ({ href, children }) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="md-a underline underline-offset-2"
+    >
+      {children}
+    </a>
+  ),
+  strong: ({ children }) => (
+    <strong className="font-semibold">{children}</strong>
+  ),
+  em: ({ children }) => <em className="italic">{children}</em>,
+  /**
+   * Block vs inline:
+   * - Fenced blocks render as <pre><code className="language-?">…
+   * - Bare fences often have **no** className — still block because parent is pre.
+   * - True inline is <code> without pre ancestor (react-markdown sets no special
+   *   prop in v9+; use newline / language class heuristics only for styling).
+   */
+  code: ({ className, children }) => {
+    const text = String(children ?? "");
+    const hasLang = Boolean(className?.includes("language-"));
+    const multiline = text.includes("\n");
+    // Block code: language tag OR multiline (bare fence). Leave unstyled chip.
+    if (hasLang || multiline) {
+      return (
+        <code className={cn("font-mono text-[12px] leading-relaxed", className)}>
+          {children}
+        </code>
+      );
     }
-    blocks.push({
-      type: "code",
-      lang: m[1]?.trim() || undefined,
-      content: (m[2] ?? "").replace(/\n$/, ""),
-    });
-    last = m.index + m[0].length;
-  }
-  if (last < source.length) {
-    const chunk = source.slice(last);
-    if (chunk.trim()) blocks.push({ type: "text", content: chunk });
-  }
-  if (blocks.length === 0 && source) {
-    blocks.push({ type: "text", content: source });
-  }
-  return blocks;
-}
-
-function renderInline(text: string): ReactNode[] {
-  // Order: code, bold, italic, bare urls
-  const parts: ReactNode[] = [];
-  const re =
-    /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|https?:\/\/[^\s<]+)/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  let key = 0;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) {
-      parts.push(text.slice(last, m.index));
-    }
-    const token = m[0]!;
-    if (token.startsWith("`")) {
-      parts.push(
-        <code
-          key={key++}
-          className="rounded bg-surface-muted px-1 py-0.5 font-mono text-[12px] text-ink-secondary"
-        >
-          {token.slice(1, -1)}
-        </code>,
-      );
-    } else if (token.startsWith("**")) {
-      parts.push(
-        <strong key={key++} className="font-semibold">
-          {token.slice(2, -2)}
-        </strong>,
-      );
-    } else if (token.startsWith("*")) {
-      parts.push(
-        <em key={key++} className="italic">
-          {token.slice(1, -1)}
-        </em>,
-      );
-    } else if (token.startsWith("http")) {
-      parts.push(
-        <a
-          key={key++}
-          href={token}
-          target="_blank"
-          rel="noreferrer"
-          className="text-amber-800 underline decoration-amber-800/30 underline-offset-2 hover:decoration-amber-800"
-        >
-          {token}
-        </a>,
-      );
-    } else {
-      parts.push(token);
-    }
-    last = m.index + token.length;
-  }
-  if (last < text.length) {
-    parts.push(text.slice(last));
-  }
-  return parts;
-}
+    return (
+      <code className="md-code-inline rounded px-1 py-0.5 font-mono text-[12px]">
+        {children}
+      </code>
+    );
+  },
+  pre: ({ children }) => (
+    <pre className="md-pre scrollbar-thin mb-2 max-w-full overflow-x-auto rounded-lg border px-3 py-2 font-mono text-[12px] leading-relaxed last:mb-0">
+      {children}
+    </pre>
+  ),
+  ul: ({ children }) => (
+    <ul className="mb-2 list-disc space-y-1 pl-5 last:mb-0">{children}</ul>
+  ),
+  ol: ({ children }) => (
+    <ol className="mb-2 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>
+  ),
+  li: ({ children }) => (
+    <li className="break-words [overflow-wrap:anywhere]">{children}</li>
+  ),
+  blockquote: ({ children }) => (
+    <blockquote className="md-quote mb-2 border-l-2 pl-3 last:mb-0">
+      {children}
+    </blockquote>
+  ),
+  // Keep hr a 1px rule — never a filled pill (that was confused with scrollbars).
+  hr: () => <hr className="md-hr my-3 border-0 border-t" />,
+  table: ({ children }) => (
+    <div className="scrollbar-thin mb-2 max-w-full overflow-x-auto last:mb-0">
+      <table className="w-full border-collapse text-left text-[12px]">
+        {children}
+      </table>
+    </div>
+  ),
+  th: ({ children }) => (
+    <th className="md-th border px-2 py-1 font-semibold">{children}</th>
+  ),
+  td: ({ children }) => (
+    <td className="md-td border px-2 py-1 align-top">{children}</td>
+  ),
+};

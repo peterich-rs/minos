@@ -45,6 +45,11 @@ export type Project = {
   conversationCount: number;
   runningAgents: number;
   needsAttention: number;
+  /**
+   * Which host owns this project (plane C).
+   * Omit for this Mac (default). Multi-device rows set a device display name.
+   */
+  hostName?: string;
 };
 
 export type Conversation = {
@@ -70,14 +75,28 @@ export type Conversation = {
   progress?: ConversationProgress;
 };
 
+export type TimelineMention = {
+  agent: string;
+  threadId?: string;
+  threadShortId?: string;
+};
+
 export type TimelineMessage = {
   id: string;
+  /** Durable sort key from daemon; optimistic rows may omit until reload. */
+  messageSeq?: number;
   role: "user" | "agent" | "system";
   agent?: AgentRuntime;
   sessionId?: string;
   body: string;
   time: string;
+  createdAtMs?: number;
   kind?: "text" | "tool_summary" | "approval";
+  replyToMessageId?: string;
+  delegationId?: string;
+  mentions?: TimelineMention[];
+  /** Local-only optimistic bubble; dropped on next server list. */
+  pending?: boolean;
 };
 
 export type AgentSession = {

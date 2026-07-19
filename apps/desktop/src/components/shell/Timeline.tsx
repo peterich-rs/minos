@@ -9,12 +9,10 @@ import {
   ArrowDown,
   AtSign,
   Bold,
-  Bot,
   GitBranch,
   Layers,
   Paperclip,
   Send,
-  ShieldAlert,
   Wrench,
 } from "lucide-react";
 import { agentMeta, type TimelineMessage } from "@/lib/mock-data";
@@ -24,6 +22,7 @@ import {
   type KnownAgent,
 } from "@/lib/agent-route";
 import { Avatar } from "@/components/Avatar";
+import { MarkdownText } from "@/components/MarkdownText";
 import {
   MetaChip,
   PriorityPlaceholder,
@@ -56,8 +55,6 @@ export function Timeline({ conversationId }: { conversationId: string }) {
   );
   const setDraftGlobal = useUiStore((s) => s.setDraft);
   const setDraft = (value: string) => setDraftGlobal(conversationId, value);
-  const selectSession = useUiStore((s) => s.selectSession);
-  const openSessionTranscript = useUiStore((s) => s.openSessionTranscript);
   const conversations = useWorkspaceStore((s) => s.conversations);
   const messagesByConversation = useWorkspaceStore(
     (s) => s.messagesByConversation,
@@ -371,7 +368,8 @@ export function Timeline({ conversationId }: { conversationId: string }) {
 
       <div
         ref={scrollRef}
-        className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-5 py-5"
+        className="scrollbar-thin min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-5 py-5"
+        style={{ flex: "1 1 0%" }}
       >
         <div ref={contentRef} className="space-y-4">
           {phase === "loading" && !hasCachedMessages ? (
@@ -408,60 +406,14 @@ export function Timeline({ conversationId }: { conversationId: string }) {
               <TimelineRow
                 key={message.id}
                 message={message}
-                onOpenSession={
-                  message.sessionId
-                    ? () => {
-                        selectSession(message.sessionId!);
-                        openSessionTranscript(
-                          message.sessionId!,
-                          conversationId,
-                        );
-                      }
+                replyParent={
+                  message.replyToMessageId
+                    ? messages.find((m) => m.id === message.replyToMessageId)
                     : undefined
                 }
               />
             ))
           )}
-
-          {/* Conversation timeline only holds durable chat_messages; live tool
-              stream + approvals live in the agent session transcript. */}
-          {sessions.some(
-            (s) => s.status === "running" || s.status === "needs_approval",
-          ) ? (
-            <div className="rounded-2xl border border-amber-200/80 bg-amber-50/70 px-4 py-3">
-              <div className="text-[13px] font-semibold text-amber-950">
-                {sessions.some((s) => s.status === "needs_approval")
-                  ? "Agent is waiting for your approval"
-                  : "Agent is still running"}
-              </div>
-              <p className="mt-1 text-[12.5px] leading-snug text-amber-950/80">
-                Tool calls, plan mode, and permission prompts do not appear on
-                this conversation timeline until the turn finishes. Open the
-                agent session transcript to follow live work or Allow/Deny.
-              </p>
-              <div className="mt-2.5 flex flex-wrap gap-2">
-                {sessions
-                  .filter(
-                    (s) =>
-                      s.status === "running" || s.status === "needs_approval",
-                  )
-                  .map((s) => (
-                    <button
-                      key={s.id}
-                      type="button"
-                      onClick={() => {
-                        selectSession(s.id);
-                        openSessionTranscript(s.id, conversationId);
-                      }}
-                      className="rounded-lg bg-ink px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-ink/90"
-                    >
-                      Open {s.agent}#{s.shortId}
-                      {s.status === "needs_approval" ? " · approve" : ""}
-                    </button>
-                  ))}
-              </div>
-            </div>
-          ) : null}
         </div>
       </div>
 
@@ -618,12 +570,30 @@ function shortWorktree(path: string): string {
   return `…/${parts.slice(-2).join("/")}`;
 }
 
+function replyPreviewBody(body: string, maxChars = 120): string {
+  const collapsed = body
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(" ");
+  if (collapsed.length <= maxChars) return collapsed;
+  return `${collapsed.slice(0, maxChars - 1)}…`;
+}
+
+function replyAuthorLabel(parent: TimelineMessage): string {
+  if (parent.role === "user") return "You";
+  if (parent.role === "system") return "System";
+  const agentKey = parent.agent as KnownAgent | undefined;
+  if (agentKey && agentMeta[agentKey]) return agentMeta[agentKey].label;
+  return parent.agent ?? "Agent";
+}
+
 function TimelineRow({
   message,
-  onOpenSession,
+  replyParent,
 }: {
   message: TimelineMessage;
-  onOpenSession?: () => void;
+  replyParent?: TimelineMessage;
 }) {
   if (message.role === "system") {
     return (
@@ -637,73 +607,19 @@ function TimelineRow({
   const agentKey = message.agent as KnownAgent | undefined;
   const agent = agentKey && agentMeta[agentKey] ? agentMeta[agentKey] : null;
 
-  if (message.kind === "approval") {
-    return (
-      <div className="rounded-2xl border border-rose-200/80 bg-rose-50/70 px-4 py-3">
-        <div className="flex items-start gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-rose-100 text-rose-700">
-            <ShieldAlert className="h-4 w-4" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2 text-[12px]">
-              <span className="font-semibold text-rose-900">
-                Approval required
-              </span>
-              {agent ? (
-                <span
-                  className={cn(
-                    "rounded-md px-1.5 py-0.5 text-[10px] font-medium",
-                    agent.color,
-                  )}
-                >
-                  {agent.label}
-                </span>
-              ) : null}
-              <span className="text-ink-muted">{message.time}</span>
-            </div>
-            <p className="mt-1 text-[13px] leading-relaxed text-ink">
-              {message.body}
-            </p>
-            <div className="mt-3 flex gap-2">
-              <button
-                type="button"
-                className="rounded-lg bg-ink px-3 py-1.5 text-[12px] font-semibold text-white"
-              >
-                Allow
-              </button>
-              <button
-                type="button"
-                className="rounded-lg border border-ink/10 bg-surface px-3 py-1.5 text-[12px] font-medium text-ink-secondary"
-              >
-                Deny
-              </button>
-              {onOpenSession ? (
-                <button
-                  type="button"
-                  onClick={onOpenSession}
-                  className="ml-auto text-[12px] font-medium text-ink-muted hover:text-ink"
-                >
-                  Open session
-                </button>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // Conversation timeline must not invent "approval" cards from free text.
+  // Real approvals (permission / plan / opencode question) live on the session
+  // transcript with a requestId and wired Allow/Deny — same as TUI.
+  // Live run status / open-session CTAs stay in the right-hand Session inspector
+  // (TUI parity: do not pollute the chat timeline with session chrome).
 
   if (message.kind === "tool_summary") {
     return (
-      <button
-        type="button"
-        onClick={onOpenSession}
-        className="flex w-full items-center gap-2 rounded-xl border border-ink/5 bg-surface-muted/80 px-3 py-2 text-left text-[12px] text-ink-secondary transition-colors hover:bg-surface-muted"
-      >
+      <div className="flex w-full items-center gap-2 rounded-xl border border-ink/5 bg-surface-muted/80 px-3 py-2 text-left text-[12px] text-ink-secondary">
         <Wrench className="h-3.5 w-3.5 shrink-0 text-ink-muted" />
         <span className="min-w-0 flex-1 truncate">{message.body}</span>
         <span className="shrink-0 text-ink-muted">{message.time}</span>
-      </button>
+      </div>
     );
   }
 
@@ -718,16 +634,28 @@ function TimelineRow({
             <span className="font-medium text-ink">
               {agent?.label ?? message.agent ?? "Agent"}
             </span>
-            {message.sessionId ? (
-              <button
-                type="button"
-                onClick={onOpenSession}
-                className="inline-flex items-center gap-0.5 text-[11px] text-ink-muted hover:text-ink"
-              >
-                <Bot className="h-3 w-3" />
-                session
-              </button>
+            {message.pending ? (
+              <span className="text-[11px] text-ink-muted">sending…</span>
             ) : null}
+          </div>
+        ) : null}
+        {message.replyToMessageId ? (
+          <div
+            className={cn(
+              "rounded-lg border-l-2 px-2.5 py-1.5 text-[11.5px] leading-snug",
+              isUser
+                ? "border-white/40 bg-black/15 text-white/85"
+                : "border-ink/20 bg-surface-muted/80 text-ink-secondary",
+            )}
+          >
+            <div className={cn("font-medium", isUser ? "text-white" : "text-ink")}>
+              ↳ {replyParent ? replyAuthorLabel(replyParent) : "Reply"}
+            </div>
+            <div className="mt-0.5 line-clamp-2 opacity-90">
+              {replyParent
+                ? replyPreviewBody(replyParent.body)
+                : `(reply unavailable · ${message.replyToMessageId})`}
+            </div>
           </div>
         ) : null}
         <div
@@ -736,9 +664,14 @@ function TimelineRow({
             isUser
               ? "rounded-br-md bg-bubble-out text-white"
               : "rounded-bl-md border border-ink/5 bg-surface-muted/60 text-ink",
+            message.pending && "opacity-70",
           )}
         >
-          {message.body}
+          <MarkdownText
+            text={message.body}
+            tone={isUser ? "onDark" : "default"}
+            className="text-[13.5px]"
+          />
         </div>
         <div
           className={cn(
@@ -746,7 +679,7 @@ function TimelineRow({
             isUser && "text-right",
           )}
         >
-          {message.time}
+          {message.pending ? "sending…" : message.time}
         </div>
       </div>
     </div>

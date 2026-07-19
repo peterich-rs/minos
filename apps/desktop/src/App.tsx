@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { AppShell } from "@/components/shell/AppShell";
 import { BootScreen } from "@/components/shell/BootScreen";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { useUiStore } from "@/store/ui-store";
 
@@ -40,5 +41,9 @@ export default function App() {
     );
   }
 
-  return <AppShell />;
+  return (
+    <ErrorBoundary label="app">
+      <AppShell />
+    </ErrorBoundary>
+  );
 }

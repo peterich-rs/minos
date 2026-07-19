@@ -1,3 +1,4 @@
+import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { statusMeta, type SessionStatus } from "@/lib/mock-data";
 
@@ -5,10 +6,12 @@ export function StatusPill({
   status,
   className,
 }: {
-  status: SessionStatus;
+  status: SessionStatus | string;
   className?: string;
 }) {
-  const meta = statusMeta[status];
+  // Runtime status can be unexpected wire strings — never throw on render.
+  const meta = statusMeta[status as SessionStatus] ?? statusMeta.idle;
+  const executing = status === "running" || status === "needs_approval";
   return (
     <span
       className={cn(
@@ -17,7 +20,11 @@ export function StatusPill({
         className,
       )}
     >
-      <span className={cn("h-1.5 w-1.5 rounded-full", meta.dot)} />
+      {executing ? (
+        <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+      ) : (
+        <span className={cn("h-1.5 w-1.5 rounded-full", meta.dot)} />
+      )}
       {meta.label}
     </span>
   );

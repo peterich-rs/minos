@@ -45,6 +45,15 @@ import { formatLocalClock, formatRelative } from "@/lib/time";
 import type {
   ConversationBoardColumn,
 } from "@/lib/mock-data";
+import {
+  EMPTY_TRANSCRIPT_HISTORY,
+  mergeTranscriptOlder,
+  metaAfterTailLoad,
+  olderPageRange,
+  tailFromSeq,
+  TRANSCRIPT_PAGE_EVENTS,
+  type TranscriptHistoryMeta,
+} from "@/lib/transcript-history";
 
 const KNOWN_AGENTS_FALLBACK: {
   agent: string;
@@ -114,6 +123,8 @@ type WorkspaceState = {
   projectSessions: ProjectSession[];
   transcriptsByThread: Record<string, TranscriptItem[]>;
   transcriptStatusByThread: Record<string, ResourceFetchStatus>;
+  /** Infinite-scroll cursor / loading flags per thread. */
+  transcriptHistoryByThread: Record<string, TranscriptHistoryMeta>;
   /** Cross-project sessions needing attention (Attention tab). */
   attentionSessions: ProjectSession[];
   attentionStatus: ResourceFetchStatus;
@@ -145,7 +156,15 @@ type WorkspaceState = {
   loadTranscript: (
     threadId: string,
     opts?: {
+      /** Append events after the highest cached seq (live poll). */
       append?: boolean;
+      /**
+       * Load one page of older history before the current window (infinite scroll).
+       * Always quiet — does not flash the main loading state.
+       */
+      older?: boolean;
+      /** @deprecated Prefer infinite scroll (`older`); still supported for tools. */
+      full?: boolean;
       tailWindow?: number;
       quiet?: boolean;
       /**
@@ -517,6 +536,7 @@ const emptyWorkspace = {
   projectSessions: [] as ProjectSession[],
   transcriptsByThread: {} as Record<string, TranscriptItem[]>,
   transcriptStatusByThread: {} as Record<string, ResourceFetchStatus>,
+  transcriptHistoryByThread: {} as Record<string, TranscriptHistoryMeta>,
   attentionSessions: [] as ProjectSession[],
   attentionStatus: idleStatus(),
   clisStatus: idleStatus(),
@@ -1029,11 +1049,96 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   loadTranscript: async (threadId, opts) => {
     if (get().source !== "daemon" || !threadId) return;
-    const quiet = opts?.quiet === true || opts?.append === true;
-    // Append polls have continuity → safe to demote; short peeks are elevate-only.
+
+    const older = opts?.older === true;
+    const append = opts?.append === true && !older;
+    const full = opts?.full === true && !older && !append;
+    // Older pages and appends never flash the main loading skeleton.
+    const quiet = opts?.quiet === true || append || older;
+
     const approvalStatusPolicy: ApprovalStatusPolicy =
       opts?.approvalStatusPolicy ??
-      (opts?.append ? "sync" : "elevate-only");
+      (append || older ? "sync" : "elevate-only");
+
+    // ── Older page (infinite scroll) ─────────────────────────────────
+    if (older) {
+      const hist =
+        get().transcriptHistoryByThread[threadId] ?? EMPTY_TRANSCRIPT_HISTORY;
+      if (hist.loadingOlder || !hist.hasOlder) return;
+      const range = olderPageRange(
+        hist.firstLoadedStartSeq,
+        opts?.tailWindow ?? TRANSCRIPT_PAGE_EVENTS,
+      );
+      if (!range) {
+        set((s) => ({
+          transcriptHistoryByThread: {
+            ...s.transcriptHistoryByThread,
+            [threadId]: {
+              firstLoadedStartSeq: 1,
+              hasOlder: false,
+              loadingOlder: false,
+            },
+          },
+        }));
+        return;
+      }
+
+      set((s) => ({
+        transcriptHistoryByThread: {
+          ...s.transcriptHistoryByThread,
+          [threadId]: {
+            firstLoadedStartSeq: hist.firstLoadedStartSeq,
+            hasOlder: hist.hasOlder,
+            loadingOlder: true,
+          },
+        },
+      }));
+
+      try {
+        const page = await daemonApi.readTranscript(
+          threadId,
+          range.fromSeq,
+          range.limit,
+        );
+        if (get().source !== "daemon") return;
+        set((s) => {
+          const existing = s.transcriptsByThread[threadId] ?? [];
+          const items = mergeTranscriptOlder(page.items, existing);
+          return {
+            transcriptsByThread: {
+              ...s.transcriptsByThread,
+              [threadId]: items,
+            },
+            transcriptHistoryByThread: {
+              ...s.transcriptHistoryByThread,
+              [threadId]: {
+                firstLoadedStartSeq: range.nextFirstLoadedStartSeq,
+                hasOlder: range.nextFirstLoadedStartSeq > 1,
+                loadingOlder: false,
+              },
+            },
+          };
+        });
+      } catch {
+        set((s) => {
+          const prev =
+            s.transcriptHistoryByThread[threadId] ?? EMPTY_TRANSCRIPT_HISTORY;
+          return {
+            transcriptHistoryByThread: {
+              ...s.transcriptHistoryByThread,
+              [threadId]: {
+                firstLoadedStartSeq: prev.firstLoadedStartSeq,
+                hasOlder: prev.hasOlder,
+                loadingOlder: false,
+              },
+            },
+          };
+        });
+      }
+      return;
+    }
+
+    // ── Initial / tail / append / full ───────────────────────────────
     const prev = get().transcriptStatusByThread[threadId];
     const { next, generation } = bumpStatus(prev, quiet);
     const isStale = () =>
@@ -1058,34 +1163,38 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           .find((s) => s.id === threadId);
 
       // Daemon `from_seq` is exclusive: start = from_seq + 1.
-      // Long sessions (10k+ events) must load the *tail*, not the head.
+      // - append: only events after the highest cached seq (live poll)
+      // - tail (default open): last N events — Sessions uses infinite older scroll
+      // - full: optional one-shot multi-page assemble (debug / rare)
       let fromSeq: number | undefined;
-      if (opts?.append && existing.length > 0) {
+      const window = opts?.tailWindow ?? TRANSCRIPT_PAGE_EVENTS;
+      if (append && existing.length > 0) {
         fromSeq = Math.max(...existing.map((i) => i.seq));
-      } else {
+      } else if (!full) {
         const lastSeq = session?.messageCount ?? 0;
-        const window = opts?.tailWindow ?? 400;
-        if (lastSeq > window) {
-          fromSeq = lastSeq - window;
-        }
+        fromSeq = tailFromSeq(lastSeq, window);
       }
 
-      const page = await daemonApi.readTranscript(threadId, fromSeq, 500);
+      const page = await daemonApi.readTranscript(
+        threadId,
+        fromSeq,
+        full ? 1000 : Math.max(window, 500),
+        { full },
+      );
       if (isStale()) return;
 
       set((s) => {
-        const prevItems = opts?.append
-          ? (s.transcriptsByThread[threadId] ?? [])
-          : [];
+        const prevItems = append ? (s.transcriptsByThread[threadId] ?? []) : [];
         // When replacing (non-append peek), merge with prior items so a short
         // tail window cannot drop an already-known pending approval card.
-        const base =
-          opts?.append
-            ? prevItems
-            : approvalStatusPolicy === "elevate-only"
-              ? (s.transcriptsByThread[threadId] ?? [])
-              : [];
-        const merged = [...base, ...page.items];
+        const base = append
+          ? prevItems
+          : approvalStatusPolicy === "elevate-only"
+            ? (s.transcriptsByThread[threadId] ?? [])
+            : [];
+        const merged = append
+          ? mergeTranscriptItems(base, page.items)
+          : [...base, ...page.items];
         const seen = new Set<string>();
         const items = merged.filter((it) => {
           if (seen.has(it.id)) return false;
@@ -1142,6 +1251,24 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
             ),
           });
         }
+
+        // History cursor: only reset on non-append open (tail/full/replace).
+        let transcriptHistoryByThread = s.transcriptHistoryByThread;
+        if (!append) {
+          // full=true multi-page load: nothing older unless the safety cap truncated.
+          const hist = full
+            ? {
+                firstLoadedStartSeq: 1,
+                hasOlder: page.nextSeq != null,
+                loadingOlder: false,
+              }
+            : metaAfterTailLoad(fromSeq);
+          transcriptHistoryByThread = {
+            ...s.transcriptHistoryByThread,
+            [threadId]: hist,
+          };
+        }
+
         return {
           transcriptsByThread: {
             ...s.transcriptsByThread,
@@ -1151,6 +1278,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
             ...s.transcriptStatusByThread,
             [threadId]: { phase: "ready", generation },
           },
+          transcriptHistoryByThread,
           sessionsByConversation,
           projectSessionsByProject,
           projectSessions,
@@ -1546,10 +1674,28 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         if (reusable) {
           threadId = reusable.id;
         } else {
+          // Prefer create-time model from the newest host profile for this runtime.
+          let model: string | undefined;
+          let reasoningEffort: string | undefined;
+          let instructions: string | undefined;
+          try {
+            const { profiles } = await daemonApi.listAgentProfiles();
+            const match = (profiles ?? [])
+              .filter((p) => p.runtime_agent === agent)
+              .sort((a, b) => (b.updated_at_ms ?? 0) - (a.updated_at_ms ?? 0))[0];
+            if (match?.model) {
+              model = match.model;
+              reasoningEffort = match.reasoning_effort?.trim() || undefined;
+              instructions = match.instructions?.trim() || undefined;
+            }
+          } catch {
+            /* profiles optional */
+          }
           const started = await daemonApi.startAgentInConversation(
             conversationId,
             agent,
             project.workspacePath,
+            { model, reasoningEffort, instructions },
           );
           threadId = started.threadId;
         }

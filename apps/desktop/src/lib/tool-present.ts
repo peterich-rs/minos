@@ -38,7 +38,9 @@ export function toolKindFromName(name: string): ToolKind {
     n.includes("str_replace") ||
     n.includes("search_replace") ||
     n.includes("create_file") ||
-    n.includes("delete_file")
+    n.includes("delete_file") ||
+    n.includes("filechange") ||
+    n.includes("file_change")
   ) {
     return "edit";
   }
