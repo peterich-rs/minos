@@ -213,7 +213,7 @@ TUI / Desktop 通过 JSON-RPC 连接 `minos-daemon`:
 
 | 场景 | 行为 |
 |------|------|
-| 退出时 idle | 落库 `suspended` + `needs_continue=0`；下次 `resume_thread` reattach，用户下一条消息续历史 |
+| 退出时 idle | 落库保持 **`idle`** + `needs_continue=0`（不显示 Paused）；下次 `resume_thread` reattach，用户下一条消息续历史 |
 | 退出时 running | 落库 `suspended` + `needs_continue=1`；打开 conversation 时 **最多一个** top-level session `resume_thread(auto_continue=true)` 注入 CONTINUE |
 | 用户立即发消息 | send 路径 `resume_thread(auto_continue=false)` + `send_user_message`；`take_needs_continue` 清 flag，**不**注入 CONTINUE |
 | 用户显式 close | `Closed`，不可 resume / 默认复用 |

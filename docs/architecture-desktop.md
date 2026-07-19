@@ -47,14 +47,15 @@ Work → Project
 | Sessions 树 | 含 subagent | `list_conversation_agent_sessions` |
 | Board | 四列派生状态 | 非独立任务系统 |
 | Attention | needs_approval | approvals |
-| Agents | CLI detect 假数据 | `detect_clis` |
-| Host | relay/daemon 文案 | status + pairing |
+| Agents | CLI inventory + personalized profiles | `list_clis`, `list_models`, agent profile CRUD; start session passes fixed `model` / `reasoning_effort` |
+| Host | Ready / Local only / Linked + 诊断 | status + pairing |
 
 ## 目录结构
 
 ```
 apps/desktop/
   src/
+    lib/host-status.ts   # Ready · Local only / Linked / This Mac
     lib/mock-data.ts
     store/ui-store.ts
     components/
@@ -82,11 +83,28 @@ apps/desktop/
 | Command | 作用 |
 |---------|------|
 | `daemon_connect` | 发现 → 失败则 managed start → 连接 |
-| `daemon_status` | `connected` / `managed` / `endpoint` |
+| `daemon_status` | `connected` / `managed` / `endpoint`（实现细节） |
 | `daemon_list_*` / `append` / `create` | 同 TUI `minos_local_*` |
 | `daemon_create_project` | `minos_local_create_project`（选文件夹后创建） |
 | `daemon_resume_thread` | `minos_local_resume_thread`（reattach；可选 `autoContinue`） |
 | `daemon_send_user_message` | 发消息前应先 resume(reattach-only) |
+
+### Host 产品状态（UI，非 wire 协议）
+
+三层状态不要混成 `Daemon · managed`：
+
+| 层 | 含义 | UI 落点 | v1 行为 |
+|----|------|---------|---------|
+| **Runtime (A)** | 本机 daemon 是否可用 | 侧栏品牌区圆点 + Ready/Unavailable | 连上 daemon → Ready |
+| **Link (B)** | backend/relay 协作链路 | 品牌区 `· Local only` / `· Linked`；Host 页 | 仅本地 → **Local only**（不是 Offline） |
+| **Project locus (C)** | 项目挂在哪台 Host | Project header pill / 列表（远程时） | **This Mac** |
+
+派生逻辑：`src/lib/host-status.ts` → `deriveHostPresence` / `projectHostLabel`。
+
+- 侧栏：`Ready · Local only`（绿）/ `Unavailable`（红）/ `Preview`（mock，琥珀）；点击进 Host
+- Project 顶栏 pill：宿主标签 `This Mac`（替代原 `MANAGED`）；多设备后可显示设备名
+- Host 页（高密度）：顶栏状态 chip + Reconnect；一块 **Runtime** 键值表（Machine / Status / Link / Process）；**Pairing** 单行占位；**Diagnostics** 默认折叠（endpoint / managed）
+- 不重复 Summary 卡；不占大块空 QR；`managed` 仅诊断区
 
 **Session 复用与 resume：**
 
@@ -94,6 +112,7 @@ apps/desktop/
 - `sendMessage`：`resumeThread(id, false)` 再 `sendUserMessage`（用户文本优先于 CONTINUE）。
 - `loadConversationDetail`：对最多一个 `needsContinue` top-level session 调 `resumeThread(id, true)`。
 - Session 状态 pill：`suspended` → “Paused”（不再误标为 needs_approval）。
+- **Idle 重启不该变 Paused：** daemon 停机/脏恢复时，**仅 mid-flight** 线程落 `suspended`；原本 `idle` 保持 `idle`。对历史错误行：`Suspended{DaemonRestart}` + `needs_continue=false` 在 bridge 仍映射为 UI `idle`。
 
 空项目态：主内容区为全幅 **Create project**（大 +），系统文件夹选择器 → create_project → 刷新列表并选中。
 
@@ -104,14 +123,34 @@ apps/desktop/
 | View | 作用 |
 |------|------|
 | Conversations | 协作主时间线 + @agent |
-| Sessions | Project 内所有 agent runs 列表 + full transcript（`read_thread_raw_history`） |
+| Sessions | Project 内 agent runs：**按 Conversation 折叠分组** + full transcript（`read_thread_raw_history`） |
 | Board | Conversation 俯视图（由 progress + session 运行态派生） |
+
+**Sessions 左侧列表（Codex-style）：**
+
+- 顶层 = **Conversation** 文件夹（可折叠）；组内 = 该对话下的 top-level agent sessions，subagent 缩进挂在 parent 下
+- 组排序 = 组内最近 `lastTsMs` DESC；header 显示 live 数 / attention / session count
+- 每个 session 显示状态 pill；`running` / `needs_approval` 用 **spinner** 表示执行中
+- 选中 session 时自动展开其 Conversation；切换 project 重置折叠态
+- 分组逻辑：`src/lib/session-list-group.ts`
 
 深链：Conversation inspector / 气泡上的 session → `openSessionTranscript` 切到 Sessions 并选中；Sessions 顶栏 **Back to conversation** 回 Conversations。
 
+### Conversation timeline（messenger 气泡）
+
+| 项 | 行为 |
+|----|------|
+| 排序键 | 服务端 `message_seq` ASC（bridge reverse + 前端 `sortTimelineMessages` 防御）；**不用** `createdAtMs` 排序 |
+| 字段 | `messageSeq` / `messageId` / `replyToMessageId` / `mentions` / `delegationId` 经 Tauri DTO 贯通 |
+| 正文 | user + agent 气泡用 `MarkdownText`：`react-markdown` + `remark-gfm`（标题/列表/表格/fence/粗斜体/链接；默认不渲染 raw HTML） |
+| 引用 | 有 `replyToMessageId` 时显示短引用条（委托 result → request 等） |
+| Optimistic | 本地 `pending` 行；下一次 list 整表替换服务端真相并丢弃 pending |
+| Live | `daemon://conversation` → debounce re-list；仍以 `message_seq` 序展示 |
+| Subagent | 主时间线不展示 subagent thread 消息（daemon list 过滤）；细节在 Sessions transcript |
+
 ### Agent transcript UX（对齐 TUI AgentDetail）
 
-Sessions 主区是 **Grok-style 日志 transcript**，不是 messenger 气泡：
+Sessions 主区是 **Grok-style 日志 transcript** + 右侧 **session summary**（类 OpenCode 右栏）：
 
 | 项 | 行为 |
 |----|------|
@@ -121,6 +160,7 @@ Sessions 主区是 **Grok-style 日志 transcript**，不是 messenger 气泡：
 | Tool | `{Verb} {bare target}`（`Read path` / `Ran cmd`）；展开看 detail；错误后缀 `failed`；diff 显示 `+n/-m` |
 | Bridge 字段 | `title` = tool name；`text` = bare target；`detail` = args→output |
 | Approvals | 可操作卡片 + modal（Allow / Deny / plan 三态） |
+| Summary 面板 | 从 transcript **派生**（`session-summary.ts`）：edit tool 路径 + 累计 `-N +M`；header 可折叠；**token 暂不展示**（各 CLI 格式不一，ui-protocol 无统一 usage 投影） |
 
 **Stick-to-bottom（`useStickToBottom`，对齐 TUI `auto_scroll`）：**
 
@@ -143,7 +183,7 @@ Sessions 主区是 **Grok-style 日志 transcript**，不是 messenger 气泡：
 | Sessions list | `projectId` props/`key` | `loadProjectSessions`（依赖 `bootEpoch`） | `projectSessionsStatusByProject` |
 | Transcript | `sessionId` props/`key` | `loadTranscript` | `transcriptStatusByThread` |
 | Attention | — | `loadAttentionSessions` | `attentionStatus` |
-| Agents | — | `loadClis` | `clisStatus` |
+| Agents | CLI cards + Create agent dialog + host profiles | `loadClis` + profile/model RPCs | `clisStatus` |
 | Board | `projectId` | 吃 conversation list 缓存 | progress 单一真相（无 local override） |
 
 **启动顺序：** `bootstrap` → projects → `WorkView` 用 `resolvedProjectId`（`ui.projectId` 或 `projects[0]`）→ `ConversationList` init load → 列表 `ready` 后 auto-select conversation → `Timeline` load detail。
@@ -186,9 +226,11 @@ Sessions 主区是 **Grok-style 日志 transcript**，不是 messenger 气泡：
 
 | 现象 | 原因 | 行为 |
 |------|------|------|
-| Conversation 时间线只有用户消息 | 主时间线只读 `chat_messages`；tool/plan 在 thread `events` | 运行中 banner 引导打开 **Sessions** transcript |
+| Conversation 时间线只有用户消息 | 主时间线只读 `chat_messages`；tool/plan 在 thread `events` | 右侧 Session inspector / Sessions 页看 transcript；**不在** timeline 插运行中 banner |
+| Conversation 气泡误显示 Approval required | 曾用 body 包含 `"approval"` / `Permission:` 推断 kind | **禁止** 从对话正文推断；approval 仅 session transcript 的 reverse-request（`request_id`） |
 | Session 一直 Running 无更新 | 无 live 事件时只能靠 poll | **manager + ingest 推送**；transcript 初始 **tail 窗口** hydrate |
 | Grok 卡住 | `x.ai/exit_plan_mode` plan approval 待决策 | ingest `approval/request` → UI `needs_approval` + transcript approval 卡 + `minos_local_approval_decision` |
+| “View plan” 被截断（历史） | Desktop bridge 曾对 `planContent` 做 6000 字符 `truncate_str` | **plan body 完整透传**到 modal（`detail` 不截断）；其它 permission 参数仍可截断 |
 | 状态仍是 running | Grok 等审批时 runtime state 仍为 Running | **ingest** 抬升 `needs_approval`；manager 的 running **不覆盖** elevation |
 | Quiet poll 闪烁（历史） | 盲刷 listSessions + 误降级 | **默认 live push**；poll 仅 `livePush=false` 降级 |
 

@@ -125,6 +125,8 @@ DaemonInner {
 
 subagent 也是普通 thread，只是在 `ThreadAdded` / `ThreadSummary` / `LocalThreadSnapshot` 上携带 `parent_thread_id`。daemon 收到 `ThreadAdded { parent_thread_id: Some(parent) }` 时复用父线程的 conversation 插入子线程行，且不增加 `conversations.agent_session_count`。TUI 通过现有 `list_conversation_agent_sessions` 得到父子 thread，不新增 `list_subagents` RPC。conversation message 读路径会过滤 `thread_id` 指向 subagent 的旧消息行，summary 的 preview/count 也只计算可见消息，避免 subagent transcript/result 污染 conversation 主时间线。
 
+**Conversation 主时间线排序契约：** `chat_messages.message_seq`（SQLite rowid PK）是唯一排序键；list 按 `message_seq DESC` 分页，客户端 reverse 为 ASC 展示。`message_id` upsert 复用原 `message_seq`（body/metadata 可更新）。`created_at_ms` 仅展示。多 agent 完成顺序 = durable 落库顺序（finish/write order）；因果关系用 `reply_to_message_id` / `mentions` / `delegation_id` 表达（例如 MCP 委托 result 引用 request），不通过重排历史 seq。Agent 回合结果由 `conversation_completion` 在 turn boundary 写入 `agent-result:…`；subagent thread 不写 conversation result。
+
 Codex app-server 启动分两段超时：initialize handshake 默认 5 秒，`thread/start` 默认 30 秒。后者独立配置为 `AgentRuntimeConfig.thread_start_timeout`，因为线程创建会受 workspace 初始化、skills/MCP 注入和 Codex 冷启动状态影响。
 
 Teamwork MCP 注入不依赖单一外部 sidecar。`AgentRuntimeConfig` 优先使用 `MINOS_TEAMWORK_MCP_BIN` 或同目录 `minos-teamwork-mcp`；找不到时，`minos-daemon __minos-teamwork-mcp` hidden 子命令可直接作为 stdio MCP server。TUI 托管 daemon 时当前可执行文件是 `minos-tui`，同一逻辑会回落到 `minos-tui __minos-teamwork-mcp`，因此 `minos-tui --backend daemon` 不要求用户额外构建 MCP bin。
@@ -158,7 +160,7 @@ Managed TUI/Desktop 退出会调用 `DaemonHandle::stop`：
 2. `shutdown_instances` SIGTERM/SIGKILL provider 进程组。
 3. 拆除 local RPC discovery + relay。
 
-脏退出（kill -9）：下次 `DaemonHandle::start` 时 `mark_orphans_suspended` 将非 `closed`/`suspended` 行翻成 `suspended` + `daemon_restart`，并对 `running`/`starting`/`resuming` 设 `needs_continue=1`。
+脏退出（kill -9）：下次 `DaemonHandle::start` 时 `mark_orphans_suspended` **只**把 `running`/`starting`/`resuming` 翻成 `suspended` + `daemon_restart` + `needs_continue=1`。**`idle` 保持 `idle`**（回合间进程死亡 ≠ 用户 Pause；下次 `resume_thread` 在无 live process 时仍会 reattach）。
 
 | 列 / 标志 | 含义 |
 |-----------|------|
@@ -258,7 +260,9 @@ Starting → Idle → Running { turn_started_at_ms }
 
 `RpcServerImpl` 实现 `MinosRpcServer` trait，路由后端转发的命令。
 
-支持的方法: `health`, `list_clis`, `list_host_skills`, `write_host_skill_config`, `start_agent`, `send_user_message`, `approval_decision`, `respond_opencode_question`, `interrupt_thread`, `close_thread`, `list_threads`, `get_thread`
+支持的方法: `health`, `list_clis`, `list_models`, `list_agent_profiles`, `create_agent_profile`, `update_agent_profile`, `delete_agent_profile`, `list_host_skills`, `write_host_skill_config`, `start_agent` (optional `model` / `reasoning_effort`), `start_agent_in_conversation` (same), `send_user_message`, `approval_decision`, `respond_opencode_question`, `interrupt_thread`, `close_thread`, `list_threads`, `get_thread`
+
+Host-local **agent profiles** (`agent_profiles` table, migration `0010`) store personalized runtime+model+effort bindings. Model discovery is best-effort via Codex `model/list`, CLI probes (`grok models`, `opencode models`), or static aliases (Claude/Gemini).
 
 ### `invoke_host_command()` — 分发函数
 
