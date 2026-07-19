@@ -505,7 +505,7 @@ fn bootstrap() -> Result<()> {
         let brewfile = workspace_root.join("apps/macos/Brewfile");
         if brewfile.exists() {
             if which("brew").is_none() {
-                bail!("brew not installed; required to install xcodegen and swiftlint");
+                bail!("brew not installed; required to install xcodegen, swiftlint, and just");
             }
 
             eprintln!("==> brew bundle --file {}", brewfile.display());
