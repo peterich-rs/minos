@@ -7,14 +7,17 @@
 //! The handle carries:
 //!
 //! - the session's [`DeviceId`] (also the registry key);
-//! - a `paired_with` slot (`Arc<RwLock<Option<DeviceId>>>`) that mirrors the
-//!   current pairing state for this session. The backend updates this when
-//!   `consume_token` or `forget_peer` changes the DB — step 8 wires the
-//!   update path;
 //! - an **outbox**: `tokio::sync::mpsc::Sender<ServerFrame>` handed to the
 //!   per-socket writer task. Anything that wants to push a frame to this
 //!   device calls `registry.route(..)` or picks up the handle via `get`
 //!   and uses the sender directly.
+//!
+//! ADR-0020 / Phase G: there is no longer a per-session `paired_with`
+//! slot. A Mac can be paired to multiple iOS accounts, so a single
+//! `Option<DeviceId>` field cannot represent live pairing. iOS callers
+//! stamp `target_device_id` on the wire (`Envelope::Forward`) and the
+//! envelope dispatcher validates against `account_host_pairings::exists`
+//! for the caller's account.
 //!
 //! Values are cheap to clone (one `Arc` + one `mpsc::Sender` bump), so the
 //! API returns owned clones rather than `DashMap` guards. This keeps
@@ -36,8 +39,16 @@
 //! On [`TrySendError::Closed`] we translate to [`BackendError::PeerOffline`].
 //! The receiver going away means the writer task has shut down; from the
 //! caller's perspective the peer is effectively offline.
+//!
+//! # Mutex poisoning
+//!
+//! The per-session `account_id` slot uses `std::sync::Mutex`. We never
+//! `.await` while the guard is held, so the lock is uncontended in
+//! practice; on poison (i.e. a panic in a critical section) we recover
+//! the inner data via `into_inner()` rather than dropping the bind, so a
+//! poisoned account binding stays consistent with the live session.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use dashmap::DashMap;
@@ -56,18 +67,27 @@ pub const OUTBOX_CAPACITY: usize = 256;
 /// A frame queued for push from the backend to a specific device.
 ///
 /// Aliased to [`Envelope`] directly rather than wrapped in a narrower enum
-/// — the envelope already carries the discriminator (`Forwarded`, `Event`,
-/// `LocalRpcResponse`) the writer needs. The alias exists so call sites
-/// at the registry surface can say "ServerFrame" (intent) without tying
-/// themselves to the envelope type forever; if we ever need to attach
-/// metadata (e.g. send-timestamp) it becomes a newtype around `Envelope`.
+/// — the envelope already carries the discriminator (`Forwarded`, `Event`)
+/// the writer needs. The alias exists so call sites at the registry
+/// surface can say "ServerFrame" (intent) without tying themselves to the
+/// envelope type forever; if we ever need to attach metadata (e.g.
+/// send-timestamp) it becomes a newtype around `Envelope`.
 pub type ServerFrame = Envelope;
+
+/// Why a live session was actively revoked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionRevocation {
+    /// A newer socket for the same device replaced this one.
+    Superseded,
+    /// The session's auth backing was revoked after the socket was live.
+    AuthRevoked,
+}
 
 /// One live WebSocket session, indexed by its [`DeviceId`].
 ///
 /// Constructed by the WS accept handler (step 8); removed by the same
 /// handler on close. Cheaply clonable — clones share the outbox `Sender`,
-/// the `paired_with` lock, and the `last_pong_at` lock.
+/// the `account_id` lock, and the `last_pong_at` lock.
 #[derive(Debug, Clone)]
 pub struct SessionHandle {
     /// Identity of the device owning this session. Also the registry key.
@@ -77,27 +97,35 @@ pub struct SessionHandle {
     /// local RPC dispatch, e.g. `request_pairing_token` accepts only
     /// [`DeviceRole::AgentHost`].
     pub role: DeviceRole,
-    /// The peer this session is currently paired with, if any.
-    ///
-    /// Wrapped in `Arc<RwLock<_>>` so the registry holder and the WS
-    /// reader/writer tasks can all observe / update pairing transitions
-    /// (e.g. `Event::Paired`, `Event::Unpaired`) without re-issuing a
-    /// whole new handle.
-    pub paired_with: Arc<RwLock<Option<DeviceId>>>,
     /// Bounded outbox to the per-socket writer task.
     ///
     /// Sender end only; the receiver lives inside the writer. `Clone` on
     /// `mpsc::Sender` is a cheap `Arc` bump.
     pub outbox: mpsc::Sender<ServerFrame>,
-    /// Session-local revocation signal used to actively supersede an old
-    /// socket when a reconnect replaces it in the registry.
-    revoked: watch::Sender<bool>,
+    /// Session-local revocation signal used to actively close the socket,
+    /// distinguishing reconnect supersede from auth/token revocation.
+    revoked: watch::Sender<Option<SessionRevocation>>,
     /// Timestamp of the most recent `Pong` frame we received from this
     /// client. Updated by the dispatcher's read branch (step 8); consumed
     /// by the heartbeat tick branch to decide when to close the socket as
     /// dead. Wrapped in `Arc<RwLock<_>>` so the writer/reader tasks can
     /// share it cheaply.
     pub last_pong_at: Arc<RwLock<Instant>>,
+    /// Account that owns this session, set after a successful bearer-
+    /// token check on iOS upgrades or copied across at pairing-consume on
+    /// the Mac side. `None` while the session has not yet been linked to
+    /// an account (e.g. fresh `MobileClient` first-connect or a pre-bearer
+    /// `AgentHost`). Wrapped in [`Mutex`] (sync `std::sync`) so the
+    /// upgrade handler can `set_account_id` synchronously without
+    /// promising async borrow semantics — stays sync because no caller
+    /// `.await`s while holding the guard.
+    pub account_id: Arc<Mutex<Option<String>>>,
+    /// For multi-iOS pairing, Mac replies cannot be routed by deriving
+    /// the original requester from a single per-session slot. When an
+    /// iOS request is forwarded to this Mac, the backend records
+    /// JSON-RPC id -> requester here so the response with the same id is
+    /// routed back to the originating device.
+    rpc_reply_targets: Arc<DashMap<u64, DeviceId>>,
 }
 
 impl SessionHandle {
@@ -111,27 +139,76 @@ impl SessionHandle {
     #[must_use]
     pub fn new(device_id: DeviceId, role: DeviceRole) -> (Self, mpsc::Receiver<ServerFrame>) {
         let (tx, rx) = mpsc::channel(OUTBOX_CAPACITY);
-        let (revoked, _revoked_rx) = watch::channel(false);
+        let (revoked, _revoked_rx) = watch::channel(None);
         let handle = Self {
             device_id,
             role,
-            paired_with: Arc::new(RwLock::new(None)),
             outbox: tx,
             revoked,
             last_pong_at: Arc::new(RwLock::new(Instant::now())),
+            account_id: Arc::new(Mutex::new(None)),
+            rpc_reply_targets: Arc::new(DashMap::new()),
         };
         (handle, rx)
     }
 
-    /// Mark this session as superseded and wake any socket loop waiting on it.
-    pub fn revoke(&self) {
-        let _ = self.revoked.send(true);
+    /// Mark this session as revoked and wake any socket loop waiting on it.
+    pub fn revoke(&self, reason: SessionRevocation) {
+        let _ = self.revoked.send(Some(reason));
+    }
+
+    /// Bind this session to an account (spec §5.5). Called by the iOS WS
+    /// upgrade handler after [`crate::auth::bearer::require`] succeeds and
+    /// by the pairing/consume handler after the Mac side adopts its
+    /// peer's account. Idempotent overwrite — the most-recent claim wins.
+    pub fn set_account_id(&self, id: String) {
+        // Mutex is `std::sync::Mutex`; we never `.await` while the guard
+        // is held so the lock is uncontended in practice. On poison we
+        // log + recover via `into_inner()` rather than silently dropping
+        // the bind, so the session's account binding stays consistent.
+        match self.account_id.lock() {
+            Ok(mut slot) => {
+                *slot = Some(id);
+            }
+            Err(poison) => {
+                tracing::error!(
+                    target: "minos_backend::session",
+                    device_id = %self.device_id,
+                    "session account_id mutex poisoned; recovering",
+                );
+                *poison.into_inner() = Some(id);
+            }
+        }
+    }
+
+    /// Snapshot of the bound account, if any.
+    #[must_use]
+    pub fn account_id(&self) -> Option<String> {
+        match self.account_id.lock() {
+            Ok(g) => g.clone(),
+            Err(poison) => {
+                tracing::error!(
+                    target: "minos_backend::session",
+                    device_id = %self.device_id,
+                    "session account_id mutex poisoned; recovering",
+                );
+                poison.into_inner().clone()
+            }
+        }
     }
 
     /// Subscribe to revocation changes for this session.
     #[must_use]
-    pub fn subscribe_revocation(&self) -> watch::Receiver<bool> {
+    pub fn subscribe_revocation(&self) -> watch::Receiver<Option<SessionRevocation>> {
         self.revoked.subscribe()
+    }
+
+    pub fn remember_rpc_reply_target(&self, request_id: u64, from: DeviceId) {
+        self.rpc_reply_targets.insert(request_id, from);
+    }
+
+    pub fn take_rpc_reply_target(&self, request_id: u64) -> Option<DeviceId> {
+        self.rpc_reply_targets.remove(&request_id).map(|(_, id)| id)
     }
 
     /// True when `other` refers to the same concrete socket session.
@@ -163,12 +240,18 @@ impl SessionRegistry {
     /// caller should typically drop the returned handle to close the old
     /// outbox and shut the prior writer task.
     pub fn insert(&self, handle: SessionHandle) -> Option<SessionHandle> {
-        self.0.insert(handle.device_id, handle)
+        let previous = self.0.insert(handle.device_id, handle);
+        crate::telemetry::set_session_registry_size(self.len());
+        previous
     }
 
     /// Remove and return the handle for `id`, or `None` if none was live.
     pub fn remove(&self, id: DeviceId) -> Option<SessionHandle> {
-        self.0.remove(&id).map(|(_k, v)| v)
+        let removed = self.0.remove(&id).map(|(_k, v)| v);
+        if removed.is_some() {
+            crate::telemetry::set_session_registry_size(self.len());
+        }
+        removed
     }
 
     /// Remove and return `current` only if it is still the live entry.
@@ -178,9 +261,14 @@ impl SessionRegistry {
     /// `DeviceId`, and in that case cleanup must leave the fresh entry in
     /// place.
     pub fn remove_current(&self, current: &SessionHandle) -> Option<SessionHandle> {
-        self.0
+        let removed = self
+            .0
             .remove_if(&current.device_id, |_, live| live.same_session(current))
-            .map(|(_k, v)| v)
+            .map(|(_k, v)| v);
+        if removed.is_some() {
+            crate::telemetry::set_session_registry_size(self.len());
+        }
+        removed
     }
 
     /// Clone the handle for `id` if a session is live.
@@ -232,6 +320,73 @@ impl SessionRegistry {
         }
     }
 
+    /// Revoke and drop every account-client session bound to `account_id`, except an
+    /// optional `except` device id (provided as a string, matching the
+    /// `DeviceId::to_string` representation that bearer claims carry).
+    ///
+    /// Retained for administrative/session-revocation flows. Normal login no
+    /// longer calls this because multiple account-client devices on the same
+    /// account may stay connected concurrently. Agent-host sessions are not
+    /// touched.
+    ///
+    /// Returns the number of sessions actually closed.
+    pub fn close_account_sessions(&self, account_id: &str, except: Option<&str>) -> usize {
+        let to_close: Vec<DeviceId> = self
+            .0
+            .iter()
+            .filter(|entry| {
+                let h = entry.value();
+                if !h.role.is_account_client() {
+                    return false;
+                }
+                if h.account_id().as_deref() != Some(account_id) {
+                    return false;
+                }
+                match except {
+                    Some(keep) => entry.key().to_string() != keep,
+                    None => true,
+                }
+            })
+            .map(|entry| *entry.key())
+            .collect();
+
+        let mut closed = 0;
+        for id in to_close {
+            if let Some((_, handle)) = self.0.remove(&id) {
+                handle.revoke(SessionRevocation::AuthRevoked);
+                closed += 1;
+            }
+        }
+        crate::telemetry::set_session_registry_size(self.len());
+        closed
+    }
+
+    /// Count currently-live account-client sessions bound to `account_id`.
+    #[must_use]
+    pub fn mobile_account_session_count(&self, account_id: &str) -> usize {
+        self.0
+            .iter()
+            .filter(|entry| {
+                let handle = entry.value();
+                handle.role.is_account_client()
+                    && handle.account_id().as_deref() == Some(account_id)
+            })
+            .count()
+    }
+
+    /// Count currently-live mobile-client sessions bound to `account_id`.
+    #[must_use]
+    pub fn mobile_client_session_count(&self, account_id: &str) -> usize {
+        self.0
+            .iter()
+            .filter(|entry| {
+                let handle = entry.value();
+                handle.role == DeviceRole::MobileClient
+                    && handle.account_id().as_deref() == Some(account_id)
+            })
+            .count()
+    }
+
     /// Current number of live sessions. Useful for metrics and tests;
     /// O(#shards) under the hood.
     #[must_use]
@@ -273,6 +428,33 @@ impl SessionRegistry {
         }
     }
 
+    /// Best-effort broadcast of `frame` to every live account-client session bound to
+    /// `account_id`.
+    pub fn broadcast_mobile_account(&self, account_id: &str, frame: ServerFrame) -> usize {
+        let mut delivered = 0;
+        for handle in self.0.iter() {
+            if !handle.role.is_account_client() {
+                continue;
+            }
+            if handle.account_id().as_deref() != Some(account_id) {
+                continue;
+            }
+            match handle.outbox.try_send(frame.clone()) {
+                Ok(()) => delivered += 1,
+                Err(err) => {
+                    tracing::debug!(
+                        target: "minos_backend::session",
+                        device_id = %handle.device_id,
+                        account_id,
+                        error = ?err,
+                        "account-scoped broadcast try_send failed; dropping frame for this peer"
+                    );
+                }
+            }
+        }
+        delivered
+    }
+
     /// Route `payload` from `from` to `to` as an [`Envelope::Forwarded`].
     ///
     /// Mechanical forward — does NOT verify `from` is paired with `to`.
@@ -309,6 +491,41 @@ impl SessionRegistry {
         to: DeviceId,
         payload: serde_json::Value,
     ) -> Result<(), BackendError> {
+        // Phase 2 Task 2.4: account-scoped Mac→iOS forwarding. When the
+        // sender is an `AgentHost`, the destination must belong to the
+        // same account. A device-secret pair across two accounts (which
+        // can occur if a Mac was paired before login or with another
+        // account previously) must NOT route — surface it as
+        // `PeerOffline` so the existing `handle_forward` mapping returns
+        // a synthesised peer-offline JSON-RPC reply (spec §7.3 `(*)`)
+        // rather than a hard error to the sender.
+        if let Some(from_handle) = self.get(from) {
+            if from_handle.role == DeviceRole::AgentHost {
+                if let Some(to_handle) = self.get(to) {
+                    let from_account = from_handle.account_id();
+                    let to_account = to_handle.account_id();
+                    let mismatch = match (from_account, to_account) {
+                        (Some(a), Some(b)) => a != b,
+                        // Unbound account on either side means the pair
+                        // hasn't been associated with a logged-in iOS
+                        // user — treat as offline for routing purposes.
+                        _ => true,
+                    };
+                    if mismatch {
+                        tracing::debug!(
+                            target: "minos_backend::session",
+                            from = %from,
+                            to = %to,
+                            "rejecting Mac→iOS route: account_id mismatch"
+                        );
+                        return Err(BackendError::PeerOffline {
+                            peer_device_id: to.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
         let Some(handle) = self.get(to) else {
             return Err(BackendError::PeerOffline {
                 peer_device_id: to.to_string(),
@@ -357,23 +574,26 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn make_handle(id: DeviceId) -> (SessionHandle, mpsc::Receiver<ServerFrame>) {
-        // Tests default to `AgentHost` — role-gating is not exercised by the
-        // registry itself; the envelope dispatcher (step 8) tests cover it.
-        SessionHandle::new(id, DeviceRole::AgentHost)
+        // Tests default to `MobileClient` so the Mac→iOS account-scope gate
+        // added in Phase 2 Task 2.4 does not fire. The dedicated
+        // `routing_mac_to_ios_*` tests construct `AgentHost` senders
+        // explicitly and seed `account_id` to exercise that gate.
+        SessionHandle::new(id, DeviceRole::MobileClient)
     }
 
     // Small outbox variant so we can fill it deterministically in tests.
     fn make_tiny_handle(id: DeviceId, cap: usize) -> (SessionHandle, mpsc::Receiver<ServerFrame>) {
         let (tx, rx) = mpsc::channel(cap);
-        let (revoked, _revoked_rx) = watch::channel(false);
+        let (revoked, _revoked_rx) = watch::channel(None);
         (
             SessionHandle {
                 device_id: id,
                 role: DeviceRole::AgentHost,
-                paired_with: Arc::new(RwLock::new(None)),
                 outbox: tx,
                 revoked,
                 last_pong_at: Arc::new(RwLock::new(Instant::now())),
+                account_id: Arc::new(Mutex::new(None)),
+                rpc_reply_targets: Arc::new(DashMap::new()),
             },
             rx,
         )
@@ -453,19 +673,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_account_id_then_account_id_round_trips() {
+        let id = DeviceId::new();
+        let (handle, _rx) = make_handle(id);
+        assert_eq!(handle.account_id(), None);
+        handle.set_account_id("acct-42".into());
+        assert_eq!(handle.account_id(), Some("acct-42".into()));
+        // Clones share the underlying Mutex (Arc bump).
+        let clone = handle.clone();
+        clone.set_account_id("acct-43".into());
+        assert_eq!(handle.account_id(), Some("acct-43".into()));
+    }
+
+    #[tokio::test]
     async fn revoke_notifies_existing_and_late_subscribers() {
         let id = DeviceId::new();
         let (handle, _rx) = make_handle(id);
         let mut subscriber = handle.subscribe_revocation();
 
-        assert!(!*subscriber.borrow());
-        handle.revoke();
+        assert_eq!(*subscriber.borrow(), None);
+        handle.revoke(SessionRevocation::Superseded);
         subscriber.changed().await.unwrap();
-        assert!(*subscriber.borrow_and_update());
+        assert_eq!(
+            *subscriber.borrow_and_update(),
+            Some(SessionRevocation::Superseded)
+        );
 
         let late_subscriber = handle.subscribe_revocation();
-        assert!(
+        assert_eq!(
             *late_subscriber.borrow(),
+            Some(SessionRevocation::Superseded),
             "late subscribers must observe the current revoked state"
         );
     }
@@ -495,6 +732,112 @@ mod tests {
                 assert_eq!(version, 1);
                 assert_eq!(from, a);
                 assert_eq!(p, payload);
+            }
+            other => panic!("expected Forwarded, got {other:?}"),
+        }
+    }
+
+    // ── routing: account-aware Mac→iOS scoping (Task 2.4) ─────────────
+
+    #[tokio::test]
+    async fn routing_mac_to_ios_filters_by_account_id() {
+        let reg = SessionRegistry::new();
+        let mac = DeviceId::new();
+        let ios = DeviceId::new();
+        let (mac_handle, _mac_rx) = SessionHandle::new(mac, DeviceRole::AgentHost);
+        let (ios_handle, mut ios_rx) = SessionHandle::new(ios, DeviceRole::MobileClient);
+
+        mac_handle.set_account_id("acct-shared".into());
+        ios_handle.set_account_id("acct-shared".into());
+
+        reg.insert(mac_handle);
+        reg.insert(ios_handle);
+
+        // Same account → forward delivers.
+        reg.route(mac, ios, serde_json::json!({"n": 1}))
+            .await
+            .expect("matching account_id should route");
+        let frame = ios_rx.recv().await.expect("iOS receives the frame");
+        match frame {
+            Envelope::Forwarded { from, payload, .. } => {
+                assert_eq!(from, mac);
+                assert_eq!(payload["n"], 1);
+            }
+            other => panic!("expected Forwarded, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn routing_mac_to_ios_with_no_account_match_returns_not_paired() {
+        let reg = SessionRegistry::new();
+        let mac = DeviceId::new();
+        let ios = DeviceId::new();
+        let (mac_handle, _mac_rx) = SessionHandle::new(mac, DeviceRole::AgentHost);
+        let (ios_handle, mut ios_rx) = SessionHandle::new(ios, DeviceRole::MobileClient);
+
+        // Distinct accounts simulate a stale pairing or cross-account
+        // device-secret reuse. Routing must not punch through.
+        mac_handle.set_account_id("acct-mac".into());
+        ios_handle.set_account_id("acct-other".into());
+
+        reg.insert(mac_handle);
+        reg.insert(ios_handle);
+
+        let err = reg
+            .route(mac, ios, serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BackendError::PeerOffline { .. }));
+        assert!(
+            ios_rx.try_recv().is_err(),
+            "iOS must not receive a forwarded frame when accounts disagree",
+        );
+    }
+
+    #[tokio::test]
+    async fn routing_mac_to_ios_with_unbound_account_is_rejected() {
+        // Mac has no account_id (e.g. paired before any iOS login). Even
+        // if the iOS side has an account, routing is rejected — there's
+        // no positive ownership claim to base scope on.
+        let reg = SessionRegistry::new();
+        let mac = DeviceId::new();
+        let ios = DeviceId::new();
+        let (mac_handle, _mac_rx) = SessionHandle::new(mac, DeviceRole::AgentHost);
+        let (ios_handle, mut ios_rx) = SessionHandle::new(ios, DeviceRole::MobileClient);
+        ios_handle.set_account_id("acct-1".into());
+        reg.insert(mac_handle);
+        reg.insert(ios_handle);
+
+        let err = reg
+            .route(mac, ios, serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BackendError::PeerOffline { .. }));
+        assert!(ios_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn routing_ios_to_mac_does_not_apply_account_filter() {
+        // The reverse direction (iOS → Mac) is not gated; only Mac → iOS
+        // is. iOS is the authenticated side; trust flows down to the Mac.
+        let reg = SessionRegistry::new();
+        let mac = DeviceId::new();
+        let ios = DeviceId::new();
+        let (mac_handle, mut mac_rx) = SessionHandle::new(mac, DeviceRole::AgentHost);
+        let (ios_handle, _ios_rx) = SessionHandle::new(ios, DeviceRole::MobileClient);
+        mac_handle.set_account_id("acct-mac".into());
+        ios_handle.set_account_id("acct-other".into());
+        reg.insert(mac_handle);
+        reg.insert(ios_handle);
+
+        reg.route(ios, mac, serde_json::json!({"n": 9}))
+            .await
+            .expect("iOS → Mac should not be account-filtered");
+        let frame = mac_rx.recv().await.expect("Mac receives the frame");
+        match frame {
+            Envelope::Forwarded { from, payload, .. } => {
+                assert_eq!(from, ios);
+                assert_eq!(payload["n"], 9);
             }
             other => panic!("expected Forwarded, got {other:?}"),
         }
@@ -608,6 +951,83 @@ mod tests {
 
         let live = reg.get(id).expect("replacement handle still live");
         assert!(live.same_session(&current));
+    }
+
+    // ── close_account_sessions (Task 2.5) ─────────────────────────────
+
+    #[tokio::test]
+    async fn close_account_sessions_drops_other_devices_and_fires_revoke() {
+        // Two iPhones logged into the same account; closing the account's
+        // sessions with `except = a` must drop b but leave a alive, and
+        // b's revoke watch must fire so its socket loop exits.
+        let reg = SessionRegistry::new();
+        let a = DeviceId::new();
+        let b = DeviceId::new();
+        let (ha, _ra) = SessionHandle::new(a, DeviceRole::MobileClient);
+        let (hb, _rb) = SessionHandle::new(b, DeviceRole::MobileClient);
+        ha.set_account_id("acct-1".into());
+        hb.set_account_id("acct-1".into());
+        reg.insert(ha.clone());
+        reg.insert(hb.clone());
+
+        let mut b_revoked = hb.subscribe_revocation();
+        assert_eq!(*b_revoked.borrow(), None);
+
+        let closed = reg.close_account_sessions("acct-1", Some(&a.to_string()));
+        assert_eq!(closed, 1, "only b should be closed");
+
+        // Registry membership: a stays, b is gone.
+        assert!(reg.get(a).is_some(), "device a must remain live");
+        assert!(reg.get(b).is_none(), "device b must be removed");
+
+        // b's revoke watch fired.
+        b_revoked
+            .changed()
+            .await
+            .expect("close_account_sessions must trigger revoke on b");
+        assert_eq!(*b_revoked.borrow(), Some(SessionRevocation::AuthRevoked));
+    }
+
+    #[tokio::test]
+    async fn close_account_sessions_skips_other_accounts_and_mac_role() {
+        let reg = SessionRegistry::new();
+        let ios_target = DeviceId::new();
+        let ios_other_acct = DeviceId::new();
+        let mac_same_acct = DeviceId::new();
+        let (h_target, _r1) = SessionHandle::new(ios_target, DeviceRole::MobileClient);
+        let (h_other, _r2) = SessionHandle::new(ios_other_acct, DeviceRole::MobileClient);
+        let (h_mac, _r3) = SessionHandle::new(mac_same_acct, DeviceRole::AgentHost);
+        h_target.set_account_id("acct-1".into());
+        h_other.set_account_id("acct-2".into());
+        h_mac.set_account_id("acct-1".into());
+        reg.insert(h_target);
+        reg.insert(h_other);
+        reg.insert(h_mac);
+
+        let closed = reg.close_account_sessions("acct-1", None);
+        assert_eq!(
+            closed, 1,
+            "only the iOS device on acct-1 should be closed (Mac stays, other acct stays)"
+        );
+        assert!(reg.get(ios_target).is_none());
+        assert!(
+            reg.get(ios_other_acct).is_some(),
+            "different account untouched"
+        );
+        assert!(reg.get(mac_same_acct).is_some(), "Mac role untouched");
+    }
+
+    #[tokio::test]
+    async fn close_account_sessions_with_no_matches_returns_zero() {
+        let reg = SessionRegistry::new();
+        let id = DeviceId::new();
+        let (h, _r) = SessionHandle::new(id, DeviceRole::MobileClient);
+        h.set_account_id("acct-1".into());
+        reg.insert(h);
+
+        let closed = reg.close_account_sessions("acct-other", None);
+        assert_eq!(closed, 0);
+        assert!(reg.get(id).is_some());
     }
 
     // ── routing: ABA-safe eviction on reconnect race ─────────────────
@@ -749,6 +1169,40 @@ mod tests {
         reg.broadcast(frame);
     }
 
+    #[tokio::test]
+    async fn broadcast_mobile_account_targets_matching_mobile_sessions_only() {
+        let reg = SessionRegistry::new();
+
+        let (h1, mut rx1) = SessionHandle::new(DeviceId::new(), DeviceRole::MobileClient);
+        h1.set_account_id("acct-1".into());
+        reg.insert(h1);
+
+        let (h2, mut rx2) = SessionHandle::new(DeviceId::new(), DeviceRole::MobileClient);
+        h2.set_account_id("acct-2".into());
+        reg.insert(h2);
+
+        let (h3, mut rx3) = SessionHandle::new(DeviceId::new(), DeviceRole::AgentHost);
+        h3.set_account_id("acct-1".into());
+        reg.insert(h3);
+
+        let (h4, mut rx4) = SessionHandle::new(DeviceId::new(), DeviceRole::MobileClient);
+        reg.insert(h4);
+
+        let frame = Envelope::Event {
+            version: 1,
+            event: minos_protocol::EventKind::ServerShutdown,
+        };
+
+        assert_eq!(reg.broadcast_mobile_account("acct-1", frame.clone()), 1);
+        assert_eq!(rx1.recv().await.unwrap(), frame);
+        assert!(
+            rx2.try_recv().is_err(),
+            "different account must not receive"
+        );
+        assert!(rx3.try_recv().is_err(), "agent-host must not receive");
+        assert!(rx4.try_recv().is_err(), "unbound mobile must not receive");
+    }
+
     // ── Arc strong-count on session end (no leaks acceptance) ─────────
 
     #[tokio::test]
@@ -757,17 +1211,17 @@ mod tests {
         let id = DeviceId::new();
         let (h, _rx) = make_handle(id);
 
-        // Before insert: we hold the only reference to `paired_with`.
-        assert_eq!(Arc::strong_count(&h.paired_with), 1);
+        // Before insert: we hold the only reference to `account_id`.
+        assert_eq!(Arc::strong_count(&h.account_id), 1);
 
         reg.insert(h.clone());
         // After insert: we hold one, the registry's stored clone holds one.
-        assert_eq!(Arc::strong_count(&h.paired_with), 2);
+        assert_eq!(Arc::strong_count(&h.account_id), 2);
 
         // Drop our view of the inserted clone by never holding it past
         // `insert`; the registry still has its own copy.
         reg.remove(id);
         // After remove: the registry's clone is dropped, leaving only us.
-        assert_eq!(Arc::strong_count(&h.paired_with), 1);
+        assert_eq!(Arc::strong_count(&h.account_id), 1);
     }
 }

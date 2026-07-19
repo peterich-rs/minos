@@ -15,19 +15,35 @@ test-support = []
 uniffi = ["dep:uniffi", "minos-domain/uniffi"]
 
 [dependencies]
+minos-codex-protocol = { path = "../minos-codex-protocol", version = "0.1.0" }
+minos-acp-protocol = { path = "../minos-acp-protocol", version = "0.1.0" }
+minos-chat-store = { path = "../minos-chat-store", version = "0.1.0" }
 minos-domain = { path = "../minos-domain", version = "0.1.0" }
 minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
+minos-ui-protocol = { path = "../minos-ui-protocol", version = "0.1.0" }
+anyhow = { workspace = true }
+chrono = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-tungstenite = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+toml = "0.9"
 thiserror = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 url = { workspace = true }
 futures-util = { workspace = true }
 dashmap = { workspace = true }
+reqwest = { workspace = true }
+eventsource-stream = "0.2"
+base64 = { workspace = true }
 uniffi = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+# Used by `process.rs` and `manager::shutdown_instances` for `setpgid` (place
+# every codex child in its own process group) and `kill(-pgid, sig)` (signal
+# the entire group on shutdown so codex's subprocesses don't survive Minos).
+libc = "0.2"
 
 [dev-dependencies]
 # Self-reference enables the `test-support` feature for this crate's own

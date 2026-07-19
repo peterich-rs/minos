@@ -3,8 +3,12 @@
 //! callers and tests; `minos-mobile` now uses the envelope/local-RPC path.
 
 use crate::{
-    HealthResponse, ListClisResponse, PairRequest, PairResponse, SendUserMessageRequest,
-    StartAgentRequest, StartAgentResponse,
+    ApprovalDecisionRequest, CloseThreadRequest, GetThreadParams, GetThreadResponse,
+    HealthResponse, InterruptThreadRequest, ListClisResponse, ListHostSkillsRequest,
+    ListHostSkillsResponse, ListHostWorkspacesRequest, ListHostWorkspacesResponse,
+    ListThreadsParams, ListThreadsResponse, PairRequest, PairResponse,
+    RespondOpencodeQuestionRequest, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use jsonrpsee::proc_macros::rpc;
 
@@ -23,16 +27,39 @@ pub trait MinosRpc {
     #[method(name = "list_clis")]
     async fn list_clis(&self) -> jsonrpsee::core::RpcResult<ListClisResponse>;
 
-    /// Launch an agent session. Errors with `AgentAlreadyRunning` if one is
-    /// already active. Response carries the `session_id` consumers must pass
-    /// to `send_user_message`. See spec §5.2.
+    /// Snapshot of host-side skills resolved for the given workspace.
+    #[method(name = "list_host_skills")]
+    async fn list_host_skills(
+        &self,
+        req: ListHostSkillsRequest,
+    ) -> jsonrpsee::core::RpcResult<ListHostSkillsResponse>;
+
+    /// Snapshot of host-side workspace directories under the user's home.
+    #[method(name = "list_host_workspaces")]
+    async fn list_host_workspaces(
+        &self,
+        req: ListHostWorkspacesRequest,
+    ) -> jsonrpsee::core::RpcResult<ListHostWorkspacesResponse>;
+
+    /// Enable or disable one host-side skill by path.
+    #[method(name = "write_host_skill_config")]
+    async fn write_host_skill_config(
+        &self,
+        req: WriteHostSkillConfigRequest,
+    ) -> jsonrpsee::core::RpcResult<WriteHostSkillConfigResponse>;
+
+    /// Launch (or join) an agent session for the given `workspace`. Multi-
+    /// session: subsequent calls with the same `workspace` reuse the existing
+    /// codex app-server child while distinct workspaces each spawn their own
+    /// instance. Response carries the `session_id` consumers must pass to
+    /// `send_user_message` / `interrupt_thread` / `close_thread`. See spec §5.2.
     #[method(name = "start_agent")]
     async fn start_agent(
         &self,
         req: StartAgentRequest,
     ) -> jsonrpsee::core::RpcResult<StartAgentResponse>;
 
-    /// Send user text into the active session. Fire-and-observe: streaming
+    /// Send user text into the named thread. Fire-and-observe: streaming
     /// output arrives via the backend's ingest pipeline (plan §B6), not as
     /// this RPC's response. See spec §5.2.
     #[method(name = "send_user_message")]
@@ -41,8 +68,44 @@ pub trait MinosRpc {
         req: SendUserMessageRequest,
     ) -> jsonrpsee::core::RpcResult<()>;
 
-    /// Stop the active session. Idempotent when no session is running.
-    /// See spec §5.2.
-    #[method(name = "stop_agent")]
-    async fn stop_agent(&self) -> jsonrpsee::core::RpcResult<()>;
+    /// Resolve one pending approval request by its original `request_id`.
+    #[method(name = "approval_decision")]
+    async fn approval_decision(
+        &self,
+        req: ApprovalDecisionRequest,
+    ) -> jsonrpsee::core::RpcResult<()>;
+
+    /// Resolve one pending opencode question request.
+    #[method(name = "respond_opencode_question")]
+    async fn respond_opencode_question(
+        &self,
+        req: RespondOpencodeQuestionRequest,
+    ) -> jsonrpsee::core::RpcResult<()>;
+
+    /// Pause an in-flight turn on the named thread. Best-effort: the codex
+    /// app-server may have already finished the turn — that is fine, the
+    /// thread transitions to `Suspended { UserInterrupt }` either way.
+    #[method(name = "interrupt_thread")]
+    async fn interrupt_thread(&self, req: InterruptThreadRequest)
+        -> jsonrpsee::core::RpcResult<()>;
+
+    /// Permanently close the named thread. Idempotent — re-closing a closed
+    /// thread is a no-op.
+    #[method(name = "close_thread")]
+    async fn close_thread(&self, req: CloseThreadRequest) -> jsonrpsee::core::RpcResult<()>;
+
+    /// Paginated history list. Keyed by `last_activity_at` desc.
+    #[method(name = "list_threads")]
+    async fn list_threads(
+        &self,
+        req: ListThreadsParams,
+    ) -> jsonrpsee::core::RpcResult<ListThreadsResponse>;
+
+    /// Snapshot one thread's metadata + live state (intended for the chat
+    /// detail screen first paint).
+    #[method(name = "get_thread")]
+    async fn get_thread(
+        &self,
+        req: GetThreadParams,
+    ) -> jsonrpsee::core::RpcResult<GetThreadResponse>;
 }

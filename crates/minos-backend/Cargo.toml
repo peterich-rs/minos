@@ -21,11 +21,27 @@ sqlx = { workspace = true }
 
 # auth
 argon2 = { workspace = true }
+jsonwebtoken = { workspace = true }
 sha2 = { workspace = true }
 subtle = { workspace = true }
+ed25519-dalek = { workspace = true }
+base64 = { workspace = true }
 
 # concurrent state
 dashmap = { workspace = true }
+moka = { version = "0.12", features = ["sync"] }
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "cluster-async"] }
+deadpool-redis = "0.18"
+
+# observability / telemetry
+opentelemetry = "0.27"
+opentelemetry-otlp = { version = "0.27", features = ["tonic"] }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+tracing-opentelemetry = "0.28"
+
+# api schema
+utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
+schemars = "0.8"
 
 # cli / config
 clap = { workspace = true }
@@ -47,23 +63,47 @@ chrono = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 mars-xlog = { workspace = true }
+tower-http = { version = "0.6", features = ["cors", "request-id", "trace"] }
 
 # workspace crates
 minos-domain = { path = "../minos-domain", version = "0.1.0" }
 minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
 minos-ui-protocol = { path = "../minos-ui-protocol", version = "0.1.0" }
+metrics = "0.24.5"
+metrics-exporter-prometheus = "0.18.3"
 
 [dev-dependencies]
+# Self-reference enables the `test-support` feature for this crate's own
+# integration tests under `tests/` so they can reach the `pub mod
+# test_support` factories. Cargo allows a crate to appear in its own
+# `[dev-dependencies]` exactly so features can be toggled for tests.
+minos-backend = { path = ".", version = "0.1.0", features = ["test-support"] }
 tokio-test = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 rstest = { workspace = true }
 proptest = { workspace = true }
 tokio-tungstenite = { workspace = true }
-# HTTP integration-test helpers: simple GET helper for /health builds a
+# HTTP integration-test helpers: simple GET helper for the health routes builds a
 # raw TCP request; `url` parses the ws:// / http:// endpoints handed
 # back from `TcpListener::bind("127.0.0.1:0")`.
 url = { workspace = true }
+# `tower::ServiceExt::oneshot` drives the axum `Router` directly in
+# `tests/v1_*.rs` without binding a TCP listener, and `http-body-util`
+# collects the response body into bytes for JSON assertions.
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[features]
+default = ["backend-sqlite", "backend-postgres"]
+backend-sqlite = []
+backend-postgres = []
+# Re-exports `test_support::*` modules (`store::test_support`,
+# `http::test_support`) as `pub` so integration tests in sibling crates
+# (notably `minos-mobile`'s dev-deps in Phase B) can build a backend
+# state with an in-memory pool. No production code path enables it; the
+# feature is purely a visibility toggle.
+test-support = []
 
 [lints]
 workspace = true

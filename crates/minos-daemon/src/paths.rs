@@ -1,28 +1,174 @@
+use std::fs;
 use std::path::PathBuf;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use minos_domain::MinosError;
+
+pub fn user_home_dir() -> Result<PathBuf, MinosError> {
+    for value in [std::env::var_os("HOME"), std::env::var_os("USERPROFILE")] {
+        if let Some(path) = value.filter(|value| !value.is_empty()) {
+            return Ok(PathBuf::from(path));
+        }
+    }
+
+    let home_drive = std::env::var_os("HOMEDRIVE").filter(|value| !value.is_empty());
+    let home_path = std::env::var_os("HOMEPATH").filter(|value| !value.is_empty());
+    if let (Some(drive), Some(path)) = (home_drive, home_path) {
+        let mut joined = PathBuf::from(drive);
+        joined.push(path);
+        return Ok(joined);
+    }
+
+    Err(MinosError::StoreIo {
+        path: "$HOME/$USERPROFILE".into(),
+        message: "home directory env vars are not set".into(),
+    })
+}
 
 pub fn minos_home() -> Result<PathBuf, MinosError> {
     if let Ok(path) = std::env::var("MINOS_HOME") {
         return Ok(PathBuf::from(path));
     }
-
-    let home = std::env::var("HOME").map_err(|_| MinosError::StoreIo {
-        path: "$HOME".into(),
-        message: "HOME env var not set".into(),
-    })?;
-    Ok(PathBuf::from(home).join(".minos"))
+    Ok(user_home_dir()?.join(".minos"))
 }
+
+fn ensure_subdir(name: &str) -> Result<PathBuf, MinosError> {
+    let p = minos_home()?.join(name);
+    fs::create_dir_all(&p).map_err(|e| MinosError::StoreIo {
+        path: p.display().to_string(),
+        message: e.to_string(),
+    })?;
+    Ok(p)
+}
+
+pub fn state_dir() -> Result<PathBuf, MinosError> {
+    ensure_subdir("state")
+}
+
+pub fn secrets_dir() -> Result<PathBuf, MinosError> {
+    let p = ensure_subdir("secrets")?;
+    #[cfg(unix)]
+    {
+        let mut perm = fs::metadata(&p)
+            .map_err(|e| MinosError::StoreIo {
+                path: p.display().to_string(),
+                message: e.to_string(),
+            })?
+            .permissions();
+        perm.set_mode(0o700);
+        fs::set_permissions(&p, perm).map_err(|e| MinosError::StoreIo {
+            path: p.display().to_string(),
+            message: e.to_string(),
+        })?;
+    }
+    Ok(p)
+}
+
+pub fn db_dir() -> Result<PathBuf, MinosError> {
+    ensure_subdir("db")
+}
+
+pub fn db_path() -> Result<PathBuf, MinosError> {
+    Ok(db_dir()?.join("minos.sqlite"))
+}
+
+pub fn logs_dir() -> Result<PathBuf, MinosError> {
+    ensure_subdir("logs")
+}
+
+pub fn workspaces_dir() -> Result<PathBuf, MinosError> {
+    ensure_subdir("workspaces")
+}
+
+pub fn run_dir() -> Result<PathBuf, MinosError> {
+    ensure_subdir("run")
+}
+
+/// Process-global mutex serializing every test that mutates `MINOS_HOME`.
+/// Both `paths::tests` and `logging::tests` (which set `MINOS_HOME` to a
+/// tempdir to redirect log paths) must acquire this before `set_var` so the
+/// two modules don't race when run as one cargo-test binary.
+#[cfg(test)]
+pub(crate) static MINOS_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        MINOS_HOME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     #[test]
     fn minos_home_prefers_env_override() {
+        let _g = lock();
         std::env::set_var("MINOS_HOME", "/tmp/minos-home-test");
         let resolved = minos_home().unwrap();
         assert_eq!(resolved, PathBuf::from("/tmp/minos-home-test"));
         std::env::remove_var("MINOS_HOME");
+    }
+
+    #[test]
+    fn user_home_dir_prefers_home_env() {
+        let _g = lock();
+        std::env::set_var("HOME", "/tmp/minos-home");
+        std::env::remove_var("USERPROFILE");
+        std::env::remove_var("HOMEDRIVE");
+        std::env::remove_var("HOMEPATH");
+        let resolved = user_home_dir().unwrap();
+        assert_eq!(resolved, PathBuf::from("/tmp/minos-home"));
+        std::env::remove_var("HOME");
+    }
+
+    #[test]
+    fn user_home_dir_falls_back_to_userprofile() {
+        let _g = lock();
+        std::env::remove_var("HOME");
+        std::env::set_var("USERPROFILE", "/tmp/minos-userprofile");
+        std::env::remove_var("HOMEDRIVE");
+        std::env::remove_var("HOMEPATH");
+        let resolved = user_home_dir().unwrap();
+        assert_eq!(resolved, PathBuf::from("/tmp/minos-userprofile"));
+        std::env::remove_var("USERPROFILE");
+    }
+
+    #[test]
+    fn state_dir_is_under_minos_home() {
+        let _g = lock();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("MINOS_HOME", tmp.path());
+        let s = state_dir().unwrap();
+        assert_eq!(s, tmp.path().join("state"));
+        assert!(s.is_dir());
+        std::env::remove_var("MINOS_HOME");
+    }
+
+    #[test]
+    fn db_path_is_under_db_dir() {
+        let _g = lock();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("MINOS_HOME", tmp.path());
+        let p = db_path().unwrap();
+        assert_eq!(p, tmp.path().join("db").join("minos.sqlite"));
+        std::env::remove_var("MINOS_HOME");
+    }
+
+    #[test]
+    fn secrets_dir_has_owner_only_perms() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _g = lock();
+            let tmp = tempfile::tempdir().unwrap();
+            std::env::set_var("MINOS_HOME", tmp.path());
+            let s = secrets_dir().unwrap();
+            let mode = std::fs::metadata(&s).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700);
+            std::env::remove_var("MINOS_HOME");
+        }
     }
 }

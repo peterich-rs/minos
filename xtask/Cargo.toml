@@ -9,10 +9,21 @@ publish = false
 [dependencies]
 anyhow = { workspace = true }
 clap = { version = "4", features = ["derive"] }
+fs2 = "0.4"
 minos-agent-runtime = { path = "../crates/minos-agent-runtime", version = "0.1.0" }
+minos-backend = { path = "../crates/minos-backend", version = "0.1.0" }
 minos-domain = { path = "../crates/minos-domain", version = "0.1.0" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+typify = "0.4"
+prettyplease = "0.2"
+syn = { version = "2", features = ["full", "parsing"] }
+quote = "1"
+proc-macro2 = "1"
+schemars = "0.8"
+regex = "1"
 
 [lints]
 workspace = true

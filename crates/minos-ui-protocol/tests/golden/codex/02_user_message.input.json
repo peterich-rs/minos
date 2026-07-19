@@ -1,3 +1,6 @@
 [
-  {"method":"item/started","params":{"itemId":"i1","role":"user","startedAtMs":1714000001000}}
+  {"method":"item/started","params":{
+    "item":{"type":"userMessage","id":"u1","content":[{"type":"text","text":"hello"}]},
+    "threadId":"thr_fixture","turnId":"t1"
+  }}
 ]

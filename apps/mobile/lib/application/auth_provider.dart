@@ -1,0 +1,96 @@
+import 'dart:async';
+
+import 'package:minos/data/repositories/auth_repository.dart';
+import 'package:minos/domain/auth_state.dart';
+import 'package:minos/src/rust/api/minos.dart'
+    show
+        AuthStateFrame,
+        AuthStateFrame_Authenticated,
+        AuthStateFrame_RefreshFailed,
+        AuthStateFrame_Refreshing,
+        AuthStateFrame_Unauthenticated;
+import 'package:riverpod_annotation/riverpod_annotation.dart';
+
+part 'auth_provider.g.dart';
+
+/// Mirrors the Rust-side `AuthState` watch-channel into the Dart UI tier.
+///
+/// The Rust forwarder (`subscribe_auth_state`) emits the current cached
+/// frame immediately on subscribe, then every transition. The provider
+/// returns [AuthBootstrapping] from `build()`; the very first frame from
+/// the stream replaces it on the next microtask. Components watching
+/// this provider should treat [AuthBootstrapping] as "show splash".
+///
+/// Phase 8.9: on the first `Authenticated` transition, the controller
+/// also kicks the Rust WS reconnect path via `resumePersistedSession()`
+/// so the chat surface lights up without a separate trigger.
+///
+/// Phase 11.3 + ADR-0020 — cross-account migration sequence:
+///   1. `register` / `login` go through [MinosCore.register] /
+///      [MinosCore.login], which compare the freshly minted
+///      `account_id` against the prior persisted snapshot.
+///   2. If the prior `account_id` differs, `MinosCore` clears the
+///      cached peer display name so a stale label from the previous
+///      account doesn't briefly flash in the partners list. The
+///      server-side `account_mac_pairings` rows are already
+///      account-scoped, so the next `listPairedHosts` sync naturally
+///      yields the new account's Macs.
+///   3. The first `Authenticated` frame fires; this controller calls
+///      `resumePersistedSession()` which spins up the WS for the new
+///      account.
+///   4. The Partners tab calls `listPairedHosts` and shows whatever
+///      Macs are paired to the new account (possibly empty → the user
+///      taps "Add partner" to scan a QR).
+@Riverpod(keepAlive: true)
+class AuthController extends _$AuthController {
+  StreamSubscription<AuthStateFrame>? _sub;
+  bool _wsResumed = false;
+
+  AuthRepository get _repository => ref.read(authRepositoryProvider);
+
+  @override
+  AuthState build() {
+    _sub = ref.watch(authRepositoryProvider).authStates.listen(_onFrame);
+    ref.onDispose(() => _sub?.cancel());
+    return const AuthBootstrapping();
+  }
+
+  void _onFrame(AuthStateFrame frame) {
+    state = switch (frame) {
+      AuthStateFrame_Unauthenticated() => const AuthUnauthenticated(),
+      AuthStateFrame_Authenticated(:final account) => AuthAuthenticated(
+        account,
+      ),
+      AuthStateFrame_Refreshing() => const AuthRefreshing(),
+      AuthStateFrame_RefreshFailed(:final error) => AuthRefreshFailed(error),
+    };
+    if (frame is AuthStateFrame_Authenticated && !_wsResumed) {
+      _wsResumed = true;
+      // Best-effort: a missing pairing snapshot or an unreachable Mac
+      // surfaces on connectionStateProvider — don't block the auth flow.
+      unawaited(_repository.resumePersistedSession().catchError((_) {}));
+    } else if (frame is AuthStateFrame_Unauthenticated) {
+      _wsResumed = false;
+    }
+  }
+
+  /// Register a fresh account. Errors propagate; the state itself is
+  /// driven exclusively from the Rust auth-state stream so the UI sees
+  /// the same transitions whether the trigger was UI-initiated or
+  /// background refresh.
+  Future<void> register(String email, String password) async {
+    await _repository.register(email, password);
+  }
+
+  /// Log into an existing account. See [register] for state-update
+  /// semantics.
+  Future<void> login(String email, String password) async {
+    await _repository.login(email, password);
+  }
+
+  /// Best-effort logout: revoke server-side, wipe local secrets, and let
+  /// the Rust core flip [authStates] to `Unauthenticated`.
+  Future<void> logout() async {
+    await _repository.logout();
+  }
+}

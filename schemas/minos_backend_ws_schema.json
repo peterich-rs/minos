@@ -1,0 +1,509 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Generated websocket contract for the Minos backend relay envelope.",
+  "examples": {
+    "event_agent_error": {
+      "code": "peer_offline",
+      "kind": "event",
+      "message": "host is offline",
+      "session_id": "thread-abc12",
+      "type": "agent_error",
+      "v": 1
+    },
+    "event_approval_request": {
+      "kind": "event",
+      "method": "exec_command",
+      "params": {
+        "command": [
+          "cargo",
+          "test"
+        ],
+        "cwd": "/Users/fan/dev/minos"
+      },
+      "request_id": "req_123",
+      "thread_id": "thr_approval",
+      "timeout_ms": 120000,
+      "turn_id": "turn_123",
+      "type": "approval_request",
+      "v": 1
+    },
+    "event_approval_timeout": {
+      "kind": "event",
+      "reason": "timeout",
+      "request_id": "req_123",
+      "thread_id": "thr_approval",
+      "type": "approval_timeout",
+      "v": 1
+    },
+    "event_paired": {
+      "kind": "event",
+      "peer_device_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "peer_name": "Mac-mini",
+      "type": "paired",
+      "v": 1,
+      "your_device_secret": "Sg3AfM5V0_3Vp1IvGxPzWwXhE-3HXfLQyIJzj6TZAmE"
+    },
+    "event_peer_offline": {
+      "kind": "event",
+      "peer_device_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "type": "peer_offline",
+      "v": 1
+    },
+    "event_peer_online": {
+      "kind": "event",
+      "peer_device_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "type": "peer_online",
+      "v": 1
+    },
+    "event_server_shutdown": {
+      "kind": "event",
+      "type": "server_shutdown",
+      "v": 1
+    },
+    "event_ui_event_message": {
+      "kind": "event",
+      "seq": 42,
+      "thread_id": "thr_abc",
+      "ts_ms": 1714000000000,
+      "type": "ui_event_message",
+      "ui": {
+        "kind": "text_delta",
+        "message_id": "msg_def",
+        "text": {
+          "kind": "inline",
+          "text": "Hi"
+        }
+      },
+      "v": 1
+    },
+    "event_unpaired": {
+      "kind": "event",
+      "type": "unpaired",
+      "v": 1
+    },
+    "forward": {
+      "kind": "forward",
+      "payload": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "method": "list_clis"
+      },
+      "target_device_id": "11111111-2222-3333-4444-555555555555",
+      "v": 1
+    },
+    "forwarded": {
+      "from": "11111111-2222-3333-4444-555555555555",
+      "kind": "forwarded",
+      "payload": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": []
+      },
+      "v": 1
+    },
+    "ingest": {
+      "agent": "codex",
+      "kind": "ingest",
+      "payload": {
+        "method": "item/agentMessage/delta",
+        "params": {
+          "delta": "Hi"
+        }
+      },
+      "seq": 42,
+      "thread_id": "thr_abc",
+      "ts_ms": 1714000000000,
+      "v": 1
+    }
+  },
+  "gateways": [
+    {
+      "auth": "realtime_ticket",
+      "example_names": [
+        "event_agent_error",
+        "event_approval_request",
+        "event_approval_timeout",
+        "event_paired",
+        "event_peer_offline",
+        "event_peer_online",
+        "event_server_shutdown",
+        "event_ui_event_message",
+        "event_unpaired",
+        "forward",
+        "forwarded",
+        "ingest"
+      ],
+      "frame_schema_ref": "#/schemas/Envelope",
+      "path": "/ws/client",
+      "probe_path": "/ws/client",
+      "surface": "client_gateway"
+    },
+    {
+      "auth": "realtime_ticket",
+      "example_names": [
+        "event_agent_error",
+        "event_approval_request",
+        "event_approval_timeout",
+        "event_paired",
+        "event_peer_offline",
+        "event_peer_online",
+        "event_server_shutdown",
+        "event_ui_event_message",
+        "event_unpaired",
+        "forward",
+        "forwarded",
+        "ingest"
+      ],
+      "frame_schema_ref": "#/schemas/Envelope",
+      "path": "/ws/host",
+      "probe_path": "/ws/host",
+      "surface": "host_gateway"
+    }
+  ],
+  "schemas": {
+    "Envelope": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "forward"
+            },
+            "payload": true,
+            "target_device_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "kind",
+            "v",
+            "target_device_id",
+            "payload"
+          ],
+          "title": "ForwardEnvelope",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "from": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "kind": {
+              "const": "forwarded"
+            },
+            "payload": true,
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "kind",
+            "v",
+            "from",
+            "payload"
+          ],
+          "title": "ForwardedEnvelope",
+          "type": "object"
+        },
+        {
+          "allOf": [
+            {
+              "properties": {
+                "kind": {
+                  "const": "event"
+                },
+                "v": {
+                  "const": 1
+                }
+              },
+              "required": [
+                "kind",
+                "v"
+              ],
+              "type": "object"
+            },
+            {
+              "$ref": "#/schemas/EventKind"
+            }
+          ],
+          "title": "EventEnvelope"
+        },
+        {
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "ingest"
+            },
+            "payload": true,
+            "seq": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "thread_id": {
+              "type": "string"
+            },
+            "ts_ms": {
+              "type": "integer"
+            },
+            "v": {
+              "const": 1
+            }
+          },
+          "required": [
+            "kind",
+            "v",
+            "agent",
+            "thread_id",
+            "seq",
+            "payload",
+            "ts_ms"
+          ],
+          "title": "IngestEnvelope",
+          "type": "object"
+        }
+      ]
+    },
+    "EventKind": {
+      "oneOf": [
+        {
+          "properties": {
+            "peer_device_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "peer_name": {
+              "type": "string"
+            },
+            "type": {
+              "const": "paired"
+            },
+            "your_device_secret": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "peer_device_id",
+            "peer_name"
+          ],
+          "title": "PairedEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "peer_device_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": {
+              "const": "peer_online"
+            }
+          },
+          "required": [
+            "type",
+            "peer_device_id"
+          ],
+          "title": "PeerOnlineEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "peer_device_id": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": {
+              "const": "peer_offline"
+            }
+          },
+          "required": [
+            "type",
+            "peer_device_id"
+          ],
+          "title": "PeerOfflineEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "unpaired"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "UnpairedEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "server_shutdown"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ServerShutdownEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "seq": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "thread_id": {
+              "type": "string"
+            },
+            "ts_ms": {
+              "type": "integer"
+            },
+            "type": {
+              "const": "ui_event_message"
+            },
+            "ui": true
+          },
+          "required": [
+            "type",
+            "thread_id",
+            "seq",
+            "ui",
+            "ts_ms"
+          ],
+          "title": "UiEventMessageEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "type": "string"
+            },
+            "params": true,
+            "request_id": {
+              "type": "string"
+            },
+            "thread_id": {
+              "type": "string"
+            },
+            "timeout_ms": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "turn_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "approval_request"
+            }
+          },
+          "required": [
+            "type",
+            "thread_id",
+            "turn_id",
+            "request_id",
+            "method",
+            "params",
+            "timeout_ms"
+          ],
+          "title": "ApprovalRequestEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "thread_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "approval_timeout"
+            }
+          },
+          "required": [
+            "type",
+            "thread_id",
+            "request_id",
+            "reason"
+          ],
+          "title": "ApprovalTimeoutEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "agent_error"
+            }
+          },
+          "required": [
+            "type",
+            "code",
+            "message"
+          ],
+          "title": "AgentErrorEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "conversation_id": {
+              "type": "string"
+            },
+            "message": true,
+            "type": {
+              "const": "social_message"
+            }
+          },
+          "required": [
+            "type",
+            "conversation_id",
+            "message"
+          ],
+          "title": "SocialMessageEvent",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "last_seq_per_thread": {
+              "additionalProperties": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            "type": {
+              "const": "ingest_checkpoint"
+            }
+          },
+          "required": [
+            "type",
+            "last_seq_per_thread"
+          ],
+          "title": "IngestCheckpointEvent",
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "service": "minos-backend",
+  "transport": "websocket",
+  "version": "0.1.0"
+}

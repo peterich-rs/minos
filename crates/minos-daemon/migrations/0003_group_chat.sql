@@ -1,0 +1,3 @@
+-- No-op in the latest-only schema.
+-- Conversation messages live in 0001_initial.chat_messages. The teamwork/MCP
+-- delegation store remains in minos-chat-store, not this daemon database.

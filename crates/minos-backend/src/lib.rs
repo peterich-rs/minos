@@ -10,19 +10,36 @@
 //!   per-peer outboxes (step 7; consumed by the WS dispatcher in step 8).
 //! - `envelope` — WebSocket envelope dispatcher + local-RPC handlers
 //!   (step 8; consumed by the axum upgrade handler in step 9).
-//! - `http` — axum router + `/health` + `/devices` WS upgrade handshake
+//! - `http` — axum router + `/health/*` + `/ws/client|host` gateways
 //!   (step 9; consumed by `main.rs` in step 10).
 //!
 //! The binary entry point lives in `src/main.rs` and composes the above
 //! modules into a running backend (step 10).
 
 #![forbid(unsafe_code)]
+#![cfg_attr(test, allow(deprecated))]
 
+pub mod agent_sessions;
+pub mod app;
+pub mod approvals;
+pub mod auth;
 pub mod config;
+pub mod conversations;
 pub mod envelope;
 pub mod error;
+pub mod friends;
+pub mod host_commands;
 pub mod http;
 pub mod ingest;
+pub mod jobs;
+pub mod notifications;
 pub mod pairing;
+pub mod profiles;
+pub mod project;
+pub mod realtime;
+pub mod runtime;
 pub mod session;
+#[deprecated(note = "Use profiles/friends/conversations modules directly")]
+pub mod social;
 pub mod store;
+pub mod telemetry;

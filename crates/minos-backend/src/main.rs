@@ -8,7 +8,7 @@
 //! ```
 //!
 //! The binary logs `migrations applied` and `listening` on boot, answers
-//! `GET /health` with 200, and tears down cleanly on SIGINT/SIGTERM.
+//! `GET /health/ready` with 200, and tears down cleanly on SIGINT/SIGTERM.
 //!
 //! ## Tracing
 //!
@@ -26,8 +26,8 @@
 //! 500ms so clients can drain. Only after `axum::serve` returns — which
 //! signals both that the listener has stopped accepting new connections
 //! AND that in-flight handlers have finished — do we abort the token GC
-//! task and close the SQLite pool. Closing the pool earlier would race
-//! WS handlers still issuing queries and surface `PoolClosed` errors.
+//! task and close the backing SQL pool. Closing the store earlier would race
+//! handlers still issuing queries and surface `PoolClosed` errors.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,22 +36,20 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use mars_xlog::{LogLevel, Xlog, XlogConfig, XlogLayer, XlogLayerConfig};
 use minos_backend::{
-    config::Config,
-    http::{self, BackendState},
-    pairing::PairingService,
-    session::SessionRegistry,
+    config::{Config, StorageMode},
+    http,
+    runtime::RuntimeShell,
     store,
 };
 use minos_protocol::{Envelope, EventKind};
-use sqlx::SqlitePool;
 use tokio::signal;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-/// Token GC cadence (plan §10 step 6).
-const TOKEN_GC_INTERVAL: Duration = Duration::from_mins(1);
-
-/// Drain window after broadcasting `ServerShutdown` (plan §10 step 8).
+/// Default drain window after broadcasting `ServerShutdown` (plan §10 step 8).
 const SHUTDOWN_DRAIN: Duration = Duration::from_millis(500);
+
+/// Default shutdown timeout if `MINOS_SHUTDOWN_TIMEOUT_SECS` is not set.
+const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
 
 /// xlog file prefix. Spec §9.4 reserves `backend` for the server process.
 const XLOG_NAME_PREFIX: &str = "backend";
@@ -69,68 +67,139 @@ async fn main() -> Result<()> {
 
     init_tracing(&cfg).context("init tracing")?;
 
-    let db_url = format!("sqlite://{}?mode=rwc", cfg.db.display());
-    tracing::info!(db_url = %db_url, "connecting to sqlite");
-    let pool = store::connect(&db_url)
-        .await
-        .with_context(|| format!("store::connect {}", cfg.db.display()))?;
-    tracing::info!("migrations applied");
+    let store = match cfg.storage_mode {
+        StorageMode::Sqlite => {
+            let db_url = cfg.resolved_database_url();
+            tracing::info!(db_url = %db_url, "connecting to sqlite");
+            let pool = store::connect_sqlite_with_options(&db_url, cfg.db_max_connections)
+                .await
+                .with_context(|| format!("store::connect {db_url}"))?;
+            tracing::info!(
+                runtime_mode = %cfg.runtime_mode.as_str(),
+                storage_mode = %cfg.storage_mode.as_str(),
+                "migrations applied"
+            );
 
-    if cfg.exit_after_migrate {
-        tracing::info!("--exit-after-migrate set; exiting after migrations");
-        pool.close().await;
-        return Ok(());
+            if cfg.exit_after_migrate {
+                tracing::info!("--exit-after-migrate set; exiting after migrations");
+                pool.close().await;
+                return Ok(());
+            }
+
+            pool.into()
+        }
+        StorageMode::ExternalSql => {
+            let db_url = cfg.resolved_database_url();
+            tracing::info!(
+                max_connections = cfg.db_max_connections,
+                "preflighting external postgres store"
+            );
+            let (store, preflight) =
+                store::connect_external_sql_with_options(&db_url, cfg.db_max_connections)
+                    .await
+                    .context("external_sql::connect")?;
+            tracing::info!(
+                driver = %preflight.driver,
+                database = %preflight.database,
+                server_version = %preflight.server_version,
+                runtime_mode = %cfg.runtime_mode.as_str(),
+                storage_mode = %cfg.storage_mode.as_str(),
+                "external SQL preflight complete"
+            );
+
+            if cfg.exit_after_migrate {
+                tracing::info!("--exit-after-migrate set; exiting after external SQL preflight");
+                store.close().await;
+                return Ok(());
+            }
+
+            tracing::warn!(
+                driver = %preflight.driver,
+                database = %preflight.database,
+                "external SQL runtime is live; any remaining SQLite-only behavior must now be enforced at the specific handler or store boundary"
+            );
+            store
+        }
+    };
+
+    // `cfg.validate()` already enforced presence + length above. Unwrap is
+    // load-bearing here: a missing secret should never reach BackendState
+    // construction, and panicking surfaces the bug loudly in dev runs that
+    // somehow skipped validation.
+    let jwt_secret = cfg
+        .jwt_secret
+        .clone()
+        .expect("MINOS_JWT_SECRET must be set after Config::validate");
+    let shell = RuntimeShell::from_config(
+        &cfg,
+        store,
+        jwt_secret,
+        http::parse_cors_origins(&cfg.cors_origins),
+    )
+    .context("compose runtime shell")?;
+    let instance_id = shell.app.instance_id.clone();
+
+    if cfg.runtime_mode.serves_http() {
+        let listener = tokio::net::TcpListener::bind(cfg.listen)
+            .await
+            .with_context(|| format!("bind {}", cfg.listen))?;
+        let local_addr = listener.local_addr().context("local_addr")?;
+        tracing::info!(
+            addr = %local_addr,
+            version = %env!("CARGO_PKG_VERSION"),
+            instance_id = %instance_id,
+            runtime_mode = %cfg.runtime_mode.as_str(),
+            storage_mode = %cfg.storage_mode.as_str(),
+            "listening"
+        );
+
+        let router = http::router(shell.backend_state());
+
+        // Phase 1 of teardown runs inside `with_graceful_shutdown`: await a
+        // signal, broadcast `ServerShutdown`, and sleep the drain window.
+        // Axum only stops the listener + waits for in-flight handlers AFTER
+        // this future resolves, so everything that must happen while handlers
+        // are still live (broadcast + drain) belongs here.
+        let registry_for_shutdown = Arc::clone(&shell.app.registry);
+        let shutdown_timeout = Duration::from_secs(
+            std::env::var("MINOS_SHUTDOWN_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(DEFAULT_SHUTDOWN_TIMEOUT_SECS),
+        );
+        tracing::info!(
+            shutdown_timeout_secs = shutdown_timeout.as_secs(),
+            "graceful shutdown configured"
+        );
+        axum::serve(listener, router)
+            .with_graceful_shutdown(async move {
+                wait_for_signal().await;
+                tracing::info!("broadcasting ServerShutdown to all sessions");
+                registry_for_shutdown.broadcast(Envelope::Event {
+                    version: 1,
+                    event: EventKind::ServerShutdown,
+                });
+                // Use the configured shutdown timeout for the drain window,
+                // capped at the configured value.
+                let drain = SHUTDOWN_DRAIN.min(shutdown_timeout);
+                tokio::time::sleep(drain).await;
+            })
+            .await
+            .context("axum::serve")?;
+    } else {
+        tracing::info!(
+            instance_id = %instance_id,
+            runtime_mode = %cfg.runtime_mode.as_str(),
+            storage_mode = %cfg.storage_mode.as_str(),
+            "runtime shell running without HTTP listener"
+        );
+        wait_for_signal().await;
     }
-
-    let registry = Arc::new(SessionRegistry::new());
-    let pairing = Arc::new(PairingService::new(pool.clone()));
-    let mut state = BackendState::new(
-        registry.clone(),
-        pairing.clone(),
-        pool.clone(),
-        cfg.token_ttl(),
-    );
-    // Override the default public-cfg with env-sourced values from cfg.
-    state.public_cfg = Arc::new(crate::http::BackendPublicConfig {
-        public_url: cfg.public_url.clone(),
-        cf_access_client_id: cfg.cf_access_client_id.clone(),
-        cf_access_client_secret: cfg.cf_access_client_secret.clone(),
-    });
-
-    let gc_task = spawn_token_gc(pool.clone());
-
-    let listener = tokio::net::TcpListener::bind(cfg.listen)
-        .await
-        .with_context(|| format!("bind {}", cfg.listen))?;
-    let local_addr = listener.local_addr().context("local_addr")?;
-    tracing::info!(addr = %local_addr, version = %state.version, "listening");
-
-    let router = http::router(state);
-
-    // Phase 1 of teardown runs inside `with_graceful_shutdown`: await a
-    // signal, broadcast `ServerShutdown`, and sleep the drain window.
-    // Axum only stops the listener + waits for in-flight handlers AFTER
-    // this future resolves, so everything that must happen while handlers
-    // are still live (broadcast + drain) belongs here.
-    let registry_for_shutdown = registry.clone();
-    axum::serve(listener, router)
-        .with_graceful_shutdown(async move {
-            wait_for_signal().await;
-            tracing::info!("broadcasting ServerShutdown to all sessions");
-            registry_for_shutdown.broadcast(Envelope::Event {
-                version: 1,
-                event: EventKind::ServerShutdown,
-            });
-            tokio::time::sleep(SHUTDOWN_DRAIN).await;
-        })
-        .await
-        .context("axum::serve")?;
 
     // Phase 2: listener has stopped and handlers have drained, so DB
     // resources can go away without racing a query.
-    tracing::info!("listener stopped; tearing down GC + pool");
-    gc_task.abort();
-    pool.close().await;
+    tracing::info!("listener stopped; tearing down runtime store");
+    shell.shutdown().await;
 
     tracing::info!("server exited cleanly");
     // Flush mars-xlog before returning so the teardown info! lines are
@@ -179,34 +248,6 @@ fn init_tracing(cfg: &Config) -> Result<()> {
         "backend logging initialized"
     );
     Ok(())
-}
-
-/// Spawn the periodic token-GC background task.
-///
-/// Ticks every [`TOKEN_GC_INTERVAL`] and calls
-/// [`store::tokens::gc_expired`]. Errors are logged at `warn!` — GC is
-/// best-effort; a failure here does not take the backend down.
-fn spawn_token_gc(pool: SqlitePool) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(TOKEN_GC_INTERVAL);
-        // Skip the immediate-on-start tick so the first GC pass happens
-        // one interval after boot; avoids a burst of DB work while the
-        // server is still bringing up the listener.
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            interval.tick().await;
-            let now = chrono::Utc::now().timestamp_millis();
-            match store::tokens::gc_expired(&pool, now).await {
-                Ok(n) if n > 0 => {
-                    tracing::info!(rows = n, "token GC removed expired rows");
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::warn!(error = %e, "token GC failed");
-                }
-            }
-        }
-    })
 }
 
 /// Await a shutdown signal (`SIGINT` everywhere, `SIGTERM` on Unix) and

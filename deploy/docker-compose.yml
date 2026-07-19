@@ -1,0 +1,73 @@
+# Docker Compose for local development and testing.
+#
+# Usage:
+#   cd deploy && docker compose up
+#
+# Services:
+#   - postgres: Postgres 16 for production-grade storage
+#   - redis: Redis 7 for cache and message bus
+#   - minos-backend: The backend server (API + Worker)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: minos
+      POSTGRES_PASSWORD: minos_dev_password
+      POSTGRES_DB: minos
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../crates/minos-backend/migrations/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U minos"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minos-backend:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "8787:8787"
+    environment:
+      MINOS_BACKEND_LISTEN: "0.0.0.0:8787"
+      MINOS_STORAGE_MODE: "external-sql"
+      MINOS_DATABASE_URL: "postgres://minos:minos_dev_password@postgres:5432/minos"
+      MINOS_JWT_SECRET: "dev-jwt-secret-at-least-32-bytes-long-for-local"
+      MINOS_CACHE_BACKEND: "redis"
+      MINOS_MESSAGE_BUS_BACKEND: "redis"
+      MINOS_REDIS_URL: "redis://redis:6379/"
+      MINOS_ENV: "dev"
+      MINOS_CORS_ORIGINS: "*"
+      RUST_LOG: "info,minos_backend=debug"
+      MINOS_SHUTDOWN_TIMEOUT_SECS: "30"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8787/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  postgres_data:
+  redis_data:

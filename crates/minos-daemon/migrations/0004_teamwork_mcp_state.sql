@@ -1,0 +1,2 @@
+-- No-op in the latest-only daemon schema.
+-- Teamwork/MCP state is owned by minos-chat-store.

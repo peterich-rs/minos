@@ -1,0 +1,212 @@
+//! Bearer-token extractor (spec §5.4). Pattern mirrors
+//! `crate::http::auth::authenticate` — handler-level call, not axum
+//! middleware, so handlers can opt in per route.
+
+use axum::http::{HeaderMap, StatusCode};
+
+use crate::auth::jwt::{self, Claims};
+use crate::error::BackendError;
+use crate::http::auth::extract_device_id;
+use crate::http::BackendState;
+
+#[derive(Debug, Clone)]
+pub struct AccountAuthOutcome {
+    pub account_id: String,
+    pub device_id: String,
+    pub claims: Claims,
+}
+
+#[derive(Debug)]
+pub enum BearerError {
+    Missing,
+    /// JWT decode/verify failed. The inner string is the upstream
+    /// `jsonwebtoken` message (e.g. `"InvalidSignature"`,
+    /// `"ExpiredSignature"`, `"Base64"`) — kept here for ops logs only.
+    /// `into_response_tuple` deliberately collapses this to a fixed
+    /// `"invalid bearer"` body so anonymous probes can't fingerprint
+    /// which JWT failure mode they tripped.
+    Invalid(String),
+    /// `X-Device-Id` header was absent.
+    MissingDeviceHeader,
+    /// JWT verified but its `did` claim doesn't match `X-Device-Id`.
+    DeviceMismatch,
+}
+
+impl BearerError {
+    pub fn into_response_tuple(self) -> (StatusCode, String) {
+        match self {
+            Self::Missing => (StatusCode::UNAUTHORIZED, "missing bearer".into()),
+            Self::Invalid(message) => {
+                tracing::debug!(target: "minos_backend::auth::bearer", %message, "bearer verify failed");
+                (StatusCode::UNAUTHORIZED, "invalid bearer".into())
+            }
+            Self::MissingDeviceHeader => (StatusCode::UNAUTHORIZED, "missing device header".into()),
+            Self::DeviceMismatch => (StatusCode::UNAUTHORIZED, "device mismatch".into()),
+        }
+    }
+}
+
+/// Verify only the `Authorization: Bearer <jwt>` header and return the
+/// account principal carried by the token.
+///
+/// This is the extractor for the formal account rail where `/v1/*` handlers
+/// should not depend on the legacy `X-Device-*` header bundle for business
+/// identity. The token still contains a `did` claim, but handlers that care
+/// about a specific installation must validate it from request data.
+pub fn require_account(
+    state: &BackendState,
+    headers: &HeaderMap,
+) -> Result<AccountAuthOutcome, BearerError> {
+    let claims = verify_authorization_header(state, headers)?;
+    Ok(AccountAuthOutcome {
+        account_id: claims.sub.clone(),
+        device_id: claims.did.clone(),
+        claims,
+    })
+}
+
+/// Verify the `Authorization: Bearer <jwt>` header and bind it to the
+/// `X-Device-Id` header. Returns `Ok(AccountAuthOutcome)` only when:
+///
+/// - Header is present and starts with `Bearer ` (case-insensitive).
+/// - JWT signature + exp validate against `state.auth.jwt_secret()`.
+/// - JWT `did` claim equals the `X-Device-Id` header (replay defence).
+pub fn require(
+    state: &BackendState,
+    headers: &HeaderMap,
+) -> Result<AccountAuthOutcome, BearerError> {
+    let claims = verify_authorization_header(state, headers)?;
+    let device_id = extract_device_id(headers).map_err(|_| BearerError::MissingDeviceHeader)?;
+    if claims.did != device_id.to_string() {
+        return Err(BearerError::DeviceMismatch);
+    }
+    Ok(AccountAuthOutcome {
+        account_id: claims.sub.clone(),
+        device_id: device_id.to_string(),
+        claims,
+    })
+}
+
+fn verify_authorization_header(
+    state: &BackendState,
+    headers: &HeaderMap,
+) -> Result<Claims, BearerError> {
+    let raw = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(BearerError::Missing)?;
+    let tok = raw
+        .strip_prefix("Bearer ")
+        .or_else(|| raw.strip_prefix("bearer "))
+        .ok_or(BearerError::Missing)?;
+    let claims = jwt::verify(state.auth.jwt_secret(), tok).map_err(|e| match e {
+        BackendError::JwtVerify { message } => BearerError::Invalid(message),
+        _ => BearerError::Invalid("verify failed".into()),
+    })?;
+    Ok(claims)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::jwt;
+    use crate::http::test_support::{backend_state, TEST_JWT_SECRET};
+    use minos_domain::DeviceId;
+
+    fn auth_header(token: &str) -> String {
+        format!("Bearer {token}")
+    }
+
+    #[tokio::test]
+    async fn require_missing_authorization_returns_missing() {
+        let state = backend_state().await;
+        let headers = HeaderMap::new();
+        let err = require(&state, &headers).unwrap_err();
+        assert!(matches!(err, BearerError::Missing));
+    }
+
+    #[tokio::test]
+    async fn require_with_valid_token_and_matching_device_succeeds() {
+        let state = backend_state().await;
+        let device_id = DeviceId::new();
+        let token =
+            jwt::sign(TEST_JWT_SECRET.as_bytes(), "acct-1", &device_id.to_string()).unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", auth_header(&token).parse().unwrap());
+        headers.insert("x-device-id", device_id.to_string().parse().unwrap());
+        let outcome = require(&state, &headers).unwrap();
+        assert_eq!(outcome.account_id, "acct-1");
+        assert_eq!(outcome.device_id, device_id.to_string());
+    }
+
+    #[tokio::test]
+    async fn require_account_does_not_require_device_header() {
+        let state = backend_state().await;
+        let device_id = DeviceId::new();
+        let token =
+            jwt::sign(TEST_JWT_SECRET.as_bytes(), "acct-1", &device_id.to_string()).unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", auth_header(&token).parse().unwrap());
+
+        let outcome = require_account(&state, &headers).unwrap();
+
+        assert_eq!(outcome.account_id, "acct-1");
+        assert_eq!(outcome.device_id, device_id.to_string());
+    }
+
+    #[tokio::test]
+    async fn require_with_mismatched_device_returns_device_mismatch() {
+        let state = backend_state().await;
+        let token = jwt::sign(TEST_JWT_SECRET.as_bytes(), "acct-1", "some-other-device").unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", auth_header(&token).parse().unwrap());
+        headers.insert("x-device-id", DeviceId::new().to_string().parse().unwrap());
+        let err = require(&state, &headers).unwrap_err();
+        assert!(matches!(err, BearerError::DeviceMismatch));
+    }
+
+    #[tokio::test]
+    async fn require_with_garbage_token_returns_invalid() {
+        let state = backend_state().await;
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer not.a.jwt".parse().unwrap());
+        headers.insert("x-device-id", DeviceId::new().to_string().parse().unwrap());
+        let err = require(&state, &headers).unwrap_err();
+        assert!(matches!(err, BearerError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn require_with_lowercase_bearer_prefix_succeeds() {
+        let state = backend_state().await;
+        let device_id = DeviceId::new();
+        let token =
+            jwt::sign(TEST_JWT_SECRET.as_bytes(), "acct-1", &device_id.to_string()).unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", format!("bearer {token}").parse().unwrap());
+        headers.insert("x-device-id", device_id.to_string().parse().unwrap());
+        let outcome = require(&state, &headers).unwrap();
+        assert_eq!(outcome.account_id, "acct-1");
+    }
+
+    #[tokio::test]
+    async fn require_without_device_header_returns_missing_device_header() {
+        let state = backend_state().await;
+        let token = jwt::sign(TEST_JWT_SECRET.as_bytes(), "acct-1", "any-device").unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", auth_header(&token).parse().unwrap());
+        // No x-device-id header.
+        let err = require(&state, &headers).unwrap_err();
+        assert!(matches!(err, BearerError::MissingDeviceHeader));
+    }
+
+    #[test]
+    fn invalid_response_body_is_collapsed_to_fixed_string() {
+        // Whatever upstream message we capture, the response body must
+        // not echo it: anonymous probes shouldn't be able to fingerprint
+        // `InvalidSignature` vs `ExpiredSignature` vs `Base64`.
+        let (status, body) =
+            BearerError::Invalid("ExpiredSignature".to_string()).into_response_tuple();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body, "invalid bearer");
+    }
+}

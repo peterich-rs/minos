@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT pair_id\n        FROM account_host_pairings\n        WHERE host_device_id = ? AND mobile_account_id = ?\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "pair_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "08d3fa31f38bb08168d928a9992242abfb4a8008f2905a4e07330181d2a1ddeb"
+}

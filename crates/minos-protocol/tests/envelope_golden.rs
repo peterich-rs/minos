@@ -14,7 +14,7 @@
 //! loudly than an inline `#[cfg(test)]` module, and lets us share a
 //! single `fixture()` helper without `pub`-exposing it.
 
-use minos_protocol::{Envelope, EventKind, LocalRpcMethod, LocalRpcOutcome};
+use minos_protocol::{Envelope, EventKind};
 use minos_ui_protocol::UiEventMessage;
 use pretty_assertions::assert_eq;
 use std::fs;
@@ -41,80 +41,12 @@ fn round_trip(name: &str) -> Envelope {
 }
 
 #[test]
-fn local_rpc_ping() {
-    let env = round_trip("local_rpc_ping.json");
-    let Envelope::LocalRpc {
-        version,
-        id,
-        method,
-        params,
-    } = env
-    else {
-        panic!("expected LocalRpc");
-    };
-    assert_eq!(version, 1);
-    assert_eq!(id, 1);
-    assert_eq!(method, LocalRpcMethod::Ping);
-    assert_eq!(params, serde_json::json!({}));
-}
-
-#[test]
-fn local_rpc_pair() {
-    let env = round_trip("local_rpc_pair.json");
-    let Envelope::LocalRpc {
-        version,
-        id,
-        method,
-        params,
-    } = env
-    else {
-        panic!("expected LocalRpc");
-    };
-    assert_eq!(version, 1);
-    assert_eq!(id, 7);
-    assert_eq!(method, LocalRpcMethod::Pair);
-    assert_eq!(
-        params["device_name"],
-        serde_json::Value::String("iPhone of fan".into())
-    );
-}
-
-#[test]
-fn local_rpc_response_ok() {
-    let env = round_trip("local_rpc_response_ok.json");
-    let Envelope::LocalRpcResponse {
-        version,
-        id,
-        outcome,
-    } = env
-    else {
-        panic!("expected LocalRpcResponse");
-    };
-    assert_eq!(version, 1);
-    assert_eq!(id, 42);
-    let LocalRpcOutcome::Ok { result } = outcome else {
-        panic!("expected Ok outcome");
-    };
-    assert_eq!(result["expires_at"], "2026-04-23T12:00:00Z");
-}
-
-#[test]
-fn local_rpc_response_err() {
-    let env = round_trip("local_rpc_response_err.json");
-    let Envelope::LocalRpcResponse { outcome, .. } = env else {
-        panic!("expected LocalRpcResponse");
-    };
-    let LocalRpcOutcome::Err { error } = outcome else {
-        panic!("expected Err outcome");
-    };
-    assert_eq!(error.code, "pairing_token_invalid");
-    assert_eq!(error.message, "token expired");
-}
-
-#[test]
 fn forward() {
     let env = round_trip("forward.json");
-    let Envelope::Forward { version, payload } = env else {
+    let Envelope::Forward {
+        version, payload, ..
+    } = env
+    else {
         panic!("expected Forward");
     };
     assert_eq!(version, 1);
@@ -156,8 +88,10 @@ fn event_paired() {
     assert_eq!(peer_name, "Mac-mini");
     // DeviceSecret is transparent on the wire (redaction is Debug/Display only).
     assert_eq!(
-        your_device_secret.as_str(),
-        "Sg3AfM5V0_3Vp1IvGxPzWwXhE-3HXfLQyIJzj6TZAmE"
+        your_device_secret
+            .as_ref()
+            .map(minos_domain::DeviceSecret::as_str),
+        Some("Sg3AfM5V0_3Vp1IvGxPzWwXhE-3HXfLQyIJzj6TZAmE")
     );
 }
 
@@ -244,4 +178,70 @@ fn event_ui_event_message() {
     };
     assert_eq!(message_id, "msg_def");
     assert_eq!(text, "Hi");
+}
+
+#[test]
+fn event_approval_request() {
+    let env = round_trip("event_approval_request.json");
+    let Envelope::Event { version, event } = env else {
+        panic!("expected Event");
+    };
+    assert_eq!(version, 1);
+    let EventKind::ApprovalRequest {
+        thread_id,
+        turn_id,
+        request_id,
+        method,
+        params,
+        timeout_ms,
+    } = event
+    else {
+        panic!("expected ApprovalRequest");
+    };
+    assert_eq!(thread_id, "thr_approval");
+    assert_eq!(turn_id, "turn_123");
+    assert_eq!(request_id, "req_123");
+    assert_eq!(method, "exec_command");
+    assert_eq!(params["command"][0], "cargo");
+    assert_eq!(timeout_ms, 120_000);
+}
+
+#[test]
+fn event_approval_timeout() {
+    let env = round_trip("event_approval_timeout.json");
+    let Envelope::Event { version, event } = env else {
+        panic!("expected Event");
+    };
+    assert_eq!(version, 1);
+    let EventKind::ApprovalTimeout {
+        thread_id,
+        request_id,
+        reason,
+    } = event
+    else {
+        panic!("expected ApprovalTimeout");
+    };
+    assert_eq!(thread_id, "thr_approval");
+    assert_eq!(request_id, "req_123");
+    assert_eq!(reason, "timeout");
+}
+
+#[test]
+fn event_agent_error() {
+    let env = round_trip("event_agent_error.json");
+    let Envelope::Event { version, event } = env else {
+        panic!("expected Event");
+    };
+    assert_eq!(version, 1);
+    let EventKind::AgentError {
+        session_id,
+        code,
+        message,
+    } = event
+    else {
+        panic!("expected AgentError");
+    };
+    assert_eq!(session_id.as_deref(), Some("thread-abc12"));
+    assert_eq!(code, "peer_offline");
+    assert_eq!(message, "host is offline");
 }

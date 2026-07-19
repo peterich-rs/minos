@@ -1,8 +1,396 @@
 //! Request and response payload types.
 
-use minos_domain::{AgentDescriptor, AgentName, DeviceId, DeviceSecret, PairingToken};
+use minos_domain::{AgentDescriptor, AgentName, DeviceId, PairingToken};
 use minos_ui_protocol::{ThreadEndReason, UiEventMessage};
 use serde::{Deserialize, Serialize};
+
+/// Response body for `GET /v1/me/peer` — the backend's view of the
+/// host caller's currently paired mobile peer. Returned by the
+/// authenticated device-secret rail (`X-Device-Id` + `X-Device-Secret`)
+/// so a freshly reconnected daemon can refresh its in-memory peer mirror
+/// without reading anything from local disk.
+///
+/// On `200`, the body carries the mobile peer's `device_id`, display
+/// name, and the most-recent account-host pairing timestamp (epoch ms).
+/// On `404` with `error.code == "not_paired"`, the caller has no row in
+/// `account_host_pairings` — the response body uses the standard
+/// `{ "error": { "code": ..., "message": ... } }` envelope shared by
+/// every other `/v1/*` route.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct MePeerResponse {
+    pub peer_device_id: DeviceId,
+    pub peer_name: String,
+    pub paired_at_ms: i64,
+}
+
+/// Response body for `GET /v1/me/macs`. iOS callers receive every Mac
+/// paired to their `account_id`. `paired_via_device_id` is the mobile
+/// device that performed the scan — recorded for audit; not used for
+/// routing.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct MeHostsResponse {
+    pub hosts: Vec<HostSummary>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct HostSummary {
+    pub host_device_id: DeviceId,
+    pub host_display_name: String,
+    pub paired_at_ms: i64,
+    pub paired_via_device_id: DeviceId,
+    #[serde(default)]
+    pub online: bool,
+}
+
+/// Response body for `GET /v1/me/peers`. Host callers receive every
+/// mobile/account pair currently associated with their `host_device_id`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct MePeersResponse {
+    pub peers: Vec<HostPeerSummary>,
+}
+
+/// One mobile/account row connected to a host.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct HostPeerSummary {
+    pub mobile_device_id: DeviceId,
+    pub mobile_device_name: String,
+    pub account_email: String,
+    pub paired_at_ms: i64,
+    pub last_active_at_ms: i64,
+    pub online: bool,
+}
+
+/// Bearer-authenticated mobile account profile.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct MyProfileResponse {
+    pub account_id: String,
+    pub email: String,
+    pub minos_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+/// Minimal user directory card exposed to the mobile app.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct UserSummary {
+    pub account_id: String,
+    pub minos_id: String,
+    pub display_name: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SearchUsersResponse {
+    pub users: Vec<UserSummary>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SearchUsersRequest {
+    pub minos_id: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SetMinosIdRequest {
+    pub minos_id: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SetDisplayNameRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct CreateFriendRequestRequest {
+    pub target_minos_id: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FriendRequestStatus {
+    Pending,
+    Accepted,
+    Rejected,
+    Canceled,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct FriendRequestSummary {
+    pub request_id: String,
+    pub from: UserSummary,
+    pub to: UserSummary,
+    pub status: FriendRequestStatus,
+    pub created_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_at_ms: Option<i64>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct FriendRequestsResponse {
+    pub incoming: Vec<FriendRequestSummary>,
+    pub outgoing: Vec<FriendRequestSummary>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct FriendSummary {
+    pub account_id: String,
+    pub minos_id: String,
+    pub display_name: String,
+    pub created_at_ms: i64,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct FriendsResponse {
+    pub friends: Vec<FriendSummary>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationKind {
+    Direct,
+    Group,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ConversationSummary {
+    pub conversation_id: String,
+    pub kind: ConversationKind,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counterpart: Option<UserSummary>,
+    pub member_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_message_preview: Option<String>,
+    pub last_message_at_ms: i64,
+    pub unread_count: u32,
+    pub unread_mention_count: u32,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ConversationsResponse {
+    pub conversations: Vec<ConversationSummary>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct EnsureDirectConversationRequest {
+    pub friend_account_id: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct CreateGroupConversationRequest {
+    pub title: String,
+    pub member_account_ids: Vec<String>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ConversationResponse {
+    pub conversation_id: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ConversationMembersResponse {
+    pub members: Vec<UserSummary>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ConversationReadResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_read_at_ms: Option<i64>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ChatMessageReplySummary {
+    pub message_id: String,
+    pub sender: UserSummary,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recalled_at_ms: Option<i64>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ChatMessageSummary {
+    pub message_id: String,
+    pub conversation_id: String,
+    pub sender: UserSummary,
+    pub text: String,
+    pub created_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<ChatMessageReplySummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recalled_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentioned_account_ids: Vec<String>,
+    /// Distinguishes user-sent messages from agent-sent messages.
+    /// Defaults to "user" for backward compatibility.
+    #[serde(default = "default_sender_type")]
+    pub sender_type: SenderType,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListChatMessagesResponse {
+    pub messages: Vec<ChatMessageSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_before_ts_ms: Option<i64>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListChatMessagesRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_ts_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SendChatMessageRequest {
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to_message_id: Option<String>,
+}
+
+// ─── Agent in Group Chat ───────────────────────────────────────────────
+
+/// The type of sender for a chat message.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SenderType {
+    User,
+    Agent,
+}
+
+fn default_sender_type() -> SenderType {
+    SenderType::User
+}
+
+/// Request to register a new agent under the caller's account.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RegisterAgentRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub runtime_agent: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
+}
+
+/// Request to update an existing agent owned by the caller.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct UpdateAgentRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub runtime_agent: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
+}
+
+/// Summary of a registered agent.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AgentSummary {
+    pub agent_id: String,
+    pub owner_account_id: String,
+    pub name: String,
+    pub description: String,
+    pub runtime_agent: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+/// Response for listing agents owned by the caller.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListAgentsResponse {
+    pub agents: Vec<AgentSummary>,
+}
+
+/// Request to add an agent to a group conversation.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AddAgentToGroupRequest {
+    pub agent_id: String,
+}
+
+/// Request to remove an agent from a group conversation.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RemoveAgentFromGroupRequest {
+    pub agent_id: String,
+}
+
+/// Request to add a user member to an existing group conversation.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AddGroupMemberRequest {
+    pub member_account_id: String,
+}
+
+/// Request to remove a user member from an existing group conversation.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RemoveGroupMemberRequest {
+    pub member_account_id: String,
+}
+
+/// Response listing agent members of a conversation.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ConversationAgentMembersResponse {
+    pub agents: Vec<AgentSummary>,
+}
+
+/// Request for an agent to send a message in a group conversation.
+/// The agent_id identifies which agent is "speaking".
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SendAgentMessageRequest {
+    pub agent_id: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to_message_id: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairRequest {
@@ -14,13 +402,22 @@ pub struct PairRequest {
     pub token: PairingToken,
 }
 
+/// Result of `POST /v1/pairings` (consume). iOS no longer receives a
+/// device secret — the rail is bearer-only post ADR-0020. Mac-side
+/// pair state is delivered separately via `EventKind::Paired`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairResponse {
-    /// Mirrors the envelope/local-RPC pair result naming so the legacy typed
-    /// jsonrpsee surface exposes the same contract.
     pub peer_device_id: DeviceId,
     pub peer_name: String,
-    pub your_device_secret: DeviceSecret,
+}
+
+/// Request body for `POST /v1/pairing/consume`. Distinct from
+/// [`PairRequest`] because the HTTP route derives `device_id` from the
+/// `X-Device-Id` header, not the body.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PairConsumeRequest {
+    pub token: PairingToken,
+    pub device_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -29,13 +426,161 @@ pub struct HealthResponse {
     pub uptime_secs: u64,
 }
 
+/// Account-side request to target one paired host for a CLI scan.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListHostClisRequest {
+    pub host_installation_id: String,
+}
+
 pub type ListClisResponse = Vec<AgentDescriptor>;
+
+/// Parameters for the `list_host_skills` RPC. `workspace` is optional for
+/// mobile clients that still rely on the daemon's default workspace.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListHostSkillsRequest {
+    pub workspace: String,
+    #[serde(default)]
+    pub force_reload: bool,
+}
+
+/// Account-side request to inspect skills on one paired host.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListHostSkillsCommandRequest {
+    pub host_installation_id: String,
+    pub workspace: String,
+    #[serde(default)]
+    pub force_reload: bool,
+}
+
+/// Parameters for listing host-side workspace directories. `root` is optional;
+/// hosts default it to the current user's home directory and constrain custom
+/// roots to that home tree.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListHostWorkspacesRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    #[serde(default)]
+    pub limit: u32,
+}
+
+/// Account-side request to inspect workspace directories on one paired host.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListHostWorkspacesCommandRequest {
+    pub host_installation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    #[serde(default)]
+    pub limit: u32,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostWorkspaceSummary {
+    pub path: String,
+    pub display_name: String,
+    pub is_git_repo: bool,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListHostWorkspacesResponse {
+    pub root: String,
+    pub workspaces: Vec<HostWorkspaceSummary>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostSkillSummary {
+    pub name: String,
+    pub path: String,
+    pub description: String,
+    pub enabled: bool,
+    pub scope: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short_description: Option<String>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostSkillError {
+    pub path: String,
+    pub message: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostSkillsEntry {
+    pub cwd: String,
+    pub errors: Vec<HostSkillError>,
+    pub skills: Vec<HostSkillSummary>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListHostSkillsResponse {
+    pub data: Vec<HostSkillsEntry>,
+}
+
+/// Parameters for the `write_host_skill_config` RPC. The path comes from
+/// a prior `list_host_skills` result.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WriteHostSkillConfigRequest {
+    pub workspace: String,
+    pub path: String,
+    pub enabled: bool,
+}
+
+/// Account-side request to update one host skill toggle.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WriteHostSkillConfigCommandRequest {
+    pub host_installation_id: String,
+    pub workspace: String,
+    pub path: String,
+    pub enabled: bool,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WriteHostSkillConfigResponse {
+    pub effective_enabled: bool,
+}
+
+/// Which codex driver to spawn — selectable at start time so dev/test
+/// surfaces can compare the two paths side-by-side without rebuilding.
+/// `Jsonl` is the production default (`codex exec --json` per turn); `Server`
+/// spawns `codex app-server --listen ws://…` and connects via WebSocket.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
+pub enum AgentLaunchMode {
+    #[default]
+    #[serde(rename = "jsonl")]
+    Jsonl,
+    #[serde(rename = "server")]
+    Server,
+}
 
 /// Parameters for the `start_agent` RPC. See spec §5.2.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StartAgentRequest {
     pub agent: AgentName,
+    /// Workspace directory the codex app-server child should treat as its
+    /// `cwd`. Multi-session manager keys instances by workspace, so two
+    /// `start_agent` calls for the same workspace share an instance and
+    /// distinct calls for different workspaces spawn distinct codex children.
+    /// Carried as a string for FFI portability (UniFFI does not lift `PathBuf`).
+    pub workspace: String,
+    /// Optional driver selector. Absent ⇒ `Server` post-Phase-C, preserving
+    /// the wire shape for clients that pre-date the field. The `Jsonl` variant
+    /// is retained for compatibility but no longer drives a JSONL exec path —
+    /// it is silently treated as `Server`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<AgentLaunchMode>,
 }
 
 /// Result of a successful `start_agent` RPC — carries the codex `thread_id`
@@ -56,27 +601,130 @@ pub struct SendUserMessageRequest {
     pub text: String,
 }
 
-/// Deep-link QR payload minted by the Mac and scanned by iOS. Carries the
-/// backend URL, a display name for the host, a short-lived one-shot
-/// `pairing_token`, its RFC-3339-ish epoch-ms expiry, and — when the
-/// backend sits behind a Cloudflare Access service-token — the two
-/// service-token headers so the iPhone can authenticate against the edge
-/// before the bearer-secret WebSocket handshake.
+/// Server → Host. Unified dispatch payload for agent-bound chat messages.
+/// `session_id = None` instructs the host to auto-create a session before
+/// sending `text`; otherwise the existing session should receive the message.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentDispatchRequest {
+    pub agent: AgentName,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    pub text: String,
+    #[serde(default)]
+    pub workspace: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_message_id: Option<String>,
+}
+
+/// Host → Server response for [`AgentDispatchRequest`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentDispatchResponse {
+    pub session_id: String,
+}
+
+/// Mobile → Server → Host. User resolution for a pending approval request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApprovalDecisionRequest {
+    pub request_id: String,
+    pub thread_id: String,
+    pub decision: serde_json::Value,
+}
+
+/// Parameters for the `interrupt_thread` RPC. See spec §5.2.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InterruptThreadRequest {
+    pub thread_id: String,
+}
+
+/// Parameters for the `close_thread` RPC. See spec §5.2.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CloseThreadRequest {
+    pub thread_id: String,
+}
+
+/// Parameters for the `get_thread` RPC. See spec §5.2.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetThreadParams {
+    pub thread_id: String,
+}
+
+/// Parameters for local `resume_thread`. Reattach only by default; optional
+/// `auto_continue` injects a one-shot CONTINUE prompt when the store flag is set.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResumeThreadRequest {
+    pub thread_id: String,
+    /// When true, after reattach, if `needs_continue` is set, inject CONTINUE once.
+    /// Send paths must leave this false so user text wins.
+    #[serde(default)]
+    pub auto_continue: bool,
+}
+
+/// Mirror of `minos_agent_runtime::ThreadState` published over the wire for
+/// the host's JSON-RPC surface. Kept structurally identical to the runtime
+/// enum (same `tag = "kind"` / `snake_case` shape) so the two serialise
+/// interchangeably across the relay. Not exposed to UniFFI — the FFI surface
+/// uses `minos_agent_runtime::ThreadState` directly so Swift sees one
+/// canonical `ThreadState` type.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum ThreadState {
+    Starting,
+    Idle,
+    Running { turn_started_at_ms: i64 },
+    Suspended { reason: PauseReason },
+    Resuming,
+    Closed { reason: CloseReason },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PauseReason {
+    UserInterrupt,
+    CodexCrashed,
+    DaemonRestart,
+    InstanceReaped,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseReason {
+    UserClose,
+    TerminalError,
+}
+
+/// Response from the `get_thread` RPC. Wraps the existing `ThreadSummary`
+/// metadata with the live `ThreadState` snapshot so the mobile UI can both
+/// render the history list entry and decide whether to draw the running
+/// indicator without a second round-trip.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GetThreadResponse {
+    pub thread: ThreadSummary,
+    pub state: ThreadState,
+}
+
+/// Deep-link QR payload minted by the Mac and scanned by iOS. Carries a
+/// display name for the host, a short-lived one-shot `pairing_token`, and
+/// its RFC-3339-ish epoch-ms expiry. The backend URL lives in the mobile
+/// client's compile-time build config (see `minos_mobile::build_config`);
+/// it is not a transit value and never enters the QR payload, durable
+/// storage, or the post-pair business logic.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct PairingQrPayload {
     #[serde(default = "default_pairing_qr_version")]
     pub v: u8,
-    pub backend_url: String,
-    #[serde(alias = "mac_display_name")]
     pub host_display_name: String,
     #[serde(alias = "token")]
     pub pairing_token: String,
     #[serde(default)]
     pub expires_at_ms: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cf_access_client_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cf_access_client_secret: Option<String>,
 }
 
 const fn default_pairing_qr_version() -> u8 {
@@ -109,6 +757,11 @@ pub struct ThreadSummary {
     pub message_count: u32,
     pub ended_at_ms: Option<i64>,
     pub end_reason: Option<ThreadEndReason>,
+    pub parent_thread_id: Option<String>,
+    pub state: ThreadState,
+    /// Host should offer a one-shot continue turn after process-death recovery.
+    #[serde(default)]
+    pub needs_continue: bool,
 }
 
 /// Parameters for `list_threads`. `before_ts_ms` paginates older entries;
@@ -166,6 +819,253 @@ pub struct GetThreadLastSeqResponse {
     pub last_seq: u64,
 }
 
+// ─── Projects ──────────────────────────────────────────────────────────
+
+/// Summary of a project for list views.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ProjectSummary {
+    pub project_id: String,
+    pub name: String,
+    pub workspace_slug: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub thread_count: u32,
+}
+
+/// Request to create a new project.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct CreateProjectRequest {
+    pub name: String,
+    pub workspace_slug: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
+}
+
+/// Response from creating a project.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct CreateProjectResponse {
+    pub project: ProjectSummary,
+}
+
+/// Request to update a project's name.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct UpdateProjectRequest {
+    pub project_id: String,
+    pub name: String,
+}
+
+/// Request to delete a project.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct DeleteProjectRequest {
+    pub project_id: String,
+}
+
+/// Request to attach an existing backend thread to a project.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AssignProjectThreadRequest {
+    pub project_id: String,
+    pub thread_id: String,
+}
+
+/// Response from listing projects.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListProjectsResponse {
+    pub projects: Vec<ProjectSummary>,
+}
+
+fn default_conversation_progress() -> String {
+    "todo".to_string()
+}
+
+/// Local TUI conversation list item. This is separate from the social/cloud
+/// `ConversationSummary` type near the top of this file.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct LocalConversationSummary {
+    pub conversation_id: String,
+    pub project_id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_message_preview: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub message_count: u32,
+    pub agent_session_count: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub participating_agents: Vec<AgentName>,
+    /// User priority: `high` | `medium` | `low`. Absent = unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<String>,
+    /// Workflow progress: `todo` | `in_progress` | `in_review` | `done`.
+    #[serde(default = "default_conversation_progress")]
+    pub progress: String,
+    /// Git branch snapshot captured when the conversation was created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Linked worktree path snapshot at create (when workspace is a git worktree).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    /// Live agent sessions in starting/running/resuming (list-time aggregate).
+    #[serde(default)]
+    pub running_count: u32,
+    /// Live agent sessions needing human attention (suspended / approval).
+    #[serde(default)]
+    pub needs_attention_count: u32,
+}
+
+/// Agent/thread mention attached to a local conversation message.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ConversationMention {
+    pub agent: AgentName,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_short_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct LocalConversationMessage {
+    pub message_seq: i64,
+    pub message_id: String,
+    pub conversation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    pub created_at_ms: i64,
+    pub sender_role: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentName>,
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to_message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentions: Vec<ConversationMention>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListConversationsParams {
+    pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_updated_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListConversationsResponse {
+    pub conversations: Vec<LocalConversationSummary>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct CreateConversationParams {
+    pub project_id: String,
+    pub title: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct CreateConversationResponse {
+    pub conversation: LocalConversationSummary,
+}
+
+/// Patch conversation product metadata (title / priority / progress).
+/// Omitted fields are left unchanged. For `priority`, send empty string to clear.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct UpdateConversationParams {
+    pub conversation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// `high` | `medium` | `low`, or empty string to clear. Absent = leave unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<String>,
+    /// `todo` | `in_progress` | `in_review` | `done`. Absent = leave unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct UpdateConversationResponse {
+    pub conversation: LocalConversationSummary,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListConversationMessagesParams {
+    pub conversation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_seq: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListConversationMessagesResponse {
+    pub messages: Vec<LocalConversationMessage>,
+    pub has_more: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListConversationAgentSessionsParams {
+    pub conversation_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListConversationAgentSessionsResponse {
+    pub threads: Vec<ThreadSummary>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct StartAgentInConversationRequest {
+    pub conversation_id: String,
+    pub agent: AgentName,
+    pub workspace: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AppendConversationMessageParams {
+    pub conversation_id: String,
+    pub message_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    pub sender_role: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentName>,
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to_message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentions: Vec<ConversationMention>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AppendConversationMessageResponse {
+    pub message_seq: i64,
+}
+
+/// Parameters for listing threads within a project.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListProjectThreadsParams {
+    pub project_id: String,
+    pub limit: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before_ts_ms: Option<i64>,
+}
+
+/// Response from listing project threads.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListProjectThreadsResponse {
+    pub threads: Vec<ThreadSummary>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,7 +1088,6 @@ mod tests {
         let resp = PairResponse {
             peer_device_id: DeviceId::new(),
             peer_name: "MacBook".into(),
-            your_device_secret: DeviceSecret::generate(),
         };
         let json = serde_json::to_string(&resp).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -197,12 +1096,64 @@ mod tests {
             serde_json::to_value(resp.peer_device_id).unwrap()
         );
         assert_eq!(value["peer_name"], serde_json::json!("MacBook"));
-        assert_eq!(
-            value["your_device_secret"],
-            serde_json::json!(resp.your_device_secret.as_str())
-        );
+        assert!(value.get("your_device_secret").is_none());
         let back: PairResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(resp, back);
+    }
+
+    #[test]
+    fn pair_response_no_secret_field_round_trip() {
+        let resp = PairResponse {
+            peer_device_id: DeviceId::new(),
+            peer_name: "iPhone".into(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            value.get("your_device_secret").is_none(),
+            "secret must not appear"
+        );
+        let back: PairResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, resp);
+    }
+
+    #[test]
+    fn me_hosts_response_round_trips() {
+        let hosts = MeHostsResponse {
+            hosts: vec![HostSummary {
+                host_device_id: DeviceId::new(),
+                host_display_name: "Mac-mini".into(),
+                paired_at_ms: 1_714_000_000_000,
+                paired_via_device_id: DeviceId::new(),
+                online: true,
+            }],
+        };
+        let json = serde_json::to_string(&hosts).unwrap();
+        let back: MeHostsResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, hosts);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(value["hosts"].is_array());
+    }
+
+    #[test]
+    fn search_users_request_round_trip() {
+        let req = SearchUsersRequest {
+            minos_id: "fan123".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: SearchUsersRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, req);
+    }
+
+    #[test]
+    fn list_chat_messages_request_round_trip() {
+        let req = ListChatMessagesRequest {
+            before_ts_ms: Some(42),
+            limit: Some(50),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: ListChatMessagesRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, req);
     }
 
     #[test]
@@ -217,13 +1168,76 @@ mod tests {
     }
 
     #[test]
+    fn list_host_clis_request_round_trip() {
+        let req = ListHostClisRequest {
+            host_installation_id: "host-123".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: ListHostClisRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+    }
+
+    #[test]
+    fn list_host_skills_command_request_round_trip() {
+        let req = ListHostSkillsCommandRequest {
+            host_installation_id: "host-123".into(),
+            workspace: "/tmp/workspace".into(),
+            force_reload: true,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: ListHostSkillsCommandRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+    }
+
+    #[test]
+    fn write_host_skill_config_command_request_round_trip() {
+        let req = WriteHostSkillConfigCommandRequest {
+            host_installation_id: "host-123".into(),
+            workspace: String::new(),
+            path: "/tmp/skill".into(),
+            enabled: false,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: WriteHostSkillConfigCommandRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+    }
+
+    #[test]
     fn start_agent_request_round_trip() {
         let req = StartAgentRequest {
             agent: AgentName::Codex,
+            workspace: "/Users/fan/dev".into(),
+            mode: None,
         };
         let json = serde_json::to_string(&req).unwrap();
+        // Default-mode payload omits the optional `mode` field.
+        assert!(!json.contains("mode"));
+        // Workspace is mandatory post-Phase-C and must serialize.
+        assert!(json.contains("workspace"));
         let back: StartAgentRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(req, back);
+    }
+
+    #[test]
+    fn start_agent_request_with_mode_round_trip() {
+        let req = StartAgentRequest {
+            agent: AgentName::Codex,
+            workspace: "/Users/fan/dev".into(),
+            mode: Some(AgentLaunchMode::Server),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"mode\":\"server\""));
+        let back: StartAgentRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+    }
+
+    #[test]
+    fn start_agent_request_pre_mode_payload_decodes() {
+        let json = r#"{"agent":"codex","workspace":"/w"}"#;
+        let req: StartAgentRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.agent, AgentName::Codex);
+        assert_eq!(req.workspace, "/w");
+        assert_eq!(req.mode, None);
     }
 
     #[test]
@@ -247,6 +1261,71 @@ mod tests {
         let back: SendUserMessageRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(req, back);
     }
+
+    #[test]
+    fn agent_dispatch_request_round_trip() {
+        let req = AgentDispatchRequest {
+            agent: AgentName::Codex,
+            session_id: Some("thread-abc12".into()),
+            text: "continue with tests".into(),
+            workspace: "/Users/fan/dev/minos".into(),
+            approval_policy: Some("on_request".into()),
+            sandbox_policy: Some("workspace_write".into()),
+            conversation_id: Some("conv-123".into()),
+            origin_message_id: Some("msg-456".into()),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: AgentDispatchRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+    }
+
+    #[test]
+    fn agent_dispatch_request_omits_none_fields() {
+        let req = AgentDispatchRequest {
+            agent: AgentName::Claude,
+            session_id: None,
+            text: "start a new session".into(),
+            workspace: String::new(),
+            approval_policy: None,
+            sandbox_policy: None,
+            conversation_id: None,
+            origin_message_id: None,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["agent"], serde_json::json!("claude"));
+        assert_eq!(value["workspace"], serde_json::json!(""));
+        assert!(value.get("session_id").is_none());
+        assert!(value.get("approval_policy").is_none());
+        assert!(value.get("sandbox_policy").is_none());
+        assert!(value.get("conversation_id").is_none());
+        assert!(value.get("origin_message_id").is_none());
+    }
+
+    #[test]
+    fn agent_dispatch_response_round_trip() {
+        let resp = AgentDispatchResponse {
+            session_id: "thread-abc12".into(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let back: AgentDispatchResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(resp, back);
+    }
+
+    #[test]
+    fn approval_decision_request_round_trip() {
+        let req = ApprovalDecisionRequest {
+            request_id: "req-123".into(),
+            thread_id: "thread-abc12".into(),
+            decision: serde_json::json!({
+                "decision": "approve",
+                "scope": "once",
+            }),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: ApprovalDecisionRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+    }
 }
 
 #[cfg(test)]
@@ -255,48 +1334,20 @@ mod new_type_tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn pairing_qr_payload_round_trip_with_cf() {
-        let p = PairingQrPayload {
-            v: 2,
-            backend_url: "wss://minos.fan-nn.top/devices".into(),
-            host_display_name: "Mac".into(),
-            pairing_token: "tok".into(),
-            expires_at_ms: 1,
-            cf_access_client_id: Some("id".into()),
-            cf_access_client_secret: Some("sec".into()),
-        };
-        let back: PairingQrPayload =
-            serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
-        assert_eq!(p, back);
-    }
-
-    #[test]
-    fn pairing_qr_payload_without_cf_omits_fields() {
-        let p = PairingQrPayload {
-            v: 2,
-            backend_url: "x".into(),
-            host_display_name: "x".into(),
-            pairing_token: "t".into(),
-            expires_at_ms: 0,
-            cf_access_client_id: None,
-            cf_access_client_secret: None,
-        };
-        let s = serde_json::to_string(&p).unwrap();
-        assert!(!s.contains("cf_access_client_id"));
-        assert!(!s.contains("cf_access_client_secret"));
-    }
-
-    #[test]
-    fn pairing_qr_payload_accepts_legacy_mac_field_names() {
+    fn pairing_qr_payload_ignores_legacy_unknown_fields() {
+        // Legacy QR payloads may still carry `backend_url` and CF Access
+        // fields — `serde` ignores unknown fields by default, so this is
+        // a forward-compat read of older Mac builds. The struct itself no
+        // longer carries them. The legacy display-name alias was dropped
+        // in Phase B; new payloads must use `host_display_name`.
         let back: PairingQrPayload = serde_json::from_value(serde_json::json!({
             "backend_url": "wss://minos.fan-nn.top/devices",
-            "mac_display_name": "Mac",
+            "host_display_name": "Mac",
             "token": "tok"
         }))
         .unwrap();
 
         assert_eq!(back.v, 2);
-        assert_eq!(back.backend_url, "wss://minos.fan-nn.top/devices");
         assert_eq!(back.host_display_name, "Mac");
         assert_eq!(back.pairing_token, "tok");
         assert_eq!(back.expires_at_ms, 0);
@@ -317,12 +1368,9 @@ mod new_type_tests {
         let r = RequestPairingQrResponse {
             qr_payload: PairingQrPayload {
                 v: 1,
-                backend_url: "wss://example.com/devices".into(),
                 host_display_name: "Mac".into(),
                 pairing_token: "tok".into(),
                 expires_at_ms: 42,
-                cf_access_client_id: None,
-                cf_access_client_secret: None,
             },
         };
         let back: RequestPairingQrResponse =
@@ -341,6 +1389,11 @@ mod new_type_tests {
             message_count: 3,
             ended_at_ms: Some(300),
             end_reason: Some(ThreadEndReason::AgentDone),
+            parent_thread_id: None,
+            state: ThreadState::Closed {
+                reason: CloseReason::UserClose,
+            },
+            needs_continue: false,
         };
         let back: ThreadSummary =
             serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
@@ -358,6 +1411,9 @@ mod new_type_tests {
             message_count: 1,
             ended_at_ms: None,
             end_reason: None,
+            parent_thread_id: Some("parent".into()),
+            state: ThreadState::Idle,
+            needs_continue: true,
         };
         let back: ThreadSummary =
             serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
@@ -400,6 +1456,9 @@ mod new_type_tests {
                 message_count: 0,
                 ended_at_ms: None,
                 end_reason: None,
+                parent_thread_id: None,
+                state: ThreadState::Idle,
+                needs_continue: false,
             }],
             next_before_ts_ms: Some(1),
         };
@@ -450,6 +1509,28 @@ mod new_type_tests {
         let r = GetThreadLastSeqResponse { last_seq: 42 };
         let back: GetThreadLastSeqResponse =
             serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(r, back);
+    }
+
+    #[test]
+    fn me_peer_response_round_trip() {
+        let r = MePeerResponse {
+            peer_device_id: DeviceId::new(),
+            peer_name: "fan's iPhone".into(),
+            paired_at_ms: 1_726_500_000_000,
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            value["peer_device_id"],
+            serde_json::to_value(r.peer_device_id).unwrap()
+        );
+        assert_eq!(value["peer_name"], serde_json::json!("fan's iPhone"));
+        assert_eq!(
+            value["paired_at_ms"],
+            serde_json::json!(1_726_500_000_000_i64)
+        );
+        let back: MePeerResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
     }
 }

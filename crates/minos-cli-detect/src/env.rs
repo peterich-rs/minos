@@ -23,12 +23,31 @@ const BEGIN: &str = "\x01MINOS_ENV_BEGIN\x01";
 const END: &str = "\x01MINOS_ENV_END\x01";
 
 const SHELL_TIMEOUT: Duration = Duration::from_secs(3);
-const FALLBACK_SHELL: &str = "/bin/zsh";
 
 /// Shell-side dump script. Brackets `env -0` output with control-char
 /// sentinels so the parser can discard rc-script chatter on stdout.
 /// `\1` is octal-escape for `\x01`, supported by every printf we care about.
 const DUMP_SCRIPT: &str = "printf '\\1MINOS_ENV_BEGIN\\1'; env -0; printf '\\1MINOS_ENV_END\\1'";
+
+fn process_env() -> HashMap<String, String> {
+    std::env::vars().collect()
+}
+
+#[cfg(target_os = "macos")]
+#[allow(clippy::unnecessary_wraps)]
+fn default_shell() -> Option<&'static str> {
+    Some("/bin/zsh")
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn default_shell() -> Option<&'static str> {
+    None
+}
+
+#[cfg(not(unix))]
+fn default_shell() -> Option<&'static str> {
+    None
+}
 
 /// Pure parser: given the raw stdout of the dump script, slice between
 /// sentinels and split into `(key, value)` pairs. Returns an empty map if
@@ -60,10 +79,22 @@ pub(crate) fn parse_env_dump(stdout: &str) -> HashMap<String, String> {
 /// `std::env::vars()`. This function never panics and never returns Err —
 /// daemon bootstrap must not be blocked by a broken user shell rc.
 pub async fn capture_user_shell_env() -> HashMap<String, String> {
+    #[cfg(windows)]
+    {
+        // Windows host support is CLI-only for now, so the current process
+        // env is the canonical source of PATH and auth context.
+        return process_env();
+    }
+
     let shell = std::env::var("SHELL")
         .ok()
         .filter(|p| Path::new(p).is_absolute())
-        .unwrap_or_else(|| FALLBACK_SHELL.to_owned());
+        .or_else(|| default_shell().map(str::to_owned));
+
+    let Some(shell) = shell else {
+        warn!("no suitable login shell configured; falling back to process env");
+        return process_env();
+    };
 
     capture_shell_env(&shell, SHELL_TIMEOUT).await
 }
@@ -83,7 +114,7 @@ async fn capture_shell_env(shell: &str, shell_timeout: Duration) -> HashMap<Stri
                     shell = %shell,
                     "shell env dump produced no parseable entries; falling back to process env"
                 );
-                std::env::vars().collect()
+                process_env()
             } else {
                 map
             }
@@ -96,7 +127,7 @@ async fn capture_shell_env(shell: &str, shell_timeout: Duration) -> HashMap<Stri
                 stderr_first_line = %stderr.lines().next().unwrap_or(""),
                 "shell env dump exited non-zero; falling back to process env",
             );
-            std::env::vars().collect()
+            process_env()
         }
         Ok(Err(e)) => {
             warn!(
@@ -104,7 +135,7 @@ async fn capture_shell_env(shell: &str, shell_timeout: Duration) -> HashMap<Stri
                 error = %e,
                 "shell env dump spawn failed; falling back to process env",
             );
-            std::env::vars().collect()
+            process_env()
         }
         Err(_) => {
             warn!(
@@ -112,7 +143,7 @@ async fn capture_shell_env(shell: &str, shell_timeout: Duration) -> HashMap<Stri
                 timeout_ms = shell_timeout.as_millis(),
                 "shell env dump timed out; falling back to process env",
             );
-            std::env::vars().collect()
+            process_env()
         }
     }
 }
@@ -191,6 +222,15 @@ mod tests {
         assert_eq!(map.len(), 1);
     }
 
+    #[test]
+    fn process_env_contains_path_like_keys() {
+        let map = process_env();
+        assert!(
+            map.contains_key("PATH") || map.contains_key("Path"),
+            "expected a PATH-like key in the process env"
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn timed_out_shell_is_killed_on_drop() {
@@ -213,7 +253,7 @@ mod tests {
         fs::write(
             &shell,
             format!(
-                "#!/bin/sh\nprintf started > {}\nsleep 1\nprintf completed > {}\n",
+                "#!/bin/sh\nprintf started > {}\nsleep 2\nprintf completed > {}\n",
                 shell_quote(&started),
                 shell_quote(&completed)
             ),
@@ -227,10 +267,16 @@ mod tests {
         fs::set_permissions(&shell, perms).expect("make slow shell executable");
 
         let shell_path = shell.to_str().expect("temp shell path should be utf-8");
-        let _ = capture_shell_env(shell_path, Duration::from_millis(50)).await;
+        let _ = capture_shell_env(shell_path, Duration::from_secs(1)).await;
 
-        assert!(started.exists(), "test shell should have started");
-        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !started.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("test shell should have started");
+        tokio::time::sleep(Duration::from_millis(2_200)).await;
         assert!(
             !completed.exists(),
             "timed-out shell should be killed before completing"

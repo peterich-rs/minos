@@ -7,22 +7,53 @@
 //! state for history reads so translations are deterministic.
 
 use crate::error::TranslationError;
-use crate::message::{MessageRole, ThreadEndReason, UiEventMessage};
+use crate::message::{
+    DisplayPayload, MessageRole, SubagentStatus, ThreadEndReason, UiEventMessage,
+};
 use minos_domain::AgentName;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
+
+const TOOL_ARGS_DISPLAY_LIMIT: usize = 64 * 1024;
 
 /// Per-thread state the translator accumulates while streaming raw codex
 /// notifications. Not thread-safe; one instance per `thread_id`.
 pub struct CodexTranslatorState {
     thread_id: String,
     /// Currently-open assistant message (only one at a time for codex).
+    /// Populated when `item/started` carries `item.type == "agentMessage"`;
+    /// reset when the corresponding `turn/completed` lands.
     open_assistant_message_id: Option<String>,
+    /// Currently-open user message id. Set when an `item/started` with
+    /// `item.type == "userMessage"` arrives — either echoed by codex
+    /// itself, or synthesised by the daemon ahead of `turn/start` (see
+    /// `minos-agent-runtime::manager::send_user_message`). Used so the
+    /// `error` translator can target the user bubble when the failure
+    /// races a still-open user item.
+    open_user_message_id: Option<String>,
+    /// Already-emitted message ids — used to dedupe a `MessageStarted` for
+    /// the same `item.id` if the daemon's synthesised echo races with a
+    /// real codex `item/started` carrying the same id. Lookup is bounded
+    /// to the current thread's lifetime; entries never get pruned because
+    /// codex item ids are turn-scoped and one thread's `turn` count is
+    /// bounded in practice.
+    emitted_message_ids: std::collections::HashSet<String>,
+    /// Normalized user texts already seen in the current in-flight turn.
+    /// The daemon synthesizes a durable user item before `turn/start`; some
+    /// app-server versions can also echo that same user item with a distinct
+    /// id. Message ids alone cannot collapse that case, so we suppress a
+    /// second identical user text until the turn completes.
+    pending_user_message_texts: HashSet<String>,
     /// CLI tool-call-id → buffered state (args JSON fragments, stable UUID
     /// the translator assigned when `toolCall/started` was seen, plus the
     /// message id the tool call belongs to).
     tool_calls: HashMap<String, OpenToolCall>,
+    /// Completed thread items can arrive after later assistant content has
+    /// started. Remember the assistant message that was open when each item
+    /// started so completed tool rows do not attach to a newer answer.
+    item_message_ids: HashMap<String, String>,
+    emitted_subagent_ids: HashSet<(String, String)>,
 }
 
 struct OpenToolCall {
@@ -38,9 +69,40 @@ impl CodexTranslatorState {
         Self {
             thread_id,
             open_assistant_message_id: None,
+            open_user_message_id: None,
+            emitted_message_ids: std::collections::HashSet::new(),
+            pending_user_message_texts: HashSet::new(),
             tool_calls: HashMap::new(),
+            item_message_ids: HashMap::new(),
+            emitted_subagent_ids: HashSet::new(),
         }
     }
+}
+
+/// Concatenate the `text` field of every `Text` variant in a codex
+/// `userMessage.content` array. Non-text inputs (image, mention, skill,
+/// localImage) are not yet rendered as text — they fall through silently
+/// and the resulting string may be empty. Newline-joined so multi-segment
+/// pastes stay readable in the bubble.
+fn collect_user_input_text(content: Option<&Value>) -> String {
+    let Some(Value::Array(arr)) = content else {
+        return String::new();
+    };
+    arr.iter()
+        .filter_map(|el| {
+            let kind = el.get("type").and_then(Value::as_str)?;
+            if kind == "text" {
+                el.get("text").and_then(Value::as_str).map(str::to_string)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn normalize_user_input_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Translate one raw codex WS notification (or response) into zero or more
@@ -88,28 +150,80 @@ pub fn translate(
             }])
         }
         "item/started" => {
-            let role_raw = params
-                .get("role")
+            // Real codex 2026-04 shape (`crates/minos-codex-protocol`
+            // `ItemStartedNotification`): `params: {item: ThreadItem (tagged
+            // by "type"), threadId, turnId}`. ThreadItem variants we render
+            // in the chat timeline are `userMessage` and `agentMessage`;
+            // anything else (plan, reasoning, hookPrompt, …) flows through
+            // as a `Raw` event so the system surface can still see it
+            // without producing a misleading bubble.
+            //
+            // Item id is supplied by codex (or the daemon when it
+            // synthesises a user echo ahead of `turn/start`); we do NOT
+            // mint a fresh UUID here so that re-translation is idempotent
+            // and the daemon's synth + a hypothetical codex echo of the
+            // same id collapse into a single bubble.
+            let item = params.get("item").cloned().unwrap_or(Value::Null);
+            let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
+            let item_id = item
+                .get("id")
                 .and_then(Value::as_str)
-                .unwrap_or("agent");
-            let started_at_ms = params
-                .get("startedAtMs")
-                .and_then(Value::as_i64)
-                .unwrap_or(0);
-            let role = match role_raw {
-                "user" => MessageRole::User,
-                "agent" | "assistant" => MessageRole::Assistant,
-                _ => MessageRole::System,
-            };
-            let message_id = Uuid::new_v4().to_string();
-            if matches!(role, MessageRole::Assistant) {
-                state.open_assistant_message_id = Some(message_id.clone());
+                .map_or_else(|| Uuid::new_v4().to_string(), str::to_string);
+
+            match item_type {
+                "userMessage" => {
+                    if !state.emitted_message_ids.insert(item_id.clone()) {
+                        // Duplicate — already emitted MessageStarted for
+                        // this id (synth + codex echo race). Drop silently.
+                        return Ok(vec![]);
+                    }
+                    let text = collect_user_input_text(item.get("content"));
+                    let normalized_text = normalize_user_input_text(&text);
+                    if !normalized_text.is_empty()
+                        && !state.pending_user_message_texts.insert(normalized_text)
+                    {
+                        // Same turn, same user text, different item id:
+                        // daemon synth + app-server echo. Keep the durable
+                        // first row and suppress the transport echo.
+                        return Ok(vec![]);
+                    }
+                    state.open_user_message_id = Some(item_id.clone());
+                    let mut events = vec![UiEventMessage::MessageStarted {
+                        message_id: item_id.clone(),
+                        role: MessageRole::User,
+                        started_at_ms: 0,
+                    }];
+                    if !text.is_empty() {
+                        events.push(UiEventMessage::TextDelta {
+                            message_id: item_id,
+                            text: DisplayPayload::inline(text),
+                        });
+                    }
+                    Ok(events)
+                }
+                "agentMessage" => {
+                    if !state.emitted_message_ids.insert(item_id.clone()) {
+                        return Ok(vec![]);
+                    }
+                    state.open_assistant_message_id = Some(item_id.clone());
+                    Ok(vec![UiEventMessage::MessageStarted {
+                        message_id: item_id,
+                        role: MessageRole::Assistant,
+                        started_at_ms: 0,
+                    }])
+                }
+                "commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall" => {
+                    if let Some(msg_id) = state.open_assistant_message_id.clone() {
+                        state.item_message_ids.insert(item_id.clone(), msg_id);
+                    }
+                    Ok(vec![])
+                }
+                "collabAgentToolCall" => Ok(collab_spawn_events(state, &params, &item, &item_id)),
+                _ => Ok(vec![UiEventMessage::Raw {
+                    kind: format!("item/started:{item_type}"),
+                    payload_json: serde_json::to_string(&params).unwrap_or_default(),
+                }]),
             }
-            Ok(vec![UiEventMessage::MessageStarted {
-                message_id,
-                role,
-                started_at_ms,
-            }])
         }
         "item/agentMessage/delta" => {
             let text = params
@@ -123,7 +237,7 @@ pub fn translate(
             };
             Ok(vec![UiEventMessage::TextDelta {
                 message_id: msg_id,
-                text,
+                text: DisplayPayload::inline(text),
             }])
         }
         // Note: spec §12.1 (2026-04 codex app-server) canonicalises reasoning
@@ -141,7 +255,7 @@ pub fn translate(
             };
             Ok(vec![UiEventMessage::ReasoningDelta {
                 message_id: msg_id,
-                text,
+                text: DisplayPayload::inline(text),
             }])
         }
         // `*/completed` markers are signal-absorbed per spec §12.1: the
@@ -149,6 +263,7 @@ pub fn translate(
         // per-item completion. Returning `vec![]` keeps these off the mobile
         // timeline without falling through to the Raw escape hatch.
         "item/agentMessage/completed" | "item/reasoning/completed" => Ok(vec![]),
+        "item/completed" => Ok(translate_item_completed(state, &params)),
         "item/toolCall/started" => {
             let cli_id = params
                 .get("toolCallId")
@@ -186,7 +301,7 @@ pub fn translate(
                 })?;
             if let Some(tc) = state.tool_calls.get_mut(cli_id) {
                 if let Some(delta) = params.get("argumentsDelta").and_then(Value::as_str) {
-                    tc.args_buf.push_str(delta);
+                    push_bounded_display(&mut tc.args_buf, delta, TOOL_ARGS_DISPLAY_LIMIT);
                 }
             }
             Ok(vec![])
@@ -203,7 +318,7 @@ pub fn translate(
                     message_id: tc.message_id.clone(),
                     tool_call_id: tc.tool_call_id_stable.clone(),
                     name: tc.name.clone(),
-                    args_json: tc.args_buf.clone(),
+                    args_json: DisplayPayload::inline(tc.args_buf.clone()),
                 }])
             } else {
                 Ok(vec![])
@@ -228,7 +343,7 @@ pub fn translate(
             if let Some(tc) = state.tool_calls.remove(cli_id) {
                 Ok(vec![UiEventMessage::ToolCallCompleted {
                     tool_call_id: tc.tool_call_id_stable,
-                    output,
+                    output: DisplayPayload::inline(output),
                     is_error,
                 }])
             } else {
@@ -240,6 +355,8 @@ pub fn translate(
                 .get("finishedAtMs")
                 .and_then(Value::as_i64)
                 .unwrap_or(0);
+            state.pending_user_message_texts.clear();
+            state.item_message_ids.clear();
             let Some(msg_id) = state.open_assistant_message_id.take() else {
                 return Ok(vec![]);
             };
@@ -248,10 +365,298 @@ pub fn translate(
                 finished_at_ms,
             }])
         }
+        "error" => {
+            let code = params
+                .get("code")
+                .and_then(Value::as_str)
+                .unwrap_or("codex_error")
+                .to_string();
+            let message = params
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("codex reported an error")
+                .to_string();
+            Ok(vec![UiEventMessage::Error {
+                code,
+                message,
+                message_id: state
+                    .open_assistant_message_id
+                    .clone()
+                    .or_else(|| state.open_user_message_id.clone()),
+            }])
+        }
         other => Ok(vec![UiEventMessage::Raw {
             kind: other.to_string(),
             payload_json: serde_json::to_string(&params).unwrap_or_default(),
         }]),
+    }
+}
+
+fn push_bounded_display(buf: &mut String, delta: &str, limit: usize) {
+    if buf.len() >= limit {
+        return;
+    }
+    let remaining = limit - buf.len();
+    if delta.len() <= remaining {
+        buf.push_str(delta);
+        return;
+    }
+    let mut end = remaining;
+    while end > 0 && !delta.is_char_boundary(end) {
+        end -= 1;
+    }
+    buf.push_str(&delta[..end]);
+    buf.push_str("\n[truncated display buffer; full raw event is stored separately]");
+}
+
+fn translate_item_completed(
+    state: &mut CodexTranslatorState,
+    params: &Value,
+) -> Vec<UiEventMessage> {
+    let item = params.get("item").unwrap_or(&Value::Null);
+    let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
+    let item_id = item.get("id").and_then(Value::as_str).unwrap_or("");
+    match item_type {
+        "agentMessage" => {
+            let text = item
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            if item_id.is_empty() {
+                return Vec::new();
+            }
+            let mut events = Vec::new();
+            if state.open_assistant_message_id.as_deref() != Some(item_id)
+                && state.emitted_message_ids.insert(item_id.to_string())
+            {
+                state.open_assistant_message_id = Some(item_id.to_string());
+                events.push(UiEventMessage::MessageStarted {
+                    message_id: item_id.to_string(),
+                    role: MessageRole::Assistant,
+                    started_at_ms: 0,
+                });
+            }
+            events.push(UiEventMessage::TextReplace {
+                message_id: item_id.to_string(),
+                text: DisplayPayload::inline(text),
+            });
+            events
+        }
+        "reasoning" => {
+            let Some(msg_id) = state.open_assistant_message_id.clone() else {
+                return Vec::new();
+            };
+            let content = string_array(item.get("content"));
+            let summary = string_array(item.get("summary"));
+            let text = if summary.is_empty() {
+                content.join("\n")
+            } else {
+                summary.join("\n")
+            };
+            if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![UiEventMessage::ReasoningReplace {
+                    message_id: msg_id,
+                    text: DisplayPayload::inline(text),
+                }]
+            }
+        }
+        "commandExecution" => {
+            let Some(msg_id) = completed_item_message_id(state, item_id) else {
+                return Vec::new();
+            };
+            let tool_call_id = stable_item_tool_call_id(item_id, item_type);
+            let name = "commandExecution".to_string();
+            let args_json = serde_json::json!({
+                "command": item.get("command").cloned().unwrap_or(Value::Null),
+                "cwd": item.get("cwd").cloned().unwrap_or(Value::Null),
+                "status": item.get("status").cloned().unwrap_or(Value::Null),
+                "exitCode": item.get("exitCode").cloned().unwrap_or(Value::Null),
+            })
+            .to_string();
+            let output = item
+                .get("aggregatedOutput")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let is_error = !matches!(
+                item.get("status").and_then(Value::as_str),
+                Some("completed" | "succeeded")
+            ) || item.get("exitCode").and_then(Value::as_i64).unwrap_or(0) != 0;
+            vec![
+                UiEventMessage::ToolCallPlaced {
+                    message_id: msg_id,
+                    tool_call_id: tool_call_id.clone(),
+                    name,
+                    args_json: DisplayPayload::inline(args_json),
+                },
+                UiEventMessage::ToolCallCompleted {
+                    tool_call_id,
+                    output: DisplayPayload::inline(output),
+                    is_error,
+                },
+            ]
+        }
+        "fileChange" | "mcpToolCall" | "dynamicToolCall" => {
+            let Some(msg_id) = completed_item_message_id(state, item_id) else {
+                return Vec::new();
+            };
+            let tool_call_id = stable_item_tool_call_id(item_id, item_type);
+            let name = item
+                .get("tool")
+                .or_else(|| item.get("server"))
+                .and_then(Value::as_str)
+                .map_or_else(|| item_type.to_string(), str::to_string);
+            let args_json = serde_json::to_string(item).unwrap_or_default();
+            let output = summarize_completed_tool_item(item_type, item);
+            let is_error = completed_tool_item_is_error(item);
+            vec![
+                UiEventMessage::ToolCallPlaced {
+                    message_id: msg_id,
+                    tool_call_id: tool_call_id.clone(),
+                    name,
+                    args_json: DisplayPayload::inline(args_json),
+                },
+                UiEventMessage::ToolCallCompleted {
+                    tool_call_id,
+                    output: DisplayPayload::inline(output),
+                    is_error,
+                },
+            ]
+        }
+        "collabAgentToolCall" => {
+            let mut events = collab_spawn_events(state, params, item, item_id);
+            let status = collab_tool_call_status(item);
+            for sub_thread_id in receiver_thread_ids(item) {
+                events.push(UiEventMessage::SubagentStatusUpdated {
+                    sub_thread_id,
+                    status,
+                });
+            }
+            events
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn collab_spawn_events(
+    state: &mut CodexTranslatorState,
+    params: &Value,
+    item: &Value,
+    item_id: &str,
+) -> Vec<UiEventMessage> {
+    let parent_thread_id = item
+        .get("senderThreadId")
+        .and_then(Value::as_str)
+        .or_else(|| params.get("threadId").and_then(Value::as_str))
+        .unwrap_or(&state.thread_id)
+        .to_string();
+    let tool_call_id = if item_id.is_empty() {
+        stable_item_tool_call_id("", "collabAgentToolCall")
+    } else {
+        item_id.to_string()
+    };
+    let model = item
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let prompt = item
+        .get("prompt")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    receiver_thread_ids(item)
+        .into_iter()
+        .filter_map(|sub_thread_id| {
+            if !state
+                .emitted_subagent_ids
+                .insert((tool_call_id.clone(), sub_thread_id.clone()))
+            {
+                return None;
+            }
+            Some(UiEventMessage::SubagentSpawned {
+                parent_thread_id: parent_thread_id.clone(),
+                sub_thread_id,
+                tool_call_id: tool_call_id.clone(),
+                agent: AgentName::Codex,
+                model: model.clone(),
+                prompt: prompt.clone(),
+                title: None,
+            })
+        })
+        .collect()
+}
+
+fn receiver_thread_ids(item: &Value) -> Vec<String> {
+    item.get("receiverThreadIds")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+fn collab_tool_call_status(item: &Value) -> SubagentStatus {
+    match item.get("status").and_then(Value::as_str).unwrap_or("") {
+        "completed" => SubagentStatus::Completed,
+        "failed" => SubagentStatus::Failed,
+        "interrupted" => SubagentStatus::Interrupted,
+        _ => SubagentStatus::Running,
+    }
+}
+
+fn completed_item_message_id(state: &mut CodexTranslatorState, item_id: &str) -> Option<String> {
+    state
+        .item_message_ids
+        .remove(item_id)
+        .or_else(|| state.open_assistant_message_id.clone())
+}
+
+fn string_array(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+fn stable_item_tool_call_id(item_id: &str, item_type: &str) -> String {
+    if item_id.is_empty() {
+        format!("{item_type}:unknown")
+    } else {
+        format!("{item_type}:{item_id}")
+    }
+}
+
+fn completed_tool_item_is_error(item: &Value) -> bool {
+    let has_error_payload = item.get("error").is_some_and(|error| !error.is_null());
+    matches!(
+        item.get("status").and_then(Value::as_str),
+        Some("failed" | "errored" | "cancelled" | "denied")
+    ) || has_error_payload
+        || item.get("success").and_then(Value::as_bool) == Some(false)
+}
+
+fn summarize_completed_tool_item(item_type: &str, item: &Value) -> String {
+    match item_type {
+        "fileChange" => item
+            .get("changes")
+            .map(|changes| serde_json::to_string_pretty(changes).unwrap_or_default())
+            .unwrap_or_default(),
+        "mcpToolCall" => item
+            .get("result")
+            .or_else(|| item.get("error"))
+            .map(|value| serde_json::to_string_pretty(value).unwrap_or_default())
+            .unwrap_or_default(),
+        "dynamicToolCall" => item
+            .get("contentItems")
+            .map(|value| serde_json::to_string_pretty(value).unwrap_or_default())
+            .unwrap_or_default(),
+        _ => String::new(),
     }
 }
 
@@ -305,17 +710,19 @@ mod state_tests {
 
         let o1 = translate(
             &mut s,
-            &val(
-                r#"{"method":"item/started","params":{"itemId":"i1","role":"agent","startedAtMs":1}}"#,
-            ),
+            &val(r#"{"method":"item/started","params":{
+                    "item":{"type":"agentMessage","id":"i1","text":""},
+                    "threadId":"thr","turnId":"t1"
+                }}"#),
         )
         .unwrap();
         assert!(matches!(
             o1.as_slice(),
             [UiEventMessage::MessageStarted {
                 role: MessageRole::Assistant,
+                message_id,
                 ..
-            }]
+            }] if message_id == "i1"
         ));
 
         let o2 = translate(
@@ -347,15 +754,286 @@ mod state_tests {
     }
 
     #[test]
+    fn item_completed_replaces_incomplete_agent_message_text() {
+        let mut s = CodexTranslatorState::new("thr".into());
+
+        let _ = translate(
+            &mut s,
+            &val(r#"{"method":"item/started","params":{
+                    "item":{"type":"agentMessage","id":"i1","text":""},
+                    "threadId":"thr","turnId":"t1"
+                }}"#),
+        )
+        .unwrap();
+        let _ = translate(
+            &mut s,
+            &val(r#"{"method":"item/agentMessage/delta","params":{"itemId":"i1","delta":"Partial"}}"#),
+        )
+        .unwrap();
+
+        let completed = translate(
+            &mut s,
+            &val(r#"{"method":"item/completed","params":{
+                    "item":{"type":"agentMessage","id":"i1","text":"Partial final answer"},
+                    "threadId":"thr","turnId":"t1","completedAtMs":2
+                }}"#),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            completed.as_slice(),
+            [UiEventMessage::TextReplace { message_id, text }]
+                if message_id == "i1" && text == "Partial final answer"
+        ));
+    }
+
+    #[test]
+    fn completed_tool_item_uses_message_open_when_item_started() {
+        let mut s = CodexTranslatorState::new("thr".into());
+
+        let _ = translate(
+            &mut s,
+            &val(r#"{"method":"item/started","params":{
+                    "item":{"type":"agentMessage","id":"a1","text":""},
+                    "threadId":"thr","turnId":"t1"
+                }}"#),
+        )
+        .unwrap();
+        let _ = translate(
+            &mut s,
+            &val(r#"{"method":"item/started","params":{
+                    "item":{"type":"commandExecution","id":"cmd1","command":"ls","commandActions":[],"cwd":"/tmp","status":"inProgress"},
+                    "threadId":"thr","turnId":"t1"
+                }}"#),
+        )
+        .unwrap();
+        let _ = translate(
+            &mut s,
+            &val(r#"{"method":"item/started","params":{
+                    "item":{"type":"agentMessage","id":"a2","text":""},
+                    "threadId":"thr","turnId":"t1"
+                }}"#),
+        )
+        .unwrap();
+
+        let completed = translate(
+            &mut s,
+            &val(r#"{"method":"item/completed","params":{
+                    "item":{"type":"commandExecution","id":"cmd1","command":"ls","commandActions":[],"cwd":"/tmp","status":"completed","aggregatedOutput":"ok","exitCode":0},
+                    "threadId":"thr","turnId":"t1","completedAtMs":2
+                }}"#),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            completed.as_slice(),
+            [UiEventMessage::ToolCallPlaced { message_id, tool_call_id, .. }, UiEventMessage::ToolCallCompleted { tool_call_id: done_id, output, is_error: false }]
+                if message_id == "a1" && tool_call_id == done_id && output == "ok"
+        ));
+    }
+
+    #[test]
+    fn completed_mcp_tool_with_null_error_is_success() {
+        let mut s = CodexTranslatorState::new("thr".into());
+
+        let _ = translate(
+            &mut s,
+            &val(r#"{"method":"item/started","params":{
+                    "item":{"type":"agentMessage","id":"a1","text":""},
+                    "threadId":"thr","turnId":"t1"
+                }}"#),
+        )
+        .unwrap();
+        let _ = translate(
+            &mut s,
+            &val(r#"{"method":"item/started","params":{
+                    "item":{"type":"mcpToolCall","id":"mcp1","tool":"list_conversation_messages","status":"running"},
+                    "threadId":"thr","turnId":"t1"
+                }}"#),
+        )
+        .unwrap();
+
+        let completed = translate(
+            &mut s,
+            &val(r#"{"method":"item/completed","params":{
+                    "item":{
+                        "type":"mcpToolCall",
+                        "id":"mcp1",
+                        "tool":"list_conversation_messages",
+                        "status":"completed",
+                        "result":{"ok":true},
+                        "error":null
+                    },
+                    "threadId":"thr","turnId":"t1","completedAtMs":2
+                }}"#),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            completed.as_slice(),
+            [
+                UiEventMessage::ToolCallPlaced { .. },
+                UiEventMessage::ToolCallCompleted {
+                    is_error: false,
+                    ..
+                }
+            ]
+        ));
+    }
+
+    #[test]
+    fn user_message_emits_started_and_text_in_one_step() {
+        // Real codex (and the daemon's synth) put the user text inside
+        // `item.content[*].text`; there is no `item/userMessage/delta` in
+        // the 2026-04 protocol.
+        let mut s = CodexTranslatorState::new("thr".into());
+
+        let out = translate(
+            &mut s,
+            &val(r#"{"method":"item/started","params":{
+                    "item":{
+                        "type":"userMessage",
+                        "id":"u1",
+                        "content":[{"type":"text","text":"hello"}]
+                    },
+                    "threadId":"thr","turnId":"t1"
+                }}"#),
+        )
+        .unwrap();
+        assert_eq!(out.len(), 2);
+        assert!(matches!(
+            &out[0],
+            UiEventMessage::MessageStarted {
+                role: MessageRole::User,
+                message_id,
+                ..
+            } if message_id == "u1"
+        ));
+        assert!(matches!(
+            &out[1],
+            UiEventMessage::TextDelta { message_id, text }
+                if message_id == "u1" && text == "hello"
+        ));
+    }
+
+    #[test]
+    fn duplicate_user_item_started_is_deduped() {
+        // Daemon synth + codex echo can race on the same item.id. The
+        // translator must emit MessageStarted exactly once.
+        let mut s = CodexTranslatorState::new("thr".into());
+        let raw = val(r#"{"method":"item/started","params":{
+                "item":{"type":"userMessage","id":"u1","content":[{"type":"text","text":"hi"}]},
+                "threadId":"thr","turnId":"t1"
+            }}"#);
+        let first = translate(&mut s, &raw).unwrap();
+        assert_eq!(first.len(), 2);
+        let second = translate(&mut s, &raw).unwrap();
+        assert!(second.is_empty(), "second emission must dedupe: {second:?}");
+    }
+
+    #[test]
+    fn duplicate_user_text_in_same_turn_is_deduped_across_item_ids() {
+        let mut s = CodexTranslatorState::new("thr".into());
+        let synth = val(r#"{"method":"item/started","params":{
+                "item":{"type":"userMessage","id":"synth-1","content":[{"type":"text","text":"hi there"}]},
+                "threadId":"thr","turnId":""
+            }}"#);
+        let echo = val(r#"{"method":"item/started","params":{
+                "item":{"type":"userMessage","id":"echo-1","content":[{"type":"text","text":"hi  there"}]},
+                "threadId":"thr","turnId":"t1"
+            }}"#);
+
+        let first = translate(&mut s, &synth).unwrap();
+        assert_eq!(first.len(), 2);
+        let second = translate(&mut s, &echo).unwrap();
+        assert!(
+            second.is_empty(),
+            "same-turn user echo with a new id must dedupe: {second:?}"
+        );
+    }
+
+    #[test]
+    fn same_user_text_is_allowed_after_turn_completed() {
+        let mut s = CodexTranslatorState::new("thr".into());
+        let first_user = val(r#"{"method":"item/started","params":{
+                "item":{"type":"userMessage","id":"u1","content":[{"type":"text","text":"repeat"}]},
+                "threadId":"thr","turnId":"t1"
+            }}"#);
+        let assistant = val(r#"{"method":"item/started","params":{
+                "item":{"type":"agentMessage","id":"a1","text":""},
+                "threadId":"thr","turnId":"t1"
+            }}"#);
+        let completed = val(r#"{"method":"turn/completed","params":{"finishedAtMs":2}}"#);
+        let second_user = val(r#"{"method":"item/started","params":{
+                "item":{"type":"userMessage","id":"u2","content":[{"type":"text","text":"repeat"}]},
+                "threadId":"thr","turnId":"t2"
+            }}"#);
+
+        assert_eq!(translate(&mut s, &first_user).unwrap().len(), 2);
+        assert_eq!(translate(&mut s, &assistant).unwrap().len(), 1);
+        assert_eq!(translate(&mut s, &completed).unwrap().len(), 1);
+        let second = translate(&mut s, &second_user).unwrap();
+        assert_eq!(second.len(), 2);
+        assert!(matches!(
+            &second[0],
+            UiEventMessage::MessageStarted {
+                role: MessageRole::User,
+                message_id,
+                ..
+            } if message_id == "u2"
+        ));
+    }
+
+    #[test]
+    fn user_message_with_empty_content_emits_started_only() {
+        let mut s = CodexTranslatorState::new("thr".into());
+        let out = translate(
+            &mut s,
+            &val(r#"{"method":"item/started","params":{
+                    "item":{"type":"userMessage","id":"u_empty","content":[]},
+                    "threadId":"thr","turnId":"t1"
+                }}"#),
+        )
+        .unwrap();
+        assert_eq!(out.len(), 1);
+        assert!(matches!(
+            &out[0],
+            UiEventMessage::MessageStarted {
+                role: MessageRole::User,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn raw_error_maps_to_ui_error() {
+        let mut s = CodexTranslatorState::new("thr".into());
+        let out = translate(
+            &mut s,
+            &val(r#"{"method":"error","params":{"code":"exec_exit_nonzero","message":"boom"}}"#),
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            vec![UiEventMessage::Error {
+                code: "exec_exit_nonzero".into(),
+                message: "boom".into(),
+                message_id: None,
+            }]
+        );
+    }
+
+    #[test]
     fn tool_call_buffers_args_then_emits_placed() {
         let mut s = CodexTranslatorState::new("thr".into());
 
         // Bracket with a MessageStarted so the tool is associated.
         let _ = translate(
             &mut s,
-            &val(
-                r#"{"method":"item/started","params":{"itemId":"i1","role":"agent","startedAtMs":1}}"#,
-            ),
+            &val(r#"{"method":"item/started","params":{
+                    "item":{"type":"agentMessage","id":"i1","text":""},
+                    "threadId":"thr","turnId":"t1"
+                }}"#),
         )
         .unwrap();
 
@@ -422,5 +1100,71 @@ mod state_tests {
                 ..
             }] if output == "file1\nfile2"
         ));
+    }
+
+    #[test]
+    fn collab_agent_started_emits_subagent_spawned() {
+        let mut s = CodexTranslatorState::new("parent".into());
+        let out = translate(
+            &mut s,
+            &val(r#"{"method":"item/started","params":{
+                "threadId":"parent",
+                "item":{
+                    "type":"collabAgentToolCall",
+                    "id":"collab-1",
+                    "senderThreadId":"parent",
+                    "receiverThreadIds":["sub-1"],
+                    "status":"inProgress",
+                    "tool":"spawnAgent",
+                    "model":"gpt-5",
+                    "prompt":"inspect this"
+                }
+            }}"#),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            out.as_slice(),
+            [UiEventMessage::SubagentSpawned {
+                parent_thread_id,
+                sub_thread_id,
+                tool_call_id,
+                model,
+                prompt,
+                ..
+            }] if parent_thread_id == "parent"
+                && sub_thread_id == "sub-1"
+                && tool_call_id == "collab-1"
+                && model.as_deref() == Some("gpt-5")
+                && prompt.as_deref() == Some("inspect this")
+        ));
+    }
+
+    #[test]
+    fn collab_agent_completed_emits_terminal_status() {
+        let mut s = CodexTranslatorState::new("parent".into());
+        let out = translate(
+            &mut s,
+            &val(r#"{"method":"item/completed","params":{
+                "threadId":"parent",
+                "item":{
+                    "type":"collabAgentToolCall",
+                    "id":"collab-1",
+                    "senderThreadId":"parent",
+                    "receiverThreadIds":["sub-1"],
+                    "status":"completed",
+                    "tool":"spawnAgent"
+                }
+            }}"#),
+        )
+        .unwrap();
+
+        assert!(out.iter().any(|event| matches!(
+            event,
+            UiEventMessage::SubagentStatusUpdated {
+                sub_thread_id,
+                status: SubagentStatus::Completed,
+            } if sub_thread_id == "sub-1"
+        )));
     }
 }

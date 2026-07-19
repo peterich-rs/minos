@@ -1,0 +1,3 @@
+-- No-op in the latest-only schema.
+-- Projects are part of 0001_initial so new development databases start with
+-- the conversation-centric hierarchy directly.

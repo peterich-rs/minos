@@ -75,6 +75,35 @@ final class AppStateBootTests: XCTestCase {
     }
 
     @MainActor
+    func testFinishBootAllowsQrWhenPeersAlreadyExist() {
+        let appState = AppState()
+        let summary = MockDaemon.makePeerSummary(online: true)
+        let daemon = MockDaemon(
+            currentRelayLink: .connected,
+            currentPeer: .paired(
+                peerId: summary.mobileDeviceId,
+                peerName: summary.mobileDeviceName,
+                online: summary.online
+            ),
+            currentPeers: [summary]
+        )
+
+        appState.finishBoot(
+            daemon: daemon,
+            relayLinkSubscription: MockSubscription(),
+            peerSubscription: MockSubscription(),
+            relayLink: .connected,
+            peer: .paired(peerId: summary.mobileDeviceId, peerName: summary.mobileDeviceName, online: summary.online),
+            trustedDevice: nil,
+            peers: [summary]
+        )
+
+        XCTAssertTrue(appState.canShowQr)
+        XCTAssertTrue(appState.canForgetPeer)
+        XCTAssertEqual(appState.peers, [summary])
+    }
+
+    @MainActor
     func testFailBootSetsPhaseAndPreservesError() {
         let appState = AppState()
         let relayLinkSub = MockSubscription()
@@ -87,7 +116,7 @@ final class AppStateBootTests: XCTestCase {
         appState.peer = .pairing
         appState.isShowingQr = true
 
-        let error = MinosError.CfAuthFailed(message: "Cloudflare denied")
+        let error = MinosError.Unauthorized(reason: "backend rejected bootstrap")
         appState.failBoot(with: error)
 
         XCTAssertEqual(relayLinkSub.cancelCallCount, 1)
@@ -100,74 +129,66 @@ final class AppStateBootTests: XCTestCase {
         XCTAssertFalse(appState.isShowingQr)
     }
 
-    func testDaemonBootstrapEnvCredsAcceptsCompletePair() throws {
-        let creds = try XCTUnwrap(DaemonBootstrap.envCreds(from: [
-            "CF_ACCESS_CLIENT_ID": " client-id ",
-            "CF_ACCESS_CLIENT_SECRET": " client-secret "
-        ]))
-
-        XCTAssertEqual(creds.clientId, "client-id")
-        XCTAssertEqual(creds.clientSecret, "client-secret")
-    }
-
-    func testDaemonBootstrapEnvCredsRejectsPartialPair() {
-        XCTAssertThrowsError(try DaemonBootstrap.envCreds(from: [
-            "CF_ACCESS_CLIENT_ID": "client-id"
-        ])) { error in
-            guard case let .some(.CfAccessMisconfigured(reason)) = error as? MinosError else {
-                XCTFail("expected CfAccessMisconfigured, got \(error)")
-                return
-            }
-            XCTAssertTrue(reason.contains("CF_ACCESS_CLIENT_SECRET"))
-        }
-    }
-
-    func testLocalStateLoaderAcceptsRustFractionalRfc3339PairedAt() throws {
-        let json = """
-        {
-          "self_device_id": "00000000-0000-0000-0000-000000000001",
-          "peer": {
-            "device_id": "00000000-0000-0000-0000-000000000002",
-            "name": "iPhone",
-            "paired_at": "2026-04-26T02:34:56.123456789Z"
-          }
-        }
-        """
-
-        let loaded = try LocalStateLoader.decodePersistedState(
-            Data(json.utf8),
-            from: "/tmp/local-state.json"
+    func testDaemonBootstrapRelayConfigReadsFromInfoPlist() throws {
+        let config = try DaemonBootstrap.relayConfig(
+            infoDictionary: [
+                "MINOS_BACKEND_URL": " wss://relay.example/devices "
+            ]
         )
 
-        XCTAssertEqual(loaded.selfDeviceId, "00000000-0000-0000-0000-000000000001")
-        XCTAssertEqual(loaded.toRecord()?.deviceId, "00000000-0000-0000-0000-000000000002")
-        XCTAssertEqual(loaded.toRecord()?.name, "iPhone")
+        XCTAssertEqual(config.backendUrl, "wss://relay.example/devices")
     }
 
-    func testLocalStateLoaderReportsBadDateAsStoreCorrupt() throws {
-        let path = "/tmp/local-state.json"
+    func testDaemonBootstrapRelayConfigFallsBackToEnvironment() throws {
+        let config = try DaemonBootstrap.relayConfig(
+            infoDictionary: [:],
+            env: ["MINOS_BACKEND_URL": " wss://env.example/devices "]
+        )
 
-        let json = """
-        {
-          "self_device_id": "00000000-0000-0000-0000-000000000001",
-          "peer": {
-            "device_id": "00000000-0000-0000-0000-000000000002",
-            "name": "iPhone",
-            "paired_at": "not-a-date"
-          }
-        }
-        """
+        XCTAssertEqual(config.backendUrl, "wss://env.example/devices")
+    }
 
-        XCTAssertThrowsError(
-            try LocalStateLoader.decodePersistedState(Data(json.utf8), from: path)
-        ) { error in
-            guard case let .StoreCorrupt(errorPath, message) = error as? MinosError else {
-                XCTFail("expected StoreCorrupt, got \(error)")
-                return
-            }
-            XCTAssertEqual(errorPath, path)
-            XCTAssertTrue(message.contains("paired_at"))
-        }
+    func testDaemonBootstrapRelayConfigDefaultsBlankWhenInfoPlistEmpty() throws {
+        let config = try DaemonBootstrap.relayConfig(infoDictionary: [:], env: [:])
+
+        XCTAssertEqual(config.backendUrl, "")
+    }
+
+    func testAppDirectoriesLocalStatePathUsesMinosHome() {
+        let path = AppDirectories.localStatePath(env: ["MINOS_HOME": "/tmp/minos-shared"])
+
+        XCTAssertEqual(path.path, "/tmp/minos-shared/state/local-state.json")
+    }
+
+    func testAppDirectoriesLocalStatePathDefaultsToRustMinosHome() {
+        let path = AppDirectories.localStatePath(env: [:])
+        let expected = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".minos", isDirectory: true)
+            .appendingPathComponent("state", isDirectory: true)
+            .appendingPathComponent("local-state.json")
+
+        XCTAssertEqual(path.path, expected.path)
+    }
+
+    func testLocalStateLoaderMigratesLegacyApplicationSupportPath() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let newPath = dir
+            .appendingPathComponent("state", isDirectory: true)
+            .appendingPathComponent("local-state.json")
+        let legacyPath = dir.appendingPathComponent("legacy-local-state.json")
+        let deviceId = "00000000-0000-0000-0000-000000000123"
+        try FileManager.default.createDirectory(
+            at: legacyPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let bytes = Data(#"{"self_device_id":"\#(deviceId)"}"#.utf8)
+        try bytes.write(to: legacyPath)
+
+        let loaded = try LocalStateLoader.loadOrInit(at: newPath, legacyPath: legacyPath)
+
+        XCTAssertEqual(loaded, deviceId)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: newPath.path))
     }
 
     @MainActor
@@ -227,6 +248,17 @@ final class AppStateBootTests: XCTestCase {
             name: "iPhone",
             pairedAt: originalPairedAt
         )
+        daemon.currentTrustedDeviceValue = appState.trustedDevice
+        daemon.currentPeersValue = [
+            MockDaemon.makePeerSummary(
+                deviceId: did,
+                deviceName: "iPhone",
+                accountEmail: "",
+                pairedAtMs: Int64(originalPairedAt.timeIntervalSince1970 * 1000),
+                lastActiveAtMs: Int64(originalPairedAt.timeIntervalSince1970 * 1000),
+                online: true
+            )
+        ]
 
         // Two repeat emissions that would historically have stamped
         // `pairedAt = Date()` on each hit, wiping the original value.
@@ -290,7 +322,7 @@ enum AppStateFixtures {
             Task { @MainActor in appState.applyRelayLink(state) }
         }
         let peerObserver = PeerObserver { state in
-            Task { @MainActor in appState.applyPeer(state) }
+            Task { @MainActor in await appState.applyPeer(state) }
         }
         let relayLinkSub = daemon.subscribeRelayLink(relayObserver)
         let peerSub = daemon.subscribePeer(peerObserver)

@@ -1,5 +1,8 @@
 [
-  {"method":"item/started","params":{"itemId":"i1","role":"agent","startedAtMs":1714000004000}},
+  {"method":"item/started","params":{
+    "item":{"type":"agentMessage","id":"i1","text":""},
+    "threadId":"thr_fixture","turnId":"t1"
+  }},
   {"method":"item/reasoning/delta","params":{"itemId":"i1","delta":"Thinking…"}},
   {"method":"turn/completed","params":{"finishedAtMs":1714000005000}}
 ]

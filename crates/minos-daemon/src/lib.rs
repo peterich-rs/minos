@@ -2,24 +2,32 @@
 
 pub mod agent;
 pub mod config;
+pub mod conversation_completion;
+pub mod device_secret_store;
+pub mod git_snapshot;
 pub mod handle;
-#[cfg(target_os = "macos")]
-pub mod keychain_store;
+pub mod host_bootstrap_key_store;
+pub mod ingest_chunk;
+pub mod ingest_coalescer;
+pub mod ingest_sync;
+pub mod jsonl_recover;
+pub mod local_rpc;
 pub mod local_state;
 pub mod logging;
+mod openwire_trace;
 pub mod paths;
 pub mod relay_client;
+pub mod relay_http;
 pub mod relay_pairing;
 pub mod rpc_server;
+pub mod store;
 pub mod subscription;
 
-pub use agent::AgentGlue;
+pub use agent::{AgentGlue, AgentThreadSnapshot};
 pub use config::{RelayConfig, BACKEND_URL};
 pub use handle::*;
-#[cfg(target_os = "macos")]
-pub use keychain_store::KeychainTrustedDeviceStore;
 pub use local_state::LocalState;
-pub use minos_agent_runtime::AgentState;
+pub use minos_agent_runtime::ThreadState;
 pub use relay_client::RelayClient;
 pub use relay_pairing::{PeerRecord, RelayQrPayload};
 pub use subscription::{

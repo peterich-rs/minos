@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO account_host_pairings\n            (pair_id, host_device_id, mobile_account_id, paired_via_device_id, paired_at_ms)\n        VALUES (?, ?, ?, ?, ?)\n        ON CONFLICT (host_device_id, mobile_account_id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "d69398a39c5d74474d1530d77657ebb08b3daf449a844c7e0845917186536095"
+}

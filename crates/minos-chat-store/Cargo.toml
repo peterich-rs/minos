@@ -1,0 +1,31 @@
+[package]
+name = "minos-chat-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+minos-domain = { path = "../minos-domain", version = "0.1.0" }
+minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[[bin]]
+name = "minos-teamwork-mcp"
+path = "src/bin/minos-teamwork-mcp.rs"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

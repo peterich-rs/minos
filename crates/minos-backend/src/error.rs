@@ -59,12 +59,34 @@ pub enum BackendError {
     #[error("pairing token invalid or expired")]
     PairingTokenInvalid,
 
-    /// Pairing refused because one side was already paired.
+    /// An account create attempt collided with an existing email row.
     ///
-    /// Spec §10.2 R4: MVP policy is "refuse and let the UI confirm replace
-    /// via explicit `forget_peer` + retry". `actual` captures the observed
-    /// state (currently always `"paired"`) so future callers can rely on
-    /// the stringly-typed shape without caring about the domain enum.
+    /// The `accounts` table has `UNIQUE COLLATE NOCASE` on email so the
+    /// check is enforced at insert time. Mirrors
+    /// `MinosError::EmailTaken` for the boundary mapping.
+    #[error("email already registered")]
+    EmailTaken,
+
+    /// An argon2id password hash / verify operation failed.
+    ///
+    /// Distinct from `PairingHash` so the auth rail and the pairing rail
+    /// can surface independent log/metric labels.
+    #[error("password hash error: {message}")]
+    PasswordHash { message: String },
+
+    /// HS256 JWT signing failed (e.g. malformed key).
+    #[error("jwt sign error: {message}")]
+    JwtSign { message: String },
+
+    /// HS256 JWT decode/verify failed (bad signature, expired, malformed).
+    #[error("jwt verify error: {message}")]
+    JwtVerify { message: String },
+
+    /// Pairing refused because the candidate state is invalid, for example
+    /// a device trying to pair with itself. `actual` captures the observed
+    /// state (currently `"self"` for the live multi-device path, with
+    /// `"paired"` still possible from legacy single-pair DB triggers during
+    /// upgrade).
     /// Mirrors `MinosError::PairingStateMismatch`.
     #[error("pairing state mismatch: {actual}")]
     PairingStateMismatch { actual: String },
@@ -92,4 +114,16 @@ pub enum BackendError {
     /// sender rather than hanging until timeout.
     #[error("peer backpressure: {peer_device_id}")]
     PeerBackpressure { peer_device_id: String },
+
+    #[error("forwarded rpc `{method}` failed: {message}")]
+    ForwardRpc { method: String, message: String },
+
+    #[error("forwarded rpc `{method}` timed out after {timeout_ms}ms")]
+    ForwardRpcTimeout { method: String, timeout_ms: u64 },
+
+    #[error("cache `{operation}` failed: {message}")]
+    Cache { operation: String, message: String },
+
+    #[error("message bus `{operation}` failed: {message}")]
+    MessageBus { operation: String, message: String },
 }

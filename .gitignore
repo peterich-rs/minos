@@ -58,3 +58,19 @@ apps/mobile/android/local.properties
 apps/mobile/android/captures/
 apps/mobile/android/key.properties
 apps/mobile/android/**/gradle-wrapper.jar
+
+# Per-developer environment configuration. .env.example is the schema.
+.env.local
+.env.local.*
+
+# Claude Code local agent state (scheduled-task locks, transcripts, etc.).
+.claude/
+
+# Workspace-root FVM (mirrors apps/mobile/.fvm/ rule above).
+.fvm/
+.fvmrc
+
+# Local UI/protocol reference clones (Remodex / fire / openwire). These are
+# user-side checkouts kept for design reference; they each carry their own
+# .git/ and are not part of this repo.
+third_party/

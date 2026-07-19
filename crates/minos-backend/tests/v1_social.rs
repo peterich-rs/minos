@@ -1,0 +1,1351 @@
+use axum::body::Body;
+use axum::http::{Method, Request, StatusCode};
+use minos_backend::auth::jwt;
+use minos_backend::http::{router, test_support::backend_state, test_support::TEST_JWT_SECRET};
+use minos_backend::session::SessionHandle;
+use minos_backend::store::{
+    account_host_pairings, agent_sessions, devices, durable_event_log, host_commands, raw_events,
+    social, threads,
+};
+use minos_domain::{AgentName, DeviceId, DeviceRole};
+use minos_protocol::Envelope;
+use pretty_assertions::assert_eq;
+use std::time::Duration;
+
+mod common;
+
+fn authed_request(
+    method: Method,
+    uri: &str,
+    device_id: DeviceId,
+    account_id: &str,
+    body: Body,
+) -> Request<Body> {
+    let token = jwt::sign(
+        TEST_JWT_SECRET.as_bytes(),
+        account_id,
+        &device_id.to_string(),
+    )
+    .unwrap();
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json")
+        .header("x-device-id", device_id.to_string())
+        .body(body)
+        .unwrap()
+}
+
+async fn seed_host_pair_for_account(
+    state: &minos_backend::http::BackendState,
+    account_id: &str,
+    mobile_device_id: DeviceId,
+) -> DeviceId {
+    let host_device_id = DeviceId::new();
+    devices::insert_device(
+        &state.store,
+        host_device_id,
+        "Mac",
+        DeviceRole::AgentHost,
+        0,
+    )
+    .await
+    .unwrap();
+    devices::insert_device(
+        &state.store,
+        mobile_device_id,
+        "iPhone",
+        DeviceRole::MobileClient,
+        0,
+    )
+    .await
+    .unwrap();
+    devices::set_account_id(&state.store, &host_device_id, account_id)
+        .await
+        .unwrap();
+    devices::set_account_id(&state.store, &mobile_device_id, account_id)
+        .await
+        .unwrap();
+    account_host_pairings::insert_pair(
+        &state.store,
+        host_device_id,
+        account_id,
+        mobile_device_id,
+        0,
+    )
+    .await
+    .unwrap();
+    host_device_id
+}
+
+fn seed_live_host_session(
+    state: &minos_backend::http::BackendState,
+    host_device_id: DeviceId,
+    account_id: &str,
+) -> tokio::sync::mpsc::Receiver<Envelope> {
+    let (handle, outbox_rx) = SessionHandle::new(host_device_id, DeviceRole::AgentHost);
+    handle.set_account_id(account_id.to_string());
+    state.registry.insert(handle);
+    outbox_rx
+}
+
+#[tokio::test]
+async fn register_and_update_agent_persist_workspace_path() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            "/v1/agents",
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "name": "Codex",
+                    "description": "Assistant",
+                    "runtime_agent": "codex",
+                    "model": "gpt-5",
+                    "workspace_path": "~/develop/minos"
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["workspace_path"], "~/develop/minos");
+    let agent_id = body["agent_id"].as_str().unwrap().to_string();
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!("/v1/agents/{agent_id}/update"),
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "name": "Codex Writer",
+                    "description": "Assistant",
+                    "runtime_agent": "codex",
+                    "model": "gpt-5.1",
+                    "workspace_path": "/Users/example/minos"
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["workspace_path"], "/Users/example/minos");
+
+    let row = social::get_agent(&state.store, &agent_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.name, "Codex Writer");
+    assert_eq!(row.workspace_path.as_deref(), Some("/Users/example/minos"));
+}
+
+fn deterministic_uuid(namespace: &str, parts: &[&str]) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut value = namespace.to_string();
+    for part in parts {
+        value.push(':');
+        value.push_str(part);
+    }
+    let digest = Sha256::digest(value.as_bytes());
+    digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn expected_social_start_session_id(account_id: &str, origin_message_id: &str) -> String {
+    deterministic_uuid(
+        "agent-session-start",
+        &[account_id, &format!("social-start-{origin_message_id}")],
+    )
+}
+
+fn expected_social_send_turn_id(session_id: &str, origin_message_id: &str) -> String {
+    deterministic_uuid(
+        "agent-session-send-input",
+        &[session_id, &format!("social-send-{origin_message_id}")],
+    )
+}
+
+async fn assert_agent_start_host_command(
+    pool: &sqlx::SqlitePool,
+    host_device_id: DeviceId,
+    requester_account_id: &str,
+    session_id: &str,
+    _origin_message_id: &str,
+    expected_text: &str,
+    expected_conversation_id: &str,
+    expected_agent_id: &str,
+    expected_workspace_path: Option<&str>,
+) {
+    let row = host_commands::get(pool, &format!("cmd-agent-session-start-{session_id}"))
+        .await
+        .unwrap()
+        .expect("host command should be recorded for social agent session start");
+
+    assert_eq!(row.host_installation_id, host_device_id);
+    assert_eq!(row.method, "agent_session.start");
+    assert_eq!(row.agent_session_id.as_deref(), Some(session_id));
+    assert_eq!(
+        row.requested_by_account_id.as_deref(),
+        Some(requester_account_id)
+    );
+    assert_eq!(row.status, host_commands::HostCommandStatus::Pending);
+    assert_eq!(row.response_json, None);
+    assert_eq!(row.params_json["session_id"], session_id);
+    assert_eq!(row.params_json["agent_id"], expected_agent_id);
+    assert_eq!(row.params_json["runtime_agent"], "codex");
+    assert_eq!(row.params_json["conversation_id"], expected_conversation_id);
+    assert_eq!(row.params_json["initial_user_message"], expected_text);
+    assert_eq!(
+        row.params_json["workspace"],
+        expected_workspace_path.unwrap_or_default()
+    );
+    assert_eq!(
+        row.params_json["workspace_path"],
+        expected_workspace_path
+            .map(|path| serde_json::json!(path))
+            .unwrap_or(serde_json::Value::Null)
+    );
+}
+
+async fn assert_agent_send_host_command(
+    pool: &sqlx::SqlitePool,
+    host_device_id: DeviceId,
+    requester_account_id: &str,
+    session_id: &str,
+    origin_message_id: &str,
+    expected_text: &str,
+) {
+    let turn_id = expected_social_send_turn_id(session_id, origin_message_id);
+    let row = host_commands::get(pool, &format!("cmd-agent-session-send-{turn_id}"))
+        .await
+        .unwrap()
+        .expect("host command should be recorded for social agent input");
+
+    assert_eq!(row.host_installation_id, host_device_id);
+    assert_eq!(row.method, "agent_session.send_input");
+    assert_eq!(row.agent_session_id.as_deref(), Some(session_id));
+    assert_eq!(
+        row.requested_by_account_id.as_deref(),
+        Some(requester_account_id)
+    );
+    assert_eq!(row.status, host_commands::HostCommandStatus::Pending);
+    assert_eq!(row.response_json, None);
+    assert_eq!(row.params_json["session_id"], session_id);
+    assert_eq!(row.params_json["turn_id"], turn_id);
+    assert_eq!(row.params_json["text"], expected_text);
+    assert_eq!(row.params_json["mentions"], serde_json::json!([]));
+}
+
+async fn assert_formal_agent_session(
+    state: &minos_backend::http::BackendState,
+    session_id: &str,
+    conversation_id: &str,
+    host_device_id: DeviceId,
+    agent_id: &str,
+) {
+    let session = agent_sessions::get(&state.store, session_id)
+        .await
+        .unwrap()
+        .expect("social agent dispatch should create a formal agent session");
+    let host_device_id = host_device_id.to_string();
+    assert_eq!(session.conversation_id, conversation_id);
+    assert_eq!(
+        session.host_device_id.as_deref(),
+        Some(host_device_id.as_str())
+    );
+    assert_eq!(session.agent_id.as_deref(), Some(agent_id));
+    assert_eq!(session.status, "pending");
+}
+
+async fn wait_for_message_count(
+    state: &minos_backend::http::BackendState,
+    conversation_id: &str,
+    expected: usize,
+) -> Vec<social::ChatMessageRow> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let rows = social::list_messages(&state.store, conversation_id, None, 50)
+            .await
+            .unwrap();
+        if rows.len() >= expected {
+            return rows;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for social reply"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn social_friend_and_chat_flow_round_trips() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+        .await
+        .unwrap();
+    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com", "phc")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let bob_device = DeviceId::new();
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            "/v1/profiles/self",
+            alice_device,
+            &alice.account_id,
+            Body::from("{}"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["email"], "alice@example.com");
+    assert_eq!(body["minos_id"], alice.minos_id);
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            "/v1/profiles/search",
+            alice_device,
+            &alice.account_id,
+            Body::from(serde_json::json!({ "minos_id": &bob.minos_id[..4] }).to_string()),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["users"].as_array().unwrap().len(), 1);
+    assert_eq!(body["users"][0]["minos_id"], bob.minos_id);
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            "/v1/friend-requests",
+            alice_device,
+            &alice.account_id,
+            Body::from(serde_json::json!({ "target_minos_id": bob.minos_id }).to_string()),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let request_id = body["request_id"].as_str().unwrap().to_string();
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            "/v1/friend-requests/query",
+            bob_device,
+            &bob.account_id,
+            Body::from("{}"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["incoming"].as_array().unwrap().len(), 1);
+
+    let (status, _) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!("/v1/friend-requests/{request_id}/accept"),
+            bob_device,
+            &bob.account_id,
+            Body::from("{}"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            "/v1/friends/query",
+            alice_device,
+            &alice.account_id,
+            Body::from("{}"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["friends"].as_array().unwrap().len(), 1);
+    assert_eq!(body["friends"][0]["minos_id"], bob.minos_id);
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            "/v1/conversations/direct",
+            alice_device,
+            &alice.account_id,
+            Body::from(serde_json::json!({ "friend_account_id": bob.account_id }).to_string()),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let conversation_id = body["conversation_id"].as_str().unwrap();
+
+    let (status, _) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!("/v1/conversations/{conversation_id}/messages"),
+            alice_device,
+            &alice.account_id,
+            Body::from(serde_json::json!({ "text": "hello bob" }).to_string()),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!("/v1/conversations/{conversation_id}/messages/query"),
+            bob_device,
+            &bob.account_id,
+            Body::from(r#"{"limit":50}"#),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(body["messages"][0]["text"], "hello bob");
+    assert_eq!(body["messages"][0]["sender"]["minos_id"], alice.minos_id);
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            "/v1/conversations/query",
+            bob_device,
+            &bob.account_id,
+            Body::from("{}"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["conversations"].as_array().unwrap().len(), 1);
+    assert_eq!(body["conversations"][0]["conversation_id"], conversation_id);
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!("/v1/conversations/{conversation_id}/members/query"),
+            bob_device,
+            &bob.account_id,
+            Body::from("{}"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["members"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn conversation_command_aliases_list_and_send_message() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let conversation = social::create_group_conversation(
+        &state.store,
+        &alice.account_id,
+        "Alias Conversation",
+        &[],
+        100,
+    )
+    .await
+    .unwrap();
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            "/v1/conversations/list",
+            alice_device,
+            &alice.account_id,
+            Body::from("{}"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["conversations"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        body["conversations"][0]["conversation_id"],
+        conversation.conversation_id
+    );
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            "/v1/conversations/send-message",
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "conversation_id": conversation.conversation_id,
+                    "text": "hello via command route",
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["text"], "hello via command route");
+
+    let rows = social::list_messages(&state.store, &conversation.conversation_id, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].text, "hello via command route");
+}
+
+#[tokio::test]
+async fn send_message_publishes_account_realtime_event_with_full_message() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+        .await
+        .unwrap();
+    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com", "phc")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let conversation = social::create_group_conversation(
+        &state.store,
+        &alice.account_id,
+        "Realtime",
+        std::slice::from_ref(&bob.account_id),
+        100,
+    )
+    .await
+    .unwrap();
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(serde_json::json!({ "text": "live hello" }).to_string()),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let message_id = body["message_id"].as_str().unwrap();
+
+    for account_id in [&alice.account_id, &bob.account_id] {
+        let topic = format!("account:{account_id}");
+        let events = durable_event_log::read_topic_after(&state.store, "account", &topic, 0, 10)
+            .await
+            .unwrap();
+        let event = events
+            .iter()
+            .find(|event| event.payload_json["message_id"] == message_id)
+            .expect("account topic should receive the social message event");
+        assert_eq!(
+            event.payload_json["kind"],
+            "account_conversation_message_appended"
+        );
+        assert_eq!(
+            event.payload_json["conversation_id"],
+            conversation.conversation_id
+        );
+        assert_eq!(event.payload_json["message"]["text"], "live hello");
+        assert_eq!(event.payload_json["message"]["message_id"], message_id);
+    }
+}
+
+#[tokio::test]
+async fn delete_conversation_stops_running_agent_session_and_hides_for_caller() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let host_device_id = seed_host_pair_for_account(&state, &alice.account_id, alice_device).await;
+    let host_device_id_string = host_device_id.to_string();
+    let conversation =
+        social::create_group_conversation(&state.store, &alice.account_id, "Delete Me", &[], 100)
+            .await
+            .unwrap();
+    let agent = social::register_agent(
+        &state.store,
+        &alice.account_id,
+        "Codex",
+        "Assistant",
+        "codex",
+        "gpt-5",
+        None,
+        100,
+    )
+    .await
+    .unwrap();
+    social::add_agent_to_conversation(
+        &state.store,
+        &conversation.conversation_id,
+        &agent.agent_id,
+        &alice.account_id,
+        100,
+    )
+    .await
+    .unwrap();
+    agent_sessions::create(
+        &state.store,
+        "sess-delete-1",
+        &conversation.conversation_id,
+        None,
+        Some(&host_device_id_string),
+        Some(&agent.agent_id),
+        "running",
+        100,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let (status, _) = common::send(
+        &mut app,
+        authed_request(
+            Method::DELETE,
+            &format!("/v1/conversations/{}", conversation.conversation_id),
+            alice_device,
+            &alice.account_id,
+            Body::empty(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let stop_command = host_commands::get(&state.store, "cmd-agent-session-stop-sess-delete-1")
+        .await
+        .unwrap()
+        .expect("delete should enqueue stop for running agent session");
+    assert_eq!(stop_command.host_installation_id, host_device_id);
+    assert_eq!(stop_command.method, "agent_session.stop");
+    assert_eq!(stop_command.params_json["session_id"], "sess-delete-1");
+    assert!(
+        social::get_conversation(&state.store, &conversation.conversation_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let stopped_session = agent_sessions::get(&state.store, "sess-delete-1")
+        .await
+        .unwrap()
+        .expect("session row should remain available for stop tracking");
+    assert_eq!(stopped_session.status, "stopping");
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            "/v1/conversations/query",
+            alice_device,
+            &alice.account_id,
+            Body::from("{}"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["conversations"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn delete_direct_conversation_hides_only_for_requesting_account() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+        .await
+        .unwrap();
+    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com", "phc")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let bob_device = DeviceId::new();
+    let conversation = social::ensure_direct_conversation(
+        &state.store,
+        &alice.account_id,
+        &alice.account_id,
+        &bob.account_id,
+        100,
+    )
+    .await
+    .unwrap();
+    social::insert_message(
+        &state.store,
+        &conversation.conversation_id,
+        &bob.account_id,
+        "hello",
+        101,
+        None,
+        &[],
+    )
+    .await
+    .unwrap();
+
+    let (status, _) = common::send(
+        &mut app,
+        authed_request(
+            Method::DELETE,
+            &format!("/v1/conversations/{}", conversation.conversation_id),
+            alice_device,
+            &alice.account_id,
+            Body::empty(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            "/v1/conversations/query",
+            alice_device,
+            &alice.account_id,
+            Body::from("{}"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["conversations"].as_array().unwrap().is_empty());
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            "/v1/conversations/query",
+            bob_device,
+            &bob.account_id,
+            Body::from("{}"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["conversations"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        body["conversations"][0]["conversation_id"],
+        conversation.conversation_id
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+        .await
+        .unwrap();
+    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com", "phc")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let host_device_id = seed_host_pair_for_account(&state, &alice.account_id, alice_device).await;
+    let _host_rx = seed_live_host_session(&state, host_device_id, &alice.account_id);
+
+    let conversation = social::create_group_conversation(
+        &state.store,
+        &alice.account_id,
+        "Group",
+        &[bob.account_id.clone()],
+        100,
+    )
+    .await
+    .unwrap();
+    let agent = social::register_agent(
+        &state.store,
+        &alice.account_id,
+        "Codex",
+        "Assistant",
+        "codex",
+        "gpt-5",
+        Some("/Users/example/minos"),
+        100,
+    )
+    .await
+    .unwrap();
+    social::add_agent_to_conversation(
+        &state.store,
+        &conversation.conversation_id,
+        &agent.agent_id,
+        &alice.account_id,
+        100,
+    )
+    .await
+    .unwrap();
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "text": format!("@{} please help", agent.agent_id)
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let user_message_id = body["message_id"].as_str().unwrap().to_string();
+    let session_id = expected_social_start_session_id(&alice.account_id, &user_message_id);
+    assert_eq!(
+        social::lookup_session_id_for_message(&state.store, &user_message_id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(session_id.as_str())
+    );
+    assert_agent_start_host_command(
+        &state.store,
+        host_device_id,
+        &alice.account_id,
+        &session_id,
+        &user_message_id,
+        "please help",
+        &conversation.conversation_id,
+        &agent.agent_id,
+        Some("/Users/example/minos"),
+    )
+    .await;
+    assert_eq!(
+        social::lookup_latest_session_id_for_conversation_agent(
+            &state.store,
+            &conversation.conversation_id,
+            &agent.agent_id
+        )
+        .await
+        .unwrap()
+        .as_deref(),
+        Some(session_id.as_str())
+    );
+    assert_formal_agent_session(
+        &state,
+        &session_id,
+        &conversation.conversation_id,
+        host_device_id,
+        &agent.agent_id,
+    )
+    .await;
+
+    threads::upsert(
+        &state.store,
+        &session_id,
+        AgentName::Codex,
+        &host_device_id.to_string(),
+        199,
+    )
+    .await
+    .unwrap();
+
+    raw_events::insert_if_absent(
+        &state.store,
+        &session_id,
+        1,
+        AgentName::Codex,
+        &serde_json::json!({
+            "method": "item/started",
+            "params": {
+                "item": { "type": "agentMessage", "id": "agent-msg-1" },
+                "threadId": session_id,
+                "turnId": "turn-1"
+            }
+        }),
+        200,
+    )
+    .await
+    .unwrap();
+    raw_events::insert_if_absent(
+        &state.store,
+        &session_id,
+        2,
+        AgentName::Codex,
+        &serde_json::json!({
+            "method": "item/agentMessage/delta",
+            "params": {
+                "itemId": "agent-msg-1",
+                "delta": "Done"
+            }
+        }),
+        201,
+    )
+    .await
+    .unwrap();
+    raw_events::insert_if_absent(
+        &state.store,
+        &session_id,
+        3,
+        AgentName::Codex,
+        &serde_json::json!({
+            "method": "turn/completed",
+            "params": {
+                "finishedAtMs": 202
+            }
+        }),
+        202,
+    )
+    .await
+    .unwrap();
+
+    let rows = wait_for_message_count(&state, &conversation.conversation_id, 2).await;
+    let agent_reply = rows
+        .iter()
+        .find(|row| row.sender_type == "agent")
+        .expect("watcher should persist an agent-authored social reply");
+    assert_eq!(
+        agent_reply.reply_to_message_id.as_deref(),
+        Some(user_message_id.as_str())
+    );
+    assert_eq!(agent_reply.text, format!("@{} Done", alice.minos_id));
+    assert_eq!(
+        social::lookup_session_id_for_message(&state.store, &agent_reply.message_id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(session_id.as_str())
+    );
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "text": format!("@{} one more thing", agent.agent_id)
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let followup_message_id = body["message_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        social::lookup_session_id_for_message(&state.store, &followup_message_id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(session_id.as_str())
+    );
+    assert_agent_send_host_command(
+        &state.store,
+        host_device_id,
+        &alice.account_id,
+        &session_id,
+        &followup_message_id,
+        "one more thing",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn group_member_can_be_removed_by_existing_member() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+        .await
+        .unwrap();
+    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com", "phc")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let conversation = social::create_group_conversation(
+        &state.store,
+        &alice.account_id,
+        "Group",
+        &[bob.account_id.clone()],
+        100,
+    )
+    .await
+    .unwrap();
+
+    let (status, _) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/members/remove",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "member_account_id": bob.account_id
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let members = social::list_conversation_members(&state.store, &conversation.conversation_id)
+        .await
+        .unwrap();
+    assert_eq!(members.len(), 1);
+    assert_eq!(members[0], alice.account_id);
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn direct_agent_conversation_auto_routes_and_reuses_reply_session() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let host_device_id = seed_host_pair_for_account(&state, &alice.account_id, alice_device).await;
+    let _host_rx = seed_live_host_session(&state, host_device_id, &alice.account_id);
+
+    let conversation =
+        social::create_group_conversation(&state.store, &alice.account_id, "Agent DM", &[], 100)
+            .await
+            .unwrap();
+    let agent = social::register_agent(
+        &state.store,
+        &alice.account_id,
+        "Codex",
+        "Assistant",
+        "codex",
+        "gpt-5",
+        None,
+        100,
+    )
+    .await
+    .unwrap();
+    social::add_agent_to_conversation(
+        &state.store,
+        &conversation.conversation_id,
+        &agent.agent_id,
+        &alice.account_id,
+        100,
+    )
+    .await
+    .unwrap();
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(serde_json::json!({ "text": "hello agent" }).to_string()),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let first_user_message_id = body["message_id"].as_str().unwrap().to_string();
+    let session_id = expected_social_start_session_id(&alice.account_id, &first_user_message_id);
+    assert_eq!(
+        social::lookup_session_id_for_message(&state.store, &first_user_message_id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(session_id.as_str())
+    );
+    assert_formal_agent_session(
+        &state,
+        &session_id,
+        &conversation.conversation_id,
+        host_device_id,
+        &agent.agent_id,
+    )
+    .await;
+
+    let prior_agent_message = social::insert_agent_message(
+        &state.store,
+        &conversation.conversation_id,
+        &agent.agent_id,
+        "previous reply",
+        150,
+        Some(&first_user_message_id),
+        &[],
+    )
+    .await
+    .unwrap();
+    social::bind_session_to_message(&state.store, &prior_agent_message.message_id, &session_id)
+        .await
+        .unwrap();
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "text": "follow up",
+                    "reply_to_message_id": prior_agent_message.message_id,
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let second_user_message_id = body["message_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        social::lookup_session_id_for_message(&state.store, &second_user_message_id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(session_id.as_str())
+    );
+    assert_agent_start_host_command(
+        &state.store,
+        host_device_id,
+        &alice.account_id,
+        &session_id,
+        &first_user_message_id,
+        "hello agent",
+        &conversation.conversation_id,
+        &agent.agent_id,
+        None,
+    )
+    .await;
+    assert_agent_send_host_command(
+        &state.store,
+        host_device_id,
+        &alice.account_id,
+        &session_id,
+        &second_user_message_id,
+        "follow up",
+    )
+    .await;
+}
+
+/// Tests group chat reply session reuse: when a user replies to an agent's
+/// reply message in a group conversation, the server looks up the session_id
+/// bound to the replied-to message and forwards the new message using that
+/// existing session (no new session creation).
+///
+/// Validates: Requirements 11.3 (reply to agent message reuses session),
+///            11.5 (session binding persists across messages)
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn group_reply_to_agent_message_reuses_session() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    // Setup: alice owns the host, bob is a group member
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+        .await
+        .unwrap();
+    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com", "phc")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let host_device_id = seed_host_pair_for_account(&state, &alice.account_id, alice_device).await;
+    let _host_rx = seed_live_host_session(&state, host_device_id, &alice.account_id);
+
+    // Create group conversation with an agent
+    let conversation = social::create_group_conversation(
+        &state.store,
+        &alice.account_id,
+        "Project Group",
+        &[bob.account_id.clone()],
+        100,
+    )
+    .await
+    .unwrap();
+    let agent = social::register_agent(
+        &state.store,
+        &alice.account_id,
+        "Codex",
+        "Assistant",
+        "codex",
+        "gpt-5",
+        None,
+        100,
+    )
+    .await
+    .unwrap();
+    social::add_agent_to_conversation(
+        &state.store,
+        &conversation.conversation_id,
+        &agent.agent_id,
+        &alice.account_id,
+        100,
+    )
+    .await
+    .unwrap();
+
+    // Step 1: Send initial @mention to create a session
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "text": format!("@{} summarize the PR", agent.agent_id)
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let user_message_id = body["message_id"].as_str().unwrap().to_string();
+    let session_id = expected_social_start_session_id(&alice.account_id, &user_message_id);
+
+    // Verify session binding on user message
+    assert_eq!(
+        social::lookup_session_id_for_message(&state.store, &user_message_id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(session_id.as_str())
+    );
+    assert_agent_start_host_command(
+        &state.store,
+        host_device_id,
+        &alice.account_id,
+        &session_id,
+        &user_message_id,
+        "summarize the PR",
+        &conversation.conversation_id,
+        &agent.agent_id,
+        None,
+    )
+    .await;
+
+    // Step 2: Simulate agent completing and posting a reply message
+    // (In production, the completion watcher does this; here we insert directly)
+    let agent_reply = social::insert_agent_message(
+        &state.store,
+        &conversation.conversation_id,
+        &agent.agent_id,
+        &format!("@{} Here is the PR summary: ...", alice.minos_id),
+        200,
+        Some(&user_message_id),
+        &[],
+    )
+    .await
+    .unwrap();
+    // Bind the same session to the agent's reply (as the completion watcher would)
+    social::bind_session_to_message(&state.store, &agent_reply.message_id, &session_id)
+        .await
+        .unwrap();
+
+    // Step 3: User replies to the agent's reply message — should reuse session
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "text": "can you also include the test coverage?",
+                    "reply_to_message_id": agent_reply.message_id,
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let followup_message_id = body["message_id"].as_str().unwrap().to_string();
+
+    // Verify session binding on the follow-up message
+    assert_eq!(
+        social::lookup_session_id_for_message(&state.store, &followup_message_id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(session_id.as_str())
+    );
+    assert_agent_send_host_command(
+        &state.store,
+        host_device_id,
+        &alice.account_id,
+        &session_id,
+        &followup_message_id,
+        "can you also include the test coverage?",
+    )
+    .await;
+}

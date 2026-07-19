@@ -1,7 +1,6 @@
 //! Plain-JSON persistence for the Mac-side non-secret state:
 //! `self_device_id` (UUIDv4) + `peer` (nullable `PeerRecord`).
-//! Secrets (CF tokens, device_secret) are NOT stored here — they go to
-//! the Keychain via `keychain_store.rs`.
+//! Secrets (CF tokens, device_secret) are NOT stored here.
 
 use crate::relay_pairing::PeerRecord;
 use minos_domain::{DeviceId, MinosError};
@@ -18,14 +17,8 @@ pub struct LocalState {
 }
 
 impl LocalState {
-    pub fn default_path() -> PathBuf {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let override_dir = std::env::var("MINOS_DATA_DIR").ok();
-        let dir = match override_dir {
-            Some(d) => PathBuf::from(d),
-            None => PathBuf::from(&home).join("Library/Application Support/Minos"),
-        };
-        dir.join("local-state.json")
+    pub fn default_path() -> Result<PathBuf, MinosError> {
+        Ok(crate::paths::state_dir()?.join("local-state.json"))
     }
 
     /// Load or initialize. If missing, create fresh with a new DeviceId.

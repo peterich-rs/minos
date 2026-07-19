@@ -15,7 +15,13 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use flutter_rust_bridge::frb;
+use minos_mobile::http::AgentSessionSummary as CoreAgentSessionSummary;
 use minos_mobile::log_capture::{LogLevel as CoreLogLevel, LogRecord as CoreLogRecord};
+use minos_mobile::request_trace::{
+    RequestTraceRecord as CoreRequestTraceRecord, RequestTraceStatus as CoreRequestTraceStatus,
+    RequestTransport as CoreRequestTransport,
+};
+use minos_mobile::SocialEventFrame as MobileSocialEventFrame;
 use minos_mobile::UiEventFrame as MobileUiEventFrame;
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::watch;
@@ -29,11 +35,26 @@ use crate::frb_generated::StreamSink;
 // Re-exported `pub use` so `crate::api::minos::TypeName` resolves for the
 // generated wire code in `frb_generated.rs`. Mirror declarations below still
 // provide the shape metadata the codegen needs.
-pub use minos_domain::{AgentName, ConnectionState, ErrorKind, Lang, MinosError, PairingState};
-pub use minos_protocol::{
-    ListThreadsParams, ListThreadsResponse, ReadThreadParams, ReadThreadResponse, ThreadSummary,
+pub use minos_domain::{
+    AgentDescriptor, AgentName, AgentStatus, ConnectionState, ErrorKind, Lang, MinosError,
+    PairingState,
 };
-pub use minos_ui_protocol::{MessageRole, ThreadEndReason, UiEventMessage};
+pub use minos_protocol::{
+    AgentSummary, AuthSummary, ChatMessageReplySummary, ChatMessageSummary, CloseReason,
+    ConversationAgentMembersResponse, ConversationKind, ConversationMembersResponse,
+    ConversationReadResponse, ConversationResponse, ConversationSummary, ConversationsResponse,
+    CreateProjectRequest, CreateProjectResponse, DeleteProjectRequest, FriendRequestStatus,
+    FriendRequestSummary, FriendRequestsResponse, FriendSummary, FriendsResponse, HostSkillError,
+    HostSkillSummary, HostSkillsEntry, HostSummary, HostWorkspaceSummary, ListAgentsResponse,
+    ListChatMessagesResponse, ListHostSkillsResponse, ListHostWorkspacesResponse,
+    ListProjectThreadsParams, ListProjectThreadsResponse, ListProjectsResponse, ListThreadsParams,
+    ListThreadsResponse, MyProfileResponse, PauseReason, ProjectSummary, ReadThreadParams,
+    ReadThreadResponse, SearchUsersResponse, SenderType, StartAgentResponse, ThreadState,
+    ThreadSummary, UpdateProjectRequest, UserSummary, WriteHostSkillConfigResponse,
+};
+pub use minos_ui_protocol::{
+    ArtifactRef, DisplayPayload, MessageRole, SubagentStatus, ThreadEndReason, UiEventMessage,
+};
 
 // ───────────────────────────── opaque client ─────────────────────────────
 
@@ -84,23 +105,43 @@ pub struct UiEventFrame {
     pub ts_ms: i64,
 }
 
+/// Dart-visible shape of `minos_mobile::SocialEventFrame`.
+pub struct SocialEventFrame {
+    pub conversation_id: String,
+    pub message: ChatMessageSummary,
+}
+
 /// Durable mobile pairing snapshot mirrored into the iOS keychain.
+///
+/// Phase 4 added the five auth fields (access/refresh tokens + bound
+/// account identity) so the Dart-side secure store can rehydrate the full
+/// session on cold launch. All five auth fields are persisted as a tuple —
+/// either every one is present or all are `None`.
+///
+/// ADR-0020 dropped the device_secret from this snapshot — the iOS rail
+/// is bearer-only.
+///
+/// Backend URL and CF Access service-token headers were dropped from the
+/// snapshot when pairing transitioned to compile-time `build_config` — the
+/// transport-edge values never round-trip through durable storage now.
 pub struct PersistedPairingState {
-    pub backend_url: Option<String>,
     pub device_id: Option<String>,
-    pub device_secret: Option<String>,
-    pub cf_access_client_id: Option<String>,
-    pub cf_access_client_secret: Option<String>,
+    pub access_token: Option<String>,
+    pub access_expires_at_ms: Option<i64>,
+    pub refresh_token: Option<String>,
+    pub account_id: Option<String>,
+    pub account_email: Option<String>,
 }
 
 impl From<minos_mobile::PersistedPairingState> for PersistedPairingState {
     fn from(state: minos_mobile::PersistedPairingState) -> Self {
         Self {
-            backend_url: state.backend_url,
             device_id: state.device_id,
-            device_secret: state.device_secret,
-            cf_access_client_id: state.cf_access_client_id,
-            cf_access_client_secret: state.cf_access_client_secret,
+            access_token: state.access_token,
+            access_expires_at_ms: state.access_expires_at_ms,
+            refresh_token: state.refresh_token,
+            account_id: state.account_id,
+            account_email: state.account_email,
         }
     }
 }
@@ -108,11 +149,34 @@ impl From<minos_mobile::PersistedPairingState> for PersistedPairingState {
 impl From<PersistedPairingState> for minos_mobile::PersistedPairingState {
     fn from(state: PersistedPairingState) -> Self {
         Self {
-            backend_url: state.backend_url,
             device_id: state.device_id,
-            device_secret: state.device_secret,
-            cf_access_client_id: state.cf_access_client_id,
-            cf_access_client_secret: state.cf_access_client_secret,
+            access_token: state.access_token,
+            access_expires_at_ms: state.access_expires_at_ms,
+            refresh_token: state.refresh_token,
+            account_id: state.account_id,
+            account_email: state.account_email,
+        }
+    }
+}
+
+/// Dart-visible mirror of `minos_protocol::HostSummary`. One row returned by
+/// `/v1/pairing/list-hosts`.
+pub struct HostSummaryDto {
+    pub host_device_id: String,
+    pub host_display_name: String,
+    pub paired_at_ms: i64,
+    pub paired_via_device_id: String,
+    pub online: bool,
+}
+
+impl From<HostSummary> for HostSummaryDto {
+    fn from(s: HostSummary) -> Self {
+        Self {
+            host_device_id: s.host_device_id.to_string(),
+            host_display_name: s.host_display_name,
+            paired_at_ms: s.paired_at_ms,
+            paired_via_device_id: s.paired_via_device_id.to_string(),
+            online: s.online,
         }
     }
 }
@@ -124,6 +188,45 @@ impl From<MobileUiEventFrame> for UiEventFrame {
             seq: f.seq,
             ui: f.ui,
             ts_ms: f.ts_ms,
+        }
+    }
+}
+
+impl From<MobileSocialEventFrame> for SocialEventFrame {
+    fn from(f: MobileSocialEventFrame) -> Self {
+        Self {
+            conversation_id: f.conversation_id,
+            message: f.message,
+        }
+    }
+}
+
+/// Dart-visible auth state frame.
+///
+/// Defined fresh here rather than mirrored from `minos_mobile::auth` because
+/// the inner `RefreshFailed` payload is `Arc<MinosError>` for cheap watch-
+/// channel cloning — frb's `#[frb(mirror)]` codegen would have to round-trip
+/// the Arc, which is awkward. The `From` impl below unwraps the Arc and
+/// clones the inner `MinosError` (cheap, since `MinosError` derives `Clone`)
+/// so the Dart side sees a plain typed-error variant.
+#[derive(Debug, Clone)]
+pub enum AuthStateFrame {
+    Unauthenticated,
+    Authenticated { account: AuthSummary },
+    Refreshing,
+    RefreshFailed { error: MinosError },
+}
+
+impl From<minos_mobile::auth::AuthStateFrame> for AuthStateFrame {
+    fn from(f: minos_mobile::auth::AuthStateFrame) -> Self {
+        use minos_mobile::auth::AuthStateFrame as M;
+        match f {
+            M::Unauthenticated => Self::Unauthenticated,
+            M::Authenticated { account } => Self::Authenticated { account },
+            M::Refreshing => Self::Refreshing,
+            M::RefreshFailed { error } => Self::RefreshFailed {
+                error: (*error).clone(),
+            },
         }
     }
 }
@@ -162,10 +265,227 @@ impl MobileClient {
         self.0.resume_persisted_session().await
     }
 
-    /// Forget the paired backend; clears secure storage and tears down the
-    /// WS. Idempotent.
-    pub async fn forget_peer(&self) -> Result<(), MinosError> {
-        self.0.forget_peer().await
+    /// Forget a specific paired Mac. The path-bound `host_device_id` is
+    /// the Mac to forget. Idempotent. ADR-0020 supersedes the old
+    /// `forget_peer` (single-peer) call.
+    pub async fn forget_host(&self, host_device_id: String) -> Result<(), MinosError> {
+        let host = parse_device_id(&host_device_id)?;
+        self.0.forget_host(host).await
+    }
+
+    /// List every Mac paired to the caller's account.
+    pub async fn list_paired_hosts(&self) -> Result<Vec<HostSummaryDto>, MinosError> {
+        let hosts = self.0.list_paired_hosts().await?;
+        Ok(hosts.into_iter().map(HostSummaryDto::from).collect())
+    }
+
+    pub async fn my_profile(&self) -> Result<MyProfileResponse, MinosError> {
+        self.0.my_profile().await
+    }
+
+    pub async fn set_minos_id(&self, minos_id: String) -> Result<MyProfileResponse, MinosError> {
+        self.0.set_minos_id(minos_id).await
+    }
+
+    pub async fn search_users(&self, minos_id: String) -> Result<Vec<UserSummary>, MinosError> {
+        self.0.search_users(minos_id).await
+    }
+
+    pub async fn friends(&self) -> Result<FriendsResponse, MinosError> {
+        self.0.friends().await
+    }
+
+    pub async fn register_agent(
+        &self,
+        name: String,
+        description: String,
+        runtime_agent: String,
+        model: String,
+        workspace_path: Option<String>,
+    ) -> Result<AgentSummary, MinosError> {
+        self.0
+            .register_agent(name, description, runtime_agent, model, workspace_path)
+            .await
+    }
+
+    pub async fn update_agent(
+        &self,
+        agent_id: String,
+        name: String,
+        description: String,
+        runtime_agent: String,
+        model: String,
+        workspace_path: Option<String>,
+    ) -> Result<AgentSummary, MinosError> {
+        self.0
+            .update_agent(
+                agent_id,
+                name,
+                description,
+                runtime_agent,
+                model,
+                workspace_path,
+            )
+            .await
+    }
+
+    pub async fn list_agents(&self) -> Result<ListAgentsResponse, MinosError> {
+        self.0.list_agents().await
+    }
+
+    pub async fn create_friend_request(
+        &self,
+        target_minos_id: String,
+    ) -> Result<FriendRequestSummary, MinosError> {
+        self.0.create_friend_request(target_minos_id).await
+    }
+
+    pub async fn friend_requests(&self) -> Result<FriendRequestsResponse, MinosError> {
+        self.0.friend_requests().await
+    }
+
+    pub async fn accept_friend_request(
+        &self,
+        request_id: String,
+    ) -> Result<FriendRequestSummary, MinosError> {
+        self.0.accept_friend_request(request_id).await
+    }
+
+    pub async fn reject_friend_request(
+        &self,
+        request_id: String,
+    ) -> Result<FriendRequestSummary, MinosError> {
+        self.0.reject_friend_request(request_id).await
+    }
+
+    pub async fn conversations(&self) -> Result<ConversationsResponse, MinosError> {
+        self.0.conversations().await
+    }
+
+    pub async fn delete_conversation(&self, conversation_id: String) -> Result<(), MinosError> {
+        self.0.delete_conversation(conversation_id).await
+    }
+
+    pub async fn ensure_direct_conversation(
+        &self,
+        friend_account_id: String,
+    ) -> Result<ConversationResponse, MinosError> {
+        self.0.ensure_direct_conversation(friend_account_id).await
+    }
+
+    pub async fn create_group_conversation(
+        &self,
+        title: String,
+        member_account_ids: Vec<String>,
+    ) -> Result<ConversationResponse, MinosError> {
+        self.0
+            .create_group_conversation(title, member_account_ids)
+            .await
+    }
+
+    pub async fn add_group_member(
+        &self,
+        conversation_id: String,
+        member_account_id: String,
+    ) -> Result<(), MinosError> {
+        self.0
+            .add_group_member(conversation_id, member_account_id)
+            .await
+    }
+
+    pub async fn remove_group_member(
+        &self,
+        conversation_id: String,
+        member_account_id: String,
+    ) -> Result<(), MinosError> {
+        self.0
+            .remove_group_member(conversation_id, member_account_id)
+            .await
+    }
+
+    pub async fn conversation_members(
+        &self,
+        conversation_id: String,
+    ) -> Result<ConversationMembersResponse, MinosError> {
+        self.0.conversation_members(conversation_id).await
+    }
+
+    pub async fn list_conversation_agents(
+        &self,
+        conversation_id: String,
+    ) -> Result<ConversationAgentMembersResponse, MinosError> {
+        self.0.list_conversation_agents(conversation_id).await
+    }
+
+    pub async fn add_agent_to_conversation(
+        &self,
+        conversation_id: String,
+        agent_id: String,
+    ) -> Result<(), MinosError> {
+        self.0
+            .add_agent_to_conversation(conversation_id, agent_id)
+            .await
+    }
+
+    pub async fn remove_agent_from_conversation(
+        &self,
+        conversation_id: String,
+        agent_id: String,
+    ) -> Result<(), MinosError> {
+        self.0
+            .remove_agent_from_conversation(conversation_id, agent_id)
+            .await
+    }
+
+    pub async fn mark_conversation_read(
+        &self,
+        conversation_id: String,
+    ) -> Result<ConversationReadResponse, MinosError> {
+        self.0.mark_conversation_read(conversation_id).await
+    }
+
+    pub async fn list_chat_messages(
+        &self,
+        conversation_id: String,
+        before_ts_ms: Option<i64>,
+        limit: u32,
+    ) -> Result<ListChatMessagesResponse, MinosError> {
+        self.0
+            .list_chat_messages(conversation_id, before_ts_ms, limit)
+            .await
+    }
+
+    pub async fn send_chat_message(
+        &self,
+        conversation_id: String,
+        text: String,
+        reply_to_message_id: Option<String>,
+    ) -> Result<ChatMessageSummary, MinosError> {
+        self.0
+            .send_chat_message(conversation_id, text, reply_to_message_id)
+            .await
+    }
+
+    pub async fn recall_chat_message(
+        &self,
+        conversation_id: String,
+        message_id: String,
+    ) -> Result<ChatMessageSummary, MinosError> {
+        self.0
+            .recall_chat_message(conversation_id, message_id)
+            .await
+    }
+
+    /// Override the active Mac the next forward-RPC routes to.
+    pub async fn set_active_host(&self, host_device_id: String) -> Result<(), MinosError> {
+        let host = parse_device_id(&host_device_id)?;
+        self.0.set_active_host(host).await
+    }
+
+    /// Read the current active Mac id, or `None` if no pair has been
+    /// completed yet.
+    pub async fn active_host(&self) -> Result<Option<String>, MinosError> {
+        Ok(self.0.active_host().await?.map(|id| id.to_string()))
     }
 
     /// Request a page of thread summaries.
@@ -174,6 +494,21 @@ impl MobileClient {
         req: ListThreadsParams,
     ) -> Result<ListThreadsResponse, MinosError> {
         self.0.list_threads(req).await
+    }
+
+    pub async fn list_agent_sessions(
+        &self,
+        conversation_id: Option<String>,
+        limit: u32,
+    ) -> Result<Vec<AgentSessionSummaryDto>, MinosError> {
+        self.0
+            .list_agent_sessions(conversation_id, limit)
+            .await
+            .map(|sessions| sessions.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn subscribe_agent_session(&self, session_id: String) -> Result<(), MinosError> {
+        self.0.subscribe_agent_session(session_id).await
     }
 
     /// Read a window of translated UI events for one thread.
@@ -225,12 +560,246 @@ impl MobileClient {
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!(skipped = n, "ui_events_stream lagged");
+                        break;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
         });
     }
+
+    /// Subscribe to live `SocialEventFrame`s fanned out from the backend.
+    pub fn subscribe_social_events(&self, sink: StreamSink<SocialEventFrame>) {
+        let mut rx = self.0.social_events_stream();
+        frb_runtime().spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(frame) => {
+                        if sink.add(SocialEventFrame::from(frame)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "social_events_stream lagged");
+                        break;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
+
+    // ─────────────────────────── account auth ──────────────────────────────
+
+    /// Register a new account on the backend. On success the bearer +
+    /// refresh tokens are held in memory and surfaced via the auth-state
+    /// stream; the reconnect loop then drives the WS back to `Connected`.
+    pub async fn register(
+        &self,
+        email: String,
+        password: String,
+    ) -> Result<AuthSummary, MinosError> {
+        self.0.register(email, password).await
+    }
+
+    /// Log into an existing account on the backend. Same shape as
+    /// `register` modulo the create-vs-find behaviour on the server.
+    pub async fn login(&self, email: String, password: String) -> Result<AuthSummary, MinosError> {
+        self.0.login(email, password).await
+    }
+
+    /// Rotate the bearer + refresh tokens. Surfaces `Refreshing` /
+    /// `Authenticated` / `RefreshFailed` transitions on the auth-state
+    /// stream.
+    pub async fn refresh_session(&self) -> Result<(), MinosError> {
+        self.0.refresh_session().await
+    }
+
+    /// Log out of the current session. Best-effort `stop_agent`, then
+    /// revoke the refresh token server-side, then wipe local state.
+    pub async fn logout(&self) -> Result<(), MinosError> {
+        self.0.logout().await
+    }
+
+    // ─────────────────────────── agent dispatch ────────────────────────────
+
+    /// Detect the CLI agents available on the paired runtime.
+    pub async fn list_clis(&self) -> Result<Vec<AgentDescriptor>, MinosError> {
+        self.0.list_clis().await
+    }
+
+    /// Scan host-side skills for the selected runtime host.
+    pub async fn list_host_skills(
+        &self,
+        host_device_id: Option<String>,
+        force_reload: bool,
+    ) -> Result<ListHostSkillsResponse, MinosError> {
+        self.0.list_host_skills(host_device_id, force_reload).await
+    }
+
+    pub async fn list_host_workspaces(
+        &self,
+        host_device_id: Option<String>,
+        root: Option<String>,
+        limit: u32,
+    ) -> Result<ListHostWorkspacesResponse, MinosError> {
+        self.0
+            .list_host_workspaces(host_device_id, root, limit)
+            .await
+    }
+
+    /// Enable or disable one host-side skill.
+    pub async fn write_host_skill_config(
+        &self,
+        host_device_id: Option<String>,
+        path: String,
+        enabled: bool,
+    ) -> Result<WriteHostSkillConfigResponse, MinosError> {
+        self.0
+            .write_host_skill_config(host_device_id, path, enabled)
+            .await
+    }
+
+    /// Send a follow-up user message to an existing agent session.
+    pub async fn send_user_message(
+        &self,
+        session_id: String,
+        text: String,
+    ) -> Result<(), MinosError> {
+        self.0.send_user_message(session_id, text).await
+    }
+
+    /// Submit a user approval decision for a pending host request.
+    pub async fn send_approval_decision(
+        &self,
+        request_id: String,
+        thread_id: String,
+        decision_json: String,
+    ) -> Result<(), MinosError> {
+        let decision =
+            serde_json::from_str(&decision_json).map_err(|error| MinosError::RpcCallFailed {
+                method: "send_approval_decision".into(),
+                message: format!("invalid approval decision json: {error}"),
+            })?;
+        self.0
+            .send_approval_decision(request_id, thread_id, decision)
+            .await
+    }
+
+    /// Submit an opencode question answer for a pending host request.
+    pub async fn respond_opencode_question(
+        &self,
+        session_id: String,
+        question_id: String,
+        answers_json: String,
+    ) -> Result<(), MinosError> {
+        let answers =
+            serde_json::from_str(&answers_json).map_err(|error| MinosError::RpcCallFailed {
+                method: "respond_opencode_question".into(),
+                message: format!("invalid opencode question answers json: {error}"),
+            })?;
+        self.0
+            .respond_opencode_question(session_id, question_id, answers)
+            .await
+    }
+
+    /// Pause an in-flight turn on the given thread. Best-effort. The thread
+    /// transitions to `Suspended { UserInterrupt }` regardless of whether the
+    /// codex side acknowledges in time.
+    pub async fn interrupt_thread(&self, thread_id: String) -> Result<(), MinosError> {
+        self.0.interrupt_thread(thread_id).await
+    }
+
+    /// Permanently close the given thread. Idempotent.
+    pub async fn close_thread(&self, thread_id: String) -> Result<(), MinosError> {
+        self.0.close_thread(thread_id).await
+    }
+
+    // ─────────────────────────── project rpcs ──────────────────────────────
+
+    /// Create a new project on the daemon.
+    pub async fn create_project(
+        &self,
+        req: CreateProjectRequest,
+    ) -> Result<CreateProjectResponse, MinosError> {
+        self.0.create_project(req).await
+    }
+
+    /// List all projects on the daemon.
+    pub async fn list_projects(&self) -> Result<ListProjectsResponse, MinosError> {
+        self.0.list_projects().await
+    }
+
+    /// Update a project's name.
+    pub async fn update_project(&self, req: UpdateProjectRequest) -> Result<(), MinosError> {
+        self.0.update_project(req).await
+    }
+
+    /// Delete a project.
+    pub async fn delete_project(&self, req: DeleteProjectRequest) -> Result<(), MinosError> {
+        self.0.delete_project(req).await
+    }
+
+    /// List threads within a project.
+    pub async fn list_project_threads(
+        &self,
+        req: ListProjectThreadsParams,
+    ) -> Result<ListProjectThreadsResponse, MinosError> {
+        self.0.list_project_threads(req).await
+    }
+
+    // ─────────────────────────── lifecycle hooks ───────────────────────────
+
+    /// Mark the app as foregrounded. Resets the reconnect backoff so the
+    /// next connect attempt happens promptly.
+    #[frb(sync)]
+    pub fn notify_foregrounded(&self) {
+        self.0.notify_foregrounded();
+    }
+
+    /// Mark the app as backgrounded. Pauses the reconnect loop so we
+    /// don't poke the backend while the OS is freezing the process.
+    #[frb(sync)]
+    pub fn notify_backgrounded(&self) {
+        self.0.notify_backgrounded();
+    }
+
+    // ─────────────────────────── auth subscription ─────────────────────────
+
+    /// Subscribe to auth-state transitions. Emits the current cached frame
+    /// immediately, then every subsequent change. The spawned task exits
+    /// once Dart drops the stream (detected via `sink.add(...).is_err()`).
+    pub fn subscribe_auth_state(&self, sink: StreamSink<AuthStateFrame>) {
+        let mut rx = self.0.subscribe_auth_state();
+        frb_runtime().spawn(async move {
+            // Emit the snapshot visible at subscribe time so late subscribers
+            // aren't stuck on whatever they last rendered.
+            let snapshot = AuthStateFrame::from(rx.borrow_and_update().clone());
+            if sink.add(snapshot).is_err() {
+                return;
+            }
+            while rx.changed().await.is_ok() {
+                let frame = AuthStateFrame::from(rx.borrow().clone());
+                if sink.add(frame).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+}
+
+/// Parse a UUID-shaped device id string emitted from Dart back into a
+/// `minos_domain::DeviceId`. Surfaces `MinosError::StoreCorrupt` on
+/// malformed input — the Dart side is expected to round-trip the same
+/// strings it received from `HostSummaryDto.host_device_id`, so this is a
+/// best-effort guard rather than a user-facing error path.
+fn parse_device_id(s: &str) -> Result<minos_domain::DeviceId, MinosError> {
+    uuid::Uuid::parse_str(s)
+        .map(minos_domain::DeviceId)
+        .map_err(|e| MinosError::StoreCorrupt {
+            path: "device_id".into(),
+            message: format!("invalid uuid '{s}': {e}"),
+        })
 }
 
 // ────────────────────────────── free functions ──────────────────────────────
@@ -270,6 +839,27 @@ impl From<CoreLogLevel> for LogLevel {
             CoreLogLevel::Info => Self::Info,
             CoreLogLevel::Warn => Self::Warn,
             CoreLogLevel::Error => Self::Error,
+        }
+    }
+}
+
+#[frb(sync)]
+pub fn emit_log(level: LogLevel, target: String, message: String) {
+    match level {
+        LogLevel::Trace => {
+            tracing::trace!(target: "minos_mobile::flutter", ui_target = %target, "{message}")
+        }
+        LogLevel::Debug => {
+            tracing::debug!(target: "minos_mobile::flutter", ui_target = %target, "{message}")
+        }
+        LogLevel::Info => {
+            tracing::info!(target: "minos_mobile::flutter", ui_target = %target, "{message}")
+        }
+        LogLevel::Warn => {
+            tracing::warn!(target: "minos_mobile::flutter", ui_target = %target, "{message}")
+        }
+        LogLevel::Error => {
+            tracing::error!(target: "minos_mobile::flutter", ui_target = %target, "{message}")
         }
     }
 }
@@ -328,6 +918,105 @@ pub fn subscribe_log_records(sink: StreamSink<LogRecord>) {
     });
 }
 
+// ───────────────────────── request trace surface ─────────────────────────
+
+pub enum RequestTraceTransport {
+    Http,
+    Rpc,
+}
+
+impl From<CoreRequestTransport> for RequestTraceTransport {
+    fn from(value: CoreRequestTransport) -> Self {
+        match value {
+            CoreRequestTransport::Http => Self::Http,
+            CoreRequestTransport::Rpc => Self::Rpc,
+        }
+    }
+}
+
+pub enum RequestTraceStatus {
+    Pending,
+    Success,
+    Failure,
+}
+
+impl From<CoreRequestTraceStatus> for RequestTraceStatus {
+    fn from(value: CoreRequestTraceStatus) -> Self {
+        match value {
+            CoreRequestTraceStatus::Pending => Self::Pending,
+            CoreRequestTraceStatus::Success => Self::Success,
+            CoreRequestTraceStatus::Failure => Self::Failure,
+        }
+    }
+}
+
+pub struct RequestTraceRecord {
+    pub id: u64,
+    pub transport: RequestTraceTransport,
+    pub method: String,
+    pub target: String,
+    pub thread_id: Option<String>,
+    pub request_summary: Option<String>,
+    pub response_summary: Option<String>,
+    pub error_detail: Option<String>,
+    pub status: RequestTraceStatus,
+    pub status_code: Option<u16>,
+    pub started_at_ms: i64,
+    pub completed_at_ms: Option<i64>,
+    pub duration_ms: Option<u32>,
+}
+
+impl From<CoreRequestTraceRecord> for RequestTraceRecord {
+    fn from(record: CoreRequestTraceRecord) -> Self {
+        Self {
+            id: record.id,
+            transport: record.transport.into(),
+            method: record.method,
+            target: record.target,
+            thread_id: record.thread_id,
+            request_summary: record.request_summary,
+            response_summary: record.response_summary,
+            error_detail: record.error_detail,
+            status: record.status.into(),
+            status_code: record.status_code,
+            started_at_ms: record.started_at_ms,
+            completed_at_ms: record.completed_at_ms,
+            duration_ms: record.duration_ms,
+        }
+    }
+}
+
+#[frb(sync)]
+#[must_use]
+pub fn recent_request_traces() -> Vec<RequestTraceRecord> {
+    minos_mobile::request_trace::recent()
+        .into_iter()
+        .map(RequestTraceRecord::from)
+        .collect()
+}
+
+#[frb(sync)]
+pub fn clear_request_traces() {
+    minos_mobile::request_trace::clear();
+}
+
+pub fn subscribe_request_traces(sink: StreamSink<RequestTraceRecord>) {
+    let mut rx = minos_mobile::request_trace::subscribe();
+    frb_runtime().spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(record) => {
+                    if sink.add(RequestTraceRecord::from(record)).is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+}
+
 // ─────────────────────────── mirrored domain types ───────────────────────────
 //
 // frb requires us to re-declare any foreign type we want to expose to Dart.
@@ -369,6 +1058,23 @@ pub enum _AgentName {
 }
 
 #[allow(dead_code)]
+#[frb(mirror(AgentStatus))]
+pub enum _AgentStatus {
+    Ok,
+    Missing,
+    Error { reason: String },
+}
+
+#[allow(dead_code)]
+#[frb(mirror(AgentDescriptor))]
+pub struct _AgentDescriptor {
+    pub name: AgentName,
+    pub path: Option<String>,
+    pub version: Option<String>,
+    pub status: AgentStatus,
+}
+
+#[allow(dead_code)]
 #[frb(mirror(ErrorKind))]
 pub enum _ErrorKind {
     BindFailed,
@@ -387,20 +1093,30 @@ pub enum _ErrorKind {
     EnvelopeVersionUnsupported,
     PeerOffline,
     BackendInternal,
-    CfAuthFailed,
     CodexSpawnFailed,
     CodexConnectFailed,
     CodexProtocolError,
+    GeminiSpawnFailed,
+    AcpProtocolError,
     AgentAlreadyRunning,
     AgentNotRunning,
     AgentNotSupported,
     AgentSessionIdMismatch,
-    CfAccessMisconfigured,
     IngestSeqConflict,
     ThreadNotFound,
     TranslationNotImplemented,
     TranslationFailed,
     PairingQrVersionUnsupported,
+    Timeout,
+    NotConnected,
+    RequestDropped,
+    AuthRefreshFailed,
+    EmailTaken,
+    WeakPassword,
+    RateLimited,
+    InvalidCredentials,
+    AgentStartFailed,
+    PairingTokenExpired,
 }
 
 #[allow(dead_code)]
@@ -422,20 +1138,30 @@ pub enum _MinosError {
     EnvelopeVersionUnsupported { version: u8 },
     PeerOffline { peer_device_id: String },
     BackendInternal { message: String },
-    CfAuthFailed { message: String },
     CodexSpawnFailed { message: String },
     CodexConnectFailed { url: String, message: String },
     CodexProtocolError { method: String, message: String },
+    GeminiSpawnFailed { message: String },
+    AcpProtocolError { method: String, message: String },
     AgentAlreadyRunning,
     AgentNotRunning,
     AgentNotSupported { agent: AgentName },
     AgentSessionIdMismatch,
-    CfAccessMisconfigured { reason: String },
     IngestSeqConflict { thread_id: String, seq: u64 },
     ThreadNotFound { thread_id: String },
     TranslationNotImplemented { agent: AgentName },
     TranslationFailed { agent: AgentName, message: String },
     PairingQrVersionUnsupported { version: u8 },
+    Timeout,
+    NotConnected,
+    RequestDropped,
+    AuthRefreshFailed { message: String },
+    EmailTaken,
+    WeakPassword,
+    RateLimited { retry_after_s: u32 },
+    InvalidCredentials,
+    AgentStartFailed { reason: String },
+    PairingTokenExpired,
 }
 
 // ─────────────────────────── mirrored protocol types ──────────────────────────
@@ -482,6 +1208,41 @@ pub struct _ThreadSummary {
     pub message_count: u32,
     pub ended_at_ms: Option<i64>,
     pub end_reason: Option<ThreadEndReason>,
+    pub parent_thread_id: Option<String>,
+    pub state: ThreadState,
+    pub needs_continue: bool,
+}
+
+pub struct AgentSessionSummaryDto {
+    pub session_id: String,
+    pub conversation_id: String,
+    pub agent_id: Option<String>,
+    pub agent: Option<AgentName>,
+    pub status: String,
+    pub started_at_ms: i64,
+    pub ended_at_ms: Option<i64>,
+    pub title: Option<String>,
+    pub last_activity_at_ms: i64,
+    pub message_count: u32,
+    pub end_reason: Option<ThreadEndReason>,
+}
+
+impl From<CoreAgentSessionSummary> for AgentSessionSummaryDto {
+    fn from(value: CoreAgentSessionSummary) -> Self {
+        Self {
+            session_id: value.session_id,
+            conversation_id: value.conversation_id,
+            agent_id: value.agent_id,
+            agent: value.agent,
+            status: value.status,
+            started_at_ms: value.started_at_ms,
+            ended_at_ms: value.ended_at_ms,
+            title: value.title,
+            last_activity_at_ms: value.last_activity_at_ms,
+            message_count: value.message_count,
+            end_reason: value.end_reason,
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -500,6 +1261,44 @@ pub enum _ThreadEndReason {
     Crashed { message: String },
     Timeout,
     HostDisconnected,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ArtifactRef))]
+pub struct _ArtifactRef {
+    pub thread_id: String,
+    pub artifact_id: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub media_type: String,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(DisplayPayload))]
+pub enum _DisplayPayload {
+    Inline {
+        text: String,
+    },
+    StreamingWindow {
+        head: String,
+        received_bytes: u64,
+        artifact: Option<ArtifactRef>,
+    },
+    WindowedFinal {
+        head: String,
+        tail: String,
+        omitted_bytes: u64,
+        artifact: ArtifactRef,
+    },
+}
+
+#[allow(dead_code)]
+#[frb(mirror(SubagentStatus))]
+pub enum _SubagentStatus {
+    Running,
+    Completed,
+    Failed,
+    Interrupted,
 }
 
 #[allow(dead_code)]
@@ -531,22 +1330,43 @@ pub enum _UiEventMessage {
     },
     TextDelta {
         message_id: String,
-        text: String,
+        text: DisplayPayload,
+    },
+    TextReplace {
+        message_id: String,
+        text: DisplayPayload,
     },
     ReasoningDelta {
         message_id: String,
-        text: String,
+        text: DisplayPayload,
+    },
+    ReasoningReplace {
+        message_id: String,
+        text: DisplayPayload,
     },
     ToolCallPlaced {
         message_id: String,
         tool_call_id: String,
         name: String,
-        args_json: String,
+        args_json: DisplayPayload,
     },
     ToolCallCompleted {
         tool_call_id: String,
-        output: String,
+        output: DisplayPayload,
         is_error: bool,
+    },
+    SubagentSpawned {
+        parent_thread_id: String,
+        sub_thread_id: String,
+        tool_call_id: String,
+        agent: AgentName,
+        model: Option<String>,
+        prompt: Option<String>,
+        title: Option<String>,
+    },
+    SubagentStatusUpdated {
+        sub_thread_id: String,
+        status: SubagentStatus,
     },
     Error {
         code: String,
@@ -557,6 +1377,304 @@ pub enum _UiEventMessage {
         kind: String,
         payload_json: String,
     },
+}
+
+// ─────────────────────── mirrored auth + agent types ─────────────────────────
+
+#[allow(dead_code)]
+#[frb(mirror(AuthSummary))]
+pub struct _AuthSummary {
+    pub account_id: String,
+    pub email: String,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(MyProfileResponse))]
+pub struct _MyProfileResponse {
+    pub account_id: String,
+    pub email: String,
+    pub minos_id: String,
+    pub display_name: Option<String>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(UserSummary))]
+pub struct _UserSummary {
+    pub account_id: String,
+    pub minos_id: String,
+    pub display_name: String,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(FriendRequestStatus))]
+pub enum _FriendRequestStatus {
+    Pending,
+    Accepted,
+    Rejected,
+    Canceled,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(FriendRequestSummary))]
+pub struct _FriendRequestSummary {
+    pub request_id: String,
+    pub from: UserSummary,
+    pub to: UserSummary,
+    pub status: FriendRequestStatus,
+    pub created_at_ms: i64,
+    pub resolved_at_ms: Option<i64>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(FriendRequestsResponse))]
+pub struct _FriendRequestsResponse {
+    pub incoming: Vec<FriendRequestSummary>,
+    pub outgoing: Vec<FriendRequestSummary>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(FriendSummary))]
+pub struct _FriendSummary {
+    pub account_id: String,
+    pub minos_id: String,
+    pub display_name: String,
+    pub created_at_ms: i64,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(FriendsResponse))]
+pub struct _FriendsResponse {
+    pub friends: Vec<FriendSummary>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ConversationKind))]
+pub enum _ConversationKind {
+    Direct,
+    Group,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ConversationSummary))]
+pub struct _ConversationSummary {
+    pub conversation_id: String,
+    pub kind: ConversationKind,
+    pub title: String,
+    pub counterpart: Option<UserSummary>,
+    pub member_count: u32,
+    pub last_message_preview: Option<String>,
+    pub last_message_at_ms: i64,
+    pub unread_count: u32,
+    pub unread_mention_count: u32,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ConversationsResponse))]
+pub struct _ConversationsResponse {
+    pub conversations: Vec<ConversationSummary>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ConversationResponse))]
+pub struct _ConversationResponse {
+    pub conversation_id: String,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ConversationMembersResponse))]
+pub struct _ConversationMembersResponse {
+    pub members: Vec<UserSummary>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(AgentSummary))]
+pub struct _AgentSummary {
+    pub agent_id: String,
+    pub owner_account_id: String,
+    pub name: String,
+    pub description: String,
+    pub runtime_agent: String,
+    pub model: String,
+    pub workspace_path: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ListAgentsResponse))]
+pub struct _ListAgentsResponse {
+    pub agents: Vec<AgentSummary>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ConversationAgentMembersResponse))]
+pub struct _ConversationAgentMembersResponse {
+    pub agents: Vec<AgentSummary>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ConversationReadResponse))]
+pub struct _ConversationReadResponse {
+    pub last_read_at_ms: Option<i64>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ChatMessageReplySummary))]
+pub struct _ChatMessageReplySummary {
+    pub message_id: String,
+    pub sender: UserSummary,
+    pub text: String,
+    pub recalled_at_ms: Option<i64>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ChatMessageSummary))]
+pub struct _ChatMessageSummary {
+    pub message_id: String,
+    pub conversation_id: String,
+    pub sender: UserSummary,
+    pub text: String,
+    pub created_at_ms: i64,
+    pub reply_to: Option<ChatMessageReplySummary>,
+    pub recalled_at_ms: Option<i64>,
+    pub mentioned_account_ids: Vec<String>,
+    pub sender_type: SenderType,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(SenderType))]
+pub enum _SenderType {
+    User,
+    Agent,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ListChatMessagesResponse))]
+pub struct _ListChatMessagesResponse {
+    pub messages: Vec<ChatMessageSummary>,
+    pub next_before_ts_ms: Option<i64>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(StartAgentResponse))]
+pub struct _StartAgentResponse {
+    pub session_id: String,
+    pub cwd: String,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(HostSkillSummary))]
+pub struct _HostSkillSummary {
+    pub name: String,
+    pub path: String,
+    pub description: String,
+    pub enabled: bool,
+    pub scope: String,
+    pub display_name: Option<String>,
+    pub short_description: Option<String>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(HostSkillError))]
+pub struct _HostSkillError {
+    pub path: String,
+    pub message: String,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(HostSkillsEntry))]
+pub struct _HostSkillsEntry {
+    pub cwd: String,
+    pub errors: Vec<HostSkillError>,
+    pub skills: Vec<HostSkillSummary>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ListHostSkillsResponse))]
+pub struct _ListHostSkillsResponse {
+    pub data: Vec<HostSkillsEntry>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(HostWorkspaceSummary))]
+pub struct _HostWorkspaceSummary {
+    pub path: String,
+    pub display_name: String,
+    pub is_git_repo: bool,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ListHostWorkspacesResponse))]
+pub struct _ListHostWorkspacesResponse {
+    pub root: String,
+    pub workspaces: Vec<HostWorkspaceSummary>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(WriteHostSkillConfigResponse))]
+pub struct _WriteHostSkillConfigResponse {
+    pub effective_enabled: bool,
+}
+
+// ─────────────────────── mirrored project types ──────────────────────────
+
+#[allow(dead_code)]
+#[frb(mirror(ProjectSummary))]
+pub struct _ProjectSummary {
+    pub project_id: String,
+    pub name: String,
+    pub workspace_slug: String,
+    pub workspace_path: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub thread_count: u32,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(CreateProjectRequest))]
+pub struct _CreateProjectRequest {
+    pub name: String,
+    pub workspace_slug: String,
+    pub workspace_path: Option<String>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(CreateProjectResponse))]
+pub struct _CreateProjectResponse {
+    pub project: ProjectSummary,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(UpdateProjectRequest))]
+pub struct _UpdateProjectRequest {
+    pub project_id: String,
+    pub name: String,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(DeleteProjectRequest))]
+pub struct _DeleteProjectRequest {
+    pub project_id: String,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ListProjectsResponse))]
+pub struct _ListProjectsResponse {
+    pub projects: Vec<ProjectSummary>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ListProjectThreadsParams))]
+pub struct _ListProjectThreadsParams {
+    pub project_id: String,
+    pub limit: u32,
+    pub before_ts_ms: Option<i64>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ListProjectThreadsResponse))]
+pub struct _ListProjectThreadsResponse {
+    pub threads: Vec<ThreadSummary>,
 }
 
 #[cfg(test)]

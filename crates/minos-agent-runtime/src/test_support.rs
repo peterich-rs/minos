@@ -51,6 +51,13 @@ pub enum Step {
         method: String,
         reply: serde_json::Value,
     },
+    /// Read one client request, assert its method and selected params, then
+    /// reply like `ExpectRequest`.
+    ExpectRequestMatching {
+        method: String,
+        params_subset: serde_json::Value,
+        reply: serde_json::Value,
+    },
     /// Read one client notification frame and assert its method/params.
     ExpectNotification {
         method: String,
@@ -68,6 +75,10 @@ pub enum Step {
         method: String,
         params: serde_json::Value,
     },
+    /// Read one client reply frame and assert its `result` payload.
+    ExpectResponse { result: serde_json::Value },
+    /// Keep the WebSocket open for a short interval without sending frames.
+    Sleep { ms: u64 },
     /// Close the WS abruptly without a close frame.
     DieUnexpectedly,
 }
@@ -125,6 +136,42 @@ impl FakeCodexServer {
         )
     }
 
+    /// Spawn a perpetually-running auto-responder masquerading as
+    /// `codex app-server`. Accepts every incoming WS connection and replies
+    /// to typed JSON-RPC requests with synthetic results derived from the
+    /// request method. Useful for the multi-session smoke test (C22) where
+    /// the real codex protocol shape is irrelevant.
+    pub async fn bind_auto_responder() -> (Self, u16) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("FakeCodexServer failed to bind loopback port");
+        let port = listener
+            .local_addr()
+            .expect("FakeCodexServer local_addr failed")
+            .port();
+        let server_request_ids = Arc::new(Mutex::new(Vec::<String>::new()));
+        let accept_task = tokio::spawn(async move {
+            loop {
+                let Ok((stream, _peer)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    let Ok(ws) = accept_async(stream).await else {
+                        return;
+                    };
+                    auto_respond(ws).await;
+                });
+            }
+        });
+        (
+            Self {
+                accept_task,
+                server_request_ids,
+            },
+            port,
+        )
+    }
+
     /// Shut down the accept task, surfacing any panic it produced.
     ///
     /// If the script task already finished on its own (naturally or via
@@ -152,6 +199,7 @@ impl FakeCodexServer {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn run_script(
     ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
     script: Vec<Step>,
@@ -181,6 +229,50 @@ async fn run_script(
                 assert_eq!(
                     got_method, method,
                     "FakeCodexServer: method mismatch on ExpectRequest"
+                );
+                let id = parsed.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                let response = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": reply,
+                });
+                if let Err(e) = tx.send(Message::text(response.to_string())).await {
+                    tracing::warn!(error = %e, "FakeCodexServer: send reply failed");
+                    return;
+                }
+            }
+            Step::ExpectRequestMatching {
+                method,
+                params_subset,
+                reply,
+            } => {
+                let frame = match rx.next().await {
+                    Some(Ok(Message::Text(t))) => t.to_string(),
+                    Some(Ok(Message::Binary(b))) => {
+                        String::from_utf8(b.to_vec()).unwrap_or_default()
+                    }
+                    Some(Ok(other)) => {
+                        panic!("FakeCodexServer: expected text/binary frame, got {other:?}");
+                    }
+                    Some(Err(e)) => panic!("FakeCodexServer: WS read error: {e}"),
+                    None => {
+                        panic!("FakeCodexServer: WS closed before ExpectRequestMatching({method})")
+                    }
+                };
+                let parsed: serde_json::Value = serde_json::from_str(&frame)
+                    .unwrap_or_else(|e| panic!("FakeCodexServer: bad JSON from client: {e}"));
+                let got_method = parsed
+                    .get("method")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                assert_eq!(
+                    got_method, method,
+                    "FakeCodexServer: method mismatch on ExpectRequestMatching"
+                );
+                assert_json_subset(
+                    parsed.get("params").unwrap_or(&serde_json::Value::Null),
+                    &params_subset,
+                    "params",
                 );
                 let id = parsed.get("id").cloned().unwrap_or(serde_json::Value::Null);
                 let response = serde_json::json!({
@@ -248,6 +340,33 @@ async fn run_script(
                     return;
                 }
             }
+            Step::ExpectResponse { result } => {
+                let frame = match rx.next().await {
+                    Some(Ok(Message::Text(t))) => t.to_string(),
+                    Some(Ok(Message::Binary(b))) => {
+                        String::from_utf8(b.to_vec()).unwrap_or_default()
+                    }
+                    Some(Ok(other)) => {
+                        panic!("FakeCodexServer: expected text/binary frame, got {other:?}");
+                    }
+                    Some(Err(e)) => panic!("FakeCodexServer: WS read error: {e}"),
+                    None => panic!("FakeCodexServer: WS closed before ExpectResponse"),
+                };
+                let parsed: serde_json::Value = serde_json::from_str(&frame)
+                    .unwrap_or_else(|e| panic!("FakeCodexServer: bad JSON from client: {e}"));
+                assert!(
+                    parsed.get("method").is_none(),
+                    "FakeCodexServer: response frames must not carry a method",
+                );
+                assert!(
+                    parsed.get("id").is_some(),
+                    "FakeCodexServer: response must carry an id"
+                );
+                assert_eq!(parsed.get("result").cloned().unwrap_or_default(), result);
+            }
+            Step::Sleep { ms } => {
+                tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+            }
             Step::DieUnexpectedly => {
                 // Drop the sender/receiver without sending a close frame.
                 drop(tx);
@@ -255,6 +374,155 @@ async fn run_script(
                 return;
             }
         }
+    }
+}
+
+fn assert_json_subset(actual: &serde_json::Value, expected: &serde_json::Value, path: &str) {
+    match expected {
+        serde_json::Value::Object(expected_map) => {
+            let actual_map = actual
+                .as_object()
+                .unwrap_or_else(|| panic!("FakeCodexServer: {path} is not an object"));
+            for (key, expected_value) in expected_map {
+                let next_path = format!("{path}.{key}");
+                let actual_value = actual_map.get(key).unwrap_or_else(|| {
+                    panic!("FakeCodexServer: missing expected subset key {next_path}")
+                });
+                assert_json_subset(actual_value, expected_value, &next_path);
+            }
+        }
+        _ => assert_eq!(
+            actual, expected,
+            "FakeCodexServer: JSON subset mismatch at {path}"
+        ),
+    }
+}
+
+/// Auto-responder that handles every typed JSON-RPC method `AgentManager`
+/// fires. Returns canned successes; thread ids are minted from a Uuid so each
+/// `thread/start` returns a fresh value. No script discipline — the test
+/// owns the assertions on observable side-effects, not on the codex protocol
+/// shape.
+async fn auto_respond(ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>) {
+    let (mut tx, mut rx) = ws.split();
+    while let Some(frame) = rx.next().await {
+        let text = match frame {
+            Ok(Message::Text(t)) => t.to_string(),
+            Ok(Message::Binary(b)) => String::from_utf8(b.to_vec()).unwrap_or_default(),
+            Ok(_) => continue,
+            Err(_) => return,
+        };
+        let parsed: serde_json::Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let method = parsed
+            .get("method")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let id = parsed.get("id").cloned();
+        // Notifications (no id) are silently consumed.
+        let Some(id) = id else { continue };
+        let result = match method.as_str() {
+            "initialize" => serde_json::json!({
+                "supportedNotifications": [],
+                "protocolVersion": "0.0.0-fake",
+                "agentName": "fake-codex",
+                "agentVersion": "0.0.0",
+                "capabilities": {
+                    "experimentalApi": true
+                }
+            }),
+            "thread/start" => {
+                let thread_id = format!("fake-{}", uuid::Uuid::new_v4());
+                fake_thread_response(&thread_id)
+            }
+            "thread/resume" => {
+                let thread_id = parsed
+                    .get("params")
+                    .and_then(|p| p.get("threadId"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("fake-resume")
+                    .to_string();
+                fake_thread_response(&thread_id)
+            }
+            "turn/start" => serde_json::json!({
+                "turn": {
+                    "id": format!("turn-{}", uuid::Uuid::new_v4()),
+                    "items": [],
+                    "status": "inProgress"
+                }
+            }),
+            "turn/steer" => serde_json::json!({
+                "turnId": parsed
+                    .get("params")
+                    .and_then(|p| p.get("expectedTurnId"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("turn-steer-fallback")
+            }),
+            // "turn/interrupt" and any unknown method get an empty `{}` ack.
+            _ => serde_json::json!({}),
+        };
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result,
+        });
+        if tx.send(Message::text(response.to_string())).await.is_err() {
+            return;
+        }
+    }
+}
+
+fn fake_thread_response(thread_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "approvalPolicy": "never",
+        "approvalsReviewer": "user",
+        "cwd": "/tmp",
+        "instructionSources": [],
+        "model": "fake",
+        "modelProvider": "fake",
+        "sandbox": { "type": "dangerFullAccess" },
+        "thread": {
+            "id": thread_id,
+            "cliVersion": "0.0.0-fake",
+            "createdAt": 0,
+            "cwd": "/tmp",
+            "ephemeral": true,
+            "modelProvider": "fake",
+            "preview": "",
+            "source": "appServer",
+            "status": { "type": "idle" },
+            "turns": [],
+            "updatedAt": 0
+        }
+    })
+}
+
+/// Fluent helper: spin up an [`auto_respond`] backend on a fresh port and
+/// pin the manager's `test_ws_url` to it. Returns the server handle so the
+/// test can hold it alive for the duration. C22 multi-session smoke is the
+/// canonical caller.
+pub struct FakeCodexBackend {
+    server: FakeCodexServer,
+}
+
+impl FakeCodexBackend {
+    /// Bind a fresh fake codex backend and return both the handle and the
+    /// loopback URL the manager should connect to. Callers wire the URL in
+    /// via `cfg.test_ws_url`.
+    pub async fn install() -> (Self, url::Url) {
+        let (server, port) = FakeCodexServer::bind_auto_responder().await;
+        let url = url::Url::parse(&format!("ws://127.0.0.1:{port}"))
+            .expect("loopback URL is well-formed");
+        (Self { server }, url)
+    }
+
+    /// Tear the fake down — useful when the test wants to assert codex is
+    /// gone before exercising reaper / shutdown behaviours.
+    pub async fn stop(self) {
+        self.server.stop().await;
     }
 }
 

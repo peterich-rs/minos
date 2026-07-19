@@ -14,10 +14,12 @@
 //! happens to be the issuer" with other device ids in the same scope.
 
 use minos_domain::DeviceId;
+use sqlx::Postgres;
 use sqlx::{Executor, Sqlite, SqlitePool};
 use uuid::Uuid;
 
 use crate::error::BackendError;
+use crate::store::{AsStorePool, StorePoolRef};
 
 /// Successful output of [`consume_token`].
 ///
@@ -34,7 +36,7 @@ pub struct ConsumedToken {
 /// `token_hash` is the hex-encoded SHA-256 digest of the plaintext pairing
 /// token. `now` and `expires_at` are both unix epoch ms.
 pub async fn issue_token(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     token_hash: &str,
     issuer: DeviceId,
     expires_at: i64,
@@ -42,18 +44,38 @@ pub async fn issue_token(
 ) -> Result<(), BackendError> {
     let issuer_str = issuer.to_string();
 
-    sqlx::query!(
-        r#"
-        INSERT INTO pairing_tokens (token_hash, issuer_device_id, created_at, expires_at, consumed_at)
-        VALUES (?, ?, ?, ?, NULL)
-        "#,
-        token_hash,
-        issuer_str,
-        now,
-        expires_at,
-    )
-    .execute(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query(
+                r#"
+                INSERT INTO pairing_tokens (token_hash, issuer_device_id, created_at, expires_at, consumed_at)
+                VALUES (?, ?, ?, ?, NULL)
+                "#,
+            )
+            .bind(token_hash)
+            .bind(&issuer_str)
+            .bind(now)
+            .bind(expires_at)
+            .execute(pool)
+            .await
+            .map(|_| ())
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query(
+                r#"
+                INSERT INTO pairing_tokens (token_hash, issuer_device_id, created_at, expires_at, consumed_at)
+                VALUES ($1, $2, $3, $4, NULL)
+                "#,
+            )
+            .bind(token_hash)
+            .bind(&issuer_str)
+            .bind(now)
+            .bind(expires_at)
+            .execute(pool)
+            .await
+            .map(|_| ())
+        }
+    }
     .map_err(|e| BackendError::StoreQuery {
         operation: "issue_token".to_string(),
         message: e.to_string(),
@@ -102,6 +124,36 @@ where
     decode_consumed_token(issuer_device_id, "peek_usable_token")
 }
 
+#[allow(dead_code)]
+pub(crate) async fn peek_usable_token_with_postgres_executor<'e, E>(
+    executor: E,
+    token_hash_candidate: &str,
+    now: i64,
+) -> Result<Option<ConsumedToken>, BackendError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let issuer_device_id = sqlx::query_scalar::<_, String>(
+        "
+        SELECT issuer_device_id
+        FROM pairing_tokens
+        WHERE token_hash = $1
+          AND consumed_at IS NULL
+          AND expires_at > $2
+        ",
+    )
+    .bind(token_hash_candidate)
+    .bind(now)
+    .fetch_optional(executor)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "peek_usable_token".to_string(),
+        message: e.to_string(),
+    })?;
+
+    decode_consumed_token(issuer_device_id, "peek_usable_token")
+}
+
 pub async fn consume_token(
     pool: &SqlitePool,
     token_hash_candidate: &str,
@@ -118,7 +170,7 @@ pub(crate) async fn consume_token_with_executor<'e, E>(
 where
     E: Executor<'e, Database = Sqlite>,
 {
-    let row = sqlx::query!(
+    let issuer_device_id = sqlx::query_scalar::<_, String>(
         r#"
         UPDATE pairing_tokens
         SET consumed_at = ?
@@ -127,10 +179,10 @@ where
           AND expires_at > ?
         RETURNING issuer_device_id
         "#,
-        now,
-        token_hash_candidate,
-        now,
     )
+    .bind(now)
+    .bind(token_hash_candidate)
+    .bind(now)
     .fetch_optional(executor)
     .await
     .map_err(|e| BackendError::StoreQuery {
@@ -138,7 +190,39 @@ where
         message: e.to_string(),
     })?;
 
-    decode_consumed_token(row.map(|r| r.issuer_device_id), "consume_token")
+    decode_consumed_token(issuer_device_id, "consume_token")
+}
+
+#[allow(dead_code)]
+pub(crate) async fn consume_token_with_postgres_executor<'e, E>(
+    executor: E,
+    token_hash_candidate: &str,
+    now: i64,
+) -> Result<Option<ConsumedToken>, BackendError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let issuer_device_id = sqlx::query_scalar::<_, String>(
+        r#"
+        UPDATE pairing_tokens
+        SET consumed_at = $1
+        WHERE token_hash = $2
+          AND consumed_at IS NULL
+          AND expires_at > $3
+        RETURNING issuer_device_id
+        "#,
+    )
+    .bind(now)
+    .bind(token_hash_candidate)
+    .bind(now)
+    .fetch_optional(executor)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "consume_token".to_string(),
+        message: e.to_string(),
+    })?;
+
+    decode_consumed_token(issuer_device_id, "consume_token")
 }
 
 fn decode_consumed_token(
@@ -162,19 +246,29 @@ fn decode_consumed_token(
 ///
 /// Consumed tokens are preserved as an audit trail (spec §8.2:
 /// `consumed_at` is permanent).
-pub async fn gc_expired(pool: &SqlitePool, now: i64) -> Result<u64, BackendError> {
-    let result = sqlx::query!(
-        r#"DELETE FROM pairing_tokens WHERE expires_at <= ? AND consumed_at IS NULL"#,
-        now,
-    )
-    .execute(pool)
-    .await
+pub async fn gc_expired(store: &impl AsStorePool, now: i64) -> Result<u64, BackendError> {
+    let result = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            r#"DELETE FROM pairing_tokens WHERE expires_at <= ? AND consumed_at IS NULL"#,
+        )
+        .bind(now)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            r#"DELETE FROM pairing_tokens WHERE expires_at <= $1 AND consumed_at IS NULL"#,
+        )
+        .bind(now)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+    }
     .map_err(|e| BackendError::StoreQuery {
         operation: "gc_expired".to_string(),
         message: e.to_string(),
     })?;
 
-    Ok(result.rows_affected())
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -276,7 +370,7 @@ mod tests {
         assert_eq!(removed, 1, "only hash-A is expired-and-unconsumed");
 
         let remaining: Vec<String> =
-            sqlx::query_scalar!("SELECT token_hash FROM pairing_tokens ORDER BY token_hash")
+            sqlx::query_scalar("SELECT token_hash FROM pairing_tokens ORDER BY token_hash")
                 .fetch_all(&pool)
                 .await
                 .unwrap();

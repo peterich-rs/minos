@@ -6,24 +6,33 @@
 //! format onto this shape; the backend runs them on ingest and on
 //! history read.
 //!
-//! See `docs/superpowers/specs/mobile-migration-and-ui-protocol-design.md`
-//! §6.4 for the authoritative type definition.
+//! The Rust types in this crate are the authoritative definition of the
+//! UI event contract.
 
 #![forbid(unsafe_code)]
+
+#[cfg(feature = "uniffi")]
+uniffi::setup_scaffolding!();
 
 mod claude;
 mod codex;
 mod error;
 mod gemini;
+mod grok;
 mod message;
+mod opencode;
 
 pub use error::TranslationError;
-pub use message::{MessageRole, ThreadEndReason, UiEventMessage};
+pub use message::{
+    ArtifactRef, DisplayPayload, MessageRole, SubagentStatus, ThreadEndReason, UiEventMessage,
+};
 pub use minos_domain::AgentName as AgentKind;
 
-pub use claude::translate as translate_claude;
+pub use claude::{translate as translate_claude, ClaudeTranslatorState};
 pub use codex::{translate as translate_codex, CodexTranslatorState};
-pub use gemini::translate as translate_gemini;
+pub use gemini::{translate as translate_gemini, GeminiTranslatorState};
+pub use grok::{translate as translate_grok, GrokTranslatorState};
+pub use opencode::{translate as translate_opencode, OpencodeTranslatorState};
 
 /// One-shot dispatch convenience for the backend: given an agent kind
 /// and one raw native event, return all resulting UI events. Used when
@@ -42,7 +51,21 @@ pub fn translate_stateless(
             let mut s = CodexTranslatorState::new(String::new());
             translate_codex(&mut s, raw_payload)
         }
-        AgentKind::Claude => translate_claude(raw_payload),
-        AgentKind::Gemini => translate_gemini(raw_payload),
+        AgentKind::Claude => {
+            let mut s = ClaudeTranslatorState::new(String::new());
+            translate_claude(&mut s, raw_payload)
+        }
+        AgentKind::Gemini => {
+            let mut s = GeminiTranslatorState::new(String::new());
+            translate_gemini(&mut s, raw_payload)
+        }
+        AgentKind::Grok => {
+            let mut s = GrokTranslatorState::new(String::new());
+            translate_grok(&mut s, raw_payload)
+        }
+        AgentKind::Opencode => {
+            let mut s = OpencodeTranslatorState::new(String::new());
+            translate_opencode(&mut s, raw_payload)
+        }
     }
 }

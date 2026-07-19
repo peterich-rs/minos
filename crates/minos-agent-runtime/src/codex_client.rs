@@ -194,6 +194,37 @@ impl CodexClient {
         })?
     }
 
+    /// Typed JSON-RPC request: serialise `params`, dispatch via `call`,
+    /// deserialise the result into `R::Response`. Method string is taken
+    /// from `R::METHOD` — no string is duplicated at the call site.
+    pub(crate) async fn call_typed<R: minos_codex_protocol::ClientRequest>(
+        &self,
+        params: R,
+    ) -> Result<R::Response, MinosError> {
+        let value = serde_json::to_value(&params).map_err(|e| MinosError::CodexProtocolError {
+            method: R::METHOD.into(),
+            message: format!("encode params failed: {e}"),
+        })?;
+        let raw = self.call(R::METHOD, value).await?;
+        serde_json::from_value::<R::Response>(raw).map_err(|e| MinosError::CodexProtocolError {
+            method: R::METHOD.into(),
+            message: format!("decode response failed: {e}"),
+        })
+    }
+
+    /// Typed JSON-RPC notification: serialise `params`, dispatch via `notify`.
+    /// Method string is taken from `N::METHOD`.
+    pub(crate) async fn notify_typed<N: minos_codex_protocol::ClientNotification>(
+        &self,
+        params: N,
+    ) -> Result<(), MinosError> {
+        let value = serde_json::to_value(&params).map_err(|e| MinosError::CodexProtocolError {
+            method: N::METHOD.into(),
+            message: format!("encode notification params failed: {e}"),
+        })?;
+        self.notify(N::METHOD, value).await
+    }
+
     /// Reply to a server request with a `result` value. Fire-and-forget from
     /// the caller's perspective — an error here means the WS went away.
     pub(crate) async fn reply(&self, id: Value, result: Value) -> Result<(), MinosError> {
@@ -636,6 +667,84 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn call_typed_round_trips_with_typed_response() {
+        use minos_codex_protocol::{
+            ClientInfo, InitializeCapabilities, InitializeParams, InitializeResponse,
+        };
+
+        let (client_ws, server_ws) = duplex_pair().await;
+        let client = CodexClient::from_stream(client_ws);
+
+        let server_task = tokio::spawn(async move {
+            let (mut tx, mut rx) = server_ws.split();
+            let frame = match rx.next().await {
+                Some(Ok(Message::Text(t))) => t,
+                other => panic!("expected text frame, got {other:?}"),
+            };
+            let parsed: Value = serde_json::from_str(frame.as_ref()).unwrap();
+            assert_eq!(parsed["method"], "initialize");
+            let id = parsed["id"].clone();
+            // Hand-build a typed-compatible response (only fields required by
+            // the schema; round-trip handles defaults).
+            let response = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "codexHome": "/tmp/codex",
+                    "platformFamily": "unix",
+                    "platformOs": "macos",
+                    "userAgent": "codex/test",
+                },
+            });
+            tx.send(Message::text(response.to_string())).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        });
+
+        let result: InitializeResponse = client
+            .call_typed(InitializeParams {
+                client_info: ClientInfo {
+                    name: "test".into(),
+                    title: Some("Test".into()),
+                    version: "0".into(),
+                },
+                capabilities: Some(InitializeCapabilities {
+                    experimental_api: true,
+                    opt_out_notification_methods: None,
+                }),
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.platform_family, "unix");
+        assert_eq!(result.platform_os, "macos");
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn notify_typed_omits_id_field() {
+        use minos_codex_protocol::InitializedNotification;
+
+        let (client_ws, server_ws) = duplex_pair().await;
+        let client = CodexClient::from_stream(client_ws);
+
+        let server_task = tokio::spawn(async move {
+            let (_tx, mut rx) = server_ws.split();
+            let frame = match rx.next().await {
+                Some(Ok(Message::Text(t))) => t,
+                other => panic!("expected text frame, got {other:?}"),
+            };
+            let parsed: Value = serde_json::from_str(frame.as_ref()).unwrap();
+            assert_eq!(parsed["method"], "initialized");
+            assert!(
+                parsed.get("id").is_none(),
+                "notifications must not carry id",
+            );
+        });
+
+        client.notify_typed(InitializedNotification).await.unwrap();
+        server_task.await.unwrap();
     }
 
     #[tokio::test]

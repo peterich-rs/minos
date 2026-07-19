@@ -1,6 +1,5 @@
 import AppKit
 import Observation
-import OSLog
 
 /// Top-level lifecycle phase the menubar UI ladders against. Distinct
 /// from the per-axis state (`relayLink`, `peer`) — `phase` answers "are
@@ -25,7 +24,9 @@ final class AppState: @unchecked Sendable {
         let relayLink: RelayLinkState
         let peer: PeerState
         let trustedDevice: PeerRecord?
-        let agentState: AgentState
+        let peers: [HostPeerSummary]
+        let agentState: ThreadState
+        let agentThread: AgentThreadSnapshot?
     }
 
     // ── Daemon + subscriptions ──
@@ -41,6 +42,7 @@ final class AppState: @unchecked Sendable {
     var relayLink: RelayLinkState = .disconnected
     var peer: PeerState = .unpaired
     var trustedDevice: PeerRecord?
+    var peers: [HostPeerSummary] = []
 
     // ── Pairing UX ──
     var currentQr: RelayQrPayload?
@@ -48,16 +50,13 @@ final class AppState: @unchecked Sendable {
     var isShowingQr: Bool = false
 
     // ── Agent runtime ──
-    var agentState: AgentState = .idle
+    var agentState: ThreadState = .idle
     var currentSession: StartAgentResponse?
     var agentError: MinosError?
 
     // ── Errors ──
     var bootError: MinosError?
     var displayError: MinosError?
-
-    @ObservationIgnored
-    let logger = Logger(subsystem: "ai.minos.macos", category: "appState")
 
     // Internal access (not private) so AppState+Agent.swift can reach
     // them — the agent error is parented on the same task lifecycle.
@@ -87,23 +86,33 @@ final class AppState: @unchecked Sendable {
 
     /// Show the "显示配对二维码…" item only when:
     /// - the daemon is running (so we have someone to ask),
-    /// - the relay link is up (so the QR token can actually be minted),
-    /// - and there is no peer already paired (a second peer would be a
-    ///   second pairing, not currently supported).
+    /// - regardless of realtime link state. Pairing QR minting uses the
+    ///   HTTP control plane, while `relayLink` only describes the host
+    ///   realtime socket after a host installation token exists.
     var canShowQr: Bool {
-        guard phase == .running, daemon != nil else { return false }
-        if case .connected = relayLink, case .unpaired = peer { return true }
-        return false
+        phase == .running && daemon != nil
     }
 
     /// Show the "忘记已配对设备" item only when:
     /// - the daemon is running,
     /// - the relay link is up (so the host can issue ForgetPeer),
-    /// - and a peer is currently paired.
+    /// - and at least one peer row is currently known.
     var canForgetPeer: Bool {
         guard phase == .running, daemon != nil else { return false }
         guard case .connected = relayLink else { return false }
-        if case .paired = peer { return true }
+        return !resolvedPeers.isEmpty
+    }
+
+    func canForgetPeerDevice(_ peer: HostPeerSummary) -> Bool {
+        guard canForgetPeer else { return false }
+        return resolvedPeers.contains(peer)
+    }
+
+    /// Show a manual reconnect affordance when the relay task has stopped
+    /// retrying and the daemon is still otherwise booted.
+    var canReconnectBackend: Bool {
+        guard phase == .running, daemon != nil else { return false }
+        if case .disconnected = relayLink { return true }
         return false
     }
 
@@ -122,6 +131,7 @@ final class AppState: @unchecked Sendable {
         currentQrGeneratedAt = nil
         isShowingQr = false
         trustedDevice = nil
+        peers = []
         relayLink = .disconnected
         peer = .unpaired
         phase = .booting
@@ -152,8 +162,10 @@ final class AppState: @unchecked Sendable {
             relayLink: snapshot.relayLink,
             peer: snapshot.peer,
             trustedDevice: snapshot.trustedDevice,
+            peers: snapshot.peers,
             agentSubscription: agentSubscription,
-            agentState: snapshot.agentState
+            agentState: snapshot.agentState,
+            agentThread: snapshot.agentThread
         )
     }
 
@@ -166,8 +178,10 @@ final class AppState: @unchecked Sendable {
         relayLink: RelayLinkState,
         peer: PeerState,
         trustedDevice: PeerRecord?,
+        peers: [HostPeerSummary] = [],
         agentSubscription: (any SubscriptionHandle)? = nil,
-        agentState: AgentState = .idle
+        agentState: ThreadState = .idle,
+        agentThread: AgentThreadSnapshot? = nil
     ) {
         displayErrorTask?.cancel()
         agentErrorTask?.cancel()
@@ -179,16 +193,18 @@ final class AppState: @unchecked Sendable {
         self.peerSubscription = peerSubscription
         self.agentSubscription = agentSubscription
         self.relayLink = relayLink
-        self.peer = peer
+        let resolvedPeers = peers.isEmpty ? Self.synthesizedPeers(from: trustedDevice, peer: peer) : peers
+        self.peers = resolvedPeers
+        self.peer = resolvedPeers.isEmpty ? peer : Self.aggregatePeerState(from: resolvedPeers)
         self.agentState = agentState
-        self.currentSession = nil
-        self.trustedDevice = trustedDevice
+        applyAgentThreadSnapshot(agentThread)
+        self.trustedDevice = resolvedPeers.first.map(Self.peerRecord) ?? trustedDevice
         self.phase = .running
     }
 
     @MainActor
     func failBoot(with error: MinosError) {
-        logger.error("Boot failed: \(error.technicalDetails, privacy: .public)")
+        AppLog.error("appState", "Boot failed: \(error.technicalDetails)")
         displayErrorTask?.cancel()
         agentErrorTask?.cancel()
         relayLinkSubscription?.cancel()
@@ -203,6 +219,7 @@ final class AppState: @unchecked Sendable {
         agentState = .idle
         currentSession = nil
         trustedDevice = nil
+        peers = []
         currentQr = nil
         currentQrGeneratedAt = nil
         isShowingQr = false
@@ -218,38 +235,7 @@ final class AppState: @unchecked Sendable {
         relayLink = state
     }
 
-    /// Push from the peer observer. Mirror the trustedDevice cache so
-    /// pairing-aware UI doesn't have to wait for `current_trusted_device`
-    /// to round-trip the daemon.
-    ///
-    /// `PeerState::Paired` is ephemeral — it carries `(id, name, online)`
-    /// but no `pairedAt`, because the relay re-emits Paired/PeerOnline on
-    /// every reconnect. `PeerRecord` is the persisted shape and owns the
-    /// real `pairedAt` that was captured at first-pair time. So we only
-    /// synthesize a new `PeerRecord` when the deviceId has genuinely
-    /// changed (first pair, or pair-after-forget). For the steady-state
-    /// reconnect case where we already hold a record for this peer, we
-    /// leave `trustedDevice` untouched rather than stamp a fresh `Date()`
-    /// over the original timestamp.
-    @MainActor
-    func applyPeer(_ state: PeerState) {
-        peer = state
-        switch state {
-        case let .paired(id, name, _):
-            if trustedDevice?.deviceId != id {
-                trustedDevice = PeerRecord(deviceId: id, name: name, pairedAt: Date())
-            }
-        case .unpaired:
-            trustedDevice = nil
-            currentQr = nil
-            currentQrGeneratedAt = nil
-            isShowingQr = false
-        case .pairing:
-            break
-        }
-    }
-
-    // QR / forget / shutdown / reveal / presentTransientError live in
-    // AppState+Actions.swift so the core type body stays under the
-    // swiftlint type-body-length cap.
+    // Peer snapshot helpers live in AppState+Peers.swift; QR / forget /
+    // shutdown / reveal live in AppState+Actions.swift so the core type
+    // body stays under the swiftlint type-body-length cap.
 }

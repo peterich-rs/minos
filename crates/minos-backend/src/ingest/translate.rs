@@ -11,8 +11,9 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use minos_domain::AgentName;
 use minos_ui_protocol::{
-    translate_claude, translate_codex, translate_gemini, CodexTranslatorState, TranslationError,
-    UiEventMessage,
+    translate_claude, translate_codex, translate_gemini, translate_grok, translate_opencode,
+    ClaudeTranslatorState, CodexTranslatorState, GeminiTranslatorState, GrokTranslatorState,
+    OpencodeTranslatorState, TranslationError, UiEventMessage,
 };
 use serde_json::Value;
 
@@ -20,6 +21,10 @@ use serde_json::Value;
 /// can hand a clone to every dispatched ingest call without locking.
 pub struct ThreadTranslators {
     codex: DashMap<String, CodexTranslatorState>,
+    claude: DashMap<String, ClaudeTranslatorState>,
+    opencode: DashMap<String, OpencodeTranslatorState>,
+    gemini: DashMap<String, GeminiTranslatorState>,
+    grok: DashMap<String, GrokTranslatorState>,
 }
 
 impl ThreadTranslators {
@@ -27,13 +32,15 @@ impl ThreadTranslators {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             codex: DashMap::new(),
+            claude: DashMap::new(),
+            opencode: DashMap::new(),
+            gemini: DashMap::new(),
+            grok: DashMap::new(),
         })
     }
 
     /// Translate one raw event for `agent` within `thread_id`, using (and
-    /// mutating) the cached translator state. Unknown agents fall through
-    /// to `translate_claude` / `translate_gemini` stubs, which return
-    /// `TranslationError::NotImplemented` until those CLIs land.
+    /// mutating) the cached translator state.
     pub fn translate(
         &self,
         agent: AgentName,
@@ -48,13 +55,43 @@ impl ThreadTranslators {
                     .or_insert_with(|| CodexTranslatorState::new(thread_id.to_string()));
                 translate_codex(&mut state, payload)
             }
-            AgentName::Claude => translate_claude(payload),
-            AgentName::Gemini => translate_gemini(payload),
+            AgentName::Claude => {
+                let mut state = self
+                    .claude
+                    .entry(thread_id.to_string())
+                    .or_insert_with(|| ClaudeTranslatorState::new(thread_id.to_string()));
+                translate_claude(&mut state, payload)
+            }
+            AgentName::Gemini => {
+                let mut state = self
+                    .gemini
+                    .entry(thread_id.to_string())
+                    .or_insert_with(|| GeminiTranslatorState::new(thread_id.to_string()));
+                translate_gemini(&mut state, payload)
+            }
+            AgentName::Grok => {
+                let mut state = self
+                    .grok
+                    .entry(thread_id.to_string())
+                    .or_insert_with(|| GrokTranslatorState::new(thread_id.to_string()));
+                translate_grok(&mut state, payload)
+            }
+            AgentName::Opencode => {
+                let mut state = self
+                    .opencode
+                    .entry(thread_id.to_string())
+                    .or_insert_with(|| OpencodeTranslatorState::new(thread_id.to_string()));
+                translate_opencode(&mut state, payload)
+            }
         }
     }
 
     /// Drop the translator state for `thread_id`. Call on `ThreadClosed`.
     pub fn drop_thread(&self, thread_id: &str) {
         self.codex.remove(thread_id);
+        self.claude.remove(thread_id);
+        self.opencode.remove(thread_id);
+        self.gemini.remove(thread_id);
+        self.grok.remove(thread_id);
     }
 }

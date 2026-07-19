@@ -35,14 +35,16 @@ extension MinosError {
             return .peerOffline
         case .BackendInternal:
             return .backendInternal
-        case .CfAuthFailed:
-            return .cfAuthFailed
         case .CodexSpawnFailed:
             return .codexSpawnFailed
         case .CodexConnectFailed:
             return .codexConnectFailed
         case .CodexProtocolError:
             return .codexProtocolError
+        case .GeminiSpawnFailed:
+            return .geminiSpawnFailed
+        case .AcpProtocolError:
+            return .acpProtocolError
         case .AgentAlreadyRunning:
             return .agentAlreadyRunning
         case .AgentNotRunning:
@@ -51,8 +53,6 @@ extension MinosError {
             return .agentNotSupported
         case .AgentSessionIdMismatch:
             return .agentSessionIdMismatch
-        case .CfAccessMisconfigured:
-            return .cfAccessMisconfigured
         case .IngestSeqConflict:
             return .ingestSeqConflict
         case .ThreadNotFound:
@@ -63,6 +63,26 @@ extension MinosError {
             return .translationFailed
         case .PairingQrVersionUnsupported:
             return .pairingQrVersionUnsupported
+        case .Timeout:
+            return .timeout
+        case .NotConnected:
+            return .notConnected
+        case .RequestDropped:
+            return .requestDropped
+        case .AuthRefreshFailed:
+            return .authRefreshFailed
+        case .EmailTaken:
+            return .emailTaken
+        case .WeakPassword:
+            return .weakPassword
+        case .RateLimited:
+            return .rateLimited
+        case .InvalidCredentials:
+            return .invalidCredentials
+        case .AgentStartFailed:
+            return .agentStartFailed
+        case .PairingTokenExpired:
+            return .pairingTokenExpired
         }
     }
 

@@ -8,8 +8,9 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'minos.freezed.dart';
 
-// These functions are ignored because they are not marked as `pub`: `frb_runtime`, `spawn_state_forwarder`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`, `from`, `from`, `from`, `from`
+// These functions are ignored because they are not marked as `pub`: `frb_runtime`, `parse_device_id`, `spawn_state_forwarder`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `StartAgentResponse`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Initialize mobile-side Rust logging with the given directory (supplied by
 /// Dart, typically `<Documents>/Minos/Logs`). Idempotent — safe to call once
@@ -23,6 +24,16 @@ Future<void> initLogging({required String logDir}) =>
 String kindMessage({required ErrorKind kind, required Lang lang}) =>
     RustLib.instance.api.crateApiMinosKindMessage(kind: kind, lang: lang);
 
+void emitLog({
+  required LogLevel level,
+  required String target,
+  required String message,
+}) => RustLib.instance.api.crateApiMinosEmitLog(
+  level: level,
+  target: target,
+  message: message,
+);
+
 /// Snapshot the records currently held in the ring buffer (oldest first).
 /// Pair this with [`subscribe_log_records`] when populating a freshly
 /// mounted log panel so prior events are not lost.
@@ -35,18 +46,142 @@ List<LogRecord> recentLogRecords() =>
 Stream<LogRecord> subscribeLogRecords() =>
     RustLib.instance.api.crateApiMinosSubscribeLogRecords();
 
+List<RequestTraceRecord> recentRequestTraces() =>
+    RustLib.instance.api.crateApiMinosRecentRequestTraces();
+
+void clearRequestTraces() =>
+    RustLib.instance.api.crateApiMinosClearRequestTraces();
+
+Stream<RequestTraceRecord> subscribeRequestTraces() =>
+    RustLib.instance.api.crateApiMinosSubscribeRequestTraces();
+
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MobileClient>>
 abstract class MobileClient implements RustOpaqueInterface {
+  Future<FriendRequestSummary> acceptFriendRequest({required String requestId});
+
+  /// Read the current active Mac id, or `None` if no pair has been
+  /// completed yet.
+  Future<String?> activeHost();
+
+  Future<void> addAgentToConversation({
+    required String conversationId,
+    required String agentId,
+  });
+
+  Future<void> addGroupMember({
+    required String conversationId,
+    required String memberAccountId,
+  });
+
+  /// Permanently close the given thread. Idempotent.
+  Future<void> closeThread({required String threadId});
+
+  Future<ConversationMembersResponse> conversationMembers({
+    required String conversationId,
+  });
+
+  Future<ConversationsResponse> conversations();
+
+  Future<FriendRequestSummary> createFriendRequest({
+    required String targetMinosId,
+  });
+
+  Future<ConversationResponse> createGroupConversation({
+    required String title,
+    required List<String> memberAccountIds,
+  });
+
+  /// Create a new project on the daemon.
+  Future<CreateProjectResponse> createProject({
+    required CreateProjectRequest req,
+  });
+
   /// Current connection state, read from the watch-channel cache. Cheap and
   /// synchronous.
   ConnectionState currentState();
 
-  /// Forget the paired backend; clears secure storage and tears down the
-  /// WS. Idempotent.
-  Future<void> forgetPeer();
+  Future<void> deleteConversation({required String conversationId});
+
+  /// Delete a project.
+  Future<void> deleteProject({required DeleteProjectRequest req});
+
+  Future<ConversationResponse> ensureDirectConversation({
+    required String friendAccountId,
+  });
+
+  /// Forget a specific paired Mac. The path-bound `host_device_id` is
+  /// the Mac to forget. Idempotent. ADR-0020 supersedes the old
+  /// `forget_peer` (single-peer) call.
+  Future<void> forgetHost({required String hostDeviceId});
+
+  Future<FriendRequestsResponse> friendRequests();
+
+  Future<FriendsResponse> friends();
+
+  /// Pause an in-flight turn on the given thread. Best-effort. The thread
+  /// transitions to `Suspended { UserInterrupt }` regardless of whether the
+  /// codex side acknowledges in time.
+  Future<void> interruptThread({required String threadId});
+
+  Future<List<AgentSessionSummaryDto>> listAgentSessions({
+    String? conversationId,
+    required int limit,
+  });
+
+  Future<ListAgentsResponse> listAgents();
+
+  Future<ListChatMessagesResponse> listChatMessages({
+    required String conversationId,
+    PlatformInt64? beforeTsMs,
+    required int limit,
+  });
+
+  /// Detect the CLI agents available on the paired runtime.
+  Future<List<AgentDescriptor>> listClis();
+
+  Future<ConversationAgentMembersResponse> listConversationAgents({
+    required String conversationId,
+  });
+
+  /// Scan host-side skills for the selected runtime host.
+  Future<ListHostSkillsResponse> listHostSkills({
+    String? hostDeviceId,
+    required bool forceReload,
+  });
+
+  Future<ListHostWorkspacesResponse> listHostWorkspaces({
+    String? hostDeviceId,
+    String? root,
+    required int limit,
+  });
+
+  /// List every Mac paired to the caller's account.
+  Future<List<HostSummaryDto>> listPairedHosts();
+
+  /// List threads within a project.
+  Future<ListProjectThreadsResponse> listProjectThreads({
+    required ListProjectThreadsParams req,
+  });
+
+  /// List all projects on the daemon.
+  Future<ListProjectsResponse> listProjects();
 
   /// Request a page of thread summaries.
   Future<ListThreadsResponse> listThreads({required ListThreadsParams req});
+
+  /// Log into an existing account on the backend. Same shape as
+  /// `register` modulo the create-vs-find behaviour on the server.
+  Future<AuthSummary> login({required String email, required String password});
+
+  /// Log out of the current session. Best-effort `stop_agent`, then
+  /// revoke the refresh token server-side, then wipe local state.
+  Future<void> logout();
+
+  Future<ConversationReadResponse> markConversationRead({
+    required String conversationId,
+  });
+
+  Future<MyProfileResponse> myProfile();
 
   /// Construct a client backed by the built-in in-memory pairing store.
   /// Synchronous — no I/O happens until a pairing method is called.
@@ -63,6 +198,14 @@ abstract class MobileClient implements RustOpaqueInterface {
     state: state,
   );
 
+  /// Mark the app as backgrounded. Pauses the reconnect loop so we
+  /// don't poke the backend while the OS is freezing the process.
+  void notifyBackgrounded();
+
+  /// Mark the app as foregrounded. Resets the reconnect backoff so the
+  /// next connect attempt happens promptly.
+  void notifyForegrounded();
+
   /// Pair using the raw JSON payload extracted from the scanned QR v2
   /// code. Delegates to `MobileClient::pair_with_qr_json`.
   Future<void> pairWithQrJson({required String qrJson});
@@ -74,9 +217,90 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// Read a window of translated UI events for one thread.
   Future<ReadThreadResponse> readThread({required ReadThreadParams req});
 
+  Future<ChatMessageSummary> recallChatMessage({
+    required String conversationId,
+    required String messageId,
+  });
+
+  /// Rotate the bearer + refresh tokens. Surfaces `Refreshing` /
+  /// `Authenticated` / `RefreshFailed` transitions on the auth-state
+  /// stream.
+  Future<void> refreshSession();
+
+  /// Register a new account on the backend. On success the bearer +
+  /// refresh tokens are held in memory and surfaced via the auth-state
+  /// stream; the reconnect loop then drives the WS back to `Connected`.
+  Future<AuthSummary> register({
+    required String email,
+    required String password,
+  });
+
+  Future<AgentSummary> registerAgent({
+    required String name,
+    required String description,
+    required String runtimeAgent,
+    required String model,
+    String? workspacePath,
+  });
+
+  Future<FriendRequestSummary> rejectFriendRequest({required String requestId});
+
+  Future<void> removeAgentFromConversation({
+    required String conversationId,
+    required String agentId,
+  });
+
+  Future<void> removeGroupMember({
+    required String conversationId,
+    required String memberAccountId,
+  });
+
+  /// Submit an opencode question answer for a pending host request.
+  Future<void> respondOpencodeQuestion({
+    required String sessionId,
+    required String questionId,
+    required String answersJson,
+  });
+
   /// Reconnect using the durable pairing snapshot already loaded from the
   /// Dart-side secure store.
   Future<void> resumePersistedSession();
+
+  Future<List<UserSummary>> searchUsers({required String minosId});
+
+  /// Submit a user approval decision for a pending host request.
+  Future<void> sendApprovalDecision({
+    required String requestId,
+    required String threadId,
+    required String decisionJson,
+  });
+
+  Future<ChatMessageSummary> sendChatMessage({
+    required String conversationId,
+    required String text,
+    String? replyToMessageId,
+  });
+
+  /// Send a follow-up user message to an existing agent session.
+  Future<void> sendUserMessage({
+    required String sessionId,
+    required String text,
+  });
+
+  /// Override the active Mac the next forward-RPC routes to.
+  Future<void> setActiveHost({required String hostDeviceId});
+
+  Future<MyProfileResponse> setMinosId({required String minosId});
+
+  Future<void> subscribeAgentSession({required String sessionId});
+
+  /// Subscribe to auth-state transitions. Emits the current cached frame
+  /// immediately, then every subsequent change. The spawned task exits
+  /// once Dart drops the stream (detected via `sink.add(...).is_err()`).
+  Stream<AuthStateFrame> subscribeAuthState();
+
+  /// Subscribe to live `SocialEventFrame`s fanned out from the backend.
+  Stream<SocialEventFrame> subscribeSocialEvents();
 
   /// Subscribe to connection-state transitions. Emits the current value
   /// immediately, then every subsequent change. The spawned task exits once
@@ -87,9 +311,373 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// Every frb stream sink gets its own broadcast receiver; lagging
   /// subscribers lose old frames rather than blocking the producer.
   Stream<UiEventFrame> subscribeUiEvents();
+
+  Future<AgentSummary> updateAgent({
+    required String agentId,
+    required String name,
+    required String description,
+    required String runtimeAgent,
+    required String model,
+    String? workspacePath,
+  });
+
+  /// Update a project's name.
+  Future<void> updateProject({required UpdateProjectRequest req});
+
+  /// Enable or disable one host-side skill.
+  Future<WriteHostSkillConfigResponse> writeHostSkillConfig({
+    String? hostDeviceId,
+    required String path,
+    required bool enabled,
+  });
+}
+
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<ThreadState>>
+abstract class ThreadState implements RustOpaqueInterface {}
+
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<ThreadSummary>>
+abstract class ThreadSummary implements RustOpaqueInterface {
+  AgentName get agent;
+
+  ThreadEndReason? get endReason;
+
+  PlatformInt64? get endedAtMs;
+
+  PlatformInt64 get firstTsMs;
+
+  PlatformInt64 get lastTsMs;
+
+  int get messageCount;
+
+  bool get needsContinue;
+
+  String? get parentThreadId;
+
+  ThreadState get state;
+
+  String get threadId;
+
+  String? get title;
+
+  set agent(AgentName agent);
+
+  set endReason(ThreadEndReason? endReason);
+
+  set endedAtMs(PlatformInt64? endedAtMs);
+
+  set firstTsMs(PlatformInt64 firstTsMs);
+
+  set lastTsMs(PlatformInt64 lastTsMs);
+
+  set messageCount(int messageCount);
+
+  set needsContinue(bool needsContinue);
+
+  set parentThreadId(String? parentThreadId);
+
+  set state(ThreadState state);
+
+  set threadId(String threadId);
+
+  set title(String? title);
+}
+
+class AgentDescriptor {
+  final AgentName name;
+  final String? path;
+  final String? version;
+  final AgentStatus status;
+
+  const AgentDescriptor({
+    required this.name,
+    this.path,
+    this.version,
+    required this.status,
+  });
+
+  @override
+  int get hashCode =>
+      name.hashCode ^ path.hashCode ^ version.hashCode ^ status.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AgentDescriptor &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          path == other.path &&
+          version == other.version &&
+          status == other.status;
 }
 
 enum AgentName { codex, claude, gemini }
+
+class AgentSessionSummaryDto {
+  final String sessionId;
+  final String conversationId;
+  final String? agentId;
+  final AgentName? agent;
+  final String status;
+  final PlatformInt64 startedAtMs;
+  final PlatformInt64? endedAtMs;
+  final String? title;
+  final PlatformInt64 lastActivityAtMs;
+  final int messageCount;
+  final ThreadEndReason? endReason;
+
+  const AgentSessionSummaryDto({
+    required this.sessionId,
+    required this.conversationId,
+    this.agentId,
+    this.agent,
+    required this.status,
+    required this.startedAtMs,
+    this.endedAtMs,
+    this.title,
+    required this.lastActivityAtMs,
+    required this.messageCount,
+    this.endReason,
+  });
+
+  @override
+  int get hashCode =>
+      sessionId.hashCode ^
+      conversationId.hashCode ^
+      agentId.hashCode ^
+      agent.hashCode ^
+      status.hashCode ^
+      startedAtMs.hashCode ^
+      endedAtMs.hashCode ^
+      title.hashCode ^
+      lastActivityAtMs.hashCode ^
+      messageCount.hashCode ^
+      endReason.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AgentSessionSummaryDto &&
+          runtimeType == other.runtimeType &&
+          sessionId == other.sessionId &&
+          conversationId == other.conversationId &&
+          agentId == other.agentId &&
+          agent == other.agent &&
+          status == other.status &&
+          startedAtMs == other.startedAtMs &&
+          endedAtMs == other.endedAtMs &&
+          title == other.title &&
+          lastActivityAtMs == other.lastActivityAtMs &&
+          messageCount == other.messageCount &&
+          endReason == other.endReason;
+}
+
+@freezed
+sealed class AgentStatus with _$AgentStatus {
+  const AgentStatus._();
+
+  const factory AgentStatus.ok() = AgentStatus_Ok;
+  const factory AgentStatus.missing() = AgentStatus_Missing;
+  const factory AgentStatus.error({required String reason}) = AgentStatus_Error;
+}
+
+class AgentSummary {
+  final String agentId;
+  final String ownerAccountId;
+  final String name;
+  final String description;
+  final String runtimeAgent;
+  final String model;
+  final String? workspacePath;
+  final PlatformInt64 createdAtMs;
+  final PlatformInt64 updatedAtMs;
+
+  const AgentSummary({
+    required this.agentId,
+    required this.ownerAccountId,
+    required this.name,
+    required this.description,
+    required this.runtimeAgent,
+    required this.model,
+    this.workspacePath,
+    required this.createdAtMs,
+    required this.updatedAtMs,
+  });
+
+  @override
+  int get hashCode =>
+      agentId.hashCode ^
+      ownerAccountId.hashCode ^
+      name.hashCode ^
+      description.hashCode ^
+      runtimeAgent.hashCode ^
+      model.hashCode ^
+      workspacePath.hashCode ^
+      createdAtMs.hashCode ^
+      updatedAtMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AgentSummary &&
+          runtimeType == other.runtimeType &&
+          agentId == other.agentId &&
+          ownerAccountId == other.ownerAccountId &&
+          name == other.name &&
+          description == other.description &&
+          runtimeAgent == other.runtimeAgent &&
+          model == other.model &&
+          workspacePath == other.workspacePath &&
+          createdAtMs == other.createdAtMs &&
+          updatedAtMs == other.updatedAtMs;
+}
+
+class ArtifactRef {
+  final String threadId;
+  final String artifactId;
+  final BigInt sizeBytes;
+  final String sha256;
+  final String mediaType;
+
+  const ArtifactRef({
+    required this.threadId,
+    required this.artifactId,
+    required this.sizeBytes,
+    required this.sha256,
+    required this.mediaType,
+  });
+
+  @override
+  int get hashCode =>
+      threadId.hashCode ^
+      artifactId.hashCode ^
+      sizeBytes.hashCode ^
+      sha256.hashCode ^
+      mediaType.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ArtifactRef &&
+          runtimeType == other.runtimeType &&
+          threadId == other.threadId &&
+          artifactId == other.artifactId &&
+          sizeBytes == other.sizeBytes &&
+          sha256 == other.sha256 &&
+          mediaType == other.mediaType;
+}
+
+@freezed
+sealed class AuthStateFrame with _$AuthStateFrame {
+  const AuthStateFrame._();
+
+  const factory AuthStateFrame.unauthenticated() =
+      AuthStateFrame_Unauthenticated;
+  const factory AuthStateFrame.authenticated({required AuthSummary account}) =
+      AuthStateFrame_Authenticated;
+  const factory AuthStateFrame.refreshing() = AuthStateFrame_Refreshing;
+  const factory AuthStateFrame.refreshFailed({required MinosError error}) =
+      AuthStateFrame_RefreshFailed;
+}
+
+class AuthSummary {
+  final String accountId;
+  final String email;
+
+  const AuthSummary({required this.accountId, required this.email});
+
+  @override
+  int get hashCode => accountId.hashCode ^ email.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AuthSummary &&
+          runtimeType == other.runtimeType &&
+          accountId == other.accountId &&
+          email == other.email;
+}
+
+class ChatMessageReplySummary {
+  final String messageId;
+  final UserSummary sender;
+  final String text;
+  final PlatformInt64? recalledAtMs;
+
+  const ChatMessageReplySummary({
+    required this.messageId,
+    required this.sender,
+    required this.text,
+    this.recalledAtMs,
+  });
+
+  @override
+  int get hashCode =>
+      messageId.hashCode ^
+      sender.hashCode ^
+      text.hashCode ^
+      recalledAtMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ChatMessageReplySummary &&
+          runtimeType == other.runtimeType &&
+          messageId == other.messageId &&
+          sender == other.sender &&
+          text == other.text &&
+          recalledAtMs == other.recalledAtMs;
+}
+
+class ChatMessageSummary {
+  final String messageId;
+  final String conversationId;
+  final UserSummary sender;
+  final String text;
+  final PlatformInt64 createdAtMs;
+  final ChatMessageReplySummary? replyTo;
+  final PlatformInt64? recalledAtMs;
+  final List<String> mentionedAccountIds;
+  final SenderType senderType;
+
+  const ChatMessageSummary({
+    required this.messageId,
+    required this.conversationId,
+    required this.sender,
+    required this.text,
+    required this.createdAtMs,
+    this.replyTo,
+    this.recalledAtMs,
+    required this.mentionedAccountIds,
+    required this.senderType,
+  });
+
+  @override
+  int get hashCode =>
+      messageId.hashCode ^
+      conversationId.hashCode ^
+      sender.hashCode ^
+      text.hashCode ^
+      createdAtMs.hashCode ^
+      replyTo.hashCode ^
+      recalledAtMs.hashCode ^
+      mentionedAccountIds.hashCode ^
+      senderType.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ChatMessageSummary &&
+          runtimeType == other.runtimeType &&
+          messageId == other.messageId &&
+          conversationId == other.conversationId &&
+          sender == other.sender &&
+          text == other.text &&
+          createdAtMs == other.createdAtMs &&
+          replyTo == other.replyTo &&
+          recalledAtMs == other.recalledAtMs &&
+          mentionedAccountIds == other.mentionedAccountIds &&
+          senderType == other.senderType;
+}
 
 @freezed
 sealed class ConnectionState with _$ConnectionState {
@@ -100,6 +688,215 @@ sealed class ConnectionState with _$ConnectionState {
   const factory ConnectionState.connected() = ConnectionState_Connected;
   const factory ConnectionState.reconnecting({required int attempt}) =
       ConnectionState_Reconnecting;
+}
+
+class ConversationAgentMembersResponse {
+  final List<AgentSummary> agents;
+
+  const ConversationAgentMembersResponse({required this.agents});
+
+  @override
+  int get hashCode => agents.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConversationAgentMembersResponse &&
+          runtimeType == other.runtimeType &&
+          agents == other.agents;
+}
+
+enum ConversationKind { direct, group }
+
+class ConversationMembersResponse {
+  final List<UserSummary> members;
+
+  const ConversationMembersResponse({required this.members});
+
+  @override
+  int get hashCode => members.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConversationMembersResponse &&
+          runtimeType == other.runtimeType &&
+          members == other.members;
+}
+
+class ConversationReadResponse {
+  final PlatformInt64? lastReadAtMs;
+
+  const ConversationReadResponse({this.lastReadAtMs});
+
+  @override
+  int get hashCode => lastReadAtMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConversationReadResponse &&
+          runtimeType == other.runtimeType &&
+          lastReadAtMs == other.lastReadAtMs;
+}
+
+class ConversationResponse {
+  final String conversationId;
+
+  const ConversationResponse({required this.conversationId});
+
+  @override
+  int get hashCode => conversationId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConversationResponse &&
+          runtimeType == other.runtimeType &&
+          conversationId == other.conversationId;
+}
+
+class ConversationSummary {
+  final String conversationId;
+  final ConversationKind kind;
+  final String title;
+  final UserSummary? counterpart;
+  final int memberCount;
+  final String? lastMessagePreview;
+  final PlatformInt64 lastMessageAtMs;
+  final int unreadCount;
+  final int unreadMentionCount;
+
+  const ConversationSummary({
+    required this.conversationId,
+    required this.kind,
+    required this.title,
+    this.counterpart,
+    required this.memberCount,
+    this.lastMessagePreview,
+    required this.lastMessageAtMs,
+    required this.unreadCount,
+    required this.unreadMentionCount,
+  });
+
+  @override
+  int get hashCode =>
+      conversationId.hashCode ^
+      kind.hashCode ^
+      title.hashCode ^
+      counterpart.hashCode ^
+      memberCount.hashCode ^
+      lastMessagePreview.hashCode ^
+      lastMessageAtMs.hashCode ^
+      unreadCount.hashCode ^
+      unreadMentionCount.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConversationSummary &&
+          runtimeType == other.runtimeType &&
+          conversationId == other.conversationId &&
+          kind == other.kind &&
+          title == other.title &&
+          counterpart == other.counterpart &&
+          memberCount == other.memberCount &&
+          lastMessagePreview == other.lastMessagePreview &&
+          lastMessageAtMs == other.lastMessageAtMs &&
+          unreadCount == other.unreadCount &&
+          unreadMentionCount == other.unreadMentionCount;
+}
+
+class ConversationsResponse {
+  final List<ConversationSummary> conversations;
+
+  const ConversationsResponse({required this.conversations});
+
+  @override
+  int get hashCode => conversations.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConversationsResponse &&
+          runtimeType == other.runtimeType &&
+          conversations == other.conversations;
+}
+
+class CreateProjectRequest {
+  final String name;
+  final String workspaceSlug;
+  final String? workspacePath;
+
+  const CreateProjectRequest({
+    required this.name,
+    required this.workspaceSlug,
+    this.workspacePath,
+  });
+
+  @override
+  int get hashCode =>
+      name.hashCode ^ workspaceSlug.hashCode ^ workspacePath.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CreateProjectRequest &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          workspaceSlug == other.workspaceSlug &&
+          workspacePath == other.workspacePath;
+}
+
+class CreateProjectResponse {
+  final ProjectSummary project;
+
+  const CreateProjectResponse({required this.project});
+
+  @override
+  int get hashCode => project.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CreateProjectResponse &&
+          runtimeType == other.runtimeType &&
+          project == other.project;
+}
+
+class DeleteProjectRequest {
+  final String projectId;
+
+  const DeleteProjectRequest({required this.projectId});
+
+  @override
+  int get hashCode => projectId.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DeleteProjectRequest &&
+          runtimeType == other.runtimeType &&
+          projectId == other.projectId;
+}
+
+@freezed
+sealed class DisplayPayload with _$DisplayPayload {
+  const DisplayPayload._();
+
+  const factory DisplayPayload.inline({required String text}) =
+      DisplayPayload_Inline;
+  const factory DisplayPayload.streamingWindow({
+    required String head,
+    required BigInt receivedBytes,
+    ArtifactRef? artifact,
+  }) = DisplayPayload_StreamingWindow;
+  const factory DisplayPayload.windowedFinal({
+    required String head,
+    required String tail,
+    required BigInt omittedBytes,
+    required ArtifactRef artifact,
+  }) = DisplayPayload_WindowedFinal;
 }
 
 enum ErrorKind {
@@ -119,23 +916,415 @@ enum ErrorKind {
   envelopeVersionUnsupported,
   peerOffline,
   backendInternal,
-  cfAuthFailed,
   codexSpawnFailed,
   codexConnectFailed,
   codexProtocolError,
+  geminiSpawnFailed,
+  acpProtocolError,
   agentAlreadyRunning,
   agentNotRunning,
   agentNotSupported,
   agentSessionIdMismatch,
-  cfAccessMisconfigured,
   ingestSeqConflict,
   threadNotFound,
   translationNotImplemented,
   translationFailed,
   pairingQrVersionUnsupported,
+  timeout,
+  notConnected,
+  requestDropped,
+  authRefreshFailed,
+  emailTaken,
+  weakPassword,
+  rateLimited,
+  invalidCredentials,
+  agentStartFailed,
+  pairingTokenExpired,
+}
+
+enum FriendRequestStatus { pending, accepted, rejected, canceled }
+
+class FriendRequestSummary {
+  final String requestId;
+  final UserSummary from;
+  final UserSummary to;
+  final FriendRequestStatus status;
+  final PlatformInt64 createdAtMs;
+  final PlatformInt64? resolvedAtMs;
+
+  const FriendRequestSummary({
+    required this.requestId,
+    required this.from,
+    required this.to,
+    required this.status,
+    required this.createdAtMs,
+    this.resolvedAtMs,
+  });
+
+  @override
+  int get hashCode =>
+      requestId.hashCode ^
+      from.hashCode ^
+      to.hashCode ^
+      status.hashCode ^
+      createdAtMs.hashCode ^
+      resolvedAtMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FriendRequestSummary &&
+          runtimeType == other.runtimeType &&
+          requestId == other.requestId &&
+          from == other.from &&
+          to == other.to &&
+          status == other.status &&
+          createdAtMs == other.createdAtMs &&
+          resolvedAtMs == other.resolvedAtMs;
+}
+
+class FriendRequestsResponse {
+  final List<FriendRequestSummary> incoming;
+  final List<FriendRequestSummary> outgoing;
+
+  const FriendRequestsResponse({
+    required this.incoming,
+    required this.outgoing,
+  });
+
+  @override
+  int get hashCode => incoming.hashCode ^ outgoing.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FriendRequestsResponse &&
+          runtimeType == other.runtimeType &&
+          incoming == other.incoming &&
+          outgoing == other.outgoing;
+}
+
+class FriendSummary {
+  final String accountId;
+  final String minosId;
+  final String displayName;
+  final PlatformInt64 createdAtMs;
+
+  const FriendSummary({
+    required this.accountId,
+    required this.minosId,
+    required this.displayName,
+    required this.createdAtMs,
+  });
+
+  @override
+  int get hashCode =>
+      accountId.hashCode ^
+      minosId.hashCode ^
+      displayName.hashCode ^
+      createdAtMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FriendSummary &&
+          runtimeType == other.runtimeType &&
+          accountId == other.accountId &&
+          minosId == other.minosId &&
+          displayName == other.displayName &&
+          createdAtMs == other.createdAtMs;
+}
+
+class FriendsResponse {
+  final List<FriendSummary> friends;
+
+  const FriendsResponse({required this.friends});
+
+  @override
+  int get hashCode => friends.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FriendsResponse &&
+          runtimeType == other.runtimeType &&
+          friends == other.friends;
+}
+
+class HostSkillError {
+  final String path;
+  final String message;
+
+  const HostSkillError({required this.path, required this.message});
+
+  @override
+  int get hashCode => path.hashCode ^ message.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HostSkillError &&
+          runtimeType == other.runtimeType &&
+          path == other.path &&
+          message == other.message;
+}
+
+class HostSkillSummary {
+  final String name;
+  final String path;
+  final String description;
+  final bool enabled;
+  final String scope;
+  final String? displayName;
+  final String? shortDescription;
+
+  const HostSkillSummary({
+    required this.name,
+    required this.path,
+    required this.description,
+    required this.enabled,
+    required this.scope,
+    this.displayName,
+    this.shortDescription,
+  });
+
+  @override
+  int get hashCode =>
+      name.hashCode ^
+      path.hashCode ^
+      description.hashCode ^
+      enabled.hashCode ^
+      scope.hashCode ^
+      displayName.hashCode ^
+      shortDescription.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HostSkillSummary &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          path == other.path &&
+          description == other.description &&
+          enabled == other.enabled &&
+          scope == other.scope &&
+          displayName == other.displayName &&
+          shortDescription == other.shortDescription;
+}
+
+class HostSkillsEntry {
+  final String cwd;
+  final List<HostSkillError> errors;
+  final List<HostSkillSummary> skills;
+
+  const HostSkillsEntry({
+    required this.cwd,
+    required this.errors,
+    required this.skills,
+  });
+
+  @override
+  int get hashCode => cwd.hashCode ^ errors.hashCode ^ skills.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HostSkillsEntry &&
+          runtimeType == other.runtimeType &&
+          cwd == other.cwd &&
+          errors == other.errors &&
+          skills == other.skills;
+}
+
+/// Dart-visible mirror of `minos_protocol::HostSummary`. One row returned by
+/// `/v1/pairing/list-hosts`.
+class HostSummaryDto {
+  final String hostDeviceId;
+  final String hostDisplayName;
+  final PlatformInt64 pairedAtMs;
+  final String pairedViaDeviceId;
+  final bool online;
+
+  const HostSummaryDto({
+    required this.hostDeviceId,
+    required this.hostDisplayName,
+    required this.pairedAtMs,
+    required this.pairedViaDeviceId,
+    required this.online,
+  });
+
+  @override
+  int get hashCode =>
+      hostDeviceId.hashCode ^
+      hostDisplayName.hashCode ^
+      pairedAtMs.hashCode ^
+      pairedViaDeviceId.hashCode ^
+      online.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HostSummaryDto &&
+          runtimeType == other.runtimeType &&
+          hostDeviceId == other.hostDeviceId &&
+          hostDisplayName == other.hostDisplayName &&
+          pairedAtMs == other.pairedAtMs &&
+          pairedViaDeviceId == other.pairedViaDeviceId &&
+          online == other.online;
+}
+
+class HostWorkspaceSummary {
+  final String path;
+  final String displayName;
+  final bool isGitRepo;
+
+  const HostWorkspaceSummary({
+    required this.path,
+    required this.displayName,
+    required this.isGitRepo,
+  });
+
+  @override
+  int get hashCode => path.hashCode ^ displayName.hashCode ^ isGitRepo.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HostWorkspaceSummary &&
+          runtimeType == other.runtimeType &&
+          path == other.path &&
+          displayName == other.displayName &&
+          isGitRepo == other.isGitRepo;
 }
 
 enum Lang { zh, en }
+
+class ListAgentsResponse {
+  final List<AgentSummary> agents;
+
+  const ListAgentsResponse({required this.agents});
+
+  @override
+  int get hashCode => agents.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ListAgentsResponse &&
+          runtimeType == other.runtimeType &&
+          agents == other.agents;
+}
+
+class ListChatMessagesResponse {
+  final List<ChatMessageSummary> messages;
+  final PlatformInt64? nextBeforeTsMs;
+
+  const ListChatMessagesResponse({required this.messages, this.nextBeforeTsMs});
+
+  @override
+  int get hashCode => messages.hashCode ^ nextBeforeTsMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ListChatMessagesResponse &&
+          runtimeType == other.runtimeType &&
+          messages == other.messages &&
+          nextBeforeTsMs == other.nextBeforeTsMs;
+}
+
+class ListHostSkillsResponse {
+  final List<HostSkillsEntry> data;
+
+  const ListHostSkillsResponse({required this.data});
+
+  @override
+  int get hashCode => data.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ListHostSkillsResponse &&
+          runtimeType == other.runtimeType &&
+          data == other.data;
+}
+
+class ListHostWorkspacesResponse {
+  final String root;
+  final List<HostWorkspaceSummary> workspaces;
+
+  const ListHostWorkspacesResponse({
+    required this.root,
+    required this.workspaces,
+  });
+
+  @override
+  int get hashCode => root.hashCode ^ workspaces.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ListHostWorkspacesResponse &&
+          runtimeType == other.runtimeType &&
+          root == other.root &&
+          workspaces == other.workspaces;
+}
+
+class ListProjectThreadsParams {
+  final String projectId;
+  final int limit;
+  final PlatformInt64? beforeTsMs;
+
+  const ListProjectThreadsParams({
+    required this.projectId,
+    required this.limit,
+    this.beforeTsMs,
+  });
+
+  @override
+  int get hashCode => projectId.hashCode ^ limit.hashCode ^ beforeTsMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ListProjectThreadsParams &&
+          runtimeType == other.runtimeType &&
+          projectId == other.projectId &&
+          limit == other.limit &&
+          beforeTsMs == other.beforeTsMs;
+}
+
+class ListProjectThreadsResponse {
+  final List<ThreadSummary> threads;
+
+  const ListProjectThreadsResponse({required this.threads});
+
+  @override
+  int get hashCode => threads.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ListProjectThreadsResponse &&
+          runtimeType == other.runtimeType &&
+          threads == other.threads;
+}
+
+class ListProjectsResponse {
+  final List<ProjectSummary> projects;
+
+  const ListProjectsResponse({required this.projects});
+
+  @override
+  int get hashCode => projects.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ListProjectsResponse &&
+          runtimeType == other.runtimeType &&
+          projects == other.projects;
+}
 
 class ListThreadsParams {
   final int limit;
@@ -262,8 +1451,6 @@ sealed class MinosError with _$MinosError implements FrbException {
       MinosError_PeerOffline;
   const factory MinosError.backendInternal({required String message}) =
       MinosError_BackendInternal;
-  const factory MinosError.cfAuthFailed({required String message}) =
-      MinosError_CfAuthFailed;
   const factory MinosError.codexSpawnFailed({required String message}) =
       MinosError_CodexSpawnFailed;
   const factory MinosError.codexConnectFailed({
@@ -274,6 +1461,12 @@ sealed class MinosError with _$MinosError implements FrbException {
     required String method,
     required String message,
   }) = MinosError_CodexProtocolError;
+  const factory MinosError.geminiSpawnFailed({required String message}) =
+      MinosError_GeminiSpawnFailed;
+  const factory MinosError.acpProtocolError({
+    required String method,
+    required String message,
+  }) = MinosError_AcpProtocolError;
   const factory MinosError.agentAlreadyRunning() =
       MinosError_AgentAlreadyRunning;
   const factory MinosError.agentNotRunning() = MinosError_AgentNotRunning;
@@ -281,8 +1474,6 @@ sealed class MinosError with _$MinosError implements FrbException {
       MinosError_AgentNotSupported;
   const factory MinosError.agentSessionIdMismatch() =
       MinosError_AgentSessionIdMismatch;
-  const factory MinosError.cfAccessMisconfigured({required String reason}) =
-      MinosError_CfAccessMisconfigured;
   const factory MinosError.ingestSeqConflict({
     required String threadId,
     required BigInt seq,
@@ -298,44 +1489,148 @@ sealed class MinosError with _$MinosError implements FrbException {
   }) = MinosError_TranslationFailed;
   const factory MinosError.pairingQrVersionUnsupported({required int version}) =
       MinosError_PairingQrVersionUnsupported;
+  const factory MinosError.timeout() = MinosError_Timeout;
+  const factory MinosError.notConnected() = MinosError_NotConnected;
+  const factory MinosError.requestDropped() = MinosError_RequestDropped;
+  const factory MinosError.authRefreshFailed({required String message}) =
+      MinosError_AuthRefreshFailed;
+  const factory MinosError.emailTaken() = MinosError_EmailTaken;
+  const factory MinosError.weakPassword() = MinosError_WeakPassword;
+  const factory MinosError.rateLimited({required int retryAfterS}) =
+      MinosError_RateLimited;
+  const factory MinosError.invalidCredentials() = MinosError_InvalidCredentials;
+  const factory MinosError.agentStartFailed({required String reason}) =
+      MinosError_AgentStartFailed;
+  const factory MinosError.pairingTokenExpired() =
+      MinosError_PairingTokenExpired;
+}
+
+class MyProfileResponse {
+  final String accountId;
+  final String email;
+  final String minosId;
+  final String? displayName;
+
+  const MyProfileResponse({
+    required this.accountId,
+    required this.email,
+    required this.minosId,
+    this.displayName,
+  });
+
+  @override
+  int get hashCode =>
+      accountId.hashCode ^
+      email.hashCode ^
+      minosId.hashCode ^
+      displayName.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MyProfileResponse &&
+          runtimeType == other.runtimeType &&
+          accountId == other.accountId &&
+          email == other.email &&
+          minosId == other.minosId &&
+          displayName == other.displayName;
 }
 
 enum PairingState { unpaired, awaitingPeer, paired }
 
 /// Durable mobile pairing snapshot mirrored into the iOS keychain.
+///
+/// Phase 4 added the five auth fields (access/refresh tokens + bound
+/// account identity) so the Dart-side secure store can rehydrate the full
+/// session on cold launch. All five auth fields are persisted as a tuple —
+/// either every one is present or all are `None`.
+///
+/// ADR-0020 dropped the device_secret from this snapshot — the iOS rail
+/// is bearer-only.
+///
+/// Backend URL and CF Access service-token headers were dropped from the
+/// snapshot when pairing transitioned to compile-time `build_config` — the
+/// transport-edge values never round-trip through durable storage now.
 class PersistedPairingState {
-  final String? backendUrl;
   final String? deviceId;
-  final String? deviceSecret;
-  final String? cfAccessClientId;
-  final String? cfAccessClientSecret;
+  final String? accessToken;
+  final PlatformInt64? accessExpiresAtMs;
+  final String? refreshToken;
+  final String? accountId;
+  final String? accountEmail;
 
   const PersistedPairingState({
-    this.backendUrl,
     this.deviceId,
-    this.deviceSecret,
-    this.cfAccessClientId,
-    this.cfAccessClientSecret,
+    this.accessToken,
+    this.accessExpiresAtMs,
+    this.refreshToken,
+    this.accountId,
+    this.accountEmail,
   });
 
   @override
   int get hashCode =>
-      backendUrl.hashCode ^
       deviceId.hashCode ^
-      deviceSecret.hashCode ^
-      cfAccessClientId.hashCode ^
-      cfAccessClientSecret.hashCode;
+      accessToken.hashCode ^
+      accessExpiresAtMs.hashCode ^
+      refreshToken.hashCode ^
+      accountId.hashCode ^
+      accountEmail.hashCode;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is PersistedPairingState &&
           runtimeType == other.runtimeType &&
-          backendUrl == other.backendUrl &&
           deviceId == other.deviceId &&
-          deviceSecret == other.deviceSecret &&
-          cfAccessClientId == other.cfAccessClientId &&
-          cfAccessClientSecret == other.cfAccessClientSecret;
+          accessToken == other.accessToken &&
+          accessExpiresAtMs == other.accessExpiresAtMs &&
+          refreshToken == other.refreshToken &&
+          accountId == other.accountId &&
+          accountEmail == other.accountEmail;
+}
+
+class ProjectSummary {
+  final String projectId;
+  final String name;
+  final String workspaceSlug;
+  final String? workspacePath;
+  final PlatformInt64 createdAtMs;
+  final PlatformInt64 updatedAtMs;
+  final int threadCount;
+
+  const ProjectSummary({
+    required this.projectId,
+    required this.name,
+    required this.workspaceSlug,
+    this.workspacePath,
+    required this.createdAtMs,
+    required this.updatedAtMs,
+    required this.threadCount,
+  });
+
+  @override
+  int get hashCode =>
+      projectId.hashCode ^
+      name.hashCode ^
+      workspaceSlug.hashCode ^
+      workspacePath.hashCode ^
+      createdAtMs.hashCode ^
+      updatedAtMs.hashCode ^
+      threadCount.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ProjectSummary &&
+          runtimeType == other.runtimeType &&
+          projectId == other.projectId &&
+          name == other.name &&
+          workspaceSlug == other.workspaceSlug &&
+          workspacePath == other.workspacePath &&
+          createdAtMs == other.createdAtMs &&
+          updatedAtMs == other.updatedAtMs &&
+          threadCount == other.threadCount;
 }
 
 class ReadThreadParams {
@@ -387,6 +1682,100 @@ class ReadThreadResponse {
           threadEndReason == other.threadEndReason;
 }
 
+class RequestTraceRecord {
+  final BigInt id;
+  final RequestTraceTransport transport;
+  final String method;
+  final String target;
+  final String? threadId;
+  final String? requestSummary;
+  final String? responseSummary;
+  final String? errorDetail;
+  final RequestTraceStatus status;
+  final int? statusCode;
+  final PlatformInt64 startedAtMs;
+  final PlatformInt64? completedAtMs;
+  final int? durationMs;
+
+  const RequestTraceRecord({
+    required this.id,
+    required this.transport,
+    required this.method,
+    required this.target,
+    this.threadId,
+    this.requestSummary,
+    this.responseSummary,
+    this.errorDetail,
+    required this.status,
+    this.statusCode,
+    required this.startedAtMs,
+    this.completedAtMs,
+    this.durationMs,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      transport.hashCode ^
+      method.hashCode ^
+      target.hashCode ^
+      threadId.hashCode ^
+      requestSummary.hashCode ^
+      responseSummary.hashCode ^
+      errorDetail.hashCode ^
+      status.hashCode ^
+      statusCode.hashCode ^
+      startedAtMs.hashCode ^
+      completedAtMs.hashCode ^
+      durationMs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is RequestTraceRecord &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          transport == other.transport &&
+          method == other.method &&
+          target == other.target &&
+          threadId == other.threadId &&
+          requestSummary == other.requestSummary &&
+          responseSummary == other.responseSummary &&
+          errorDetail == other.errorDetail &&
+          status == other.status &&
+          statusCode == other.statusCode &&
+          startedAtMs == other.startedAtMs &&
+          completedAtMs == other.completedAtMs &&
+          durationMs == other.durationMs;
+}
+
+enum RequestTraceStatus { pending, success, failure }
+
+enum RequestTraceTransport { http, rpc }
+
+enum SenderType { user, agent }
+
+/// Dart-visible shape of `minos_mobile::SocialEventFrame`.
+class SocialEventFrame {
+  final String conversationId;
+  final ChatMessageSummary message;
+
+  const SocialEventFrame({required this.conversationId, required this.message});
+
+  @override
+  int get hashCode => conversationId.hashCode ^ message.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SocialEventFrame &&
+          runtimeType == other.runtimeType &&
+          conversationId == other.conversationId &&
+          message == other.message;
+}
+
+enum SubagentStatus { running, completed, failed, interrupted }
+
 @freezed
 sealed class ThreadEndReason with _$ThreadEndReason {
   const ThreadEndReason._();
@@ -398,53 +1787,6 @@ sealed class ThreadEndReason with _$ThreadEndReason {
   const factory ThreadEndReason.timeout() = ThreadEndReason_Timeout;
   const factory ThreadEndReason.hostDisconnected() =
       ThreadEndReason_HostDisconnected;
-}
-
-class ThreadSummary {
-  final String threadId;
-  final AgentName agent;
-  final String? title;
-  final PlatformInt64 firstTsMs;
-  final PlatformInt64 lastTsMs;
-  final int messageCount;
-  final PlatformInt64? endedAtMs;
-  final ThreadEndReason? endReason;
-
-  const ThreadSummary({
-    required this.threadId,
-    required this.agent,
-    this.title,
-    required this.firstTsMs,
-    required this.lastTsMs,
-    required this.messageCount,
-    this.endedAtMs,
-    this.endReason,
-  });
-
-  @override
-  int get hashCode =>
-      threadId.hashCode ^
-      agent.hashCode ^
-      title.hashCode ^
-      firstTsMs.hashCode ^
-      lastTsMs.hashCode ^
-      messageCount.hashCode ^
-      endedAtMs.hashCode ^
-      endReason.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ThreadSummary &&
-          runtimeType == other.runtimeType &&
-          threadId == other.threadId &&
-          agent == other.agent &&
-          title == other.title &&
-          firstTsMs == other.firstTsMs &&
-          lastTsMs == other.lastTsMs &&
-          messageCount == other.messageCount &&
-          endedAtMs == other.endedAtMs &&
-          endReason == other.endReason;
 }
 
 /// Dart-visible shape of `minos_mobile::UiEventFrame`. Held as a separate
@@ -508,23 +1850,44 @@ sealed class UiEventMessage with _$UiEventMessage {
   }) = UiEventMessage_MessageCompleted;
   const factory UiEventMessage.textDelta({
     required String messageId,
-    required String text,
+    required DisplayPayload text,
   }) = UiEventMessage_TextDelta;
+  const factory UiEventMessage.textReplace({
+    required String messageId,
+    required DisplayPayload text,
+  }) = UiEventMessage_TextReplace;
   const factory UiEventMessage.reasoningDelta({
     required String messageId,
-    required String text,
+    required DisplayPayload text,
   }) = UiEventMessage_ReasoningDelta;
+  const factory UiEventMessage.reasoningReplace({
+    required String messageId,
+    required DisplayPayload text,
+  }) = UiEventMessage_ReasoningReplace;
   const factory UiEventMessage.toolCallPlaced({
     required String messageId,
     required String toolCallId,
     required String name,
-    required String argsJson,
+    required DisplayPayload argsJson,
   }) = UiEventMessage_ToolCallPlaced;
   const factory UiEventMessage.toolCallCompleted({
     required String toolCallId,
-    required String output,
+    required DisplayPayload output,
     required bool isError,
   }) = UiEventMessage_ToolCallCompleted;
+  const factory UiEventMessage.subagentSpawned({
+    required String parentThreadId,
+    required String subThreadId,
+    required String toolCallId,
+    required AgentName agent,
+    String? model,
+    String? prompt,
+    String? title,
+  }) = UiEventMessage_SubagentSpawned;
+  const factory UiEventMessage.subagentStatusUpdated({
+    required String subThreadId,
+    required SubagentStatus status,
+  }) = UiEventMessage_SubagentStatusUpdated;
   const factory UiEventMessage.error({
     required String code,
     required String message,
@@ -534,4 +1897,63 @@ sealed class UiEventMessage with _$UiEventMessage {
     required String kind,
     required String payloadJson,
   }) = UiEventMessage_Raw;
+}
+
+class UpdateProjectRequest {
+  final String projectId;
+  final String name;
+
+  const UpdateProjectRequest({required this.projectId, required this.name});
+
+  @override
+  int get hashCode => projectId.hashCode ^ name.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is UpdateProjectRequest &&
+          runtimeType == other.runtimeType &&
+          projectId == other.projectId &&
+          name == other.name;
+}
+
+class UserSummary {
+  final String accountId;
+  final String minosId;
+  final String displayName;
+
+  const UserSummary({
+    required this.accountId,
+    required this.minosId,
+    required this.displayName,
+  });
+
+  @override
+  int get hashCode =>
+      accountId.hashCode ^ minosId.hashCode ^ displayName.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is UserSummary &&
+          runtimeType == other.runtimeType &&
+          accountId == other.accountId &&
+          minosId == other.minosId &&
+          displayName == other.displayName;
+}
+
+class WriteHostSkillConfigResponse {
+  final bool effectiveEnabled;
+
+  const WriteHostSkillConfigResponse({required this.effectiveEnabled});
+
+  @override
+  int get hashCode => effectiveEnabled.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is WriteHostSkillConfigResponse &&
+          runtimeType == other.runtimeType &&
+          effectiveEnabled == other.effectiveEnabled;
 }

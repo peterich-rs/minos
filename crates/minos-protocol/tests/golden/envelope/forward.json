@@ -1,6 +1,7 @@
 {
   "kind": "forward",
   "v": 1,
+  "target_device_id": "11111111-2222-3333-4444-555555555555",
   "payload": {
     "jsonrpc": "2.0",
     "method": "list_clis",

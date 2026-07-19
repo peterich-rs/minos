@@ -1,5 +1,8 @@
 [
-  {"method":"item/started","params":{"itemId":"i1","role":"agent","startedAtMs":1714000007000}},
+  {"method":"item/started","params":{
+    "item":{"type":"agentMessage","id":"i1","text":""},
+    "threadId":"thr_fixture","turnId":"t1"
+  }},
   {"method":"item/toolCall/started","params":{"itemId":"i1","toolCallId":"tc_bad","name":"run_command"}},
   {"method":"item/toolCall/arguments","params":{"toolCallId":"tc_bad","argumentsDelta":"{\"cmd\":\"false\"}"}},
   {"method":"item/toolCall/argumentsCompleted","params":{"toolCallId":"tc_bad"}},

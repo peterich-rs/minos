@@ -25,6 +25,10 @@
 //! `sleep` / `bash`). The module deliberately has no dependency on
 //! `codex_client` or `runtime` so its tests run in isolation.
 
+// Module-local allow for the single async-signal-safe `setpgid(2)` call in
+// `pre_exec`. The crate-level `deny(unsafe_code)` keeps everything else honest.
+#![allow(unsafe_code)]
+
 use std::path::Path;
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
@@ -48,7 +52,17 @@ impl CodexProcess {
     /// Spawn `bin` with `args` and the explicit `env` (parent env is
     /// cleared so the child only sees what the daemon captured from the
     /// user's login shell). Sets up piped stdout/stderr, null stdin, and
-    /// `kill_on_drop(true)` so the child dies with us.
+    /// `kill_on_drop(true)` so the child dies with us. Retained for the
+    /// app-server test seam even though exec/jsonl is now the default route.
+    ///
+    /// On Unix the child is put in a fresh process group via `setpgid(0, 0)`
+    /// in `pre_exec`. That lets `manager::shutdown_instances` deliver
+    /// SIGTERM / SIGKILL to the entire group with `kill(-pgid, sig)`,
+    /// catching whatever subprocesses codex itself spawns (sandboxed
+    /// shell helpers, model invocations, etc.). Without it, a SIGKILL on
+    /// the codex pid only reaped codex; everything codex forked off was
+    /// reparented to launchd and survived `daemon.stop()`.
+    #[allow(dead_code)]
     pub(crate) fn spawn(
         bin: &Path,
         args: &[&str],
@@ -62,6 +76,24 @@ impl CodexProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        #[cfg(unix)]
+        {
+            // SAFETY: `pre_exec` runs the closure in the child after fork()
+            // but before exec(); only async-signal-safe syscalls are
+            // permitted there, and `setpgid(2)` is on the POSIX ASS list.
+            // The closure does not capture or share state with the parent.
+            unsafe {
+                cmd.pre_exec(|| {
+                    // Make the child its own process group leader. Returns 0
+                    // on success; on the impossible failure path we surface
+                    // errno so the spawn side reports the real reason.
+                    if libc::setpgid(0, 0) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
         let child = cmd.spawn().map_err(|e| MinosError::CodexSpawnFailed {
             message: format!("spawn {}: {e}", bin.display()),
         })?;
@@ -75,6 +107,9 @@ impl CodexProcess {
     /// emits each line at `tracing::warn!` level under the
     /// `minos_agent_runtime::process` target. Idempotent — a second call is a
     /// no-op so callers don't need to track whether the drain is already up.
+    /// Retained for the app-server test seam even though exec/jsonl is now the
+    /// default route.
+    #[allow(dead_code)]
     pub(crate) fn stderr_drain(&mut self) {
         if self.stderr_task.is_some() {
             return;
@@ -127,6 +162,7 @@ impl CodexProcess {
     /// SIGTERM → 3 s wait → SIGKILL escalation. Returns the child's
     /// [`ExitStatus`]. Safe to call multiple times — a second call with no
     /// child returns a synthetic success status.
+    #[allow(dead_code)]
     pub(crate) async fn stop_graceful(&mut self) -> Result<ExitStatus, MinosError> {
         let Some(mut child) = self.child.take() else {
             // Return a synthetic "already exited" status. We don't track the
@@ -189,6 +225,7 @@ impl Drop for CodexProcess {
 /// - Unix signal: `"signal <NAME>"` (canonical SIG* name when we recognise it,
 ///   or the numeric form otherwise).
 /// - Windows (non-Unix): `"exit code N"` using the raw status.
+#[allow(dead_code)]
 pub(crate) fn reason_from_exit(status: ExitStatus) -> String {
     #[cfg(unix)]
     {
@@ -211,6 +248,7 @@ pub(crate) fn reason_from_exit(status: ExitStatus) -> String {
 }
 
 #[cfg(unix)]
+#[allow(dead_code)]
 fn signal_name(sig: i32) -> String {
     // Canonical names for the signals codex is likely to die of. Anything
     // else falls through to the numeric form; that's enough for
@@ -234,6 +272,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn spawn_ok_for_echo() {
         // `echo` exits immediately; we just verify spawn doesn't error and
@@ -267,6 +306,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn kill_on_drop_terminates_long_running_sleep() {
         // `sleep 60` will outlive the process struct — verify drop SIGKILLs it.
@@ -289,6 +329,7 @@ mod tests {
         assert!(!alive, "child should have been killed on drop");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn stop_graceful_exits_cleanly_for_sigterm_respecting_process() {
         // `sleep 30` exits on SIGTERM without needing escalation.
@@ -304,6 +345,7 @@ mod tests {
         assert!(!status.success(), "expected non-zero exit, got {status:?}");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn stop_graceful_escalates_for_sigterm_trapping_process() {
         // `bash -c 'trap "" TERM; sleep 30'` ignores SIGTERM; stop_graceful
@@ -326,6 +368,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn stderr_drain_consumes_output() {
         // `bash -c 'for i in 1 2 3; do echo line$i 1>&2; done; sleep 1'`
@@ -346,18 +389,25 @@ mod tests {
 
     #[test]
     fn reason_from_exit_codes() {
-        // Construct synthetic ExitStatus values via a portable command. `bash`
-        // is available on both Linux and macOS; `exit N` pins the exit code
-        // deterministically without relying on `/bin/true` / `/bin/false`
-        // (which don't exist on every host — macOS omits `/bin/true` on some
-        // builds).
-        let status = std::process::Command::new("bash")
+        #[cfg(unix)]
+        let status = std::process::Command::new("sh")
             .args(["-c", "exit 0"])
             .status()
             .unwrap();
+        #[cfg(windows)]
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "exit 0"])
+            .status()
+            .unwrap();
         assert_eq!(reason_from_exit(status), "exit code 0");
-        let status = std::process::Command::new("bash")
+        #[cfg(unix)]
+        let status = std::process::Command::new("sh")
             .args(["-c", "exit 1"])
+            .status()
+            .unwrap();
+        #[cfg(windows)]
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "exit 1"])
             .status()
             .unwrap();
         assert_eq!(reason_from_exit(status), "exit code 1");

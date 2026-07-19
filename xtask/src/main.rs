@@ -7,11 +7,27 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use minos_agent_runtime::{AgentRuntime, AgentRuntimeConfig, RawIngest};
+use fs2::FileExt;
+use minos_agent_runtime::{AgentManager, AgentRuntimeConfig, InstanceCaps, RawIngest};
 use minos_domain::AgentName;
 use tempfile::TempDir;
 use tokio::runtime::Builder;
 use tokio::sync::broadcast::error::RecvError;
+
+mod backend_platform_schemas;
+mod gen_codex;
+mod lint_contract;
+mod lint_conventions;
+mod lint_docs;
+mod lint_metrics;
+mod lint_naming;
+mod lint_route_inventory;
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum BackendDbDriver {
+    Sqlite,
+    Postgres,
+}
 
 #[derive(Parser)]
 #[command(name = "xtask", about = "Minos build & codegen orchestration")]
@@ -28,7 +44,7 @@ struct Cli {
 enum Cmd {
     /// fmt + clippy + workspace tests + Swift + Flutter legs + frb codegen drift guard.
     CheckAll,
-    /// Install developer-side codegen tools (cargo-deny, uniffi, frb codegen,
+    /// Install developer-side codegen tools (uniffi, frb codegen,
     /// iOS rustup targets, and Flutter deps for apps/mobile).
     Bootstrap,
     /// Generate Swift bindings via uniffi-bindgen-swift.
@@ -46,10 +62,35 @@ enum Cmd {
     BuildIos,
     /// Generate apps/macos/Minos.xcodeproj from apps/macos/project.yml.
     GenXcode,
-    /// Wipe and recreate the backend SQLite DB at ./minos-backend.db.
-    BackendDbReset,
+    /// Wipe and recreate the backend database using the selected driver.
+    BackendDbReset {
+        #[arg(long, value_enum, default_value = "sqlite")]
+        driver: BackendDbDriver,
+    },
     /// Run the backend binary with dev-friendly defaults.
     BackendRun,
+    /// Regenerate `crates/minos-codex-protocol/src/generated/{types,methods}.rs`
+    /// from the JSON schemas in `/schemas`. Run after editing `/schemas`.
+    GenCodexProtocol,
+    /// Generate the backend platform artifacts (runtime contract, OpenAPI,
+    /// and websocket schema), or verify they are up to date with `--check`.
+    GenBackendPlatformContract {
+        #[arg(long)]
+        check: bool,
+    },
+    /// Scan protocol/FFI/HTTP/SQL surfaces for `mac_*` / `ios_*` identifiers
+    /// (Phase B naming-sweep guard). Fails if any are found.
+    LintNaming,
+    /// Check docs files exist and topic/path consistency is valid.
+    LintDocs,
+    /// Check for the "transaction triple" pattern in service code.
+    LintConventions,
+    /// Check metric registry drift.
+    LintMetrics,
+    /// Check OpenAPI contract drift against baseline.
+    LintContract,
+    /// Check route inventory completeness.
+    LintRouteInventory,
 }
 
 fn main() -> Result<()> {
@@ -63,8 +104,18 @@ fn main() -> Result<()> {
         Cmd::BuildMacos { configuration } => build_macos(configuration.as_deref()),
         Cmd::BuildIos => build_ios(),
         Cmd::GenXcode => gen_xcode(),
-        Cmd::BackendDbReset => backend_db_reset(),
+        Cmd::BackendDbReset { driver } => backend_db_reset(driver),
         Cmd::BackendRun => backend_run(),
+        Cmd::GenCodexProtocol => gen_codex::run(&workspace_root()?),
+        Cmd::GenBackendPlatformContract { check } => {
+            backend_platform_schemas::generate(&workspace_root()?, check)
+        }
+        Cmd::LintNaming => lint_naming::run(&workspace_root()?),
+        Cmd::LintDocs => lint_docs::run(&workspace_root()?),
+        Cmd::LintConventions => lint_conventions::run(&workspace_root()?),
+        Cmd::LintMetrics => lint_metrics::run(&workspace_root()?),
+        Cmd::LintContract => lint_contract::run(&workspace_root()?),
+        Cmd::LintRouteInventory => lint_route_inventory::run(&workspace_root()?),
     }
 }
 
@@ -74,12 +125,22 @@ fn check_all(with_codex: bool) -> Result<()> {
     run("cargo", &["fmt", "--all", "--check"], &workspace_root)?;
 
     eprintln!("==> cargo clippy");
+    // Exclude Tauri host shell: it needs platform GUI system deps (GTK/WebKit
+    // on Linux, etc.) that `check-all` and plain Linux CI runners do not
+    // install. Desktop is validated via `just check-desktop` / local Tauri builds.
+    //
+    // `--keep-going` is required: without it, cargo stops at the first crate
+    // that fails to compile under `-D warnings`, so later crates only surface
+    // their clippy debt on subsequent CI rounds after the earlier ones are fixed.
     run(
         "cargo",
         &[
             "clippy",
             "--workspace",
             "--all-targets",
+            "--exclude",
+            "minos-desktop",
+            "--keep-going",
             "--",
             "-D",
             "warnings",
@@ -87,15 +148,24 @@ fn check_all(with_codex: bool) -> Result<()> {
         &workspace_root,
     )?;
 
-    eprintln!("==> cargo test");
-    run("cargo", &["test", "--workspace"], &workspace_root)?;
+    eprintln!("==> cargo xtask lint-naming");
+    lint_naming::run(&workspace_root)?;
 
-    eprintln!("==> cargo deny check (licenses + advisories)");
-    if which("cargo-deny").is_some() {
-        run("cargo", &["deny", "check"], &workspace_root)?;
-    } else {
-        eprintln!("    (skipped: cargo-deny not installed; run `cargo xtask bootstrap`)");
-    }
+    eprintln!("==> cargo xtask lint-docs");
+    lint_docs::run(&workspace_root)?;
+
+    eprintln!("==> cargo xtask lint-conventions");
+    lint_conventions::run(&workspace_root)?;
+
+    eprintln!("==> cargo xtask lint-metrics");
+    lint_metrics::run(&workspace_root)?;
+
+    eprintln!("==> cargo test");
+    run(
+        "cargo",
+        &["test", "--workspace", "--exclude", "minos-desktop"],
+        &workspace_root,
+    )?;
 
     if cfg!(target_os = "macos") {
         eprintln!("==> cargo xtask gen-uniffi");
@@ -125,6 +195,8 @@ fn check_all(with_codex: bool) -> Result<()> {
                 "platform=macOS",
                 "-configuration",
                 "Debug",
+                "CODE_SIGNING_ALLOWED=NO",
+                "CODE_SIGNING_REQUIRED=NO",
                 "build",
             ],
             &macos_root,
@@ -142,6 +214,8 @@ fn check_all(with_codex: bool) -> Result<()> {
                 "platform=macOS",
                 "-configuration",
                 "Debug",
+                "CODE_SIGNING_ALLOWED=NO",
+                "CODE_SIGNING_REQUIRED=NO",
                 "test",
             ],
             &macos_root,
@@ -160,6 +234,9 @@ fn check_all(with_codex: bool) -> Result<()> {
     flutter_leg(&workspace_root)?;
 
     frb_drift_guard(&workspace_root)?;
+
+    eprintln!("==> backend platform schema drift");
+    backend_platform_schemas::generate(&workspace_root, true)?;
 
     if with_codex {
         codex_smoke_leg()?;
@@ -205,21 +282,21 @@ async fn codex_smoke_leg_async(codex_bin: PathBuf) -> Result<()> {
     fs::create_dir_all(&workspace_root)
         .with_context(|| format!("mkdir {}", workspace_root.display()))?;
 
-    let mut cfg = AgentRuntimeConfig::new(workspace_root);
+    let mut cfg = AgentRuntimeConfig::new(workspace_root.clone());
     cfg.codex_bin = Some(codex_bin);
     cfg.handshake_call_timeout = Duration::from_secs(30);
-    let runtime = AgentRuntime::new(cfg);
+    let manager = std::sync::Arc::new(AgentManager::new(cfg, InstanceCaps::default()));
 
-    let outcome = runtime
-        .start(AgentName::Codex)
+    let outcome = manager
+        .start_agent(AgentName::Codex, workspace_root)
         .await
         .context("codex smoke: start_agent failed")?;
-    let session_id = outcome.session_id;
-    let watcher = tokio::spawn(wait_for_codex_ok_token(runtime.ingest_stream()));
+    let thread_id = outcome.thread_id;
+    let watcher = tokio::spawn(wait_for_codex_ok_token(manager.ingest_stream()));
 
     let result = async {
-        runtime
-            .send_user_message(&session_id, "reply with the word ok")
+        manager
+            .send_user_message(&thread_id, "reply with the word ok".into())
             .await
             .context("codex smoke: send_user_message failed")?;
         watcher
@@ -229,10 +306,10 @@ async fn codex_smoke_leg_async(codex_bin: PathBuf) -> Result<()> {
     }
     .await;
 
-    let stop_result = runtime
-        .stop()
+    let stop_result = manager
+        .close_thread(&thread_id)
         .await
-        .context("codex smoke: stop_agent failed");
+        .context("codex smoke: close_thread failed");
 
     match (result, stop_result) {
         (Ok(()), Ok(())) => Ok(()),
@@ -250,7 +327,10 @@ async fn wait_for_codex_ok_token(
     tokio::time::timeout(Duration::from_mins(1), async move {
         loop {
             match events.recv().await {
-                Ok(RawIngest { payload, .. }) => {
+                Ok(event) => {
+                    let Some(payload) = event.json_value() else {
+                        continue;
+                    };
                     let method = payload.get("method").and_then(|v| v.as_str()).unwrap_or("");
                     if method == "item/agentMessage/delta" {
                         let delta = payload
@@ -399,15 +479,24 @@ fn flutter_leg(workspace_root: &Path) -> Result<()> {
 
 fn bootstrap() -> Result<()> {
     let workspace_root = workspace_root()?;
-    eprintln!("==> installing cargo-deny + uniffi (cli feature)");
+    // Pin to the same version as `workspace.dependencies.uniffi` / Cargo.lock.
+    // `cargo install uniffi` without `--version` pulls latest (0.32+ today),
+    // and uniffi-bindgen-swift then fails to extract library metadata with
+    // `Unexpected metadata type code: …` because the staticlib was built with
+    // the workspace's 0.31 macros. Keep bindgen and lib versions in lockstep.
+    eprintln!("==> installing uniffi {UNIFFI_CLI_VERSION} (cli feature)");
     run(
         "cargo",
-        &["install", "cargo-deny", "--locked"],
-        &workspace_root,
-    )?;
-    run(
-        "cargo",
-        &["install", "uniffi", "--locked", "--features", "cli"],
+        &[
+            "install",
+            "uniffi",
+            "--version",
+            UNIFFI_CLI_VERSION,
+            "--locked",
+            "--force",
+            "--features",
+            "cli",
+        ],
         &workspace_root,
     )?;
     ensure_uniffi_bindgen_swift_wrapper()?;
@@ -416,7 +505,7 @@ fn bootstrap() -> Result<()> {
         let brewfile = workspace_root.join("apps/macos/Brewfile");
         if brewfile.exists() {
             if which("brew").is_none() {
-                bail!("brew not installed; required to install xcodegen and swiftlint");
+                bail!("brew not installed; required to install xcodegen, swiftlint, and just");
             }
 
             eprintln!("==> brew bundle --file {}", brewfile.display());
@@ -563,6 +652,7 @@ fn build_macos(configuration: Option<&str>) -> Result<()> {
 
     let root = workspace_root()?;
     let build_config = MacosBuildConfiguration::from_xcode(configuration);
+    let _build_lock = acquire_build_macos_lock(&root, &build_config.xcode_name)?;
     if which("lipo").is_none() {
         bail!("lipo not installed; `build-macos` requires Xcode command-line tools");
     }
@@ -632,6 +722,28 @@ fn build_macos(configuration: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+fn acquire_build_macos_lock(root: &Path, configuration: &str) -> Result<std::fs::File> {
+    let lock_dir = root.join("target/locks");
+    fs::create_dir_all(&lock_dir).with_context(|| format!("mkdir {}", lock_dir.display()))?;
+
+    let lock_name = configuration
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect::<String>();
+    let lock_path = lock_dir.join(format!("build-macos-{lock_name}.lock"));
+    let lock = std::fs::File::create(&lock_path)
+        .with_context(|| format!("create {}", lock_path.display()))?;
+
+    eprintln!("==> acquiring build-macos lock {}", lock_path.display());
+    lock.lock_exclusive()
+        .with_context(|| format!("lock {}", lock_path.display()))?;
+    Ok(lock)
+}
+
+/// Must match `workspace.dependencies.uniffi` / Cargo.lock and the version
+/// installed by `bootstrap`. Drift here is the macOS CI `gen-uniffi` footgun.
+const UNIFFI_CLI_VERSION: &str = "0.31.1";
+
 fn gen_uniffi() -> Result<()> {
     let root = workspace_root()?;
     let out_dir = root.join("apps/macos/Minos/Generated");
@@ -640,47 +752,54 @@ fn gen_uniffi() -> Result<()> {
     if which("uniffi-bindgen-swift").is_none() {
         bail!("uniffi-bindgen-swift not installed; run `cargo xtask bootstrap`");
     }
+    ensure_uniffi_bindgen_matches_workspace()?;
 
-    eprintln!("==> cargo build (host arch) -p minos-ffi-uniffi --release");
+    let host_target = host_macos_rust_target();
+    eprintln!("==> cargo build (host arch) -p minos-ffi-uniffi --target {host_target}");
     run(
         "cargo",
-        &["build", "-p", "minos-ffi-uniffi", "--release"],
+        &["build", "-p", "minos-ffi-uniffi", "--target", host_target],
         &root,
     )?;
 
-    let dylib = root
-        .join("target/release")
-        .join(format!("libminos_ffi_uniffi.{}", host_dylib_suffix()));
-    if !dylib.exists() {
-        bail!("expected built library at {}", dylib.display());
+    let staticlib = root
+        .join("target")
+        .join(host_target)
+        .join(CargoProfile::Debug.artifact_dir())
+        .join("libminos_ffi_uniffi.a");
+    if !staticlib.exists() {
+        bail!("expected built library at {}", staticlib.display());
     }
 
     eprintln!(
         "==> uniffi-bindgen-swift --swift-sources {}",
-        dylib.display()
+        staticlib.display()
     );
     run(
         "uniffi-bindgen-swift",
         &[
             "--swift-sources",
-            dylib.to_str().unwrap(),
+            staticlib.to_str().unwrap(),
             out_dir.to_str().unwrap(),
         ],
         &root,
     )?;
 
-    eprintln!("==> uniffi-bindgen-swift --headers {}", dylib.display());
+    eprintln!("==> uniffi-bindgen-swift --headers {}", staticlib.display());
     run(
         "uniffi-bindgen-swift",
         &[
             "--headers",
-            dylib.to_str().unwrap(),
+            staticlib.to_str().unwrap(),
             out_dir.to_str().unwrap(),
         ],
         &root,
     )?;
 
-    eprintln!("==> uniffi-bindgen-swift --modulemap {}", dylib.display());
+    eprintln!(
+        "==> uniffi-bindgen-swift --modulemap {}",
+        staticlib.display()
+    );
     run(
         "uniffi-bindgen-swift",
         &[
@@ -690,7 +809,7 @@ fn gen_uniffi() -> Result<()> {
             "MinosCore",
             "--modulemap-filename",
             "MinosCoreFFI.modulemap",
-            dylib.to_str().unwrap(),
+            staticlib.to_str().unwrap(),
             out_dir.to_str().unwrap(),
         ],
         &root,
@@ -717,10 +836,14 @@ fn gen_uniffi() -> Result<()> {
 }
 
 fn verify_generated_uniffi_surface(out_dir: &Path) -> Result<()> {
+    // Phase C retired the legacy single-session `AgentState`; the multi-thread
+    // `ThreadState` enum (in `minos-agent-runtime`) is its replacement. The
+    // `AgentStateObserver` protocol survives but its `on_state` argument now
+    // carries `ThreadState`.
     require_generated_text(
         &out_dir.join("minos_agent_runtime.swift"),
-        "public enum AgentState",
-        "generated Swift enum for runtime-owned AgentState",
+        "public enum ThreadState",
+        "generated Swift enum for runtime-owned ThreadState",
     )?;
     require_generated_text(
         &out_dir.join("minos_daemon.swift"),
@@ -738,6 +861,16 @@ fn verify_generated_uniffi_surface(out_dir: &Path) -> Result<()> {
         "generated DaemonHandle.subscribeAgentState binding",
     )?;
     require_generated_text(
+        &out_dir.join("minos_daemon.swift"),
+        "public struct AgentThreadSnapshot",
+        "generated Swift record for current agent thread snapshot",
+    )?;
+    require_generated_text(
+        &out_dir.join("minos_daemon.swift"),
+        "open func currentAgentThread()",
+        "generated DaemonHandle.currentAgentThread binding",
+    )?;
+    require_generated_text(
         &out_dir.join("minos_protocol.swift"),
         "public struct StartAgentRequest",
         "generated Swift record for StartAgentRequest",
@@ -751,6 +884,16 @@ fn verify_generated_uniffi_surface(out_dir: &Path) -> Result<()> {
         &out_dir.join("minos_protocol.swift"),
         "public struct SendUserMessageRequest",
         "generated Swift record for SendUserMessageRequest",
+    )?;
+    require_generated_text(
+        &out_dir.join("minos_protocol.swift"),
+        "public struct InterruptThreadRequest",
+        "generated Swift record for InterruptThreadRequest (Phase C)",
+    )?;
+    require_generated_text(
+        &out_dir.join("minos_protocol.swift"),
+        "public struct CloseThreadRequest",
+        "generated Swift record for CloseThreadRequest (Phase C)",
     )?;
 
     Ok(())
@@ -835,6 +978,7 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
         "minos_domain.swift",
         "minos_protocol.swift",
         "minos_pairing.swift",
+        "minos_ui_protocol.swift",
     ] {
         let path = out_dir.join(file_name);
         if !path.exists() {
@@ -863,6 +1007,10 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
             )
             .replace(
                 "#if canImport(minos_protocolFFI)\nimport minos_protocolFFI\n#endif",
+                MODULE_IMPORT,
+            )
+            .replace(
+                "#if canImport(minos_ui_protocolFFI)\nimport minos_ui_protocolFFI\n#endif",
                 MODULE_IMPORT,
             );
 
@@ -1014,6 +1162,8 @@ fn gen_frb() -> Result<()> {
 }
 
 fn build_ios() -> Result<()> {
+    const IOS_DEPLOYMENT_TARGET: &str = "16.0";
+
     if !cfg!(target_os = "macos") {
         bail!("`build-ios` requires a macOS host");
     }
@@ -1048,7 +1198,7 @@ fn build_ios() -> Result<()> {
 
     for target in ["aarch64-apple-ios", "aarch64-apple-ios-sim"] {
         eprintln!("==> cargo build -p minos-ffi-frb --release --target {target}");
-        run(
+        run_env(
             "cargo",
             &[
                 "build",
@@ -1058,6 +1208,7 @@ fn build_ios() -> Result<()> {
                 "--target",
                 target,
             ],
+            &[("IPHONEOS_DEPLOYMENT_TARGET", IOS_DEPLOYMENT_TARGET)],
             &root,
         )?;
 
@@ -1087,13 +1238,13 @@ fn ensure_macos_scaffold_dirs(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn host_dylib_suffix() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "dylib"
-    } else if cfg!(target_os = "windows") {
-        "dll"
+fn host_macos_rust_target() -> &'static str {
+    if cfg!(target_arch = "aarch64") {
+        "aarch64-apple-darwin"
+    } else if cfg!(target_arch = "x86_64") {
+        "x86_64-apple-darwin"
     } else {
-        "so"
+        panic!("unsupported macOS host arch for UniFFI codegen")
     }
 }
 
@@ -1130,6 +1281,43 @@ fn ensure_uniffi_bindgen_swift_wrapper() -> Result<()> {
     Ok(())
 }
 
+/// Fail early when the on-PATH bindgen is a different major/minor than the
+/// workspace macros. Mismatches surface later as opaque
+/// `Unexpected metadata type code` errors inside `uniffi-bindgen-swift`.
+fn ensure_uniffi_bindgen_matches_workspace() -> Result<()> {
+    let out = Command::new("uniffi-bindgen-swift")
+        .arg("--version")
+        .output()
+        .context("running uniffi-bindgen-swift --version")?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let text = format!("{stdout}{stderr}");
+    if text.contains(UNIFFI_CLI_VERSION) {
+        return Ok(());
+    }
+    // Older bindgen binaries may not implement --version; fall back to
+    // `cargo install --list` which always records the installed crate version.
+    let list = Command::new("cargo")
+        .args(["install", "--list"])
+        .output()
+        .context("running cargo install --list")?;
+    let list_text = String::from_utf8_lossy(&list.stdout);
+    let expected = format!("uniffi v{UNIFFI_CLI_VERSION}:");
+    if list_text.lines().any(|line| line.starts_with(&expected)) {
+        return Ok(());
+    }
+    bail!(
+        "uniffi-bindgen-swift is not version {UNIFFI_CLI_VERSION} (workspace pin). \
+         Found install list entry may differ; run `cargo xtask bootstrap` to reinstall. \
+         cargo install --list uniffi lines:\n{}",
+        list_text
+            .lines()
+            .filter(|line| line.contains("uniffi"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
 /// Run the backend binary with dev-friendly defaults.
 ///
 /// Convenience wrapper for `cargo run -p minos-backend -- --listen 127.0.0.1:8787
@@ -1156,14 +1344,21 @@ fn backend_run() -> Result<()> {
     )
 }
 
+/// Wipe and recreate the backend database for the selected driver.
+fn backend_db_reset(driver: BackendDbDriver) -> Result<()> {
+    let root = workspace_root()?;
+    match driver {
+        BackendDbDriver::Sqlite => backend_db_reset_sqlite(&root),
+        BackendDbDriver::Postgres => backend_db_reset_postgres(&root),
+    }
+}
+
 /// Wipe and recreate the backend SQLite DB at ./minos-backend.db.
 ///
 /// Removes the db file (plus `-shm` / `-wal` sidecars if SQLite is in WAL mode)
 /// and then re-runs migrations via `--exit-after-migrate`. Idempotent — missing
 /// files are ignored.
-fn backend_db_reset() -> Result<()> {
-    let root = workspace_root()?;
-
+fn backend_db_reset_sqlite(root: &Path) -> Result<()> {
     for suffix in ["", "-shm", "-wal"] {
         let path = root.join(format!("minos-backend.db{suffix}"));
         if path.exists() {
@@ -1184,7 +1379,49 @@ fn backend_db_reset() -> Result<()> {
             "./minos-backend.db",
             "--exit-after-migrate",
         ],
-        &root,
+        root,
+    )
+}
+
+fn backend_db_reset_postgres(root: &Path) -> Result<()> {
+    let database_url = std::env::var("MINOS_DATABASE_URL")
+        .or_else(|_| std::env::var("MINOS_BACKEND_POSTGRES_URL"))
+        .context(
+            "MINOS_DATABASE_URL or MINOS_BACKEND_POSTGRES_URL must be set for `cargo xtask backend-db-reset --driver postgres`",
+        )?;
+
+    if which("psql").is_none() {
+        bail!("psql is required for `cargo xtask backend-db-reset --driver postgres`");
+    }
+
+    eprintln!("==> psql $MINOS_DATABASE_URL -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public'");
+    run_owned(
+        "psql",
+        &[
+            database_url.clone(),
+            "-v".to_string(),
+            "ON_ERROR_STOP=1".to_string(),
+            "-c".to_string(),
+            "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;".to_string(),
+        ],
+        root,
+    )?;
+
+    eprintln!("==> cargo run -p minos-backend -- --storage-mode external-sql --database-url $MINOS_DATABASE_URL --exit-after-migrate");
+    run_owned(
+        "cargo",
+        &[
+            "run".to_string(),
+            "-p".to_string(),
+            "minos-backend".to_string(),
+            "--".to_string(),
+            "--storage-mode".to_string(),
+            "external-sql".to_string(),
+            "--database-url".to_string(),
+            database_url,
+            "--exit-after-migrate".to_string(),
+        ],
+        root,
     )
 }
 
@@ -1199,6 +1436,18 @@ fn cargo_bin_dir() -> Result<PathBuf> {
 
 fn run(program: &str, args: &[&str], cwd: &Path) -> Result<()> {
     run_env(program, args, &[], cwd)
+}
+
+fn run_owned(program: &str, args: &[String], cwd: &Path) -> Result<()> {
+    let status = Command::new(program)
+        .args(args)
+        .current_dir(cwd)
+        .status()
+        .with_context(|| format!("spawning `{program} {args:?}`"))?;
+    if !status.success() {
+        bail!("`{program} {args:?}` exited {status}");
+    }
+    Ok(())
 }
 
 fn run_env(program: &str, args: &[&str], envs: &[(&str, &str)], cwd: &Path) -> Result<()> {

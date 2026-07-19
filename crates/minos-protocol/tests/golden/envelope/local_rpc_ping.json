@@ -1,7 +1,0 @@
-{
-  "kind": "local_rpc",
-  "v": 1,
-  "id": 1,
-  "method": "ping",
-  "params": {}
-}

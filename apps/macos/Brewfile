@@ -1,2 +1,5 @@
 brew "xcodegen"
 brew "swiftlint"
+# Xcode pre/post build scripts shell out to `just` (see project.yml).
+# Without this, macOS CI xcodebuild fails with `just: command not found`.
+brew "just"

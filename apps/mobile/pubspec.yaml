@@ -53,23 +53,23 @@ dependencies:
   flutter_riverpod: ^3.3.1
   riverpod_annotation: ^4.0.2
   shadcn_ui: ^0.54.0
+  sqflite: ^2.4.1
+
+  # Markdown rendering for chat bubbles. flutter_markdown_plus is the
+  # actively-maintained fork of the original (now-deprecated)
+  # flutter_markdown package. flutter_highlight provides syntax highlighting
+  # for fenced code blocks + tool-call argument JSON.
+  flutter_markdown_plus: ^1.0.0
+  flutter_highlight: ^0.7.0
   mobile_scanner: ^7.2.0
   permission_handler: ^12.0.1
   path_provider: ^2.1.5
 
-  # Keychain-backed persistence for the paired backend URL, CF Access
-  # service-token headers, and the long-lived `DeviceSecret`. See plan 05 §D5.
+  # Keychain-backed persistence for the mobile auth session and long-lived
+  # device identity. The backend URL is compile-time config, not durable state.
   flutter_secure_storage: ^9.2.0
-
-  # Dart-side mars-xlog writer (lives alongside Rust's mars-xlog output in
-  # the same Documents/Minos/Logs/ directory, distinguished by namePrefix
-  # per spec §9.4). Not on pub.dev; sourced from the peterich-rs/xlog-rs
-  # monorepo subdirectory.
-  xlog:
-    git:
-      url: https://github.com/peterich-rs/xlog-rs
-      path: packages/xlog
-      ref: 3f7f578501d142ad86a785a9f71a4e3f5077a6c1
+  flutter_list_view: ^1.1.29
+  go_router: ^17.2.3
 
 dev_dependencies:
   flutter_test:

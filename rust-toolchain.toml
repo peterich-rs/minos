@@ -1,5 +1,7 @@
 [toolchain]
-channel = "stable"
+# Pin to a concrete compiler; Minos is an app (not a library crate published to
+# crates.io), so we track current stable rather than a multi-year MSRV floor.
+channel = "1.97.0"
 components = ["rustfmt", "clippy", "rust-src"]
 targets = [
   "aarch64-apple-darwin",

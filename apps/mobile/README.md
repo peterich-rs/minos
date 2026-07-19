@@ -2,18 +2,40 @@
 
 Flutter shell for the Minos mobile client.
 
-## Cloudflare Access
+## Build & run
 
-The app reads Cloudflare Access service-token headers from Flutter
-compile-time environment values. CI should pass GitHub Secrets with
-`--dart-define`; local runs can forward shell env vars:
+All commands go through `just` from the workspace root. See the workspace
+README for one-time setup (`cp .env.example .env.local`).
 
 ```sh
-flutter run \
-  --dart-define=CF_ACCESS_CLIENT_ID="$CF_ACCESS_CLIENT_ID" \
-  --dart-define=CF_ACCESS_CLIENT_SECRET="$CF_ACCESS_CLIENT_SECRET"
+# Production iOS build (Release configuration).
+just build-mobile-ios Release
+
+# Hot-reload dev workflow on a simulator or attached device.
+just dev-mobile-ios
+
+# Hot-reload dev workflow on an attached Android device or emulator.
+just dev-mobile-android
+
+# Android release APK.
+just build-mobile-android
 ```
 
-These values are injected into the in-memory Rust client at startup/pairing
-time. They are not persisted to iOS Keychain; Keychain stores only the Minos
-business-layer pairing state (`backend_url`, `device_id`, `device_secret`).
+Direct `flutter run` and Xcode IDE Build/Run are still wired through the same
+env path: Cargokit's Rust build script re-enters `just` before invoking cargo,
+so `.env.local` is loaded before `option_env!` is evaluated. Prefer the public
+recipes above for normal work because they include the project-level checks and
+documented flags. For Android runtime work, prefer `just dev-mobile-android`
+over ad-hoc IDE runs so the debug app uses the same validated env path as the
+release APK.
+
+## Configuration
+
+`MINOS_BACKEND_URL` is baked at build time
+from `.env.local` (workspace root). The Rust FFI reads it via
+`option_env!`, so Flutter and native IDE builds stay on the same backend
+endpoint when they re-enter the shared `just`/Cargokit build path.
+
+iOS Keychain (`flutter_secure_storage`) holds only Minos business state:
+`device_id`, `device_secret`, `account_id`, refresh tokens — never the
+backend URL.

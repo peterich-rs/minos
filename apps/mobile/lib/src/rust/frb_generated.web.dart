@@ -24,6 +24,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   get rust_arc_decrement_strong_count_MobileClientPtr => wire
       .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient;
 
+  CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_ThreadStatePtr => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState;
+
+  CrossPlatformFinalizerArg
+  get rust_arc_decrement_strong_count_ThreadSummaryPtr => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary;
+
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw);
 
@@ -34,14 +42,55 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  ThreadState
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+    dynamic raw,
+  );
+
+  @protected
+  ThreadSummary
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    dynamic raw,
+  );
+
+  @protected
+  ThreadSummary
+  dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    dynamic raw,
+  );
+
+  @protected
   MobileClient
   dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
     dynamic raw,
   );
 
   @protected
+  ThreadSummary
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    dynamic raw,
+  );
+
+  @protected
   MobileClient
   dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+    dynamic raw,
+  );
+
+  @protected
+  ThreadState
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+    dynamic raw,
+  );
+
+  @protected
+  ThreadSummary
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    dynamic raw,
+  );
+
+  @protected
+  RustStreamSink<AuthStateFrame> dco_decode_StreamSink_auth_state_frame_Sse(
     dynamic raw,
   );
 
@@ -54,6 +103,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RustStreamSink<LogRecord> dco_decode_StreamSink_log_record_Sse(dynamic raw);
 
   @protected
+  RustStreamSink<RequestTraceRecord>
+  dco_decode_StreamSink_request_trace_record_Sse(dynamic raw);
+
+  @protected
+  RustStreamSink<SocialEventFrame> dco_decode_StreamSink_social_event_frame_Sse(
+    dynamic raw,
+  );
+
+  @protected
   RustStreamSink<UiEventFrame> dco_decode_StreamSink_ui_event_frame_Sse(
     dynamic raw,
   );
@@ -62,7 +120,28 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String dco_decode_String(dynamic raw);
 
   @protected
+  AgentDescriptor dco_decode_agent_descriptor(dynamic raw);
+
+  @protected
   AgentName dco_decode_agent_name(dynamic raw);
+
+  @protected
+  AgentSessionSummaryDto dco_decode_agent_session_summary_dto(dynamic raw);
+
+  @protected
+  AgentStatus dco_decode_agent_status(dynamic raw);
+
+  @protected
+  AgentSummary dco_decode_agent_summary(dynamic raw);
+
+  @protected
+  ArtifactRef dco_decode_artifact_ref(dynamic raw);
+
+  @protected
+  AuthStateFrame dco_decode_auth_state_frame(dynamic raw);
+
+  @protected
+  AuthSummary dco_decode_auth_summary(dynamic raw);
 
   @protected
   bool dco_decode_bool(dynamic raw);
@@ -71,10 +150,42 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AgentName dco_decode_box_autoadd_agent_name(dynamic raw);
 
   @protected
+  ArtifactRef dco_decode_box_autoadd_artifact_ref(dynamic raw);
+
+  @protected
+  AuthSummary dco_decode_box_autoadd_auth_summary(dynamic raw);
+
+  @protected
+  ChatMessageReplySummary dco_decode_box_autoadd_chat_message_reply_summary(
+    dynamic raw,
+  );
+
+  @protected
+  CreateProjectRequest dco_decode_box_autoadd_create_project_request(
+    dynamic raw,
+  );
+
+  @protected
+  DeleteProjectRequest dco_decode_box_autoadd_delete_project_request(
+    dynamic raw,
+  );
+
+  @protected
+  DisplayPayload dco_decode_box_autoadd_display_payload(dynamic raw);
+
+  @protected
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
 
   @protected
+  ListProjectThreadsParams dco_decode_box_autoadd_list_project_threads_params(
+    dynamic raw,
+  );
+
+  @protected
   ListThreadsParams dco_decode_box_autoadd_list_threads_params(dynamic raw);
+
+  @protected
+  MinosError dco_decode_box_autoadd_minos_error(dynamic raw);
 
   @protected
   PersistedPairingState dco_decode_box_autoadd_persisted_pairing_state(
@@ -88,13 +199,99 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ThreadEndReason dco_decode_box_autoadd_thread_end_reason(dynamic raw);
 
   @protected
+  int dco_decode_box_autoadd_u_16(dynamic raw);
+
+  @protected
+  int dco_decode_box_autoadd_u_32(dynamic raw);
+
+  @protected
   BigInt dco_decode_box_autoadd_u_64(dynamic raw);
+
+  @protected
+  UpdateProjectRequest dco_decode_box_autoadd_update_project_request(
+    dynamic raw,
+  );
+
+  @protected
+  UserSummary dco_decode_box_autoadd_user_summary(dynamic raw);
+
+  @protected
+  ChatMessageReplySummary dco_decode_chat_message_reply_summary(dynamic raw);
+
+  @protected
+  ChatMessageSummary dco_decode_chat_message_summary(dynamic raw);
 
   @protected
   ConnectionState dco_decode_connection_state(dynamic raw);
 
   @protected
+  ConversationAgentMembersResponse
+  dco_decode_conversation_agent_members_response(dynamic raw);
+
+  @protected
+  ConversationKind dco_decode_conversation_kind(dynamic raw);
+
+  @protected
+  ConversationMembersResponse dco_decode_conversation_members_response(
+    dynamic raw,
+  );
+
+  @protected
+  ConversationReadResponse dco_decode_conversation_read_response(dynamic raw);
+
+  @protected
+  ConversationResponse dco_decode_conversation_response(dynamic raw);
+
+  @protected
+  ConversationSummary dco_decode_conversation_summary(dynamic raw);
+
+  @protected
+  ConversationsResponse dco_decode_conversations_response(dynamic raw);
+
+  @protected
+  CreateProjectRequest dco_decode_create_project_request(dynamic raw);
+
+  @protected
+  CreateProjectResponse dco_decode_create_project_response(dynamic raw);
+
+  @protected
+  DeleteProjectRequest dco_decode_delete_project_request(dynamic raw);
+
+  @protected
+  DisplayPayload dco_decode_display_payload(dynamic raw);
+
+  @protected
   ErrorKind dco_decode_error_kind(dynamic raw);
+
+  @protected
+  FriendRequestStatus dco_decode_friend_request_status(dynamic raw);
+
+  @protected
+  FriendRequestSummary dco_decode_friend_request_summary(dynamic raw);
+
+  @protected
+  FriendRequestsResponse dco_decode_friend_requests_response(dynamic raw);
+
+  @protected
+  FriendSummary dco_decode_friend_summary(dynamic raw);
+
+  @protected
+  FriendsResponse dco_decode_friends_response(dynamic raw);
+
+  @protected
+  HostSkillError dco_decode_host_skill_error(dynamic raw);
+
+  @protected
+  HostSkillSummary dco_decode_host_skill_summary(dynamic raw);
+
+  @protected
+  HostSkillsEntry dco_decode_host_skills_entry(dynamic raw);
+
+  @protected
+  HostSummaryDto dco_decode_host_summary_dto(dynamic raw);
+
+  @protected
+  HostWorkspaceSummary dco_decode_host_workspace_summary(dynamic raw);
 
   @protected
   int dco_decode_i_32(dynamic raw);
@@ -106,13 +303,92 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Lang dco_decode_lang(dynamic raw);
 
   @protected
+  List<ThreadSummary>
+  dco_decode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    dynamic raw,
+  );
+
+  @protected
+  List<String> dco_decode_list_String(dynamic raw);
+
+  @protected
+  List<AgentDescriptor> dco_decode_list_agent_descriptor(dynamic raw);
+
+  @protected
+  List<AgentSessionSummaryDto> dco_decode_list_agent_session_summary_dto(
+    dynamic raw,
+  );
+
+  @protected
+  List<AgentSummary> dco_decode_list_agent_summary(dynamic raw);
+
+  @protected
+  ListAgentsResponse dco_decode_list_agents_response(dynamic raw);
+
+  @protected
+  List<ChatMessageSummary> dco_decode_list_chat_message_summary(dynamic raw);
+
+  @protected
+  ListChatMessagesResponse dco_decode_list_chat_messages_response(dynamic raw);
+
+  @protected
+  List<ConversationSummary> dco_decode_list_conversation_summary(dynamic raw);
+
+  @protected
+  List<FriendRequestSummary> dco_decode_list_friend_request_summary(
+    dynamic raw,
+  );
+
+  @protected
+  List<FriendSummary> dco_decode_list_friend_summary(dynamic raw);
+
+  @protected
+  List<HostSkillError> dco_decode_list_host_skill_error(dynamic raw);
+
+  @protected
+  List<HostSkillSummary> dco_decode_list_host_skill_summary(dynamic raw);
+
+  @protected
+  List<HostSkillsEntry> dco_decode_list_host_skills_entry(dynamic raw);
+
+  @protected
+  ListHostSkillsResponse dco_decode_list_host_skills_response(dynamic raw);
+
+  @protected
+  List<HostSummaryDto> dco_decode_list_host_summary_dto(dynamic raw);
+
+  @protected
+  List<HostWorkspaceSummary> dco_decode_list_host_workspace_summary(
+    dynamic raw,
+  );
+
+  @protected
+  ListHostWorkspacesResponse dco_decode_list_host_workspaces_response(
+    dynamic raw,
+  );
+
+  @protected
   List<LogRecord> dco_decode_list_log_record(dynamic raw);
 
   @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
-  List<ThreadSummary> dco_decode_list_thread_summary(dynamic raw);
+  List<ProjectSummary> dco_decode_list_project_summary(dynamic raw);
+
+  @protected
+  ListProjectThreadsParams dco_decode_list_project_threads_params(dynamic raw);
+
+  @protected
+  ListProjectThreadsResponse dco_decode_list_project_threads_response(
+    dynamic raw,
+  );
+
+  @protected
+  ListProjectsResponse dco_decode_list_projects_response(dynamic raw);
+
+  @protected
+  List<RequestTraceRecord> dco_decode_list_request_trace_record(dynamic raw);
 
   @protected
   ListThreadsParams dco_decode_list_threads_params(dynamic raw);
@@ -122,6 +398,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<UiEventMessage> dco_decode_list_ui_event_message(dynamic raw);
+
+  @protected
+  List<UserSummary> dco_decode_list_user_summary(dynamic raw);
 
   @protected
   LogLevel dco_decode_log_level(dynamic raw);
@@ -136,10 +415,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MinosError dco_decode_minos_error(dynamic raw);
 
   @protected
+  MyProfileResponse dco_decode_my_profile_response(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
   AgentName? dco_decode_opt_box_autoadd_agent_name(dynamic raw);
+
+  @protected
+  ArtifactRef? dco_decode_opt_box_autoadd_artifact_ref(dynamic raw);
+
+  @protected
+  ChatMessageReplySummary?
+  dco_decode_opt_box_autoadd_chat_message_reply_summary(dynamic raw);
 
   @protected
   PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
@@ -148,7 +437,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ThreadEndReason? dco_decode_opt_box_autoadd_thread_end_reason(dynamic raw);
 
   @protected
+  int? dco_decode_opt_box_autoadd_u_16(dynamic raw);
+
+  @protected
+  int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
+
+  @protected
   BigInt? dco_decode_opt_box_autoadd_u_64(dynamic raw);
+
+  @protected
+  UserSummary? dco_decode_opt_box_autoadd_user_summary(dynamic raw);
 
   @protected
   PairingState dco_decode_pairing_state(dynamic raw);
@@ -157,16 +455,37 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PersistedPairingState dco_decode_persisted_pairing_state(dynamic raw);
 
   @protected
+  ProjectSummary dco_decode_project_summary(dynamic raw);
+
+  @protected
   ReadThreadParams dco_decode_read_thread_params(dynamic raw);
 
   @protected
   ReadThreadResponse dco_decode_read_thread_response(dynamic raw);
 
   @protected
+  RequestTraceRecord dco_decode_request_trace_record(dynamic raw);
+
+  @protected
+  RequestTraceStatus dco_decode_request_trace_status(dynamic raw);
+
+  @protected
+  RequestTraceTransport dco_decode_request_trace_transport(dynamic raw);
+
+  @protected
+  SenderType dco_decode_sender_type(dynamic raw);
+
+  @protected
+  SocialEventFrame dco_decode_social_event_frame(dynamic raw);
+
+  @protected
+  SubagentStatus dco_decode_subagent_status(dynamic raw);
+
+  @protected
   ThreadEndReason dco_decode_thread_end_reason(dynamic raw);
 
   @protected
-  ThreadSummary dco_decode_thread_summary(dynamic raw);
+  int dco_decode_u_16(dynamic raw);
 
   @protected
   int dco_decode_u_32(dynamic raw);
@@ -187,7 +506,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void dco_decode_unit(dynamic raw);
 
   @protected
+  UpdateProjectRequest dco_decode_update_project_request(dynamic raw);
+
+  @protected
+  UserSummary dco_decode_user_summary(dynamic raw);
+
+  @protected
   BigInt dco_decode_usize(dynamic raw);
+
+  @protected
+  WriteHostSkillConfigResponse dco_decode_write_host_skill_config_response(
+    dynamic raw,
+  );
 
   @protected
   AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
@@ -199,14 +529,55 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  ThreadState
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ThreadSummary
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ThreadSummary
+  sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   MobileClient
   sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
     SseDeserializer deserializer,
   );
 
   @protected
+  ThreadSummary
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   MobileClient
   sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ThreadState
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ThreadSummary
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  RustStreamSink<AuthStateFrame> sse_decode_StreamSink_auth_state_frame_Sse(
     SseDeserializer deserializer,
   );
 
@@ -221,6 +592,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<RequestTraceRecord>
+  sse_decode_StreamSink_request_trace_record_Sse(SseDeserializer deserializer);
+
+  @protected
+  RustStreamSink<SocialEventFrame> sse_decode_StreamSink_social_event_frame_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   RustStreamSink<UiEventFrame> sse_decode_StreamSink_ui_event_frame_Sse(
     SseDeserializer deserializer,
   );
@@ -229,7 +609,30 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   String sse_decode_String(SseDeserializer deserializer);
 
   @protected
+  AgentDescriptor sse_decode_agent_descriptor(SseDeserializer deserializer);
+
+  @protected
   AgentName sse_decode_agent_name(SseDeserializer deserializer);
+
+  @protected
+  AgentSessionSummaryDto sse_decode_agent_session_summary_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  AgentStatus sse_decode_agent_status(SseDeserializer deserializer);
+
+  @protected
+  AgentSummary sse_decode_agent_summary(SseDeserializer deserializer);
+
+  @protected
+  ArtifactRef sse_decode_artifact_ref(SseDeserializer deserializer);
+
+  @protected
+  AuthStateFrame sse_decode_auth_state_frame(SseDeserializer deserializer);
+
+  @protected
+  AuthSummary sse_decode_auth_summary(SseDeserializer deserializer);
 
   @protected
   bool sse_decode_bool(SseDeserializer deserializer);
@@ -238,12 +641,46 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AgentName sse_decode_box_autoadd_agent_name(SseDeserializer deserializer);
 
   @protected
+  ArtifactRef sse_decode_box_autoadd_artifact_ref(SseDeserializer deserializer);
+
+  @protected
+  AuthSummary sse_decode_box_autoadd_auth_summary(SseDeserializer deserializer);
+
+  @protected
+  ChatMessageReplySummary sse_decode_box_autoadd_chat_message_reply_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  CreateProjectRequest sse_decode_box_autoadd_create_project_request(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  DeleteProjectRequest sse_decode_box_autoadd_delete_project_request(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  DisplayPayload sse_decode_box_autoadd_display_payload(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
+
+  @protected
+  ListProjectThreadsParams sse_decode_box_autoadd_list_project_threads_params(
+    SseDeserializer deserializer,
+  );
 
   @protected
   ListThreadsParams sse_decode_box_autoadd_list_threads_params(
     SseDeserializer deserializer,
   );
+
+  @protected
+  MinosError sse_decode_box_autoadd_minos_error(SseDeserializer deserializer);
 
   @protected
   PersistedPairingState sse_decode_box_autoadd_persisted_pairing_state(
@@ -261,13 +698,125 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  int sse_decode_box_autoadd_u_16(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
   BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer);
+
+  @protected
+  UpdateProjectRequest sse_decode_box_autoadd_update_project_request(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  UserSummary sse_decode_box_autoadd_user_summary(SseDeserializer deserializer);
+
+  @protected
+  ChatMessageReplySummary sse_decode_chat_message_reply_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ChatMessageSummary sse_decode_chat_message_summary(
+    SseDeserializer deserializer,
+  );
 
   @protected
   ConnectionState sse_decode_connection_state(SseDeserializer deserializer);
 
   @protected
+  ConversationAgentMembersResponse
+  sse_decode_conversation_agent_members_response(SseDeserializer deserializer);
+
+  @protected
+  ConversationKind sse_decode_conversation_kind(SseDeserializer deserializer);
+
+  @protected
+  ConversationMembersResponse sse_decode_conversation_members_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ConversationReadResponse sse_decode_conversation_read_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ConversationResponse sse_decode_conversation_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ConversationSummary sse_decode_conversation_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ConversationsResponse sse_decode_conversations_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  CreateProjectRequest sse_decode_create_project_request(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  CreateProjectResponse sse_decode_create_project_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  DeleteProjectRequest sse_decode_delete_project_request(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  DisplayPayload sse_decode_display_payload(SseDeserializer deserializer);
+
+  @protected
   ErrorKind sse_decode_error_kind(SseDeserializer deserializer);
+
+  @protected
+  FriendRequestStatus sse_decode_friend_request_status(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  FriendRequestSummary sse_decode_friend_request_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  FriendRequestsResponse sse_decode_friend_requests_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  FriendSummary sse_decode_friend_summary(SseDeserializer deserializer);
+
+  @protected
+  FriendsResponse sse_decode_friends_response(SseDeserializer deserializer);
+
+  @protected
+  HostSkillError sse_decode_host_skill_error(SseDeserializer deserializer);
+
+  @protected
+  HostSkillSummary sse_decode_host_skill_summary(SseDeserializer deserializer);
+
+  @protected
+  HostSkillsEntry sse_decode_host_skills_entry(SseDeserializer deserializer);
+
+  @protected
+  HostSummaryDto sse_decode_host_summary_dto(SseDeserializer deserializer);
+
+  @protected
+  HostWorkspaceSummary sse_decode_host_workspace_summary(
+    SseDeserializer deserializer,
+  );
 
   @protected
   int sse_decode_i_32(SseDeserializer deserializer);
@@ -279,13 +828,122 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Lang sse_decode_lang(SseDeserializer deserializer);
 
   @protected
+  List<ThreadSummary>
+  sse_decode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<String> sse_decode_list_String(SseDeserializer deserializer);
+
+  @protected
+  List<AgentDescriptor> sse_decode_list_agent_descriptor(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<AgentSessionSummaryDto> sse_decode_list_agent_session_summary_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<AgentSummary> sse_decode_list_agent_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ListAgentsResponse sse_decode_list_agents_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<ChatMessageSummary> sse_decode_list_chat_message_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ListChatMessagesResponse sse_decode_list_chat_messages_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<ConversationSummary> sse_decode_list_conversation_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<FriendRequestSummary> sse_decode_list_friend_request_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<FriendSummary> sse_decode_list_friend_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<HostSkillError> sse_decode_list_host_skill_error(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<HostSkillSummary> sse_decode_list_host_skill_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<HostSkillsEntry> sse_decode_list_host_skills_entry(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ListHostSkillsResponse sse_decode_list_host_skills_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<HostSummaryDto> sse_decode_list_host_summary_dto(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<HostWorkspaceSummary> sse_decode_list_host_workspace_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ListHostWorkspacesResponse sse_decode_list_host_workspaces_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<LogRecord> sse_decode_list_log_record(SseDeserializer deserializer);
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
-  List<ThreadSummary> sse_decode_list_thread_summary(
+  List<ProjectSummary> sse_decode_list_project_summary(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ListProjectThreadsParams sse_decode_list_project_threads_params(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ListProjectThreadsResponse sse_decode_list_project_threads_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ListProjectsResponse sse_decode_list_projects_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<RequestTraceRecord> sse_decode_list_request_trace_record(
     SseDeserializer deserializer,
   );
 
@@ -305,6 +963,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<UserSummary> sse_decode_list_user_summary(SseDeserializer deserializer);
+
+  @protected
   LogLevel sse_decode_log_level(SseDeserializer deserializer);
 
   @protected
@@ -317,10 +978,26 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MinosError sse_decode_minos_error(SseDeserializer deserializer);
 
   @protected
+  MyProfileResponse sse_decode_my_profile_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
 
   @protected
   AgentName? sse_decode_opt_box_autoadd_agent_name(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ArtifactRef? sse_decode_opt_box_autoadd_artifact_ref(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ChatMessageReplySummary?
+  sse_decode_opt_box_autoadd_chat_message_reply_summary(
     SseDeserializer deserializer,
   );
 
@@ -333,7 +1010,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  int? sse_decode_opt_box_autoadd_u_16(SseDeserializer deserializer);
+
+  @protected
+  int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
   BigInt? sse_decode_opt_box_autoadd_u_64(SseDeserializer deserializer);
+
+  @protected
+  UserSummary? sse_decode_opt_box_autoadd_user_summary(
+    SseDeserializer deserializer,
+  );
 
   @protected
   PairingState sse_decode_pairing_state(SseDeserializer deserializer);
@@ -344,6 +1032,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  ProjectSummary sse_decode_project_summary(SseDeserializer deserializer);
+
+  @protected
   ReadThreadParams sse_decode_read_thread_params(SseDeserializer deserializer);
 
   @protected
@@ -352,10 +1043,34 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RequestTraceRecord sse_decode_request_trace_record(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  RequestTraceStatus sse_decode_request_trace_status(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  RequestTraceTransport sse_decode_request_trace_transport(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  SenderType sse_decode_sender_type(SseDeserializer deserializer);
+
+  @protected
+  SocialEventFrame sse_decode_social_event_frame(SseDeserializer deserializer);
+
+  @protected
+  SubagentStatus sse_decode_subagent_status(SseDeserializer deserializer);
+
+  @protected
   ThreadEndReason sse_decode_thread_end_reason(SseDeserializer deserializer);
 
   @protected
-  ThreadSummary sse_decode_thread_summary(SseDeserializer deserializer);
+  int sse_decode_u_16(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_32(SseDeserializer deserializer);
@@ -376,7 +1091,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_decode_unit(SseDeserializer deserializer);
 
   @protected
+  UpdateProjectRequest sse_decode_update_project_request(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  UserSummary sse_decode_user_summary(SseDeserializer deserializer);
+
+  @protected
   BigInt sse_decode_usize(SseDeserializer deserializer);
+
+  @protected
+  WriteHostSkillConfigResponse sse_decode_write_host_skill_config_response(
+    SseDeserializer deserializer,
+  );
 
   @protected
   void sse_encode_AnyhowException(
@@ -393,6 +1121,27 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+    ThreadState self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    ThreadSummary self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    ThreadSummary self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
   sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
     MobileClient self,
     SseSerializer serializer,
@@ -400,8 +1149,35 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    ThreadSummary self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
   sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
     MobileClient self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+    ThreadState self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    ThreadSummary self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_auth_state_frame_Sse(
+    RustStreamSink<AuthStateFrame> self,
     SseSerializer serializer,
   );
 
@@ -418,6 +1194,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_StreamSink_request_trace_record_Sse(
+    RustStreamSink<RequestTraceRecord> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_social_event_frame_Sse(
+    RustStreamSink<SocialEventFrame> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_StreamSink_ui_event_frame_Sse(
     RustStreamSink<UiEventFrame> self,
     SseSerializer serializer,
@@ -427,7 +1215,37 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_String(String self, SseSerializer serializer);
 
   @protected
+  void sse_encode_agent_descriptor(
+    AgentDescriptor self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_agent_name(AgentName self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_agent_session_summary_dto(
+    AgentSessionSummaryDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_agent_status(AgentStatus self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_agent_summary(AgentSummary self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_artifact_ref(ArtifactRef self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_auth_state_frame(
+    AuthStateFrame self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_auth_summary(AuthSummary self, SseSerializer serializer);
 
   @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
@@ -439,14 +1257,62 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_artifact_ref(
+    ArtifactRef self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_auth_summary(
+    AuthSummary self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_chat_message_reply_summary(
+    ChatMessageReplySummary self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_create_project_request(
+    CreateProjectRequest self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_delete_project_request(
+    DeleteProjectRequest self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_display_payload(
+    DisplayPayload self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_i_64(
     PlatformInt64 self,
     SseSerializer serializer,
   );
 
   @protected
+  void sse_encode_box_autoadd_list_project_threads_params(
+    ListProjectThreadsParams self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_list_threads_params(
     ListThreadsParams self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_minos_error(
+    MinosError self,
     SseSerializer serializer,
   );
 
@@ -469,7 +1335,37 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_u_16(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
+
+  @protected
   void sse_encode_box_autoadd_u_64(BigInt self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_box_autoadd_update_project_request(
+    UpdateProjectRequest self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_user_summary(
+    UserSummary self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_chat_message_reply_summary(
+    ChatMessageReplySummary self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_chat_message_summary(
+    ChatMessageSummary self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_connection_state(
@@ -478,7 +1374,130 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_conversation_agent_members_response(
+    ConversationAgentMembersResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_conversation_kind(
+    ConversationKind self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_conversation_members_response(
+    ConversationMembersResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_conversation_read_response(
+    ConversationReadResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_conversation_response(
+    ConversationResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_conversation_summary(
+    ConversationSummary self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_conversations_response(
+    ConversationsResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_create_project_request(
+    CreateProjectRequest self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_create_project_response(
+    CreateProjectResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_delete_project_request(
+    DeleteProjectRequest self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_display_payload(
+    DisplayPayload self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_error_kind(ErrorKind self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_friend_request_status(
+    FriendRequestStatus self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_friend_request_summary(
+    FriendRequestSummary self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_friend_requests_response(
+    FriendRequestsResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_friend_summary(FriendSummary self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_friends_response(
+    FriendsResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_host_skill_error(
+    HostSkillError self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_host_skill_summary(
+    HostSkillSummary self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_host_skills_entry(
+    HostSkillsEntry self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_host_summary_dto(
+    HostSummaryDto self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_host_workspace_summary(
+    HostWorkspaceSummary self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
@@ -488,6 +1507,112 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_lang(Lang self, SseSerializer serializer);
+
+  @protected
+  void
+  sse_encode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    List<ThreadSummary> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_String(List<String> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_agent_descriptor(
+    List<AgentDescriptor> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_agent_session_summary_dto(
+    List<AgentSessionSummaryDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_agent_summary(
+    List<AgentSummary> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_agents_response(
+    ListAgentsResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_chat_message_summary(
+    List<ChatMessageSummary> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_chat_messages_response(
+    ListChatMessagesResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_conversation_summary(
+    List<ConversationSummary> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_friend_request_summary(
+    List<FriendRequestSummary> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_friend_summary(
+    List<FriendSummary> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_host_skill_error(
+    List<HostSkillError> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_host_skill_summary(
+    List<HostSkillSummary> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_host_skills_entry(
+    List<HostSkillsEntry> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_host_skills_response(
+    ListHostSkillsResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_host_summary_dto(
+    List<HostSummaryDto> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_host_workspace_summary(
+    List<HostWorkspaceSummary> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_host_workspaces_response(
+    ListHostWorkspacesResponse self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_list_log_record(
@@ -502,8 +1627,32 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  void sse_encode_list_thread_summary(
-    List<ThreadSummary> self,
+  void sse_encode_list_project_summary(
+    List<ProjectSummary> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_project_threads_params(
+    ListProjectThreadsParams self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_project_threads_response(
+    ListProjectThreadsResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_projects_response(
+    ListProjectsResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_request_trace_record(
+    List<RequestTraceRecord> self,
     SseSerializer serializer,
   );
 
@@ -526,6 +1675,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_user_summary(
+    List<UserSummary> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_log_level(LogLevel self, SseSerializer serializer);
 
   @protected
@@ -538,11 +1693,29 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_minos_error(MinosError self, SseSerializer serializer);
 
   @protected
+  void sse_encode_my_profile_response(
+    MyProfileResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_agent_name(
     AgentName? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_artifact_ref(
+    ArtifactRef? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_opt_box_autoadd_chat_message_reply_summary(
+    ChatMessageReplySummary? self,
     SseSerializer serializer,
   );
 
@@ -559,7 +1732,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_u_16(int? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer);
+
+  @protected
   void sse_encode_opt_box_autoadd_u_64(BigInt? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_user_summary(
+    UserSummary? self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_pairing_state(PairingState self, SseSerializer serializer);
@@ -567,6 +1752,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_persisted_pairing_state(
     PersistedPairingState self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_project_summary(
+    ProjectSummary self,
     SseSerializer serializer,
   );
 
@@ -583,13 +1774,46 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_request_trace_record(
+    RequestTraceRecord self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_request_trace_status(
+    RequestTraceStatus self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_request_trace_transport(
+    RequestTraceTransport self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_sender_type(SenderType self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_social_event_frame(
+    SocialEventFrame self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_subagent_status(
+    SubagentStatus self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_thread_end_reason(
     ThreadEndReason self,
     SseSerializer serializer,
   );
 
   @protected
-  void sse_encode_thread_summary(ThreadSummary self, SseSerializer serializer);
+  void sse_encode_u_16(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_32(int self, SseSerializer serializer);
@@ -613,7 +1837,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_unit(void self, SseSerializer serializer);
 
   @protected
+  void sse_encode_update_project_request(
+    UpdateProjectRequest self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_user_summary(UserSummary self, SseSerializer serializer);
+
+  @protected
   void sse_encode_usize(BigInt self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_write_host_skill_config_response(
+    WriteHostSkillConfigResponse self,
+    SseSerializer serializer,
+  );
 }
 
 // Section: wire_class
@@ -636,6 +1875,38 @@ class RustLibWire implements BaseWire {
       .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
         ptr,
       );
+
+  void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+        ptr,
+      );
+
+  void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+        ptr,
+      );
+
+  void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+        ptr,
+      );
+
+  void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    int ptr,
+  ) => wasmModule
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+        ptr,
+      );
 }
 
 @JS('wasm_bindgen')
@@ -651,6 +1922,26 @@ extension type RustLibWasmModule._(JSObject _) implements JSObject {
 
   external void
   rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient(
+    int ptr,
+  );
+
+  external void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+    int ptr,
+  );
+
+  external void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+    int ptr,
+  );
+
+  external void
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    int ptr,
+  );
+
+  external void
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
     int ptr,
   );
 }

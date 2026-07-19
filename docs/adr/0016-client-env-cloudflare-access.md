@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Accepted |
+| Status | Refined by 0018 (entry-point and storage) |
 | Date | 2026-04-25 |
 | Deciders | fannnzhang |
 

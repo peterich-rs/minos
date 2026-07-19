@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 /// The set of CLI agents Minos knows how to manage.
 ///
-/// MVP enumerates the three planned backends; expansion is a breaking change
-/// (intentional — every consumer must opt in to a new agent).
+/// Expansion is intentional API surface growth: every consumer must opt in
+/// to a new agent (match arms, DB seeds, UI labels, codegen bindings).
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -13,13 +13,21 @@ pub enum AgentName {
     Codex,
     Claude,
     Gemini,
+    Opencode,
+    Grok,
 }
 
 impl AgentName {
     /// All known agents, in the order shown to users.
     #[must_use]
     pub const fn all() -> &'static [AgentName] {
-        &[AgentName::Codex, AgentName::Claude, AgentName::Gemini]
+        &[
+            AgentName::Codex,
+            AgentName::Claude,
+            AgentName::Gemini,
+            AgentName::Opencode,
+            AgentName::Grok,
+        ]
     }
 
     /// The CLI binary name to look for on PATH.
@@ -29,6 +37,8 @@ impl AgentName {
             AgentName::Codex => "codex",
             AgentName::Claude => "claude",
             AgentName::Gemini => "gemini",
+            AgentName::Opencode => "opencode",
+            AgentName::Grok => "grok",
         }
     }
 }
@@ -92,8 +102,9 @@ mod tests {
     }
 
     #[test]
-    fn agent_name_all_returns_three_in_canonical_order() {
-        assert_eq!(AgentName::all().len(), 3);
+    fn agent_name_all_returns_five_in_canonical_order() {
+        assert_eq!(AgentName::all().len(), 5);
         assert_eq!(AgentName::all()[0], AgentName::Codex);
+        assert_eq!(AgentName::all()[4], AgentName::Grok);
     }
 }

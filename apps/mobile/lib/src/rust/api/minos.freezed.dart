@@ -12,6 +12,679 @@ part of 'minos.dart';
 // dart format off
 T _$identity<T>(T value) => value;
 /// @nodoc
+mixin _$AgentStatus {
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AgentStatus);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'AgentStatus()';
+}
+
+
+}
+
+/// @nodoc
+class $AgentStatusCopyWith<$Res>  {
+$AgentStatusCopyWith(AgentStatus _, $Res Function(AgentStatus) __);
+}
+
+
+/// Adds pattern-matching-related methods to [AgentStatus].
+extension AgentStatusPatterns on AgentStatus {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( AgentStatus_Ok value)?  ok,TResult Function( AgentStatus_Missing value)?  missing,TResult Function( AgentStatus_Error value)?  error,required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case AgentStatus_Ok() when ok != null:
+return ok(_that);case AgentStatus_Missing() when missing != null:
+return missing(_that);case AgentStatus_Error() when error != null:
+return error(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( AgentStatus_Ok value)  ok,required TResult Function( AgentStatus_Missing value)  missing,required TResult Function( AgentStatus_Error value)  error,}){
+final _that = this;
+switch (_that) {
+case AgentStatus_Ok():
+return ok(_that);case AgentStatus_Missing():
+return missing(_that);case AgentStatus_Error():
+return error(_that);}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( AgentStatus_Ok value)?  ok,TResult? Function( AgentStatus_Missing value)?  missing,TResult? Function( AgentStatus_Error value)?  error,}){
+final _that = this;
+switch (_that) {
+case AgentStatus_Ok() when ok != null:
+return ok(_that);case AgentStatus_Missing() when missing != null:
+return missing(_that);case AgentStatus_Error() when error != null:
+return error(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function()?  ok,TResult Function()?  missing,TResult Function( String reason)?  error,required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case AgentStatus_Ok() when ok != null:
+return ok();case AgentStatus_Missing() when missing != null:
+return missing();case AgentStatus_Error() when error != null:
+return error(_that.reason);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function()  ok,required TResult Function()  missing,required TResult Function( String reason)  error,}) {final _that = this;
+switch (_that) {
+case AgentStatus_Ok():
+return ok();case AgentStatus_Missing():
+return missing();case AgentStatus_Error():
+return error(_that.reason);}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function()?  ok,TResult? Function()?  missing,TResult? Function( String reason)?  error,}) {final _that = this;
+switch (_that) {
+case AgentStatus_Ok() when ok != null:
+return ok();case AgentStatus_Missing() when missing != null:
+return missing();case AgentStatus_Error() when error != null:
+return error(_that.reason);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+
+
+class AgentStatus_Ok extends AgentStatus {
+  const AgentStatus_Ok(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AgentStatus_Ok);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'AgentStatus.ok()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class AgentStatus_Missing extends AgentStatus {
+  const AgentStatus_Missing(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AgentStatus_Missing);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'AgentStatus.missing()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class AgentStatus_Error extends AgentStatus {
+  const AgentStatus_Error({required this.reason}): super._();
+  
+
+ final  String reason;
+
+/// Create a copy of AgentStatus
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$AgentStatus_ErrorCopyWith<AgentStatus_Error> get copyWith => _$AgentStatus_ErrorCopyWithImpl<AgentStatus_Error>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AgentStatus_Error&&(identical(other.reason, reason) || other.reason == reason));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,reason);
+
+@override
+String toString() {
+  return 'AgentStatus.error(reason: $reason)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $AgentStatus_ErrorCopyWith<$Res> implements $AgentStatusCopyWith<$Res> {
+  factory $AgentStatus_ErrorCopyWith(AgentStatus_Error value, $Res Function(AgentStatus_Error) _then) = _$AgentStatus_ErrorCopyWithImpl;
+@useResult
+$Res call({
+ String reason
+});
+
+
+
+
+}
+/// @nodoc
+class _$AgentStatus_ErrorCopyWithImpl<$Res>
+    implements $AgentStatus_ErrorCopyWith<$Res> {
+  _$AgentStatus_ErrorCopyWithImpl(this._self, this._then);
+
+  final AgentStatus_Error _self;
+  final $Res Function(AgentStatus_Error) _then;
+
+/// Create a copy of AgentStatus
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? reason = null,}) {
+  return _then(AgentStatus_Error(
+reason: null == reason ? _self.reason : reason // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
+mixin _$AuthStateFrame {
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AuthStateFrame);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'AuthStateFrame()';
+}
+
+
+}
+
+/// @nodoc
+class $AuthStateFrameCopyWith<$Res>  {
+$AuthStateFrameCopyWith(AuthStateFrame _, $Res Function(AuthStateFrame) __);
+}
+
+
+/// Adds pattern-matching-related methods to [AuthStateFrame].
+extension AuthStateFramePatterns on AuthStateFrame {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( AuthStateFrame_Unauthenticated value)?  unauthenticated,TResult Function( AuthStateFrame_Authenticated value)?  authenticated,TResult Function( AuthStateFrame_Refreshing value)?  refreshing,TResult Function( AuthStateFrame_RefreshFailed value)?  refreshFailed,required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case AuthStateFrame_Unauthenticated() when unauthenticated != null:
+return unauthenticated(_that);case AuthStateFrame_Authenticated() when authenticated != null:
+return authenticated(_that);case AuthStateFrame_Refreshing() when refreshing != null:
+return refreshing(_that);case AuthStateFrame_RefreshFailed() when refreshFailed != null:
+return refreshFailed(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( AuthStateFrame_Unauthenticated value)  unauthenticated,required TResult Function( AuthStateFrame_Authenticated value)  authenticated,required TResult Function( AuthStateFrame_Refreshing value)  refreshing,required TResult Function( AuthStateFrame_RefreshFailed value)  refreshFailed,}){
+final _that = this;
+switch (_that) {
+case AuthStateFrame_Unauthenticated():
+return unauthenticated(_that);case AuthStateFrame_Authenticated():
+return authenticated(_that);case AuthStateFrame_Refreshing():
+return refreshing(_that);case AuthStateFrame_RefreshFailed():
+return refreshFailed(_that);}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( AuthStateFrame_Unauthenticated value)?  unauthenticated,TResult? Function( AuthStateFrame_Authenticated value)?  authenticated,TResult? Function( AuthStateFrame_Refreshing value)?  refreshing,TResult? Function( AuthStateFrame_RefreshFailed value)?  refreshFailed,}){
+final _that = this;
+switch (_that) {
+case AuthStateFrame_Unauthenticated() when unauthenticated != null:
+return unauthenticated(_that);case AuthStateFrame_Authenticated() when authenticated != null:
+return authenticated(_that);case AuthStateFrame_Refreshing() when refreshing != null:
+return refreshing(_that);case AuthStateFrame_RefreshFailed() when refreshFailed != null:
+return refreshFailed(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function()?  unauthenticated,TResult Function( AuthSummary account)?  authenticated,TResult Function()?  refreshing,TResult Function( MinosError error)?  refreshFailed,required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case AuthStateFrame_Unauthenticated() when unauthenticated != null:
+return unauthenticated();case AuthStateFrame_Authenticated() when authenticated != null:
+return authenticated(_that.account);case AuthStateFrame_Refreshing() when refreshing != null:
+return refreshing();case AuthStateFrame_RefreshFailed() when refreshFailed != null:
+return refreshFailed(_that.error);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function()  unauthenticated,required TResult Function( AuthSummary account)  authenticated,required TResult Function()  refreshing,required TResult Function( MinosError error)  refreshFailed,}) {final _that = this;
+switch (_that) {
+case AuthStateFrame_Unauthenticated():
+return unauthenticated();case AuthStateFrame_Authenticated():
+return authenticated(_that.account);case AuthStateFrame_Refreshing():
+return refreshing();case AuthStateFrame_RefreshFailed():
+return refreshFailed(_that.error);}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function()?  unauthenticated,TResult? Function( AuthSummary account)?  authenticated,TResult? Function()?  refreshing,TResult? Function( MinosError error)?  refreshFailed,}) {final _that = this;
+switch (_that) {
+case AuthStateFrame_Unauthenticated() when unauthenticated != null:
+return unauthenticated();case AuthStateFrame_Authenticated() when authenticated != null:
+return authenticated(_that.account);case AuthStateFrame_Refreshing() when refreshing != null:
+return refreshing();case AuthStateFrame_RefreshFailed() when refreshFailed != null:
+return refreshFailed(_that.error);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+
+
+class AuthStateFrame_Unauthenticated extends AuthStateFrame {
+  const AuthStateFrame_Unauthenticated(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AuthStateFrame_Unauthenticated);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'AuthStateFrame.unauthenticated()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class AuthStateFrame_Authenticated extends AuthStateFrame {
+  const AuthStateFrame_Authenticated({required this.account}): super._();
+  
+
+ final  AuthSummary account;
+
+/// Create a copy of AuthStateFrame
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$AuthStateFrame_AuthenticatedCopyWith<AuthStateFrame_Authenticated> get copyWith => _$AuthStateFrame_AuthenticatedCopyWithImpl<AuthStateFrame_Authenticated>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AuthStateFrame_Authenticated&&(identical(other.account, account) || other.account == account));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,account);
+
+@override
+String toString() {
+  return 'AuthStateFrame.authenticated(account: $account)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $AuthStateFrame_AuthenticatedCopyWith<$Res> implements $AuthStateFrameCopyWith<$Res> {
+  factory $AuthStateFrame_AuthenticatedCopyWith(AuthStateFrame_Authenticated value, $Res Function(AuthStateFrame_Authenticated) _then) = _$AuthStateFrame_AuthenticatedCopyWithImpl;
+@useResult
+$Res call({
+ AuthSummary account
+});
+
+
+
+
+}
+/// @nodoc
+class _$AuthStateFrame_AuthenticatedCopyWithImpl<$Res>
+    implements $AuthStateFrame_AuthenticatedCopyWith<$Res> {
+  _$AuthStateFrame_AuthenticatedCopyWithImpl(this._self, this._then);
+
+  final AuthStateFrame_Authenticated _self;
+  final $Res Function(AuthStateFrame_Authenticated) _then;
+
+/// Create a copy of AuthStateFrame
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? account = null,}) {
+  return _then(AuthStateFrame_Authenticated(
+account: null == account ? _self.account : account // ignore: cast_nullable_to_non_nullable
+as AuthSummary,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class AuthStateFrame_Refreshing extends AuthStateFrame {
+  const AuthStateFrame_Refreshing(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AuthStateFrame_Refreshing);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'AuthStateFrame.refreshing()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class AuthStateFrame_RefreshFailed extends AuthStateFrame {
+  const AuthStateFrame_RefreshFailed({required this.error}): super._();
+  
+
+ final  MinosError error;
+
+/// Create a copy of AuthStateFrame
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$AuthStateFrame_RefreshFailedCopyWith<AuthStateFrame_RefreshFailed> get copyWith => _$AuthStateFrame_RefreshFailedCopyWithImpl<AuthStateFrame_RefreshFailed>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AuthStateFrame_RefreshFailed&&(identical(other.error, error) || other.error == error));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,error);
+
+@override
+String toString() {
+  return 'AuthStateFrame.refreshFailed(error: $error)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $AuthStateFrame_RefreshFailedCopyWith<$Res> implements $AuthStateFrameCopyWith<$Res> {
+  factory $AuthStateFrame_RefreshFailedCopyWith(AuthStateFrame_RefreshFailed value, $Res Function(AuthStateFrame_RefreshFailed) _then) = _$AuthStateFrame_RefreshFailedCopyWithImpl;
+@useResult
+$Res call({
+ MinosError error
+});
+
+
+$MinosErrorCopyWith<$Res> get error;
+
+}
+/// @nodoc
+class _$AuthStateFrame_RefreshFailedCopyWithImpl<$Res>
+    implements $AuthStateFrame_RefreshFailedCopyWith<$Res> {
+  _$AuthStateFrame_RefreshFailedCopyWithImpl(this._self, this._then);
+
+  final AuthStateFrame_RefreshFailed _self;
+  final $Res Function(AuthStateFrame_RefreshFailed) _then;
+
+/// Create a copy of AuthStateFrame
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? error = null,}) {
+  return _then(AuthStateFrame_RefreshFailed(
+error: null == error ? _self.error : error // ignore: cast_nullable_to_non_nullable
+as MinosError,
+  ));
+}
+
+/// Create a copy of AuthStateFrame
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$MinosErrorCopyWith<$Res> get error {
+  
+  return $MinosErrorCopyWith<$Res>(_self.error, (value) {
+    return _then(_self.copyWith(error: value));
+  });
+}
+}
+
+/// @nodoc
 mixin _$ConnectionState {
 
 
@@ -346,6 +1019,380 @@ as int,
 }
 
 /// @nodoc
+mixin _$DisplayPayload {
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is DisplayPayload);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'DisplayPayload()';
+}
+
+
+}
+
+/// @nodoc
+class $DisplayPayloadCopyWith<$Res>  {
+$DisplayPayloadCopyWith(DisplayPayload _, $Res Function(DisplayPayload) __);
+}
+
+
+/// Adds pattern-matching-related methods to [DisplayPayload].
+extension DisplayPayloadPatterns on DisplayPayload {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( DisplayPayload_Inline value)?  inline,TResult Function( DisplayPayload_StreamingWindow value)?  streamingWindow,TResult Function( DisplayPayload_WindowedFinal value)?  windowedFinal,required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case DisplayPayload_Inline() when inline != null:
+return inline(_that);case DisplayPayload_StreamingWindow() when streamingWindow != null:
+return streamingWindow(_that);case DisplayPayload_WindowedFinal() when windowedFinal != null:
+return windowedFinal(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( DisplayPayload_Inline value)  inline,required TResult Function( DisplayPayload_StreamingWindow value)  streamingWindow,required TResult Function( DisplayPayload_WindowedFinal value)  windowedFinal,}){
+final _that = this;
+switch (_that) {
+case DisplayPayload_Inline():
+return inline(_that);case DisplayPayload_StreamingWindow():
+return streamingWindow(_that);case DisplayPayload_WindowedFinal():
+return windowedFinal(_that);}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( DisplayPayload_Inline value)?  inline,TResult? Function( DisplayPayload_StreamingWindow value)?  streamingWindow,TResult? Function( DisplayPayload_WindowedFinal value)?  windowedFinal,}){
+final _that = this;
+switch (_that) {
+case DisplayPayload_Inline() when inline != null:
+return inline(_that);case DisplayPayload_StreamingWindow() when streamingWindow != null:
+return streamingWindow(_that);case DisplayPayload_WindowedFinal() when windowedFinal != null:
+return windowedFinal(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String text)?  inline,TResult Function( String head,  BigInt receivedBytes,  ArtifactRef? artifact)?  streamingWindow,TResult Function( String head,  String tail,  BigInt omittedBytes,  ArtifactRef artifact)?  windowedFinal,required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case DisplayPayload_Inline() when inline != null:
+return inline(_that.text);case DisplayPayload_StreamingWindow() when streamingWindow != null:
+return streamingWindow(_that.head,_that.receivedBytes,_that.artifact);case DisplayPayload_WindowedFinal() when windowedFinal != null:
+return windowedFinal(_that.head,_that.tail,_that.omittedBytes,_that.artifact);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String text)  inline,required TResult Function( String head,  BigInt receivedBytes,  ArtifactRef? artifact)  streamingWindow,required TResult Function( String head,  String tail,  BigInt omittedBytes,  ArtifactRef artifact)  windowedFinal,}) {final _that = this;
+switch (_that) {
+case DisplayPayload_Inline():
+return inline(_that.text);case DisplayPayload_StreamingWindow():
+return streamingWindow(_that.head,_that.receivedBytes,_that.artifact);case DisplayPayload_WindowedFinal():
+return windowedFinal(_that.head,_that.tail,_that.omittedBytes,_that.artifact);}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String text)?  inline,TResult? Function( String head,  BigInt receivedBytes,  ArtifactRef? artifact)?  streamingWindow,TResult? Function( String head,  String tail,  BigInt omittedBytes,  ArtifactRef artifact)?  windowedFinal,}) {final _that = this;
+switch (_that) {
+case DisplayPayload_Inline() when inline != null:
+return inline(_that.text);case DisplayPayload_StreamingWindow() when streamingWindow != null:
+return streamingWindow(_that.head,_that.receivedBytes,_that.artifact);case DisplayPayload_WindowedFinal() when windowedFinal != null:
+return windowedFinal(_that.head,_that.tail,_that.omittedBytes,_that.artifact);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+
+
+class DisplayPayload_Inline extends DisplayPayload {
+  const DisplayPayload_Inline({required this.text}): super._();
+  
+
+ final  String text;
+
+/// Create a copy of DisplayPayload
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$DisplayPayload_InlineCopyWith<DisplayPayload_Inline> get copyWith => _$DisplayPayload_InlineCopyWithImpl<DisplayPayload_Inline>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is DisplayPayload_Inline&&(identical(other.text, text) || other.text == text));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,text);
+
+@override
+String toString() {
+  return 'DisplayPayload.inline(text: $text)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $DisplayPayload_InlineCopyWith<$Res> implements $DisplayPayloadCopyWith<$Res> {
+  factory $DisplayPayload_InlineCopyWith(DisplayPayload_Inline value, $Res Function(DisplayPayload_Inline) _then) = _$DisplayPayload_InlineCopyWithImpl;
+@useResult
+$Res call({
+ String text
+});
+
+
+
+
+}
+/// @nodoc
+class _$DisplayPayload_InlineCopyWithImpl<$Res>
+    implements $DisplayPayload_InlineCopyWith<$Res> {
+  _$DisplayPayload_InlineCopyWithImpl(this._self, this._then);
+
+  final DisplayPayload_Inline _self;
+  final $Res Function(DisplayPayload_Inline) _then;
+
+/// Create a copy of DisplayPayload
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? text = null,}) {
+  return _then(DisplayPayload_Inline(
+text: null == text ? _self.text : text // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class DisplayPayload_StreamingWindow extends DisplayPayload {
+  const DisplayPayload_StreamingWindow({required this.head, required this.receivedBytes, this.artifact}): super._();
+  
+
+ final  String head;
+ final  BigInt receivedBytes;
+ final  ArtifactRef? artifact;
+
+/// Create a copy of DisplayPayload
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$DisplayPayload_StreamingWindowCopyWith<DisplayPayload_StreamingWindow> get copyWith => _$DisplayPayload_StreamingWindowCopyWithImpl<DisplayPayload_StreamingWindow>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is DisplayPayload_StreamingWindow&&(identical(other.head, head) || other.head == head)&&(identical(other.receivedBytes, receivedBytes) || other.receivedBytes == receivedBytes)&&(identical(other.artifact, artifact) || other.artifact == artifact));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,head,receivedBytes,artifact);
+
+@override
+String toString() {
+  return 'DisplayPayload.streamingWindow(head: $head, receivedBytes: $receivedBytes, artifact: $artifact)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $DisplayPayload_StreamingWindowCopyWith<$Res> implements $DisplayPayloadCopyWith<$Res> {
+  factory $DisplayPayload_StreamingWindowCopyWith(DisplayPayload_StreamingWindow value, $Res Function(DisplayPayload_StreamingWindow) _then) = _$DisplayPayload_StreamingWindowCopyWithImpl;
+@useResult
+$Res call({
+ String head, BigInt receivedBytes, ArtifactRef? artifact
+});
+
+
+
+
+}
+/// @nodoc
+class _$DisplayPayload_StreamingWindowCopyWithImpl<$Res>
+    implements $DisplayPayload_StreamingWindowCopyWith<$Res> {
+  _$DisplayPayload_StreamingWindowCopyWithImpl(this._self, this._then);
+
+  final DisplayPayload_StreamingWindow _self;
+  final $Res Function(DisplayPayload_StreamingWindow) _then;
+
+/// Create a copy of DisplayPayload
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? head = null,Object? receivedBytes = null,Object? artifact = freezed,}) {
+  return _then(DisplayPayload_StreamingWindow(
+head: null == head ? _self.head : head // ignore: cast_nullable_to_non_nullable
+as String,receivedBytes: null == receivedBytes ? _self.receivedBytes : receivedBytes // ignore: cast_nullable_to_non_nullable
+as BigInt,artifact: freezed == artifact ? _self.artifact : artifact // ignore: cast_nullable_to_non_nullable
+as ArtifactRef?,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class DisplayPayload_WindowedFinal extends DisplayPayload {
+  const DisplayPayload_WindowedFinal({required this.head, required this.tail, required this.omittedBytes, required this.artifact}): super._();
+  
+
+ final  String head;
+ final  String tail;
+ final  BigInt omittedBytes;
+ final  ArtifactRef artifact;
+
+/// Create a copy of DisplayPayload
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$DisplayPayload_WindowedFinalCopyWith<DisplayPayload_WindowedFinal> get copyWith => _$DisplayPayload_WindowedFinalCopyWithImpl<DisplayPayload_WindowedFinal>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is DisplayPayload_WindowedFinal&&(identical(other.head, head) || other.head == head)&&(identical(other.tail, tail) || other.tail == tail)&&(identical(other.omittedBytes, omittedBytes) || other.omittedBytes == omittedBytes)&&(identical(other.artifact, artifact) || other.artifact == artifact));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,head,tail,omittedBytes,artifact);
+
+@override
+String toString() {
+  return 'DisplayPayload.windowedFinal(head: $head, tail: $tail, omittedBytes: $omittedBytes, artifact: $artifact)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $DisplayPayload_WindowedFinalCopyWith<$Res> implements $DisplayPayloadCopyWith<$Res> {
+  factory $DisplayPayload_WindowedFinalCopyWith(DisplayPayload_WindowedFinal value, $Res Function(DisplayPayload_WindowedFinal) _then) = _$DisplayPayload_WindowedFinalCopyWithImpl;
+@useResult
+$Res call({
+ String head, String tail, BigInt omittedBytes, ArtifactRef artifact
+});
+
+
+
+
+}
+/// @nodoc
+class _$DisplayPayload_WindowedFinalCopyWithImpl<$Res>
+    implements $DisplayPayload_WindowedFinalCopyWith<$Res> {
+  _$DisplayPayload_WindowedFinalCopyWithImpl(this._self, this._then);
+
+  final DisplayPayload_WindowedFinal _self;
+  final $Res Function(DisplayPayload_WindowedFinal) _then;
+
+/// Create a copy of DisplayPayload
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? head = null,Object? tail = null,Object? omittedBytes = null,Object? artifact = null,}) {
+  return _then(DisplayPayload_WindowedFinal(
+head: null == head ? _self.head : head // ignore: cast_nullable_to_non_nullable
+as String,tail: null == tail ? _self.tail : tail // ignore: cast_nullable_to_non_nullable
+as String,omittedBytes: null == omittedBytes ? _self.omittedBytes : omittedBytes // ignore: cast_nullable_to_non_nullable
+as BigInt,artifact: null == artifact ? _self.artifact : artifact // ignore: cast_nullable_to_non_nullable
+as ArtifactRef,
+  ));
+}
+
+
+}
+
+/// @nodoc
 mixin _$MinosError {
 
 
@@ -389,7 +1436,7 @@ extension MinosErrorPatterns on MinosError {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( MinosError_BindFailed value)?  bindFailed,TResult Function( MinosError_ConnectFailed value)?  connectFailed,TResult Function( MinosError_Disconnected value)?  disconnected,TResult Function( MinosError_PairingTokenInvalid value)?  pairingTokenInvalid,TResult Function( MinosError_PairingStateMismatch value)?  pairingStateMismatch,TResult Function( MinosError_DeviceNotTrusted value)?  deviceNotTrusted,TResult Function( MinosError_StoreIo value)?  storeIo,TResult Function( MinosError_StoreCorrupt value)?  storeCorrupt,TResult Function( MinosError_CliProbeTimeout value)?  cliProbeTimeout,TResult Function( MinosError_CliProbeFailed value)?  cliProbeFailed,TResult Function( MinosError_RpcCallFailed value)?  rpcCallFailed,TResult Function( MinosError_Unauthorized value)?  unauthorized,TResult Function( MinosError_ConnectionStateMismatch value)?  connectionStateMismatch,TResult Function( MinosError_EnvelopeVersionUnsupported value)?  envelopeVersionUnsupported,TResult Function( MinosError_PeerOffline value)?  peerOffline,TResult Function( MinosError_BackendInternal value)?  backendInternal,TResult Function( MinosError_CfAuthFailed value)?  cfAuthFailed,TResult Function( MinosError_CodexSpawnFailed value)?  codexSpawnFailed,TResult Function( MinosError_CodexConnectFailed value)?  codexConnectFailed,TResult Function( MinosError_CodexProtocolError value)?  codexProtocolError,TResult Function( MinosError_AgentAlreadyRunning value)?  agentAlreadyRunning,TResult Function( MinosError_AgentNotRunning value)?  agentNotRunning,TResult Function( MinosError_AgentNotSupported value)?  agentNotSupported,TResult Function( MinosError_AgentSessionIdMismatch value)?  agentSessionIdMismatch,TResult Function( MinosError_CfAccessMisconfigured value)?  cfAccessMisconfigured,TResult Function( MinosError_IngestSeqConflict value)?  ingestSeqConflict,TResult Function( MinosError_ThreadNotFound value)?  threadNotFound,TResult Function( MinosError_TranslationNotImplemented value)?  translationNotImplemented,TResult Function( MinosError_TranslationFailed value)?  translationFailed,TResult Function( MinosError_PairingQrVersionUnsupported value)?  pairingQrVersionUnsupported,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( MinosError_BindFailed value)?  bindFailed,TResult Function( MinosError_ConnectFailed value)?  connectFailed,TResult Function( MinosError_Disconnected value)?  disconnected,TResult Function( MinosError_PairingTokenInvalid value)?  pairingTokenInvalid,TResult Function( MinosError_PairingStateMismatch value)?  pairingStateMismatch,TResult Function( MinosError_DeviceNotTrusted value)?  deviceNotTrusted,TResult Function( MinosError_StoreIo value)?  storeIo,TResult Function( MinosError_StoreCorrupt value)?  storeCorrupt,TResult Function( MinosError_CliProbeTimeout value)?  cliProbeTimeout,TResult Function( MinosError_CliProbeFailed value)?  cliProbeFailed,TResult Function( MinosError_RpcCallFailed value)?  rpcCallFailed,TResult Function( MinosError_Unauthorized value)?  unauthorized,TResult Function( MinosError_ConnectionStateMismatch value)?  connectionStateMismatch,TResult Function( MinosError_EnvelopeVersionUnsupported value)?  envelopeVersionUnsupported,TResult Function( MinosError_PeerOffline value)?  peerOffline,TResult Function( MinosError_BackendInternal value)?  backendInternal,TResult Function( MinosError_CodexSpawnFailed value)?  codexSpawnFailed,TResult Function( MinosError_CodexConnectFailed value)?  codexConnectFailed,TResult Function( MinosError_CodexProtocolError value)?  codexProtocolError,TResult Function( MinosError_GeminiSpawnFailed value)?  geminiSpawnFailed,TResult Function( MinosError_AcpProtocolError value)?  acpProtocolError,TResult Function( MinosError_AgentAlreadyRunning value)?  agentAlreadyRunning,TResult Function( MinosError_AgentNotRunning value)?  agentNotRunning,TResult Function( MinosError_AgentNotSupported value)?  agentNotSupported,TResult Function( MinosError_AgentSessionIdMismatch value)?  agentSessionIdMismatch,TResult Function( MinosError_IngestSeqConflict value)?  ingestSeqConflict,TResult Function( MinosError_ThreadNotFound value)?  threadNotFound,TResult Function( MinosError_TranslationNotImplemented value)?  translationNotImplemented,TResult Function( MinosError_TranslationFailed value)?  translationFailed,TResult Function( MinosError_PairingQrVersionUnsupported value)?  pairingQrVersionUnsupported,TResult Function( MinosError_Timeout value)?  timeout,TResult Function( MinosError_NotConnected value)?  notConnected,TResult Function( MinosError_RequestDropped value)?  requestDropped,TResult Function( MinosError_AuthRefreshFailed value)?  authRefreshFailed,TResult Function( MinosError_EmailTaken value)?  emailTaken,TResult Function( MinosError_WeakPassword value)?  weakPassword,TResult Function( MinosError_RateLimited value)?  rateLimited,TResult Function( MinosError_InvalidCredentials value)?  invalidCredentials,TResult Function( MinosError_AgentStartFailed value)?  agentStartFailed,TResult Function( MinosError_PairingTokenExpired value)?  pairingTokenExpired,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case MinosError_BindFailed() when bindFailed != null:
@@ -408,21 +1455,31 @@ return unauthorized(_that);case MinosError_ConnectionStateMismatch() when connec
 return connectionStateMismatch(_that);case MinosError_EnvelopeVersionUnsupported() when envelopeVersionUnsupported != null:
 return envelopeVersionUnsupported(_that);case MinosError_PeerOffline() when peerOffline != null:
 return peerOffline(_that);case MinosError_BackendInternal() when backendInternal != null:
-return backendInternal(_that);case MinosError_CfAuthFailed() when cfAuthFailed != null:
-return cfAuthFailed(_that);case MinosError_CodexSpawnFailed() when codexSpawnFailed != null:
+return backendInternal(_that);case MinosError_CodexSpawnFailed() when codexSpawnFailed != null:
 return codexSpawnFailed(_that);case MinosError_CodexConnectFailed() when codexConnectFailed != null:
 return codexConnectFailed(_that);case MinosError_CodexProtocolError() when codexProtocolError != null:
-return codexProtocolError(_that);case MinosError_AgentAlreadyRunning() when agentAlreadyRunning != null:
+return codexProtocolError(_that);case MinosError_GeminiSpawnFailed() when geminiSpawnFailed != null:
+return geminiSpawnFailed(_that);case MinosError_AcpProtocolError() when acpProtocolError != null:
+return acpProtocolError(_that);case MinosError_AgentAlreadyRunning() when agentAlreadyRunning != null:
 return agentAlreadyRunning(_that);case MinosError_AgentNotRunning() when agentNotRunning != null:
 return agentNotRunning(_that);case MinosError_AgentNotSupported() when agentNotSupported != null:
 return agentNotSupported(_that);case MinosError_AgentSessionIdMismatch() when agentSessionIdMismatch != null:
-return agentSessionIdMismatch(_that);case MinosError_CfAccessMisconfigured() when cfAccessMisconfigured != null:
-return cfAccessMisconfigured(_that);case MinosError_IngestSeqConflict() when ingestSeqConflict != null:
+return agentSessionIdMismatch(_that);case MinosError_IngestSeqConflict() when ingestSeqConflict != null:
 return ingestSeqConflict(_that);case MinosError_ThreadNotFound() when threadNotFound != null:
 return threadNotFound(_that);case MinosError_TranslationNotImplemented() when translationNotImplemented != null:
 return translationNotImplemented(_that);case MinosError_TranslationFailed() when translationFailed != null:
 return translationFailed(_that);case MinosError_PairingQrVersionUnsupported() when pairingQrVersionUnsupported != null:
-return pairingQrVersionUnsupported(_that);case _:
+return pairingQrVersionUnsupported(_that);case MinosError_Timeout() when timeout != null:
+return timeout(_that);case MinosError_NotConnected() when notConnected != null:
+return notConnected(_that);case MinosError_RequestDropped() when requestDropped != null:
+return requestDropped(_that);case MinosError_AuthRefreshFailed() when authRefreshFailed != null:
+return authRefreshFailed(_that);case MinosError_EmailTaken() when emailTaken != null:
+return emailTaken(_that);case MinosError_WeakPassword() when weakPassword != null:
+return weakPassword(_that);case MinosError_RateLimited() when rateLimited != null:
+return rateLimited(_that);case MinosError_InvalidCredentials() when invalidCredentials != null:
+return invalidCredentials(_that);case MinosError_AgentStartFailed() when agentStartFailed != null:
+return agentStartFailed(_that);case MinosError_PairingTokenExpired() when pairingTokenExpired != null:
+return pairingTokenExpired(_that);case _:
   return orElse();
 
 }
@@ -440,7 +1497,7 @@ return pairingQrVersionUnsupported(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( MinosError_BindFailed value)  bindFailed,required TResult Function( MinosError_ConnectFailed value)  connectFailed,required TResult Function( MinosError_Disconnected value)  disconnected,required TResult Function( MinosError_PairingTokenInvalid value)  pairingTokenInvalid,required TResult Function( MinosError_PairingStateMismatch value)  pairingStateMismatch,required TResult Function( MinosError_DeviceNotTrusted value)  deviceNotTrusted,required TResult Function( MinosError_StoreIo value)  storeIo,required TResult Function( MinosError_StoreCorrupt value)  storeCorrupt,required TResult Function( MinosError_CliProbeTimeout value)  cliProbeTimeout,required TResult Function( MinosError_CliProbeFailed value)  cliProbeFailed,required TResult Function( MinosError_RpcCallFailed value)  rpcCallFailed,required TResult Function( MinosError_Unauthorized value)  unauthorized,required TResult Function( MinosError_ConnectionStateMismatch value)  connectionStateMismatch,required TResult Function( MinosError_EnvelopeVersionUnsupported value)  envelopeVersionUnsupported,required TResult Function( MinosError_PeerOffline value)  peerOffline,required TResult Function( MinosError_BackendInternal value)  backendInternal,required TResult Function( MinosError_CfAuthFailed value)  cfAuthFailed,required TResult Function( MinosError_CodexSpawnFailed value)  codexSpawnFailed,required TResult Function( MinosError_CodexConnectFailed value)  codexConnectFailed,required TResult Function( MinosError_CodexProtocolError value)  codexProtocolError,required TResult Function( MinosError_AgentAlreadyRunning value)  agentAlreadyRunning,required TResult Function( MinosError_AgentNotRunning value)  agentNotRunning,required TResult Function( MinosError_AgentNotSupported value)  agentNotSupported,required TResult Function( MinosError_AgentSessionIdMismatch value)  agentSessionIdMismatch,required TResult Function( MinosError_CfAccessMisconfigured value)  cfAccessMisconfigured,required TResult Function( MinosError_IngestSeqConflict value)  ingestSeqConflict,required TResult Function( MinosError_ThreadNotFound value)  threadNotFound,required TResult Function( MinosError_TranslationNotImplemented value)  translationNotImplemented,required TResult Function( MinosError_TranslationFailed value)  translationFailed,required TResult Function( MinosError_PairingQrVersionUnsupported value)  pairingQrVersionUnsupported,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( MinosError_BindFailed value)  bindFailed,required TResult Function( MinosError_ConnectFailed value)  connectFailed,required TResult Function( MinosError_Disconnected value)  disconnected,required TResult Function( MinosError_PairingTokenInvalid value)  pairingTokenInvalid,required TResult Function( MinosError_PairingStateMismatch value)  pairingStateMismatch,required TResult Function( MinosError_DeviceNotTrusted value)  deviceNotTrusted,required TResult Function( MinosError_StoreIo value)  storeIo,required TResult Function( MinosError_StoreCorrupt value)  storeCorrupt,required TResult Function( MinosError_CliProbeTimeout value)  cliProbeTimeout,required TResult Function( MinosError_CliProbeFailed value)  cliProbeFailed,required TResult Function( MinosError_RpcCallFailed value)  rpcCallFailed,required TResult Function( MinosError_Unauthorized value)  unauthorized,required TResult Function( MinosError_ConnectionStateMismatch value)  connectionStateMismatch,required TResult Function( MinosError_EnvelopeVersionUnsupported value)  envelopeVersionUnsupported,required TResult Function( MinosError_PeerOffline value)  peerOffline,required TResult Function( MinosError_BackendInternal value)  backendInternal,required TResult Function( MinosError_CodexSpawnFailed value)  codexSpawnFailed,required TResult Function( MinosError_CodexConnectFailed value)  codexConnectFailed,required TResult Function( MinosError_CodexProtocolError value)  codexProtocolError,required TResult Function( MinosError_GeminiSpawnFailed value)  geminiSpawnFailed,required TResult Function( MinosError_AcpProtocolError value)  acpProtocolError,required TResult Function( MinosError_AgentAlreadyRunning value)  agentAlreadyRunning,required TResult Function( MinosError_AgentNotRunning value)  agentNotRunning,required TResult Function( MinosError_AgentNotSupported value)  agentNotSupported,required TResult Function( MinosError_AgentSessionIdMismatch value)  agentSessionIdMismatch,required TResult Function( MinosError_IngestSeqConflict value)  ingestSeqConflict,required TResult Function( MinosError_ThreadNotFound value)  threadNotFound,required TResult Function( MinosError_TranslationNotImplemented value)  translationNotImplemented,required TResult Function( MinosError_TranslationFailed value)  translationFailed,required TResult Function( MinosError_PairingQrVersionUnsupported value)  pairingQrVersionUnsupported,required TResult Function( MinosError_Timeout value)  timeout,required TResult Function( MinosError_NotConnected value)  notConnected,required TResult Function( MinosError_RequestDropped value)  requestDropped,required TResult Function( MinosError_AuthRefreshFailed value)  authRefreshFailed,required TResult Function( MinosError_EmailTaken value)  emailTaken,required TResult Function( MinosError_WeakPassword value)  weakPassword,required TResult Function( MinosError_RateLimited value)  rateLimited,required TResult Function( MinosError_InvalidCredentials value)  invalidCredentials,required TResult Function( MinosError_AgentStartFailed value)  agentStartFailed,required TResult Function( MinosError_PairingTokenExpired value)  pairingTokenExpired,}){
 final _that = this;
 switch (_that) {
 case MinosError_BindFailed():
@@ -459,21 +1516,31 @@ return unauthorized(_that);case MinosError_ConnectionStateMismatch():
 return connectionStateMismatch(_that);case MinosError_EnvelopeVersionUnsupported():
 return envelopeVersionUnsupported(_that);case MinosError_PeerOffline():
 return peerOffline(_that);case MinosError_BackendInternal():
-return backendInternal(_that);case MinosError_CfAuthFailed():
-return cfAuthFailed(_that);case MinosError_CodexSpawnFailed():
+return backendInternal(_that);case MinosError_CodexSpawnFailed():
 return codexSpawnFailed(_that);case MinosError_CodexConnectFailed():
 return codexConnectFailed(_that);case MinosError_CodexProtocolError():
-return codexProtocolError(_that);case MinosError_AgentAlreadyRunning():
+return codexProtocolError(_that);case MinosError_GeminiSpawnFailed():
+return geminiSpawnFailed(_that);case MinosError_AcpProtocolError():
+return acpProtocolError(_that);case MinosError_AgentAlreadyRunning():
 return agentAlreadyRunning(_that);case MinosError_AgentNotRunning():
 return agentNotRunning(_that);case MinosError_AgentNotSupported():
 return agentNotSupported(_that);case MinosError_AgentSessionIdMismatch():
-return agentSessionIdMismatch(_that);case MinosError_CfAccessMisconfigured():
-return cfAccessMisconfigured(_that);case MinosError_IngestSeqConflict():
+return agentSessionIdMismatch(_that);case MinosError_IngestSeqConflict():
 return ingestSeqConflict(_that);case MinosError_ThreadNotFound():
 return threadNotFound(_that);case MinosError_TranslationNotImplemented():
 return translationNotImplemented(_that);case MinosError_TranslationFailed():
 return translationFailed(_that);case MinosError_PairingQrVersionUnsupported():
-return pairingQrVersionUnsupported(_that);}
+return pairingQrVersionUnsupported(_that);case MinosError_Timeout():
+return timeout(_that);case MinosError_NotConnected():
+return notConnected(_that);case MinosError_RequestDropped():
+return requestDropped(_that);case MinosError_AuthRefreshFailed():
+return authRefreshFailed(_that);case MinosError_EmailTaken():
+return emailTaken(_that);case MinosError_WeakPassword():
+return weakPassword(_that);case MinosError_RateLimited():
+return rateLimited(_that);case MinosError_InvalidCredentials():
+return invalidCredentials(_that);case MinosError_AgentStartFailed():
+return agentStartFailed(_that);case MinosError_PairingTokenExpired():
+return pairingTokenExpired(_that);}
 }
 /// A variant of `map` that fallback to returning `null`.
 ///
@@ -487,7 +1554,7 @@ return pairingQrVersionUnsupported(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( MinosError_BindFailed value)?  bindFailed,TResult? Function( MinosError_ConnectFailed value)?  connectFailed,TResult? Function( MinosError_Disconnected value)?  disconnected,TResult? Function( MinosError_PairingTokenInvalid value)?  pairingTokenInvalid,TResult? Function( MinosError_PairingStateMismatch value)?  pairingStateMismatch,TResult? Function( MinosError_DeviceNotTrusted value)?  deviceNotTrusted,TResult? Function( MinosError_StoreIo value)?  storeIo,TResult? Function( MinosError_StoreCorrupt value)?  storeCorrupt,TResult? Function( MinosError_CliProbeTimeout value)?  cliProbeTimeout,TResult? Function( MinosError_CliProbeFailed value)?  cliProbeFailed,TResult? Function( MinosError_RpcCallFailed value)?  rpcCallFailed,TResult? Function( MinosError_Unauthorized value)?  unauthorized,TResult? Function( MinosError_ConnectionStateMismatch value)?  connectionStateMismatch,TResult? Function( MinosError_EnvelopeVersionUnsupported value)?  envelopeVersionUnsupported,TResult? Function( MinosError_PeerOffline value)?  peerOffline,TResult? Function( MinosError_BackendInternal value)?  backendInternal,TResult? Function( MinosError_CfAuthFailed value)?  cfAuthFailed,TResult? Function( MinosError_CodexSpawnFailed value)?  codexSpawnFailed,TResult? Function( MinosError_CodexConnectFailed value)?  codexConnectFailed,TResult? Function( MinosError_CodexProtocolError value)?  codexProtocolError,TResult? Function( MinosError_AgentAlreadyRunning value)?  agentAlreadyRunning,TResult? Function( MinosError_AgentNotRunning value)?  agentNotRunning,TResult? Function( MinosError_AgentNotSupported value)?  agentNotSupported,TResult? Function( MinosError_AgentSessionIdMismatch value)?  agentSessionIdMismatch,TResult? Function( MinosError_CfAccessMisconfigured value)?  cfAccessMisconfigured,TResult? Function( MinosError_IngestSeqConflict value)?  ingestSeqConflict,TResult? Function( MinosError_ThreadNotFound value)?  threadNotFound,TResult? Function( MinosError_TranslationNotImplemented value)?  translationNotImplemented,TResult? Function( MinosError_TranslationFailed value)?  translationFailed,TResult? Function( MinosError_PairingQrVersionUnsupported value)?  pairingQrVersionUnsupported,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( MinosError_BindFailed value)?  bindFailed,TResult? Function( MinosError_ConnectFailed value)?  connectFailed,TResult? Function( MinosError_Disconnected value)?  disconnected,TResult? Function( MinosError_PairingTokenInvalid value)?  pairingTokenInvalid,TResult? Function( MinosError_PairingStateMismatch value)?  pairingStateMismatch,TResult? Function( MinosError_DeviceNotTrusted value)?  deviceNotTrusted,TResult? Function( MinosError_StoreIo value)?  storeIo,TResult? Function( MinosError_StoreCorrupt value)?  storeCorrupt,TResult? Function( MinosError_CliProbeTimeout value)?  cliProbeTimeout,TResult? Function( MinosError_CliProbeFailed value)?  cliProbeFailed,TResult? Function( MinosError_RpcCallFailed value)?  rpcCallFailed,TResult? Function( MinosError_Unauthorized value)?  unauthorized,TResult? Function( MinosError_ConnectionStateMismatch value)?  connectionStateMismatch,TResult? Function( MinosError_EnvelopeVersionUnsupported value)?  envelopeVersionUnsupported,TResult? Function( MinosError_PeerOffline value)?  peerOffline,TResult? Function( MinosError_BackendInternal value)?  backendInternal,TResult? Function( MinosError_CodexSpawnFailed value)?  codexSpawnFailed,TResult? Function( MinosError_CodexConnectFailed value)?  codexConnectFailed,TResult? Function( MinosError_CodexProtocolError value)?  codexProtocolError,TResult? Function( MinosError_GeminiSpawnFailed value)?  geminiSpawnFailed,TResult? Function( MinosError_AcpProtocolError value)?  acpProtocolError,TResult? Function( MinosError_AgentAlreadyRunning value)?  agentAlreadyRunning,TResult? Function( MinosError_AgentNotRunning value)?  agentNotRunning,TResult? Function( MinosError_AgentNotSupported value)?  agentNotSupported,TResult? Function( MinosError_AgentSessionIdMismatch value)?  agentSessionIdMismatch,TResult? Function( MinosError_IngestSeqConflict value)?  ingestSeqConflict,TResult? Function( MinosError_ThreadNotFound value)?  threadNotFound,TResult? Function( MinosError_TranslationNotImplemented value)?  translationNotImplemented,TResult? Function( MinosError_TranslationFailed value)?  translationFailed,TResult? Function( MinosError_PairingQrVersionUnsupported value)?  pairingQrVersionUnsupported,TResult? Function( MinosError_Timeout value)?  timeout,TResult? Function( MinosError_NotConnected value)?  notConnected,TResult? Function( MinosError_RequestDropped value)?  requestDropped,TResult? Function( MinosError_AuthRefreshFailed value)?  authRefreshFailed,TResult? Function( MinosError_EmailTaken value)?  emailTaken,TResult? Function( MinosError_WeakPassword value)?  weakPassword,TResult? Function( MinosError_RateLimited value)?  rateLimited,TResult? Function( MinosError_InvalidCredentials value)?  invalidCredentials,TResult? Function( MinosError_AgentStartFailed value)?  agentStartFailed,TResult? Function( MinosError_PairingTokenExpired value)?  pairingTokenExpired,}){
 final _that = this;
 switch (_that) {
 case MinosError_BindFailed() when bindFailed != null:
@@ -506,21 +1573,31 @@ return unauthorized(_that);case MinosError_ConnectionStateMismatch() when connec
 return connectionStateMismatch(_that);case MinosError_EnvelopeVersionUnsupported() when envelopeVersionUnsupported != null:
 return envelopeVersionUnsupported(_that);case MinosError_PeerOffline() when peerOffline != null:
 return peerOffline(_that);case MinosError_BackendInternal() when backendInternal != null:
-return backendInternal(_that);case MinosError_CfAuthFailed() when cfAuthFailed != null:
-return cfAuthFailed(_that);case MinosError_CodexSpawnFailed() when codexSpawnFailed != null:
+return backendInternal(_that);case MinosError_CodexSpawnFailed() when codexSpawnFailed != null:
 return codexSpawnFailed(_that);case MinosError_CodexConnectFailed() when codexConnectFailed != null:
 return codexConnectFailed(_that);case MinosError_CodexProtocolError() when codexProtocolError != null:
-return codexProtocolError(_that);case MinosError_AgentAlreadyRunning() when agentAlreadyRunning != null:
+return codexProtocolError(_that);case MinosError_GeminiSpawnFailed() when geminiSpawnFailed != null:
+return geminiSpawnFailed(_that);case MinosError_AcpProtocolError() when acpProtocolError != null:
+return acpProtocolError(_that);case MinosError_AgentAlreadyRunning() when agentAlreadyRunning != null:
 return agentAlreadyRunning(_that);case MinosError_AgentNotRunning() when agentNotRunning != null:
 return agentNotRunning(_that);case MinosError_AgentNotSupported() when agentNotSupported != null:
 return agentNotSupported(_that);case MinosError_AgentSessionIdMismatch() when agentSessionIdMismatch != null:
-return agentSessionIdMismatch(_that);case MinosError_CfAccessMisconfigured() when cfAccessMisconfigured != null:
-return cfAccessMisconfigured(_that);case MinosError_IngestSeqConflict() when ingestSeqConflict != null:
+return agentSessionIdMismatch(_that);case MinosError_IngestSeqConflict() when ingestSeqConflict != null:
 return ingestSeqConflict(_that);case MinosError_ThreadNotFound() when threadNotFound != null:
 return threadNotFound(_that);case MinosError_TranslationNotImplemented() when translationNotImplemented != null:
 return translationNotImplemented(_that);case MinosError_TranslationFailed() when translationFailed != null:
 return translationFailed(_that);case MinosError_PairingQrVersionUnsupported() when pairingQrVersionUnsupported != null:
-return pairingQrVersionUnsupported(_that);case _:
+return pairingQrVersionUnsupported(_that);case MinosError_Timeout() when timeout != null:
+return timeout(_that);case MinosError_NotConnected() when notConnected != null:
+return notConnected(_that);case MinosError_RequestDropped() when requestDropped != null:
+return requestDropped(_that);case MinosError_AuthRefreshFailed() when authRefreshFailed != null:
+return authRefreshFailed(_that);case MinosError_EmailTaken() when emailTaken != null:
+return emailTaken(_that);case MinosError_WeakPassword() when weakPassword != null:
+return weakPassword(_that);case MinosError_RateLimited() when rateLimited != null:
+return rateLimited(_that);case MinosError_InvalidCredentials() when invalidCredentials != null:
+return invalidCredentials(_that);case MinosError_AgentStartFailed() when agentStartFailed != null:
+return agentStartFailed(_that);case MinosError_PairingTokenExpired() when pairingTokenExpired != null:
+return pairingTokenExpired(_that);case _:
   return null;
 
 }
@@ -537,7 +1614,7 @@ return pairingQrVersionUnsupported(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String addr,  String message)?  bindFailed,TResult Function( String url,  String message)?  connectFailed,TResult Function( String reason)?  disconnected,TResult Function()?  pairingTokenInvalid,TResult Function( PairingState actual)?  pairingStateMismatch,TResult Function( String deviceId)?  deviceNotTrusted,TResult Function( String path,  String message)?  storeIo,TResult Function( String path,  String message)?  storeCorrupt,TResult Function( String bin,  BigInt timeoutMs)?  cliProbeTimeout,TResult Function( String bin,  String message)?  cliProbeFailed,TResult Function( String method,  String message)?  rpcCallFailed,TResult Function( String reason)?  unauthorized,TResult Function( String expected,  String actual)?  connectionStateMismatch,TResult Function( int version)?  envelopeVersionUnsupported,TResult Function( String peerDeviceId)?  peerOffline,TResult Function( String message)?  backendInternal,TResult Function( String message)?  cfAuthFailed,TResult Function( String message)?  codexSpawnFailed,TResult Function( String url,  String message)?  codexConnectFailed,TResult Function( String method,  String message)?  codexProtocolError,TResult Function()?  agentAlreadyRunning,TResult Function()?  agentNotRunning,TResult Function( AgentName agent)?  agentNotSupported,TResult Function()?  agentSessionIdMismatch,TResult Function( String reason)?  cfAccessMisconfigured,TResult Function( String threadId,  BigInt seq)?  ingestSeqConflict,TResult Function( String threadId)?  threadNotFound,TResult Function( AgentName agent)?  translationNotImplemented,TResult Function( AgentName agent,  String message)?  translationFailed,TResult Function( int version)?  pairingQrVersionUnsupported,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String addr,  String message)?  bindFailed,TResult Function( String url,  String message)?  connectFailed,TResult Function( String reason)?  disconnected,TResult Function()?  pairingTokenInvalid,TResult Function( PairingState actual)?  pairingStateMismatch,TResult Function( String deviceId)?  deviceNotTrusted,TResult Function( String path,  String message)?  storeIo,TResult Function( String path,  String message)?  storeCorrupt,TResult Function( String bin,  BigInt timeoutMs)?  cliProbeTimeout,TResult Function( String bin,  String message)?  cliProbeFailed,TResult Function( String method,  String message)?  rpcCallFailed,TResult Function( String reason)?  unauthorized,TResult Function( String expected,  String actual)?  connectionStateMismatch,TResult Function( int version)?  envelopeVersionUnsupported,TResult Function( String peerDeviceId)?  peerOffline,TResult Function( String message)?  backendInternal,TResult Function( String message)?  codexSpawnFailed,TResult Function( String url,  String message)?  codexConnectFailed,TResult Function( String method,  String message)?  codexProtocolError,TResult Function( String message)?  geminiSpawnFailed,TResult Function( String method,  String message)?  acpProtocolError,TResult Function()?  agentAlreadyRunning,TResult Function()?  agentNotRunning,TResult Function( AgentName agent)?  agentNotSupported,TResult Function()?  agentSessionIdMismatch,TResult Function( String threadId,  BigInt seq)?  ingestSeqConflict,TResult Function( String threadId)?  threadNotFound,TResult Function( AgentName agent)?  translationNotImplemented,TResult Function( AgentName agent,  String message)?  translationFailed,TResult Function( int version)?  pairingQrVersionUnsupported,TResult Function()?  timeout,TResult Function()?  notConnected,TResult Function()?  requestDropped,TResult Function( String message)?  authRefreshFailed,TResult Function()?  emailTaken,TResult Function()?  weakPassword,TResult Function( int retryAfterS)?  rateLimited,TResult Function()?  invalidCredentials,TResult Function( String reason)?  agentStartFailed,TResult Function()?  pairingTokenExpired,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case MinosError_BindFailed() when bindFailed != null:
 return bindFailed(_that.addr,_that.message);case MinosError_ConnectFailed() when connectFailed != null:
@@ -555,21 +1632,31 @@ return unauthorized(_that.reason);case MinosError_ConnectionStateMismatch() when
 return connectionStateMismatch(_that.expected,_that.actual);case MinosError_EnvelopeVersionUnsupported() when envelopeVersionUnsupported != null:
 return envelopeVersionUnsupported(_that.version);case MinosError_PeerOffline() when peerOffline != null:
 return peerOffline(_that.peerDeviceId);case MinosError_BackendInternal() when backendInternal != null:
-return backendInternal(_that.message);case MinosError_CfAuthFailed() when cfAuthFailed != null:
-return cfAuthFailed(_that.message);case MinosError_CodexSpawnFailed() when codexSpawnFailed != null:
+return backendInternal(_that.message);case MinosError_CodexSpawnFailed() when codexSpawnFailed != null:
 return codexSpawnFailed(_that.message);case MinosError_CodexConnectFailed() when codexConnectFailed != null:
 return codexConnectFailed(_that.url,_that.message);case MinosError_CodexProtocolError() when codexProtocolError != null:
-return codexProtocolError(_that.method,_that.message);case MinosError_AgentAlreadyRunning() when agentAlreadyRunning != null:
+return codexProtocolError(_that.method,_that.message);case MinosError_GeminiSpawnFailed() when geminiSpawnFailed != null:
+return geminiSpawnFailed(_that.message);case MinosError_AcpProtocolError() when acpProtocolError != null:
+return acpProtocolError(_that.method,_that.message);case MinosError_AgentAlreadyRunning() when agentAlreadyRunning != null:
 return agentAlreadyRunning();case MinosError_AgentNotRunning() when agentNotRunning != null:
 return agentNotRunning();case MinosError_AgentNotSupported() when agentNotSupported != null:
 return agentNotSupported(_that.agent);case MinosError_AgentSessionIdMismatch() when agentSessionIdMismatch != null:
-return agentSessionIdMismatch();case MinosError_CfAccessMisconfigured() when cfAccessMisconfigured != null:
-return cfAccessMisconfigured(_that.reason);case MinosError_IngestSeqConflict() when ingestSeqConflict != null:
+return agentSessionIdMismatch();case MinosError_IngestSeqConflict() when ingestSeqConflict != null:
 return ingestSeqConflict(_that.threadId,_that.seq);case MinosError_ThreadNotFound() when threadNotFound != null:
 return threadNotFound(_that.threadId);case MinosError_TranslationNotImplemented() when translationNotImplemented != null:
 return translationNotImplemented(_that.agent);case MinosError_TranslationFailed() when translationFailed != null:
 return translationFailed(_that.agent,_that.message);case MinosError_PairingQrVersionUnsupported() when pairingQrVersionUnsupported != null:
-return pairingQrVersionUnsupported(_that.version);case _:
+return pairingQrVersionUnsupported(_that.version);case MinosError_Timeout() when timeout != null:
+return timeout();case MinosError_NotConnected() when notConnected != null:
+return notConnected();case MinosError_RequestDropped() when requestDropped != null:
+return requestDropped();case MinosError_AuthRefreshFailed() when authRefreshFailed != null:
+return authRefreshFailed(_that.message);case MinosError_EmailTaken() when emailTaken != null:
+return emailTaken();case MinosError_WeakPassword() when weakPassword != null:
+return weakPassword();case MinosError_RateLimited() when rateLimited != null:
+return rateLimited(_that.retryAfterS);case MinosError_InvalidCredentials() when invalidCredentials != null:
+return invalidCredentials();case MinosError_AgentStartFailed() when agentStartFailed != null:
+return agentStartFailed(_that.reason);case MinosError_PairingTokenExpired() when pairingTokenExpired != null:
+return pairingTokenExpired();case _:
   return orElse();
 
 }
@@ -587,7 +1674,7 @@ return pairingQrVersionUnsupported(_that.version);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String addr,  String message)  bindFailed,required TResult Function( String url,  String message)  connectFailed,required TResult Function( String reason)  disconnected,required TResult Function()  pairingTokenInvalid,required TResult Function( PairingState actual)  pairingStateMismatch,required TResult Function( String deviceId)  deviceNotTrusted,required TResult Function( String path,  String message)  storeIo,required TResult Function( String path,  String message)  storeCorrupt,required TResult Function( String bin,  BigInt timeoutMs)  cliProbeTimeout,required TResult Function( String bin,  String message)  cliProbeFailed,required TResult Function( String method,  String message)  rpcCallFailed,required TResult Function( String reason)  unauthorized,required TResult Function( String expected,  String actual)  connectionStateMismatch,required TResult Function( int version)  envelopeVersionUnsupported,required TResult Function( String peerDeviceId)  peerOffline,required TResult Function( String message)  backendInternal,required TResult Function( String message)  cfAuthFailed,required TResult Function( String message)  codexSpawnFailed,required TResult Function( String url,  String message)  codexConnectFailed,required TResult Function( String method,  String message)  codexProtocolError,required TResult Function()  agentAlreadyRunning,required TResult Function()  agentNotRunning,required TResult Function( AgentName agent)  agentNotSupported,required TResult Function()  agentSessionIdMismatch,required TResult Function( String reason)  cfAccessMisconfigured,required TResult Function( String threadId,  BigInt seq)  ingestSeqConflict,required TResult Function( String threadId)  threadNotFound,required TResult Function( AgentName agent)  translationNotImplemented,required TResult Function( AgentName agent,  String message)  translationFailed,required TResult Function( int version)  pairingQrVersionUnsupported,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String addr,  String message)  bindFailed,required TResult Function( String url,  String message)  connectFailed,required TResult Function( String reason)  disconnected,required TResult Function()  pairingTokenInvalid,required TResult Function( PairingState actual)  pairingStateMismatch,required TResult Function( String deviceId)  deviceNotTrusted,required TResult Function( String path,  String message)  storeIo,required TResult Function( String path,  String message)  storeCorrupt,required TResult Function( String bin,  BigInt timeoutMs)  cliProbeTimeout,required TResult Function( String bin,  String message)  cliProbeFailed,required TResult Function( String method,  String message)  rpcCallFailed,required TResult Function( String reason)  unauthorized,required TResult Function( String expected,  String actual)  connectionStateMismatch,required TResult Function( int version)  envelopeVersionUnsupported,required TResult Function( String peerDeviceId)  peerOffline,required TResult Function( String message)  backendInternal,required TResult Function( String message)  codexSpawnFailed,required TResult Function( String url,  String message)  codexConnectFailed,required TResult Function( String method,  String message)  codexProtocolError,required TResult Function( String message)  geminiSpawnFailed,required TResult Function( String method,  String message)  acpProtocolError,required TResult Function()  agentAlreadyRunning,required TResult Function()  agentNotRunning,required TResult Function( AgentName agent)  agentNotSupported,required TResult Function()  agentSessionIdMismatch,required TResult Function( String threadId,  BigInt seq)  ingestSeqConflict,required TResult Function( String threadId)  threadNotFound,required TResult Function( AgentName agent)  translationNotImplemented,required TResult Function( AgentName agent,  String message)  translationFailed,required TResult Function( int version)  pairingQrVersionUnsupported,required TResult Function()  timeout,required TResult Function()  notConnected,required TResult Function()  requestDropped,required TResult Function( String message)  authRefreshFailed,required TResult Function()  emailTaken,required TResult Function()  weakPassword,required TResult Function( int retryAfterS)  rateLimited,required TResult Function()  invalidCredentials,required TResult Function( String reason)  agentStartFailed,required TResult Function()  pairingTokenExpired,}) {final _that = this;
 switch (_that) {
 case MinosError_BindFailed():
 return bindFailed(_that.addr,_that.message);case MinosError_ConnectFailed():
@@ -605,21 +1692,31 @@ return unauthorized(_that.reason);case MinosError_ConnectionStateMismatch():
 return connectionStateMismatch(_that.expected,_that.actual);case MinosError_EnvelopeVersionUnsupported():
 return envelopeVersionUnsupported(_that.version);case MinosError_PeerOffline():
 return peerOffline(_that.peerDeviceId);case MinosError_BackendInternal():
-return backendInternal(_that.message);case MinosError_CfAuthFailed():
-return cfAuthFailed(_that.message);case MinosError_CodexSpawnFailed():
+return backendInternal(_that.message);case MinosError_CodexSpawnFailed():
 return codexSpawnFailed(_that.message);case MinosError_CodexConnectFailed():
 return codexConnectFailed(_that.url,_that.message);case MinosError_CodexProtocolError():
-return codexProtocolError(_that.method,_that.message);case MinosError_AgentAlreadyRunning():
+return codexProtocolError(_that.method,_that.message);case MinosError_GeminiSpawnFailed():
+return geminiSpawnFailed(_that.message);case MinosError_AcpProtocolError():
+return acpProtocolError(_that.method,_that.message);case MinosError_AgentAlreadyRunning():
 return agentAlreadyRunning();case MinosError_AgentNotRunning():
 return agentNotRunning();case MinosError_AgentNotSupported():
 return agentNotSupported(_that.agent);case MinosError_AgentSessionIdMismatch():
-return agentSessionIdMismatch();case MinosError_CfAccessMisconfigured():
-return cfAccessMisconfigured(_that.reason);case MinosError_IngestSeqConflict():
+return agentSessionIdMismatch();case MinosError_IngestSeqConflict():
 return ingestSeqConflict(_that.threadId,_that.seq);case MinosError_ThreadNotFound():
 return threadNotFound(_that.threadId);case MinosError_TranslationNotImplemented():
 return translationNotImplemented(_that.agent);case MinosError_TranslationFailed():
 return translationFailed(_that.agent,_that.message);case MinosError_PairingQrVersionUnsupported():
-return pairingQrVersionUnsupported(_that.version);}
+return pairingQrVersionUnsupported(_that.version);case MinosError_Timeout():
+return timeout();case MinosError_NotConnected():
+return notConnected();case MinosError_RequestDropped():
+return requestDropped();case MinosError_AuthRefreshFailed():
+return authRefreshFailed(_that.message);case MinosError_EmailTaken():
+return emailTaken();case MinosError_WeakPassword():
+return weakPassword();case MinosError_RateLimited():
+return rateLimited(_that.retryAfterS);case MinosError_InvalidCredentials():
+return invalidCredentials();case MinosError_AgentStartFailed():
+return agentStartFailed(_that.reason);case MinosError_PairingTokenExpired():
+return pairingTokenExpired();}
 }
 /// A variant of `when` that fallback to returning `null`
 ///
@@ -633,7 +1730,7 @@ return pairingQrVersionUnsupported(_that.version);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String addr,  String message)?  bindFailed,TResult? Function( String url,  String message)?  connectFailed,TResult? Function( String reason)?  disconnected,TResult? Function()?  pairingTokenInvalid,TResult? Function( PairingState actual)?  pairingStateMismatch,TResult? Function( String deviceId)?  deviceNotTrusted,TResult? Function( String path,  String message)?  storeIo,TResult? Function( String path,  String message)?  storeCorrupt,TResult? Function( String bin,  BigInt timeoutMs)?  cliProbeTimeout,TResult? Function( String bin,  String message)?  cliProbeFailed,TResult? Function( String method,  String message)?  rpcCallFailed,TResult? Function( String reason)?  unauthorized,TResult? Function( String expected,  String actual)?  connectionStateMismatch,TResult? Function( int version)?  envelopeVersionUnsupported,TResult? Function( String peerDeviceId)?  peerOffline,TResult? Function( String message)?  backendInternal,TResult? Function( String message)?  cfAuthFailed,TResult? Function( String message)?  codexSpawnFailed,TResult? Function( String url,  String message)?  codexConnectFailed,TResult? Function( String method,  String message)?  codexProtocolError,TResult? Function()?  agentAlreadyRunning,TResult? Function()?  agentNotRunning,TResult? Function( AgentName agent)?  agentNotSupported,TResult? Function()?  agentSessionIdMismatch,TResult? Function( String reason)?  cfAccessMisconfigured,TResult? Function( String threadId,  BigInt seq)?  ingestSeqConflict,TResult? Function( String threadId)?  threadNotFound,TResult? Function( AgentName agent)?  translationNotImplemented,TResult? Function( AgentName agent,  String message)?  translationFailed,TResult? Function( int version)?  pairingQrVersionUnsupported,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String addr,  String message)?  bindFailed,TResult? Function( String url,  String message)?  connectFailed,TResult? Function( String reason)?  disconnected,TResult? Function()?  pairingTokenInvalid,TResult? Function( PairingState actual)?  pairingStateMismatch,TResult? Function( String deviceId)?  deviceNotTrusted,TResult? Function( String path,  String message)?  storeIo,TResult? Function( String path,  String message)?  storeCorrupt,TResult? Function( String bin,  BigInt timeoutMs)?  cliProbeTimeout,TResult? Function( String bin,  String message)?  cliProbeFailed,TResult? Function( String method,  String message)?  rpcCallFailed,TResult? Function( String reason)?  unauthorized,TResult? Function( String expected,  String actual)?  connectionStateMismatch,TResult? Function( int version)?  envelopeVersionUnsupported,TResult? Function( String peerDeviceId)?  peerOffline,TResult? Function( String message)?  backendInternal,TResult? Function( String message)?  codexSpawnFailed,TResult? Function( String url,  String message)?  codexConnectFailed,TResult? Function( String method,  String message)?  codexProtocolError,TResult? Function( String message)?  geminiSpawnFailed,TResult? Function( String method,  String message)?  acpProtocolError,TResult? Function()?  agentAlreadyRunning,TResult? Function()?  agentNotRunning,TResult? Function( AgentName agent)?  agentNotSupported,TResult? Function()?  agentSessionIdMismatch,TResult? Function( String threadId,  BigInt seq)?  ingestSeqConflict,TResult? Function( String threadId)?  threadNotFound,TResult? Function( AgentName agent)?  translationNotImplemented,TResult? Function( AgentName agent,  String message)?  translationFailed,TResult? Function( int version)?  pairingQrVersionUnsupported,TResult? Function()?  timeout,TResult? Function()?  notConnected,TResult? Function()?  requestDropped,TResult? Function( String message)?  authRefreshFailed,TResult? Function()?  emailTaken,TResult? Function()?  weakPassword,TResult? Function( int retryAfterS)?  rateLimited,TResult? Function()?  invalidCredentials,TResult? Function( String reason)?  agentStartFailed,TResult? Function()?  pairingTokenExpired,}) {final _that = this;
 switch (_that) {
 case MinosError_BindFailed() when bindFailed != null:
 return bindFailed(_that.addr,_that.message);case MinosError_ConnectFailed() when connectFailed != null:
@@ -651,21 +1748,31 @@ return unauthorized(_that.reason);case MinosError_ConnectionStateMismatch() when
 return connectionStateMismatch(_that.expected,_that.actual);case MinosError_EnvelopeVersionUnsupported() when envelopeVersionUnsupported != null:
 return envelopeVersionUnsupported(_that.version);case MinosError_PeerOffline() when peerOffline != null:
 return peerOffline(_that.peerDeviceId);case MinosError_BackendInternal() when backendInternal != null:
-return backendInternal(_that.message);case MinosError_CfAuthFailed() when cfAuthFailed != null:
-return cfAuthFailed(_that.message);case MinosError_CodexSpawnFailed() when codexSpawnFailed != null:
+return backendInternal(_that.message);case MinosError_CodexSpawnFailed() when codexSpawnFailed != null:
 return codexSpawnFailed(_that.message);case MinosError_CodexConnectFailed() when codexConnectFailed != null:
 return codexConnectFailed(_that.url,_that.message);case MinosError_CodexProtocolError() when codexProtocolError != null:
-return codexProtocolError(_that.method,_that.message);case MinosError_AgentAlreadyRunning() when agentAlreadyRunning != null:
+return codexProtocolError(_that.method,_that.message);case MinosError_GeminiSpawnFailed() when geminiSpawnFailed != null:
+return geminiSpawnFailed(_that.message);case MinosError_AcpProtocolError() when acpProtocolError != null:
+return acpProtocolError(_that.method,_that.message);case MinosError_AgentAlreadyRunning() when agentAlreadyRunning != null:
 return agentAlreadyRunning();case MinosError_AgentNotRunning() when agentNotRunning != null:
 return agentNotRunning();case MinosError_AgentNotSupported() when agentNotSupported != null:
 return agentNotSupported(_that.agent);case MinosError_AgentSessionIdMismatch() when agentSessionIdMismatch != null:
-return agentSessionIdMismatch();case MinosError_CfAccessMisconfigured() when cfAccessMisconfigured != null:
-return cfAccessMisconfigured(_that.reason);case MinosError_IngestSeqConflict() when ingestSeqConflict != null:
+return agentSessionIdMismatch();case MinosError_IngestSeqConflict() when ingestSeqConflict != null:
 return ingestSeqConflict(_that.threadId,_that.seq);case MinosError_ThreadNotFound() when threadNotFound != null:
 return threadNotFound(_that.threadId);case MinosError_TranslationNotImplemented() when translationNotImplemented != null:
 return translationNotImplemented(_that.agent);case MinosError_TranslationFailed() when translationFailed != null:
 return translationFailed(_that.agent,_that.message);case MinosError_PairingQrVersionUnsupported() when pairingQrVersionUnsupported != null:
-return pairingQrVersionUnsupported(_that.version);case _:
+return pairingQrVersionUnsupported(_that.version);case MinosError_Timeout() when timeout != null:
+return timeout();case MinosError_NotConnected() when notConnected != null:
+return notConnected();case MinosError_RequestDropped() when requestDropped != null:
+return requestDropped();case MinosError_AuthRefreshFailed() when authRefreshFailed != null:
+return authRefreshFailed(_that.message);case MinosError_EmailTaken() when emailTaken != null:
+return emailTaken();case MinosError_WeakPassword() when weakPassword != null:
+return weakPassword();case MinosError_RateLimited() when rateLimited != null:
+return rateLimited(_that.retryAfterS);case MinosError_InvalidCredentials() when invalidCredentials != null:
+return invalidCredentials();case MinosError_AgentStartFailed() when agentStartFailed != null:
+return agentStartFailed(_that.reason);case MinosError_PairingTokenExpired() when pairingTokenExpired != null:
+return pairingTokenExpired();case _:
   return null;
 
 }
@@ -1714,72 +2821,6 @@ as String,
 /// @nodoc
 
 
-class MinosError_CfAuthFailed extends MinosError {
-  const MinosError_CfAuthFailed({required this.message}): super._();
-  
-
- final  String message;
-
-/// Create a copy of MinosError
-/// with the given fields replaced by the non-null parameter values.
-@JsonKey(includeFromJson: false, includeToJson: false)
-@pragma('vm:prefer-inline')
-$MinosError_CfAuthFailedCopyWith<MinosError_CfAuthFailed> get copyWith => _$MinosError_CfAuthFailedCopyWithImpl<MinosError_CfAuthFailed>(this, _$identity);
-
-
-
-@override
-bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_CfAuthFailed&&(identical(other.message, message) || other.message == message));
-}
-
-
-@override
-int get hashCode => Object.hash(runtimeType,message);
-
-@override
-String toString() {
-  return 'MinosError.cfAuthFailed(message: $message)';
-}
-
-
-}
-
-/// @nodoc
-abstract mixin class $MinosError_CfAuthFailedCopyWith<$Res> implements $MinosErrorCopyWith<$Res> {
-  factory $MinosError_CfAuthFailedCopyWith(MinosError_CfAuthFailed value, $Res Function(MinosError_CfAuthFailed) _then) = _$MinosError_CfAuthFailedCopyWithImpl;
-@useResult
-$Res call({
- String message
-});
-
-
-
-
-}
-/// @nodoc
-class _$MinosError_CfAuthFailedCopyWithImpl<$Res>
-    implements $MinosError_CfAuthFailedCopyWith<$Res> {
-  _$MinosError_CfAuthFailedCopyWithImpl(this._self, this._then);
-
-  final MinosError_CfAuthFailed _self;
-  final $Res Function(MinosError_CfAuthFailed) _then;
-
-/// Create a copy of MinosError
-/// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? message = null,}) {
-  return _then(MinosError_CfAuthFailed(
-message: null == message ? _self.message : message // ignore: cast_nullable_to_non_nullable
-as String,
-  ));
-}
-
-
-}
-
-/// @nodoc
-
-
 class MinosError_CodexSpawnFailed extends MinosError {
   const MinosError_CodexSpawnFailed({required this.message}): super._();
   
@@ -1982,6 +3023,140 @@ as String,
 /// @nodoc
 
 
+class MinosError_GeminiSpawnFailed extends MinosError {
+  const MinosError_GeminiSpawnFailed({required this.message}): super._();
+  
+
+ final  String message;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$MinosError_GeminiSpawnFailedCopyWith<MinosError_GeminiSpawnFailed> get copyWith => _$MinosError_GeminiSpawnFailedCopyWithImpl<MinosError_GeminiSpawnFailed>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_GeminiSpawnFailed&&(identical(other.message, message) || other.message == message));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,message);
+
+@override
+String toString() {
+  return 'MinosError.geminiSpawnFailed(message: $message)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $MinosError_GeminiSpawnFailedCopyWith<$Res> implements $MinosErrorCopyWith<$Res> {
+  factory $MinosError_GeminiSpawnFailedCopyWith(MinosError_GeminiSpawnFailed value, $Res Function(MinosError_GeminiSpawnFailed) _then) = _$MinosError_GeminiSpawnFailedCopyWithImpl;
+@useResult
+$Res call({
+ String message
+});
+
+
+
+
+}
+/// @nodoc
+class _$MinosError_GeminiSpawnFailedCopyWithImpl<$Res>
+    implements $MinosError_GeminiSpawnFailedCopyWith<$Res> {
+  _$MinosError_GeminiSpawnFailedCopyWithImpl(this._self, this._then);
+
+  final MinosError_GeminiSpawnFailed _self;
+  final $Res Function(MinosError_GeminiSpawnFailed) _then;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? message = null,}) {
+  return _then(MinosError_GeminiSpawnFailed(
+message: null == message ? _self.message : message // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class MinosError_AcpProtocolError extends MinosError {
+  const MinosError_AcpProtocolError({required this.method, required this.message}): super._();
+  
+
+ final  String method;
+ final  String message;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$MinosError_AcpProtocolErrorCopyWith<MinosError_AcpProtocolError> get copyWith => _$MinosError_AcpProtocolErrorCopyWithImpl<MinosError_AcpProtocolError>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_AcpProtocolError&&(identical(other.method, method) || other.method == method)&&(identical(other.message, message) || other.message == message));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,method,message);
+
+@override
+String toString() {
+  return 'MinosError.acpProtocolError(method: $method, message: $message)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $MinosError_AcpProtocolErrorCopyWith<$Res> implements $MinosErrorCopyWith<$Res> {
+  factory $MinosError_AcpProtocolErrorCopyWith(MinosError_AcpProtocolError value, $Res Function(MinosError_AcpProtocolError) _then) = _$MinosError_AcpProtocolErrorCopyWithImpl;
+@useResult
+$Res call({
+ String method, String message
+});
+
+
+
+
+}
+/// @nodoc
+class _$MinosError_AcpProtocolErrorCopyWithImpl<$Res>
+    implements $MinosError_AcpProtocolErrorCopyWith<$Res> {
+  _$MinosError_AcpProtocolErrorCopyWithImpl(this._self, this._then);
+
+  final MinosError_AcpProtocolError _self;
+  final $Res Function(MinosError_AcpProtocolError) _then;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? method = null,Object? message = null,}) {
+  return _then(MinosError_AcpProtocolError(
+method: null == method ? _self.method : method // ignore: cast_nullable_to_non_nullable
+as String,message: null == message ? _self.message : message // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
 class MinosError_AgentAlreadyRunning extends MinosError {
   const MinosError_AgentAlreadyRunning(): super._();
   
@@ -2140,72 +3315,6 @@ String toString() {
 
 
 
-
-/// @nodoc
-
-
-class MinosError_CfAccessMisconfigured extends MinosError {
-  const MinosError_CfAccessMisconfigured({required this.reason}): super._();
-  
-
- final  String reason;
-
-/// Create a copy of MinosError
-/// with the given fields replaced by the non-null parameter values.
-@JsonKey(includeFromJson: false, includeToJson: false)
-@pragma('vm:prefer-inline')
-$MinosError_CfAccessMisconfiguredCopyWith<MinosError_CfAccessMisconfigured> get copyWith => _$MinosError_CfAccessMisconfiguredCopyWithImpl<MinosError_CfAccessMisconfigured>(this, _$identity);
-
-
-
-@override
-bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_CfAccessMisconfigured&&(identical(other.reason, reason) || other.reason == reason));
-}
-
-
-@override
-int get hashCode => Object.hash(runtimeType,reason);
-
-@override
-String toString() {
-  return 'MinosError.cfAccessMisconfigured(reason: $reason)';
-}
-
-
-}
-
-/// @nodoc
-abstract mixin class $MinosError_CfAccessMisconfiguredCopyWith<$Res> implements $MinosErrorCopyWith<$Res> {
-  factory $MinosError_CfAccessMisconfiguredCopyWith(MinosError_CfAccessMisconfigured value, $Res Function(MinosError_CfAccessMisconfigured) _then) = _$MinosError_CfAccessMisconfiguredCopyWithImpl;
-@useResult
-$Res call({
- String reason
-});
-
-
-
-
-}
-/// @nodoc
-class _$MinosError_CfAccessMisconfiguredCopyWithImpl<$Res>
-    implements $MinosError_CfAccessMisconfiguredCopyWith<$Res> {
-  _$MinosError_CfAccessMisconfiguredCopyWithImpl(this._self, this._then);
-
-  final MinosError_CfAccessMisconfigured _self;
-  final $Res Function(MinosError_CfAccessMisconfigured) _then;
-
-/// Create a copy of MinosError
-/// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? reason = null,}) {
-  return _then(MinosError_CfAccessMisconfigured(
-reason: null == reason ? _self.reason : reason // ignore: cast_nullable_to_non_nullable
-as String,
-  ));
-}
-
-
-}
 
 /// @nodoc
 
@@ -2540,6 +3649,428 @@ as int,
 
 
 }
+
+/// @nodoc
+
+
+class MinosError_Timeout extends MinosError {
+  const MinosError_Timeout(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_Timeout);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'MinosError.timeout()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class MinosError_NotConnected extends MinosError {
+  const MinosError_NotConnected(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_NotConnected);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'MinosError.notConnected()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class MinosError_RequestDropped extends MinosError {
+  const MinosError_RequestDropped(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_RequestDropped);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'MinosError.requestDropped()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class MinosError_AuthRefreshFailed extends MinosError {
+  const MinosError_AuthRefreshFailed({required this.message}): super._();
+  
+
+ final  String message;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$MinosError_AuthRefreshFailedCopyWith<MinosError_AuthRefreshFailed> get copyWith => _$MinosError_AuthRefreshFailedCopyWithImpl<MinosError_AuthRefreshFailed>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_AuthRefreshFailed&&(identical(other.message, message) || other.message == message));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,message);
+
+@override
+String toString() {
+  return 'MinosError.authRefreshFailed(message: $message)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $MinosError_AuthRefreshFailedCopyWith<$Res> implements $MinosErrorCopyWith<$Res> {
+  factory $MinosError_AuthRefreshFailedCopyWith(MinosError_AuthRefreshFailed value, $Res Function(MinosError_AuthRefreshFailed) _then) = _$MinosError_AuthRefreshFailedCopyWithImpl;
+@useResult
+$Res call({
+ String message
+});
+
+
+
+
+}
+/// @nodoc
+class _$MinosError_AuthRefreshFailedCopyWithImpl<$Res>
+    implements $MinosError_AuthRefreshFailedCopyWith<$Res> {
+  _$MinosError_AuthRefreshFailedCopyWithImpl(this._self, this._then);
+
+  final MinosError_AuthRefreshFailed _self;
+  final $Res Function(MinosError_AuthRefreshFailed) _then;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? message = null,}) {
+  return _then(MinosError_AuthRefreshFailed(
+message: null == message ? _self.message : message // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class MinosError_EmailTaken extends MinosError {
+  const MinosError_EmailTaken(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_EmailTaken);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'MinosError.emailTaken()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class MinosError_WeakPassword extends MinosError {
+  const MinosError_WeakPassword(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_WeakPassword);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'MinosError.weakPassword()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class MinosError_RateLimited extends MinosError {
+  const MinosError_RateLimited({required this.retryAfterS}): super._();
+  
+
+ final  int retryAfterS;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$MinosError_RateLimitedCopyWith<MinosError_RateLimited> get copyWith => _$MinosError_RateLimitedCopyWithImpl<MinosError_RateLimited>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_RateLimited&&(identical(other.retryAfterS, retryAfterS) || other.retryAfterS == retryAfterS));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,retryAfterS);
+
+@override
+String toString() {
+  return 'MinosError.rateLimited(retryAfterS: $retryAfterS)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $MinosError_RateLimitedCopyWith<$Res> implements $MinosErrorCopyWith<$Res> {
+  factory $MinosError_RateLimitedCopyWith(MinosError_RateLimited value, $Res Function(MinosError_RateLimited) _then) = _$MinosError_RateLimitedCopyWithImpl;
+@useResult
+$Res call({
+ int retryAfterS
+});
+
+
+
+
+}
+/// @nodoc
+class _$MinosError_RateLimitedCopyWithImpl<$Res>
+    implements $MinosError_RateLimitedCopyWith<$Res> {
+  _$MinosError_RateLimitedCopyWithImpl(this._self, this._then);
+
+  final MinosError_RateLimited _self;
+  final $Res Function(MinosError_RateLimited) _then;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? retryAfterS = null,}) {
+  return _then(MinosError_RateLimited(
+retryAfterS: null == retryAfterS ? _self.retryAfterS : retryAfterS // ignore: cast_nullable_to_non_nullable
+as int,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class MinosError_InvalidCredentials extends MinosError {
+  const MinosError_InvalidCredentials(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_InvalidCredentials);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'MinosError.invalidCredentials()';
+}
+
+
+}
+
+
+
+
+/// @nodoc
+
+
+class MinosError_AgentStartFailed extends MinosError {
+  const MinosError_AgentStartFailed({required this.reason}): super._();
+  
+
+ final  String reason;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$MinosError_AgentStartFailedCopyWith<MinosError_AgentStartFailed> get copyWith => _$MinosError_AgentStartFailedCopyWithImpl<MinosError_AgentStartFailed>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_AgentStartFailed&&(identical(other.reason, reason) || other.reason == reason));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,reason);
+
+@override
+String toString() {
+  return 'MinosError.agentStartFailed(reason: $reason)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $MinosError_AgentStartFailedCopyWith<$Res> implements $MinosErrorCopyWith<$Res> {
+  factory $MinosError_AgentStartFailedCopyWith(MinosError_AgentStartFailed value, $Res Function(MinosError_AgentStartFailed) _then) = _$MinosError_AgentStartFailedCopyWithImpl;
+@useResult
+$Res call({
+ String reason
+});
+
+
+
+
+}
+/// @nodoc
+class _$MinosError_AgentStartFailedCopyWithImpl<$Res>
+    implements $MinosError_AgentStartFailedCopyWith<$Res> {
+  _$MinosError_AgentStartFailedCopyWithImpl(this._self, this._then);
+
+  final MinosError_AgentStartFailed _self;
+  final $Res Function(MinosError_AgentStartFailed) _then;
+
+/// Create a copy of MinosError
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? reason = null,}) {
+  return _then(MinosError_AgentStartFailed(
+reason: null == reason ? _self.reason : reason // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class MinosError_PairingTokenExpired extends MinosError {
+  const MinosError_PairingTokenExpired(): super._();
+  
+
+
+
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_PairingTokenExpired);
+}
+
+
+@override
+int get hashCode => runtimeType.hashCode;
+
+@override
+String toString() {
+  return 'MinosError.pairingTokenExpired()';
+}
+
+
+}
+
+
+
 
 /// @nodoc
 mixin _$ThreadEndReason {
@@ -2957,7 +4488,7 @@ extension UiEventMessagePatterns on UiEventMessage {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( UiEventMessage_ThreadOpened value)?  threadOpened,TResult Function( UiEventMessage_ThreadTitleUpdated value)?  threadTitleUpdated,TResult Function( UiEventMessage_ThreadClosed value)?  threadClosed,TResult Function( UiEventMessage_MessageStarted value)?  messageStarted,TResult Function( UiEventMessage_MessageCompleted value)?  messageCompleted,TResult Function( UiEventMessage_TextDelta value)?  textDelta,TResult Function( UiEventMessage_ReasoningDelta value)?  reasoningDelta,TResult Function( UiEventMessage_ToolCallPlaced value)?  toolCallPlaced,TResult Function( UiEventMessage_ToolCallCompleted value)?  toolCallCompleted,TResult Function( UiEventMessage_Error value)?  error,TResult Function( UiEventMessage_Raw value)?  raw,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( UiEventMessage_ThreadOpened value)?  threadOpened,TResult Function( UiEventMessage_ThreadTitleUpdated value)?  threadTitleUpdated,TResult Function( UiEventMessage_ThreadClosed value)?  threadClosed,TResult Function( UiEventMessage_MessageStarted value)?  messageStarted,TResult Function( UiEventMessage_MessageCompleted value)?  messageCompleted,TResult Function( UiEventMessage_TextDelta value)?  textDelta,TResult Function( UiEventMessage_TextReplace value)?  textReplace,TResult Function( UiEventMessage_ReasoningDelta value)?  reasoningDelta,TResult Function( UiEventMessage_ReasoningReplace value)?  reasoningReplace,TResult Function( UiEventMessage_ToolCallPlaced value)?  toolCallPlaced,TResult Function( UiEventMessage_ToolCallCompleted value)?  toolCallCompleted,TResult Function( UiEventMessage_SubagentSpawned value)?  subagentSpawned,TResult Function( UiEventMessage_SubagentStatusUpdated value)?  subagentStatusUpdated,TResult Function( UiEventMessage_Error value)?  error,TResult Function( UiEventMessage_Raw value)?  raw,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened() when threadOpened != null:
@@ -2966,10 +4497,14 @@ return threadTitleUpdated(_that);case UiEventMessage_ThreadClosed() when threadC
 return threadClosed(_that);case UiEventMessage_MessageStarted() when messageStarted != null:
 return messageStarted(_that);case UiEventMessage_MessageCompleted() when messageCompleted != null:
 return messageCompleted(_that);case UiEventMessage_TextDelta() when textDelta != null:
-return textDelta(_that);case UiEventMessage_ReasoningDelta() when reasoningDelta != null:
-return reasoningDelta(_that);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
+return textDelta(_that);case UiEventMessage_TextReplace() when textReplace != null:
+return textReplace(_that);case UiEventMessage_ReasoningDelta() when reasoningDelta != null:
+return reasoningDelta(_that);case UiEventMessage_ReasoningReplace() when reasoningReplace != null:
+return reasoningReplace(_that);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
 return toolCallPlaced(_that);case UiEventMessage_ToolCallCompleted() when toolCallCompleted != null:
-return toolCallCompleted(_that);case UiEventMessage_Error() when error != null:
+return toolCallCompleted(_that);case UiEventMessage_SubagentSpawned() when subagentSpawned != null:
+return subagentSpawned(_that);case UiEventMessage_SubagentStatusUpdated() when subagentStatusUpdated != null:
+return subagentStatusUpdated(_that);case UiEventMessage_Error() when error != null:
 return error(_that);case UiEventMessage_Raw() when raw != null:
 return raw(_that);case _:
   return orElse();
@@ -2989,7 +4524,7 @@ return raw(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( UiEventMessage_ThreadOpened value)  threadOpened,required TResult Function( UiEventMessage_ThreadTitleUpdated value)  threadTitleUpdated,required TResult Function( UiEventMessage_ThreadClosed value)  threadClosed,required TResult Function( UiEventMessage_MessageStarted value)  messageStarted,required TResult Function( UiEventMessage_MessageCompleted value)  messageCompleted,required TResult Function( UiEventMessage_TextDelta value)  textDelta,required TResult Function( UiEventMessage_ReasoningDelta value)  reasoningDelta,required TResult Function( UiEventMessage_ToolCallPlaced value)  toolCallPlaced,required TResult Function( UiEventMessage_ToolCallCompleted value)  toolCallCompleted,required TResult Function( UiEventMessage_Error value)  error,required TResult Function( UiEventMessage_Raw value)  raw,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( UiEventMessage_ThreadOpened value)  threadOpened,required TResult Function( UiEventMessage_ThreadTitleUpdated value)  threadTitleUpdated,required TResult Function( UiEventMessage_ThreadClosed value)  threadClosed,required TResult Function( UiEventMessage_MessageStarted value)  messageStarted,required TResult Function( UiEventMessage_MessageCompleted value)  messageCompleted,required TResult Function( UiEventMessage_TextDelta value)  textDelta,required TResult Function( UiEventMessage_TextReplace value)  textReplace,required TResult Function( UiEventMessage_ReasoningDelta value)  reasoningDelta,required TResult Function( UiEventMessage_ReasoningReplace value)  reasoningReplace,required TResult Function( UiEventMessage_ToolCallPlaced value)  toolCallPlaced,required TResult Function( UiEventMessage_ToolCallCompleted value)  toolCallCompleted,required TResult Function( UiEventMessage_SubagentSpawned value)  subagentSpawned,required TResult Function( UiEventMessage_SubagentStatusUpdated value)  subagentStatusUpdated,required TResult Function( UiEventMessage_Error value)  error,required TResult Function( UiEventMessage_Raw value)  raw,}){
 final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened():
@@ -2998,10 +4533,14 @@ return threadTitleUpdated(_that);case UiEventMessage_ThreadClosed():
 return threadClosed(_that);case UiEventMessage_MessageStarted():
 return messageStarted(_that);case UiEventMessage_MessageCompleted():
 return messageCompleted(_that);case UiEventMessage_TextDelta():
-return textDelta(_that);case UiEventMessage_ReasoningDelta():
-return reasoningDelta(_that);case UiEventMessage_ToolCallPlaced():
+return textDelta(_that);case UiEventMessage_TextReplace():
+return textReplace(_that);case UiEventMessage_ReasoningDelta():
+return reasoningDelta(_that);case UiEventMessage_ReasoningReplace():
+return reasoningReplace(_that);case UiEventMessage_ToolCallPlaced():
 return toolCallPlaced(_that);case UiEventMessage_ToolCallCompleted():
-return toolCallCompleted(_that);case UiEventMessage_Error():
+return toolCallCompleted(_that);case UiEventMessage_SubagentSpawned():
+return subagentSpawned(_that);case UiEventMessage_SubagentStatusUpdated():
+return subagentStatusUpdated(_that);case UiEventMessage_Error():
 return error(_that);case UiEventMessage_Raw():
 return raw(_that);}
 }
@@ -3017,7 +4556,7 @@ return raw(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( UiEventMessage_ThreadOpened value)?  threadOpened,TResult? Function( UiEventMessage_ThreadTitleUpdated value)?  threadTitleUpdated,TResult? Function( UiEventMessage_ThreadClosed value)?  threadClosed,TResult? Function( UiEventMessage_MessageStarted value)?  messageStarted,TResult? Function( UiEventMessage_MessageCompleted value)?  messageCompleted,TResult? Function( UiEventMessage_TextDelta value)?  textDelta,TResult? Function( UiEventMessage_ReasoningDelta value)?  reasoningDelta,TResult? Function( UiEventMessage_ToolCallPlaced value)?  toolCallPlaced,TResult? Function( UiEventMessage_ToolCallCompleted value)?  toolCallCompleted,TResult? Function( UiEventMessage_Error value)?  error,TResult? Function( UiEventMessage_Raw value)?  raw,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( UiEventMessage_ThreadOpened value)?  threadOpened,TResult? Function( UiEventMessage_ThreadTitleUpdated value)?  threadTitleUpdated,TResult? Function( UiEventMessage_ThreadClosed value)?  threadClosed,TResult? Function( UiEventMessage_MessageStarted value)?  messageStarted,TResult? Function( UiEventMessage_MessageCompleted value)?  messageCompleted,TResult? Function( UiEventMessage_TextDelta value)?  textDelta,TResult? Function( UiEventMessage_TextReplace value)?  textReplace,TResult? Function( UiEventMessage_ReasoningDelta value)?  reasoningDelta,TResult? Function( UiEventMessage_ReasoningReplace value)?  reasoningReplace,TResult? Function( UiEventMessage_ToolCallPlaced value)?  toolCallPlaced,TResult? Function( UiEventMessage_ToolCallCompleted value)?  toolCallCompleted,TResult? Function( UiEventMessage_SubagentSpawned value)?  subagentSpawned,TResult? Function( UiEventMessage_SubagentStatusUpdated value)?  subagentStatusUpdated,TResult? Function( UiEventMessage_Error value)?  error,TResult? Function( UiEventMessage_Raw value)?  raw,}){
 final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened() when threadOpened != null:
@@ -3026,10 +4565,14 @@ return threadTitleUpdated(_that);case UiEventMessage_ThreadClosed() when threadC
 return threadClosed(_that);case UiEventMessage_MessageStarted() when messageStarted != null:
 return messageStarted(_that);case UiEventMessage_MessageCompleted() when messageCompleted != null:
 return messageCompleted(_that);case UiEventMessage_TextDelta() when textDelta != null:
-return textDelta(_that);case UiEventMessage_ReasoningDelta() when reasoningDelta != null:
-return reasoningDelta(_that);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
+return textDelta(_that);case UiEventMessage_TextReplace() when textReplace != null:
+return textReplace(_that);case UiEventMessage_ReasoningDelta() when reasoningDelta != null:
+return reasoningDelta(_that);case UiEventMessage_ReasoningReplace() when reasoningReplace != null:
+return reasoningReplace(_that);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
 return toolCallPlaced(_that);case UiEventMessage_ToolCallCompleted() when toolCallCompleted != null:
-return toolCallCompleted(_that);case UiEventMessage_Error() when error != null:
+return toolCallCompleted(_that);case UiEventMessage_SubagentSpawned() when subagentSpawned != null:
+return subagentSpawned(_that);case UiEventMessage_SubagentStatusUpdated() when subagentStatusUpdated != null:
+return subagentStatusUpdated(_that);case UiEventMessage_Error() when error != null:
 return error(_that);case UiEventMessage_Raw() when raw != null:
 return raw(_that);case _:
   return null;
@@ -3048,7 +4591,7 @@ return raw(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)?  threadOpened,TResult Function( String threadId,  String title)?  threadTitleUpdated,TResult Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)?  threadClosed,TResult Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)?  messageStarted,TResult Function( String messageId,  PlatformInt64 finishedAtMs)?  messageCompleted,TResult Function( String messageId,  String text)?  textDelta,TResult Function( String messageId,  String text)?  reasoningDelta,TResult Function( String messageId,  String toolCallId,  String name,  String argsJson)?  toolCallPlaced,TResult Function( String toolCallId,  String output,  bool isError)?  toolCallCompleted,TResult Function( String code,  String message,  String? messageId)?  error,TResult Function( String kind,  String payloadJson)?  raw,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)?  threadOpened,TResult Function( String threadId,  String title)?  threadTitleUpdated,TResult Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)?  threadClosed,TResult Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)?  messageStarted,TResult Function( String messageId,  PlatformInt64 finishedAtMs)?  messageCompleted,TResult Function( String messageId,  DisplayPayload text)?  textDelta,TResult Function( String messageId,  DisplayPayload text)?  textReplace,TResult Function( String messageId,  DisplayPayload text)?  reasoningDelta,TResult Function( String messageId,  DisplayPayload text)?  reasoningReplace,TResult Function( String messageId,  String toolCallId,  String name,  DisplayPayload argsJson)?  toolCallPlaced,TResult Function( String toolCallId,  DisplayPayload output,  bool isError)?  toolCallCompleted,TResult Function( String parentThreadId,  String subThreadId,  String toolCallId,  AgentName agent,  String? model,  String? prompt,  String? title)?  subagentSpawned,TResult Function( String subThreadId,  SubagentStatus status)?  subagentStatusUpdated,TResult Function( String code,  String message,  String? messageId)?  error,TResult Function( String kind,  String payloadJson)?  raw,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened() when threadOpened != null:
 return threadOpened(_that.threadId,_that.agent,_that.title,_that.openedAtMs);case UiEventMessage_ThreadTitleUpdated() when threadTitleUpdated != null:
@@ -3056,10 +4599,14 @@ return threadTitleUpdated(_that.threadId,_that.title);case UiEventMessage_Thread
 return threadClosed(_that.threadId,_that.reason,_that.closedAtMs);case UiEventMessage_MessageStarted() when messageStarted != null:
 return messageStarted(_that.messageId,_that.role,_that.startedAtMs);case UiEventMessage_MessageCompleted() when messageCompleted != null:
 return messageCompleted(_that.messageId,_that.finishedAtMs);case UiEventMessage_TextDelta() when textDelta != null:
-return textDelta(_that.messageId,_that.text);case UiEventMessage_ReasoningDelta() when reasoningDelta != null:
-return reasoningDelta(_that.messageId,_that.text);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
+return textDelta(_that.messageId,_that.text);case UiEventMessage_TextReplace() when textReplace != null:
+return textReplace(_that.messageId,_that.text);case UiEventMessage_ReasoningDelta() when reasoningDelta != null:
+return reasoningDelta(_that.messageId,_that.text);case UiEventMessage_ReasoningReplace() when reasoningReplace != null:
+return reasoningReplace(_that.messageId,_that.text);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
 return toolCallPlaced(_that.messageId,_that.toolCallId,_that.name,_that.argsJson);case UiEventMessage_ToolCallCompleted() when toolCallCompleted != null:
-return toolCallCompleted(_that.toolCallId,_that.output,_that.isError);case UiEventMessage_Error() when error != null:
+return toolCallCompleted(_that.toolCallId,_that.output,_that.isError);case UiEventMessage_SubagentSpawned() when subagentSpawned != null:
+return subagentSpawned(_that.parentThreadId,_that.subThreadId,_that.toolCallId,_that.agent,_that.model,_that.prompt,_that.title);case UiEventMessage_SubagentStatusUpdated() when subagentStatusUpdated != null:
+return subagentStatusUpdated(_that.subThreadId,_that.status);case UiEventMessage_Error() when error != null:
 return error(_that.code,_that.message,_that.messageId);case UiEventMessage_Raw() when raw != null:
 return raw(_that.kind,_that.payloadJson);case _:
   return orElse();
@@ -3079,7 +4626,7 @@ return raw(_that.kind,_that.payloadJson);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)  threadOpened,required TResult Function( String threadId,  String title)  threadTitleUpdated,required TResult Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)  threadClosed,required TResult Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)  messageStarted,required TResult Function( String messageId,  PlatformInt64 finishedAtMs)  messageCompleted,required TResult Function( String messageId,  String text)  textDelta,required TResult Function( String messageId,  String text)  reasoningDelta,required TResult Function( String messageId,  String toolCallId,  String name,  String argsJson)  toolCallPlaced,required TResult Function( String toolCallId,  String output,  bool isError)  toolCallCompleted,required TResult Function( String code,  String message,  String? messageId)  error,required TResult Function( String kind,  String payloadJson)  raw,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)  threadOpened,required TResult Function( String threadId,  String title)  threadTitleUpdated,required TResult Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)  threadClosed,required TResult Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)  messageStarted,required TResult Function( String messageId,  PlatformInt64 finishedAtMs)  messageCompleted,required TResult Function( String messageId,  DisplayPayload text)  textDelta,required TResult Function( String messageId,  DisplayPayload text)  textReplace,required TResult Function( String messageId,  DisplayPayload text)  reasoningDelta,required TResult Function( String messageId,  DisplayPayload text)  reasoningReplace,required TResult Function( String messageId,  String toolCallId,  String name,  DisplayPayload argsJson)  toolCallPlaced,required TResult Function( String toolCallId,  DisplayPayload output,  bool isError)  toolCallCompleted,required TResult Function( String parentThreadId,  String subThreadId,  String toolCallId,  AgentName agent,  String? model,  String? prompt,  String? title)  subagentSpawned,required TResult Function( String subThreadId,  SubagentStatus status)  subagentStatusUpdated,required TResult Function( String code,  String message,  String? messageId)  error,required TResult Function( String kind,  String payloadJson)  raw,}) {final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened():
 return threadOpened(_that.threadId,_that.agent,_that.title,_that.openedAtMs);case UiEventMessage_ThreadTitleUpdated():
@@ -3087,10 +4634,14 @@ return threadTitleUpdated(_that.threadId,_that.title);case UiEventMessage_Thread
 return threadClosed(_that.threadId,_that.reason,_that.closedAtMs);case UiEventMessage_MessageStarted():
 return messageStarted(_that.messageId,_that.role,_that.startedAtMs);case UiEventMessage_MessageCompleted():
 return messageCompleted(_that.messageId,_that.finishedAtMs);case UiEventMessage_TextDelta():
-return textDelta(_that.messageId,_that.text);case UiEventMessage_ReasoningDelta():
-return reasoningDelta(_that.messageId,_that.text);case UiEventMessage_ToolCallPlaced():
+return textDelta(_that.messageId,_that.text);case UiEventMessage_TextReplace():
+return textReplace(_that.messageId,_that.text);case UiEventMessage_ReasoningDelta():
+return reasoningDelta(_that.messageId,_that.text);case UiEventMessage_ReasoningReplace():
+return reasoningReplace(_that.messageId,_that.text);case UiEventMessage_ToolCallPlaced():
 return toolCallPlaced(_that.messageId,_that.toolCallId,_that.name,_that.argsJson);case UiEventMessage_ToolCallCompleted():
-return toolCallCompleted(_that.toolCallId,_that.output,_that.isError);case UiEventMessage_Error():
+return toolCallCompleted(_that.toolCallId,_that.output,_that.isError);case UiEventMessage_SubagentSpawned():
+return subagentSpawned(_that.parentThreadId,_that.subThreadId,_that.toolCallId,_that.agent,_that.model,_that.prompt,_that.title);case UiEventMessage_SubagentStatusUpdated():
+return subagentStatusUpdated(_that.subThreadId,_that.status);case UiEventMessage_Error():
 return error(_that.code,_that.message,_that.messageId);case UiEventMessage_Raw():
 return raw(_that.kind,_that.payloadJson);}
 }
@@ -3106,7 +4657,7 @@ return raw(_that.kind,_that.payloadJson);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)?  threadOpened,TResult? Function( String threadId,  String title)?  threadTitleUpdated,TResult? Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)?  threadClosed,TResult? Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)?  messageStarted,TResult? Function( String messageId,  PlatformInt64 finishedAtMs)?  messageCompleted,TResult? Function( String messageId,  String text)?  textDelta,TResult? Function( String messageId,  String text)?  reasoningDelta,TResult? Function( String messageId,  String toolCallId,  String name,  String argsJson)?  toolCallPlaced,TResult? Function( String toolCallId,  String output,  bool isError)?  toolCallCompleted,TResult? Function( String code,  String message,  String? messageId)?  error,TResult? Function( String kind,  String payloadJson)?  raw,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)?  threadOpened,TResult? Function( String threadId,  String title)?  threadTitleUpdated,TResult? Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)?  threadClosed,TResult? Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)?  messageStarted,TResult? Function( String messageId,  PlatformInt64 finishedAtMs)?  messageCompleted,TResult? Function( String messageId,  DisplayPayload text)?  textDelta,TResult? Function( String messageId,  DisplayPayload text)?  textReplace,TResult? Function( String messageId,  DisplayPayload text)?  reasoningDelta,TResult? Function( String messageId,  DisplayPayload text)?  reasoningReplace,TResult? Function( String messageId,  String toolCallId,  String name,  DisplayPayload argsJson)?  toolCallPlaced,TResult? Function( String toolCallId,  DisplayPayload output,  bool isError)?  toolCallCompleted,TResult? Function( String parentThreadId,  String subThreadId,  String toolCallId,  AgentName agent,  String? model,  String? prompt,  String? title)?  subagentSpawned,TResult? Function( String subThreadId,  SubagentStatus status)?  subagentStatusUpdated,TResult? Function( String code,  String message,  String? messageId)?  error,TResult? Function( String kind,  String payloadJson)?  raw,}) {final _that = this;
 switch (_that) {
 case UiEventMessage_ThreadOpened() when threadOpened != null:
 return threadOpened(_that.threadId,_that.agent,_that.title,_that.openedAtMs);case UiEventMessage_ThreadTitleUpdated() when threadTitleUpdated != null:
@@ -3114,10 +4665,14 @@ return threadTitleUpdated(_that.threadId,_that.title);case UiEventMessage_Thread
 return threadClosed(_that.threadId,_that.reason,_that.closedAtMs);case UiEventMessage_MessageStarted() when messageStarted != null:
 return messageStarted(_that.messageId,_that.role,_that.startedAtMs);case UiEventMessage_MessageCompleted() when messageCompleted != null:
 return messageCompleted(_that.messageId,_that.finishedAtMs);case UiEventMessage_TextDelta() when textDelta != null:
-return textDelta(_that.messageId,_that.text);case UiEventMessage_ReasoningDelta() when reasoningDelta != null:
-return reasoningDelta(_that.messageId,_that.text);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
+return textDelta(_that.messageId,_that.text);case UiEventMessage_TextReplace() when textReplace != null:
+return textReplace(_that.messageId,_that.text);case UiEventMessage_ReasoningDelta() when reasoningDelta != null:
+return reasoningDelta(_that.messageId,_that.text);case UiEventMessage_ReasoningReplace() when reasoningReplace != null:
+return reasoningReplace(_that.messageId,_that.text);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
 return toolCallPlaced(_that.messageId,_that.toolCallId,_that.name,_that.argsJson);case UiEventMessage_ToolCallCompleted() when toolCallCompleted != null:
-return toolCallCompleted(_that.toolCallId,_that.output,_that.isError);case UiEventMessage_Error() when error != null:
+return toolCallCompleted(_that.toolCallId,_that.output,_that.isError);case UiEventMessage_SubagentSpawned() when subagentSpawned != null:
+return subagentSpawned(_that.parentThreadId,_that.subThreadId,_that.toolCallId,_that.agent,_that.model,_that.prompt,_that.title);case UiEventMessage_SubagentStatusUpdated() when subagentStatusUpdated != null:
+return subagentStatusUpdated(_that.subThreadId,_that.status);case UiEventMessage_Error() when error != null:
 return error(_that.code,_that.message,_that.messageId);case UiEventMessage_Raw() when raw != null:
 return raw(_that.kind,_that.payloadJson);case _:
   return null;
@@ -3492,7 +5047,7 @@ class UiEventMessage_TextDelta extends UiEventMessage {
   
 
  final  String messageId;
- final  String text;
+ final  DisplayPayload text;
 
 /// Create a copy of UiEventMessage
 /// with the given fields replaced by the non-null parameter values.
@@ -3524,11 +5079,11 @@ abstract mixin class $UiEventMessage_TextDeltaCopyWith<$Res> implements $UiEvent
   factory $UiEventMessage_TextDeltaCopyWith(UiEventMessage_TextDelta value, $Res Function(UiEventMessage_TextDelta) _then) = _$UiEventMessage_TextDeltaCopyWithImpl;
 @useResult
 $Res call({
- String messageId, String text
+ String messageId, DisplayPayload text
 });
 
 
-
+$DisplayPayloadCopyWith<$Res> get text;
 
 }
 /// @nodoc
@@ -3545,11 +5100,97 @@ class _$UiEventMessage_TextDeltaCopyWithImpl<$Res>
   return _then(UiEventMessage_TextDelta(
 messageId: null == messageId ? _self.messageId : messageId // ignore: cast_nullable_to_non_nullable
 as String,text: null == text ? _self.text : text // ignore: cast_nullable_to_non_nullable
-as String,
+as DisplayPayload,
   ));
 }
 
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$DisplayPayloadCopyWith<$Res> get text {
+  
+  return $DisplayPayloadCopyWith<$Res>(_self.text, (value) {
+    return _then(_self.copyWith(text: value));
+  });
+}
+}
 
+/// @nodoc
+
+
+class UiEventMessage_TextReplace extends UiEventMessage {
+  const UiEventMessage_TextReplace({required this.messageId, required this.text}): super._();
+  
+
+ final  String messageId;
+ final  DisplayPayload text;
+
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$UiEventMessage_TextReplaceCopyWith<UiEventMessage_TextReplace> get copyWith => _$UiEventMessage_TextReplaceCopyWithImpl<UiEventMessage_TextReplace>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEventMessage_TextReplace&&(identical(other.messageId, messageId) || other.messageId == messageId)&&(identical(other.text, text) || other.text == text));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,messageId,text);
+
+@override
+String toString() {
+  return 'UiEventMessage.textReplace(messageId: $messageId, text: $text)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $UiEventMessage_TextReplaceCopyWith<$Res> implements $UiEventMessageCopyWith<$Res> {
+  factory $UiEventMessage_TextReplaceCopyWith(UiEventMessage_TextReplace value, $Res Function(UiEventMessage_TextReplace) _then) = _$UiEventMessage_TextReplaceCopyWithImpl;
+@useResult
+$Res call({
+ String messageId, DisplayPayload text
+});
+
+
+$DisplayPayloadCopyWith<$Res> get text;
+
+}
+/// @nodoc
+class _$UiEventMessage_TextReplaceCopyWithImpl<$Res>
+    implements $UiEventMessage_TextReplaceCopyWith<$Res> {
+  _$UiEventMessage_TextReplaceCopyWithImpl(this._self, this._then);
+
+  final UiEventMessage_TextReplace _self;
+  final $Res Function(UiEventMessage_TextReplace) _then;
+
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? messageId = null,Object? text = null,}) {
+  return _then(UiEventMessage_TextReplace(
+messageId: null == messageId ? _self.messageId : messageId // ignore: cast_nullable_to_non_nullable
+as String,text: null == text ? _self.text : text // ignore: cast_nullable_to_non_nullable
+as DisplayPayload,
+  ));
+}
+
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$DisplayPayloadCopyWith<$Res> get text {
+  
+  return $DisplayPayloadCopyWith<$Res>(_self.text, (value) {
+    return _then(_self.copyWith(text: value));
+  });
+}
 }
 
 /// @nodoc
@@ -3560,7 +5201,7 @@ class UiEventMessage_ReasoningDelta extends UiEventMessage {
   
 
  final  String messageId;
- final  String text;
+ final  DisplayPayload text;
 
 /// Create a copy of UiEventMessage
 /// with the given fields replaced by the non-null parameter values.
@@ -3592,11 +5233,11 @@ abstract mixin class $UiEventMessage_ReasoningDeltaCopyWith<$Res> implements $Ui
   factory $UiEventMessage_ReasoningDeltaCopyWith(UiEventMessage_ReasoningDelta value, $Res Function(UiEventMessage_ReasoningDelta) _then) = _$UiEventMessage_ReasoningDeltaCopyWithImpl;
 @useResult
 $Res call({
- String messageId, String text
+ String messageId, DisplayPayload text
 });
 
 
-
+$DisplayPayloadCopyWith<$Res> get text;
 
 }
 /// @nodoc
@@ -3613,11 +5254,97 @@ class _$UiEventMessage_ReasoningDeltaCopyWithImpl<$Res>
   return _then(UiEventMessage_ReasoningDelta(
 messageId: null == messageId ? _self.messageId : messageId // ignore: cast_nullable_to_non_nullable
 as String,text: null == text ? _self.text : text // ignore: cast_nullable_to_non_nullable
-as String,
+as DisplayPayload,
   ));
 }
 
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$DisplayPayloadCopyWith<$Res> get text {
+  
+  return $DisplayPayloadCopyWith<$Res>(_self.text, (value) {
+    return _then(_self.copyWith(text: value));
+  });
+}
+}
 
+/// @nodoc
+
+
+class UiEventMessage_ReasoningReplace extends UiEventMessage {
+  const UiEventMessage_ReasoningReplace({required this.messageId, required this.text}): super._();
+  
+
+ final  String messageId;
+ final  DisplayPayload text;
+
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$UiEventMessage_ReasoningReplaceCopyWith<UiEventMessage_ReasoningReplace> get copyWith => _$UiEventMessage_ReasoningReplaceCopyWithImpl<UiEventMessage_ReasoningReplace>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEventMessage_ReasoningReplace&&(identical(other.messageId, messageId) || other.messageId == messageId)&&(identical(other.text, text) || other.text == text));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,messageId,text);
+
+@override
+String toString() {
+  return 'UiEventMessage.reasoningReplace(messageId: $messageId, text: $text)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $UiEventMessage_ReasoningReplaceCopyWith<$Res> implements $UiEventMessageCopyWith<$Res> {
+  factory $UiEventMessage_ReasoningReplaceCopyWith(UiEventMessage_ReasoningReplace value, $Res Function(UiEventMessage_ReasoningReplace) _then) = _$UiEventMessage_ReasoningReplaceCopyWithImpl;
+@useResult
+$Res call({
+ String messageId, DisplayPayload text
+});
+
+
+$DisplayPayloadCopyWith<$Res> get text;
+
+}
+/// @nodoc
+class _$UiEventMessage_ReasoningReplaceCopyWithImpl<$Res>
+    implements $UiEventMessage_ReasoningReplaceCopyWith<$Res> {
+  _$UiEventMessage_ReasoningReplaceCopyWithImpl(this._self, this._then);
+
+  final UiEventMessage_ReasoningReplace _self;
+  final $Res Function(UiEventMessage_ReasoningReplace) _then;
+
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? messageId = null,Object? text = null,}) {
+  return _then(UiEventMessage_ReasoningReplace(
+messageId: null == messageId ? _self.messageId : messageId // ignore: cast_nullable_to_non_nullable
+as String,text: null == text ? _self.text : text // ignore: cast_nullable_to_non_nullable
+as DisplayPayload,
+  ));
+}
+
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$DisplayPayloadCopyWith<$Res> get text {
+  
+  return $DisplayPayloadCopyWith<$Res>(_self.text, (value) {
+    return _then(_self.copyWith(text: value));
+  });
+}
 }
 
 /// @nodoc
@@ -3630,7 +5357,7 @@ class UiEventMessage_ToolCallPlaced extends UiEventMessage {
  final  String messageId;
  final  String toolCallId;
  final  String name;
- final  String argsJson;
+ final  DisplayPayload argsJson;
 
 /// Create a copy of UiEventMessage
 /// with the given fields replaced by the non-null parameter values.
@@ -3662,11 +5389,11 @@ abstract mixin class $UiEventMessage_ToolCallPlacedCopyWith<$Res> implements $Ui
   factory $UiEventMessage_ToolCallPlacedCopyWith(UiEventMessage_ToolCallPlaced value, $Res Function(UiEventMessage_ToolCallPlaced) _then) = _$UiEventMessage_ToolCallPlacedCopyWithImpl;
 @useResult
 $Res call({
- String messageId, String toolCallId, String name, String argsJson
+ String messageId, String toolCallId, String name, DisplayPayload argsJson
 });
 
 
-
+$DisplayPayloadCopyWith<$Res> get argsJson;
 
 }
 /// @nodoc
@@ -3685,11 +5412,20 @@ messageId: null == messageId ? _self.messageId : messageId // ignore: cast_nulla
 as String,toolCallId: null == toolCallId ? _self.toolCallId : toolCallId // ignore: cast_nullable_to_non_nullable
 as String,name: null == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
 as String,argsJson: null == argsJson ? _self.argsJson : argsJson // ignore: cast_nullable_to_non_nullable
-as String,
+as DisplayPayload,
   ));
 }
 
-
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$DisplayPayloadCopyWith<$Res> get argsJson {
+  
+  return $DisplayPayloadCopyWith<$Res>(_self.argsJson, (value) {
+    return _then(_self.copyWith(argsJson: value));
+  });
+}
 }
 
 /// @nodoc
@@ -3700,7 +5436,7 @@ class UiEventMessage_ToolCallCompleted extends UiEventMessage {
   
 
  final  String toolCallId;
- final  String output;
+ final  DisplayPayload output;
  final  bool isError;
 
 /// Create a copy of UiEventMessage
@@ -3733,11 +5469,11 @@ abstract mixin class $UiEventMessage_ToolCallCompletedCopyWith<$Res> implements 
   factory $UiEventMessage_ToolCallCompletedCopyWith(UiEventMessage_ToolCallCompleted value, $Res Function(UiEventMessage_ToolCallCompleted) _then) = _$UiEventMessage_ToolCallCompletedCopyWithImpl;
 @useResult
 $Res call({
- String toolCallId, String output, bool isError
+ String toolCallId, DisplayPayload output, bool isError
 });
 
 
-
+$DisplayPayloadCopyWith<$Res> get output;
 
 }
 /// @nodoc
@@ -3754,8 +5490,163 @@ class _$UiEventMessage_ToolCallCompletedCopyWithImpl<$Res>
   return _then(UiEventMessage_ToolCallCompleted(
 toolCallId: null == toolCallId ? _self.toolCallId : toolCallId // ignore: cast_nullable_to_non_nullable
 as String,output: null == output ? _self.output : output // ignore: cast_nullable_to_non_nullable
-as String,isError: null == isError ? _self.isError : isError // ignore: cast_nullable_to_non_nullable
+as DisplayPayload,isError: null == isError ? _self.isError : isError // ignore: cast_nullable_to_non_nullable
 as bool,
+  ));
+}
+
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@override
+@pragma('vm:prefer-inline')
+$DisplayPayloadCopyWith<$Res> get output {
+  
+  return $DisplayPayloadCopyWith<$Res>(_self.output, (value) {
+    return _then(_self.copyWith(output: value));
+  });
+}
+}
+
+/// @nodoc
+
+
+class UiEventMessage_SubagentSpawned extends UiEventMessage {
+  const UiEventMessage_SubagentSpawned({required this.parentThreadId, required this.subThreadId, required this.toolCallId, required this.agent, this.model, this.prompt, this.title}): super._();
+  
+
+ final  String parentThreadId;
+ final  String subThreadId;
+ final  String toolCallId;
+ final  AgentName agent;
+ final  String? model;
+ final  String? prompt;
+ final  String? title;
+
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$UiEventMessage_SubagentSpawnedCopyWith<UiEventMessage_SubagentSpawned> get copyWith => _$UiEventMessage_SubagentSpawnedCopyWithImpl<UiEventMessage_SubagentSpawned>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEventMessage_SubagentSpawned&&(identical(other.parentThreadId, parentThreadId) || other.parentThreadId == parentThreadId)&&(identical(other.subThreadId, subThreadId) || other.subThreadId == subThreadId)&&(identical(other.toolCallId, toolCallId) || other.toolCallId == toolCallId)&&(identical(other.agent, agent) || other.agent == agent)&&(identical(other.model, model) || other.model == model)&&(identical(other.prompt, prompt) || other.prompt == prompt)&&(identical(other.title, title) || other.title == title));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,parentThreadId,subThreadId,toolCallId,agent,model,prompt,title);
+
+@override
+String toString() {
+  return 'UiEventMessage.subagentSpawned(parentThreadId: $parentThreadId, subThreadId: $subThreadId, toolCallId: $toolCallId, agent: $agent, model: $model, prompt: $prompt, title: $title)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $UiEventMessage_SubagentSpawnedCopyWith<$Res> implements $UiEventMessageCopyWith<$Res> {
+  factory $UiEventMessage_SubagentSpawnedCopyWith(UiEventMessage_SubagentSpawned value, $Res Function(UiEventMessage_SubagentSpawned) _then) = _$UiEventMessage_SubagentSpawnedCopyWithImpl;
+@useResult
+$Res call({
+ String parentThreadId, String subThreadId, String toolCallId, AgentName agent, String? model, String? prompt, String? title
+});
+
+
+
+
+}
+/// @nodoc
+class _$UiEventMessage_SubagentSpawnedCopyWithImpl<$Res>
+    implements $UiEventMessage_SubagentSpawnedCopyWith<$Res> {
+  _$UiEventMessage_SubagentSpawnedCopyWithImpl(this._self, this._then);
+
+  final UiEventMessage_SubagentSpawned _self;
+  final $Res Function(UiEventMessage_SubagentSpawned) _then;
+
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? parentThreadId = null,Object? subThreadId = null,Object? toolCallId = null,Object? agent = null,Object? model = freezed,Object? prompt = freezed,Object? title = freezed,}) {
+  return _then(UiEventMessage_SubagentSpawned(
+parentThreadId: null == parentThreadId ? _self.parentThreadId : parentThreadId // ignore: cast_nullable_to_non_nullable
+as String,subThreadId: null == subThreadId ? _self.subThreadId : subThreadId // ignore: cast_nullable_to_non_nullable
+as String,toolCallId: null == toolCallId ? _self.toolCallId : toolCallId // ignore: cast_nullable_to_non_nullable
+as String,agent: null == agent ? _self.agent : agent // ignore: cast_nullable_to_non_nullable
+as AgentName,model: freezed == model ? _self.model : model // ignore: cast_nullable_to_non_nullable
+as String?,prompt: freezed == prompt ? _self.prompt : prompt // ignore: cast_nullable_to_non_nullable
+as String?,title: freezed == title ? _self.title : title // ignore: cast_nullable_to_non_nullable
+as String?,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class UiEventMessage_SubagentStatusUpdated extends UiEventMessage {
+  const UiEventMessage_SubagentStatusUpdated({required this.subThreadId, required this.status}): super._();
+  
+
+ final  String subThreadId;
+ final  SubagentStatus status;
+
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$UiEventMessage_SubagentStatusUpdatedCopyWith<UiEventMessage_SubagentStatusUpdated> get copyWith => _$UiEventMessage_SubagentStatusUpdatedCopyWithImpl<UiEventMessage_SubagentStatusUpdated>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEventMessage_SubagentStatusUpdated&&(identical(other.subThreadId, subThreadId) || other.subThreadId == subThreadId)&&(identical(other.status, status) || other.status == status));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,subThreadId,status);
+
+@override
+String toString() {
+  return 'UiEventMessage.subagentStatusUpdated(subThreadId: $subThreadId, status: $status)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $UiEventMessage_SubagentStatusUpdatedCopyWith<$Res> implements $UiEventMessageCopyWith<$Res> {
+  factory $UiEventMessage_SubagentStatusUpdatedCopyWith(UiEventMessage_SubagentStatusUpdated value, $Res Function(UiEventMessage_SubagentStatusUpdated) _then) = _$UiEventMessage_SubagentStatusUpdatedCopyWithImpl;
+@useResult
+$Res call({
+ String subThreadId, SubagentStatus status
+});
+
+
+
+
+}
+/// @nodoc
+class _$UiEventMessage_SubagentStatusUpdatedCopyWithImpl<$Res>
+    implements $UiEventMessage_SubagentStatusUpdatedCopyWith<$Res> {
+  _$UiEventMessage_SubagentStatusUpdatedCopyWithImpl(this._self, this._then);
+
+  final UiEventMessage_SubagentStatusUpdated _self;
+  final $Res Function(UiEventMessage_SubagentStatusUpdated) _then;
+
+/// Create a copy of UiEventMessage
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') $Res call({Object? subThreadId = null,Object? status = null,}) {
+  return _then(UiEventMessage_SubagentStatusUpdated(
+subThreadId: null == subThreadId ? _self.subThreadId : subThreadId // ignore: cast_nullable_to_non_nullable
+as String,status: null == status ? _self.status : status // ignore: cast_nullable_to_non_nullable
+as SubagentStatus,
   ));
 }
 

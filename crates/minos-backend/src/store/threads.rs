@@ -6,13 +6,28 @@
 //! `ThreadTitleUpdated`, `increment_message_count` when a new message is
 //! placed, `mark_ended` when the backend sees `ThreadClosed`.
 //!
-//! List (for `LocalRpc::ListThreads`) lands in task C1.
+//! The formal agent-session and project APIs still use these summaries while
+//! the ingest path is being folded into room-first storage.
+
+use std::collections::HashMap;
 
 use minos_domain::AgentName;
 use minos_ui_protocol::ThreadEndReason;
-use sqlx::SqlitePool;
+use sqlx::{Postgres, QueryBuilder, Sqlite};
 
 use crate::error::BackendError;
+use crate::store::{AsStorePool, StorePoolRef};
+
+type ThreadSummaryRow = (
+    String,
+    String,
+    Option<String>,
+    i64,
+    i64,
+    i64,
+    Option<i64>,
+    Option<String>,
+);
 
 /// Wire-value string for an `AgentName`, matching the DB CHECK constraint.
 fn agent_str(a: AgentName) -> &'static str {
@@ -20,6 +35,8 @@ fn agent_str(a: AgentName) -> &'static str {
         AgentName::Codex => "codex",
         AgentName::Claude => "claude",
         AgentName::Gemini => "gemini",
+        AgentName::Opencode => "opencode",
+        AgentName::Grok => "grok",
     }
 }
 
@@ -27,23 +44,42 @@ fn agent_str(a: AgentName) -> &'static str {
 /// for the same `thread_id`, update `last_ts_ms` to `ts_ms`. `first_ts_ms`
 /// is frozen at insert time, `message_count` starts at 0.
 pub async fn upsert(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     thread_id: &str,
     agent: AgentName,
     owner_device_id: &str,
     ts_ms: i64,
 ) -> Result<(), BackendError> {
-    sqlx::query(
-        r"INSERT INTO threads (thread_id, agent, owner_device_id, first_ts_ms, last_ts_ms, message_count)
-           VALUES (?1, ?2, ?3, ?4, ?4, 0)
-           ON CONFLICT(thread_id) DO UPDATE SET last_ts_ms = ?4",
-    )
-    .bind(thread_id)
-    .bind(agent_str(agent))
-    .bind(owner_device_id)
-    .bind(ts_ms)
-    .execute(pool)
-    .await
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query(
+                r"INSERT INTO threads (thread_id, agent, owner_device_id, first_ts_ms, last_ts_ms, message_count)
+                   VALUES (?1, ?2, ?3, ?4, ?4, 0)
+                   ON CONFLICT(thread_id) DO UPDATE SET last_ts_ms = ?4",
+            )
+            .bind(thread_id)
+            .bind(agent_str(agent))
+            .bind(owner_device_id)
+            .bind(ts_ms)
+            .execute(pool)
+            .await
+            .map(|_| ())
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query(
+                r"INSERT INTO threads (thread_id, agent, owner_device_id, first_ts_ms, last_ts_ms, message_count)
+                   VALUES ($1, $2, $3, $4, $4, 0)
+                   ON CONFLICT(thread_id) DO UPDATE SET last_ts_ms = $4",
+            )
+            .bind(thread_id)
+            .bind(agent_str(agent))
+            .bind(owner_device_id)
+            .bind(ts_ms)
+            .execute(pool)
+            .await
+            .map(|_| ())
+        }
+    }
     .map_err(|e| BackendError::StoreQuery {
         operation: "threads.upsert".into(),
         message: e.to_string(),
@@ -55,7 +91,7 @@ pub async fn upsert(
 /// protocol uses — `serde_json::to_string` on a `ThreadEndReason` produces
 /// `{"kind":"agent_done"}` etc.
 pub async fn mark_ended(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     thread_id: &str,
     reason: &ThreadEndReason,
     ts_ms: i64,
@@ -64,155 +100,357 @@ pub async fn mark_ended(
         operation: "threads.mark_ended.serialise".into(),
         message: e.to_string(),
     })?;
-    sqlx::query(r"UPDATE threads SET ended_at_ms = ?1, end_reason = ?2 WHERE thread_id = ?3")
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            r"UPDATE threads SET ended_at_ms = ?1, end_reason = ?2 WHERE thread_id = ?3",
+        )
         .bind(ts_ms)
-        .bind(reason_json)
+        .bind(&reason_json)
         .bind(thread_id)
         .execute(pool)
         .await
-        .map_err(|e| BackendError::StoreQuery {
-            operation: "threads.mark_ended".into(),
-            message: e.to_string(),
-        })?;
+        .map(|_| ()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            r"UPDATE threads SET ended_at_ms = $1, end_reason = $2 WHERE thread_id = $3",
+        )
+        .bind(ts_ms)
+        .bind(&reason_json)
+        .bind(thread_id)
+        .execute(pool)
+        .await
+        .map(|_| ()),
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "threads.mark_ended".into(),
+        message: e.to_string(),
+    })?;
     Ok(())
 }
 
 /// Set the human-friendly title. Called when the translator emits
 /// `ThreadTitleUpdated` (codex surfaces this as a separate notification).
 pub async fn update_title(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     thread_id: &str,
     title: &str,
 ) -> Result<(), BackendError> {
-    sqlx::query(r"UPDATE threads SET title = ?1 WHERE thread_id = ?2")
-        .bind(title)
-        .bind(thread_id)
-        .execute(pool)
-        .await
-        .map_err(|e| BackendError::StoreQuery {
-            operation: "threads.update_title".into(),
-            message: e.to_string(),
-        })?;
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query(r"UPDATE threads SET title = ?1 WHERE thread_id = ?2")
+                .bind(title)
+                .bind(thread_id)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query(r"UPDATE threads SET title = $1 WHERE thread_id = $2")
+                .bind(title)
+                .bind(thread_id)
+                .execute(pool)
+                .await
+                .map(|_| ())
+        }
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "threads.update_title".into(),
+        message: e.to_string(),
+    })?;
     Ok(())
 }
 
-/// List thread summaries for the `LocalRpc::ListThreads` response.
+/// Check whether a thread exists and belongs to a device owned by the
+/// given `account_id`. Used for authorization checks on thread-scoped
+/// endpoints.
+pub async fn exists_for_account(
+    store: &impl AsStorePool,
+    thread_id: &str,
+    account_id: &str,
+) -> Result<bool, BackendError> {
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*)
+                   FROM threads t
+                  WHERE t.thread_id = ?
+                    AND EXISTS (
+                        SELECT 1 FROM devices d
+                         WHERE d.device_id = t.owner_device_id
+                           AND d.account_id = ?
+                    )",
+        )
+        .bind(thread_id)
+        .bind(account_id)
+        .fetch_one(pool)
+        .await
+        .map(|count| count > 0),
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (
+                    SELECT 1
+                      FROM threads t
+                     WHERE t.thread_id = $1
+                       AND EXISTS (
+                           SELECT 1 FROM devices d
+                            WHERE d.device_id = t.owner_device_id
+                              AND d.account_id = $2
+                       )
+                )",
+            )
+            .bind(thread_id)
+            .bind(account_id)
+            .fetch_one(pool)
+            .await
+        }
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "threads.exists_for_account".into(),
+        message: e.to_string(),
+    })
+}
+
+/// List thread summaries for formal agent-session/project query responses.
 ///
 /// Filters (all optional):
 /// - `owner_device_id`  — restrict to threads owned by this device.
 /// - `agent`            — restrict to a single CLI agent.
 /// - `before_ts_ms`     — only threads whose `last_ts_ms` is strictly less
 ///   than this (exclusive cursor for pagination).
+/// - `account_id`       — restrict to threads whose `owner_device_id`
+///   belongs to a device row with this `account_id`. Spec §5.5; Phase 2
+///   Task 2.6. The check uses an `EXISTS` clause against `devices` rather
+///   than a `JOIN` so the optional-cursor + ordering plan stays simple.
 ///
 /// Ordering: `last_ts_ms DESC` — most-recently-active first. Capped at
 /// `limit` rows; the caller pins the upper bound in the dispatch layer.
 pub async fn list(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     owner_device_id: Option<&str>,
     agent: Option<AgentName>,
     before_ts_ms: Option<i64>,
     limit: u32,
+    account_id: Option<&str>,
 ) -> Result<Vec<minos_protocol::ThreadSummary>, BackendError> {
     let agent_s = agent.map(agent_str);
-    let rows = sqlx::query_as::<
-        _,
-        (
-            String,
-            String,
-            Option<String>,
-            i64,
-            i64,
-            i64,
-            Option<i64>,
-            Option<String>,
-        ),
-    >(
-        r"SELECT thread_id, agent, title, first_ts_ms, last_ts_ms, message_count, ended_at_ms, end_reason
-           FROM threads
-           WHERE (?1 IS NULL OR owner_device_id = ?1)
-             AND (?2 IS NULL OR agent = ?2)
-             AND (?3 IS NULL OR last_ts_ms < ?3)
-           ORDER BY last_ts_ms DESC
-           LIMIT ?4",
-    )
-    .bind(owner_device_id)
-    .bind(agent_s)
-    .bind(before_ts_ms)
-    .bind(i64::from(limit))
-    .fetch_all(pool)
-    .await
+    let rows = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, ThreadSummaryRow>(
+                r"SELECT thread_id, agent, title, first_ts_ms, last_ts_ms, message_count, ended_at_ms, end_reason
+                   FROM threads
+                   WHERE (?1 IS NULL OR owner_device_id = ?1)
+                     AND (?2 IS NULL OR agent = ?2)
+                     AND (?3 IS NULL OR last_ts_ms < ?3)
+                     AND (
+                         ?5 IS NULL
+                         OR EXISTS (
+                             SELECT 1 FROM devices d
+                             WHERE d.device_id = threads.owner_device_id
+                               AND d.account_id = ?5
+                         )
+                     )
+                   ORDER BY last_ts_ms DESC
+                   LIMIT ?4",
+            )
+            .bind(owner_device_id)
+            .bind(agent_s)
+            .bind(before_ts_ms)
+            .bind(i64::from(limit))
+            .bind(account_id)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, ThreadSummaryRow>(
+                r"SELECT thread_id, agent, title, first_ts_ms, last_ts_ms, message_count, ended_at_ms, end_reason
+                   FROM threads
+                   WHERE ($1::TEXT IS NULL OR owner_device_id = $1)
+                     AND ($2::TEXT IS NULL OR agent = $2)
+                     AND ($3::BIGINT IS NULL OR last_ts_ms < $3)
+                     AND (
+                         $5::TEXT IS NULL
+                         OR EXISTS (
+                             SELECT 1 FROM devices d
+                             WHERE d.device_id = threads.owner_device_id
+                               AND d.account_id = $5
+                         )
+                     )
+                   ORDER BY last_ts_ms DESC
+                   LIMIT $4",
+            )
+            .bind(owner_device_id)
+            .bind(agent_s)
+            .bind(before_ts_ms)
+            .bind(i64::from(limit))
+            .bind(account_id)
+            .fetch_all(pool)
+            .await
+        }
+    }
     .map_err(|e| BackendError::StoreQuery {
         operation: "threads.list".into(),
         message: e.to_string(),
     })?;
 
-    rows.into_iter()
-        .map(
-            |(
-                thread_id,
-                agent_s,
-                title,
-                first_ts_ms,
-                last_ts_ms,
-                message_count,
-                ended_at_ms,
-                end_reason_json,
-            )| {
-                let agent = match agent_s.as_str() {
-                    "codex" => AgentName::Codex,
-                    "claude" => AgentName::Claude,
-                    "gemini" => AgentName::Gemini,
-                    other => {
-                        return Err(BackendError::StoreDecode {
-                            column: "threads.agent".into(),
-                            message: other.to_string(),
-                        })
-                    }
-                };
-                let end_reason = end_reason_json
-                    .as_ref()
-                    .map(|s| serde_json::from_str::<ThreadEndReason>(s))
-                    .transpose()
-                    .map_err(|e| BackendError::StoreDecode {
-                        column: "threads.end_reason".into(),
-                        message: e.to_string(),
-                    })?;
-                Ok(minos_protocol::ThreadSummary {
-                    thread_id,
-                    agent,
-                    title,
-                    first_ts_ms,
-                    last_ts_ms,
-                    message_count: u32::try_from(message_count).unwrap_or(u32::MAX),
-                    ended_at_ms,
-                    end_reason,
-                })
-            },
-        )
-        .collect()
+    rows.into_iter().map(decode_thread_summary_row).collect()
+}
+
+/// Load thread summaries for a specific set of ids, scoped to one account.
+pub async fn summaries_for_ids(
+    store: &impl AsStorePool,
+    account_id: &str,
+    thread_ids: &[String],
+) -> Result<HashMap<String, minos_protocol::ThreadSummary>, BackendError> {
+    if thread_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let rows: Vec<ThreadSummaryRow> = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let mut query = QueryBuilder::<Sqlite>::new(
+                "SELECT thread_id, agent, title, first_ts_ms, last_ts_ms, message_count, ended_at_ms, end_reason \
+                 FROM threads WHERE thread_id IN (",
+            );
+            {
+                let mut separated = query.separated(", ");
+                for thread_id in thread_ids {
+                    separated.push_bind(thread_id);
+                }
+            }
+            query.push(
+                ") AND EXISTS (\
+                    SELECT 1 FROM devices d \
+                    WHERE d.device_id = threads.owner_device_id \
+                      AND d.account_id = ",
+            );
+            query.push_bind(account_id);
+            query.push(")");
+
+            query.build_query_as().fetch_all(pool).await
+        }
+        StorePoolRef::Postgres(pool) => {
+            let mut query = QueryBuilder::<Postgres>::new(
+                "SELECT thread_id, agent, title, first_ts_ms, last_ts_ms, message_count, ended_at_ms, end_reason \
+                 FROM threads WHERE thread_id IN (",
+            );
+            {
+                let mut separated = query.separated(", ");
+                for thread_id in thread_ids {
+                    separated.push_bind(thread_id);
+                }
+            }
+            query.push(
+                ") AND EXISTS (\
+                    SELECT 1 FROM devices d \
+                    WHERE d.device_id = threads.owner_device_id \
+                      AND d.account_id = ",
+            );
+            query.push_bind(account_id);
+            query.push(")");
+
+            query.build_query_as().fetch_all(pool).await
+        }
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "threads.summaries_for_ids".into(),
+        message: e.to_string(),
+    })?;
+
+    let mut summaries = HashMap::with_capacity(rows.len());
+    for row in rows {
+        let summary = decode_thread_summary_row(row)?;
+        summaries.insert(summary.thread_id.clone(), summary);
+    }
+    Ok(summaries)
 }
 
 /// Bump `message_count` by 1. Called when the translator places a new
 /// `MessageStarted` — gives the list view a cheap "N messages" badge.
 pub async fn increment_message_count(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     thread_id: &str,
 ) -> Result<(), BackendError> {
-    sqlx::query(r"UPDATE threads SET message_count = message_count + 1 WHERE thread_id = ?1")
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            r"UPDATE threads SET message_count = message_count + 1 WHERE thread_id = ?1",
+        )
         .bind(thread_id)
         .execute(pool)
         .await
-        .map_err(|e| BackendError::StoreQuery {
-            operation: "threads.increment_message_count".into(),
+        .map(|_| ()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            r"UPDATE threads SET message_count = message_count + 1 WHERE thread_id = $1",
+        )
+        .bind(thread_id)
+        .execute(pool)
+        .await
+        .map(|_| ()),
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "threads.increment_message_count".into(),
+        message: e.to_string(),
+    })?;
+    Ok(())
+}
+
+fn decode_thread_summary_row(
+    (
+        thread_id,
+        agent_s,
+        title,
+        first_ts_ms,
+        last_ts_ms,
+        message_count,
+        ended_at_ms,
+        end_reason_json,
+    ): ThreadSummaryRow,
+) -> Result<minos_protocol::ThreadSummary, BackendError> {
+    let agent = match agent_s.as_str() {
+        "codex" => AgentName::Codex,
+        "claude" => AgentName::Claude,
+        "gemini" => AgentName::Gemini,
+        "opencode" => AgentName::Opencode,
+        "grok" => AgentName::Grok,
+        other => {
+            return Err(BackendError::StoreDecode {
+                column: "threads.agent".into(),
+                message: other.to_string(),
+            })
+        }
+    };
+    let end_reason = end_reason_json
+        .as_ref()
+        .map(|s| serde_json::from_str::<ThreadEndReason>(s))
+        .transpose()
+        .map_err(|e| BackendError::StoreDecode {
+            column: "threads.end_reason".into(),
             message: e.to_string(),
         })?;
-    Ok(())
+    let state = if ended_at_ms.is_some() {
+        minos_protocol::ThreadState::Closed {
+            reason: minos_protocol::CloseReason::UserClose,
+        }
+    } else {
+        minos_protocol::ThreadState::Idle
+    };
+    Ok(minos_protocol::ThreadSummary {
+        thread_id,
+        agent,
+        title,
+        first_ts_ms,
+        last_ts_ms,
+        message_count: u32::try_from(message_count).unwrap_or(u32::MAX),
+        ended_at_ms,
+        end_reason,
+        parent_thread_id: None,
+        state,
+        needs_continue: false,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::store::test_support::memory_pool;
+    use sqlx::SqlitePool;
 
     async fn seed_agent_host(pool: &SqlitePool) {
         sqlx::query(
@@ -325,7 +563,9 @@ mod tests {
             .unwrap();
         }
 
-        let r = list(&pool, Some("dev1"), None, None, 3).await.unwrap();
+        let r = list(&pool, Some("dev1"), None, None, 3, None)
+            .await
+            .unwrap();
         assert_eq!(r.len(), 3);
         assert_eq!(r[0].thread_id, "thr4");
         assert_eq!(r[1].thread_id, "thr3");
@@ -351,9 +591,71 @@ mod tests {
             .await
             .unwrap();
 
-        let r = list(&pool, Some("dev1"), None, None, 50).await.unwrap();
+        let r = list(&pool, Some("dev1"), None, None, 50, None)
+            .await
+            .unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].thread_id, "mine");
+    }
+
+    #[tokio::test]
+    async fn list_filters_by_account_id() {
+        // Phase 2 Task 2.6: when an `account_id` is supplied, only
+        // threads whose owner device row carries that account_id are
+        // returned. Threads owned by devices on a different account, or
+        // by devices with no account_id, must be excluded.
+        let pool = memory_pool().await;
+        // Account A + device owning thread "mine".
+        let acct_a = crate::store::accounts::create(&pool, "alice@example.com", "phc")
+            .await
+            .unwrap();
+        let acct_b = crate::store::accounts::create(&pool, "bob@example.com", "phc")
+            .await
+            .unwrap();
+        sqlx::query(
+            r"INSERT INTO devices (device_id, display_name, role, created_at, last_seen_at, account_id)
+               VALUES ('a-mac','Mac-A','agent-host',0,0,?1)",
+        )
+        .bind(&acct_a.account_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r"INSERT INTO devices (device_id, display_name, role, created_at, last_seen_at, account_id)
+               VALUES ('b-mac','Mac-B','agent-host',0,0,?1)",
+        )
+        .bind(&acct_b.account_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r"INSERT INTO devices (device_id, display_name, role, created_at, last_seen_at)
+               VALUES ('orphan','Mac-O','agent-host',0,0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        upsert(&pool, "thr-a", AgentName::Codex, "a-mac", 1000)
+            .await
+            .unwrap();
+        upsert(&pool, "thr-b", AgentName::Codex, "b-mac", 2000)
+            .await
+            .unwrap();
+        upsert(&pool, "thr-orphan", AgentName::Codex, "orphan", 3000)
+            .await
+            .unwrap();
+
+        // Filtering by account A should return only thr-a.
+        let r = list(&pool, None, None, None, 50, Some(&acct_a.account_id))
+            .await
+            .unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].thread_id, "thr-a");
+
+        // No account filter: all three.
+        let r = list(&pool, None, None, None, 50, None).await.unwrap();
+        assert_eq!(r.len(), 3);
     }
 
     #[tokio::test]
@@ -373,7 +675,7 @@ mod tests {
         }
 
         // before_ts_ms = 3000 must strictly exclude last_ts_ms = 3000.
-        let r = list(&pool, Some("dev1"), None, Some(3000), 50)
+        let r = list(&pool, Some("dev1"), None, Some(3000), 50, None)
             .await
             .unwrap();
         assert_eq!(r.len(), 3);

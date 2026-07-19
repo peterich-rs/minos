@@ -4,37 +4,87 @@
 //! frame. It:
 //!
 //! 1. Upserts the `threads` row.
-//! 2. `INSERT OR IGNORE`s the raw event, discarding retransmits at the DB
-//!    boundary so seq collisions are not observable to callers.
+//! 2. Persists the raw event, discarding exact retransmits while assigning a
+//!    fresh backend seq when a resumed daemon reuses an old process-local seq.
 //! 3. Runs the per-agent translator. Translator errors surface as a
 //!    synthetic `UiEventMessage::Error` so mobile sees something deterministic
 //!    rather than a silent drop.
 //! 4. For each produced UI event, wraps it in an `Envelope::Event` /
-//!    `EventKind::UiEventMessage` and fans it out to every device paired
-//!    with `owner_device_id` that has a live session.
+//!    `EventKind::UiEventMessage` and fans it out to every iOS device
+//!    on every account paired to the ingesting Mac (`owner_device_id`).
+//!    See [`broadcast_to_peers_of`] for the
+//!    `account_host_pairings → devices` walk introduced in ADR-0020 /
+//!    Phase G.
 //!
 //! Fan-out is bounded: the SessionHandle's outbox is a fixed-size
 //! `mpsc::channel(256)`; full channels drop the one frame with a warn log
 //! rather than blocking the ingest path.
 
 pub mod translate;
+pub mod use_case;
 
+use std::collections::HashMap;
+
+use crate::approvals::{ApprovalService, RecordApprovalRequestInput};
 use minos_domain::AgentName;
 use minos_protocol::{Envelope, EventKind};
+use minos_ui_protocol::{MessageRole, UiEventMessage};
 use serde_json::Value;
-use sqlx::SqlitePool;
 
 use crate::error::BackendError;
 use crate::ingest::translate::ThreadTranslators;
+use crate::realtime::{peer_target_cache_backend, RealtimeFanout, RealtimeTopic};
 use crate::session::SessionRegistry;
-use crate::store::{raw_events, threads};
+use crate::store::{raw_events, threads, AsStorePool, StorePoolRef};
+
+pub async fn invalidate_peer_targets_for_host(
+    host_device_id: minos_domain::DeviceId,
+) -> Result<(), BackendError> {
+    peer_target_cache_backend().invalidate(host_device_id).await
+}
+
+pub async fn invalidate_peer_targets_for_account<S>(
+    store: &S,
+    account_id: &str,
+) -> Result<(), BackendError>
+where
+    S: AsStorePool,
+{
+    let pairs =
+        crate::store::account_host_pairings::list_hosts_for_account(store, account_id).await?;
+    for pair in pairs {
+        invalidate_peer_targets_for_host(pair.host_device_id).await?;
+    }
+    Ok(())
+}
+
+async fn peer_targets_for_host(
+    store: &impl AsStorePool,
+    host_device_id: minos_domain::DeviceId,
+) -> Result<Vec<minos_domain::DeviceId>, BackendError> {
+    if let Some(device_ids) = peer_target_cache_backend().get(host_device_id).await? {
+        return Ok(device_ids);
+    }
+
+    let targets = crate::store::account_host_pairings::list_account_client_targets_for_host(
+        store,
+        host_device_id,
+    )
+    .await?;
+    peer_target_cache_backend()
+        .set(host_device_id, &targets)
+        .await?;
+    Ok(targets)
+}
 
 /// Process one `Envelope::Ingest` frame.
 #[allow(clippy::too_many_arguments)] // Single-site dispatcher; splitting obscures the 4-step pipeline.
 pub async fn dispatch(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     registry: &SessionRegistry,
     translators: &ThreadTranslators,
+    approvals: &dyn ApprovalService,
+    realtime: &RealtimeFanout,
     agent: AgentName,
     thread_id: &str,
     seq: u64,
@@ -43,16 +93,34 @@ pub async fn dispatch(
     owner_device_id: minos_domain::DeviceId,
 ) -> Result<(), BackendError> {
     // 1. Upsert the thread row (creates on first ingest, bumps last_ts_ms otherwise).
-    threads::upsert(pool, thread_id, agent, &owner_device_id.to_string(), ts_ms).await?;
+    threads::upsert(store, thread_id, agent, &owner_device_id.to_string(), ts_ms).await?;
 
-    // 2. Persist raw; dedupe on (thread_id, seq).
-    let inserted =
-        raw_events::insert_if_absent(pool, thread_id, seq, agent, payload, ts_ms).await?;
-    if !inserted {
+    // 2. Persist raw. The backend may assign a fresh seq when the daemon
+    // resumes an existing thread with a process-local counter reset.
+    let Some(persisted_seq) =
+        raw_events::insert_assigning_seq(store, thread_id, seq, agent, payload, ts_ms).await?
+    else {
         tracing::debug!(
             target: "minos_backend::ingest",
             thread_id, seq, "ingest seq retransmit, dropping"
         );
+        return Ok(());
+    };
+
+    if should_skip_external_sql_approval_event(store, payload) {
+        tracing::info!(
+            target: "minos_backend::ingest",
+            thread_id,
+            "skipping approval realtime event because external-sql approval runtime is still unavailable"
+        );
+        return Ok(());
+    }
+
+    if let Some(event) =
+        special_event_from_payload(approvals, thread_id, payload, ts_ms, owner_device_id).await?
+    {
+        let env = Envelope::Event { version: 1, event };
+        broadcast_to_peers_of(store, registry, realtime, owner_device_id, &env).await;
         return Ok(());
     }
 
@@ -79,9 +147,9 @@ pub async fn dispatch(
             minos_ui_protocol::UiEventMessage::ThreadTitleUpdated { .. }
         )
     });
-    if !has_explicit_title && thread_title_is_missing(pool, thread_id).await {
+    if !has_explicit_title && thread_title_is_missing(store, thread_id).await {
         if let Some(title) = derive_fallback_title(payload, &translated) {
-            let _ = threads::update_title(pool, thread_id, &title).await;
+            let _ = threads::update_title(store, thread_id, &title).await;
             translated.insert(
                 0,
                 minos_ui_protocol::UiEventMessage::ThreadTitleUpdated {
@@ -92,44 +160,389 @@ pub async fn dispatch(
         }
     }
 
+    sync_formal_agent_session_from_ui_events(store, thread_id, &translated, ts_ms).await?;
+
     // 4. Fan out each UI event to every live peer paired with owner_device_id.
+    let suppress_social_fanout =
+        match crate::store::social::suppress_live_ui_fanout_for_session(store, thread_id).await {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_backend::ingest",
+                    error = %error,
+                    thread_id,
+                    "failed to probe social fan-out mode; defaulting to regular fan-out"
+                );
+                false
+            }
+        };
     for ui in translated {
         // Side effects on DB when the UI event implies a thread mutation.
         match &ui {
             minos_ui_protocol::UiEventMessage::ThreadTitleUpdated { title, .. } => {
-                let _ = threads::update_title(pool, thread_id, title).await;
+                let _ = threads::update_title(store, thread_id, title).await;
             }
             minos_ui_protocol::UiEventMessage::MessageStarted { .. } => {
-                let _ = threads::increment_message_count(pool, thread_id).await;
+                let _ = threads::increment_message_count(store, thread_id).await;
             }
             minos_ui_protocol::UiEventMessage::ThreadClosed { reason, .. } => {
-                let _ = threads::mark_ended(pool, thread_id, reason, ts_ms).await;
+                let _ = threads::mark_ended(store, thread_id, reason, ts_ms).await;
                 translators.drop_thread(thread_id);
             }
             _ => {}
+        }
+
+        if suppress_social_fanout {
+            let payload = match serde_json::to_value(&ui) {
+                Ok(payload) => payload,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "minos_backend::ingest",
+                        error = %error,
+                        thread_id,
+                        "failed to encode suppressed social ui event for formal stream"
+                    );
+                    continue;
+                }
+            };
+            realtime.fanout_stream_event(
+                &RealtimeTopic::AgentSession(thread_id.to_string()),
+                "ui_event",
+                i64::try_from(persisted_seq).ok(),
+                payload,
+            );
+            continue;
         }
 
         let env = Envelope::Event {
             version: 1,
             event: EventKind::UiEventMessage {
                 thread_id: thread_id.to_string(),
-                seq,
+                seq: persisted_seq,
                 ui,
                 ts_ms,
             },
         };
-        broadcast_to_peers_of(pool, registry, owner_device_id, &env).await;
+        broadcast_to_peers_of(store, registry, realtime, owner_device_id, &env).await;
     }
 
     Ok(())
 }
 
-async fn thread_title_is_missing(pool: &SqlitePool, thread_id: &str) -> bool {
-    match sqlx::query_scalar::<_, Option<String>>("SELECT title FROM threads WHERE thread_id = ?1")
-        .bind(thread_id)
-        .fetch_optional(pool)
-        .await
+async fn sync_formal_agent_session_from_ui_events(
+    store: &impl AsStorePool,
+    session_id: &str,
+    events: &[UiEventMessage],
+    default_ts_ms: i64,
+) -> Result<(), BackendError> {
+    let Some(_) = crate::store::agent_sessions::get(store, session_id).await? else {
+        return Ok(());
+    };
+
+    let mut role_by_message = HashMap::<String, MessageRole>::new();
+    for event in events {
+        if let UiEventMessage::MessageStarted {
+            message_id, role, ..
+        } = event
+        {
+            role_by_message.insert(message_id.clone(), *role);
+        }
+    }
+
+    for event in events {
+        match event {
+            UiEventMessage::MessageStarted {
+                message_id,
+                role: MessageRole::Assistant,
+                started_at_ms,
+            } => {
+                mark_formal_session_running_if_open(store, session_id).await?;
+                ensure_assistant_turn(store, session_id, message_id, *started_at_ms).await?;
+            }
+            UiEventMessage::TextDelta { message_id, text } => {
+                if assistant_message_known(store, session_id, message_id, &role_by_message).await? {
+                    let text = text.render_preview();
+                    append_assistant_turn_summary(
+                        store,
+                        session_id,
+                        message_id,
+                        &text,
+                        default_ts_ms,
+                    )
+                    .await?;
+                }
+            }
+            UiEventMessage::TextReplace { message_id, text } => {
+                if assistant_message_known(store, session_id, message_id, &role_by_message).await? {
+                    let text = text.render_preview();
+                    replace_assistant_turn_summary(
+                        store,
+                        session_id,
+                        message_id,
+                        &text,
+                        default_ts_ms,
+                    )
+                    .await?;
+                }
+            }
+            UiEventMessage::MessageCompleted {
+                message_id,
+                finished_at_ms,
+            } => {
+                if let Some(turn) = crate::store::agent_turns::get(store, message_id).await? {
+                    if turn.agent_session_id == session_id && turn.role == "assistant" {
+                        let _ = crate::store::agent_turns::update_status(
+                            store,
+                            message_id,
+                            "completed",
+                            Some(*finished_at_ms),
+                        )
+                        .await?;
+                    }
+                }
+            }
+            UiEventMessage::Error { message_id, .. } => {
+                let _ = crate::store::agent_sessions::update_status(
+                    store,
+                    session_id,
+                    "failed",
+                    Some(default_ts_ms),
+                )
+                .await?;
+                if let Some(message_id) = message_id {
+                    if let Some(turn) = crate::store::agent_turns::get(store, message_id).await? {
+                        if turn.agent_session_id == session_id && turn.role == "assistant" {
+                            let _ = crate::store::agent_turns::update_status(
+                                store,
+                                message_id,
+                                "failed",
+                                Some(default_ts_ms),
+                            )
+                            .await?;
+                        }
+                    }
+                }
+            }
+            UiEventMessage::ThreadClosed { closed_at_ms, .. } => {
+                let _ = crate::store::agent_sessions::update_status(
+                    store,
+                    session_id,
+                    "ended",
+                    Some(*closed_at_ms),
+                )
+                .await?;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+async fn assistant_message_known(
+    store: &impl AsStorePool,
+    session_id: &str,
+    message_id: &str,
+    role_by_message: &HashMap<String, MessageRole>,
+) -> Result<bool, BackendError> {
+    match role_by_message.get(message_id) {
+        Some(MessageRole::User | MessageRole::System) => Ok(false),
+        Some(MessageRole::Assistant) => Ok(true),
+        None => Ok(crate::store::agent_turns::get(store, message_id)
+            .await?
+            .is_some_and(|turn| turn.agent_session_id == session_id && turn.role == "assistant")),
+    }
+}
+
+async fn mark_formal_session_running_if_open(
+    store: &impl AsStorePool,
+    session_id: &str,
+) -> Result<(), BackendError> {
+    let Some(session) = crate::store::agent_sessions::get(store, session_id).await? else {
+        return Ok(());
+    };
+    if matches!(session.status.as_str(), "pending" | "running") && session.status != "running" {
+        let _ =
+            crate::store::agent_sessions::update_status(store, session_id, "running", None).await?;
+    }
+    Ok(())
+}
+
+async fn ensure_assistant_turn(
+    store: &impl AsStorePool,
+    session_id: &str,
+    message_id: &str,
+    started_at_ms: i64,
+) -> Result<(), BackendError> {
+    if crate::store::agent_turns::get(store, message_id)
+        .await?
+        .is_some()
     {
+        return Ok(());
+    }
+    let existing_turns =
+        crate::store::agent_turns::list_for_session(store, session_id, None, u32::MAX).await?;
+    let turn_seq = existing_turns.last().map_or(1, |turn| turn.turn_seq + 1);
+    let _ = crate::store::agent_turns::create(
+        store,
+        message_id,
+        session_id,
+        turn_seq,
+        "assistant",
+        "streaming",
+        started_at_ms,
+        None,
+        None,
+        None,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn append_assistant_turn_summary(
+    store: &impl AsStorePool,
+    session_id: &str,
+    message_id: &str,
+    text: &str,
+    started_at_ms: i64,
+) -> Result<(), BackendError> {
+    ensure_assistant_turn(store, session_id, message_id, started_at_ms).await?;
+    let Some(turn) = crate::store::agent_turns::get(store, message_id).await? else {
+        return Ok(());
+    };
+    if turn.agent_session_id != session_id || turn.role != "assistant" {
+        return Ok(());
+    }
+    let mut next = turn.summary_text.unwrap_or_default();
+    next.push_str(text);
+    let _ = crate::store::agent_turns::update_summary_text(store, message_id, Some(&next)).await?;
+    Ok(())
+}
+
+async fn replace_assistant_turn_summary(
+    store: &impl AsStorePool,
+    session_id: &str,
+    message_id: &str,
+    text: &str,
+    started_at_ms: i64,
+) -> Result<(), BackendError> {
+    ensure_assistant_turn(store, session_id, message_id, started_at_ms).await?;
+    let _ = crate::store::agent_turns::update_summary_text(store, message_id, Some(text)).await?;
+    Ok(())
+}
+
+fn should_skip_external_sql_approval_event(store: &impl AsStorePool, payload: &Value) -> bool {
+    if !matches!(store.as_store_pool(), StorePoolRef::Postgres(_)) {
+        return false;
+    }
+    matches!(
+        payload.get("method").and_then(Value::as_str),
+        Some("approval/request" | "approval/timeout")
+    )
+}
+
+async fn special_event_from_payload(
+    approvals: &dyn ApprovalService,
+    thread_id: &str,
+    payload: &Value,
+    ts_ms: i64,
+    _owner_device_id: minos_domain::DeviceId,
+) -> Result<Option<EventKind>, BackendError> {
+    let Some(method) = payload.get("method").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    let params = payload.get("params").cloned().unwrap_or(Value::Null);
+
+    match method {
+        "approval/request" => {
+            let request_id = params
+                .get("request_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let turn_id = params
+                .get("turn_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let approval_method = params
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let approval_params = params.get("params").cloned().unwrap_or(Value::Null);
+            let timeout_ms = params
+                .get("timeout_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+
+            approvals
+                .record_request(RecordApprovalRequestInput {
+                    request_id: request_id.clone(),
+                    agent_session_id: thread_id.to_string(),
+                    turn_id: (!turn_id.is_empty()).then_some(turn_id.clone()),
+                    method: approval_method.clone(),
+                    params_json: approval_params.clone(),
+                    created_at_ms: ts_ms,
+                    timeout_ms,
+                })
+                .await?;
+
+            Ok(Some(EventKind::ApprovalRequest {
+                thread_id: thread_id.to_string(),
+                turn_id,
+                request_id,
+                method: approval_method,
+                params: approval_params,
+                timeout_ms,
+            }))
+        }
+        "approval/timeout" => {
+            let request_id = params
+                .get("request_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let reason = params
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("timeout")
+                .to_string();
+
+            approvals
+                .handle_host_timeout(&request_id, &reason, ts_ms)
+                .await?;
+
+            Ok(Some(EventKind::ApprovalTimeout {
+                thread_id: thread_id.to_string(),
+                request_id,
+                reason,
+            }))
+        }
+        _ => Ok(None),
+    }
+}
+
+async fn thread_title_is_missing(store: &impl AsStorePool, thread_id: &str) -> bool {
+    let result = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar::<_, Option<String>>(
+                "SELECT title FROM threads WHERE thread_id = ?1",
+            )
+            .bind(thread_id)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar::<_, Option<String>>(
+                "SELECT title FROM threads WHERE thread_id = $1",
+            )
+            .bind(thread_id)
+            .fetch_optional(pool)
+            .await
+        }
+    };
+    match result {
         Ok(Some(None)) => true,
         Ok(Some(Some(_)) | None) => false,
         Err(e) => {
@@ -171,7 +584,9 @@ fn derive_title_from_translated(
     }
 
     translated.iter().find_map(|ui| match ui {
-        minos_ui_protocol::UiEventMessage::TextDelta { text, .. } => sanitize_title(text),
+        minos_ui_protocol::UiEventMessage::TextDelta { text, .. } => {
+            sanitize_title(&text.render_preview())
+        }
         _ => None,
     })
 }
@@ -209,55 +624,143 @@ fn sanitize_title(text: &str) -> Option<String> {
     Some(trimmed.chars().take(80).collect())
 }
 
-/// Look up the pair for `device_id` in the DB, find its live session in the
-/// registry (if any), and try-send `env` on its outbox. Misses (unpaired
-/// device, peer offline, full outbox) are logged at debug/warn and swallowed
-/// — ingest must stay crash-safe.
+/// Look up every account paired to `host_device_id` (the ingesting Mac),
+/// resolve every iOS device under each account, and try-send `env` on
+/// each live session's outbox. Misses (no paired accounts, peer offline,
+/// full outbox) are logged at debug/warn and swallowed — ingest must
+/// stay crash-safe.
+///
+/// ADR-0020 / Phase G: replaces the legacy device-keyed
+/// `pairings::get_peers` lookup. Pair table is now keyed on
+/// `(host_device_id, mobile_account_id)`, so we walk
+/// account_host_pairings → devices(account_id) → live registry.
 async fn broadcast_to_peers_of(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     registry: &SessionRegistry,
-    device_id: minos_domain::DeviceId,
+    realtime: &RealtimeFanout,
+    host_device_id: minos_domain::DeviceId,
     env: &Envelope,
 ) {
-    let peer = match crate::store::pairings::get_pair(pool, device_id).await {
-        Ok(Some(p)) => p,
-        Ok(None) => {
+    let targets = match peer_targets_for_host(store, host_device_id).await {
+        Ok(v) if !v.is_empty() => v,
+        Ok(_) => {
             tracing::debug!(
                 target: "minos_backend::ingest",
-                device = %device_id,
-                "no peer paired; dropping ui event"
+                mac = %host_device_id,
+                "no accounts paired; dropping ui event"
             );
             return;
         }
-        Err(e) => {
+        Err(error) => {
             tracing::warn!(
                 target: "minos_backend::ingest",
-                error = ?e,
-                "failed to look up pair"
+                error = %error,
+                mac = %host_device_id,
+                "failed to resolve peer targets for host"
             );
             return;
         }
     };
 
-    let Some(handle) = registry.get(peer) else {
-        tracing::debug!(
-            target: "minos_backend::ingest",
-            peer = %peer,
-            "peer not live; dropping ui event"
-        );
-        return;
-    };
+    let _ = registry;
+    realtime.fanout_ui_event(&targets, env).await;
+}
 
-    // Route through `try_send_current` so a reconnect race (peer reconnects
-    // between `get` and the send) cannot let a superseded socket consume
-    // the live UI event. The replacement session will catch up via the
-    // next ingest tick or via list/read_thread on its own (re)attach.
-    if let Err(e) = registry.try_send_current(&handle, env.clone()) {
-        tracing::warn!(
-            target: "minos_backend::ingest",
-            peer = %peer,
-            error = ?e,
-            "peer outbox full or superseded; dropping ui event"
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::account_host_pairings;
+    use crate::store::devices::{insert_device, set_account_id};
+    use crate::store::test_support::{insert_account, insert_ios_device, memory_pool, T0};
+    use minos_domain::{DeviceId, DeviceRole};
+
+    #[tokio::test]
+    async fn peer_targets_cache_refreshes_after_explicit_invalidation() {
+        let pool = memory_pool().await;
+        let host = DeviceId::new();
+        insert_device(&pool, host, "mac", DeviceRole::AgentHost, T0)
+            .await
+            .unwrap();
+
+        let account_a = insert_account(&pool, "a@example.com").await;
+        let ios_a = insert_ios_device(&pool, &account_a).await;
+        account_host_pairings::insert_pair(&pool, host, &account_a, ios_a, T0)
+            .await
+            .unwrap();
+
+        let initial = peer_targets_for_host(&pool, host).await.unwrap();
+        assert_eq!(initial, vec![ios_a]);
+
+        let account_b = insert_account(&pool, "b@example.com").await;
+        let ios_b = insert_ios_device(&pool, &account_b).await;
+        account_host_pairings::insert_pair(&pool, host, &account_b, ios_b, T0 + 1)
+            .await
+            .unwrap();
+
+        let cached = peer_targets_for_host(&pool, host).await.unwrap();
+        assert_eq!(
+            cached,
+            vec![ios_a],
+            "cached peer targets should remain stable until invalidated"
         );
+
+        invalidate_peer_targets_for_host(host).await.unwrap();
+        let refreshed = peer_targets_for_host(&pool, host).await.unwrap();
+        assert_eq!(refreshed.len(), 2);
+        assert!(refreshed.contains(&ios_a));
+        assert!(refreshed.contains(&ios_b));
+    }
+
+    #[tokio::test]
+    async fn account_invalidation_refreshes_hosts_after_device_moves_accounts() {
+        let pool = memory_pool().await;
+        let host_a = DeviceId::new();
+        let host_b = DeviceId::new();
+        insert_device(&pool, host_a, "mac-a", DeviceRole::AgentHost, T0)
+            .await
+            .unwrap();
+        insert_device(&pool, host_b, "mac-b", DeviceRole::AgentHost, T0)
+            .await
+            .unwrap();
+
+        let account_a = insert_account(&pool, "a@example.com").await;
+        let account_b = insert_account(&pool, "b@example.com").await;
+        let ios_a = insert_ios_device(&pool, &account_a).await;
+        let ios_b = insert_ios_device(&pool, &account_b).await;
+
+        account_host_pairings::insert_pair(&pool, host_a, &account_a, ios_a, T0)
+            .await
+            .unwrap();
+        account_host_pairings::insert_pair(&pool, host_b, &account_b, ios_b, T0 + 1)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            peer_targets_for_host(&pool, host_a).await.unwrap(),
+            vec![ios_a]
+        );
+        assert_eq!(
+            peer_targets_for_host(&pool, host_b).await.unwrap(),
+            vec![ios_b]
+        );
+
+        set_account_id(&pool, &ios_a, &account_b).await.unwrap();
+
+        invalidate_peer_targets_for_account(&pool, &account_a)
+            .await
+            .unwrap();
+        invalidate_peer_targets_for_account(&pool, &account_b)
+            .await
+            .unwrap();
+
+        assert!(peer_targets_for_host(&pool, host_a)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let refreshed_b = peer_targets_for_host(&pool, host_b).await.unwrap();
+        assert_eq!(refreshed_b.len(), 2);
+        assert!(refreshed_b.contains(&ios_a));
+        assert!(refreshed_b.contains(&ios_b));
     }
 }

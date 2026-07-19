@@ -1,31 +1,41 @@
 import Foundation
-import OSLog
-import Security
 
-/// Production daemon bootstrap. Resolves optional CF Service Token credentials
-/// from process env, spawns the daemon, and wires the dual-axis observers into
-/// AppState. CF credentials are never read from or written to the macOS
-/// Keychain; launchd/CLI env injection is the single host-side source.
+/// Production daemon bootstrap. Resolves the runtime backend URL from the
+/// bundled Info.plist, spawns the daemon, and wires the dual-axis observers
+/// into AppState. The Mac's own `selfDeviceId` is persisted in the shared
+/// Rust daemon state path. The daemon's long-lived `deviceSecret` now lives
+/// in the Rust-managed secrets store, so Swift no longer needs to load
+/// or migrate it at bootstrap.
+/// The peer relationship itself lives only on the backend; the daemon
+/// repopulates its in-memory peer mirror after each successful WebSocket
+/// connect.
 ///
 /// Plan 05 Phase I.6.
 enum DaemonBootstrap {
-    private static let logger = Logger(subsystem: "ai.minos.macos", category: "bootstrap")
-    fileprivate static let keychainService = "ai.minos.macos"
+    private static let backendURLKey = "MINOS_BACKEND_URL"
 
-    /// Default startDaemon factory used in production. Reads
-    /// LocalState off disk and the device-secret out of Keychain;
-    /// Swift only supplies what's not on the filesystem (CF token from
-    /// env + display name) before handing off to the Rust ctor.
+    /// Default startDaemon factory used in production. Reads `selfDeviceId`
+    /// off `local-state.json` (minted on first launch). The daemon loads
+    /// any persisted `deviceSecret` internally via its own durable store,
+    /// so app bootstrap only needs the stable host device id here. The
+    /// peer record is no longer persisted — the daemon queries the backend
+    /// for it after the WS link comes up.
     static let defaultStartDaemon: @Sendable (RelayConfig, String) async throws
         -> any DaemonDriving = { config, macName in
         let localStatePath = AppDirectories.localStatePath()
-        let (selfDeviceId, peer) = try LocalStateLoader.loadOrInit(at: localStatePath)
-        let secret = KeychainDeviceSecret.read()
+        let selfDeviceId = try LocalStateLoader.loadOrInit(
+            at: localStatePath,
+            legacyPath: AppDirectories.legacyLocalStatePath()
+        )
+        AppLog.info(
+            "bootstrap",
+            "Local state ready; path=\(localStatePath.path); selfDeviceId=\(selfDeviceId)"
+        )
         return try await DaemonHandle.start(
             config: config,
             selfDeviceId: selfDeviceId,
-            peer: peer,
-            secret: secret,
+            peer: nil,
+            secret: nil,
             macName: macName
         )
     }
@@ -38,16 +48,20 @@ enum DaemonBootstrap {
     /// real Rust runtime.
     static func bootstrap(
         _ appState: AppState,
+        clearExistingLogs: Bool = false,
         startDaemon: @escaping @Sendable (RelayConfig, String) async throws -> any DaemonDriving = defaultStartDaemon
     ) async {
         await appState.beginBoot()
+        let logCleanup = clearExistingLogs ? StartupLogCleaner.clearExistingLogs() : nil
         try? initLogging()
+        logStartupCleanup(logCleanup)
         let macName = hostName()
-        logger.info("Bootstrapping daemon for \(macName, privacy: .public)")
+        AppLog.info("bootstrap", "Bootstrapping daemon for \(macName)")
 
-        let creds: CfAccessCreds?
+        let config: RelayConfig
         do {
-            creds = try envCreds()
+            config = try relayConfig()
+            AppLog.info("bootstrap", "Relay config resolved; \(relayConfigLog(config))")
         } catch let error as MinosError {
             await appState.failBoot(with: error)
             return
@@ -56,12 +70,21 @@ enum DaemonBootstrap {
             return
         }
 
-        let config = RelayConfig(
-            cfClientId: creds?.clientId ?? "",
-            cfClientSecret: creds?.clientSecret ?? ""
-        )
-
         await runStart(appState: appState, config: config, macName: macName, startDaemon: startDaemon)
+    }
+
+    private static func logStartupCleanup(_ result: StartupLogCleanupResult?) {
+        guard let result else { return }
+
+        let summary = "dir=\(result.logDirectory.path); deleted=\(result.deletedCount); skipped=\(result.skippedCount)"
+        if result.failures.isEmpty {
+            AppLog.info("bootstrap", "Startup log cleanup complete; \(summary)")
+        } else {
+            AppLog.warn(
+                "bootstrap",
+                "Startup log cleanup incomplete; \(summary); failures=\(result.failures.joined(separator: " | "))"
+            )
+        }
     }
 
     /// Inner half of `bootstrap`: spawn the daemon, wire observers, and
@@ -92,7 +115,7 @@ enum DaemonBootstrap {
                 peerSubscription: subs.peer,
                 agentSubscription: subs.agent
             )
-            logger.info("Boot complete; phase=running")
+            AppLog.info("bootstrap", "Boot complete; phase=running")
         } catch let error as MinosError {
             await failBoot(appState: appState, error: error, inFlight: inFlight)
         } catch {
@@ -118,7 +141,7 @@ enum DaemonBootstrap {
             Task { @MainActor in appState.applyRelayLink(state) }
         }
         let peerObserver = PeerObserver { state in
-            Task { @MainActor in appState.applyPeer(state) }
+            Task { @MainActor in await appState.applyPeer(state) }
         }
         let agentObserver = AgentStateObserverAdapter { state in
             Task { @MainActor in appState.applyAgentState(state) }
@@ -134,12 +157,16 @@ enum DaemonBootstrap {
         let relayLink = daemon.currentRelayLink()
         let peer = daemon.currentPeer()
         let agentState = daemon.currentAgentState()
+        let agentThread = try await daemon.currentAgentThread()
         let trustedDevice = try await daemon.currentTrustedDevice()
+        let peers = try await daemon.currentPeers()
         return AppState.BootSnapshot(
             relayLink: relayLink,
             peer: peer,
             trustedDevice: trustedDevice,
-            agentState: agentState
+            peers: peers,
+            agentState: agentState,
+            agentThread: agentThread
         )
     }
 
@@ -165,29 +192,26 @@ enum DaemonBootstrap {
         await appState.failBoot(with: error)
     }
 
-    struct CfAccessCreds {
-        let clientId: String
-        let clientSecret: String
+    static func relayConfig(
+        infoDictionary: [String: Any]? = Bundle.main.infoDictionary,
+        env: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> RelayConfig {
+        let infoDictionary = infoDictionary ?? [:]
+        let backendUrl = infoString(infoDictionary[backendURLKey]) ?? blankToNil(env[backendURLKey]) ?? ""
+
+        return RelayConfig(backendUrl: backendUrl)
     }
 
-    static func envCreds(from env: [String: String] = ProcessInfo.processInfo.environment) throws -> CfAccessCreds? {
-        let id = blankToNil(env["CF_ACCESS_CLIENT_ID"])
-        let secret = blankToNil(env["CF_ACCESS_CLIENT_SECRET"])
-
-        switch (id, secret) {
-        case let (.some(id), .some(secret)):
-            return CfAccessCreds(clientId: id, clientSecret: secret)
-        case (nil, nil):
-            return nil
-        case (.some, nil):
-            throw MinosError.CfAccessMisconfigured(
-                reason: "CF_ACCESS_CLIENT_ID is set but CF_ACCESS_CLIENT_SECRET is missing"
-            )
-        case (nil, .some):
-            throw MinosError.CfAccessMisconfigured(
-                reason: "CF_ACCESS_CLIENT_SECRET is set but CF_ACCESS_CLIENT_ID is missing"
-            )
+    private static func relayConfigLog(_ config: RelayConfig) -> String {
+        let trimmed = config.backendUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return "source=baked-rust-default"
         }
+        return "source=runtime; backendUrl=\(trimmed)"
+    }
+
+    private static func infoString(_ value: Any?) -> String? {
+        blankToNil(value as? String)
     }
 
     private static func blankToNil(_ value: String?) -> String? {
@@ -206,15 +230,38 @@ enum DaemonBootstrap {
 
 // ── Local-state JSON loader ──
 //
-// Bundled into this file because it's only consumed from the bootstrap
-// path. The Rust side persists `local-state.json` (DeviceId + optional
-// peer record) under `~/Library/Application Support/Minos/`; first run
-// creates a fresh DeviceId and writes the file. Swift mirrors that
-// behavior so the daemon doesn't have to be running before we know our
-// own DeviceId.
+// Persists just the Mac's own `selfDeviceId` so it survives relaunch — the
+// peer relationship itself comes from the backend after each connect, and
+// is never written to disk. Older `local-state.json` files (with a `peer`
+// block) deserialize cleanly because serde/Codable both ignore unknown
+// keys by default.
 
 enum AppDirectories {
-    static func localStatePath() -> URL {
+    static func localStatePath(
+        env: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        minosHome(env: env)
+            .appendingPathComponent("state", isDirectory: true)
+            .appendingPathComponent("local-state.json")
+    }
+
+    static func logsDirectory(
+        env: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        minosHome(env: env)
+            .appendingPathComponent("logs", isDirectory: true)
+    }
+
+    private static func minosHome(env: [String: String]) -> URL {
+        if let raw = env["MINOS_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty {
+            return URL(fileURLWithPath: raw, isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".minos", isDirectory: true)
+    }
+
+    static func legacyLocalStatePath() -> URL {
         let support = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -223,38 +270,70 @@ enum AppDirectories {
     }
 }
 
-/// JSON shape mirroring the Rust `LocalState` struct
-/// (`crates/minos-daemon/src/local_state.rs`). Snake-case keys match
-/// the Rust serde derive verbatim, including the `paired_at` ISO-8601
-/// timestamp inside the optional `peer` block.
-struct LocalStateJSON: Codable {
-    let selfDeviceId: DeviceId
-    let peer: PeerRecordJSON?
+struct StartupLogCleanupResult {
+    let logDirectory: URL
+    let deletedCount: Int
+    let skippedCount: Int
+    let failures: [String]
+}
 
-    enum CodingKeys: String, CodingKey {
-        case selfDeviceId = "self_device_id"
-        case peer
+enum StartupLogCleaner {
+    static func clearExistingLogs(
+        env: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> StartupLogCleanupResult {
+        let logDirectory = AppDirectories.logsDirectory(env: env)
+        var deletedCount = 0
+        var skippedCount = 0
+        var failures: [String] = []
+
+        do {
+            try fileManager.createDirectory(at: logDirectory, withIntermediateDirectories: true)
+            let entries = try fileManager.contentsOfDirectory(
+                at: logDirectory,
+                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+            )
+
+            for entry in entries {
+                if shouldSkip(entry) {
+                    skippedCount += 1
+                    continue
+                }
+                do {
+                    try fileManager.removeItem(at: entry)
+                    deletedCount += 1
+                } catch {
+                    failures.append("\(entry.lastPathComponent): \(error.localizedDescription)")
+                }
+            }
+        } catch {
+            failures.append("\(logDirectory.path): \(error.localizedDescription)")
+        }
+
+        return StartupLogCleanupResult(
+            logDirectory: logDirectory,
+            deletedCount: deletedCount,
+            skippedCount: skippedCount,
+            failures: failures
+        )
     }
 
-    func toRecord() -> PeerRecord? {
-        peer.map { json in
-            PeerRecord(deviceId: json.deviceId, name: json.name, pairedAt: json.pairedAt)
+    private static func shouldSkip(_ entry: URL) -> Bool {
+        guard let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else {
+            return false
         }
+        return values.isDirectory == true && values.isSymbolicLink != true
     }
 }
 
-/// JSON-side mirror of `PeerRecord`. The UniFFI-generated `PeerRecord`
-/// struct is not `Codable` (no auto-derive across the FFI boundary), so
-/// we shadow the three live fields and convert at the boundary.
-struct PeerRecordJSON: Codable {
-    let deviceId: DeviceId
-    let name: String
-    let pairedAt: Date
+/// JSON shape mirroring the Rust `LocalState` struct
+/// (`crates/minos-daemon/src/local_state.rs`). After the peer-record move
+/// to the backend this carries only `selfDeviceId`.
+struct LocalStateJSON: Codable {
+    let selfDeviceId: DeviceId
 
     enum CodingKeys: String, CodingKey {
-        case deviceId = "device_id"
-        case name
-        case pairedAt = "paired_at"
+        case selfDeviceId = "self_device_id"
     }
 }
 
@@ -263,96 +342,52 @@ enum LocalStateLoader {
     /// file is missing, mint a fresh DeviceId and persist it; if it's
     /// present but corrupt, surface as a Swift-side throw the bootstrap
     /// catches and converts into a `bootError`.
-    static func loadOrInit(at path: URL) throws -> (selfDeviceId: DeviceId, peer: PeerRecord?) {
+    static func loadOrInit(at path: URL, legacyPath: URL? = nil) throws -> DeviceId {
         let manager = FileManager.default
-        if !manager.fileExists(atPath: path.path) {
-            let initial = LocalStateJSON(selfDeviceId: UUID().uuidString.lowercased(), peer: nil)
-            try save(initial, to: path)
-            return (initial.selfDeviceId, nil)
+        if !manager.fileExists(atPath: path.path),
+           let legacyPath,
+           manager.fileExists(atPath: legacyPath.path) {
+            let migrated = try load(from: legacyPath)
+            try save(migrated, to: path)
+            AppLog.info(
+                "bootstrap",
+                "Migrated local state; from=\(legacyPath.path); to=\(path.path)"
+            )
+            return migrated.selfDeviceId
         }
+        if !manager.fileExists(atPath: path.path) {
+            let initial = LocalStateJSON(selfDeviceId: UUID().uuidString.lowercased())
+            try save(initial, to: path)
+            return initial.selfDeviceId
+        }
+        return try load(from: path).selfDeviceId
+    }
+
+    private static func load(from path: URL) throws -> LocalStateJSON {
         let data: Data
         do {
             data = try Data(contentsOf: path)
         } catch {
             throw MinosError.StoreIo(path: path.path, message: error.localizedDescription)
         }
-
-        let json = try decodePersistedState(data, from: path.path)
-        return (json.selfDeviceId, json.toRecord())
+        return try decodePersistedState(data, from: path.path)
     }
 
     static func decodePersistedState(_ data: Data, from path: String) throws -> LocalStateJSON {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom(decodeRustDate)
         do {
-            return try decoder.decode(LocalStateJSON.self, from: data)
+            return try JSONDecoder().decode(LocalStateJSON.self, from: data)
         } catch {
             throw MinosError.StoreCorrupt(path: path, message: String(describing: error))
         }
     }
 
-    private static func decodeRustDate(from decoder: Decoder) throws -> Date {
-        let container = try decoder.singleValueContainer()
-        let value = try container.decode(String.self)
-        if let parsed = parseRustDate(value) {
-            return parsed
-        }
-        throw DecodingError.dataCorruptedError(
-            in: container,
-            debugDescription: "Expected RFC3339 timestamp from Rust local-state.json"
-        )
-    }
-
-    private static func parseRustDate(_ value: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: value) {
-            return date
-        }
-
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: value)
-    }
-
     private static func save(_ state: LocalStateJSON, to path: URL) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
         try FileManager.default.createDirectory(
             at: path.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
         try encoder.encode(state).write(to: path, options: .atomic)
-    }
-}
-
-// ── Keychain device-secret reader ──
-//
-// Only `read` is needed at bootstrap; the daemon owns writes (after a
-// successful Pair the relay's response carries the secret and the Rust
-// side stores it via `KeychainTrustedDeviceStore::write`). The query skips
-// authentication UI so a background menu-bar launch never prompts.
-
-enum KeychainDeviceSecret {
-    static func read() -> DeviceSecret? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: DaemonBootstrap.keychainService,
-            kSecAttrAccount as String: "device-secret",
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecUseAuthenticationUI as String: kSecUseAuthenticationUISkip
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard
-            status == errSecSuccess,
-            let data = item as? Data,
-            let utf8 = String(data: data, encoding: .utf8)
-        else {
-            return nil
-        }
-        return DeviceSecret(utf8)
     }
 }

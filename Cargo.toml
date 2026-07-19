@@ -4,16 +4,19 @@ resolver = "2"
 # across plan 01 tasks. `xtask` is enumerated explicitly because it lives at the
 # root, not under `crates/`. The FFI shim crates (`minos-ffi-*`) are matched by
 # the glob; their build-smoke tests run with `cargo test --workspace`.
-members = ["crates/*", "xtask"]
+members = ["crates/*", "xtask", "apps/desktop/src-tauri"]
+exclude = ["third_party/openwire", "third_party/fire"]
 # default-members empty → `cargo test` (no flags) tests every glob match.
 default-members = []
 
 [workspace.package]
 edition = "2021"
+version = "0.1.0"
 license = "MIT"
-authors = ["Peterich <wangqingyn2@gmail.com>"]
+authors = ["Peter Rich <fannnzhang@gmail.com>"]
 homepage = "https://github.com/peterich-rs/minos"
 repository = "https://github.com/peterich-rs/minos"
+rust-version = "1.97"
 
 [workspace.dependencies]
 # async runtime
@@ -32,15 +35,24 @@ anyhow = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 getrandom = "0.3"
 base64 = "0.22"
+ed25519-dalek = "2"
+
+# http / rpc (client)
+reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # url / time
 url = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 
 # http / rpc
+http = "1"
 axum = { version = "0.7", features = ["ws", "macros"] }
 jsonrpsee = { version = "0.24", features = ["server", "client", "ws-client", "macros"] }
-tokio-tungstenite = { version = "0.29", features = ["native-tls"] }
+jsonwebtoken = "9"
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+openwire = "0.1.0"
+openwire-core = "0.1.0"
+rustls = { version = "0.23.35", features = ["aws-lc-rs"] }
 futures-util = "0.3"
 async-trait = "0.1"
 
@@ -54,7 +66,7 @@ argon2 = "0.5"
 clap = { version = "4", features = ["derive", "env"] }
 dashmap = "6"
 sha2 = "0.10"
-sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "postgres", "runtime-tokio", "macros", "migrate"] }
 subtle = "2"
 which = "6"
 
@@ -62,7 +74,6 @@ which = "6"
 uniffi = { version = "0.31", features = ["build"] }
 
 # macOS Keychain (consumed by minos-daemon under cfg(target_os = "macos"))
-security-framework = { version = "3", default-features = false }
 
 # test deps (declared here so all crates use the same versions)
 rstest = "0.23"
@@ -82,17 +93,61 @@ all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 
 # Allow doc-completeness lints — they create high noise on plumbing fns
-# without commensurate value. Public API documentation lives in the spec
-# (docs/superpowers/specs/) and ADRs (docs/adr/).
+# without commensurate value. Public API documentation lives in crate docs
+# plus ADRs under `docs/adr/`.
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 missing_safety_doc = "allow"
 doc_markdown = "allow"
 # Common Rust idioms that pedantic flags but are stylistically fine here.
+assigning_clones = "allow"
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+collapsible_if = "allow"
+collapsible_match = "allow"
+duration_suboptimal_units = "allow"
+elidable_lifetime_names = "allow"
+enum_variant_names = "allow"
+fn_params_excessive_bools = "allow"
+format_collect = "allow"
+ignored_unit_patterns = "allow"
+implicit_hasher = "allow"
+items_after_statements = "allow"
+manual_is_variant_and = "allow"
+manual_let_else = "allow"
+map_identity = "allow"
+map_unwrap_or = "allow"
+match_same_arms = "allow"
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
+needless_borrow = "allow"
+needless_continue = "allow"
+needless_range_loop = "allow"
+needless_raw_string_hashes = "allow"
 needless_pass_by_value = "allow"
+new_without_default = "allow"
+no_effect_underscore_binding = "allow"
+obfuscated_if_else = "allow"
+option_as_ref_cloned = "allow"
+option_option = "allow"
+redundant_closure = "allow"
+redundant_closure_for_method_calls = "allow"
+semicolon_if_nothing_returned = "allow"
 similar_names = "allow"
+single_match_else = "allow"
+struct_excessive_bools = "allow"
+too_many_arguments = "allow"
+too_many_lines = "allow"
+type_complexity = "allow"
+uninlined_format_args = "allow"
+unnested_or_patterns = "allow"
+unnecessary_wraps = "allow"
+unused_async = "allow"
+used_underscore_binding = "allow"
+useless_conversion = "allow"
+useless_format = "allow"
+wildcard_imports = "allow"
 # Test/integration-test idioms.
 cloned_ref_to_slice_refs = "allow"
 match_wildcard_for_single_variants = "allow"

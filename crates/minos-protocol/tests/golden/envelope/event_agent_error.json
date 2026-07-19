@@ -1,0 +1,8 @@
+{
+  "kind": "event",
+  "v": 1,
+  "type": "agent_error",
+  "session_id": "thread-abc12",
+  "code": "peer_offline",
+  "message": "host is offline"
+}

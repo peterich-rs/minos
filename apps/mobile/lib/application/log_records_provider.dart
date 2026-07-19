@@ -62,7 +62,7 @@ class LogRecords extends Notifier<List<LogRecord>> {
   }
 
   void _disposeSubscription() {
-    _subscription?.cancel();
+    unawaited(_subscription?.cancel() ?? Future<void>.value());
     _subscription = null;
   }
 

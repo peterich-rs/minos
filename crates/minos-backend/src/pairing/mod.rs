@@ -1,18 +1,21 @@
-//! Backend-side pairing service: token issuance, token consumption, and
-//! pair dismissal.
+//! Backend-side pairing service: token issuance and token consumption.
 //!
-//! Sits on top of `store::{devices, pairings, tokens}` and layers the
-//! business rules of spec §6.1 / §7 onto the CRUD:
+//! Sits on top of `store::{devices, tokens}` and layers the business
+//! rules of spec §6.1 / §7 onto the CRUD:
 //!
 //! 1. Request — the Mac host asks for a fresh 5-minute token, which is
 //!    persisted as a SHA-256 digest (never the plaintext). The plaintext
 //!    is returned once for QR rendering and then discarded.
 //! 2. Consume — the iOS client presents a candidate token; we atomically
-//!    mark the row consumed, mint two fresh `DeviceSecret`s (one for each
-//!    side), hash them with argon2id, and insert the pairing row.
-//! 3. Forget — either side can dissolve the pair; the caller learns the
-//!    peer's `DeviceId` so it can broadcast the `Unpaired` event, and both
-//!    stored device-secret hashes are revoked in the same transaction.
+//!    mark the row consumed, mint a fresh `DeviceSecret` for the Mac
+//!    issuer, hash it with argon2id, and persist on the issuer row. iOS
+//!    never gets a `DeviceSecret`; its row keeps `secret_hash = NULL` per
+//!    ADR-0020 (the iOS rail is bearer-JWT only).
+//!
+//! The `(host_device_id, mobile_account_id)` pair row in
+//! `account_host_pairings` is inserted by the HTTP handler post-commit —
+//! see `http::v1::pairing::post_consume`. `consume_token` does not see
+//! the bearer's `account_id`, so it cannot insert the pair itself.
 //!
 //! # Two hash primitives
 //!
@@ -20,55 +23,92 @@
 //!   Tuned for "brute-force resistant if the DB is stolen".
 //! - `sha2::Sha256` hex digest for `PairingToken`. Deterministic for PK
 //!   lookup; safe because tokens carry 256 bits of entropy and expire in
-//!   5 minutes. See [`migrations/0003_pairing_tokens.sql`] and spec §6.1.
-//!
-//! # Replacement policy
-//!
-//! Spec §10.2 R4 says "Mac UI confirms replace; iPhone UI: 'Mac is already
-//! paired'". The MVP server-side policy implemented here is to refuse
-//! consumption when either side already has a pairing row, returning
-//! [`BackendError::PairingStateMismatch`] — the UI is expected to resolve it
-//! by calling `forget_peer` and retrying.
+//!   5 minutes.
 //!
 //! # Atomicity
 //!
 //! `consume_token` starts with `BEGIN IMMEDIATE`, then wraps token validation,
-//! token consumption, secret-hash updates, and pairing insertion in one SQLite
-//! transaction. That write lock serializes concurrent consumes before any token
-//! or pairing lookup, so two valid outstanding tokens for the same issuer
-//! cannot both clear the prechecks. Any failure in the flow rolls the whole
-//! transaction back so the token is still usable and no partial secrets or
-//! pair rows leak into the store.
+//! token consumption, and the issuer's secret-hash upsert in one SQLite
+//! transaction. That write lock serializes concurrent consumes before any
+//! token lookup. Any failure rolls the whole transaction back so the token
+//! is still usable and no partial secret leaks into the store.
 
 use std::time::Duration;
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
 use minos_domain::{DeviceId, DeviceRole, DeviceSecret, PairingToken};
+use minos_protocol::{Envelope, EventKind};
 use sha2::{Digest, Sha256};
-use sqlx::SqlitePool;
+use sqlx::{PgPool, Postgres, SqlitePool};
 
 use crate::{
     error::BackendError,
-    store::{devices, pairings, tokens},
+    session::{SessionRegistry, SessionRevocation},
+    store::{
+        account_host_pairings, devices, host_installation_tokens, pairing_codes, tokens,
+        AsStorePool, StoreHandle, StorePoolRef,
+    },
 };
 
 pub mod secret;
 
 /// Successful outcome of [`PairingService::consume_token`].
 ///
-/// Both plaintext secrets live in this struct momentarily — just long
-/// enough for the caller to push each one to its owning device over the
-/// envelope. Neither value is persisted anywhere in the backend; only their
-/// argon2id hashes were written as part of `consume_token` itself.
+/// Carries the Mac issuer's plaintext `DeviceSecret` momentarily so the
+/// caller can push it via `EventKind::Paired`. Not persisted anywhere
+/// — only its argon2id hash was written as part of `consume_token`.
 #[derive(Debug, Clone)]
 pub struct PairingOutcome {
-    /// `DeviceId` of the side that originally issued the pairing token.
+    /// `DeviceId` of the side that originally issued the pairing token
+    /// (the Mac host).
     pub issuer_device_id: DeviceId,
     /// Plaintext secret minted for the issuer (to be delivered to the Mac).
     pub issuer_secret: DeviceSecret,
-    /// Plaintext secret minted for the consumer (to be returned to the
-    /// iOS client as the `pair` RPC result).
-    pub consumer_secret: DeviceSecret,
+}
+
+#[derive(Debug, Clone)]
+pub struct PairingCompletion {
+    pub peer_device_id: DeviceId,
+    pub peer_name: String,
+}
+
+#[derive(Debug)]
+pub enum ConsumePairingError {
+    DeliveryFailed,
+    Internal(BackendError),
+    IssuerOffline,
+    PairingStateMismatch { actual: String },
+    PairingTokenInvalid,
+}
+
+#[derive(Debug, Clone)]
+pub struct FormalPairingConfirm {
+    pub host_installation_id: DeviceId,
+    pub already_confirmed: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct HostInstallationToken {
+    pub host_installation_id: DeviceId,
+    pub account_id: String,
+    pub token: String,
+    pub issued_at_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct FormalRevokeOutcome {
+    pub host_installation_id: DeviceId,
+    pub remaining_link_count: i64,
+    pub revoked_token_count: u64,
+}
+
+#[derive(Debug)]
+pub enum FormalPairingError {
+    Internal(BackendError),
+    PairingNotConfirmed,
+    PairingCodeInvalid,
+    PairingStateMismatch { actual: String },
 }
 
 /// Stateless facade around the pairing-related store helpers.
@@ -77,15 +117,15 @@ pub struct PairingOutcome {
 /// once in `main.rs` and shared via `Arc`.
 #[derive(Debug, Clone)]
 pub struct PairingService {
-    pool: SqlitePool,
+    pool: StoreHandle,
 }
 
 impl PairingService {
     /// Construct a service backed by `pool`. The pool must already have
     /// migrations applied (use [`crate::store::connect`]).
     #[must_use]
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(pool: impl Into<StoreHandle>) -> Self {
+        Self { pool: pool.into() }
     }
 
     /// Mint a fresh pairing token for `issuer`.
@@ -99,6 +139,16 @@ impl PairingService {
     /// - [`BackendError::StoreQuery`] — the underlying `INSERT` failed (for
     ///   example an FK violation if `issuer` has not been inserted yet).
     pub async fn request_token(
+        &self,
+        issuer: DeviceId,
+        ttl: Duration,
+    ) -> Result<(PairingToken, DateTime<Utc>), BackendError> {
+        let result = self.request_token_inner(issuer, ttl).await;
+        crate::telemetry::record_pairing_token_issue(pairing_token_issue_outcome(&result));
+        result
+    }
+
+    async fn request_token_inner(
         &self,
         issuer: DeviceId,
         ttl: Duration,
@@ -126,27 +176,685 @@ impl PairingService {
         Ok((plain, expires))
     }
 
-    /// Consume a pairing token and complete a pair.
+    /// Mint a formal pairing code in the `pending` state.
+    pub async fn request_code(
+        &self,
+        host_installation_id: DeviceId,
+        ttl: Duration,
+    ) -> Result<(String, DateTime<Utc>), BackendError> {
+        let now = Utc::now();
+        let expires = now
+            + chrono::Duration::from_std(ttl).map_err(|e| BackendError::PairingHash {
+                message: format!("ttl out of range: {e}"),
+            })?;
+        let code = generate_pairing_code();
+        let digest = sha256_hex(&code);
+        pairing_codes::insert_code(
+            &self.pool,
+            &digest,
+            host_installation_id,
+            now.timestamp_millis(),
+            expires.timestamp_millis(),
+        )
+        .await?;
+        Ok((code, expires))
+    }
+
+    pub async fn confirm_pairing_code(
+        &self,
+        pairing_code: &str,
+        account_id: &str,
+        linked_via_installation_id: DeviceId,
+        client_request_id: Option<&str>,
+    ) -> Result<FormalPairingConfirm, FormalPairingError> {
+        match self.pool.as_store_pool() {
+            StorePoolRef::Sqlite(pool) => {
+                self.confirm_pairing_code_sqlite(
+                    pool,
+                    pairing_code,
+                    account_id,
+                    linked_via_installation_id,
+                    client_request_id,
+                )
+                .await
+            }
+            StorePoolRef::Postgres(pool) => {
+                self.confirm_pairing_code_postgres(
+                    pool,
+                    pairing_code,
+                    account_id,
+                    linked_via_installation_id,
+                    client_request_id,
+                )
+                .await
+            }
+        }
+    }
+
+    async fn confirm_pairing_code_sqlite(
+        &self,
+        pool: &SqlitePool,
+        pairing_code: &str,
+        account_id: &str,
+        linked_via_installation_id: DeviceId,
+        client_request_id: Option<&str>,
+    ) -> Result<FormalPairingConfirm, FormalPairingError> {
+        let now = Utc::now().timestamp_millis();
+        let digest = sha256_hex(pairing_code);
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| {
+            FormalPairingError::Internal(BackendError::StoreQuery {
+                operation: "begin_formal_pairing_confirm".to_string(),
+                message: e.to_string(),
+            })
+        })?;
+
+        let result: Result<FormalPairingConfirm, FormalPairingError> = async {
+            let row = pairing_codes::get_code_with_executor(&mut *tx, &digest)
+                .await
+                .map_err(FormalPairingError::Internal)?
+                .ok_or(FormalPairingError::PairingCodeInvalid)?;
+
+            if row.expires_at_ms <= now {
+                return Err(FormalPairingError::PairingCodeInvalid);
+            }
+
+            match row.status {
+                pairing_codes::PairingCodeStatus::Pending => {
+                    let updated = pairing_codes::confirm_code_with_executor(
+                        &mut *tx,
+                        &digest,
+                        account_id,
+                        linked_via_installation_id,
+                        client_request_id,
+                        now,
+                    )
+                    .await
+                    .map_err(FormalPairingError::Internal)?;
+                    if updated != 1 {
+                        return Err(FormalPairingError::PairingCodeInvalid);
+                    }
+                    account_host_pairings::insert_pair_with_executor(
+                        &mut *tx,
+                        row.host_installation_id,
+                        account_id,
+                        linked_via_installation_id,
+                        now,
+                    )
+                    .await
+                    .map_err(FormalPairingError::Internal)?;
+                    Ok(FormalPairingConfirm {
+                        host_installation_id: row.host_installation_id,
+                        already_confirmed: false,
+                    })
+                }
+                pairing_codes::PairingCodeStatus::Confirmed => {
+                    if row.account_id.as_deref() != Some(account_id) {
+                        return Err(FormalPairingError::PairingStateMismatch {
+                            actual: "confirmed_by_different_account".to_string(),
+                        });
+                    }
+                    account_host_pairings::insert_pair_with_executor(
+                        &mut *tx,
+                        row.host_installation_id,
+                        account_id,
+                        linked_via_installation_id,
+                        now,
+                    )
+                    .await
+                    .map_err(FormalPairingError::Internal)?;
+                    Ok(FormalPairingConfirm {
+                        host_installation_id: row.host_installation_id,
+                        already_confirmed: true,
+                    })
+                }
+                pairing_codes::PairingCodeStatus::Redeemed
+                | pairing_codes::PairingCodeStatus::Expired => {
+                    Err(FormalPairingError::PairingCodeInvalid)
+                }
+            }
+        }
+        .await;
+
+        match result {
+            Ok(outcome) => {
+                tx.commit().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "commit_formal_pairing_confirm".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                let _ =
+                    crate::ingest::invalidate_peer_targets_for_host(outcome.host_installation_id)
+                        .await;
+                Ok(outcome)
+            }
+            Err(err) => {
+                tx.rollback().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "rollback_formal_pairing_confirm".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                Err(err)
+            }
+        }
+    }
+
+    async fn confirm_pairing_code_postgres(
+        &self,
+        pool: &PgPool,
+        pairing_code: &str,
+        account_id: &str,
+        linked_via_installation_id: DeviceId,
+        client_request_id: Option<&str>,
+    ) -> Result<FormalPairingConfirm, FormalPairingError> {
+        let now = Utc::now().timestamp_millis();
+        let digest = sha256_hex(pairing_code);
+        let mut tx = begin_serializable_postgres_tx(pool, "begin_formal_pairing_confirm")
+            .await
+            .map_err(FormalPairingError::Internal)?;
+
+        let result: Result<FormalPairingConfirm, FormalPairingError> = async {
+            let row = pairing_codes::get_code_with_postgres_executor(&mut *tx, &digest)
+                .await
+                .map_err(FormalPairingError::Internal)?
+                .ok_or(FormalPairingError::PairingCodeInvalid)?;
+
+            if row.expires_at_ms <= now {
+                return Err(FormalPairingError::PairingCodeInvalid);
+            }
+
+            match row.status {
+                pairing_codes::PairingCodeStatus::Pending => {
+                    let updated = pairing_codes::confirm_code_with_postgres_executor(
+                        &mut *tx,
+                        &digest,
+                        account_id,
+                        linked_via_installation_id,
+                        client_request_id,
+                        now,
+                    )
+                    .await
+                    .map_err(FormalPairingError::Internal)?;
+                    if updated != 1 {
+                        return Err(FormalPairingError::PairingCodeInvalid);
+                    }
+                    account_host_pairings::insert_pair_with_postgres_executor(
+                        &mut *tx,
+                        row.host_installation_id,
+                        account_id,
+                        linked_via_installation_id,
+                        now,
+                    )
+                    .await
+                    .map_err(FormalPairingError::Internal)?;
+                    Ok(FormalPairingConfirm {
+                        host_installation_id: row.host_installation_id,
+                        already_confirmed: false,
+                    })
+                }
+                pairing_codes::PairingCodeStatus::Confirmed => {
+                    if row.account_id.as_deref() != Some(account_id) {
+                        return Err(FormalPairingError::PairingStateMismatch {
+                            actual: "confirmed_by_different_account".to_string(),
+                        });
+                    }
+                    account_host_pairings::insert_pair_with_postgres_executor(
+                        &mut *tx,
+                        row.host_installation_id,
+                        account_id,
+                        linked_via_installation_id,
+                        now,
+                    )
+                    .await
+                    .map_err(FormalPairingError::Internal)?;
+                    Ok(FormalPairingConfirm {
+                        host_installation_id: row.host_installation_id,
+                        already_confirmed: true,
+                    })
+                }
+                pairing_codes::PairingCodeStatus::Redeemed
+                | pairing_codes::PairingCodeStatus::Expired => {
+                    Err(FormalPairingError::PairingCodeInvalid)
+                }
+            }
+        }
+        .await;
+
+        match result {
+            Ok(outcome) => {
+                tx.commit().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "commit_formal_pairing_confirm".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                let _ =
+                    crate::ingest::invalidate_peer_targets_for_host(outcome.host_installation_id)
+                        .await;
+                Ok(outcome)
+            }
+            Err(err) => {
+                tx.rollback().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "rollback_formal_pairing_confirm".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                Err(err)
+            }
+        }
+    }
+
+    pub async fn redeem_host_installation(
+        &self,
+        pairing_code: &str,
+        host_installation_id: DeviceId,
+        _client_request_id: Option<&str>,
+    ) -> Result<HostInstallationToken, FormalPairingError> {
+        match self.pool.as_store_pool() {
+            StorePoolRef::Sqlite(pool) => {
+                self.redeem_host_installation_sqlite(pool, pairing_code, host_installation_id)
+                    .await
+            }
+            StorePoolRef::Postgres(pool) => {
+                self.redeem_host_installation_postgres(pool, pairing_code, host_installation_id)
+                    .await
+            }
+        }
+    }
+
+    async fn redeem_host_installation_sqlite(
+        &self,
+        pool: &SqlitePool,
+        pairing_code: &str,
+        host_installation_id: DeviceId,
+    ) -> Result<HostInstallationToken, FormalPairingError> {
+        let now = Utc::now().timestamp_millis();
+        let digest = sha256_hex(pairing_code);
+        let token = generate_host_installation_token();
+        let token_hash = sha256_hex(&token);
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| {
+            FormalPairingError::Internal(BackendError::StoreQuery {
+                operation: "begin_host_installation_redeem".to_string(),
+                message: e.to_string(),
+            })
+        })?;
+
+        let result: Result<HostInstallationToken, FormalPairingError> = async {
+            let row = pairing_codes::get_code_with_executor(&mut *tx, &digest)
+                .await
+                .map_err(FormalPairingError::Internal)?
+                .ok_or(FormalPairingError::PairingCodeInvalid)?;
+            if row.host_installation_id != host_installation_id || row.expires_at_ms <= now {
+                return Err(FormalPairingError::PairingCodeInvalid);
+            }
+            match row.status {
+                pairing_codes::PairingCodeStatus::Pending => {
+                    return Err(FormalPairingError::PairingNotConfirmed);
+                }
+                pairing_codes::PairingCodeStatus::Confirmed => {}
+                pairing_codes::PairingCodeStatus::Redeemed
+                | pairing_codes::PairingCodeStatus::Expired => {
+                    return Err(FormalPairingError::PairingCodeInvalid);
+                }
+            }
+
+            let account_id = pairing_codes::redeem_code_with_executor(
+                &mut *tx,
+                &digest,
+                host_installation_id,
+                now,
+            )
+            .await
+            .map_err(FormalPairingError::Internal)?
+            .ok_or(FormalPairingError::PairingCodeInvalid)?;
+            host_installation_tokens::insert_token_with_executor(
+                &mut *tx,
+                &token_hash,
+                host_installation_id,
+                now,
+            )
+            .await
+            .map_err(FormalPairingError::Internal)?;
+            Ok(HostInstallationToken {
+                host_installation_id,
+                account_id,
+                token,
+                issued_at_ms: now,
+            })
+        }
+        .await;
+
+        match result {
+            Ok(outcome) => {
+                tx.commit().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "commit_host_installation_redeem".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                Ok(outcome)
+            }
+            Err(err) => {
+                tx.rollback().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "rollback_host_installation_redeem".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                Err(err)
+            }
+        }
+    }
+
+    async fn redeem_host_installation_postgres(
+        &self,
+        pool: &PgPool,
+        pairing_code: &str,
+        host_installation_id: DeviceId,
+    ) -> Result<HostInstallationToken, FormalPairingError> {
+        let now = Utc::now().timestamp_millis();
+        let digest = sha256_hex(pairing_code);
+        let token = generate_host_installation_token();
+        let token_hash = sha256_hex(&token);
+        let mut tx = begin_serializable_postgres_tx(pool, "begin_host_installation_redeem")
+            .await
+            .map_err(FormalPairingError::Internal)?;
+
+        let result: Result<HostInstallationToken, FormalPairingError> = async {
+            let row = pairing_codes::get_code_with_postgres_executor(&mut *tx, &digest)
+                .await
+                .map_err(FormalPairingError::Internal)?
+                .ok_or(FormalPairingError::PairingCodeInvalid)?;
+            if row.host_installation_id != host_installation_id || row.expires_at_ms <= now {
+                return Err(FormalPairingError::PairingCodeInvalid);
+            }
+            match row.status {
+                pairing_codes::PairingCodeStatus::Pending => {
+                    return Err(FormalPairingError::PairingNotConfirmed);
+                }
+                pairing_codes::PairingCodeStatus::Confirmed => {}
+                pairing_codes::PairingCodeStatus::Redeemed
+                | pairing_codes::PairingCodeStatus::Expired => {
+                    return Err(FormalPairingError::PairingCodeInvalid);
+                }
+            }
+
+            let account_id = pairing_codes::redeem_code_with_postgres_executor(
+                &mut *tx,
+                &digest,
+                host_installation_id,
+                now,
+            )
+            .await
+            .map_err(FormalPairingError::Internal)?
+            .ok_or(FormalPairingError::PairingCodeInvalid)?;
+            host_installation_tokens::insert_token_with_postgres_executor(
+                &mut *tx,
+                &token_hash,
+                host_installation_id,
+                now,
+            )
+            .await
+            .map_err(FormalPairingError::Internal)?;
+            Ok(HostInstallationToken {
+                host_installation_id,
+                account_id,
+                token,
+                issued_at_ms: now,
+            })
+        }
+        .await;
+
+        match result {
+            Ok(outcome) => {
+                tx.commit().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "commit_host_installation_redeem".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                Ok(outcome)
+            }
+            Err(err) => {
+                tx.rollback().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "rollback_host_installation_redeem".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                Err(err)
+            }
+        }
+    }
+
+    pub async fn revoke_link(
+        &self,
+        registry: &SessionRegistry,
+        host_installation_id: DeviceId,
+        account_id: &str,
+    ) -> Result<Option<FormalRevokeOutcome>, FormalPairingError> {
+        match self.pool.as_store_pool() {
+            StorePoolRef::Sqlite(pool) => {
+                self.revoke_link_sqlite(pool, registry, host_installation_id, account_id)
+                    .await
+            }
+            StorePoolRef::Postgres(pool) => {
+                self.revoke_link_postgres(pool, registry, host_installation_id, account_id)
+                    .await
+            }
+        }
+    }
+
+    async fn revoke_link_sqlite(
+        &self,
+        pool: &SqlitePool,
+        registry: &SessionRegistry,
+        host_installation_id: DeviceId,
+        account_id: &str,
+    ) -> Result<Option<FormalRevokeOutcome>, FormalPairingError> {
+        let now = Utc::now().timestamp_millis();
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| {
+            FormalPairingError::Internal(BackendError::StoreQuery {
+                operation: "begin_formal_pairing_revoke".to_string(),
+                message: e.to_string(),
+            })
+        })?;
+
+        let result: Result<Option<FormalRevokeOutcome>, FormalPairingError> = async {
+            let deleted = account_host_pairings::delete_pair_with_executor(
+                &mut *tx,
+                host_installation_id,
+                account_id,
+            )
+            .await
+            .map_err(FormalPairingError::Internal)?;
+            if deleted == 0 {
+                return Ok(None);
+            }
+
+            let remaining_link_count =
+                account_host_pairings::count_accounts_for_host_with_executor(
+                    &mut *tx,
+                    host_installation_id,
+                )
+                .await
+                .map_err(FormalPairingError::Internal)?;
+            let revoked_token_count = if remaining_link_count == 0 {
+                host_installation_tokens::revoke_all_for_host_with_executor(
+                    &mut *tx,
+                    host_installation_id,
+                    now,
+                )
+                .await
+                .map_err(FormalPairingError::Internal)?
+            } else {
+                0
+            };
+
+            Ok(Some(FormalRevokeOutcome {
+                host_installation_id,
+                remaining_link_count,
+                revoked_token_count,
+            }))
+        }
+        .await;
+
+        match result {
+            Ok(outcome) => {
+                tx.commit().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "commit_formal_pairing_revoke".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                if let Some(outcome) = outcome.as_ref() {
+                    let _ =
+                        crate::ingest::invalidate_peer_targets_for_host(host_installation_id).await;
+                    if outcome.remaining_link_count == 0 {
+                        if let Some(handle) = registry.remove(host_installation_id) {
+                            handle.revoke(SessionRevocation::AuthRevoked);
+                        }
+                    } else if let Some(host_handle) = registry.get(host_installation_id) {
+                        let _ = registry.try_send_current(
+                            &host_handle,
+                            Envelope::Event {
+                                version: 1,
+                                event: EventKind::Unpaired,
+                            },
+                        );
+                    }
+                }
+                Ok(outcome)
+            }
+            Err(err) => {
+                tx.rollback().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "rollback_formal_pairing_revoke".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                Err(err)
+            }
+        }
+    }
+
+    async fn revoke_link_postgres(
+        &self,
+        pool: &PgPool,
+        registry: &SessionRegistry,
+        host_installation_id: DeviceId,
+        account_id: &str,
+    ) -> Result<Option<FormalRevokeOutcome>, FormalPairingError> {
+        let now = Utc::now().timestamp_millis();
+        let mut tx = begin_serializable_postgres_tx(pool, "begin_formal_pairing_revoke")
+            .await
+            .map_err(FormalPairingError::Internal)?;
+
+        let result: Result<Option<FormalRevokeOutcome>, FormalPairingError> = async {
+            let deleted = account_host_pairings::delete_pair_with_postgres_executor(
+                &mut *tx,
+                host_installation_id,
+                account_id,
+            )
+            .await
+            .map_err(FormalPairingError::Internal)?;
+            if deleted == 0 {
+                return Ok(None);
+            }
+
+            let remaining_link_count =
+                account_host_pairings::count_accounts_for_host_with_postgres_executor(
+                    &mut *tx,
+                    host_installation_id,
+                )
+                .await
+                .map_err(FormalPairingError::Internal)?;
+            let revoked_token_count = if remaining_link_count == 0 {
+                host_installation_tokens::revoke_all_for_host_with_postgres_executor(
+                    &mut *tx,
+                    host_installation_id,
+                    now,
+                )
+                .await
+                .map_err(FormalPairingError::Internal)?
+            } else {
+                0
+            };
+
+            Ok(Some(FormalRevokeOutcome {
+                host_installation_id,
+                remaining_link_count,
+                revoked_token_count,
+            }))
+        }
+        .await;
+
+        match result {
+            Ok(outcome) => {
+                tx.commit().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "commit_formal_pairing_revoke".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                if let Some(outcome) = outcome.as_ref() {
+                    let _ =
+                        crate::ingest::invalidate_peer_targets_for_host(host_installation_id).await;
+                    if outcome.remaining_link_count == 0 {
+                        if let Some(handle) = registry.remove(host_installation_id) {
+                            handle.revoke(SessionRevocation::AuthRevoked);
+                        }
+                    } else if let Some(host_handle) = registry.get(host_installation_id) {
+                        let _ = registry.try_send_current(
+                            &host_handle,
+                            Envelope::Event {
+                                version: 1,
+                                event: EventKind::Unpaired,
+                            },
+                        );
+                    }
+                }
+                Ok(outcome)
+            }
+            Err(err) => {
+                tx.rollback().await.map_err(|e| {
+                    FormalPairingError::Internal(BackendError::StoreQuery {
+                        operation: "rollback_formal_pairing_revoke".to_string(),
+                        message: e.to_string(),
+                    })
+                })?;
+                Err(err)
+            }
+        }
+    }
+
+    /// Consume a pairing token and mint the Mac's bearer secret.
     ///
     /// Steps:
     /// 1. Hash the candidate and atomically mark the matching row
-    ///    consumed (via [`tokens::consume_token`]). A missing, expired, or
-    ///    already-consumed token surfaces as [`BackendError::PairingTokenInvalid`].
-    /// 2. Refuse if either the consumer or the issuer already has a pairing
-    ///    row ([`BackendError::PairingStateMismatch`]).
-    /// 3. Mint two fresh `DeviceSecret`s, hash each with argon2id.
-    /// 4. Upsert the consumer's device row (no-op if already registered),
-    ///    write both `secret_hash` columns, insert the pairing row.
+    ///    consumed (via [`tokens::consume_token_with_executor`]). A
+    ///    missing, expired, or already-consumed token surfaces as
+    ///    [`BackendError::PairingTokenInvalid`].
+    /// 2. Refuse only self-pairing.
+    /// 3. Mint one fresh `DeviceSecret` for the issuer and hash it with
+    ///    argon2id.
+    /// 4. Upsert the consumer's device row (no-op if already registered).
+    ///    iOS rows keep `secret_hash = NULL` per ADR-0020.
+    /// 5. Write the issuer's `secret_hash`.
     ///
-    /// Returns a [`PairingOutcome`] carrying both plaintext secrets so the
-    /// caller can broadcast `Event::Paired` to each side.
+    /// Returns a [`PairingOutcome`] carrying the Mac plaintext secret so
+    /// the caller can broadcast `Event::Paired` to the Mac side. The
+    /// `(mac, mobile_account)` pair row is inserted by the HTTP handler
+    /// after this function returns — `consume_token` does not have the
+    /// bearer's `account_id`.
     ///
     /// # Errors
     ///
     /// - [`BackendError::PairingTokenInvalid`] — unknown / expired / already
     ///   consumed candidate.
-    /// - [`BackendError::PairingStateMismatch`] — consumer or issuer already
-    ///   paired.
+    /// - [`BackendError::PairingStateMismatch`] — self-pair attempt.
     /// - [`BackendError::PairingHash`] — argon2 reported an internal error.
     /// - [`BackendError::StoreQuery`] / [`BackendError::DeviceNotFound`] — any
     ///   underlying store write failed.
@@ -178,29 +886,8 @@ impl PairingService {
                 });
             }
 
-            // Spec §10.2 R4: refuse if either side already has a pairing. The
-            // UI confirms replace via `forget_peer` + retry.
-            if pairings::get_pair_with_executor(&mut *tx, consumer)
-                .await?
-                .is_some()
-            {
-                return Err(BackendError::PairingStateMismatch {
-                    actual: "paired".to_string(),
-                });
-            }
-            if pairings::get_pair_with_executor(&mut *tx, issuer)
-                .await?
-                .is_some()
-            {
-                return Err(BackendError::PairingStateMismatch {
-                    actual: "paired".to_string(),
-                });
-            }
-
             let issuer_secret = DeviceSecret::generate();
-            let consumer_secret = DeviceSecret::generate();
             let issuer_hash = secret::hash_secret(&issuer_secret)?;
-            let consumer_hash = secret::hash_secret(&consumer_secret)?;
 
             tokens::consume_token_with_executor(&mut *tx, &digest, now)
                 .await?
@@ -214,22 +901,18 @@ impl PairingService {
                     &mut *tx,
                     consumer,
                     &consumer_name,
-                    DeviceRole::IosClient,
+                    DeviceRole::MobileClient,
                     now,
                 )
                 .await?;
             }
 
-            devices::upsert_secret_hash_with_executor(&mut *tx, consumer, &consumer_hash).await?;
+            // iOS row stays at secret_hash = NULL per ADR-0020.
             devices::upsert_secret_hash_with_executor(&mut *tx, issuer, &issuer_hash).await?;
-            pairings::insert_pairing_with_executor(&mut *tx, issuer, consumer, now)
-                .await
-                .map_err(normalize_pairing_insert_error)?;
 
             Ok(PairingOutcome {
                 issuer_device_id: issuer,
                 issuer_secret,
-                consumer_secret,
             })
         }
         .await;
@@ -252,66 +935,210 @@ impl PairingService {
         }
     }
 
-    /// Dissolve the pair that includes `either_side`.
-    ///
-    /// Returns `Some(peer)` when a pair existed (so the caller can
-    /// broadcast `Event::Unpaired` to the other side), or `Ok(None)` if
-    /// `either_side` was unpaired to begin with.
-    ///
-    /// Idempotent at the store level: calling twice in a row is safe.
-    ///
-    /// # Errors
-    ///
-    /// - [`BackendError::StoreQuery`] / [`BackendError::StoreDecode`] — any
-    ///   underlying store op failed.
-    pub async fn forget_pair(
+    pub async fn consume_pairing(
         &self,
-        either_side: DeviceId,
-    ) -> Result<Option<DeviceId>, BackendError> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| {
-            BackendError::StoreQuery {
-                operation: "begin_forget_pair".to_string(),
-                message: e.to_string(),
-            }
-        })?;
-
-        let result: Result<Option<DeviceId>, BackendError> = async {
-            let Some(peer) = pairings::get_pair_with_executor(&mut *tx, either_side).await? else {
-                return Ok(None);
-            };
-
-            pairings::delete_pair_with_executor(&mut *tx, either_side, peer).await?;
-            devices::clear_secret_hash_with_executor(&mut *tx, either_side).await?;
-            devices::clear_secret_hash_with_executor(&mut *tx, peer).await?;
-
-            Ok(Some(peer))
-        }
-        .await;
-
-        match result {
-            Ok(peer) => {
-                tx.commit().await.map_err(|e| BackendError::StoreQuery {
-                    operation: "commit_forget_pair".to_string(),
-                    message: e.to_string(),
-                })?;
-                Ok(peer)
-            }
-            Err(err) => {
-                tx.rollback().await.map_err(|e| BackendError::StoreQuery {
-                    operation: "rollback_forget_pair".to_string(),
-                    message: e.to_string(),
-                })?;
-                Err(err)
-            }
-        }
+        registry: &SessionRegistry,
+        candidate: &PairingToken,
+        consumer: DeviceId,
+        consumer_name: String,
+        account_id: &str,
+    ) -> Result<PairingCompletion, ConsumePairingError> {
+        let result = self
+            .consume_pairing_inner(registry, candidate, consumer, consumer_name, account_id)
+            .await;
+        crate::telemetry::record_pairing_consume(pairing_consume_outcome(&result));
+        result
     }
+
+    async fn consume_pairing_inner(
+        &self,
+        registry: &SessionRegistry,
+        candidate: &PairingToken,
+        consumer: DeviceId,
+        consumer_name: String,
+        account_id: &str,
+    ) -> Result<PairingCompletion, ConsumePairingError> {
+        let pairing_outcome = match self
+            .consume_token(candidate, consumer, consumer_name.clone())
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(BackendError::PairingTokenInvalid) => {
+                return Err(ConsumePairingError::PairingTokenInvalid)
+            }
+            Err(BackendError::PairingStateMismatch { actual }) => {
+                return Err(ConsumePairingError::PairingStateMismatch { actual })
+            }
+            Err(error) => return Err(ConsumePairingError::Internal(error)),
+        };
+
+        let issuer_id = pairing_outcome.issuer_device_id;
+        if let Err(error) = account_host_pairings::insert_pair(
+            &self.pool,
+            issuer_id,
+            account_id,
+            consumer,
+            Utc::now().timestamp_millis(),
+        )
+        .await
+        {
+            return Err(ConsumePairingError::Internal(error));
+        }
+        let _ = crate::ingest::invalidate_peer_targets_for_host(issuer_id).await;
+
+        if let Err(error) = self
+            .link_account_to_pair_devices(consumer, issuer_id, account_id)
+            .await
+        {
+            self.compensate_pairing(issuer_id, account_id).await;
+            return Err(ConsumePairingError::Internal(error));
+        }
+
+        let mac_name = match devices::get_device(&self.pool, issuer_id).await {
+            Ok(Some(row)) => row.display_name,
+            _ => "Mac".to_string(),
+        };
+
+        let Some(issuer_handle) = registry.get(issuer_id) else {
+            self.compensate_pairing(issuer_id, account_id).await;
+            return Err(ConsumePairingError::IssuerOffline);
+        };
+
+        issuer_handle.set_account_id(account_id.to_string());
+        let frame = Envelope::Event {
+            version: 1,
+            event: EventKind::Paired {
+                peer_device_id: consumer,
+                peer_name: consumer_name,
+                your_device_secret: Some(pairing_outcome.issuer_secret),
+            },
+        };
+        if let Err(error) = registry.try_send_current(&issuer_handle, frame) {
+            tracing::warn!(
+                target: "minos_backend::pairing",
+                error = ?error,
+                issuer = %issuer_id,
+                consumer = %consumer,
+                "failed to deliver pairing event; compensating"
+            );
+            self.compensate_pairing(issuer_id, account_id).await;
+            return Err(ConsumePairingError::DeliveryFailed);
+        }
+
+        Ok(PairingCompletion {
+            peer_device_id: issuer_id,
+            peer_name: mac_name,
+        })
+    }
+
+    pub async fn forget_pairing(
+        &self,
+        registry: &SessionRegistry,
+        host_device_id: DeviceId,
+        account_id: &str,
+    ) -> Result<bool, BackendError> {
+        let result = self
+            .forget_pairing_inner(registry, host_device_id, account_id)
+            .await;
+        crate::telemetry::record_pairing_forget(pairing_forget_outcome(&result));
+        result
+    }
+
+    async fn forget_pairing_inner(
+        &self,
+        registry: &SessionRegistry,
+        host_device_id: DeviceId,
+        account_id: &str,
+    ) -> Result<bool, BackendError> {
+        let deleted =
+            account_host_pairings::delete_pair(&self.pool, host_device_id, account_id).await?;
+        let _ = crate::ingest::invalidate_peer_targets_for_host(host_device_id).await;
+
+        if deleted == 0 {
+            return Ok(false);
+        }
+
+        if let Some(host_handle) = registry.get(host_device_id) {
+            let _ = registry.try_send_current(
+                &host_handle,
+                Envelope::Event {
+                    version: 1,
+                    event: EventKind::Unpaired,
+                },
+            );
+        }
+
+        Ok(true)
+    }
+
+    async fn link_account_to_pair_devices(
+        &self,
+        consumer: DeviceId,
+        issuer: DeviceId,
+        account_id: &str,
+    ) -> Result<(), BackendError> {
+        devices::set_account_id(&self.pool, &consumer, account_id).await?;
+        devices::set_account_id(&self.pool, &issuer, account_id).await?;
+        Ok(())
+    }
+
+    async fn compensate_pairing(&self, issuer_id: DeviceId, account_id: &str) {
+        let _ = account_host_pairings::delete_pair(&self.pool, issuer_id, account_id).await;
+        let _ = crate::ingest::invalidate_peer_targets_for_host(issuer_id).await;
+    }
+}
+
+fn pairing_token_issue_outcome<T>(result: &Result<T, BackendError>) -> &'static str {
+    use crate::telemetry as t;
+    match result {
+        Ok(_) => t::OUTCOME_OK,
+        Err(_) => t::OUTCOME_ERROR,
+    }
+}
+
+fn pairing_consume_outcome<T>(result: &Result<T, ConsumePairingError>) -> &'static str {
+    use crate::telemetry as t;
+    match result {
+        Ok(_) => t::OUTCOME_OK,
+        Err(ConsumePairingError::PairingTokenInvalid) => t::OUTCOME_INVALID,
+        Err(ConsumePairingError::PairingStateMismatch { .. }) => t::OUTCOME_CONFLICT,
+        Err(ConsumePairingError::IssuerOffline) => t::OUTCOME_PEER_OFFLINE,
+        Err(ConsumePairingError::DeliveryFailed) => t::OUTCOME_PEER_BACKPRESSURE,
+        Err(ConsumePairingError::Internal(_)) => t::OUTCOME_ERROR,
+    }
+}
+
+fn pairing_forget_outcome<T>(result: &Result<T, BackendError>) -> &'static str {
+    use crate::telemetry as t;
+    match result {
+        Ok(_) => t::OUTCOME_OK,
+        Err(_) => t::OUTCOME_ERROR,
+    }
+}
+
+async fn begin_serializable_postgres_tx<'a>(
+    pool: &'a PgPool,
+    operation: &'static str,
+) -> Result<sqlx::Transaction<'a, Postgres>, BackendError> {
+    let mut tx = pool.begin().await.map_err(|e| BackendError::StoreQuery {
+        operation: operation.to_string(),
+        message: e.to_string(),
+    })?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| BackendError::StoreQuery {
+            operation: format!("{operation}.set_isolation"),
+            message: e.to_string(),
+        })?;
+    Ok(tx)
 }
 
 /// SHA-256 hex digest of a UTF-8 string.
 ///
 /// Hand-rolled `{:02x}` loop so we don't pull in the `hex` crate just for
 /// a 64-char output.
-fn sha256_hex(input: &str) -> String {
+pub(crate) fn sha256_hex(input: &str) -> String {
     let digest = Sha256::digest(input.as_bytes());
     let mut out = String::with_capacity(digest.len() * 2);
     for b in digest {
@@ -321,18 +1148,16 @@ fn sha256_hex(input: &str) -> String {
     out
 }
 
-fn normalize_pairing_insert_error(err: BackendError) -> BackendError {
-    match err {
-        BackendError::StoreQuery { operation, message }
-            if operation == "insert_pairing"
-                && message.contains(pairings::SINGLE_PAIR_VIOLATION_MARKER) =>
-        {
-            BackendError::PairingStateMismatch {
-                actual: "paired".to_string(),
-            }
-        }
-        other => other,
-    }
+fn generate_pairing_code() -> String {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes).expect("OS CSPRNG must be available");
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn generate_host_installation_token() -> String {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes).expect("OS CSPRNG must be available");
+    format!("hit_{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
 #[cfg(test)]
@@ -341,10 +1166,8 @@ mod tests {
     use crate::store::test_support::memory_pool;
     use minos_domain::DeviceRole;
     use pretty_assertions::assert_eq;
-    use std::sync::Arc;
+    use sqlx::SqlitePool;
     use std::time::Duration as StdDuration;
-    use tempfile::tempdir;
-    use tokio::sync::Barrier;
 
     const FIVE_MIN: StdDuration = StdDuration::from_mins(5);
 
@@ -390,7 +1213,7 @@ mod tests {
     // ── integration: request + consume happy path ──────────────────────
 
     #[tokio::test]
-    async fn request_then_consume_happy_path_returns_outcome_with_secrets() {
+    async fn request_then_consume_happy_path_mints_issuer_secret_only() {
         let pool = memory_pool().await;
         let svc = PairingService::new(pool.clone());
         let issuer = mac_issuer(&pool).await;
@@ -405,34 +1228,21 @@ mod tests {
             .unwrap();
 
         assert_eq!(outcome.issuer_device_id, issuer);
-        // Secrets are distinct and non-empty.
-        assert_ne!(
-            outcome.issuer_secret.as_str(),
-            outcome.consumer_secret.as_str()
-        );
+        // Issuer secret is non-empty (Base64URL of 32 bytes → 43 chars).
         assert_eq!(outcome.issuer_secret.as_str().len(), 43);
-        assert_eq!(outcome.consumer_secret.as_str().len(), 43);
 
-        // Pair row + both secret hashes are persisted.
-        assert_eq!(
-            pairings::get_pair(&pool, issuer).await.unwrap(),
-            Some(consumer)
-        );
-        assert_eq!(
-            pairings::get_pair(&pool, consumer).await.unwrap(),
-            Some(issuer)
-        );
+        // Mac-side: secret_hash IS Some(_) and round-trips through verify.
         let issuer_hash = devices::get_secret_hash(&pool, issuer).await.unwrap();
-        let consumer_hash = devices::get_secret_hash(&pool, consumer).await.unwrap();
-        assert!(issuer_hash.is_some());
-        assert!(consumer_hash.is_some());
-        // Hashes round-trip through secret::verify_secret.
+        assert!(issuer_hash.is_some(), "Mac issuer must have secret_hash");
         assert!(
             secret::verify_secret(outcome.issuer_secret.as_str(), &issuer_hash.unwrap()).unwrap()
         );
+
+        // iOS-side: secret_hash IS NULL per ADR-0020 (bearer-only rail).
+        let consumer_hash = devices::get_secret_hash(&pool, consumer).await.unwrap();
         assert!(
-            secret::verify_secret(outcome.consumer_secret.as_str(), &consumer_hash.unwrap())
-                .unwrap()
+            consumer_hash.is_none(),
+            "iOS row must keep secret_hash NULL per ADR-0020"
         );
     }
 
@@ -492,39 +1302,7 @@ mod tests {
         assert!(matches!(err, BackendError::PairingTokenInvalid));
     }
 
-    // ── integration: state-mismatch cases ──────────────────────────────
-
-    #[tokio::test]
-    async fn consume_when_consumer_already_paired_returns_pairing_state_mismatch() {
-        let pool = memory_pool().await;
-        let svc = PairingService::new(pool.clone());
-
-        // Pre-seed a pairing: consumer_id ↔ some third device.
-        let third = DeviceId::new();
-        devices::insert_device(&pool, third, "third", DeviceRole::AgentHost, 0)
-            .await
-            .unwrap();
-        let consumer = DeviceId::new();
-        devices::insert_device(&pool, consumer, "iphone", DeviceRole::IosClient, 0)
-            .await
-            .unwrap();
-        pairings::insert_pairing(&pool, third, consumer, 0)
-            .await
-            .unwrap();
-
-        // Now a fresh issuer tries to pair with the already-paired consumer.
-        let issuer = mac_issuer(&pool).await;
-        let (token, _) = svc.request_token(issuer, FIVE_MIN).await.unwrap();
-
-        let err = svc
-            .consume_token(&token, consumer, "iphone".into())
-            .await
-            .unwrap_err();
-        match err {
-            BackendError::PairingStateMismatch { actual } => assert_eq!(actual, "paired"),
-            other => panic!("expected PairingStateMismatch, got {other:?}"),
-        }
-    }
+    // ── integration: state-mismatch case ───────────────────────────────
 
     #[tokio::test]
     async fn consume_self_pair_returns_state_mismatch_without_burning_token() {
@@ -542,7 +1320,7 @@ mod tests {
             other => panic!("expected PairingStateMismatch, got {other:?}"),
         }
 
-        assert_eq!(pairings::get_pair(&pool, issuer).await.unwrap(), None);
+        // Token still usable; issuer's secret_hash still NULL.
         assert_eq!(devices::get_secret_hash(&pool, issuer).await.unwrap(), None);
 
         let consumer = DeviceId::new();
@@ -551,227 +1329,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(outcome.issuer_device_id, issuer);
-        assert_eq!(
-            pairings::get_pair(&pool, issuer).await.unwrap(),
-            Some(consumer)
-        );
-    }
-
-    #[tokio::test]
-    async fn consume_when_issuer_already_paired_returns_pairing_state_mismatch() {
-        let pool = memory_pool().await;
-        let svc = PairingService::new(pool.clone());
-
-        let issuer = mac_issuer(&pool).await;
-        // Seed issuer with an existing pair.
-        let prior_peer = DeviceId::new();
-        devices::insert_device(&pool, prior_peer, "prior", DeviceRole::IosClient, 0)
+        assert!(devices::get_secret_hash(&pool, issuer)
             .await
-            .unwrap();
-        pairings::insert_pairing(&pool, issuer, prior_peer, 0)
-            .await
-            .unwrap();
-
-        let (token, _) = svc.request_token(issuer, FIVE_MIN).await.unwrap();
-        let consumer = DeviceId::new();
-
-        let err = svc
-            .consume_token(&token, consumer, "iphone".into())
-            .await
-            .unwrap_err();
-        match err {
-            BackendError::PairingStateMismatch { actual } => assert_eq!(actual, "paired"),
-            other => panic!("expected PairingStateMismatch, got {other:?}"),
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn consume_two_outstanding_tokens_for_same_issuer_yields_one_success_and_one_paired_loser(
-    ) {
-        let dir = tempdir().unwrap();
-        let db = dir.path().join("pairing-race.db");
-        let url = format!("sqlite://{}?mode=rwc", db.display());
-        let pool = crate::store::connect(&url).await.unwrap();
-        let svc = PairingService::new(pool.clone());
-        let issuer = mac_issuer(&pool).await;
-
-        let (token_a, _) = svc.request_token(issuer, FIVE_MIN).await.unwrap();
-        let (token_b, _) = svc.request_token(issuer, FIVE_MIN).await.unwrap();
-        let consumer_a = DeviceId::new();
-        let consumer_b = DeviceId::new();
-        let barrier = Arc::new(Barrier::new(3));
-
-        let first = {
-            let svc = svc.clone();
-            let barrier = barrier.clone();
-            tokio::spawn(async move {
-                barrier.wait().await;
-                svc.consume_token(&token_a, consumer_a, "iphone-a".into())
-                    .await
-                    .map(|outcome| (consumer_a, outcome))
-            })
-        };
-        let second = {
-            let svc = svc.clone();
-            let barrier = barrier.clone();
-            tokio::spawn(async move {
-                barrier.wait().await;
-                svc.consume_token(&token_b, consumer_b, "iphone-b".into())
-                    .await
-                    .map(|outcome| (consumer_b, outcome))
-            })
-        };
-
-        barrier.wait().await;
-
-        let first = first.await.unwrap();
-        let second = second.await.unwrap();
-
-        let (winner, loser_result) = match (&first, &second) {
-            (Ok((winner, outcome)), Err(err)) | (Err(err), Ok((winner, outcome))) => {
-                assert_eq!(outcome.issuer_device_id, issuer);
-                (*winner, err)
-            }
-            (Ok(_), Ok(_)) => panic!("expected exactly one successful consume"),
-            (Err(left), Err(right)) => {
-                panic!("expected one success, got errors {left:?} and {right:?}")
-            }
-        };
-
-        match loser_result {
-            BackendError::PairingStateMismatch { actual } => assert_eq!(actual, "paired"),
-            other => panic!("expected PairingStateMismatch, got {other:?}"),
-        }
-
-        assert_eq!(
-            pairings::get_pair(&pool, issuer).await.unwrap(),
-            Some(winner)
-        );
-        assert_eq!(
-            pairings::get_pair(&pool, winner).await.unwrap(),
-            Some(issuer)
-        );
-
-        let loser = if winner == consumer_a {
-            consumer_b
-        } else {
-            consumer_a
-        };
-        assert_eq!(pairings::get_pair(&pool, loser).await.unwrap(), None);
-    }
-
-    #[tokio::test]
-    async fn consume_rolls_back_token_and_secret_hashes_when_pairing_insert_fails() {
-        let pool = memory_pool().await;
-        let svc = PairingService::new(pool.clone());
-        let issuer = mac_issuer(&pool).await;
-        let (token, _) = svc.request_token(issuer, FIVE_MIN).await.unwrap();
-        let consumer = DeviceId::new();
-
-        sqlx::query(
-            "
-            CREATE TRIGGER fail_pairing_insert
-            BEFORE INSERT ON pairings
-            BEGIN
-                SELECT RAISE(ABORT, 'pairing insert failed');
-            END;
-            ",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let err = svc
-            .consume_token(&token, consumer, "iphone".into())
-            .await
-            .unwrap_err();
-        match err {
-            BackendError::StoreQuery { operation, message } => {
-                assert_eq!(operation, "insert_pairing");
-                assert!(message.contains("pairing insert failed"));
-            }
-            other => panic!("expected StoreQuery, got {other:?}"),
-        }
-
-        assert_eq!(pairings::get_pair(&pool, issuer).await.unwrap(), None);
-        assert_eq!(pairings::get_pair(&pool, consumer).await.unwrap(), None);
-        assert_eq!(devices::get_secret_hash(&pool, issuer).await.unwrap(), None);
-        assert_eq!(
-            devices::get_secret_hash(&pool, consumer).await.unwrap(),
-            None
-        );
-        assert_eq!(devices::get_device(&pool, consumer).await.unwrap(), None);
-
-        let consumed_at = sqlx::query_scalar::<_, Option<i64>>(
-            "SELECT consumed_at FROM pairing_tokens WHERE token_hash = ?",
-        )
-        .bind(sha256_hex(token.as_str()))
-        .fetch_optional(&pool)
-        .await
-        .unwrap()
-        .flatten();
-        assert_eq!(consumed_at, None);
-
-        sqlx::query("DROP TRIGGER fail_pairing_insert")
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        let outcome = svc
-            .consume_token(&token, consumer, "iphone".into())
-            .await
-            .unwrap();
-        assert_eq!(outcome.issuer_device_id, issuer);
-        assert_eq!(
-            pairings::get_pair(&pool, issuer).await.unwrap(),
-            Some(consumer)
-        );
-    }
-
-    // ── integration: forget ────────────────────────────────────────────
-
-    #[tokio::test]
-    async fn forget_pair_returns_peer_and_deletes_row() {
-        let pool = memory_pool().await;
-        let svc = PairingService::new(pool.clone());
-        let issuer = mac_issuer(&pool).await;
-        let (token, _) = svc.request_token(issuer, FIVE_MIN).await.unwrap();
-        let consumer = DeviceId::new();
-        let outcome = svc
-            .consume_token(&token, consumer, "iphone".into())
-            .await
-            .unwrap();
-
-        let peer = svc.forget_pair(outcome.issuer_device_id).await.unwrap();
-        assert_eq!(peer, Some(consumer));
-        // Row is gone from both directions.
-        assert_eq!(pairings::get_pair(&pool, issuer).await.unwrap(), None);
-        assert_eq!(pairings::get_pair(&pool, consumer).await.unwrap(), None);
-    }
-
-    #[tokio::test]
-    async fn forget_pair_from_consumer_side_returns_issuer() {
-        // Symmetry check: forget called on the consumer must return the
-        // issuer's DeviceId.
-        let pool = memory_pool().await;
-        let svc = PairingService::new(pool.clone());
-        let issuer = mac_issuer(&pool).await;
-        let (token, _) = svc.request_token(issuer, FIVE_MIN).await.unwrap();
-        let consumer = DeviceId::new();
-        svc.consume_token(&token, consumer, "iphone".into())
-            .await
-            .unwrap();
-
-        let peer = svc.forget_pair(consumer).await.unwrap();
-        assert_eq!(peer, Some(issuer));
-    }
-
-    #[tokio::test]
-    async fn forget_pair_unpaired_returns_none() {
-        let pool = memory_pool().await;
-        let svc = PairingService::new(pool);
-        let lonely = DeviceId::new();
-        assert_eq!(svc.forget_pair(lonely).await.unwrap(), None);
+            .unwrap()
+            .is_some());
     }
 
     // ── unit: sha256_hex is deterministic + 64 chars ───────────────────

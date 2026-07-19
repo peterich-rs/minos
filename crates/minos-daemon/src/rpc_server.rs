@@ -16,10 +16,14 @@ use jsonrpsee::core::async_trait;
 use jsonrpsee::types::ErrorObjectOwned;
 use minos_cli_detect::{detect_all, CommandRunner};
 use minos_domain::MinosError;
-use minos_protocol::envelope::Envelope;
 use minos_protocol::{
-    HealthResponse, ListClisResponse, MinosRpcServer, PairRequest, PairResponse,
-    SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+    AgentDispatchRequest, ApprovalDecisionRequest, CloseThreadRequest, GetThreadParams,
+    GetThreadResponse, HealthResponse, InterruptThreadRequest, ListClisResponse,
+    ListHostSkillsRequest, ListHostSkillsResponse, ListHostWorkspacesRequest,
+    ListHostWorkspacesResponse, ListThreadsParams, ListThreadsResponse, MinosRpcServer,
+    PairRequest, PairResponse, RespondOpencodeQuestionRequest, SendUserMessageRequest,
+    StartAgentRequest, StartAgentResponse, WriteHostSkillConfigRequest,
+    WriteHostSkillConfigResponse,
 };
 use serde_json::{json, Map, Value};
 
@@ -35,10 +39,11 @@ pub struct RpcServerImpl {
 impl MinosRpcServer for RpcServerImpl {
     async fn pair(&self, _req: PairRequest) -> jsonrpsee::core::RpcResult<PairResponse> {
         // Pairing is owned end-to-end by the backend broker (plan 05 Phase F.3).
-        // The Mac receives a Paired event from the backend's `Pair` LocalRpc
-        // handler — it never sees a peer-originated `pair` JSON-RPC. If a
-        // forwarded JSON-RPC frame somehow reaches here, the right answer is
-        // that the host explicitly does not trust this surface for pairing.
+        // The Mac receives a Paired event from the backend's HTTP
+        // `POST /v1/pairing/consume` handler — it never sees a peer-originated
+        // `pair` JSON-RPC. If a forwarded JSON-RPC frame somehow reaches here,
+        // the right answer is that the host explicitly does not trust this
+        // surface for pairing.
         Err(rpc_err(MinosError::Unauthorized {
             reason: "pair handled by backend, not host".into(),
         }))
@@ -55,6 +60,30 @@ impl MinosRpcServer for RpcServerImpl {
         Ok(detect_all(self.runner.clone()).await)
     }
 
+    async fn list_host_skills(
+        &self,
+        req: ListHostSkillsRequest,
+    ) -> jsonrpsee::core::RpcResult<ListHostSkillsResponse> {
+        self.agent.list_host_skills(req).await.map_err(rpc_err)
+    }
+
+    async fn list_host_workspaces(
+        &self,
+        req: ListHostWorkspacesRequest,
+    ) -> jsonrpsee::core::RpcResult<ListHostWorkspacesResponse> {
+        self.agent.list_host_workspaces(req).map_err(rpc_err)
+    }
+
+    async fn write_host_skill_config(
+        &self,
+        req: WriteHostSkillConfigRequest,
+    ) -> jsonrpsee::core::RpcResult<WriteHostSkillConfigResponse> {
+        self.agent
+            .write_host_skill_config(req)
+            .await
+            .map_err(rpc_err)
+    }
+
     async fn start_agent(
         &self,
         req: StartAgentRequest,
@@ -69,12 +98,50 @@ impl MinosRpcServer for RpcServerImpl {
         self.agent.send_user_message(req).await.map_err(rpc_err)
     }
 
-    async fn stop_agent(&self) -> jsonrpsee::core::RpcResult<()> {
-        self.agent.stop_agent().await.map_err(rpc_err)
+    async fn approval_decision(
+        &self,
+        req: ApprovalDecisionRequest,
+    ) -> jsonrpsee::core::RpcResult<()> {
+        self.agent.resolve_approval(req).await.map_err(rpc_err)
+    }
+
+    async fn respond_opencode_question(
+        &self,
+        req: RespondOpencodeQuestionRequest,
+    ) -> jsonrpsee::core::RpcResult<()> {
+        self.agent
+            .respond_opencode_question(req)
+            .await
+            .map_err(rpc_err)
+    }
+
+    async fn interrupt_thread(
+        &self,
+        req: InterruptThreadRequest,
+    ) -> jsonrpsee::core::RpcResult<()> {
+        self.agent.interrupt_thread(req).await.map_err(rpc_err)
+    }
+
+    async fn close_thread(&self, req: CloseThreadRequest) -> jsonrpsee::core::RpcResult<()> {
+        self.agent.close_thread(req).await.map_err(rpc_err)
+    }
+
+    async fn list_threads(
+        &self,
+        req: ListThreadsParams,
+    ) -> jsonrpsee::core::RpcResult<ListThreadsResponse> {
+        self.agent.list_threads(req).await.map_err(rpc_err)
+    }
+
+    async fn get_thread(
+        &self,
+        req: GetThreadParams,
+    ) -> jsonrpsee::core::RpcResult<GetThreadResponse> {
+        self.agent.get_thread(req).await.map_err(rpc_err)
     }
 }
 
-fn rpc_err(e: MinosError) -> ErrorObjectOwned {
+pub fn rpc_err(e: MinosError) -> ErrorObjectOwned {
     let code = match e {
         MinosError::PairingStateMismatch { .. } => -32001,
         MinosError::PairingTokenInvalid => -32002,
@@ -84,126 +151,222 @@ fn rpc_err(e: MinosError) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(code, e.to_string(), None::<()>)
 }
 
-/// JSON-RPC method-not-found code (per spec).
-const RPC_METHOD_NOT_FOUND: i32 = -32601;
-/// JSON-RPC invalid-params code (per spec).
-const RPC_INVALID_PARAMS: i32 = -32602;
-/// JSON-RPC parse-error code (per spec).
-const RPC_PARSE_ERROR: i32 = -32700;
-
-/// Dispatch an opaque `Envelope::Forwarded { payload }` JSON-RPC 2.0
-/// request onto a `RpcServerImpl` and return the matching JSON-RPC 2.0
-/// response value (suitable for wrapping into `Envelope::Forward { payload }`).
+/// Dispatch a host command (method + params) onto the local `RpcServerImpl`.
+///
+/// Returns `Ok(result_json)` on success or `Err(error_json)` on failure.
+/// The caller wraps the result into `ClientFrame::HostCommandResult`.
 ///
 /// Methods are namespaced `minos_*` per the `#[rpc(namespace = "minos")]`
-/// derive on [`MinosRpc`]. The dispatcher is intentionally a small match
-/// rather than a jsonrpsee `RpcModule` round-trip so we don't pull in
-/// the full server runtime; any future method addition needs a new arm
-/// here.
-///
-/// Errors map to JSON-RPC's standard error object (`-32601` for unknown
-/// method, `-32602` for invalid params, `-32700` for malformed envelope).
-/// Method-level errors flow through [`rpc_err`] and surface with the
-/// existing `-3200x` codes.
-pub async fn invoke_forwarded(payload: Value, server: &Arc<RpcServerImpl>) -> Value {
-    let id = payload.get("id").cloned().unwrap_or(Value::Null);
-
-    let Some(method) = payload.get("method").and_then(Value::as_str) else {
-        return jsonrpc_error(id, RPC_PARSE_ERROR, "missing 'method'");
-    };
-    let params = payload.get("params").cloned().unwrap_or(Value::Null);
-
+/// derive on [`MinosRpc`].
+#[allow(clippy::too_many_lines)]
+pub async fn invoke_host_command(
+    method: &str,
+    params: Value,
+    server: &Arc<RpcServerImpl>,
+) -> Result<Value, Value> {
     match method {
         "minos_pair" => {
-            let req: PairRequest = match parse_params(&params) {
-                Ok(r) => r,
-                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
-            };
-            into_jsonrpc(id, server.pair(req).await)
+            let req: PairRequest = parse_params(&params)?;
+            into_result(server.pair(req).await)
         }
-        "minos_health" => into_jsonrpc(id, server.health().await),
-        "minos_list_clis" => into_jsonrpc(id, server.list_clis().await),
+        "minos_health" => into_result(server.health().await),
+        "minos_list_clis" => into_result(server.list_clis().await),
+        "minos_list_host_skills" => {
+            let req: ListHostSkillsRequest = parse_params(&params)?;
+            into_result(server.list_host_skills(req).await)
+        }
+        "minos_list_host_workspaces" => {
+            let req: ListHostWorkspacesRequest = parse_params(&params)?;
+            into_result(server.list_host_workspaces(req).await)
+        }
+        "minos_write_host_skill_config" => {
+            let req: WriteHostSkillConfigRequest = parse_params(&params)?;
+            into_result(server.write_host_skill_config(req).await)
+        }
         "minos_start_agent" => {
-            let req: StartAgentRequest = match parse_params(&params) {
-                Ok(r) => r,
-                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
+            let req: StartAgentRequest = parse_params(&params)?;
+            into_result(server.start_agent(req).await)
+        }
+        "agent_session.start" => {
+            #[derive(serde::Deserialize)]
+            struct StartAgentSessionParams {
+                session_id: String,
+                agent_id: String,
+                #[serde(default)]
+                runtime_agent: Option<String>,
+                #[serde(default)]
+                workspace: String,
+                #[serde(default)]
+                initial_user_message: Option<String>,
+            }
+            let req: StartAgentSessionParams = parse_params(&params)?;
+            let agent_label = req.runtime_agent.as_deref().unwrap_or(&req.agent_id);
+            let agent = parse_agent_name(agent_label)?;
+            let start_req = StartAgentRequest {
+                agent,
+                workspace: req.workspace,
+                mode: None,
             };
-            into_jsonrpc(id, server.start_agent(req).await)
+            server
+                .agent
+                .start_agent_with_session_id(req.session_id, start_req, req.initial_user_message)
+                .await
+                .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
+                .map_err(rpc_err_value)
         }
         "minos_send_user_message" => {
-            let req: SendUserMessageRequest = match parse_params(&params) {
-                Ok(r) => r,
-                Err(msg) => return jsonrpc_error(id, RPC_INVALID_PARAMS, &msg),
-            };
-            into_jsonrpc(id, server.send_user_message(req).await)
+            let req: SendUserMessageRequest = parse_params(&params)?;
+            into_result(server.send_user_message(req).await)
         }
-        "minos_stop_agent" => into_jsonrpc(id, server.stop_agent().await),
-        // `subscribe_events` cannot meaningfully cross a forwarded RPC
-        // boundary — the peer would need a streaming subscription which
-        // the envelope protocol does not model. Reject explicitly.
-        other => jsonrpc_error(
-            id,
-            RPC_METHOD_NOT_FOUND,
-            &format!("method '{other}' is not forwarded-callable"),
-        ),
+        "agent_session.send_input" => {
+            #[derive(serde::Deserialize)]
+            struct SendAgentSessionInputParams {
+                session_id: String,
+                text: String,
+            }
+            let req: SendAgentSessionInputParams = parse_params(&params)?;
+            into_result(
+                server
+                    .send_user_message(SendUserMessageRequest {
+                        session_id: req.session_id,
+                        text: req.text,
+                    })
+                    .await,
+            )
+        }
+        "minos_approval_decision" => {
+            let req: ApprovalDecisionRequest = parse_params(&params)?;
+            into_result(server.approval_decision(req).await)
+        }
+        "minos_respond_opencode_question" => {
+            let req: RespondOpencodeQuestionRequest = parse_params(&params)?;
+            into_result(server.respond_opencode_question(req).await)
+        }
+        "minos_agent_dispatch" => {
+            let req: AgentDispatchRequest = parse_params(&params)?;
+            server
+                .agent
+                .dispatch_message(req)
+                .await
+                .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
+                .map_err(|e| rpc_err_value(e))
+        }
+        "minos_interrupt_thread" => {
+            let req: InterruptThreadRequest = parse_params(&params)?;
+            into_result(server.interrupt_thread(req).await)
+        }
+        "minos_close_thread" => {
+            let req: CloseThreadRequest = parse_params(&params)?;
+            into_result(server.close_thread(req).await)
+        }
+        "agent_session.stop" => {
+            #[derive(serde::Deserialize)]
+            struct StopAgentSessionParams {
+                session_id: String,
+            }
+            let req: StopAgentSessionParams = parse_params(&params)?;
+            into_result(
+                server
+                    .close_thread(CloseThreadRequest {
+                        thread_id: req.session_id,
+                    })
+                    .await,
+            )
+        }
+        "minos_list_threads" => {
+            let req: ListThreadsParams = parse_params(&params)?;
+            into_result(server.list_threads(req).await)
+        }
+        "minos_get_thread" => {
+            let req: GetThreadParams = parse_params(&params)?;
+            into_result(server.get_thread(req).await)
+        }
+        "minos_create_project" => {
+            let req: minos_protocol::CreateProjectRequest = parse_params(&params)?;
+            server
+                .agent
+                .create_project(req)
+                .await
+                .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
+                .map_err(|e| rpc_err_value(e))
+        }
+        "minos_list_projects" => server
+            .agent
+            .list_projects()
+            .await
+            .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
+            .map_err(|e| rpc_err_value(e)),
+        "minos_update_project" => {
+            let req: minos_protocol::UpdateProjectRequest = parse_params(&params)?;
+            server
+                .agent
+                .update_project(req)
+                .await
+                .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
+                .map_err(|e| rpc_err_value(e))
+        }
+        "minos_delete_project" => {
+            let req: minos_protocol::DeleteProjectRequest = parse_params(&params)?;
+            server
+                .agent
+                .delete_project(req)
+                .await
+                .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
+                .map_err(|e| rpc_err_value(e))
+        }
+        other => Err(json!({
+            "code": -32601,
+            "message": format!("method '{other}' is not host-command-callable"),
+        })),
     }
 }
 
-/// Wrap a successful or failing `RpcResult<T>` into a JSON-RPC 2.0
-/// response object (the shape the relay echoes back to the original peer
-/// inside an [`Envelope::Forward`] payload).
-fn into_jsonrpc<T: serde::Serialize>(id: Value, result: jsonrpsee::core::RpcResult<T>) -> Value {
+fn into_result<T: serde::Serialize>(result: jsonrpsee::core::RpcResult<T>) -> Result<Value, Value> {
     match result {
-        Ok(v) => json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": serde_json::to_value(v).unwrap_or(Value::Null),
-        }),
-        Err(e) => json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "error": {
-                "code": e.code(),
-                "message": e.message(),
-            },
-        }),
+        Ok(v) => Ok(serde_json::to_value(v).unwrap_or(Value::Null)),
+        Err(e) => Err(json!({
+            "code": e.code(),
+            "message": e.message(),
+        })),
     }
 }
 
-fn jsonrpc_error(id: Value, code: i32, message: &str) -> Value {
+fn rpc_err_value(e: MinosError) -> Value {
+    let e = rpc_err(e);
     json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "error": { "code": code, "message": message },
+        "code": e.code(),
+        "message": e.message(),
     })
 }
 
-/// JSON-RPC params are conventionally either a positional array or a
-/// named object. Our generated client uses the named-object form, so we
-/// accept that as the authoritative shape and reject positional.
-fn parse_params<T: serde::de::DeserializeOwned>(params: &Value) -> Result<T, String> {
-    if params.is_null() {
-        // Some methods take `()` — try the empty-object decode for them.
-        return serde_json::from_value(Value::Object(Map::new()))
-            .map_err(|e| format!("missing params; tried empty object: {e}"));
+fn parse_agent_name(raw: &str) -> Result<minos_domain::AgentName, Value> {
+    match raw {
+        "codex" | "agent_codex" => Ok(minos_domain::AgentName::Codex),
+        "claude" | "agent_claude" => Ok(minos_domain::AgentName::Claude),
+        "gemini" | "agent_gemini" => Ok(minos_domain::AgentName::Gemini),
+        "opencode" | "agent_opencode" => Ok(minos_domain::AgentName::Opencode),
+        "grok" | "agent_grok" => Ok(minos_domain::AgentName::Grok),
+        other => Err(json!({
+            "code": -32602,
+            "message": format!("unsupported runtime_agent '{other}'"),
+        })),
     }
-    serde_json::from_value(params.clone()).map_err(|e| format!("invalid params: {e}"))
 }
 
-/// Wrap a fully formed JSON-RPC response into an `Envelope::Forward`
-/// suitable for pushing back through the outbound queue. Kept as a
-/// helper so the dispatch loop and tests share one phrasing.
-#[must_use]
-pub fn wrap_response_envelope(response: Value) -> Envelope {
-    Envelope::Forward {
-        version: 1,
-        payload: response,
+fn parse_params<T: serde::de::DeserializeOwned>(params: &Value) -> Result<T, Value> {
+    if params.is_null() {
+        return serde_json::from_value(Value::Object(Map::new()))
+            .map_err(|e| json!({"code": -32602, "message": format!("missing params: {e}")}));
     }
+    serde_json::from_value(params.clone())
+        .map_err(|e| json!({"code": -32602, "message": format!("invalid params: {e}")}))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use minos_agent_runtime::test_support::FakeCodexBackend;
+    use minos_agent_runtime::{AgentManager, AgentRuntimeConfig, InstanceCaps};
     use minos_cli_detect::CommandOutcome;
     use std::time::Duration;
 
@@ -231,51 +394,82 @@ mod tests {
         }
     }
 
-    fn fake_server() -> Arc<RpcServerImpl> {
+    async fn fake_server() -> Arc<RpcServerImpl> {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(
+            crate::store::LocalStore::open(&tmp.path().join("test.sqlite"))
+                .await
+                .unwrap(),
+        );
         Arc::new(RpcServerImpl {
             started_at: Instant::now(),
             runner: Arc::new(NoopRunner),
             agent: Arc::new(AgentGlue::new(
-                std::env::temp_dir().join("minos-rpc-test"),
+                tmp.path().to_path_buf(),
                 Arc::new(std::collections::HashMap::new()),
+                store,
             )),
         })
     }
 
-    #[tokio::test]
-    async fn invoke_forwarded_health_returns_jsonrpc_result() {
-        let server = fake_server();
-        let req = json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "minos_health",
-            "params": {},
-        });
-        let resp = invoke_forwarded(req, &server).await;
-        assert_eq!(resp["jsonrpc"], "2.0");
-        assert_eq!(resp["id"], 1);
-        let result = &resp["result"];
-        assert!(result["version"].is_string());
-        assert!(result["uptime_secs"].is_number());
+    #[allow(dead_code)]
+    fn fake_thread_start_reply(thread_id: &str) -> serde_json::Value {
+        json!({
+            "approvalPolicy": "never",
+            "approvalsReviewer": "user",
+            "cwd": "/tmp",
+            "instructionSources": [],
+            "model": "fake",
+            "modelProvider": "fake",
+            "sandbox": { "type": "dangerFullAccess" },
+            "thread": {
+                "id": thread_id,
+                "cliVersion": "0.0.0-fake",
+                "createdAt": 0,
+                "cwd": "/tmp",
+                "ephemeral": true,
+                "modelProvider": "fake",
+                "preview": "",
+                "source": "appServer",
+                "status": { "type": "idle" },
+                "turns": [],
+                "updatedAt": 0
+            }
+        })
+    }
+
+    #[allow(dead_code)]
+    fn command_approval_params(thread_id: &str, turn_id: &str) -> serde_json::Value {
+        json!({
+            "itemId": "item-1",
+            "threadId": thread_id,
+            "turnId": turn_id,
+        })
     }
 
     #[tokio::test]
-    async fn invoke_forwarded_pair_returns_unauthorized_error() {
-        let server = fake_server();
-        let req = json!({
-            "jsonrpc": "2.0",
-            "id": 7,
-            "method": "minos_pair",
-            "params": {
+    async fn invoke_host_command_health_returns_result() {
+        let server = fake_server().await;
+        let result = invoke_host_command("minos_health", json!({}), &server).await;
+        let value = result.unwrap();
+        assert!(value["version"].is_string());
+        assert!(value["uptime_secs"].is_number());
+    }
+
+    #[tokio::test]
+    async fn invoke_host_command_pair_returns_error() {
+        let server = fake_server().await;
+        let result = invoke_host_command(
+            "minos_pair",
+            json!({
                 "device_id": "00000000-0000-0000-0000-000000000000",
                 "name": "x",
                 "token": "tok",
-            },
-        });
-        let resp = invoke_forwarded(req, &server).await;
-        assert_eq!(resp["id"], 7);
-        let err = &resp["error"];
-        assert!(err.is_object(), "expected error object, got {resp}");
+            }),
+            &server,
+        )
+        .await;
+        let err = result.unwrap_err();
         let msg = err["message"].as_str().unwrap_or_default();
         assert!(
             msg.contains("backend"),
@@ -284,38 +478,111 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invoke_forwarded_unknown_method_returns_minus_32601() {
-        let server = fake_server();
-        let req = json!({
-            "jsonrpc": "2.0",
-            "id": 99,
-            "method": "minos_does_not_exist",
-            "params": {},
-        });
-        let resp = invoke_forwarded(req, &server).await;
-        assert_eq!(resp["id"], 99);
-        assert_eq!(resp["error"]["code"], RPC_METHOD_NOT_FOUND);
+    async fn invoke_host_command_unknown_method_returns_error() {
+        let server = fake_server().await;
+        let result = invoke_host_command("minos_does_not_exist", json!({}), &server).await;
+        let err = result.unwrap_err();
+        assert_eq!(err["code"], -32601);
     }
 
     #[tokio::test]
-    async fn invoke_forwarded_missing_method_returns_parse_error() {
-        let server = fake_server();
-        let req = json!({ "jsonrpc": "2.0", "id": 5 });
-        let resp = invoke_forwarded(req, &server).await;
-        assert_eq!(resp["id"], 5);
-        assert_eq!(resp["error"]["code"], RPC_PARSE_ERROR);
+    async fn invoke_host_command_agent_dispatch_returns_session_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (fake, url) = FakeCodexBackend::install().await;
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(url);
+        let manager = Arc::new(AgentManager::new(cfg, InstanceCaps::default()));
+        let store = Arc::new(
+            crate::store::LocalStore::open(&tmp.path().join("test.sqlite"))
+                .await
+                .unwrap(),
+        );
+        let writer = Arc::new(crate::store::event_writer::EventWriter::spawn(
+            store.clone(),
+        ));
+        let server = Arc::new(RpcServerImpl {
+            started_at: Instant::now(),
+            runner: Arc::new(NoopRunner),
+            agent: Arc::new(AgentGlue::wire_with(
+                manager,
+                writer,
+                store,
+                tmp.path().to_path_buf(),
+            )),
+        });
+
+        let result = invoke_host_command(
+            "minos_agent_dispatch",
+            json!({
+                "agent": "codex",
+                "text": "hello from host command",
+                "workspace": "/w-rpc-dispatch"
+            }),
+            &server,
+        )
+        .await;
+
+        let value = result.unwrap();
+        let session_id = value["session_id"]
+            .as_str()
+            .expect("session_id should be present");
+        assert!(!session_id.is_empty());
+
+        fake.stop().await;
     }
 
-    #[test]
-    fn wrap_response_envelope_uses_forward_variant() {
-        let v = json!({"jsonrpc":"2.0","id":1,"result":{"ok":true}});
-        let env = wrap_response_envelope(v.clone());
-        match env {
-            Envelope::Forward { version, payload } => {
-                assert_eq!(version, 1);
-                assert_eq!(payload, v);
-            }
-            other => panic!("expected Forward, got {other:?}"),
-        }
+    #[tokio::test]
+    async fn invoke_host_command_agent_session_start_uses_formal_session_id_and_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("formal-workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let (fake, url) = FakeCodexBackend::install().await;
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(url);
+        let manager = Arc::new(AgentManager::new(cfg, InstanceCaps::default()));
+        let store = Arc::new(
+            crate::store::LocalStore::open(&tmp.path().join("test.sqlite"))
+                .await
+                .unwrap(),
+        );
+        let writer = Arc::new(crate::store::event_writer::EventWriter::spawn(
+            store.clone(),
+        ));
+        let server = Arc::new(RpcServerImpl {
+            started_at: Instant::now(),
+            runner: Arc::new(NoopRunner),
+            agent: Arc::new(AgentGlue::wire_with(
+                manager,
+                writer,
+                store.clone(),
+                tmp.path().to_path_buf(),
+            )),
+        });
+
+        let result = invoke_host_command(
+            "agent_session.start",
+            json!({
+                "session_id": "sess-formal-1",
+                "agent_id": "agent_codex",
+                "runtime_agent": "codex",
+                "workspace": workspace.display().to_string()
+            }),
+            &server,
+        )
+        .await;
+
+        let value = result.unwrap();
+        assert_eq!(value["session_id"], "sess-formal-1");
+        assert_eq!(
+            value["cwd"].as_str().unwrap(),
+            std::fs::canonicalize(&workspace)
+                .unwrap()
+                .display()
+                .to_string()
+        );
+        let row = store.get_thread("sess-formal-1").await.unwrap().unwrap();
+        assert_eq!(row.workspace_root, value["cwd"].as_str().unwrap());
+
+        fake.stop().await;
     }
 }

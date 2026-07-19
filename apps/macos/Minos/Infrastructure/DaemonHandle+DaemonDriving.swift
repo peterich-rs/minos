@@ -8,12 +8,24 @@ extension DaemonHandle: DaemonDriving {
     // uses positional names for ergonomics. These thin shims bridge the
     // two without losing the trailing-closure-style call sites in
     // SwiftUI views.
+    func forgetPeerDevice(_ mobileDeviceId: DeviceId) async throws {
+        try await forgetPeerDevice(mobileDeviceId: mobileDeviceId)
+    }
+
     func startAgent(_ req: StartAgentRequest) async throws -> StartAgentResponse {
         try await startAgent(req: req)
     }
 
     func sendUserMessage(_ req: SendUserMessageRequest) async throws {
         try await sendUserMessage(req: req)
+    }
+
+    func interruptThread(_ req: InterruptThreadRequest) async throws {
+        try await interruptThread(req: req)
+    }
+
+    func closeThread(_ req: CloseThreadRequest) async throws {
+        try await closeThread(req: req)
     }
 
     func subscribeRelayLink(_ observer: RelayLinkStateObserver) -> any SubscriptionHandle {
