@@ -479,10 +479,24 @@ fn flutter_leg(workspace_root: &Path) -> Result<()> {
 
 fn bootstrap() -> Result<()> {
     let workspace_root = workspace_root()?;
-    eprintln!("==> installing uniffi (cli feature)");
+    // Pin to the same version as `workspace.dependencies.uniffi` / Cargo.lock.
+    // `cargo install uniffi` without `--version` pulls latest (0.32+ today),
+    // and uniffi-bindgen-swift then fails to extract library metadata with
+    // `Unexpected metadata type code: …` because the staticlib was built with
+    // the workspace's 0.31 macros. Keep bindgen and lib versions in lockstep.
+    eprintln!("==> installing uniffi {UNIFFI_CLI_VERSION} (cli feature)");
     run(
         "cargo",
-        &["install", "uniffi", "--locked", "--features", "cli"],
+        &[
+            "install",
+            "uniffi",
+            "--version",
+            UNIFFI_CLI_VERSION,
+            "--locked",
+            "--force",
+            "--features",
+            "cli",
+        ],
         &workspace_root,
     )?;
     ensure_uniffi_bindgen_swift_wrapper()?;
@@ -726,6 +740,10 @@ fn acquire_build_macos_lock(root: &Path, configuration: &str) -> Result<std::fs:
     Ok(lock)
 }
 
+/// Must match `workspace.dependencies.uniffi` / Cargo.lock and the version
+/// installed by `bootstrap`. Drift here is the macOS CI `gen-uniffi` footgun.
+const UNIFFI_CLI_VERSION: &str = "0.31.1";
+
 fn gen_uniffi() -> Result<()> {
     let root = workspace_root()?;
     let out_dir = root.join("apps/macos/Minos/Generated");
@@ -734,6 +752,7 @@ fn gen_uniffi() -> Result<()> {
     if which("uniffi-bindgen-swift").is_none() {
         bail!("uniffi-bindgen-swift not installed; run `cargo xtask bootstrap`");
     }
+    ensure_uniffi_bindgen_matches_workspace()?;
 
     let host_target = host_macos_rust_target();
     eprintln!("==> cargo build (host arch) -p minos-ffi-uniffi --target {host_target}");
@@ -1260,6 +1279,43 @@ fn ensure_uniffi_bindgen_swift_wrapper() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Fail early when the on-PATH bindgen is a different major/minor than the
+/// workspace macros. Mismatches surface later as opaque
+/// `Unexpected metadata type code` errors inside `uniffi-bindgen-swift`.
+fn ensure_uniffi_bindgen_matches_workspace() -> Result<()> {
+    let out = Command::new("uniffi-bindgen-swift")
+        .arg("--version")
+        .output()
+        .context("running uniffi-bindgen-swift --version")?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let text = format!("{stdout}{stderr}");
+    if text.contains(UNIFFI_CLI_VERSION) {
+        return Ok(());
+    }
+    // Older bindgen binaries may not implement --version; fall back to
+    // `cargo install --list` which always records the installed crate version.
+    let list = Command::new("cargo")
+        .args(["install", "--list"])
+        .output()
+        .context("running cargo install --list")?;
+    let list_text = String::from_utf8_lossy(&list.stdout);
+    let expected = format!("uniffi v{UNIFFI_CLI_VERSION}:");
+    if list_text.lines().any(|line| line.starts_with(&expected)) {
+        return Ok(());
+    }
+    bail!(
+        "uniffi-bindgen-swift is not version {UNIFFI_CLI_VERSION} (workspace pin). \
+         Found install list entry may differ; run `cargo xtask bootstrap` to reinstall. \
+         cargo install --list uniffi lines:\n{}",
+        list_text
+            .lines()
+            .filter(|line| line.contains("uniffi"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
 }
 
 /// Run the backend binary with dev-friendly defaults.
