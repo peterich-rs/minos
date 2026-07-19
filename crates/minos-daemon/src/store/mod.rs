@@ -131,49 +131,67 @@ impl LocalStore {
         .await?)
     }
 
-    /// Flip every thread whose status is neither `closed` nor `suspended`
-    /// to `suspended { daemon_restart }`. Sets `needs_continue` for rows that
-    /// were mid-flight (`running` / `starting` / `resuming`); idle orphans get
-    /// `needs_continue = 0`. Already-suspended / closed rows are untouched.
-    /// Returns the number of rows flipped so callers can log recovery footprint.
+    /// Recover orphan threads after unclean process death.
+    ///
+    /// - **Mid-flight** (`running` / `starting` / `resuming`) → `suspended` +
+    ///   `needs_continue=1` so open path can inject CONTINUE.
+    /// - **Idle** is left as **`idle`**. The agent process is gone, but the
+    ///   session is still "between turns" / ready to reattach — it must not
+    ///   surface as user-visible **Paused** after Desktop/daemon restart.
+    /// - Already `closed` / `suspended` rows are untouched.
+    ///
+    /// `resume_thread` reattaches when the row is idle but no live process exists.
     pub async fn mark_orphans_suspended(&self) -> anyhow::Result<u64> {
         let r = sqlx::query(
             "UPDATE threads SET \
-                needs_continue = CASE \
-                    WHEN status IN ('running', 'starting', 'resuming') THEN 1 \
-                    ELSE 0 \
-                END, \
+                needs_continue = 1, \
                 status = 'suspended', \
                 last_pause_reason = 'daemon_restart', \
                 last_close_reason = NULL, \
                 ended_at = NULL \
-             WHERE status NOT IN ('closed', 'suspended')",
+             WHERE status IN ('running', 'starting', 'resuming')",
         )
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected())
     }
 
-    /// Synchronously stamp a thread suspended for daemon stop / process death.
-    /// Used by the stop path so status survives process exit (async event bridge
-    /// is racy on shutdown).
+    /// Persist daemon-stop outcome for one thread (sync path; survives process exit).
+    ///
+    /// - `needs_continue == true` (was mid-flight): `suspended` + flag for CONTINUE.
+    /// - `needs_continue == false` (was idle / already paused without mid-flight):
+    ///   keep **`idle`** so restart does not rebrand a finished turn as Paused.
     pub async fn suspend_thread_for_daemon_restart(
         &self,
         thread_id: &str,
         needs_continue: bool,
         ts_ms: i64,
     ) -> anyhow::Result<u64> {
-        let result = sqlx::query(
-            "UPDATE threads SET status = 'suspended', last_pause_reason = 'daemon_restart', \
-                                last_close_reason = NULL, ended_at = NULL, \
-                                needs_continue = ?, last_activity_at = ? \
-             WHERE thread_id = ? AND status != 'closed'",
-        )
-        .bind(i64::from(needs_continue))
-        .bind(ts_ms)
-        .bind(thread_id)
-        .execute(&self.pool)
-        .await?;
+        let result = if needs_continue {
+            sqlx::query(
+                "UPDATE threads SET status = 'suspended', last_pause_reason = 'daemon_restart', \
+                                    last_close_reason = NULL, ended_at = NULL, \
+                                    needs_continue = 1, last_activity_at = ? \
+                 WHERE thread_id = ? AND status != 'closed'",
+            )
+            .bind(ts_ms)
+            .bind(thread_id)
+            .execute(&self.pool)
+            .await?
+        } else {
+            // Between turns: durable ready state is idle (reattach on next use).
+            sqlx::query(
+                "UPDATE threads SET status = 'idle', last_pause_reason = NULL, \
+                                    last_close_reason = NULL, ended_at = NULL, \
+                                    needs_continue = 0, last_activity_at = ? \
+                 WHERE thread_id = ? AND status != 'closed' \
+                   AND status NOT IN ('suspended')",
+            )
+            .bind(ts_ms)
+            .bind(thread_id)
+            .execute(&self.pool)
+            .await?
+        };
         Ok(result.rows_affected())
     }
 
@@ -692,6 +710,21 @@ impl LocalStore {
         Ok(())
     }
 
+    /// Insert or update a durable conversation timeline row.
+    ///
+    /// # Ordering contract
+    /// - **`message_seq`** (SQLite rowid / primary key) is the only sort key for the
+    ///   conversation timeline. Clients must display `ORDER BY message_seq ASC`.
+    /// - On **first insert** of a new `message_id`, `message_seq` is assigned and never
+    ///   reassigned. Concurrent multi-agent finishes are ordered by durable insert order
+    ///   (finish/write order), not by wall-clock start of the agent turn.
+    /// - On **upsert** of an existing `message_id`, body/metadata update in place and
+    ///   `message_seq` is preserved so streaming rewrites do not reorder history.
+    /// - `created_at_ms` is display-only; do not sort by it.
+    /// - `reply_to_message_id` / `mentions_json` express causality (e.g. delegation
+    ///   result → request) without changing sort order.
+    /// - List filters hide rows whose `thread_id` is a subagent (`parent_thread_id`
+    ///   set); those belong in session transcript, not the group timeline.
     pub async fn upsert_conversation_message(
         &self,
         conversation_id: &str,
@@ -916,7 +949,10 @@ const CONVERSATION_SELECT_COLS: &str = "\
        AND th.status IN ('starting', 'running', 'resuming')) AS running_count, \
     (SELECT COUNT(*) FROM threads th \
      WHERE th.conversation_id = c.conversation_id \
-       AND th.status = 'suspended') AS needs_attention_count";
+       AND th.status = 'suspended' \
+       AND (th.needs_continue != 0 \
+            OR COALESCE(th.last_pause_reason, '') NOT IN ('daemon_restart', ''))) \
+       AS needs_attention_count";
 
 #[derive(Debug, Clone, Default)]
 pub struct ConversationCreateMeta {
@@ -972,6 +1008,114 @@ pub struct EventRow {
     pub projection_json: Vec<u8>,
     pub ts_ms: i64,
     pub source: String,
+}
+
+// ── Host agent profiles ───────────────────────────────────────────────────
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct AgentProfileRow {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub runtime_agent: String,
+    pub model: String,
+    pub reasoning_effort: String,
+    pub instructions: String,
+    pub env_json: String,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+impl LocalStore {
+    pub async fn list_agent_profiles(&self) -> anyhow::Result<Vec<AgentProfileRow>> {
+        let rows = sqlx::query_as::<_, AgentProfileRow>(
+            "SELECT id, name, description, runtime_agent, model, reasoning_effort, \
+             instructions, env_json, created_at_ms, updated_at_ms \
+             FROM agent_profiles ORDER BY updated_at_ms DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn create_agent_profile(
+        &self,
+        id: &str,
+        name: &str,
+        description: &str,
+        runtime_agent: &str,
+        model: &str,
+        reasoning_effort: &str,
+        instructions: &str,
+        now_ms: i64,
+    ) -> anyhow::Result<AgentProfileRow> {
+        sqlx::query(
+            "INSERT INTO agent_profiles (id, name, description, runtime_agent, model, \
+             reasoning_effort, instructions, env_json, created_at_ms, updated_at_ms) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?, ?)",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(description)
+        .bind(runtime_agent)
+        .bind(model)
+        .bind(reasoning_effort)
+        .bind(instructions)
+        .bind(now_ms)
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await?;
+        self.get_agent_profile(id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("agent profile missing after insert"))
+    }
+
+    pub async fn get_agent_profile(&self, id: &str) -> anyhow::Result<Option<AgentProfileRow>> {
+        let row = sqlx::query_as::<_, AgentProfileRow>(
+            "SELECT id, name, description, runtime_agent, model, reasoning_effort, \
+             instructions, env_json, created_at_ms, updated_at_ms \
+             FROM agent_profiles WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn update_agent_profile(
+        &self,
+        id: &str,
+        name: &str,
+        description: &str,
+        instructions: &str,
+        now_ms: i64,
+    ) -> anyhow::Result<Option<AgentProfileRow>> {
+        let n = sqlx::query(
+            "UPDATE agent_profiles SET name = ?, description = ?, instructions = ?, \
+             updated_at_ms = ? WHERE id = ?",
+        )
+        .bind(name)
+        .bind(description)
+        .bind(instructions)
+        .bind(now_ms)
+        .bind(id)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if n == 0 {
+            return Ok(None);
+        }
+        self.get_agent_profile(id).await
+    }
+
+    pub async fn delete_agent_profile(&self, id: &str) -> anyhow::Result<bool> {
+        let n = sqlx::query("DELETE FROM agent_profiles WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        Ok(n > 0)
+    }
 }
 
 #[cfg(test)]
@@ -1071,7 +1215,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mark_orphans_suspended_flips_running_idle() {
+    async fn mark_orphans_suspended_flips_mid_flight_only_keeps_idle() {
         let tmp = tempfile::tempdir().unwrap();
         let store = LocalStore::open(&tmp.path().join("t.sqlite"))
             .await
@@ -1102,13 +1246,13 @@ mod tests {
                 .unwrap();
         }
         let n = store.mark_orphans_suspended().await.unwrap();
-        // running, idle, starting, resuming — not closed/suspended
-        assert_eq!(n, 4);
+        // running, starting, resuming — idle stays idle
+        assert_eq!(n, 3);
         let running = store.get_thread("t0").await.unwrap().unwrap();
         assert_eq!(running.status, "suspended");
         assert!(running.needs_continue);
         let idle = store.get_thread("t1").await.unwrap().unwrap();
-        assert_eq!(idle.status, "suspended");
+        assert_eq!(idle.status, "idle");
         assert!(!idle.needs_continue);
         let closed = store.get_thread("t2").await.unwrap().unwrap();
         assert_eq!(closed.status, "closed");
@@ -1316,6 +1460,145 @@ mod tests {
             Some("parent result")
         );
         assert_eq!(conversations[0].message_count, 2);
+    }
+
+    /// Timeline order is durable insert order (`message_seq`), not wall clock alone.
+    #[tokio::test]
+    async fn conversation_messages_ordered_by_message_seq_and_upsert_preserves_seq() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = LocalStore::open(&tmp.path().join("t.sqlite"))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO workspaces(root, first_seen_at, last_seen_at) VALUES ('/w', 0, 0)",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
+        seed_conversation(&store).await;
+        store
+            .insert_thread_in_conversation("t-a", "c", "/w", "codex", None, None, "idle", 1, true)
+            .await
+            .unwrap();
+        store
+            .insert_thread_in_conversation("t-b", "c", "/w", "claude", None, None, "idle", 2, true)
+            .await
+            .unwrap();
+
+        let seq_user = store
+            .upsert_conversation_message(
+                "c",
+                "user-1",
+                None,
+                "user",
+                None,
+                "please help",
+                100,
+                None,
+                None,
+                "[]",
+            )
+            .await
+            .unwrap();
+        let seq_delegate = store
+            .upsert_conversation_message(
+                "c",
+                "mcp-delegation:c:1",
+                Some("t-a"),
+                "agent",
+                Some("codex"),
+                "@claude#tb do X",
+                200,
+                None,
+                Some("del-1"),
+                "[]",
+            )
+            .await
+            .unwrap();
+        // Target finishes before source (finish-order insert).
+        let seq_target = store
+            .upsert_conversation_message(
+                "c",
+                "agent-result:c:t-b:k1",
+                Some("t-b"),
+                "agent",
+                Some("claude"),
+                "@codex#ta done",
+                300,
+                Some("mcp-delegation:c:1"),
+                Some("del-1"),
+                "[]",
+            )
+            .await
+            .unwrap();
+        let seq_source = store
+            .upsert_conversation_message(
+                "c",
+                "agent-result:c:t-a:k2",
+                Some("t-a"),
+                "agent",
+                Some("codex"),
+                "here is the answer",
+                400,
+                None,
+                None,
+                "[]",
+            )
+            .await
+            .unwrap();
+
+        assert!(seq_user < seq_delegate);
+        assert!(seq_delegate < seq_target);
+        assert!(seq_target < seq_source);
+
+        // Upsert same message_id keeps message_seq, updates body + reply metadata.
+        let seq_again = store
+            .upsert_conversation_message(
+                "c",
+                "agent-result:c:t-b:k1",
+                Some("t-b"),
+                "agent",
+                Some("claude"),
+                "@codex#ta done (revised)",
+                999,
+                Some("mcp-delegation:c:1"),
+                Some("del-1"),
+                "[]",
+            )
+            .await
+            .unwrap();
+        assert_eq!(seq_again, seq_target);
+
+        // List is newest-first (DESC); clients reverse to ASC for display.
+        let desc = store
+            .list_conversation_messages("c", None, Some(50))
+            .await
+            .unwrap();
+        let ids_desc: Vec<&str> = desc.iter().map(|r| r.message_id.as_str()).collect();
+        assert_eq!(
+            ids_desc,
+            vec![
+                "agent-result:c:t-a:k2",
+                "agent-result:c:t-b:k1",
+                "mcp-delegation:c:1",
+                "user-1",
+            ]
+        );
+        assert_eq!(desc[1].body, "@codex#ta done (revised)");
+        assert_eq!(
+            desc[1].reply_to_message_id.as_deref(),
+            Some("mcp-delegation:c:1")
+        );
+
+        let mut asc = desc;
+        asc.reverse();
+        let seqs: Vec<i64> = asc.iter().map(|r| r.message_seq).collect();
+        assert!(seqs.windows(2).all(|w| w[0] < w[1]));
+        assert_eq!(asc[0].message_id, "user-1");
+        assert_eq!(
+            asc[2].reply_to_message_id.as_deref(),
+            Some("mcp-delegation:c:1")
+        );
     }
 
     #[tokio::test]

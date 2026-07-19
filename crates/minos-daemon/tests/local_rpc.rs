@@ -170,6 +170,9 @@ async fn start_agent_then_list_local_threads_returns_one() {
                 agent: AgentName::Codex,
                 workspace: String::new(),
                 mode: Some(AgentLaunchMode::Server),
+                model: None,
+                reasoning_effort: None,
+                instructions: None,
             }],
         )
         .await
@@ -201,6 +204,9 @@ async fn delete_thread_removes_local_thread_and_history() {
                 agent: AgentName::Codex,
                 workspace: String::new(),
                 mode: Some(AgentLaunchMode::Server),
+                model: None,
+                reasoning_effort: None,
+                instructions: None,
             }],
         )
         .await
@@ -251,6 +257,9 @@ async fn send_user_message_round_trips() {
                 agent: AgentName::Codex,
                 workspace: String::new(),
                 mode: Some(AgentLaunchMode::Server),
+                model: None,
+                reasoning_effort: None,
+                instructions: None,
             }],
         )
         .await
@@ -300,6 +309,9 @@ async fn read_thread_raw_history_returns_events_after_start() {
                 agent: AgentName::Codex,
                 workspace: String::new(),
                 mode: Some(AgentLaunchMode::Server),
+                model: None,
+                reasoning_effort: None,
+                instructions: None,
             }],
         )
         .await
@@ -484,6 +496,9 @@ async fn resume_thread_returns_thread_info() {
                 agent: AgentName::Codex,
                 workspace: String::new(),
                 mode: Some(AgentLaunchMode::Server),
+                model: None,
+                reasoning_effort: None,
+                instructions: None,
             }],
         )
         .await

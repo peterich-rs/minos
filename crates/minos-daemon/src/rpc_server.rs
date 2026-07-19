@@ -198,6 +198,10 @@ pub async fn invoke_host_command(
                 workspace: String,
                 #[serde(default)]
                 initial_user_message: Option<String>,
+                #[serde(default)]
+                model: Option<String>,
+                #[serde(default)]
+                reasoning_effort: Option<String>,
             }
             let req: StartAgentSessionParams = parse_params(&params)?;
             let agent_label = req.runtime_agent.as_deref().unwrap_or(&req.agent_id);
@@ -206,6 +210,9 @@ pub async fn invoke_host_command(
                 agent,
                 workspace: req.workspace,
                 mode: None,
+                model: req.model,
+                reasoning_effort: req.reasoning_effort,
+                instructions: None,
             };
             server
                 .agent

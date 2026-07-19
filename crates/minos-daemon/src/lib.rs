@@ -14,6 +14,7 @@ pub mod jsonl_recover;
 pub mod local_rpc;
 pub mod local_state;
 pub mod logging;
+pub mod model_catalog;
 mod openwire_trace;
 pub mod paths;
 pub mod relay_client;

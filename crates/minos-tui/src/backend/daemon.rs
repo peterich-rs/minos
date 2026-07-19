@@ -293,6 +293,9 @@ fn start_agent_in_conversation_request(
         conversation_id: conversation_id.to_owned(),
         agent,
         workspace: workspace.to_string_lossy().into_owned(),
+        model: None,
+        reasoning_effort: None,
+        instructions: None,
     }
 }
 
@@ -342,6 +345,9 @@ impl AgentBackend for DaemonBackend {
             agent,
             workspace: workspace.to_string_lossy().into_owned(),
             mode: None,
+            model: None,
+            reasoning_effort: None,
+            instructions: None,
         };
         let response: StartAgentResponse = self
             .client

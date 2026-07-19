@@ -6,6 +6,10 @@
 //! 2. Completes any running teamwork delegation for that thread
 //! 3. Delivers the result to the source thread (or queues if busy)
 //!
+//! Timeline order is the durable insert order of `chat_messages.message_seq`
+//! (finish/write order). Delegation results set `reply_to_message_id` to the
+//! request message so UIs can show causality without reordering history.
+//!
 //! ## Turn-boundary latch
 //!
 //! Runtime `ThreadState::Idle`/`Closed` and ingest `MessageCompleted` race across

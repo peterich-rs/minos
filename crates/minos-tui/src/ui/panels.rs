@@ -73,7 +73,12 @@ impl ConversationPanel {
         }
     }
 
+    /// Replace the conversation timeline. Canonical order is `message_seq ASC`
+    /// (durable insert order from daemon). Defensive sort so any backend that
+    /// returns DESC or an unsorted page still renders chronologically.
     pub fn set_messages(&mut self, messages: Vec<ConversationMessageEntry>) {
+        let mut messages = messages;
+        messages.sort_by_key(|message| message.message_seq);
         self.messages = messages;
         self.bump_messages_revision();
         self.clear_selection();
@@ -181,5 +186,39 @@ impl OverlaysPanel {
 impl Default for OverlaysPanel {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod conversation_message_order_tests {
+    use super::*;
+
+    fn entry(seq: i64, id: &str) -> ConversationMessageEntry {
+        ConversationMessageEntry {
+            message_seq: seq,
+            message_id: id.to_owned(),
+            conversation_id: "c".into(),
+            thread_id: None,
+            created_at_ms: seq * 10,
+            sender_role: "user".into(),
+            agent: None,
+            body: id.to_owned(),
+            reply_to_message_id: None,
+            delegation_id: None,
+            mentions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn set_messages_sorts_by_message_seq_asc() {
+        let mut panel = ConversationPanel::new();
+        panel.set_messages(vec![entry(30, "c"), entry(10, "a"), entry(20, "b")]);
+        let ids: Vec<&str> = panel
+            .messages
+            .iter()
+            .map(|m| m.message_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["a", "b", "c"]);
+        assert_eq!(panel.messages_revision, 1);
     }
 }

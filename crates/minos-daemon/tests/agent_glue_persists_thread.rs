@@ -50,6 +50,9 @@ async fn start_agent_persists_thread_so_event_writer_does_not_fk_fail() {
             agent: AgentName::Codex,
             workspace: String::new(),
             mode: Some(AgentLaunchMode::Server),
+            model: None,
+            reasoning_effort: None,
+            instructions: None,
         })
         .await
         .expect("start_agent should succeed against the fake codex");

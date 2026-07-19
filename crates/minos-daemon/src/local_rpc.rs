@@ -233,12 +233,47 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
             conversation_id = %req.conversation_id,
             agent = ?req.agent,
             workspace = %req.workspace,
+            model = ?req.model,
             "local RPC start_agent_in_conversation",
         );
         self.agent
             .start_agent_in_conversation(req)
             .await
             .map_err(rpc_err)
+    }
+
+    async fn list_models(
+        &self,
+        req: minos_protocol::ListModelsRequest,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::ListModelsResponse> {
+        Ok(crate::model_catalog::list_models_for_runtime(req.runtime).await)
+    }
+
+    async fn list_agent_profiles(
+        &self,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::ListAgentProfilesResponse> {
+        self.agent.list_agent_profiles().await.map_err(rpc_err)
+    }
+
+    async fn create_agent_profile(
+        &self,
+        req: minos_protocol::CreateAgentProfileRequest,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::AgentProfileSummary> {
+        self.agent.create_agent_profile(req).await.map_err(rpc_err)
+    }
+
+    async fn update_agent_profile(
+        &self,
+        req: minos_protocol::UpdateAgentProfileRequest,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::AgentProfileSummary> {
+        self.agent.update_agent_profile(req).await.map_err(rpc_err)
+    }
+
+    async fn delete_agent_profile(
+        &self,
+        req: minos_protocol::DeleteAgentProfileRequest,
+    ) -> jsonrpsee::core::RpcResult<()> {
+        self.agent.delete_agent_profile(req).await.map_err(rpc_err)
     }
 
     async fn append_conversation_message(

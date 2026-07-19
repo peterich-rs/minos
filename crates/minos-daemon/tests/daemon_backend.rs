@@ -111,6 +111,9 @@ async fn start_agent_and_send_message_round_trip() {
                 agent: AgentName::Codex,
                 workspace: String::new(),
                 mode: Some(AgentLaunchMode::Server),
+                model: None,
+                reasoning_effort: None,
+                instructions: None,
             }],
         )
         .await
@@ -149,6 +152,9 @@ async fn list_threads_returns_data_after_agent_starts() {
                 agent: AgentName::Codex,
                 workspace: String::new(),
                 mode: Some(AgentLaunchMode::Server),
+                model: None,
+                reasoning_effort: None,
+                instructions: None,
             }],
         )
         .await
@@ -178,6 +184,9 @@ async fn resume_thread_and_read_history() {
                 agent: AgentName::Codex,
                 workspace: String::new(),
                 mode: Some(AgentLaunchMode::Server),
+                model: None,
+                reasoning_effort: None,
+                instructions: None,
             }],
         )
         .await

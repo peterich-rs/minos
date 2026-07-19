@@ -381,9 +381,14 @@ impl AgentGlue {
         // dir for clients (mobile pre-Phase-D) that have not been updated to
         // pick a directory yet.
         let workspace = resolve_workspace(&self.default_workspace, &req.workspace);
+        let launch = minos_agent_runtime::AgentLaunchOptions::from_parts_full(
+            req.model.clone(),
+            req.reasoning_effort.clone(),
+            req.instructions.clone(),
+        );
         let outcome = self
             .manager
-            .start_agent(req.agent, workspace)
+            .start_agent_with_policies(req.agent, workspace, None, launch)
             .await
             .map_err(map_anyhow)?;
         let cwd = outcome.cwd.display().to_string();
@@ -414,9 +419,20 @@ impl AgentGlue {
     ) -> Result<StartAgentResponse, MinosError> {
         let _mode = req.mode.map_or(AgentLaunchMode::Server, runtime_mode);
         let workspace = resolve_workspace(&self.default_workspace, &req.workspace);
+        let launch = minos_agent_runtime::AgentLaunchOptions::from_parts_full(
+            req.model.clone(),
+            req.reasoning_effort.clone(),
+            req.instructions.clone(),
+        );
         let outcome = self
             .manager
-            .start_agent_with_thread_id(req.agent, workspace, session_id.clone(), None)
+            .start_agent_with_thread_id_and_options(
+                req.agent,
+                workspace,
+                session_id.clone(),
+                None,
+                launch,
+            )
             .await
             .map_err(map_anyhow)?;
         let cwd = outcome.cwd.display().to_string();
@@ -503,6 +519,8 @@ impl AgentGlue {
             sandbox_policy,
             conversation_id: _,
             origin_message_id: _,
+            model,
+            reasoning_effort,
         } = req;
 
         if let Some(existing_session_id) = session_id.as_deref() {
@@ -517,15 +535,17 @@ impl AgentGlue {
                 sandbox_policy,
             })
         };
+        let launch = minos_agent_runtime::AgentLaunchOptions::from_parts(model, reasoning_effort);
 
         let outcome = self
             .manager
-            .dispatch_message(
+            .dispatch_message_with_options(
                 agent,
                 resolve_workspace(&self.default_workspace, &workspace),
                 session_id,
                 text,
                 policies,
+                launch,
             )
             .await
             .map_err(map_anyhow)?;
@@ -1508,9 +1528,19 @@ impl AgentGlue {
                 "failed to create conversation workspace directory",
             );
         }
+        let launch = minos_agent_runtime::AgentLaunchOptions::from_parts_full(
+            req.model.clone(),
+            req.reasoning_effort.clone(),
+            req.instructions.clone(),
+        );
         let outcome = self
             .manager
-            .start_agent_in_conversation(req.agent, workspace, req.conversation_id.clone())
+            .start_agent_in_conversation_with_options(
+                req.agent,
+                workspace,
+                req.conversation_id.clone(),
+                launch,
+            )
             .await
             .map_err(map_anyhow)?;
         let cwd = outcome.cwd.display().to_string();
@@ -1549,6 +1579,129 @@ impl AgentGlue {
             cwd,
         })
     }
+
+    pub async fn list_agent_profiles(
+        &self,
+    ) -> Result<minos_protocol::ListAgentProfilesResponse, MinosError> {
+        let rows = self
+            .store
+            .list_agent_profiles()
+            .await
+            .map_err(|e| map_store_error("list_agent_profiles", e))?;
+        Ok(minos_protocol::ListAgentProfilesResponse {
+            profiles: rows
+                .into_iter()
+                .filter_map(profile_row_to_summary)
+                .collect(),
+        })
+    }
+
+    pub async fn create_agent_profile(
+        &self,
+        req: minos_protocol::CreateAgentProfileRequest,
+    ) -> Result<minos_protocol::AgentProfileSummary, MinosError> {
+        let name = req.name.trim();
+        if name.is_empty() {
+            return Err(MinosError::CodexProtocolError {
+                method: "create_agent_profile".into(),
+                message: "name is required".into(),
+            });
+        }
+        let model = req.model.trim();
+        if model.is_empty() {
+            return Err(MinosError::CodexProtocolError {
+                method: "create_agent_profile".into(),
+                message: "model is required".into(),
+            });
+        }
+        let id = format!("profile-{}", uuid::Uuid::new_v4());
+        let now = current_unix_ms();
+        let row = self
+            .store
+            .create_agent_profile(
+                &id,
+                name,
+                req.description.trim(),
+                req.runtime_agent.bin_name(),
+                model,
+                req.reasoning_effort.trim(),
+                req.instructions.trim(),
+                now,
+            )
+            .await
+            .map_err(|e| map_store_error("create_agent_profile", e))?;
+        profile_row_to_summary(row).ok_or_else(|| MinosError::CodexProtocolError {
+            method: "create_agent_profile".into(),
+            message: "invalid runtime_agent after insert".into(),
+        })
+    }
+
+    pub async fn update_agent_profile(
+        &self,
+        req: minos_protocol::UpdateAgentProfileRequest,
+    ) -> Result<minos_protocol::AgentProfileSummary, MinosError> {
+        let name = req.name.trim();
+        if name.is_empty() {
+            return Err(MinosError::CodexProtocolError {
+                method: "update_agent_profile".into(),
+                message: "name is required".into(),
+            });
+        }
+        let row = self
+            .store
+            .update_agent_profile(
+                &req.id,
+                name,
+                req.description.trim(),
+                req.instructions.trim(),
+                current_unix_ms(),
+            )
+            .await
+            .map_err(|e| map_store_error("update_agent_profile", e))?
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "update_agent_profile".into(),
+                message: format!("profile not found: {}", req.id),
+            })?;
+        profile_row_to_summary(row).ok_or_else(|| MinosError::CodexProtocolError {
+            method: "update_agent_profile".into(),
+            message: "invalid runtime_agent".into(),
+        })
+    }
+
+    pub async fn delete_agent_profile(
+        &self,
+        req: minos_protocol::DeleteAgentProfileRequest,
+    ) -> Result<(), MinosError> {
+        let ok = self
+            .store
+            .delete_agent_profile(&req.id)
+            .await
+            .map_err(|e| map_store_error("delete_agent_profile", e))?;
+        if !ok {
+            return Err(MinosError::CodexProtocolError {
+                method: "delete_agent_profile".into(),
+                message: format!("profile not found: {}", req.id),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn profile_row_to_summary(
+    row: crate::store::AgentProfileRow,
+) -> Option<minos_protocol::AgentProfileSummary> {
+    let runtime_agent = parse_agent_label(&row.runtime_agent).ok()?;
+    Some(minos_protocol::AgentProfileSummary {
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        runtime_agent,
+        model: row.model,
+        reasoning_effort: row.reasoning_effort,
+        instructions: row.instructions,
+        created_at_ms: row.created_at_ms,
+        updated_at_ms: row.updated_at_ms,
+    })
 }
 
 #[cfg(feature = "test-support")]
@@ -3404,7 +3557,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shutdown_suspends_threads_instead_of_closing() {
+    async fn shutdown_keeps_idle_threads_resumable_without_paused() {
         let test = test_glue().await;
         seed_thread(&test.glue, "thr-stop", "codex", 10, 20).await;
         test.glue
@@ -3431,9 +3584,11 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(row.status, "suspended");
-        assert_eq!(row.last_pause_reason.as_deref(), Some("daemon_restart"));
+        // Idle between turns must not become user-visible Paused after stop.
+        assert_eq!(row.status, "idle");
+        assert!(row.last_pause_reason.is_none());
         assert!(!row.needs_continue);
+        // In-process manager still parks as Suspended so children tear down cleanly.
         assert!(matches!(
             test.glue.manager.list_threads().await[0].state,
             ThreadState::Suspended {

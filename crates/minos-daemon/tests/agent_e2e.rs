@@ -539,6 +539,9 @@ async fn start_send_stream_stop_against_fake_codex_server() -> anyhow::Result<()
             agent: AgentName::Codex,
             workspace: "/w-agent-e2e".into(),
             mode: Some(AgentLaunchMode::Server),
+            model: None,
+            reasoning_effort: None,
+            instructions: None,
         })
         .await?;
     assert_eq!(start_reply.session_id, THREAD_ID);

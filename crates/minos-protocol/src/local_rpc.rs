@@ -203,6 +203,35 @@ pub trait LocalDaemonRpc {
         req: crate::StartAgentInConversationRequest,
     ) -> jsonrpsee::core::RpcResult<crate::StartAgentResponse>;
 
+    #[method(name = "list_models")]
+    async fn list_models(
+        &self,
+        req: crate::ListModelsRequest,
+    ) -> jsonrpsee::core::RpcResult<crate::ListModelsResponse>;
+
+    #[method(name = "list_agent_profiles")]
+    async fn list_agent_profiles(
+        &self,
+    ) -> jsonrpsee::core::RpcResult<crate::ListAgentProfilesResponse>;
+
+    #[method(name = "create_agent_profile")]
+    async fn create_agent_profile(
+        &self,
+        req: crate::CreateAgentProfileRequest,
+    ) -> jsonrpsee::core::RpcResult<crate::AgentProfileSummary>;
+
+    #[method(name = "update_agent_profile")]
+    async fn update_agent_profile(
+        &self,
+        req: crate::UpdateAgentProfileRequest,
+    ) -> jsonrpsee::core::RpcResult<crate::AgentProfileSummary>;
+
+    #[method(name = "delete_agent_profile")]
+    async fn delete_agent_profile(
+        &self,
+        req: crate::DeleteAgentProfileRequest,
+    ) -> jsonrpsee::core::RpcResult<()>;
+
     #[method(name = "append_conversation_message")]
     async fn append_conversation_message(
         &self,
