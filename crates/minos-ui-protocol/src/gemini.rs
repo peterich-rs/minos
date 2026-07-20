@@ -331,6 +331,7 @@ fn translate_acp_notification(
                         }
                     })
                     .unwrap_or_default();
+                let content = crate::strip_ansi_escapes(&content);
 
                 state.tool_calls.remove(&tool_call_id);
                 Ok(vec![UiEventMessage::ToolCallCompleted {

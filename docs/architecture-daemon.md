@@ -127,6 +127,14 @@ subagent 也是普通 thread，只是在 `ThreadAdded` / `ThreadSummary` / `Loca
 
 **Conversation 主时间线排序契约：** `chat_messages.message_seq`（SQLite rowid PK）是唯一排序键；list 按 `message_seq DESC` 分页，客户端 reverse 为 ASC 展示。`message_id` upsert 复用原 `message_seq`（body/metadata 可更新）。`created_at_ms` 仅展示。多 agent 完成顺序 = durable 落库顺序（finish/write order）；因果关系用 `reply_to_message_id` / `mentions` / `delegation_id` 表达（例如 MCP 委托 result 引用 request），不通过重排历史 seq。Agent 回合结果由 `conversation_completion` 在 turn boundary 写入 `agent-result:…`；subagent thread 不写 conversation result。
 
+**Agent 终态正文（last segment）：** Grok/Gemini 等 ACP agent 常在同一 `message_id` 下用多段 `agent_message_chunk` 输出中间进度（「正在定位…」），工具/思考会把 session 时间线拆成多个气泡。`conversation_completion` 与 session `ChatState` 对齐：tool / reasoning / subagent 事件关闭当前文本 segment，turn 结束时只把**最后一个未关闭的 assistant 文本段**写入 conversation；不会把全过程进度日志与最终摘要拼接成一条。工具后若无新的最终文本，则不回写中间进度。显式 `post_conversation_update` 仍可单独追加中途状态条。
+
+**Grok 投影（Phase A–C）：** `translate_grok` 在 daemon 投影层对齐 grok-build pager：
+- **A**：读 `_meta.streamStartMs` / `agentTimestampMs` / `promptId`；`tool_call` 与 stream 边界 `MessageCompleted` 当前 assistant text，下一段 agent text 用新 `message_id`。
+- **B**：压制 todo/wait/task-output/spawn 等 plumbing（`grok/turn_activity` Raw 保留等待语义）；tool 标题优先 `rawInput.description` / path；thinking 附带 `elapsedMs` activity。
+- **C**：`minos-acp-protocol` 补齐 tool kind/locations/rawInput/Failed、`agent_thought_chunk`、notification `_meta`；translator 从 raw JSON 抽取 content/locations/orphan update。
+- **Grok ACP 双通道投影**（完整清单见 [architecture-grok-acp-projection.md](./architecture-grok-acp-projection.md)）：优先结构化 `raw_output`（pager 同款），再 `content`；禁止 dump ToolOutput JSON。覆盖 Edit→patch、Read→去模型行号 densify、Bash→`output_for_prompt`+ANSI strip、Grep→`file_matches`、ListDir 列表、Web/MCP/Skill 等。
+
 Codex app-server 启动分两段超时：initialize handshake 默认 5 秒，`thread/start` 默认 30 秒。后者独立配置为 `AgentRuntimeConfig.thread_start_timeout`，因为线程创建会受 workspace 初始化、skills/MCP 注入和 Codex 冷启动状态影响。
 
 Teamwork MCP 注入不依赖单一外部 sidecar。`AgentRuntimeConfig` 优先使用 `MINOS_TEAMWORK_MCP_BIN` 或同目录 `minos-teamwork-mcp`；找不到时，`minos-daemon __minos-teamwork-mcp` hidden 子命令可直接作为 stdio MCP server。TUI 托管 daemon 时当前可执行文件是 `minos-tui`，同一逻辑会回落到 `minos-tui __minos-teamwork-mcp`，因此 `minos-tui --backend daemon` 不要求用户额外构建 MCP bin。

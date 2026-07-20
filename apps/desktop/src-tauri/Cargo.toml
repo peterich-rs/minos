@@ -24,9 +24,11 @@ anyhow = { workspace = true }
 jsonrpsee = { workspace = true }
 futures = { workspace = true }
 uuid = { workspace = true }
+clap = { workspace = true }
 minos-protocol = { path = "../../../crates/minos-protocol" }
 minos-domain = { path = "../../../crates/minos-domain" }
 minos-daemon = { path = "../../../crates/minos-daemon" }
+minos-chat-store = { path = "../../../crates/minos-chat-store" }
 minos-ui-protocol = { path = "../../../crates/minos-ui-protocol" }
 tracing = { workspace = true }
 

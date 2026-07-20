@@ -37,7 +37,10 @@ export function deriveSessionStatus(
 export function transcriptHasPendingApproval(
   items: ReadonlyArray<{ kind: string; requestId?: string | null }>,
 ): boolean {
-  return items.some((it) => it.kind === "approval" && Boolean(it.requestId));
+  return items.some(
+    (it) =>
+      (it.kind === "approval" || it.kind === "question") && Boolean(it.requestId),
+  );
 }
 
 /**

@@ -160,9 +160,28 @@ Ownership 要点:
 
 Conversation 层布局是状态栏 + 主体 + 输入行。主体左侧为 list/timeline，右侧为 project 或 agent session 侧栏；AgentDetail 在右侧增加 direct agent chat/input。已删除 `ui/room_list.rs`、`ui/project_sessions.rs`、`ui/thread_list.rs` 和旧 overview/detail render 分支。
 
-### AgentDetail transcript 渲染（对齐 Grok Build TUI）
+### AgentDetail transcript 渲染（统一展示，视觉借鉴 Grok）
 
-视觉与文案对齐 GrokNight（`xai-grok-pager-render` theme/groknight）：中性灰底 + TokyoNight 强调色。数据源仍是 Minos `UiEventMessage` → `ChatItem`；**不**依赖 Grok crates，只复刻 toolcall / text / markdown / diff 的展示契约。
+**消费契约（agent-agnostic）：** 上层只吃 daemon 投影后的 `LocalIngestFrame.ui_events: Vec<UiEventMessage>`，**不**解析 Grok/Codex/Claude 原生 JSON。Translator 的价值就是把各 CLI 磨成同一事件面；TUI 展示逻辑必须对所有 agent 同一套路径：
+
+```text
+LocalIngestFrame.ui_events
+  → ChatState::apply_ui_events  (translation/chat_state.rs)
+  → Vec<ChatItem>
+  → ui/chat.rs paint
+```
+
+| UiEventMessage | ChatItem / 行为 |
+|----------------|-----------------|
+| MessageStarted + TextDelta | UserMessage / AssistantText（tool 后可新开气泡） |
+| ReasoningDelta | Reasoning（可折叠 Thought） |
+| ToolCallPlaced / Completed | ToolCall（动词 + bare target + kind body） |
+| SubagentSpawned / StatusUpdated | SubagentCall 卡片 |
+| Raw(approval/*) | PendingAgentRequest 审批 overlay |
+| Raw(其它) | 默认丢弃（debug log） |
+| ThreadClosed / Error | SystemMessage / Error |
+
+视觉与文案**借鉴** GrokNight（中性灰底 + TokyoNight 强调色），但**不是** Grok pager 状态机的复刻：不依赖 Grok crates，也不按 agent 分支渲染。tool 分类用 `ToolKind::from_tool_name`，兼容统一名 `"read: path"` 与各 CLI 原生 tool 名。
 
 | 块 | Grok 风格 |
 |----|-----------|
@@ -170,7 +189,7 @@ Conversation 层布局是状态栏 + 主体 + 输入行。主体左侧为 list/t
 | Agent | **无 role chrome**，直接 markdown body |
 | Thinking | 流式 `Thinking…` / 结束 `Thought`；折叠默认；展开 body 带 `│ ` quote bar |
 | Tool header | `ToolKind` 动词 + **裸 path/cmd**（无 `file=` 标签）：`Read src/main.rs`、`Edited x.rs +3/-1`、`Ran cargo test` |
-| Tool body | 按 kind：Edit = 无边框 single-gutter diff；Execute = `$ cmd` + stdout 截断；Read = 行号 + syntax HL；Other = 缩进 preformatted |
+| Tool body | 按 kind：Edit = 无边框 single-gutter diff（**完成且像 patch 时自动展开**）；Execute = `$ cmd` + stdout 截断；Read = 行号 + syntax HL；Other = 缩进 preformatted |
 | Subagent | `Running/Ran subagent <agent> #short` |
 | Diff（tool） | indent + 单列 new-line gutter + add/del 底色；折叠 header 彩色 `+N/-M`；**无** `┌─ diff ─` 盒 |
 | Diff（assistant ````diff`） | 保留 bordered 双 gutter code fence |
@@ -341,11 +360,22 @@ Minos TUI **不是** Codex 式「定稿进终端 scrollback」；历史仍在应
 
 刻意未做：终端 cell-level diff 自研 Terminal、历史卸载到 OS scrollback、完整 Grok 滚轮加速度状态机 / `AdaptiveChunkingPolicy` 队列 drain、off-screen render-cache eviction（`EVICT_KEEP_MARGIN`）。
 
-pending approval/permission 有明确选项时，`ui/approval_overlay.rs` 用 `Clear` 在 AgentChat 底部覆盖固定高度区域。数字键、Up/Down、Enter、`y`/`n` 和 Esc 会被 overlay 模态处理，最终仍复用 `Effect::SubmitPendingAgentRequest`；文本到 provider 决策的翻译继续由 `app/submission.rs` 中的 `codex_approval_decision`、`opencode_permission_response` 和 `opencode_question_answers` 负责。自由文本或多问题 pending request 继续走 Agent Input。
+pending approval/permission/question 有明确选项时，`ui/approval_overlay.rs` 用 `Clear` 在 AgentChat 底部覆盖固定高度区域。数字键、Up/Down、Enter、`y`/`n`/`a`/`s`/`q` 和 Esc 会被 overlay 模态处理，最终仍复用 `Effect::SubmitPendingAgentRequest`。
+
+| Pending 类型 | 来源 | 回复路径 |
+|--------------|------|----------|
+| CodexApproval | `approval/request` | `approval_decision` |
+| CodexUserInput | `item/tool/requestUserInput` | `approval_decision`（answers map） |
+| GrokPlanApproval | `x.ai/exit_plan_mode` | `approval_decision` → outcome |
+| GrokUserQuestion | `x.ai/ask_user_question` | `approval_decision` → `{outcome, answers}` |
+| OpencodePermission | `opencode/permission.updated` | `respond_opencode_permission` |
+| OpencodeQuestion | `opencode/question.asked` | `respond_opencode_question` |
+
+自由文本或多问题 pending request 继续走 Agent Input。Claude 的权限/提问尚未接入。
 
 `ChatItem::ToolCall` 保留自动展开状态 `is_expanded`，并用 `is_user_toggled: Option<bool>` 表示用户覆盖。`e` 键只翻转 transcript 中最后一个 tool call；`None` 时按自动规则渲染，`Some` 时按用户选择渲染。
 
-`ChatState::last_completed_assistant_text()` 只从明确完成的 assistant message 取最终文本；中间 streaming 文本不会作为最终回复记录。TUI 在打开 conversation 和启动 agent 时维护 `thread_id -> conversation_id` 映射，因此 agent 在后台或其他 project 可见时完成，也会写回对应 conversation，而不是只更新当前屏幕上的 timeline。
+`ChatState::last_completed_assistant_text()` 只从明确完成的 assistant message 取最终文本；中间 streaming 文本不会作为最终回复记录。daemon 的 `conversation_completion` 用同一语义（工具/思考打断后的 last segment）写 `agent-result`，避免 Grok 式过程叙述污染 conversation。TUI 在打开 conversation 和启动 agent 时维护 `thread_id -> conversation_id` 映射，因此 agent 在后台或其他 project 可见时完成，也会写回对应 conversation，而不是只更新当前屏幕上的 timeline。
 
 `UiEventMessage::SubagentSpawned` 在父线程 transcript 中生成 `ChatItem::SubagentCall`，并把 subagent 补进当前 conversation 的右侧 session 列表；`SubagentStatusUpdated` 更新该卡片状态。subagent 自身 transcript 仍是普通 thread history，通过相同 `read_thread_raw_history` replay。
 

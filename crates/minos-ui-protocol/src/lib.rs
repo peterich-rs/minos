@@ -14,6 +14,7 @@
 #[cfg(feature = "uniffi")]
 uniffi::setup_scaffolding!();
 
+mod ansi;
 mod claude;
 mod codex;
 mod error;
@@ -22,6 +23,7 @@ mod grok;
 mod message;
 mod opencode;
 
+pub use ansi::strip_ansi_escapes;
 pub use error::TranslationError;
 pub use message::{
     ArtifactRef, DisplayPayload, MessageRole, SubagentStatus, ThreadEndReason, UiEventMessage,

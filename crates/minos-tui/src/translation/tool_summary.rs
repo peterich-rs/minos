@@ -14,11 +14,19 @@ fn truncate_str(s: &str, max_len: usize) -> String {
 
 /// Primary one-line target for a tool header (bare path/command/pattern — no `file=` labels).
 pub(super) fn summarize_tool_args(tool_name: &str, args_json: &str) -> String {
+    let subject_fallback = ToolKind::subject_from_tool_name(tool_name);
     let Some(value) = parse_tool_args(args_json) else {
+        // Non-JSON args: prefer subject after unified `"kind: subject"` name.
+        if subject_fallback != tool_name.trim() && !subject_fallback.is_empty() {
+            return truncate_str(&one_line(subject_fallback), 120);
+        }
         return truncate_str(&one_line(args_json), 180);
     };
 
     if value.is_null() {
+        if subject_fallback != tool_name.trim() && !subject_fallback.is_empty() {
+            return truncate_str(&one_line(subject_fallback), 120);
+        }
         return String::new();
     }
 
@@ -108,6 +116,10 @@ pub(super) fn summarize_tool_args(tool_name: &str, args_json: &str) -> String {
     if let Some(count) = array_len_for_keys(&value, &["todos", "todo", "items"]) {
         return format!("{count} items");
     }
+    // Unified translator names often carry the best human subject already.
+    if subject_fallback != tool_name.trim() && !subject_fallback.is_empty() {
+        return truncate_str(&one_line(subject_fallback), 120);
+    }
 
     compact_tool_args(args_json).unwrap_or_default()
 }
@@ -123,7 +135,9 @@ pub(super) fn compact_tool_args(args_json: &str) -> Option<String> {
 }
 
 pub(super) fn summarize_tool_output(output: &str) -> String {
-    let trimmed = output.trim();
+    // Bash/CLI agents often leave SGR color codes; strip before one-line summary.
+    let cleaned = strip_ansi_for_display(output);
+    let trimmed = cleaned.trim();
     if trimmed.is_empty() {
         return String::new();
     }
@@ -133,6 +147,56 @@ pub(super) fn summarize_tool_output(output: &str) -> String {
         return format!("+{add}/-{del}");
     }
     truncate_str(&one_line(trimmed), 220)
+}
+
+/// Drop CSI/OSC sequences so tool bodies do not show orphaned `[31m` / `[90m`.
+fn strip_ansi_for_display(input: &str) -> String {
+    if !input.contains('\u{1b}') && !input.contains('\u{9b}') {
+        return input.to_owned();
+    }
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{1b}' => match chars.peek().copied() {
+                Some('[') => {
+                    chars.next();
+                    while let Some(&n) = chars.peek() {
+                        chars.next();
+                        if matches!(n, '\u{40}'..='\u{7e}') {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    chars.next();
+                    while let Some(n) = chars.next() {
+                        if n == '\u{07}' {
+                            break;
+                        }
+                        if n == '\u{1b}' && chars.peek() == Some(&'\\') {
+                            chars.next();
+                            break;
+                        }
+                    }
+                }
+                Some(_) => {
+                    chars.next();
+                }
+                None => {}
+            },
+            '\u{9b}' => {
+                while let Some(&n) = chars.peek() {
+                    chars.next();
+                    if matches!(n, '\u{40}'..='\u{7e}') {
+                        break;
+                    }
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// Parse `+N/-M` or legacy `diff +N -M` summary into insert/delete counts.
@@ -165,7 +229,8 @@ pub(crate) fn parse_diffstat(summary: &str) -> Option<(usize, usize)> {
 }
 
 pub(super) fn tool_output_detail(output: &str) -> Option<String> {
-    let trimmed = output.trim();
+    let cleaned = strip_ansi_for_display(output);
+    let trimmed = cleaned.trim();
     if trimmed.is_empty() {
         return None;
     }

@@ -4,6 +4,7 @@ import { BootScreen } from "@/components/shell/BootScreen";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { useUiStore } from "@/store/ui-store";
+import { sortByAttentionThenTime } from "@/lib/list-sort";
 
 export default function App() {
   const bootstrap = useWorkspaceStore((s) => s.bootstrap);
@@ -18,7 +19,8 @@ export default function App() {
     void bootstrap();
   }, [bootstrap]);
 
-  // After boot: select first project if none selected / stale id.
+  // After boot: restore last-used project (persisted by ui-store); if the id
+  // is stale or missing, fall back to the sorted head (attention-first).
   // Conversation list + detail load are owned by WorkView / Timeline.
   useEffect(() => {
     if (booting) return;
@@ -26,17 +28,17 @@ export default function App() {
       if (projectId) selectProject("");
       return;
     }
-    if (!projects.some((p) => p.id === projectId)) {
-      selectProject(projects[0]!.id);
-    }
+    if (projects.some((p) => p.id === projectId)) return;
+    const head = [...projects].sort(sortByAttentionThenTime)[0];
+    selectProject(head?.id ?? "");
   }, [booting, projects, projectId, selectProject]);
 
   if (booting) {
+    // Full-viewport boot — no canvas margin / shell chrome (those peek as a
+    // "background frame" behind loading).
     return (
-      <div className="h-full w-full bg-canvas p-3 sm:p-4">
-        <div className="h-full w-full overflow-hidden rounded-shell border border-white/60 bg-surface shadow-shell">
-          <BootScreen phase={bootPhase} progress={bootProgress} />
-        </div>
+      <div className="fixed inset-0 z-[100] h-full w-full bg-surface">
+        <BootScreen phase={bootPhase} progress={bootProgress} />
       </div>
     );
   }

@@ -140,7 +140,7 @@ pub struct SessionDto {
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptItemDto {
     pub id: String,
-    /// assistant | user | tool | tool_result | reasoning | status | error | approval
+    /// assistant | user | tool | tool_result | reasoning | status | error | approval | question
     pub kind: String,
     pub role: Option<String>,
     pub text: String,
@@ -150,12 +150,29 @@ pub struct TranscriptItemDto {
     pub ts_ms: i64,
     pub seq: u64,
     pub message_id: Option<String>,
-    /// Pending approval request id (for `kind == "approval"`).
+    /// Pending approval / question request id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
-    /// Underlying approval method (e.g. `x.ai/exit_plan_mode`, `session/request_permission`).
+    /// Underlying method / channel (e.g. `x.ai/exit_plan_mode`, `opencode/question`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_method: Option<String>,
+    /// Structured options for question / single-select prompts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<TranscriptOptionDto>>,
+    /// For OpenCode permission: wire response token when accepting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approve_response: Option<String>,
+    /// For OpenCode permission: wire response token when declining.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decline_response: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptOptionDto {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -892,6 +909,44 @@ impl DaemonBridge {
             .context("minos_local_approval_decision")?;
         Ok(())
     }
+
+    pub async fn respond_opencode_permission(
+        &self,
+        thread_id: String,
+        permission_id: String,
+        response: String,
+    ) -> Result<()> {
+        let client = self.client().await?;
+        let params = minos_protocol::local_rpc::RespondOpencodePermissionRequest {
+            thread_id,
+            permission_id,
+            response,
+        };
+        client
+            .request::<(), _>("minos_local_respond_opencode_permission", [params])
+            .await
+            .context("minos_local_respond_opencode_permission")?;
+        Ok(())
+    }
+
+    pub async fn respond_opencode_question(
+        &self,
+        thread_id: String,
+        question_id: String,
+        answers: Vec<Vec<String>>,
+    ) -> Result<()> {
+        let client = self.client().await?;
+        let params = minos_protocol::local_rpc::RespondOpencodeQuestionRequest {
+            thread_id,
+            question_id,
+            answers,
+        };
+        client
+            .request::<(), _>("minos_local_respond_opencode_question", [params])
+            .await
+            .context("minos_local_respond_opencode_question")?;
+        Ok(())
+    }
 }
 
 fn parse_agent_name(value: &str) -> Option<AgentName> {
@@ -1260,6 +1315,9 @@ impl TranscriptAssembler {
                 message_id: Some(message_id),
                 request_id: None,
                 approval_method: None,
+                options: None,
+                approve_response: None,
+                decline_response: None,
             });
         }
     }
@@ -1287,6 +1345,9 @@ impl TranscriptAssembler {
             message_id,
             request_id: None,
             approval_method: None,
+            options: None,
+            approve_response: None,
+            decline_response: None,
         });
     }
 
@@ -1332,6 +1393,9 @@ impl TranscriptAssembler {
                         message_id: Some(message_id),
                         request_id: None,
                         approval_method: None,
+                        options: None,
+                        approve_response: None,
+                        decline_response: None,
                     });
                 }
             }
@@ -1361,6 +1425,9 @@ impl TranscriptAssembler {
                     message_id: Some(message_id),
                     request_id: None,
                     approval_method: None,
+                    options: None,
+                    approve_response: None,
+                    decline_response: None,
                 });
             }
             UiEventMessage::ToolCallCompleted {
@@ -1497,7 +1564,7 @@ impl TranscriptAssembler {
                     None,
                 );
             }
-            // Product-critical Raw: approval requests (plan mode, tools).
+            // Product-critical Raw: user-facing reverse-requests.
             // Other Raw ACP noise is intentionally dropped.
             UiEventMessage::Raw { kind, payload_json } => {
                 if kind == "approval/request" {
@@ -1514,6 +1581,64 @@ impl TranscriptAssembler {
                         None,
                         None,
                     );
+                } else if kind == "opencode/permission.updated" {
+                    if let Some(item) =
+                        opencode_permission_item_from_payload(seq, ts_ms, &payload_json)
+                    {
+                        // Completed updates: clear any open permission card first.
+                        if item.kind == "status" {
+                            let pid = serde_json::from_str::<serde_json::Value>(&payload_json)
+                                .ok()
+                                .and_then(|v| {
+                                    v.pointer("/properties/id")
+                                        .or_else(|| v.get("id"))
+                                        .and_then(|x| x.as_str())
+                                        .map(str::to_owned)
+                                });
+                            if let Some(pid) = pid {
+                                for existing in self.items.iter_mut().rev() {
+                                    if existing.request_id.as_deref() == Some(pid.as_str())
+                                        && existing.kind == "approval"
+                                    {
+                                        existing.kind = "status".into();
+                                        existing.text = "Permission resolved".into();
+                                        existing.request_id = None;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        self.items.push(item);
+                    }
+                } else if kind == "opencode/question.asked" {
+                    if let Some(item) =
+                        opencode_question_item_from_payload(seq, ts_ms, &payload_json)
+                    {
+                        self.items.push(item);
+                    }
+                } else if kind == "opencode/question.replied"
+                    || kind == "opencode/question.rejected"
+                {
+                    // Resolve by clearing matching question cards (status line).
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload_json) {
+                        let qid = value
+                            .pointer("/properties/id")
+                            .or_else(|| value.get("id"))
+                            .and_then(|v| v.as_str());
+                        if let Some(qid) = qid {
+                            for item in self.items.iter_mut().rev() {
+                                if item.request_id.as_deref() == Some(qid)
+                                    && (item.kind == "question" || item.kind == "approval")
+                                {
+                                    item.kind = "status".into();
+                                    item.text = "Question answered".into();
+                                    item.request_id = None;
+                                    item.options = None;
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 }
             }
             UiEventMessage::ThreadTitleUpdated { .. } => {}
@@ -1537,6 +1662,10 @@ fn approval_item_from_payload(
         .get("params")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+
+    if method == "x.ai/ask_user_question" {
+        return grok_question_item_from_params(seq, ts_ms, request_id, &params);
+    }
 
     let (title, text, detail) = if method == "x.ai/exit_plan_mode" {
         // Keep the full plan body on the item (reviewers must not lose content).
@@ -1568,6 +1697,29 @@ fn approval_item_from_payload(
             format!("Agent requests permission: {tool}"),
             Some(truncate_str(&params.to_string(), 2000)),
         )
+    } else if method == "item/tool/requestUserInput" {
+        let questions = params
+            .get("questions")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let (prompt, options) = format_questions_prompt("Agent asks for input:", &questions);
+        return Some(TranscriptItemDto {
+            id: format!("question-{request_id}-{seq}"),
+            kind: "question".into(),
+            role: None,
+            text: prompt,
+            detail: None,
+            title: Some("Agent question".into()),
+            ts_ms,
+            seq,
+            message_id: None,
+            request_id: Some(request_id),
+            approval_method: Some(method),
+            options,
+            approve_response: None,
+            decline_response: None,
+        });
     } else {
         (
             "Approval required".to_owned(),
@@ -1588,7 +1740,269 @@ fn approval_item_from_payload(
         message_id: None,
         request_id: Some(request_id),
         approval_method: Some(method),
+        options: None,
+        approve_response: None,
+        decline_response: None,
     })
+}
+
+fn grok_question_item_from_params(
+    seq: u64,
+    ts_ms: i64,
+    request_id: String,
+    params: &serde_json::Value,
+) -> Option<TranscriptItemDto> {
+    let questions = params
+        .get("questions")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let (prompt, options) = format_questions_prompt("Grok asks:", &questions);
+    Some(TranscriptItemDto {
+        id: format!("question-{request_id}-{seq}"),
+        kind: "question".into(),
+        role: None,
+        text: prompt,
+        detail: None,
+        title: Some("Grok question".into()),
+        ts_ms,
+        seq,
+        message_id: None,
+        request_id: Some(request_id),
+        approval_method: Some("x.ai/ask_user_question".into()),
+        options,
+        approve_response: None,
+        decline_response: None,
+    })
+}
+
+fn opencode_permission_item_from_payload(
+    seq: u64,
+    ts_ms: i64,
+    payload_json: &str,
+) -> Option<TranscriptItemDto> {
+    let value: serde_json::Value = serde_json::from_str(payload_json).ok()?;
+    let permission_id = value
+        .pointer("/properties/id")
+        .or_else(|| value.pointer("/properties/permissionID"))
+        .or_else(|| value.pointer("/properties/permissionId"))
+        .or_else(|| value.get("id"))
+        .or_else(|| value.get("permissionID"))
+        .and_then(|v| v.as_str())?
+        .to_owned();
+    // Completed permission updates are handled by the caller (clear card).
+    let status = value
+        .pointer("/properties/status")
+        .or_else(|| value.get("status"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if matches!(
+        status.to_ascii_lowercase().as_str(),
+        "completed" | "resolved" | "done" | "accepted" | "rejected" | "denied"
+    ) {
+        return Some(TranscriptItemDto {
+            id: format!("approval-oc-perm-done-{permission_id}-{seq}"),
+            kind: "status".into(),
+            role: None,
+            text: "Permission resolved".into(),
+            detail: None,
+            title: Some("Permission".into()),
+            ts_ms,
+            seq,
+            message_id: None,
+            request_id: None,
+            approval_method: Some("opencode/permission".into()),
+            options: None,
+            approve_response: None,
+            decline_response: None,
+        });
+    }
+    let title = value
+        .pointer("/properties/title")
+        .or_else(|| value.get("title"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("permission request");
+    let description = value
+        .pointer("/properties/description")
+        .or_else(|| value.get("description"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let text = if description.is_empty() {
+        format!("OpenCode asks for permission: {title}")
+    } else {
+        format!("OpenCode asks for permission: {title}\n{description}")
+    };
+    let (approve, decline) = opencode_permission_option_tokens(&value);
+    Some(TranscriptItemDto {
+        id: format!("approval-oc-perm-{permission_id}-{seq}"),
+        kind: "approval".into(),
+        role: None,
+        text,
+        detail: None,
+        title: Some("Permission required".into()),
+        ts_ms,
+        seq,
+        message_id: None,
+        request_id: Some(permission_id),
+        approval_method: Some("opencode/permission".into()),
+        options: None,
+        approve_response: Some(approve),
+        decline_response: Some(decline),
+    })
+}
+
+fn opencode_permission_option_tokens(value: &serde_json::Value) -> (String, String) {
+    let mut approve = "accept".to_owned();
+    let mut decline = "reject".to_owned();
+    let options = value
+        .pointer("/properties/options")
+        .or_else(|| value.get("options"))
+        .and_then(|v| v.as_array());
+    if let Some(options) = options {
+        for option in options {
+            let label = option
+                .get("kind")
+                .or_else(|| option.get("name"))
+                .or_else(|| option.get("label"))
+                .or_else(|| option.get("title"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let id = option
+                .get("optionId")
+                .or_else(|| option.get("optionID"))
+                .or_else(|| option.get("id"))
+                .or_else(|| option.get("value"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if id.is_empty() {
+                continue;
+            }
+            if label.contains("allow")
+                || label.contains("approve")
+                || label.contains("accept")
+                || label.contains("yes")
+            {
+                approve = id.to_owned();
+            } else if label.contains("reject")
+                || label.contains("deny")
+                || label.contains("decline")
+                || label.contains("no")
+            {
+                decline = id.to_owned();
+            }
+        }
+    }
+    (approve, decline)
+}
+
+fn opencode_question_item_from_payload(
+    seq: u64,
+    ts_ms: i64,
+    payload_json: &str,
+) -> Option<TranscriptItemDto> {
+    let value: serde_json::Value = serde_json::from_str(payload_json).ok()?;
+    let props = value.get("properties").unwrap_or(&value);
+    let question_id = props
+        .get("id")
+        .or_else(|| props.get("requestID"))
+        .or_else(|| value.get("id"))
+        .and_then(|v| v.as_str())?
+        .to_owned();
+    let questions = props
+        .get("questions")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let (prompt, options) = format_questions_prompt("OpenCode asks:", &questions);
+    Some(TranscriptItemDto {
+        id: format!("question-oc-{question_id}-{seq}"),
+        kind: "question".into(),
+        role: None,
+        text: prompt,
+        detail: None,
+        title: Some("OpenCode question".into()),
+        ts_ms,
+        seq,
+        message_id: None,
+        request_id: Some(question_id),
+        approval_method: Some("opencode/question".into()),
+        options,
+        approve_response: None,
+        decline_response: None,
+    })
+}
+
+/// Build a human prompt and optional single-question option list for UI chips.
+fn format_questions_prompt(
+    prefix: &str,
+    questions: &[serde_json::Value],
+) -> (String, Option<Vec<TranscriptOptionDto>>) {
+    if questions.is_empty() {
+        return (
+            format!("{prefix}\nReply with your answer."),
+            None,
+        );
+    }
+    let mut lines = vec![prefix.to_owned()];
+    let mut single_options: Option<Vec<TranscriptOptionDto>> = None;
+    for (i, q) in questions.iter().enumerate() {
+        let header = q
+            .get("header")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let text = q
+            .get("question")
+            .or_else(|| q.get("text"))
+            .or_else(|| q.get("prompt"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("Question");
+        if header.is_empty() {
+            lines.push(format!("{}. {text}", i + 1));
+        } else {
+            lines.push(format!("{}. [{header}] {text}", i + 1));
+        }
+        let opts: Vec<TranscriptOptionDto> = q
+            .get("options")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|o| {
+                        let label = o
+                            .get("label")
+                            .or_else(|| o.get("value"))
+                            .or_else(|| o.get("id"))
+                            .and_then(|v| v.as_str())?
+                            .trim()
+                            .to_owned();
+                        if label.is_empty() {
+                            return None;
+                        }
+                        let description = o
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_owned);
+                        Some(TranscriptOptionDto { label, description })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (j, opt) in opts.iter().enumerate() {
+            let desc = opt
+                .description
+                .as_deref()
+                .map(|d| format!(" — {d}"))
+                .unwrap_or_default();
+            lines.push(format!("   {}) {}{desc}", j + 1, opt.label));
+        }
+        if questions.len() == 1 && !opts.is_empty() {
+            single_options = Some(opts);
+        }
+    }
+    (lines.join("\n"), single_options)
 }
 
 fn truncate_str(s: &str, max: usize) -> String {
@@ -1603,13 +2017,21 @@ fn truncate_str(s: &str, max: usize) -> String {
     }
 }
 
-/// Grok-style bare target for a tool header (path/cmd/pattern — no `file=` labels).
+/// Bare target for a tool header (path/cmd/pattern — no `file=` labels).
+/// Agent-agnostic: consumes unified translator names (`"read: path"`, …).
 /// Mirrors minos-tui `translation/tool_summary.rs` essentials.
 fn summarize_tool_args(tool_name: &str, args_json: &str) -> String {
+    let subject_fallback = tool_subject_from_name(tool_name);
     let Some(value) = parse_tool_args_json(args_json) else {
+        if subject_fallback != tool_name.trim() && !subject_fallback.is_empty() {
+            return truncate_str(&one_line(subject_fallback), 120);
+        }
         return truncate_str(&one_line(args_json), 180);
     };
     if value.is_null() {
+        if subject_fallback != tool_name.trim() && !subject_fallback.is_empty() {
+            return truncate_str(&one_line(subject_fallback), 120);
+        }
         return String::new();
     }
 
@@ -1693,8 +2115,46 @@ fn summarize_tool_args(tool_name: &str, args_json: &str) -> String {
     if let Some(desc) = find_tool_stringish(&value, &["description", "task", "prompt", "query"]) {
         return truncate_str(&one_line(&desc), 120);
     }
+    if subject_fallback != tool_name.trim() && !subject_fallback.is_empty() {
+        return truncate_str(&one_line(subject_fallback), 120);
+    }
 
     compact_tool_args_json(args_json).unwrap_or_default()
+}
+
+/// Subject after unified `"kind: subject"` tool name, else full name.
+fn tool_subject_from_name(name: &str) -> &str {
+    if let Some((prefix, rest)) = name.split_once(':') {
+        let token = prefix.trim().to_ascii_lowercase();
+        if matches!(
+            token.as_str(),
+            "read"
+                | "read_file"
+                | "edit"
+                | "write"
+                | "diff"
+                | "execute"
+                | "terminal"
+                | "bash"
+                | "shell"
+                | "run"
+                | "search"
+                | "grep"
+                | "list"
+                | "list_dir"
+                | "web_fetch"
+                | "web_search"
+                | "fetch"
+                | "skill"
+                | "other"
+        ) {
+            let subject = rest.trim();
+            if !subject.is_empty() {
+                return subject;
+            }
+        }
+    }
+    name.trim()
 }
 
 fn summarize_tool_output_line(out: &str, is_error: bool) -> String {
@@ -1732,8 +2192,17 @@ enum ToolKind {
 }
 
 impl ToolKind {
+    /// Same classification as TUI: prefer unified `"kind: subject"` prefix.
     fn from_tool_name(name: &str) -> Self {
         let n = name.to_ascii_lowercase();
+        if let Some((prefix, _)) = n.split_once(':') {
+            if let Some(kind) = Self::from_kind_token(prefix.trim()) {
+                return kind;
+            }
+        }
+        if let Some(kind) = Self::from_kind_token(n.trim()) {
+            return kind;
+        }
         if n.contains("skill") {
             return Self::Skill;
         }
@@ -1783,6 +2252,23 @@ impl ToolKind {
             return Self::Execute;
         }
         Self::Other
+    }
+
+    fn from_kind_token(token: &str) -> Option<Self> {
+        match token {
+            "read" | "read_file" | "readfile" | "cat" => Some(Self::Read),
+            "edit" | "write" | "diff" | "search_replace" | "apply_patch" | "str_replace" => {
+                Some(Self::Edit)
+            }
+            "execute" | "terminal" | "bash" | "shell" | "run" | "command" => Some(Self::Execute),
+            "search" | "grep" | "glob" | "find" | "rg" => Some(Self::Search),
+            "list" | "list_dir" | "listdir" | "list_directory" | "ls" => Some(Self::List),
+            "web_fetch" | "webfetch" | "fetch" => Some(Self::WebFetch),
+            "web_search" | "websearch" => Some(Self::WebSearch),
+            "skill" => Some(Self::Skill),
+            "other" => Some(Self::Other),
+            _ => None,
+        }
     }
 }
 
@@ -2048,7 +2534,9 @@ fn frame_to_ingest_dto(frame: LocalIngestFrame) -> IngestEventDto {
     let items = assembler.finish();
     let has_pending_approval = items
         .iter()
-        .any(|it| it.kind == "approval" && it.request_id.is_some());
+        .any(|it| {
+            (it.kind == "approval" || it.kind == "question") && it.request_id.is_some()
+        });
     IngestEventDto {
         thread_id: frame.thread_id,
         seq: frame.seq,

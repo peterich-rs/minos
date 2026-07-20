@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { MessageSquare, PanelLeftClose } from "lucide-react";
 import type { Conversation } from "@/lib/mock-data";
+import { sortByAttentionThenTime } from "@/lib/list-sort";
 import { PriorityTag, ProgressTag } from "@/components/Tag";
 import { useUiStore } from "@/store/ui-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
@@ -29,10 +30,22 @@ export function ConversationList({ projectId }: { projectId: string }) {
     void loadConversations(projectId);
   }, [projectId, source, loadConversations, bootEpoch]);
 
-  const items = useMemo(
-    () => conversations.filter((c) => c.projectId === projectId),
-    [conversations, projectId],
-  );
+  const items = useMemo(() => {
+    const sorted = [...conversations].filter(
+      (c) => c.projectId === projectId,
+    );
+    sorted.sort((a, b) => {
+      const aAttn = (a.unread ?? 0) + (a.approvalCount ?? 0);
+      const bAttn = (b.unread ?? 0) + (b.approvalCount ?? 0);
+      const aMs = a.updatedAtMs ?? 0;
+      const bMs = b.updatedAtMs ?? 0;
+      return sortByAttentionThenTime(
+        { hasUnread: aAttn > 0, lastAttentionMs: aMs, updatedAtMs: aMs },
+        { hasUnread: bAttn > 0, lastAttentionMs: bMs, updatedAtMs: bMs },
+      );
+    });
+    return sorted;
+  }, [conversations, projectId]);
 
   const phase = listStatus?.phase ?? "idle";
 

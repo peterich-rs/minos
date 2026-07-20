@@ -8,6 +8,9 @@
 
 export const FOLLOW_THRESHOLD_PX = 80;
 
+/** Sub-pixel / layout slack: treat as not overflow unless taller than this. */
+export const SCROLLABLE_EPSILON_PX = 1;
+
 export function distanceFromBottom(el: {
   scrollHeight: number;
   scrollTop: number;
@@ -23,12 +26,37 @@ export function isNearBottom(
   return distance <= threshold;
 }
 
+/**
+ * True when the viewport can actually move vertically.
+ * Short lists (content shorter than the container) are not scrollable even if
+ * wheel/trackpad gestures still fire.
+ */
+export function isVerticallyScrollable(
+  el: { scrollHeight: number; clientHeight: number },
+  epsilon: number = SCROLLABLE_EPSILON_PX,
+): boolean {
+  return el.scrollHeight > el.clientHeight + epsilon;
+}
+
 /** After a user scroll event, should we be following? */
 export function followAfterUserScroll(
   distance: number,
   threshold: number = FOLLOW_THRESHOLD_PX,
 ): boolean {
   return isNearBottom(distance, threshold);
+}
+
+/**
+ * Wheel/trackpad up should break follow only when the list can scroll.
+ * Otherwise gestures on a short transcript would show "Jump to latest" with
+ * no real scroll offset change.
+ */
+export function shouldUnfollowOnWheelUp(options: {
+  deltaY: number;
+  following: boolean;
+  scrollable: boolean;
+}): boolean {
+  return options.following && options.deltaY < 0 && options.scrollable;
 }
 
 export type FollowContentItem = {

@@ -5,7 +5,10 @@ import {
   followAfterUserScroll,
   followContentKey,
   isNearBottom,
+  isVerticallyScrollable,
+  shouldUnfollowOnWheelUp,
   FOLLOW_THRESHOLD_PX,
+  SCROLLABLE_EPSILON_PX,
 } from "./stick-to-bottom.ts";
 
 describe("distanceFromBottom", () => {
@@ -42,6 +45,79 @@ describe("isNearBottom / followAfterUserScroll", () => {
   it("unfollows when scrolled above threshold", () => {
     assert.equal(followAfterUserScroll(200), false);
     assert.equal(followAfterUserScroll(20), true);
+  });
+});
+
+describe("isVerticallyScrollable", () => {
+  it("is false when content fits in the viewport", () => {
+    assert.equal(
+      isVerticallyScrollable({ scrollHeight: 200, clientHeight: 400 }),
+      false,
+    );
+    assert.equal(
+      isVerticallyScrollable({ scrollHeight: 400, clientHeight: 400 }),
+      false,
+    );
+  });
+
+  it("is false for sub-pixel overflow within epsilon", () => {
+    assert.equal(
+      isVerticallyScrollable({
+        scrollHeight: 400 + SCROLLABLE_EPSILON_PX,
+        clientHeight: 400,
+      }),
+      false,
+    );
+  });
+
+  it("is true when content overflows the viewport", () => {
+    assert.equal(
+      isVerticallyScrollable({ scrollHeight: 800, clientHeight: 400 }),
+      true,
+    );
+  });
+});
+
+describe("shouldUnfollowOnWheelUp", () => {
+  it("unfollows only on upward wheel while following a scrollable list", () => {
+    assert.equal(
+      shouldUnfollowOnWheelUp({
+        deltaY: -12,
+        following: true,
+        scrollable: true,
+      }),
+      true,
+    );
+  });
+
+  it("does not unfollow when content cannot scroll (short list)", () => {
+    assert.equal(
+      shouldUnfollowOnWheelUp({
+        deltaY: -40,
+        following: true,
+        scrollable: false,
+      }),
+      false,
+    );
+  });
+
+  it("does not unfollow on wheel down or when already unfollowed", () => {
+    assert.equal(
+      shouldUnfollowOnWheelUp({
+        deltaY: 20,
+        following: true,
+        scrollable: true,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldUnfollowOnWheelUp({
+        deltaY: -20,
+        following: false,
+        scrollable: true,
+      }),
+      false,
+    );
   });
 });
 

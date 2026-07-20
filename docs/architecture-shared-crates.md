@@ -218,11 +218,16 @@
 | `CodexTranslatorState` | 有状态 Codex 事件翻译器 |
 | `ClaudeTranslatorState` | 有状态 Claude 事件翻译器 |
 | `GeminiTranslatorState` | 有状态 Gemini 事件翻译器 |
+| `GrokTranslatorState` | 有状态 Grok ACP 事件翻译器 |
 | `OpencodeTranslatorState` | 有状态 Opencode 事件翻译器 |
 
 ### 翻译函数
 
-`translate_codex()`, `translate_claude()`, `translate_gemini()`, `translate_opencode()` — 每个 CLI agent 的原生事件 → `Vec<UiEventMessage>`
+`translate_codex()`, `translate_claude()`, `translate_gemini()`, `translate_grok()`, `translate_opencode()` — 每个 CLI agent 的原生事件 → `Vec<UiEventMessage>`
+
+### Grok edit / tool output
+
+Grok file edits (`SearchReplace` / write / `ApplyPatch`) arrive as ACP `ToolCallContent::Diff` plus optional structured `raw_output`. `translate_grok` converts these into unified-diff tool output (not raw `EditsApplied` JSON) so TUI/Desktop can reuse the agent-agnostic diff renderer.
 
 ---
 

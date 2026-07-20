@@ -10,7 +10,8 @@ impl App {
         let request_id = match &pending {
             PendingAgentRequestKind::CodexUserInput { request_id, .. }
             | PendingAgentRequestKind::CodexApproval { request_id, .. }
-            | PendingAgentRequestKind::GrokPlanApproval { request_id } => request_id.clone(),
+            | PendingAgentRequestKind::GrokPlanApproval { request_id }
+            | PendingAgentRequestKind::GrokUserQuestion { request_id, .. } => request_id.clone(),
             PendingAgentRequestKind::OpencodePermission { permission_id, .. } => {
                 permission_id.clone()
             }
@@ -40,6 +41,15 @@ impl App {
             }
             PendingAgentRequestKind::GrokPlanApproval { request_id } => {
                 let decision = grok_plan_approval_decision(text.as_str());
+                self.backend
+                    .send_approval_decision(&request_id, &thread_id, decision)
+                    .await
+            }
+            PendingAgentRequestKind::GrokUserQuestion {
+                request_id,
+                questions,
+            } => {
+                let decision = grok_user_question_decision(questions.as_slice(), text.as_str());
                 self.backend
                     .send_approval_decision(&request_id, &thread_id, decision)
                     .await

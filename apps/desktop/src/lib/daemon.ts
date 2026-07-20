@@ -89,6 +89,11 @@ export type DaemonSession = {
   needsContinue?: boolean;
 };
 
+export type TranscriptOption = {
+  label: string;
+  description?: string | null;
+};
+
 export type TranscriptItem = {
   id: string;
   kind: string;
@@ -99,9 +104,16 @@ export type TranscriptItem = {
   tsMs: number;
   seq: number;
   messageId?: string | null;
-  /** Pending approval request id when kind === "approval". */
+  /** Pending approval / question request id. */
   requestId?: string | null;
+  /** e.g. x.ai/exit_plan_mode, session/request_permission, opencode/question */
   approvalMethod?: string | null;
+  /** Structured options for question cards. */
+  options?: TranscriptOption[] | null;
+  /** OpenCode permission accept token. */
+  approveResponse?: string | null;
+  /** OpenCode permission decline token. */
+  declineResponse?: string | null;
 };
 
 export type TranscriptPage = {
@@ -289,6 +301,26 @@ export const daemonApi = {
       requestId,
       threadId,
       decision,
+    }),
+  respondOpencodePermission: (
+    threadId: string,
+    permissionId: string,
+    response: string,
+  ) =>
+    call<void>("daemon_respond_opencode_permission", {
+      threadId,
+      permissionId,
+      response,
+    }),
+  respondOpencodeQuestion: (
+    threadId: string,
+    questionId: string,
+    answers: string[][],
+  ) =>
+    call<void>("daemon_respond_opencode_question", {
+      threadId,
+      questionId,
+      answers,
     }),
   listProjectSessions: (projectId: string) =>
     call<DaemonSession[]>("daemon_list_project_sessions", { projectId }),

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
 import {
   conversations as mockConversations,
   projects as mockProjects,
@@ -180,7 +181,17 @@ type WorkspaceState = {
   resolveApproval: (
     threadId: string,
     requestId: string,
-    decision: "approve" | "revise" | "abandon",
+    decision: string | Record<string, unknown>,
+  ) => Promise<void>;
+  respondOpencodePermission: (
+    threadId: string,
+    permissionId: string,
+    response: string,
+  ) => Promise<void>;
+  respondOpencodeQuestion: (
+    threadId: string,
+    questionId: string,
+    answers: string[][],
   ) => Promise<void>;
   /** Mark conversation messages as read (clears unread badge). */
   markConversationRead: (conversationId: string) => void;
@@ -348,6 +359,10 @@ function toUiProject(p: DaemonProject): Project {
     conversationCount: p.conversationCount,
     runningAgents: p.runningAgents,
     needsAttention: p.needsAttention,
+    updatedAtMs: p.updatedAtMs ?? 0,
+    // Recomputed by patchProjectAggregates once conversations load.
+    hasUnread: false,
+    lastAttentionMs: 0,
   };
 }
 
@@ -409,6 +424,7 @@ function toUiConversation(
     updatedAt: row.updatedAtMs
       ? formatRelative(row.updatedAtMs)
       : row.updatedAt,
+    updatedAtMs: row.updatedAtMs ?? 0,
     messageCount: row.messageCount,
     unread: unread > 0 ? unread : undefined,
     boardColumn: deriveBoardColumn({
@@ -549,13 +565,19 @@ function patchProjectAggregates(
 ): Project[] {
   const forProject = conversations.filter((c) => c.projectId === projectId);
   const needsAttention = forProject.reduce(
-    (sum, c) => sum + (c.approvalCount ?? 0),
+    (sum, c) => sum + (c.unread ?? 0) + (c.approvalCount ?? 0),
     0,
   );
   const runningAgents = forProject.reduce(
     (sum, c) => sum + (c.runningCount ?? 0),
     0,
   );
+  const hasUnread = forProject.some(
+    (c) => (c.unread ?? 0) > 0 || (c.approvalCount ?? 0) > 0,
+  );
+  const lastAttentionMs = forProject
+    .filter((c) => (c.unread ?? 0) > 0 || (c.approvalCount ?? 0) > 0)
+    .reduce((m, c) => Math.max(m, c.updatedAtMs ?? 0), 0);
   return projects.map((p) =>
     p.id === projectId
       ? {
@@ -563,12 +585,16 @@ function patchProjectAggregates(
           conversationCount: forProject.length,
           needsAttention,
           runningAgents,
+          hasUnread,
+          lastAttentionMs,
         }
       : p,
   );
 }
 
-export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
+export const useWorkspaceStore = create<WorkspaceState>()(
+  persist(
+    (set, get) => ({
   booting: true,
   bootPhase: "Starting…",
   bootProgress: 5,
@@ -685,7 +711,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           error: null,
           actionError: null,
           focusedConversationId: null,
-          readMessageCountById: {},
           ...emptyWorkspace,
           projects,
           clis,
@@ -748,6 +773,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
               runningAgents: old.runningAgents,
               conversationCount:
                 old.conversationCount || p.conversationCount,
+              hasUnread: old.hasUnread,
+              lastAttentionMs: old.lastAttentionMs,
             }
           : p;
       });
@@ -1345,17 +1372,24 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   resolveApproval: async (threadId, requestId, decision) => {
     if (get().source !== "daemon") return;
-    await daemonApi.resolveApproval(requestId, threadId, { decision });
-    // Drop local approval cards for this request; poll will refresh live state.
+    const payload =
+      typeof decision === "string" ? { decision } : decision;
+    await daemonApi.resolveApproval(requestId, threadId, payload);
+    // Drop local approval/question cards for this request; poll will refresh.
     set((s) => {
       const items = (s.transcriptsByThread[threadId] ?? []).map((it) =>
-        it.requestId === requestId && it.kind === "approval"
+        it.requestId === requestId &&
+        (it.kind === "approval" || it.kind === "question")
           ? {
               ...it,
               kind: "status",
-              text: `Approval ${decision}`,
-              title: "Approval",
+              text:
+                typeof decision === "string"
+                  ? `Answered: ${decision}`
+                  : "Answered",
+              title: "Resolved",
               requestId: null,
+              options: null,
             }
           : it,
       );
@@ -1410,6 +1444,51 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       };
     });
     // Pull fresh tail after the agent continues.
+    await get().loadTranscript(threadId, { tailWindow: 200, quiet: true });
+  },
+
+  respondOpencodePermission: async (threadId, permissionId, response) => {
+    if (get().source !== "daemon") return;
+    await daemonApi.respondOpencodePermission(threadId, permissionId, response);
+    set((s) => {
+      const items = (s.transcriptsByThread[threadId] ?? []).map((it) =>
+        it.requestId === permissionId
+          ? {
+              ...it,
+              kind: "status",
+              text: `Permission ${response}`,
+              title: "Permission",
+              requestId: null,
+            }
+          : it,
+      );
+      return {
+        transcriptsByThread: { ...s.transcriptsByThread, [threadId]: items },
+      };
+    });
+    await get().loadTranscript(threadId, { tailWindow: 200, quiet: true });
+  },
+
+  respondOpencodeQuestion: async (threadId, questionId, answers) => {
+    if (get().source !== "daemon") return;
+    await daemonApi.respondOpencodeQuestion(threadId, questionId, answers);
+    set((s) => {
+      const items = (s.transcriptsByThread[threadId] ?? []).map((it) =>
+        it.requestId === questionId
+          ? {
+              ...it,
+              kind: "status",
+              text: "Question answered",
+              title: "Question",
+              requestId: null,
+              options: null,
+            }
+          : it,
+      );
+      return {
+        transcriptsByThread: { ...s.transcriptsByThread, [threadId]: items },
+      };
+    });
     await get().loadTranscript(threadId, { tailWindow: 200, quiet: true });
   },
 
@@ -1732,6 +1811,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         title,
         preview: "No messages yet",
         updatedAt: "now",
+        updatedAtMs: Date.now(),
         messageCount: 0,
         boardColumn: "backlog",
         agentSessionCount: 0,
@@ -1861,6 +1941,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         conversationCount: 0,
         runningAgents: 0,
         needsAttention: 0,
+        updatedAtMs: Date.now(),
+        hasUnread: false,
+        lastAttentionMs: 0,
       };
       set((s) => ({
         projects: [...s.projects, project],
@@ -1881,4 +1964,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       throw e;
     }
   },
-}));
+    }),
+    {
+      name: "minos.workspace-store.v1",
+      storage: createJSONStorage(() => localStorage),
+      partialize: (s) => ({
+        readMessageCountById: s.readMessageCountById,
+      }),
+    },
+  ),
+);

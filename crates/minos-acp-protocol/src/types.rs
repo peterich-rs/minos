@@ -50,22 +50,79 @@ pub struct ResourceContent {
     pub text: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+/// ACP tool kind. Unknown wire values deserialize as [`Other`] so clients stay forward-compatible.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolCallKind {
+    Read,
     Edit,
     Diff,
+    Search,
+    Execute,
+    #[serde(alias = "terminal")]
     Terminal,
+    #[serde(alias = "fetch", alias = "web_fetch")]
+    Fetch,
+    #[serde(alias = "web_search")]
+    WebSearch,
+    #[serde(alias = "list", alias = "list_dir")]
+    List,
+    #[default]
+    #[serde(other)]
     Other,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolCallStatus {
+    #[default]
     Pending,
     InProgress,
     Completed,
+    Failed,
     Cancelled,
+}
+
+/// Full ACP tool call payload (fields optional for forward-compat with partial frames).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCall {
+    pub tool_call_id: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub title: Option<String>,
+    #[serde(default = "default_tool_kind")]
+    pub kind: ToolCallKind,
+    #[serde(default = "default_tool_status")]
+    pub status: ToolCallStatus,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub content: Option<Vec<ToolCallContent>>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub locations: Option<Vec<ToolCallLocation>>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub raw_input: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub raw_output: Option<serde_json::Value>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none", default)]
+    pub meta: Option<serde_json::Value>,
+}
+
+fn default_tool_kind() -> ToolCallKind {
+    ToolCallKind::Other
+}
+
+fn default_tool_status() -> ToolCallStatus {
+    ToolCallStatus::Pending
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallLocation {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub uri: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub line: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -74,10 +131,18 @@ pub struct ToolCallUpdate {
     pub tool_call_id: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub title: Option<String>,
-    pub kind: ToolCallKind,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub kind: Option<ToolCallKind>,
+    #[serde(default = "default_tool_status")]
     pub status: ToolCallStatus,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub content: Option<Vec<ToolCallContent>>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub raw_input: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub raw_output: Option<serde_json::Value>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none", default)]
+    pub meta: Option<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -88,6 +153,15 @@ pub struct ToolCallUpdate {
 )]
 pub enum ToolCallContent {
     Content { content: ContentBlock },
+    /// File modification shown as a diff (ACP standard; used by Grok SearchReplace / ApplyPatch).
+    Diff {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        old_text: Option<String>,
+        new_text: String,
+        #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+        meta: Option<serde_json::Value>,
+    },
     Terminal { terminal_id: String },
 }
 
@@ -357,6 +431,32 @@ mod tests {
         assert_eq!(json, r#""end_turn""#);
         let back: StopReason = serde_json::from_str(&json).unwrap();
         assert_eq!(back, StopReason::EndTurn);
+    }
+
+    #[test]
+    fn tool_call_content_diff_round_trips() {
+        let raw = serde_json::json!({
+            "type": "diff",
+            "path": "/repo/a.rs",
+            "oldText": "old\n",
+            "newText": "new\n",
+            "_meta": { "details": [] }
+        });
+        let parsed: ToolCallContent = serde_json::from_value(raw).unwrap();
+        match parsed {
+            ToolCallContent::Diff {
+                path,
+                old_text,
+                new_text,
+                meta,
+            } => {
+                assert_eq!(path, "/repo/a.rs");
+                assert_eq!(old_text.as_deref(), Some("old\n"));
+                assert_eq!(new_text, "new\n");
+                assert!(meta.is_some());
+            }
+            other => panic!("expected Diff, got {other:?}"),
+        }
     }
 
     #[test]

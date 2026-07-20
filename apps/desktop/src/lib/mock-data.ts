@@ -45,6 +45,12 @@ export type Project = {
   conversationCount: number;
   runningAgents: number;
   needsAttention: number;
+  /** Last activity timestamp (ms) for WeChat-style list sort. */
+  updatedAtMs: number;
+  /** True when any conversation has unread or pending approval. */
+  hasUnread: boolean;
+  /** Max updatedAtMs among conversations that currently need attention. */
+  lastAttentionMs: number;
   /**
    * Which host owns this project (plane C).
    * Omit for this Mac (default). Multi-device rows set a device display name.
@@ -58,6 +64,8 @@ export type Conversation = {
   title: string;
   preview: string;
   updatedAt: string;
+  /** Raw last-update timestamp (ms) for sorting; `updatedAt` is display-only. */
+  updatedAtMs: number;
   unread?: number;
   /** Aggregated message count in the conversation timeline. */
   messageCount: number;
@@ -140,6 +148,8 @@ export const installedRuntimes: InstalledRuntime[] = [
   { agent: "grok", installed: true, path: "/opt/homebrew/bin/grok", version: "0.2.0" },
 ];
 
+const NOW_MS = Date.now();
+
 export const projects: Project[] = [
   {
     id: "proj-minos",
@@ -148,6 +158,9 @@ export const projects: Project[] = [
     conversationCount: 4,
     runningAgents: 2,
     needsAttention: 2,
+    updatedAtMs: NOW_MS - 2 * 60_000,
+    hasUnread: true,
+    lastAttentionMs: NOW_MS - 2 * 60_000,
   },
   {
     id: "proj-landing",
@@ -156,6 +169,9 @@ export const projects: Project[] = [
     conversationCount: 2,
     runningAgents: 0,
     needsAttention: 0,
+    updatedAtMs: NOW_MS - 3 * 60 * 60_000,
+    hasUnread: false,
+    lastAttentionMs: 0,
   },
   {
     id: "proj-sdk",
@@ -164,6 +180,9 @@ export const projects: Project[] = [
     conversationCount: 1,
     runningAgents: 1,
     needsAttention: 1,
+    updatedAtMs: NOW_MS - 12 * 60_000,
+    hasUnread: true,
+    lastAttentionMs: NOW_MS - 12 * 60_000,
   },
 ];
 
@@ -174,6 +193,7 @@ export const conversations: Conversation[] = [
     title: "JWT auth refactor",
     preview: "@codex finished route handlers; @claude reviewing tests…",
     updatedAt: "2m",
+    updatedAtMs: NOW_MS - 2 * 60_000,
     unread: 2,
     messageCount: 14,
     boardColumn: "running",
@@ -191,6 +211,7 @@ export const conversations: Conversation[] = [
     title: "Desktop shell IA",
     preview: "You: map TUI nav to multi-pane desktop…",
     updatedAt: "18m",
+    updatedAtMs: NOW_MS - 18 * 60_000,
     messageCount: 6,
     boardColumn: "needs_you",
     agentSessionCount: 1,
@@ -206,6 +227,7 @@ export const conversations: Conversation[] = [
     title: "Ingest sync rework",
     preview: "codex: checkpoint coalescing landed",
     updatedAt: "1h",
+    updatedAtMs: NOW_MS - 60 * 60_000,
     messageCount: 9,
     boardColumn: "done",
     agentSessionCount: 1,
@@ -221,6 +243,7 @@ export const conversations: Conversation[] = [
     title: "Architecture docs pass",
     preview: "No agents yet — draft outline ready",
     updatedAt: "Yesterday",
+    updatedAtMs: NOW_MS - 24 * 60 * 60_000,
     messageCount: 1,
     boardColumn: "backlog",
     agentSessionCount: 0,
@@ -236,6 +259,7 @@ export const conversations: Conversation[] = [
     title: "Hero section rewrite",
     preview: "Waiting to start an agent",
     updatedAt: "3h",
+    updatedAtMs: NOW_MS - 3 * 60 * 60_000,
     messageCount: 1,
     boardColumn: "backlog",
     agentSessionCount: 0,
@@ -251,6 +275,7 @@ export const conversations: Conversation[] = [
     title: "SEO meta tags",
     preview: "gemini: drafted Open Graph tags",
     updatedAt: "5h",
+    updatedAtMs: NOW_MS - 5 * 60 * 60_000,
     messageCount: 4,
     boardColumn: "done",
     agentSessionCount: 1,
@@ -266,6 +291,7 @@ export const conversations: Conversation[] = [
     title: "Retry policy for WS",
     preview: "@grok needs approval to edit reconnect.rs",
     updatedAt: "12m",
+    updatedAtMs: NOW_MS - 12 * 60_000,
     unread: 1,
     messageCount: 3,
     boardColumn: "needs_you",

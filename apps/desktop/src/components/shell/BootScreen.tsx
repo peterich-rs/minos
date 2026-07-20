@@ -11,7 +11,7 @@ export function BootScreen({ phase, progress }: Props) {
   const pct = Math.max(0, Math.min(100, progress));
 
   return (
-    <div className="flex h-full w-full flex-col items-center justify-center bg-surface px-8">
+    <div className="flex h-full min-h-full w-full flex-col items-center justify-center bg-surface px-8">
       <div className="mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-ink text-white shadow-md">
         <Sparkles className="h-7 w-7" strokeWidth={2} />
       </div>

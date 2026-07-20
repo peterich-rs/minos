@@ -13,6 +13,7 @@ import { CreateProjectEmpty } from "./CreateProjectEmpty";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useUiStore } from "@/store/ui-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
+import { sortByAttentionThenTime } from "@/lib/list-sort";
 
 export function WorkView() {
   const projectView = useUiStore((s) => s.projectView);
@@ -32,10 +33,13 @@ export function WorkView() {
     (s) => s.conversationsStatusByProject,
   );
 
-  // Resolve project for this paint: do not wait a frame for App's select effect.
+  // Resolve project for this paint: do not wait a frame for App's select
+  // effect. Fall back to the sorted head (attention-first) rather than
+  // projects[0] (daemon row order).
   const resolvedProjectId = useMemo(() => {
     if (projectId && projects.some((p) => p.id === projectId)) return projectId;
-    return projects[0]?.id ?? "";
+    const head = [...projects].sort(sortByAttentionThenTime)[0];
+    return head?.id ?? "";
   }, [projectId, projects]);
 
   // Keep ui-store selection in sync when we had to fall back to projects[0].

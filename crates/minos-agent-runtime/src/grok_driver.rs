@@ -531,16 +531,16 @@ pub(crate) fn is_known_grok_ext_method(nested_method: &str) -> bool {
 }
 
 /// Immediate auto-reply for ext_methods that Minos does not park on UI yet.
-pub(crate) fn auto_reply_for_ext_method(nested_method: &str) -> Option<serde_json::Value> {
-    match nested_method {
-        "x.ai/ask_user_question" => Some(serde_json::json!({ "outcome": "cancelled" })),
-        _ => None,
-    }
+pub(crate) fn auto_reply_for_ext_method(_nested_method: &str) -> Option<serde_json::Value> {
+    None
 }
 
-/// Whether this ext_method should be parked for user approval.
+/// Whether this ext_method should be parked for user approval / answer.
 pub(crate) fn parks_for_user_approval(nested_method: &str) -> bool {
-    nested_method == "x.ai/exit_plan_mode"
+    matches!(
+        nested_method,
+        "x.ai/exit_plan_mode" | "x.ai/ask_user_question"
+    )
 }
 
 /// Handle a Grok ACP extension reverse-request.
@@ -818,13 +818,9 @@ mod tests {
     }
 
     #[test]
-    fn auto_reply_ask_user_cancels() {
-        let reply = auto_reply_for_ext_method("x.ai/ask_user_question").expect("reply");
-        assert_eq!(
-            reply.get("outcome").and_then(|v| v.as_str()),
-            Some("cancelled")
-        );
-        assert!(!parks_for_user_approval("x.ai/ask_user_question"));
+    fn ask_user_question_parks_for_user_answer() {
+        assert!(parks_for_user_approval("x.ai/ask_user_question"));
+        assert!(auto_reply_for_ext_method("x.ai/ask_user_question").is_none());
     }
 
     #[test]

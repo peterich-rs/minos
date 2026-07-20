@@ -3,6 +3,8 @@ import {
   FOLLOW_THRESHOLD_PX,
   distanceFromBottom,
   followAfterUserScroll,
+  isVerticallyScrollable,
+  shouldUnfollowOnWheelUp,
 } from "./stick-to-bottom";
 
 type Options = {
@@ -75,17 +77,31 @@ export function useStickToBottom({
 
     const onScroll = () => {
       if (programmaticRef.current) return;
+      // Short lists never leave the bottom; keep following so the jump chip
+      // does not appear when the viewport cannot actually scroll.
+      if (!isVerticallyScrollable(el)) {
+        setFollowingBoth(true);
+        return;
+      }
       const next = followAfterUserScroll(distanceFromBottom(el), threshold);
       setFollowingBoth(next);
     };
 
     // Wheel/trackpad: unfollow *before* scroll settles so pin/ResizeObserver
-    // cannot yank the viewport back to bottom mid-gesture.
+    // cannot yank the viewport back to bottom mid-gesture — but only when
+    // content actually overflows (wheel fires even on non-scrollable lists).
     const onWheel = (e: WheelEvent) => {
-      if (e.deltaY < 0 && followingRef.current) {
-        programmaticRef.current = false;
-        setFollowingBoth(false);
+      if (
+        !shouldUnfollowOnWheelUp({
+          deltaY: e.deltaY,
+          following: followingRef.current,
+          scrollable: isVerticallyScrollable(el),
+        })
+      ) {
+        return;
       }
+      programmaticRef.current = false;
+      setFollowingBoth(false);
     };
 
     el.addEventListener("scroll", onScroll, { passive: true });

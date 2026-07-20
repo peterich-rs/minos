@@ -277,6 +277,34 @@ async fn daemon_resolve_approval(
 }
 
 #[tauri::command]
+async fn daemon_respond_opencode_permission(
+    state: State<'_, AppState>,
+    thread_id: String,
+    permission_id: String,
+    response: String,
+) -> Result<(), String> {
+    state
+        .daemon
+        .respond_opencode_permission(thread_id, permission_id, response)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn daemon_respond_opencode_question(
+    state: State<'_, AppState>,
+    thread_id: String,
+    question_id: String,
+    answers: Vec<Vec<String>>,
+) -> Result<(), String> {
+    state
+        .daemon
+        .respond_opencode_question(thread_id, question_id, answers)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn daemon_list_project_sessions(
     state: State<'_, AppState>,
     project_id: String,
@@ -344,6 +372,8 @@ pub fn run() {
             daemon_send_user_message,
             daemon_resume_thread,
             daemon_resolve_approval,
+            daemon_respond_opencode_permission,
+            daemon_respond_opencode_question,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Minos desktop");

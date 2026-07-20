@@ -78,7 +78,33 @@ apps/desktop/
 1. 读 `~/.minos/run/tui-daemon-rpc.json`（若存在）并 `minos_local_health`
 2. 失败 / 无 discovery / stale port → **进程内托管** `DaemonHandle::start_with_local_rpc`（`127.0.0.1:0` + 写 discovery）
 3. 连接使用 **binder 返回的 `local_rpc_url()`**（不依赖再读 discovery，避免竞态/陈旧端口）
-4. `DaemonHandle` 由 `DaemonBridge` 持有；`connect` 经全局锁串行，避免 StrictMode 双启动
+
+### Teamwork MCP 注入（全 agent 共用）
+
+会话协作依赖 `minos_teamwork` MCP：列消息、委派、等委托结果、回写 conversation 等。  
+注入失败时 **Codex / Claude / Gemini / OpenCode / Grok 都无法做跨 agent 协作**，不是某一 CLI 的单独问题。
+
+托管 daemon 启动时 `AgentGlue` → `enable_default_mcp()`：
+
+1. 解析 MCP 入口（`MINOS_TEAMWORK_MCP_BIN` → 同目录 `minos-teamwork-mcp` → **当前 exe + hidden `__minos-teamwork-mcp`**）
+2. 仅当 agent 绑定 **conversation_id**（`start_agent_in_conversation`）时，把 `minos_teamwork` 写入该 CLI 的 MCP 配置（各 agent 线格式不同，例如 OpenCode 为 `mcp.minos_teamwork.type=local`）
+3. Desktop 进程名是 Tauri **`Minos`** / cargo **`minos-desktop`**：须识别为 sidecar host；`main.rs` 在 Tauri 启动前处理 `__minos-teamwork-mcp`（`minos_chat_store::mcp_server::serve_stdio`），以便 agent 子进程能 `spawn(current_exe, …)` 起 MCP
+4. 若 locator 找不到可执行入口，或 host 未实现 sidecar 子命令，则 **静默跳过注入**（runtime warn）；agent 仍可单聊编码，但 **teamwork 工具集为空**
+
+`DaemonHandle` 由 `DaemonBridge` 持有；`connect` 经全局锁串行，避免 StrictMode 双启动。
+
+### 用户交互请求（approval / question）
+
+Session transcript 组装（`TranscriptAssembler`）消费 daemon 投影后的 `UiEventMessage`：
+
+| 事件 | 卡片 kind | 回复 RPC |
+|------|-----------|----------|
+| `approval/request`（Codex / ACP permission / Grok plan） | `approval` | `minos_local_approval_decision` |
+| `approval/request` + `x.ai/ask_user_question` | `question` | 同上（`outcome` + `answers`） |
+| `opencode/permission.updated` | `approval`（method `opencode/permission`） | `minos_local_respond_opencode_permission` |
+| `opencode/question.asked` | `question`（method `opencode/question`） | `minos_local_respond_opencode_question` |
+
+UI：`SessionsView` 审批 modal / 选项 chips。Claude 未接。
 
 | Command | 作用 |
 |---------|------|
@@ -136,6 +162,29 @@ apps/desktop/
 
 深链：Conversation inspector / 气泡上的 session → `openSessionTranscript` 切到 Sessions 并选中；Sessions 顶栏 **Back to conversation** 回 Conversations。
 
+### Session transcript 消费（与 TUI 同契约）
+
+Desktop **Sessions** 详情与 TUI AgentDetail 共用 daemon 投影，不解析 CLI 原生事件：
+
+```text
+minos_local_read_thread_raw_history / subscribe_ingest
+  → LocalIngestFrame { ui_events: Vec<UiEventMessage> }
+  → TranscriptAssembler (src-tauri/daemon.rs)   // 对齐 ChatState 语义
+  → TranscriptItemDto { kind, text, title, detail, … }
+  → SessionsView TranscriptItemView (React)
+```
+
+| UiEventMessage | TranscriptItem.kind | UI |
+|----------------|---------------------|-----|
+| TextDelta (user/assistant) | `user` / `assistant` | `❯` 前缀 / Markdown |
+| ReasoningDelta | `reasoning` | 可折叠 Thought |
+| ToolCallPlaced → Completed | `tool` → `tool_result`/`tool_error` | 动词 + bare target；**Edit/patch 默认展开** `DiffView`（unified / apply_patch 着色，非整页编辑器） |
+| Subagent* | `status` | 一行 subagent 状态 |
+| Raw(approval/*) | `approval` | 审批卡 |
+| Raw(其它) | 丢弃 | 不进 timeline |
+
+**Conversation 主时间线**只读 `chat_messages`（user / agent-result / post_conversation_update），**不含** session 全过程 tool 流水——与 TUI conversation 层一致。展示风格可借鉴 Grok，但数据路径对所有 CLI 统一。
+
 ### Conversation timeline（messenger 气泡）
 
 | 项 | 行为 |
@@ -167,6 +216,7 @@ Sessions 主区是 **Grok-style 日志 transcript** + 右侧 **session summary**
 - 默认 following：内容增长（含 in-place stream 与 ResizeObserver）时 **即时** `scrollTop = scrollHeight`（不用 smooth 排队）。
 - 用户上滚离开底部阈值（~80px）→ unfollow；回到底部或点 **Jump to latest** → re-follow。
 - 未 following 时 **禁止** 程序化滚到底（避免与用户读历史冲突）。
+- 内容未溢出（`scrollHeight ≤ clientHeight`）时：wheel 手势 **不** unfollow，scroll 事件也保持 following，避免短列表误显 **Jump to latest**。
 - Timeline 共用同一套 follow 语义；顶栏可显示 `[manual scroll]`。
 
 前端 `workspace-store`：Tauri 下走 bridge；浏览器-only 仍 mock；托管/连接最终失败才 mock。

@@ -3,6 +3,16 @@
  * Used by desktop transcript UI; Rust bridge emits bare targets + tool name.
  */
 
+import { stripAnsiEscapes } from "./ansi.ts";
+import {
+  countDiffLines,
+  isDiffLike,
+  parseDiffstat as parseDiffstatFromLine,
+} from "./diff-view.ts";
+
+export { isDiffLike, countDiffLines } from "./diff-view.ts";
+export { stripAnsiEscapes } from "./ansi.ts";
+
 export type ToolKind =
   | "read"
   | "edit"
@@ -14,8 +24,67 @@ export type ToolKind =
   | "skill"
   | "other";
 
+const KIND_TOKENS: Record<string, ToolKind> = {
+  read: "read",
+  read_file: "read",
+  readfile: "read",
+  cat: "read",
+  edit: "edit",
+  write: "edit",
+  diff: "edit",
+  search_replace: "edit",
+  apply_patch: "edit",
+  str_replace: "edit",
+  execute: "execute",
+  terminal: "execute",
+  bash: "execute",
+  shell: "execute",
+  run: "execute",
+  command: "execute",
+  search: "search",
+  grep: "search",
+  glob: "search",
+  find: "search",
+  rg: "search",
+  list: "list",
+  list_dir: "list",
+  listdir: "list",
+  list_directory: "list",
+  ls: "list",
+  web_fetch: "web_fetch",
+  webfetch: "web_fetch",
+  fetch: "web_fetch",
+  web_search: "web_search",
+  websearch: "web_search",
+  skill: "skill",
+  other: "other",
+};
+
+/** Subject after unified translator `"kind: subject"` name, else full name. */
+export function toolSubjectFromName(name: string): string {
+  const idx = name.indexOf(":");
+  if (idx <= 0) return name.trim();
+  const token = name.slice(0, idx).trim().toLowerCase();
+  if (KIND_TOKENS[token]) {
+    const subject = name.slice(idx + 1).trim();
+    if (subject) return subject;
+  }
+  return name.trim();
+}
+
+/**
+ * Classify tool from unified `ToolCallPlaced.name` (any agent after translator).
+ * Prefer leading kind token (`read: path`) so subject text cannot mis-route.
+ */
 export function toolKindFromName(name: string): ToolKind {
   const n = name.toLowerCase();
+  const colon = n.indexOf(":");
+  if (colon > 0) {
+    const token = n.slice(0, colon).trim();
+    if (KIND_TOKENS[token]) return KIND_TOKENS[token];
+  }
+  if (KIND_TOKENS[n.trim()]) return KIND_TOKENS[n.trim()];
+
   if (n.includes("skill")) return "skill";
   if (n.includes("web_search") || n === "websearch") return "web_search";
   if (n.includes("web_fetch") || n.includes("webfetch") || n === "fetch") {
@@ -87,54 +156,7 @@ export function toolHeaderVerb(kind: ToolKind, running: boolean): string {
 export function parseDiffstat(
   summary: string,
 ): { add: number; del: number } | null {
-  const s = summary.trim();
-  if (s.startsWith("+")) {
-    const rest = s.slice(1);
-    const idx = rest.indexOf("/-");
-    if (idx >= 0) {
-      const add = Number(rest.slice(0, idx).trim());
-      const del = Number(rest.slice(idx + 2).trim());
-      if (Number.isFinite(add) && Number.isFinite(del)) {
-        return { add, del };
-      }
-    }
-  }
-  if (s.startsWith("diff ")) {
-    let add: number | undefined;
-    let del: number | undefined;
-    for (const part of s.slice(5).split(/\s+/)) {
-      if (part.startsWith("+")) add = Number(part.slice(1));
-      else if (part.startsWith("-")) del = Number(part.slice(1));
-    }
-    if (add !== undefined && del !== undefined && Number.isFinite(add) && Number.isFinite(del)) {
-      return { add, del };
-    }
-  }
-  return null;
-}
-
-export function isDiffLike(text: string): boolean {
-  return (
-    text.includes("diff --git") ||
-    text.includes("\n@@") ||
-    text.startsWith("@@") ||
-    text.includes("*** Begin Patch") ||
-    text.includes("*** Update File:") ||
-    text.includes("*** Add File:") ||
-    text.includes("*** Delete File:") ||
-    text.includes("*** End Patch") ||
-    text.split("\n").some((line) => line.startsWith("+++ ") || line.startsWith("--- "))
-  );
-}
-
-export function countDiffLines(text: string): { add: number; del: number } {
-  let add = 0;
-  let del = 0;
-  for (const line of text.split("\n")) {
-    if (line.startsWith("+") && !line.startsWith("+++")) add += 1;
-    else if (line.startsWith("-") && !line.startsWith("---")) del += 1;
-  }
-  return { add, del };
+  return parseDiffstatFromLine(summary);
 }
 
 export type ToolHeaderModel = {
@@ -162,19 +184,22 @@ export function buildToolHeader(opts: {
   const kind = toolKindFromName(opts.toolName || "tool");
   const verb = toolHeaderVerb(kind, running);
   let target = (opts.target || "").trim();
-  // Legacy bridge text like "Done read_file · …" — fall back to tool name.
+  // Legacy bridge text like "Done read_file · …" — fall back to subject.
   if (!target || /^(Running|Done|Failed)\s/i.test(target)) {
-    target = opts.toolName || "…";
+    target = toolSubjectFromName(opts.toolName || "") || "…";
   }
+  // Avoid "Read read: path" when target still carries a kind prefix.
+  target = toolSubjectFromName(target) || target;
   if (!target) target = "…";
 
   let diffstat: { add: number; del: number } | null = null;
   if (!running && !failed && opts.detail) {
-    const parsed = parseDiffstat(opts.detail);
+    const detail = stripAnsiEscapes(opts.detail);
+    const parsed = parseDiffstat(detail);
     if (parsed) {
       diffstat = parsed;
-    } else if (isDiffLike(opts.detail)) {
-      const counted = countDiffLines(opts.detail);
+    } else if (isDiffLike(detail)) {
+      const counted = countDiffLines(detail);
       if (counted.add > 0 || counted.del > 0) {
         diffstat = counted;
       }
@@ -182,6 +207,12 @@ export function buildToolHeader(opts: {
   }
 
   return { verb, target, running, failed, diffstat };
+}
+
+/** Clean tool body text for expanded transcript rows (strip SGR colors). */
+export function displayToolDetail(detail: string | null | undefined): string {
+  if (!detail) return "";
+  return stripAnsiEscapes(detail);
 }
 
 export function collapsedThinkingSummary(text: string, max = 100): string {

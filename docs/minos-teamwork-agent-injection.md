@@ -77,6 +77,9 @@ On successful record for a top-level conversation thread the daemon:
 
 1. Upserts `agent-result:{conversation}:{thread}:{key}` into conversation
    messages (delegation results use `@source#short <result>` body + metadata).
+   Body text is the **last open assistant segment** after tools/reasoning
+   (aligned with session `ChatState`), not a concatenation of mid-turn
+   progress `agent_message_chunk`s.
 2. Marks the matching teamwork delegation completed.
 3. Delivers `[target#short] @source#short <result>` to the source thread using
    the busy-delivery policy (Codex steers while running; Gemini/Grok queue until
@@ -95,7 +98,7 @@ via best-effort `ALTER TABLE` so legacy `daemon.sqlite` files open cleanly.
 | Codex | `codex app-server` receives `-c mcp_servers.minos_teamwork.command=...`, `-c mcp_servers.minos_teamwork.args=[...]`, and `-c mcp_servers.minos_teamwork.enabled=true`. Teamwork guidance is also set via `thread/start.developerInstructions`. |
 | Claude | `claude -p` receives `--mcp-config <json>` with `mcpServers.minos_teamwork` and `--strict-mcp-config`, plus `--append-system-prompt` with teamwork guidance. |
 | Gemini | ACP `session/new` and `session/resume` receive `mcpServers` containing `minos_teamwork` as a stdio server. |
-| Grok | Spawned as `grok --rules <teamwork guidance> agent --no-leader stdio`. ACP `session/new` and `session/resume` receive `mcpServers` containing `minos_teamwork` (same stdio shape as Gemini). `--rules` is a top-level `grok` flag that appends to the system prompt. Grok `exit_plan_mode` parks on ACP `ext_method` → Minos approval overlay (`a`/`s`/`q`); `ask_user_question` still auto-cancels until a question UI lands. |
+| Grok | Spawned as `grok --rules <teamwork guidance> agent --no-leader stdio`. ACP `session/new` and `session/resume` receive `mcpServers` containing `minos_teamwork` (same stdio shape as Gemini). `--rules` is a top-level `grok` flag that appends to the system prompt. Grok `exit_plan_mode` parks on ACP `ext_method` → Minos approval overlay (`a`/`s`/`q`); `ask_user_question` still auto-cancels until a question UI lands. Grok ACP projection (`translate_grok`) parses `SessionNotification._meta` (`streamStartMs` / timestamps / `promptId`), closes assistant text on tool + stream boundaries, suppresses plumbing tools (todo/wait/task-output), and prefers `rawInput.description` for tool titles — aligned with grok-build `AcpUpdateTracker`. |
 | OpenCode | `opencode serve` receives `OPENCODE_CONFIG_CONTENT` containing a local enabled `mcp.minos_teamwork` server. |
 
 The command may be the standalone `minos-teamwork-mcp` binary or the hidden

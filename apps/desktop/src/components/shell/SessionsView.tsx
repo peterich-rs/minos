@@ -15,6 +15,8 @@ import {
 } from "lucide-react";
 import { agentMeta, statusMeta } from "@/lib/mock-data";
 import { Avatar } from "@/components/Avatar";
+import { DiffView } from "@/components/DiffView";
+import { ReadView, shouldUseReadView } from "@/components/ReadView";
 import { MarkdownText } from "@/components/MarkdownText";
 import { StatusPill } from "@/components/StatusPill";
 import { useUiStore } from "@/store/ui-store";
@@ -30,6 +32,8 @@ import { useStickToBottom } from "@/lib/use-stick-to-bottom";
 import {
   buildToolHeader,
   collapsedThinkingSummary,
+  displayToolDetail,
+  isDiffLike,
 } from "@/lib/tool-present";
 import {
   childrenOf,
@@ -50,6 +54,9 @@ import {
 } from "@/lib/transcript-history";
 import { IncrementalText } from "@/components/IncrementalText";
 
+/** Stable empty list for Zustand selectors (never allocate in getSnapshot). */
+const EMPTY_PROJECT_SESSIONS: ProjectSession[] = [];
+
 /**
  * Project sessions tab — parent passes projectId (and key).
  * List load is owned here; transcript load is owned by TranscriptPane.
@@ -58,27 +65,53 @@ import { IncrementalText } from "@/components/IncrementalText";
  * conversation collapses independently; sessions show live progress.
  */
 /**
- * Resolve a session for the Sessions tab.
+ * Resolve a session for the Sessions tab **within the current project only**.
  *
- * Deep-link (`openSessionTranscript`) sets `selectedSessionId` from the
- * conversation inspector, where the session lives in `sessionsByConversation`.
- * Project list load is async (and mock mode only filled conversation maps
- * historically) — without this fallback the main pane is empty cream with
- * "Select an agent session" even though the id is already selected.
+ * Deep-link ids may exist only in `sessionsByConversation` until the project
+ * list load returns. To avoid rendering a foreign-project transcript under
+ * the current project chrome during that window, we require the session's
+ * `conversationId` to reference a conversation whose `projectId` matches the
+ * current project (conversations carry `projectId` on the row, unlike sessions).
+ * If conversations haven't loaded yet, we fall back to the project-sessions
+ * list membership check (empty during load → reject).
  */
 function resolveSessionForView(
   sessionId: string | null,
+  projectId: string,
   projectSessions: ProjectSession[],
   sessionsByConversation: Record<string, ProjectSession[]>,
+  conversationProjectById: Record<string, string>,
 ): ProjectSession | undefined {
-  if (!sessionId) return undefined;
+  if (!sessionId || !projectId) return undefined;
   const fromProject = projectSessions.find((s) => s.id === sessionId);
   if (fromProject) return fromProject;
   for (const list of Object.values(sessionsByConversation)) {
     const hit = list.find((s) => s.id === sessionId);
-    if (hit) return hit;
+    if (!hit) continue;
+    // Authoritative check: conversation row carries projectId. Reject if the
+    // conversation is known and belongs to a different project.
+    const convProject = conversationProjectById[hit.conversationId];
+    if (convProject && convProject !== projectId) continue;
+    // Conversation not yet loaded — only allow if a project-scoped session
+    // shares this conversationId (weak signal, but better than nothing).
+    if (
+      !convProject &&
+      projectSessions.length > 0 &&
+      !projectSessions.some((s) => s.conversationId === hit.conversationId)
+    ) {
+      continue;
+    }
+    return hit;
   }
   return undefined;
+}
+
+function sessionBelongsToProject(
+  sessionId: string | null,
+  projectSessions: ProjectSession[],
+): boolean {
+  if (!sessionId) return false;
+  return projectSessions.some((s) => s.id === sessionId);
 }
 
 export function SessionsView({ projectId }: { projectId: string }) {
@@ -88,12 +121,15 @@ export function SessionsView({ projectId }: { projectId: string }) {
   const listCollapsed = useUiStore((s) => s.sessionsListCollapsed);
   const toggleSessionsList = useUiStore((s) => s.toggleSessionsList);
 
+  // Important: never fall back to the global `projectSessions` array — it may
+  // still hold the previous project's rows while the new key is empty/loading.
   const projectSessions = useWorkspaceStore(
-    (s) => s.projectSessionsByProject[projectId] ?? s.projectSessions,
+    (s) => s.projectSessionsByProject[projectId] ?? EMPTY_PROJECT_SESSIONS,
   );
   const sessionsByConversation = useWorkspaceStore(
     (s) => s.sessionsByConversation,
   );
+  const conversations = useWorkspaceStore((s) => s.conversations);
   const listStatus = useWorkspaceStore(
     (s) => s.projectSessionsStatusByProject[projectId],
   );
@@ -107,21 +143,40 @@ export function SessionsView({ projectId }: { projectId: string }) {
     () => new Set(),
   );
 
-  // Merge deep-linked session into the list so the left rail stays consistent
-  // while project-wide load is in flight (or if it only exists on the conv map).
+  // conversationId → projectId, so deep-link resolution can reject a foreign
+  // project's session even during the project-sessions loading race.
+  const conversationProjectById = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const c of conversations) {
+      if (c.projectId) map[c.id] = c.projectId;
+    }
+    return map;
+  }, [conversations]);
+
+  // Merge deep-linked session into the list only if it belongs to this project.
   const displaySessions = useMemo(() => {
     if (!selectedSessionId) return projectSessions;
-    if (projectSessions.some((s) => s.id === selectedSessionId)) {
+    if (sessionBelongsToProject(selectedSessionId, projectSessions)) {
       return projectSessions;
     }
     const fallback = resolveSessionForView(
       selectedSessionId,
+      projectId,
       projectSessions,
       sessionsByConversation,
+      conversationProjectById,
     );
     if (!fallback) return projectSessions;
+    // Still only inject while list is empty (deep-link race), never a foreign id.
+    if (projectSessions.length > 0) return projectSessions;
     return [fallback, ...projectSessions];
-  }, [projectSessions, selectedSessionId, sessionsByConversation]);
+  }, [
+    projectSessions,
+    selectedSessionId,
+    sessionsByConversation,
+    conversationProjectById,
+    projectId,
+  ]);
 
   const groups = useMemo(
     () => groupSessionsByConversation(displaySessions),
@@ -134,22 +189,38 @@ export function SessionsView({ projectId }: { projectId: string }) {
     void loadProjectSessions(projectId);
   }, [projectId, source, loadProjectSessions, bootEpoch]);
 
-  // Reset collapse map when switching projects.
+  // Project switch: drop foreign selection + collapse state.
   useEffect(() => {
     setCollapsedConvIds(new Set());
-  }, [projectId]);
+    // Clear selection that does not belong to the new project's loaded list.
+    // While loading (empty list), leave deep-link id alone until list settles.
+    const phase = listStatus?.phase ?? "idle";
+    if (phase === "loading" || phase === "idle") return;
+    if (
+      selectedSessionId &&
+      !sessionBelongsToProject(selectedSessionId, projectSessions)
+    ) {
+      selectSession(null);
+    }
+  }, [
+    projectId,
+    listStatus?.phase,
+    projectSessions,
+    selectedSessionId,
+    selectSession,
+  ]);
 
-  // Auto-select first root session (most recently active group first).
-  // Do not clobber a deep-linked id while the project list is still loading —
-  // the session may only exist in sessionsByConversation until list returns.
+  // Auto-select first root session for this project when nothing valid is selected.
   useEffect(() => {
     if (selectedSessionId) {
-      if (displaySessions.some((s) => s.id === selectedSessionId)) return;
+      if (sessionBelongsToProject(selectedSessionId, displaySessions)) return;
+      // Foreign or stale id — do not wait forever on empty load.
       const phase = listStatus?.phase ?? "idle";
       if (phase === "loading" || phase === "idle") return;
     }
     const firstRoot = groups[0]?.roots[0] ?? displaySessions[0];
     if (firstRoot) selectSession(firstRoot.id);
+    else if (selectedSessionId) selectSession(null);
   }, [
     groups,
     displaySessions,
@@ -193,8 +264,10 @@ export function SessionsView({ projectId }: { projectId: string }) {
 
   const selected = resolveSessionForView(
     selectedSessionId,
+    projectId,
     displaySessions,
     sessionsByConversation,
+    conversationProjectById,
   );
   const phase = listStatus?.phase ?? "idle";
   const conversationCount = groups.length;
@@ -511,6 +584,12 @@ function TranscriptPane({
   onBackToConversation?: () => void;
 }) {
   const resolveApproval = useWorkspaceStore((s) => s.resolveApproval);
+  const respondOpencodePermission = useWorkspaceStore(
+    (s) => s.respondOpencodePermission,
+  );
+  const respondOpencodeQuestion = useWorkspaceStore(
+    (s) => s.respondOpencodeQuestion,
+  );
   const loadTranscript = useWorkspaceStore((s) => s.loadTranscript);
   const items = useWorkspaceStore(
     (s) => s.transcriptsByThread[sessionId] ?? EMPTY_TRANSCRIPT,
@@ -794,15 +873,21 @@ function TranscriptPane({
                         item.kind === "reasoning")
                     }
                     approving={approving === item.requestId}
-                    onApprove={
-                      item.kind === "approval" && item.requestId
-                        ? async (decision) => {
+                    onUserAction={
+                      item.requestId &&
+                      (item.kind === "approval" || item.kind === "question")
+                        ? async (action) => {
                             setApproving(item.requestId!);
                             try {
-                              await resolveApproval(
+                              await handleUserAction(
                                 session.id,
-                                item.requestId!,
-                                decision,
+                                item,
+                                action,
+                                {
+                                  resolveApproval,
+                                  respondOpencodePermission,
+                                  respondOpencodeQuestion,
+                                },
                               );
                             } finally {
                               setApproving(null);
@@ -972,23 +1057,123 @@ function FileChangeRow({ file }: { file: FileChangeEntry }) {
   );
 }
 
+type UserAction =
+  | { type: "decision"; decision: string }
+  | { type: "answers"; answers: string[][] }
+  | { type: "cancel" };
+
+async function handleUserAction(
+  threadId: string,
+  item: TranscriptItem,
+  action: UserAction,
+  apis: {
+    resolveApproval: (
+      threadId: string,
+      requestId: string,
+      decision: string | Record<string, unknown>,
+    ) => Promise<void>;
+    respondOpencodePermission: (
+      threadId: string,
+      permissionId: string,
+      response: string,
+    ) => Promise<void>;
+    respondOpencodeQuestion: (
+      threadId: string,
+      questionId: string,
+      answers: string[][],
+    ) => Promise<void>;
+  },
+) {
+  const requestId = item.requestId;
+  if (!requestId) return;
+  const method = item.approvalMethod ?? "";
+
+  if (method === "opencode/permission") {
+    const token =
+      action.type === "decision" &&
+      (action.decision === "approve" ||
+        action.decision === "allow" ||
+        action.decision === "yes")
+        ? (item.approveResponse ?? "accept")
+        : (item.declineResponse ?? "reject");
+    await apis.respondOpencodePermission(threadId, requestId, token);
+    return;
+  }
+
+  if (method === "opencode/question") {
+    if (action.type === "cancel") {
+      await apis.respondOpencodeQuestion(threadId, requestId, [[]]);
+      return;
+    }
+    if (action.type === "answers") {
+      await apis.respondOpencodeQuestion(threadId, requestId, action.answers);
+      return;
+    }
+    if (action.type === "decision") {
+      await apis.respondOpencodeQuestion(threadId, requestId, [
+        [action.decision],
+      ]);
+    }
+    return;
+  }
+
+  if (method === "x.ai/ask_user_question") {
+    if (action.type === "cancel") {
+      await apis.resolveApproval(threadId, requestId, {
+        outcome: "cancelled",
+      });
+      return;
+    }
+    if (action.type === "answers") {
+      const map: Record<string, string[]> = {};
+      action.answers.forEach((a, i) => {
+        if (a.length) map[String(i)] = a;
+      });
+      await apis.resolveApproval(threadId, requestId, {
+        outcome: "accepted",
+        answers: map,
+      });
+      return;
+    }
+    if (action.type === "decision") {
+      await apis.resolveApproval(threadId, requestId, {
+        outcome: "accepted",
+        answers: { "0": [action.decision] },
+      });
+    }
+    return;
+  }
+
+  // Plan / ACP permission / generic approval.
+  if (action.type === "decision") {
+    await apis.resolveApproval(threadId, requestId, action.decision);
+  } else if (action.type === "cancel") {
+    await apis.resolveApproval(threadId, requestId, "deny");
+  }
+}
+
 function ApprovalModal({
   item,
   isPlan,
   approving,
   onClose,
-  onApprove,
+  onUserAction,
 }: {
   item: TranscriptItem;
   isPlan: boolean;
   approving?: boolean;
   onClose: () => void;
-  onApprove?: (decision: "approve" | "revise" | "abandon") => void | Promise<void>;
+  onUserAction?: (action: UserAction) => void | Promise<void>;
 }) {
   const detail = item.detail?.trim() ? item.detail : null;
   // Plans can be multi‑10KB markdown; windowed display avoids one-shot paint.
   // Other approval details stay small (assembler already caps ~2KB).
   const useIncremental = isPlan && Boolean(detail) && detail!.length > 4_000;
+  const options = item.options ?? [];
+  const isQuestion =
+    item.kind === "question" ||
+    item.approvalMethod === "opencode/question" ||
+    item.approvalMethod === "x.ai/ask_user_question";
 
   return (
     <div
@@ -1009,7 +1194,9 @@ function ApprovalModal({
               <ShieldAlert className="h-4 w-4 shrink-0 text-rose-600" />
               {item.title ?? "Approval required"}
             </div>
-            <p className="mt-1 text-[12.5px] text-ink-muted">{item.text}</p>
+            <p className="mt-1 whitespace-pre-wrap text-[12.5px] text-ink-muted">
+              {item.text}
+            </p>
           </div>
           <button
             type="button"
@@ -1029,25 +1216,62 @@ function ApprovalModal({
               </pre>
             </div>
           )
+        ) : isQuestion && options.length > 0 ? (
+          <div className="scrollbar-thin min-h-0 flex-1 space-y-2 overflow-y-auto px-5 py-4">
+            {options.map((opt) => (
+              <button
+                key={opt.label}
+                type="button"
+                disabled={approving}
+                onClick={() => {
+                  void (async () => {
+                    await onUserAction?.({
+                      type: "decision",
+                      decision: opt.label,
+                    });
+                    onClose();
+                  })();
+                }}
+                className="flex w-full flex-col rounded-xl border border-ink/10 bg-white px-3.5 py-2.5 text-left hover:border-ink/25 hover:bg-surface-muted/60 disabled:opacity-50"
+              >
+                <span className="text-[13px] font-semibold text-ink">
+                  {opt.label}
+                </span>
+                {opt.description ? (
+                  <span className="mt-0.5 text-[12px] text-ink-muted">
+                    {opt.description}
+                  </span>
+                ) : null}
+              </button>
+            ))}
+          </div>
         ) : (
           <div className="min-h-0 flex-1 px-5 py-4">
-            <p className="text-[13px] text-ink-muted">No additional detail.</p>
+            <p className="text-[13px] text-ink-muted">
+              {isQuestion
+                ? "Pick an option above or cancel."
+                : "No additional detail."}
+            </p>
           </div>
         )}
-        {onApprove ? (
+        {onUserAction ? (
           <footer className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-ink/5 bg-surface-muted/40 px-5 py-3.5">
             <button
               type="button"
               disabled={approving}
               onClick={() => {
                 void (async () => {
-                  await onApprove("abandon");
+                  await onUserAction(
+                    isQuestion
+                      ? { type: "cancel" }
+                      : { type: "decision", decision: isPlan ? "abandon" : "deny" },
+                  );
                   onClose();
                 })();
               }}
               className="rounded-lg border border-ink/10 bg-white px-3 py-2 text-[12px] font-medium text-ink-muted hover:bg-surface disabled:opacity-50"
             >
-              {isPlan ? "Abandon" : "Deny"}
+              {isPlan ? "Abandon" : isQuestion ? "Cancel" : "Deny"}
             </button>
             {isPlan ? (
               <button
@@ -1055,7 +1279,7 @@ function ApprovalModal({
                 disabled={approving}
                 onClick={() => {
                   void (async () => {
-                    await onApprove("revise");
+                    await onUserAction({ type: "decision", decision: "revise" });
                     onClose();
                   })();
                 }}
@@ -1064,19 +1288,24 @@ function ApprovalModal({
                 Request changes
               </button>
             ) : null}
-            <button
-              type="button"
-              disabled={approving}
-              onClick={() => {
-                void (async () => {
-                  await onApprove("approve");
-                  onClose();
-                })();
-              }}
-              className="rounded-lg bg-ink px-3.5 py-2 text-[12px] font-semibold text-white hover:bg-ink/90 disabled:opacity-50"
-            >
-              {isPlan ? "Approve plan" : "Allow"}
-            </button>
+            {!isQuestion ? (
+              <button
+                type="button"
+                disabled={approving}
+                onClick={() => {
+                  void (async () => {
+                    await onUserAction({
+                      type: "decision",
+                      decision: "approve",
+                    });
+                    onClose();
+                  })();
+                }}
+                className="rounded-lg bg-ink px-3.5 py-2 text-[12px] font-semibold text-white hover:bg-ink/90 disabled:opacity-50"
+              >
+                {isPlan ? "Approve plan" : "Allow"}
+              </button>
+            ) : null}
           </footer>
         ) : null}
       </div>
@@ -1090,12 +1319,12 @@ function ApprovalModal({
 function TranscriptItemView({
   item,
   streaming,
-  onApprove,
+  onUserAction,
   approving,
 }: {
   item: TranscriptItem;
   streaming?: boolean;
-  onApprove?: (decision: "approve" | "revise" | "abandon") => void | Promise<void>;
+  onUserAction?: (action: UserAction) => void | Promise<void>;
   approving?: boolean;
 }) {
   const time = item.tsMs ? formatLocalClock(item.tsMs) : "";
@@ -1107,8 +1336,9 @@ function TranscriptItemView({
     if (streaming) setOpen(true);
   }, [streaming]);
 
-  if (item.kind === "approval") {
+  if (item.kind === "approval" || item.kind === "question") {
     const isPlan = item.approvalMethod === "x.ai/exit_plan_mode";
+    const isQuestion = item.kind === "question";
     return (
       <>
         <div className="rounded-xl border border-rose-200/80 bg-rose-50/80 p-3">
@@ -1116,23 +1346,55 @@ function TranscriptItemView({
             <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
             <div className="min-w-0 flex-1">
               <div className="text-[13px] font-semibold text-rose-900">
-                {item.title ?? "Approval required"}
+                {item.title ??
+                  (isQuestion ? "Question" : "Approval required")}
               </div>
-              <p className="mt-1 text-[12.5px] leading-snug text-rose-900/80">
+              <p className="mt-1 whitespace-pre-wrap text-[12.5px] leading-snug text-rose-900/80">
                 {item.text}
               </p>
-              <div className="mt-2.5 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setPlanOpen(true)}
-                  className="rounded-lg bg-ink px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-ink/90"
-                >
-                  {isPlan ? "View plan" : "View details"}
-                </button>
-                {time ? (
-                  <span className="text-[11px] text-ink-muted">{time}</span>
-                ) : null}
-              </div>
+              {isQuestion && item.options && item.options.length > 0 ? (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {item.options.map((opt) => (
+                    <button
+                      key={opt.label}
+                      type="button"
+                      disabled={approving}
+                      onClick={() => {
+                        void onUserAction?.({
+                          type: "decision",
+                          decision: opt.label,
+                        });
+                      }}
+                      className="rounded-lg border border-rose-300/80 bg-white px-2.5 py-1 text-[12px] font-medium text-rose-900 hover:bg-rose-50 disabled:opacity-50"
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    disabled={approving}
+                    onClick={() => {
+                      void onUserAction?.({ type: "cancel" });
+                    }}
+                    className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-rose-700/80 hover:bg-rose-100/60 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPlanOpen(true)}
+                    className="rounded-lg bg-ink px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-ink/90"
+                  >
+                    {isPlan ? "View plan" : "View details"}
+                  </button>
+                  {time ? (
+                    <span className="text-[11px] text-ink-muted">{time}</span>
+                  ) : null}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1142,7 +1404,7 @@ function TranscriptItemView({
             isPlan={isPlan}
             approving={approving}
             onClose={() => setPlanOpen(false)}
-            onApprove={onApprove}
+            onUserAction={onUserAction}
           />
         ) : null}
       </>
@@ -1164,9 +1426,7 @@ function TranscriptItemView({
   }
 
   if (item.kind === "assistant" || item.kind === "text") {
-    return (
-      <MarkdownText text={item.text} streaming={streaming} />
-    );
+    return <MarkdownText text={item.text} streaming={streaming} />;
   }
 
   if (item.kind === "reasoning") {
@@ -1222,7 +1482,17 @@ function TranscriptItemView({
       kind: item.kind,
       detail: item.detail,
     });
-    const expandable = Boolean(item.detail?.trim());
+    // Strip SGR color codes from bash/CLI tool bodies (Grok ACP raw bytes).
+    const detail = displayToolDetail(item.detail).trim();
+    const expandable = Boolean(detail);
+    // Only real patches (not tool-args JSON) use DiffView.
+    const showDiff = detail.length > 0 && isDiffLike(detail);
+    // Grok read_file emits `N→content` markers for the model; render as gutter.
+    const showRead = shouldUseReadView({
+      toolName: item.title ?? "tool",
+      detail,
+      isDiff: showDiff,
+    });
     return (
       <div className="text-[12.5px] leading-snug">
         <button
@@ -1279,10 +1549,16 @@ function TranscriptItemView({
             </span>
           ) : null}
         </button>
-        {open && item.detail ? (
-          <pre className="mt-1 max-h-72 overflow-auto rounded-lg border border-ink/5 bg-surface-muted/50 px-3 py-2 font-mono text-[11px] leading-relaxed text-ink-secondary whitespace-pre-wrap">
-            {item.detail}
-          </pre>
+        {open && detail ? (
+          showDiff ? (
+            <DiffView text={detail} />
+          ) : showRead ? (
+            <ReadView text={detail} />
+          ) : (
+            <pre className="mt-1 max-h-72 overflow-auto rounded-lg border border-ink/5 bg-surface-muted/50 px-3 py-2 font-mono text-[11px] leading-relaxed text-ink-secondary whitespace-pre-wrap">
+              {detail}
+            </pre>
+          )
         ) : null}
       </div>
     );
@@ -1297,9 +1573,7 @@ function TranscriptItemView({
   }
 
   if (item.kind === "status" || item.kind === "system") {
-    return (
-      <div className="text-[12px] text-ink-muted">{item.text}</div>
-    );
+    return <div className="text-[12px] text-ink-muted">{item.text}</div>;
   }
 
   return (

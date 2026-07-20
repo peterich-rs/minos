@@ -134,7 +134,8 @@ fn options_for_request(request: &PendingAgentRequest) -> Vec<ApprovalOption> {
         PendingAgentRequestKind::CodexApproval { .. }
         | PendingAgentRequestKind::OpencodePermission { .. } => yes_no_options(),
         PendingAgentRequestKind::GrokPlanApproval { .. } => plan_approval_options(),
-        PendingAgentRequestKind::OpencodeQuestion { questions, .. } => {
+        PendingAgentRequestKind::OpencodeQuestion { questions, .. }
+        | PendingAgentRequestKind::GrokUserQuestion { questions, .. } => {
             let [question] = questions.as_slice() else {
                 return Vec::new();
             };

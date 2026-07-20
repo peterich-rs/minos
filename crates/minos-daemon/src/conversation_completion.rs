@@ -10,6 +10,23 @@
 //! (finish/write order). Delegation results set `reply_to_message_id` to the
 //! request message so UIs can show causality without reordering history.
 //!
+//! ## Final text = last assistant segment
+//!
+//! Grok/Gemini ACP emit intermediate `agent_message_chunk` progress between
+//! tools (e.g. "正在定位…"). The Grok translator completes the open assistant
+//! message at each tool boundary and opens a fresh `message_id` for post-tool
+//! text (see `agent_msg_resets_after_tool` in grok.rs). Session `ChatState`
+//! splits these into separate bubbles and only treats the **last** assistant
+//! text block as the completed answer. Conversation writeback must match that:
+//!
+//! - `MessageCompleted` records any open, non-empty text segment under its own
+//!   `message_id`.
+//! - A subsequent tool / subagent interrupt marks all prior completed segments
+//!   as **interrupted** — they were progress narration, not the final answer.
+//! - `last_completed()` skips interrupted segments; if no clean (non-interrupted)
+//!   segment remains, the turn is treated as progress-only and nothing is
+//!   written back (no progress dump, no delegation completion).
+//!
 //! ## Turn-boundary latch
 //!
 //! Runtime `ThreadState::Idle`/`Closed` and ingest `MessageCompleted` race across
@@ -25,7 +42,7 @@
 //!   `pending_boundary`, `ThreadClosed`, or Opencode terminal complete.
 //! - `Running` / user `MessageStarted` → reset turn-scoped projection fields.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use minos_agent_runtime::{AgentManager, ThreadState};
@@ -41,11 +58,22 @@ use crate::store::LocalStore;
 #[derive(Default)]
 struct ThreadProjection {
     agent: Option<AgentName>,
-    /// Accumulated assistant text by message_id (within the current turn).
+    /// Current open assistant text segment by message_id (within the turn).
+    /// After a tool/reasoning interrupt, the next TextDelta starts a fresh
+    /// segment so intermediate progress is not concatenated into the final body.
     assistant_text: HashMap<String, String>,
     assistant_roles: HashMap<String, MessageRole>,
+    /// message_ids whose current text segment is closed (next text starts new).
+    segment_closed: HashMap<String, bool>,
+    /// tool_call_id → assistant message_id (so ToolCallCompleted can close segment).
+    tool_message_ids: HashMap<String, String>,
     /// Ordered completed assistant results (message_key, text) for this turn.
     completed: Vec<(String, String)>,
+    /// message_keys whose segment was followed by a non-text interrupt (tool /
+    /// subagent). These represent intermediate progress narration, not the
+    /// final answer — excluded from `last_completed()` unless a later, clean
+    /// text segment re-recorded under a fresh key.
+    interrupted_keys: HashSet<String>,
     last_error: Option<(String, String)>,
     /// message_key already written for this turn (within-turn dedupe).
     recorded_key: Option<String>,
@@ -65,13 +93,55 @@ impl ThreadProjection {
     fn begin_turn(&mut self) {
         self.assistant_text.clear();
         self.assistant_roles.clear();
+        self.segment_closed.clear();
+        self.tool_message_ids.clear();
         self.completed.clear();
+        self.interrupted_keys.clear();
         self.last_error = None;
         self.recorded_key = None;
         self.turn_recorded = false;
         self.write_in_flight = false;
         self.pending_boundary = false;
         self.turn_write_id = None;
+    }
+
+    fn close_text_segment(&mut self, message_id: &str) {
+        if message_id.is_empty() {
+            return;
+        }
+        self.segment_closed.insert(message_id.to_owned(), true);
+    }
+
+    /// A non-text timeline item (tool / subagent) arrived after some assistant
+    /// text segments were already completed. Those completed segments represent
+    /// intermediate progress narration, not the final turn answer — mark them
+    /// interrupted so `last_completed()` skips them. If a later clean text
+    /// segment completes under a fresh key, it becomes the new answer.
+    fn interrupt_prior_completed(&mut self) {
+        for (key, _) in &self.completed {
+            self.interrupted_keys.insert(key.clone());
+        }
+    }
+
+    fn append_assistant_text(&mut self, message_id: &str, text: String, replace: bool) {
+        if message_id.is_empty() {
+            return;
+        }
+        let start_new = self
+            .segment_closed
+            .get(message_id)
+            .copied()
+            .unwrap_or(false)
+            || !self.assistant_text.contains_key(message_id);
+        if replace || start_new {
+            self.assistant_text.insert(message_id.to_owned(), text);
+            self.segment_closed.insert(message_id.to_owned(), false);
+        } else {
+            self.assistant_text
+                .entry(message_id.to_owned())
+                .or_default()
+                .push_str(&text);
+        }
     }
 
     /// Allocate a turn write id lazily on first successful claim.
@@ -129,7 +199,10 @@ impl ThreadProjection {
                     }
                     self.assistant_roles.insert(message_id.clone(), *role);
                     if matches!(role, MessageRole::Assistant) {
-                        self.assistant_text.entry(message_id.clone()).or_default();
+                        // Do not seed an empty segment — first TextDelta opens it.
+                        self.segment_closed
+                            .entry(message_id.clone())
+                            .or_insert(true);
                     }
                 }
                 UiEventMessage::TextDelta { message_id, text }
@@ -141,30 +214,84 @@ impl ThreadProjection {
                         || !self.assistant_roles.contains_key(message_id)
                     {
                         let rendered = text.render_preview();
-                        match event {
-                            UiEventMessage::TextReplace { .. } => {
-                                self.assistant_text.insert(message_id.clone(), rendered);
-                            }
-                            _ => {
-                                self.assistant_text
-                                    .entry(message_id.clone())
-                                    .or_default()
-                                    .push_str(&rendered);
-                            }
+                        if rendered.is_empty() {
+                            continue;
+                        }
+                        let replace = matches!(event, UiEventMessage::TextReplace { .. });
+                        self.append_assistant_text(message_id, rendered, replace);
+                    }
+                }
+                // Tool/subagent events break the open assistant text bubble
+                // (same as ChatState). Next TextDelta is a new final-answer segment.
+                // Pure reasoning (`ReasoningDelta`/`ReasoningReplace`) does NOT
+                // close the segment — Grok intentionally reuses the same
+                // message_id for thought interleaved with text, and Codex/Claude
+                // emit reasoning under a different id that doesn't affect the
+                // open text segment's lifecycle either way.
+                UiEventMessage::ToolCallPlaced { message_id, .. } => {
+                    if let UiEventMessage::ToolCallPlaced {
+                        message_id,
+                        tool_call_id,
+                        ..
+                    } = event
+                    {
+                        self.tool_message_ids
+                            .insert(tool_call_id.clone(), message_id.clone());
+                        // A tool interrupt invalidates any progress completed
+                        // earlier in this turn (Grok emits MessageCompleted on
+                        // the prior assistant message right before ToolCallPlaced).
+                        self.interrupt_prior_completed();
+                    }
+                    self.close_text_segment(message_id);
+                }
+                UiEventMessage::ToolCallCompleted { tool_call_id, .. } => {
+                    if let Some(message_id) = self.tool_message_ids.remove(tool_call_id) {
+                        self.close_text_segment(&message_id);
+                    } else {
+                        // Unknown tool — close every open assistant segment so a
+                        // post-tool final answer is not glued to progress text.
+                        let ids: Vec<String> = self.assistant_roles
+                            .iter()
+                            .filter_map(|(id, role)| {
+                                matches!(role, MessageRole::Assistant).then(|| id.clone())
+                            })
+                            .collect();
+                        for id in ids {
+                            self.close_text_segment(&id);
                         }
                     }
                 }
+                UiEventMessage::SubagentSpawned {
+                    parent_thread_id: _,
+                    tool_call_id,
+                    ..
+                } => {
+                    if let Some(message_id) = self.tool_message_ids.get(tool_call_id).cloned() {
+                        self.close_text_segment(&message_id);
+                        self.interrupt_prior_completed();
+                    }
+                }
                 UiEventMessage::MessageCompleted { message_id, .. } => {
-                    if let Some(text) = self.assistant_text.get(message_id) {
-                        let trimmed = text.trim();
-                        if !trimmed.is_empty() {
-                            let key = if message_id.is_empty() {
-                                format!("text:{trimmed}")
-                            } else {
-                                message_id.clone()
-                            };
-                            self.completed.retain(|(existing, _)| existing != &key);
-                            self.completed.push((key, trimmed.to_owned()));
+                    // Only the last **open** segment. If tools/reasoning closed
+                    // the segment and no further TextDelta arrived, do not fall
+                    // back to pre-interrupt progress narration.
+                    let segment_open = !self
+                        .segment_closed
+                        .get(message_id)
+                        .copied()
+                        .unwrap_or(false);
+                    if segment_open {
+                        if let Some(text) = self.assistant_text.get(message_id) {
+                            let trimmed = text.trim();
+                            if !trimmed.is_empty() {
+                                let key = if message_id.is_empty() {
+                                    format!("text:{trimmed}")
+                                } else {
+                                    message_id.clone()
+                                };
+                                self.completed.retain(|(existing, _)| existing != &key);
+                                self.completed.push((key, trimmed.to_owned()));
+                            }
                         }
                     }
                 }
@@ -191,7 +318,9 @@ impl ThreadProjection {
 
     fn last_completed(&self) -> Option<(String, String)> {
         self.completed
-            .last()
+            .iter()
+            .rev()
+            .find(|(key, _)| !self.interrupted_keys.contains(key))
             .cloned()
             .or_else(|| self.last_error.clone())
     }
@@ -680,6 +809,30 @@ mod tests {
         }
     }
 
+    fn tool_placed(message_id: &str, tool_call_id: &str) -> UiEventMessage {
+        UiEventMessage::ToolCallPlaced {
+            message_id: message_id.into(),
+            tool_call_id: tool_call_id.into(),
+            name: "read_file".into(),
+            args_json: DisplayPayload::inline("{}"),
+        }
+    }
+
+    fn tool_completed(tool_call_id: &str) -> UiEventMessage {
+        UiEventMessage::ToolCallCompleted {
+            tool_call_id: tool_call_id.into(),
+            output: DisplayPayload::inline("ok"),
+            is_error: false,
+        }
+    }
+
+    fn reasoning(message_id: &str, text: &str) -> UiEventMessage {
+        UiEventMessage::ReasoningDelta {
+            message_id: message_id.into(),
+            text: DisplayPayload::inline(text),
+        }
+    }
+
     #[test]
     fn non_opencode_message_completed_without_boundary_does_not_try_record() {
         let mut p = ThreadProjection::default();
@@ -872,5 +1025,175 @@ mod tests {
         // Ingest may still *want* to try, but claim blocks a second write.
         assert!(p.should_try_record_on_ingest(true, false));
         assert!(p.claim_write().is_none());
+    }
+
+    #[test]
+    fn grok_style_progress_then_tools_then_final_keeps_only_last_segment() {
+        // Mirrors session ChatState: intermediate agent_message_chunk progress
+        // between tools must not be concatenated into conversation body.
+        let mut p = ThreadProjection::default();
+        p.apply_events(
+            AgentName::Grok,
+            &[
+                assistant_start("m1"),
+                delta("m1", "正在定位详情页 composer…"),
+                tool_placed("m1", "tc1"),
+                tool_completed("tc1"),
+                delta("m1", "发现键盘高度被错误塞进 bar。"),
+                tool_placed("m1", "tc2"),
+                tool_completed("tc2"),
+                reasoning("m1", "I'll give the user a concise summary."),
+                delta(
+                    "m1",
+                    "已完成：\n- 分支: bugfix/ios-topic-detail-quick-reply-keyboard\n- 提交: 811bd57",
+                ),
+                completed("m1"),
+            ],
+        );
+        p.pending_boundary = true;
+        assert_eq!(
+            p.last_completed().map(|(_, t)| t),
+            Some(
+                "已完成：\n- 分支: bugfix/ios-topic-detail-quick-reply-keyboard\n- 提交: 811bd57"
+                    .into()
+            )
+        );
+        let claimed = p.claim_write().expect("claim final segment");
+        assert_eq!(
+            claimed.1,
+            "已完成：\n- 分支: bugfix/ios-topic-detail-quick-reply-keyboard\n- 提交: 811bd57"
+        );
+    }
+
+    #[test]
+    fn continuous_text_without_interrupt_stays_concatenated() {
+        let mut p = ThreadProjection::default();
+        p.apply_events(
+            AgentName::Grok,
+            &[
+                assistant_start("m1"),
+                delta("m1", "Hello "),
+                delta("m1", "world"),
+                completed("m1"),
+            ],
+        );
+        assert_eq!(
+            p.last_completed().map(|(_, t)| t),
+            Some("Hello world".into())
+        );
+    }
+
+    #[test]
+    fn progress_only_before_tools_without_final_segment_is_not_recorded() {
+        // Turn ends after tools with no post-tool answer → do not dump progress.
+        let mut p = ThreadProjection::default();
+        p.apply_events(
+            AgentName::Grok,
+            &[
+                assistant_start("m1"),
+                delta("m1", "正在核对当前代码与相关提交…"),
+                tool_placed("m1", "tc1"),
+                tool_completed("tc1"),
+                completed("m1"),
+            ],
+        );
+        assert!(p.last_completed().is_none());
+        assert!(p.claim_write().is_none());
+    }
+
+    #[test]
+    fn grok_multi_message_id_progress_then_tool_without_final_is_not_recorded() {
+        // Real Grok translator shape (proven by grok.rs `agent_msg_resets_after_tool`):
+        //   MessageStarted(m1) → TextDelta(m1, progress) → MessageCompleted(m1)
+        //   → MessageStarted(m2) → ToolCallPlaced(m2, tc1) → ToolCallCompleted(tc1)
+        // The tool event completes m1 first; m1's segment is open at that moment.
+        // Turn ends with no post-tool final text → must NOT write progress back.
+        let mut p = ThreadProjection::default();
+        p.apply_events(
+            AgentName::Grok,
+            &[
+                assistant_start("m1"),
+                delta("m1", "正在核对当前代码与相关提交…"),
+                completed("m1"),
+                assistant_start("m2"),
+                tool_placed("m2", "tc1"),
+                tool_completed("tc1"),
+            ],
+        );
+        p.pending_boundary = true;
+        assert!(
+            p.last_completed().is_none(),
+            "progress-only Grok turn must not surface as conversation result"
+        );
+        assert!(p.claim_write().is_none());
+    }
+
+    #[test]
+    fn grok_multi_message_id_progress_then_tool_then_final_keeps_only_last() {
+        // Real Grok shape with post-tool final answer under a fresh message_id:
+        //   m1 progress → MessageCompleted(m1) → tool on m2 → m3 final text →
+        //   MessageCompleted(m3). Only m3 must be written back.
+        let mut p = ThreadProjection::default();
+        p.apply_events(
+            AgentName::Grok,
+            &[
+                assistant_start("m1"),
+                delta("m1", "正在定位详情页 composer…"),
+                completed("m1"),
+                assistant_start("m2"),
+                tool_placed("m2", "tc1"),
+                tool_completed("tc1"),
+                assistant_start("m3"),
+                delta("m3", "已完成：修复键盘高度"),
+                completed("m3"),
+            ],
+        );
+        p.pending_boundary = true;
+        assert_eq!(
+            p.last_completed().map(|(_, t)| t),
+            Some("已完成：修复键盘高度".into())
+        );
+        let claimed = p.claim_write().expect("claim final segment");
+        assert_eq!(claimed.1, "已完成：修复键盘高度");
+    }
+
+    #[test]
+    fn grok_thought_between_text_segments_keeps_both_halves() {
+        // Grok deliberately reuses the same message_id for thought interleaved
+        // with text (see grok.rs comment ~697-699). ReasoningDelta must NOT
+        // close the text segment — both halves concatenate into the final body.
+        let mut p = ThreadProjection::default();
+        p.apply_events(
+            AgentName::Grok,
+            &[
+                assistant_start("m1"),
+                delta("m1", "First half of answer."),
+                reasoning("m1", "Let me think about the second half."),
+                delta("m1", " Second half."),
+                completed("m1"),
+            ],
+        );
+        p.pending_boundary = true;
+        assert_eq!(
+            p.last_completed().map(|(_, t)| t),
+            Some("First half of answer. Second half.".into())
+        );
+    }
+
+    #[test]
+    fn simple_answer_without_tools_still_records() {
+        let mut p = ThreadProjection::default();
+        p.apply_events(
+            AgentName::Codex,
+            &[
+                assistant_start("m1"),
+                delta("m1", "fixed the bug"),
+                completed("m1"),
+            ],
+        );
+        assert_eq!(
+            p.last_completed().map(|(_, t)| t),
+            Some("fixed the bug".into())
+        );
     }
 }

@@ -278,7 +278,12 @@ pub(crate) fn validate_acp_permission_decision(
             decision
                 .get("decision")
                 .and_then(Value::as_str)
-                .map(|s| matches!(s, "accept" | "approved" | "allow" | "yes" | "y"))
+                .map(|s| {
+                    matches!(
+                        s,
+                        "accept" | "accepted" | "approve" | "approved" | "allow" | "yes" | "y"
+                    )
+                })
         })
         .unwrap_or(false);
 
@@ -347,8 +352,50 @@ pub(crate) fn validate_grok_ext_method_decision(
             Ok(body)
         }
         "x.ai/ask_user_question" => {
-            if decision.get("outcome").is_some() {
-                return Ok(decision.clone());
+            // Full wire response from a typed client.
+            if let Some(outcome) = decision.get("outcome").and_then(Value::as_str) {
+                match outcome {
+                    "accepted" => {
+                        anyhow::ensure!(
+                            decision.get("answers").is_some(),
+                            "ask_user_question accepted requires answers"
+                        );
+                        return Ok(decision.clone());
+                    }
+                    "cancelled" | "chat_about_this" | "skip_interview" => {
+                        return Ok(decision.clone());
+                    }
+                    other => anyhow::bail!("invalid ask_user_question outcome: {other}"),
+                }
+            }
+            // Simplified UI tokens (TUI/Desktop).
+            let token = decision
+                .get("decision")
+                .and_then(Value::as_str)
+                .or_else(|| decision.get("text").and_then(Value::as_str))
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase();
+            if matches!(token.as_str(), "cancel" | "cancelled" | "no" | "n" | "skip") {
+                return Ok(serde_json::json!({ "outcome": "cancelled" }));
+            }
+            if let Some(answers) = decision.get("answers") {
+                return Ok(serde_json::json!({
+                    "outcome": "accepted",
+                    "answers": answers,
+                }));
+            }
+            // Free-text single answer mapped onto question index "0".
+            if let Some(text) = decision
+                .get("text")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                return Ok(serde_json::json!({
+                    "outcome": "accepted",
+                    "answers": { "0": [text] },
+                }));
             }
             Ok(serde_json::json!({ "outcome": "cancelled" }))
         }

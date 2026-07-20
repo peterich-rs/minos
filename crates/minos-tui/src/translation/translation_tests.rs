@@ -604,6 +604,42 @@ fn opencode_permission_completion_clears_pending_request() {
 }
 
 #[test]
+fn grok_ask_user_question_creates_pending_request() {
+    let mut cs = ChatState::new("t1".into(), AgentName::Grok);
+
+    cs.apply_ui_events(vec![UiEventMessage::Raw {
+        kind: "approval/request".into(),
+        payload_json: serde_json::json!({
+            "request_id": "ask-1",
+            "thread_id": "t1",
+            "turn_id": "",
+            "method": "x.ai/ask_user_question",
+            "params": {
+                "sessionId": "s1",
+                "toolCallId": "tc1",
+                "questions": [{
+                    "question": "Pick a color?",
+                    "options": [
+                        {"label": "Red", "description": "warm"},
+                        {"label": "Blue", "description": "cool"}
+                    ],
+                    "multi_select": false
+                }]
+            }
+        })
+        .to_string(),
+    }]);
+
+    assert_eq!(cs.pending_requests.len(), 1);
+    assert_eq!(cs.pending_requests[0].id(), "ask-1");
+    assert!(cs.pending_requests[0].prompt.contains("Pick a color?"));
+    assert!(matches!(
+        cs.pending_requests[0].kind,
+        PendingAgentRequestKind::GrokUserQuestion { .. }
+    ));
+}
+
+#[test]
 fn opencode_question_asked_creates_pending_request_with_options() {
     let mut cs = ChatState::new("t1".into(), AgentName::Opencode);
 

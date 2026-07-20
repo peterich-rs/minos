@@ -22,6 +22,11 @@ pub enum PendingAgentRequestKind {
     GrokPlanApproval {
         request_id: String,
     },
+    /// Grok `x.ai/ask_user_question` reverse-request (structured Q&A).
+    GrokUserQuestion {
+        request_id: String,
+        questions: Vec<PendingQuestionSpec>,
+    },
     OpencodePermission {
         permission_id: String,
         approve_response: String,
@@ -53,7 +58,8 @@ impl PendingAgentRequest {
         match &self.kind {
             PendingAgentRequestKind::CodexUserInput { request_id, .. }
             | PendingAgentRequestKind::CodexApproval { request_id, .. }
-            | PendingAgentRequestKind::GrokPlanApproval { request_id } => request_id,
+            | PendingAgentRequestKind::GrokPlanApproval { request_id }
+            | PendingAgentRequestKind::GrokUserQuestion { request_id, .. } => request_id,
             PendingAgentRequestKind::OpencodePermission { permission_id, .. } => permission_id,
             PendingAgentRequestKind::OpencodeQuestion { question_id, .. } => question_id,
         }
@@ -90,6 +96,27 @@ impl PendingAgentRequest {
             return Some(Self {
                 prompt,
                 kind: PendingAgentRequestKind::GrokPlanApproval { request_id },
+            });
+        }
+
+        if method == "x.ai/ask_user_question" {
+            let raw_questions = params
+                .get("questions")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            // Grok UI always allows freeform "Other" answers.
+            let mut questions = parse_pending_questions(&raw_questions);
+            for q in &mut questions {
+                q.custom = true;
+            }
+            let prompt = format_pending_question_prompt("Grok asks:", &questions);
+            return Some(Self {
+                prompt,
+                kind: PendingAgentRequestKind::GrokUserQuestion {
+                    request_id,
+                    questions,
+                },
             });
         }
 
@@ -376,6 +403,8 @@ fn parse_pending_questions(questions: &[serde_json::Value]) -> Vec<PendingQuesti
                 options,
                 multiple: question
                     .get("multiple")
+                    .or_else(|| question.get("multi_select"))
+                    .or_else(|| question.get("multiSelect"))
                     .and_then(serde_json::Value::as_bool)
                     .unwrap_or(false),
                 custom: question

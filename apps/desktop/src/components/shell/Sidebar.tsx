@@ -15,6 +15,7 @@ import {
   presenceDotClass,
   projectHostLabel,
 } from "@/lib/host-status";
+import { sortByAttentionThenTime } from "@/lib/list-sort";
 import { cn } from "@/lib/utils";
 
 const navItems: {
@@ -108,7 +109,7 @@ export function Sidebar() {
       </div>
 
       <div className="scrollbar-thin flex-1 space-y-0.5 overflow-y-auto px-2 pb-3">
-        {projects.map((project) => {
+        {[...projects].sort(sortByAttentionThenTime).map((project) => {
           const active = primaryNav === "work" && project.id === projectId;
           return (
             <button
