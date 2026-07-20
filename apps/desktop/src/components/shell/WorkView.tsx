@@ -185,7 +185,7 @@ export function WorkView() {
                   defaultSize="25"
                   className="min-h-0 min-w-0"
                 >
-                  <SessionInspector conversationId={conversationId} />
+                  <SessionInspector conversationId={conversationId} fill />
                 </Panel>
               </>
             ) : conversationId ? (
