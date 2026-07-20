@@ -9,8 +9,11 @@ import { cn } from "@/lib/utils";
 
 export function SessionInspector({
   conversationId,
+  /** Fill a resizable panel; otherwise use a fixed inspector rail width. */
+  fill = false,
 }: {
   conversationId: string;
+  fill?: boolean;
 }) {
   const toggleDetails = useUiStore((s) => s.toggleDetails);
   const projectId = useUiStore((s) => s.projectId);
@@ -32,7 +35,14 @@ export function SessionInspector({
   const selected = sessions.find((s) => s.id === selectedSessionId);
 
   return (
-    <aside className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden border-l border-ink/5 bg-surface">
+    <aside
+      className={cn(
+        "flex h-full min-h-0 flex-col overflow-hidden border-l border-ink/5 bg-surface",
+        fill
+          ? "w-full min-w-0"
+          : "w-[min(280px,30vw)] min-w-[220px] max-w-[340px] shrink-0",
+      )}
+    >
       <header className="flex shrink-0 items-center justify-between border-b border-ink/5 px-4 py-3">
         <div className="min-w-0 truncate text-[13px] font-semibold text-ink">
           {selected ? "Agent session" : "Conversation"}

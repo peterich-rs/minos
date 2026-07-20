@@ -121,6 +121,7 @@ export function WorkView() {
                 <TimelineEmpty />
               )}
               {detailsOpen && conversationId ? (
+                // Not inside a resizable Panel — fixed rail width (fill=false).
                 <SessionInspector conversationId={conversationId} />
               ) : conversationId ? (
                 <InspectorToggle onOpen={toggleDetails} />
