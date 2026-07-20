@@ -127,6 +127,7 @@ function sessionBelongsToProject(
 export function SessionsView({ projectId }: { projectId: string }) {
   const selectedSessionId = useUiStore((s) => s.selectedSessionId);
   const conversationId = useUiStore((s) => s.conversationId);
+  const projectView = useUiStore((s) => s.projectView);
   const selectSession = useUiStore((s) => s.selectSession);
   const openConversation = useUiStore((s) => s.openConversation);
   const listCollapsed = useUiStore((s) => s.sessionsListCollapsed);
@@ -228,7 +229,12 @@ export function SessionsView({ projectId }: { projectId: string }) {
 
   // Auto-select a root session when nothing valid is selected.
   // Prefer the session under the conversation the user just left (Conversations tab).
+  //
+  // Only while the Sessions tab is active: keep-alive leaves this view mounted
+  // under Conversations, and re-selecting here would undo SessionInspector's
+  // "← Back to conversation" (selectSession(null)).
   useEffect(() => {
+    if (projectView !== "sessions") return;
     if (selectedSessionId) {
       if (sessionBelongsToProject(selectedSessionId, displaySessions)) return;
       // Foreign or stale id — do not wait forever on empty load.
@@ -245,6 +251,7 @@ export function SessionsView({ projectId }: { projectId: string }) {
     if (firstRoot) selectSession(firstRoot.id);
     else if (selectedSessionId) selectSession(null);
   }, [
+    projectView,
     groups,
     displaySessions,
     selectedSessionId,
