@@ -35,6 +35,29 @@ textarea {
   font: inherit;
 }
 
+/* Respect reduced motion globally (Phase B). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Resizable panel drag handle */
+[data-separator] {
+  outline: none;
+}
+[data-separator]:focus-visible {
+  background: rgba(236, 72, 153, 0.35);
+}
+[data-separator][data-separator-active] {
+  background: rgba(236, 72, 153, 0.25);
+}
+
 /* Thin, subtle scrollbars for multi-pane layout */
 .scrollbar-thin {
   scrollbar-width: thin;

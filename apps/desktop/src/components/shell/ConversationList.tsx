@@ -12,7 +12,14 @@ import { cn } from "@/lib/utils";
  * Parent passes `projectId` (and ideally `key={projectId}`). This view owns
  * list init for that id; render subscribes to workspace state.
  */
-export function ConversationList({ projectId }: { projectId: string }) {
+export function ConversationList({
+  projectId,
+  /** Fill a resizable panel instead of a fixed width rail. */
+  fill = false,
+}: {
+  projectId: string;
+  fill?: boolean;
+}) {
   const conversationId = useUiStore((s) => s.conversationId);
   const selectConversation = useUiStore((s) => s.selectConversation);
   const toggleConversationList = useUiStore((s) => s.toggleConversationList);
@@ -50,7 +57,14 @@ export function ConversationList({ projectId }: { projectId: string }) {
   const phase = listStatus?.phase ?? "idle";
 
   return (
-    <section className="flex w-[min(280px,34vw)] min-w-[220px] max-w-[340px] shrink-0 flex-col overflow-hidden border-r border-ink/5 bg-surface">
+    <section
+      className={cn(
+        "flex h-full min-h-0 flex-col overflow-hidden border-r border-ink/5 bg-surface",
+        fill
+          ? "w-full min-w-0"
+          : "w-[min(280px,34vw)] min-w-[220px] max-w-[340px] shrink-0",
+      )}
+    >
       <div className="flex shrink-0 items-center justify-between border-b border-ink/5 px-3 py-2.5">
         <div className="min-w-0 pl-1">
           <div className="text-[13px] font-semibold text-ink">Conversations</div>

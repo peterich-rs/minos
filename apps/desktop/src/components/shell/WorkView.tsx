@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from "react";
+import { Group, Panel, Separator } from "react-resizable-panels";
 import { PanelRight } from "lucide-react";
 import { ProjectHeader } from "./ProjectHeader";
 import {
@@ -14,6 +15,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useUiStore } from "@/store/ui-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { sortByAttentionThenTime } from "@/lib/list-sort";
+import { cn } from "@/lib/utils";
 
 export function WorkView() {
   const projectView = useUiStore((s) => s.projectView);
@@ -103,32 +105,104 @@ export function WorkView() {
       ) : (
         <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           {listCollapsed ? (
-            <ConversationListRail />
+            <>
+              <ConversationListRail />
+              <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+                {conversationId ? (
+                  <Timeline
+                    key={conversationId}
+                    conversationId={conversationId}
+                  />
+                ) : (
+                  <TimelineEmpty />
+                )}
+                {detailsOpen && conversationId ? (
+                  <SessionInspector conversationId={conversationId} />
+                ) : conversationId ? (
+                  <InspectorToggle onOpen={toggleDetails} />
+                ) : null}
+              </div>
+            </>
           ) : (
-            <ConversationList
-              key={resolvedProjectId}
-              projectId={resolvedProjectId}
-            />
-          )}
-          {conversationId ? (
-            <Timeline key={conversationId} conversationId={conversationId} />
-          ) : (
-            <TimelineEmpty />
-          )}
-          {detailsOpen && conversationId ? (
-            <SessionInspector conversationId={conversationId} />
-          ) : conversationId ? (
-            <button
-              type="button"
-              onClick={toggleDetails}
-              title="Show inspector"
-              className="flex w-10 shrink-0 flex-col items-center border-l border-ink/5 bg-surface pt-3 text-ink-muted hover:bg-surface-hover hover:text-ink"
+            <Group
+              orientation="horizontal"
+              className="flex min-h-0 min-w-0 flex-1 overflow-hidden"
+              defaultLayout={{
+                list: 22,
+                timeline: detailsOpen ? 53 : 78,
+                inspector: detailsOpen ? 25 : 0,
+              }}
             >
-              <PanelRight className="h-4 w-4" />
-            </button>
-          ) : null}
+              <Panel
+                id="list"
+                minSize={180}
+                defaultSize="22"
+                className="min-h-0 min-w-0"
+              >
+                <ConversationList
+                  key={resolvedProjectId}
+                  projectId={resolvedProjectId}
+                  fill
+                />
+              </Panel>
+              <Separator
+                className={cn(
+                  "w-1.5 shrink-0 bg-transparent transition-colors duration-150",
+                  "hover:bg-accent/30 data-[separator-active]:bg-accent/40",
+                )}
+              />
+              <Panel
+                id="timeline"
+                minSize={280}
+                defaultSize={detailsOpen ? "53" : "78"}
+                className="min-h-0 min-w-0"
+              >
+                {conversationId ? (
+                  <Timeline
+                    key={conversationId}
+                    conversationId={conversationId}
+                  />
+                ) : (
+                  <TimelineEmpty />
+                )}
+              </Panel>
+              {detailsOpen && conversationId ? (
+                <>
+                  <Separator
+                    className={cn(
+                      "w-1.5 shrink-0 bg-transparent transition-colors duration-150",
+                      "hover:bg-accent/30 data-[separator-active]:bg-accent/40",
+                    )}
+                  />
+                  <Panel
+                    id="inspector"
+                    minSize={200}
+                    defaultSize="25"
+                    className="min-h-0 min-w-0"
+                  >
+                    <SessionInspector conversationId={conversationId} />
+                  </Panel>
+                </>
+              ) : conversationId ? (
+                <InspectorToggle onOpen={toggleDetails} />
+              ) : null}
+            </Group>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+function InspectorToggle({ onOpen }: { onOpen: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      title="Show inspector"
+      className="flex w-10 shrink-0 flex-col items-center border-l border-ink/5 bg-surface pt-3 text-ink-muted transition-colors duration-150 hover:bg-surface-hover hover:text-ink"
+    >
+      <PanelRight className="h-4 w-4" />
+    </button>
   );
 }

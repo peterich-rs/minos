@@ -19,6 +19,16 @@ import { DiffView } from "@/components/DiffView";
 import { ReadView, shouldUseReadView } from "@/components/ReadView";
 import { MarkdownText } from "@/components/MarkdownText";
 import { StatusPill } from "@/components/StatusPill";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { VirtualTranscriptList } from "@/components/shell/VirtualTranscriptList";
 import { useUiStore } from "@/store/ui-store";
 import {
   useWorkspaceStore,
@@ -26,6 +36,7 @@ import {
 } from "@/store/workspace-store";
 import { formatLocalClock, formatRelative } from "@/lib/time";
 import { cn } from "@/lib/utils";
+import { toast } from "@/lib/toast";
 import type { TranscriptItem } from "@/lib/daemon";
 import { followContentKey } from "@/lib/stick-to-bottom";
 import { useStickToBottom } from "@/lib/use-stick-to-bottom";
@@ -824,46 +835,47 @@ function TranscriptPane({
             className="scrollbar-thin min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-4 py-4 sm:px-5"
             style={{ flex: "1 1 0%" }}
           >
-            <div ref={contentRef} className="mx-auto max-w-3xl space-y-2.5 pb-8">
-              {/* Tiny non-blocking marker at top while older pages stream in */}
-              {loadingOlder ? (
-                <div
-                  className="flex justify-center py-1"
-                  aria-hidden
+            {phase === "loading" && !hasCache ? (
+              <p className="py-12 text-center text-[13px] text-ink-muted">
+                Loading transcript…
+              </p>
+            ) : phase === "error" && !hasCache ? (
+              <div className="flex flex-col items-center gap-3 py-12 text-center">
+                <p className="text-[13px] text-rose-600">
+                  {status?.error ?? "Failed to load transcript"}
+                </p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void loadTranscript(sessionId, {
+                      tailWindow: TRANSCRIPT_PAGE_EVENTS,
+                      approvalStatusPolicy: "sync",
+                    })
+                  }
+                  className="rounded-lg bg-ink px-3 py-1.5 text-[12px] font-semibold text-white"
                 >
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-ink-muted/50" />
-                </div>
-              ) : null}
-              {phase === "loading" && !hasCache ? (
-                <p className="py-12 text-center text-[13px] text-ink-muted">
-                  Loading transcript…
-                </p>
-              ) : phase === "error" && !hasCache ? (
-                <div className="flex flex-col items-center gap-3 py-12 text-center">
-                  <p className="text-[13px] text-rose-600">
-                    {status?.error ?? "Failed to load transcript"}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void loadTranscript(sessionId, {
-                        tailWindow: TRANSCRIPT_PAGE_EVENTS,
-                        approvalStatusPolicy: "sync",
-                      })
-                    }
-                    className="rounded-lg bg-ink px-3 py-1.5 text-[12px] font-semibold text-white"
-                  >
-                    Retry
-                  </button>
-                </div>
-              ) : items.length === 0 ? (
-                <p className="py-12 text-center text-[13px] text-ink-muted">
-                  No transcript events yet. They appear as the agent runs.
-                </p>
-              ) : (
-                items.map((item) => (
+                  Retry
+                </button>
+              </div>
+            ) : items.length === 0 ? (
+              <p className="py-12 text-center text-[13px] text-ink-muted">
+                No transcript events yet. They appear as the agent runs.
+              </p>
+            ) : (
+              <VirtualTranscriptList
+                items={items}
+                scrollRef={scrollRef}
+                contentRef={contentRef}
+                following={following}
+                header={
+                  loadingOlder ? (
+                    <div className="flex justify-center py-1" aria-hidden>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-ink-muted/50" />
+                    </div>
+                  ) : null
+                }
+                renderItem={(item) => (
                   <TranscriptItemView
-                    key={item.id}
                     item={item}
                     streaming={
                       liveStreaming &&
@@ -889,6 +901,29 @@ function TranscriptPane({
                                   respondOpencodeQuestion,
                                 },
                               );
+                              if (
+                                action.type === "decision" &&
+                                (item.kind === "approval" ||
+                                  item.kind === "question")
+                              ) {
+                                toast.success(
+                                  action.decision === "approve" ||
+                                    action.decision === "allow"
+                                    ? "Approved"
+                                    : action.decision === "deny" ||
+                                        action.decision === "abandon"
+                                      ? "Denied"
+                                      : `Decision: ${action.decision}`,
+                                );
+                              } else if (action.type === "cancel") {
+                                toast.info("Cancelled");
+                              }
+                            } catch (e) {
+                              toast.error(
+                                "Action failed",
+                                e instanceof Error ? e.message : String(e),
+                              );
+                              throw e;
                             } finally {
                               setApproving(null);
                             }
@@ -896,9 +931,9 @@ function TranscriptPane({
                         : undefined
                     }
                   />
-                ))
-              )}
-            </div>
+                )}
+              />
+            )}
           </div>
 
           {!following ? (
@@ -1155,12 +1190,14 @@ async function handleUserAction(
 function ApprovalModal({
   item,
   isPlan,
+  open,
   approving,
   onClose,
   onUserAction,
 }: {
   item: TranscriptItem;
   isPlan: boolean;
+  open: boolean;
   approving?: boolean;
   onClose: () => void;
   onUserAction?: (action: UserAction) => void | Promise<void>;
@@ -1175,40 +1212,45 @@ function ApprovalModal({
     item.approvalMethod === "opencode/question" ||
     item.approvalMethod === "x.ai/ask_user_question";
 
+  const runAction = async (action: UserAction) => {
+    try {
+      // Success toast is owned by the transcript onUserAction callback.
+      await onUserAction?.(action);
+      onClose();
+    } catch (e) {
+      // onUserAction may already toast; still close only on success.
+      if (e) {
+        /* keep open for retry */
+      }
+    }
+  };
+
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4 sm:p-8"
-      role="dialog"
-      aria-modal="true"
-      aria-label={item.title ?? "Approval"}
-      // Close only on scrim itself. Avoid stopPropagation on the panel —
-      // document/bubble hacks can swallow the following `click` in WKWebView.
-      onPointerDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="flex max-h-[min(85vh,720px)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-ink/10 bg-surface shadow-2xl">
-        <header className="flex shrink-0 items-start justify-between gap-3 border-b border-ink/5 px-5 py-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 text-[15px] font-semibold text-ink">
-              <ShieldAlert className="h-4 w-4 shrink-0 text-rose-600" />
-              {item.title ?? "Approval required"}
-            </div>
-            <p className="mt-1 whitespace-pre-wrap text-[12.5px] text-ink-muted">
-              {item.text}
-            </p>
-          </div>
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent
+        hideClose
+        className="flex max-h-[min(85vh,720px)] w-full max-w-2xl flex-col gap-0 overflow-hidden p-0 sm:rounded-2xl"
+        aria-describedby={undefined}
+      >
+        <DialogHeader className="shrink-0 space-y-1.5 pr-12">
+          <DialogTitle className="flex items-center gap-2">
+            <ShieldAlert className="h-4 w-4 shrink-0 text-rose-600" />
+            {item.title ?? "Approval required"}
+          </DialogTitle>
+          <DialogDescription className="whitespace-pre-wrap text-left">
+            {item.text}
+          </DialogDescription>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg px-2 py-1 text-[12px] font-medium text-ink-muted hover:bg-surface-muted hover:text-ink"
+            className="absolute right-4 top-4 rounded-lg px-2 py-1 text-[12px] font-medium text-ink-muted transition-colors duration-150 hover:bg-surface-muted hover:text-ink"
           >
             Close
           </button>
-        </header>
+        </DialogHeader>
         {detail ? (
           useIncremental ? (
-            <IncrementalText text={detail} className="px-5 py-4" />
+            <IncrementalText text={detail} className="min-h-0 px-5 py-4" />
           ) : (
             <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-5 py-4">
               <pre className="whitespace-pre-wrap font-mono text-[12.5px] leading-relaxed text-ink-secondary">
@@ -1224,15 +1266,9 @@ function ApprovalModal({
                 type="button"
                 disabled={approving}
                 onClick={() => {
-                  void (async () => {
-                    await onUserAction?.({
-                      type: "decision",
-                      decision: opt.label,
-                    });
-                    onClose();
-                  })();
+                  void runAction({ type: "decision", decision: opt.label });
                 }}
-                className="flex w-full flex-col rounded-xl border border-ink/10 bg-white px-3.5 py-2.5 text-left hover:border-ink/25 hover:bg-surface-muted/60 disabled:opacity-50"
+                className="flex w-full flex-col rounded-xl border border-ink/10 bg-white px-3.5 py-2.5 text-left transition-colors duration-150 hover:border-ink/25 hover:bg-surface-muted/60 disabled:opacity-50"
               >
                 <span className="text-[13px] font-semibold text-ink">
                   {opt.label}
@@ -1255,61 +1291,54 @@ function ApprovalModal({
           </div>
         )}
         {onUserAction ? (
-          <footer className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-ink/5 bg-surface-muted/40 px-5 py-3.5">
-            <button
+          <DialogFooter className="shrink-0">
+            <Button
               type="button"
+              variant="secondary"
+              size="sm"
               disabled={approving}
               onClick={() => {
-                void (async () => {
-                  await onUserAction(
-                    isQuestion
-                      ? { type: "cancel" }
-                      : { type: "decision", decision: isPlan ? "abandon" : "deny" },
-                  );
-                  onClose();
-                })();
+                void runAction(
+                  isQuestion
+                    ? { type: "cancel" }
+                    : {
+                        type: "decision",
+                        decision: isPlan ? "abandon" : "deny",
+                      },
+                );
               }}
-              className="rounded-lg border border-ink/10 bg-white px-3 py-2 text-[12px] font-medium text-ink-muted hover:bg-surface disabled:opacity-50"
             >
               {isPlan ? "Abandon" : isQuestion ? "Cancel" : "Deny"}
-            </button>
+            </Button>
             {isPlan ? (
-              <button
+              <Button
                 type="button"
+                variant="outline"
+                size="sm"
                 disabled={approving}
                 onClick={() => {
-                  void (async () => {
-                    await onUserAction({ type: "decision", decision: "revise" });
-                    onClose();
-                  })();
+                  void runAction({ type: "decision", decision: "revise" });
                 }}
-                className="rounded-lg border border-ink/10 bg-white px-3 py-2 text-[12px] font-medium text-ink hover:bg-surface disabled:opacity-50"
               >
                 Request changes
-              </button>
+              </Button>
             ) : null}
             {!isQuestion ? (
-              <button
+              <Button
                 type="button"
+                size="sm"
                 disabled={approving}
                 onClick={() => {
-                  void (async () => {
-                    await onUserAction({
-                      type: "decision",
-                      decision: "approve",
-                    });
-                    onClose();
-                  })();
+                  void runAction({ type: "decision", decision: "approve" });
                 }}
-                className="rounded-lg bg-ink px-3.5 py-2 text-[12px] font-semibold text-white hover:bg-ink/90 disabled:opacity-50"
               >
                 {isPlan ? "Approve plan" : "Allow"}
-              </button>
+              </Button>
             ) : null}
-          </footer>
+          </DialogFooter>
         ) : null}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1398,15 +1427,14 @@ function TranscriptItemView({
             </div>
           </div>
         </div>
-        {planOpen ? (
-          <ApprovalModal
-            item={item}
-            isPlan={isPlan}
-            approving={approving}
-            onClose={() => setPlanOpen(false)}
-            onUserAction={onUserAction}
-          />
-        ) : null}
+        <ApprovalModal
+          item={item}
+          isPlan={isPlan}
+          open={planOpen}
+          approving={approving}
+          onClose={() => setPlanOpen(false)}
+          onUserAction={onUserAction}
+        />
       </>
     );
   }

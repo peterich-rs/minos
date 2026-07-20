@@ -41,14 +41,31 @@ export default {
         ],
       },
       boxShadow: {
-        shell: "0 24px 80px rgba(28, 25, 23, 0.12), 0 2px 8px rgba(28, 25, 23, 0.04)",
+        shell:
+          "0 24px 80px rgba(28, 25, 23, 0.12), 0 2px 8px rgba(28, 25, 23, 0.04)",
         panel: "0 1px 0 rgba(28, 25, 23, 0.04)",
       },
       borderRadius: {
         shell: "18px",
         panel: "14px",
       },
+      transitionDuration: {
+        150: "150ms",
+        200: "200ms",
+      },
+      transitionTimingFunction: {
+        out: "cubic-bezier(0, 0, 0.2, 1)",
+      },
+      keyframes: {
+        "message-in": {
+          from: { opacity: "0", transform: "translateY(4px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
+        },
+      },
+      animation: {
+        "message-in": "message-in 150ms ease-out both",
+      },
     },
   },
-  plugins: [],
+  plugins: [require("tailwindcss-animate")],
 };

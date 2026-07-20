@@ -1,3 +1,4 @@
+import { motion, useReducedMotion } from "motion/react";
 import {
   FolderGit2,
   LayoutDashboard,
@@ -17,6 +18,11 @@ import {
 } from "@/lib/host-status";
 import { sortByAttentionThenTime } from "@/lib/list-sort";
 import { cn } from "@/lib/utils";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 const navItems: {
   id: PrimaryNav;
@@ -32,11 +38,13 @@ const navItems: {
 export function Sidebar() {
   const primaryNav = useUiStore((s) => s.primaryNav);
   const setPrimaryNav = useUiStore((s) => s.setPrimaryNav);
+  const setCommandPaletteOpen = useUiStore((s) => s.setCommandPaletteOpen);
   const projectId = useUiStore((s) => s.projectId);
   const selectProject = useUiStore((s) => s.selectProject);
   const projects = useWorkspaceStore((s) => s.projects);
   const connection = useWorkspaceStore((s) => s.connection);
   const source = useWorkspaceStore((s) => s.source);
+  const reduceMotion = useReducedMotion();
   const attention = projects.reduce((sum, p) => sum + p.needsAttention, 0);
   // v1: only local daemon is wired; relayLinked stays false → "Local only".
   const presence = deriveHostPresence({
@@ -59,7 +67,7 @@ export function Sidebar() {
             type="button"
             onClick={() => setPrimaryNav("host")}
             title="Open Host status"
-            className="mt-0.5 flex max-w-full items-center gap-1 rounded-md text-left text-[11px] text-ink-muted transition-colors hover:text-ink-secondary"
+            className="mt-0.5 flex max-w-full items-center gap-1 rounded-md text-left text-[11px] text-ink-muted transition-colors duration-150 hover:text-ink-secondary"
           >
             <Circle
               className={cn(
@@ -83,16 +91,30 @@ export function Sidebar() {
               type="button"
               onClick={() => setPrimaryNav(item.id)}
               className={cn(
-                "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors",
+                "relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors duration-150",
                 active
-                  ? "bg-surface-muted font-medium text-ink"
+                  ? "font-medium text-ink"
                   : "text-ink-secondary hover:bg-surface-hover",
               )}
             >
-              <Icon className="h-4 w-4 shrink-0 opacity-80" strokeWidth={1.8} />
-              <span className="flex-1">{item.label}</span>
+              {active ? (
+                <motion.span
+                  layoutId="sidebar-nav-pill"
+                  className="absolute inset-0 rounded-lg bg-surface-muted"
+                  transition={
+                    reduceMotion
+                      ? { duration: 0 }
+                      : { type: "spring", stiffness: 420, damping: 36 }
+                  }
+                />
+              ) : null}
+              <Icon
+                className="relative z-[1] h-4 w-4 shrink-0 opacity-80"
+                strokeWidth={1.8}
+              />
+              <span className="relative z-[1] flex-1">{item.label}</span>
               {badge > 0 ? (
-                <span className="rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                <span className="relative z-[1] rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
                   {badge}
                 </span>
               ) : null}
@@ -117,7 +139,7 @@ export function Sidebar() {
               type="button"
               onClick={() => selectProject(project.id)}
               className={cn(
-                "flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors",
+                "flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors duration-150",
                 active
                   ? "bg-accent-soft ring-1 ring-accent/30"
                   : "hover:bg-surface-hover",
@@ -167,6 +189,24 @@ export function Sidebar() {
             No projects yet — use the big + on the right.
           </p>
         ) : null}
+      </div>
+
+      <div className="border-t border-ink/5 px-3 py-2">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={() => setCommandPaletteOpen(true)}
+              className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-[11px] text-ink-muted transition-colors duration-150 hover:bg-surface-hover hover:text-ink-secondary"
+            >
+              <span>Command palette</span>
+              <kbd className="rounded border border-ink/10 bg-surface-muted px-1.5 py-0.5 font-mono text-[10px]">
+                ⌘K
+              </kbd>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right">Jump anywhere (⌘K)</TooltipContent>
+        </Tooltip>
       </div>
     </aside>
   );

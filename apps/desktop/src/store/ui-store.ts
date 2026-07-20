@@ -32,6 +32,8 @@ type UiState = {
   toggleConversationList: () => void;
   toggleSessionsList: () => void;
   setDraft: (conversationId: string, value: string) => void;
+  commandPaletteOpen: boolean;
+  setCommandPaletteOpen: (open: boolean) => void;
 };
 
 export const useUiStore = create<UiState>()(
@@ -130,6 +132,8 @@ export const useUiStore = create<UiState>()(
             [conversationId]: draft,
           },
         })),
+      commandPaletteOpen: false,
+      setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
     }),
     {
       name: "minos.ui-store.v1",

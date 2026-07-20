@@ -19,7 +19,13 @@
 | 桌面壳 | Tauri 2 | WebView 窗口 + Rust 宿主 |
 | UI | React 19 + TypeScript | 多栏产品界面 |
 | 构建 | Vite 7 | dev/build |
-| 样式 | Tailwind CSS 3.4 | 设计 token |
+| 样式 | Tailwind CSS 3.4 + `tailwindcss-animate` | 设计 token + enter/exit utilities |
+| 交互原语 | Radix (Dialog / Dropdown / Tooltip / Slot) + CVA | shadcn 模式 headless 组件（`components/ui/*`） |
+| 分栏 | `react-resizable-panels` v4 (`Group`/`Panel`/`Separator`) | Work：list \| timeline \| inspector |
+| 命令面板 | `cmdk` + Radix Dialog | 全局 ⌘K 跳转 project / conversation / session / nav |
+| Toast | `sonner` | 发送失败、daemon 断连/恢复、审批结果 |
+| 动效 | `motion`（layout 导航指示）+ CSS `duration-150/200` | 克制动效；尊重 `prefers-reduced-motion` |
+| 长列表 | `@tanstack/react-virtual` | Sessions transcript 虚拟化（与 stick-to-bottom 联调） |
 | 状态 | Zustand 5 | nav / project / conversation / board |
 | 图标 | Lucide React | 导航与工具栏 |
 | 本机 API | `@tauri-apps/api` | `invoke` → Rust |
@@ -57,17 +63,31 @@ apps/desktop/
   src/
     lib/host-status.ts   # Ready · Local only / Linked / This Mac
     lib/mock-data.ts
-    store/ui-store.ts
+    lib/toast.ts         # sonner wrappers
+    lib/use-stick-to-bottom.ts
+    store/ui-store.ts    # + commandPaletteOpen
     components/
+      ui/                # Button · Dialog · Tooltip · Dropdown · Toaster (Radix+CVA)
       Avatar.tsx · StatusPill.tsx
       shell/
-        AppShell.tsx · Sidebar.tsx
+        AppShell.tsx · Sidebar.tsx · CommandPalette.tsx · ConnectionToasts.tsx
         WorkView.tsx · ProjectHeader.tsx
         ConversationList.tsx · Timeline.tsx · SessionInspector.tsx
+        SessionsView.tsx · VirtualTranscriptList.tsx
         ProjectBoard.tsx
         AttentionView.tsx · AgentsView.tsx · HostView.tsx
-  src-tauri/          # 独立 Cargo 包 minos-desktop（非 root workspace）
+  src-tauri/          # workspace 成员 minos-desktop
 ```
+
+### 交互基础设施（桌面 UX 层）
+
+| 能力 | 实现 |
+|------|------|
+| Approval / Question modal | Radix Dialog（Esc、focus trap、`aria-modal`） |
+| Work 三栏可拖拽 | `react-resizable-panels`；列表折叠时退回 rail + flex |
+| 全局跳转 | ⌘/Ctrl+K → `CommandPalette` |
+| Daemon 连接反馈 | `ConnectionToasts` 监听 `connection.connected` 边沿 |
+| Transcript 性能 | `VirtualTranscriptList` + 既有 stick-to-bottom / load-older |
 
 ## Rust 宿主 / Daemon 桥
 

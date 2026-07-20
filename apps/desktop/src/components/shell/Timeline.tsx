@@ -32,6 +32,7 @@ import {
 import { useUiStore } from "@/store/ui-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { cn } from "@/lib/utils";
+import { toast } from "@/lib/toast";
 import { followContentKey } from "@/lib/stick-to-bottom";
 import { useStickToBottom } from "@/lib/use-stick-to-bottom";
 
@@ -250,7 +251,9 @@ export function Timeline({ conversationId }: { conversationId: string }) {
       setDraft("");
       setCursor(0);
     } catch (e) {
-      setSendError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setSendError(msg);
+      toast.error("Failed to send message", msg);
     } finally {
       setSending(false);
     }
@@ -269,7 +272,9 @@ export function Timeline({ conversationId }: { conversationId: string }) {
     try {
       await updateConversationTitle(conversationId, next);
     } catch (e) {
-      setSendError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setSendError(msg);
+      toast.error("Failed to rename conversation", msg);
     }
   };
 
@@ -597,7 +602,7 @@ function TimelineRow({
 }) {
   if (message.role === "system") {
     return (
-      <div className="mx-auto max-w-md rounded-xl bg-surface-muted px-3 py-2 text-center text-[12px] text-ink-muted">
+      <div className="mx-auto max-w-md animate-message-in rounded-xl bg-surface-muted px-3 py-2 text-center text-[12px] text-ink-muted motion-reduce:animate-none">
         {message.body}
       </div>
     );
@@ -615,7 +620,7 @@ function TimelineRow({
 
   if (message.kind === "tool_summary") {
     return (
-      <div className="flex w-full items-center gap-2 rounded-xl border border-ink/5 bg-surface-muted/80 px-3 py-2 text-left text-[12px] text-ink-secondary">
+      <div className="flex w-full animate-message-in items-center gap-2 rounded-xl border border-ink/5 bg-surface-muted/80 px-3 py-2 text-left text-[12px] text-ink-secondary motion-reduce:animate-none">
         <Wrench className="h-3.5 w-3.5 shrink-0 text-ink-muted" />
         <span className="min-w-0 flex-1 truncate">{message.body}</span>
         <span className="shrink-0 text-ink-muted">{message.time}</span>
@@ -624,7 +629,12 @@ function TimelineRow({
   }
 
   return (
-    <div className={cn("flex gap-2.5", isUser ? "justify-end" : "justify-start")}>
+    <div
+      className={cn(
+        "flex animate-message-in gap-2.5 motion-reduce:animate-none",
+        isUser ? "justify-end" : "justify-start",
+      )}
+    >
       {!isUser ? (
         <Avatar name={agent?.label ?? "Agent"} tone={agent?.tone ?? "slate"} />
       ) : null}
