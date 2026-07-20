@@ -44,26 +44,42 @@ export function useStickToBottom({
     setFollowing(next);
   }, []);
 
-  const pinBottom = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el || !followingRef.current) return;
+  const markProgrammatic = useCallback((ms = 80) => {
     programmaticRef.current = true;
-    el.scrollTop = el.scrollHeight;
     // WKWebView can deliver the synthetic scroll event after double-rAF;
-    // hold the guard a bit longer so pin does not re-arm follow incorrectly.
+    // hold the guard so pin / anchor restore does not re-arm follow incorrectly.
     if (programmaticClearTimer.current) {
       clearTimeout(programmaticClearTimer.current);
     }
     programmaticClearTimer.current = setTimeout(() => {
       programmaticRef.current = false;
       programmaticClearTimer.current = null;
-    }, 50);
+    }, ms);
   }, []);
+
+  const pinBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || !followingRef.current) return;
+    markProgrammatic(80);
+    el.scrollTop = el.scrollHeight;
+  }, [markProgrammatic]);
 
   const jumpToLatest = useCallback(() => {
     setFollowingBoth(true);
-    pinBottom();
-  }, [setFollowingBoth, pinBottom]);
+    // pin after follow latches; mark programmatic so the jump does not bounce.
+    markProgrammatic(80);
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+    // second frame for late layout (markdown / images)
+    requestAnimationFrame(() => {
+      if (!followingRef.current) return;
+      const node = scrollRef.current;
+      if (node) {
+        markProgrammatic(80);
+        node.scrollTop = node.scrollHeight;
+      }
+    });
+  }, [setFollowingBoth, markProgrammatic]);
 
   // Session / conversation change → re-enter follow.
   useEffect(() => {
@@ -142,5 +158,10 @@ export function useStickToBottom({
     contentRef,
     following,
     jumpToLatest,
+    /**
+     * Mark the next scroll events as programmatic (load-older anchor restore).
+     * Prevents mid-restore scroll handlers from flipping follow state.
+     */
+    markProgrammatic,
   };
 }

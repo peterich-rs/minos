@@ -25,7 +25,7 @@
 | 命令面板 | `cmdk` + Radix Dialog | 全局 ⌘K 跳转 project / conversation / session / nav |
 | Toast | `sonner` | 发送失败、daemon 断连/恢复、审批结果 |
 | 动效 | `motion`（layout 导航指示）+ CSS `duration-150/200` | 克制动效；尊重 `prefers-reduced-motion` |
-| 长列表 | `@tanstack/react-virtual` | Sessions transcript 虚拟化（与 stick-to-bottom 联调） |
+| 长列表 | 分页 tail + load-older（DOM list） | Transcript **不做** variable-height 虚拟化：测高与 stick-to-bottom/prepend 会抢滚动导致抖动；长历史靠事件分页 |
 | 状态 | Zustand 5 | nav / project / conversation / board |
 | 图标 | Lucide React | 导航与工具栏 |
 | 本机 API | `@tauri-apps/api` | `invoke` → Rust |
@@ -73,7 +73,7 @@ apps/desktop/
         AppShell.tsx · Sidebar.tsx · CommandPalette.tsx · ConnectionToasts.tsx
         WorkView.tsx · ProjectHeader.tsx
         ConversationList.tsx · Timeline.tsx · SessionInspector.tsx
-        SessionsView.tsx · VirtualTranscriptList.tsx
+        SessionsView.tsx
         ProjectBoard.tsx
         AttentionView.tsx · AgentsView.tsx · HostView.tsx
   src-tauri/          # workspace 成员 minos-desktop
@@ -87,7 +87,7 @@ apps/desktop/
 | Work 三栏可拖拽 | `react-resizable-panels`；列表折叠时退回 rail + flex |
 | 全局跳转 | ⌘/Ctrl+K → `CommandPalette` |
 | Daemon 连接反馈 | `ConnectionToasts` 监听 `connection.connected` 边沿 |
-| Transcript 性能 | `VirtualTranscriptList` + 既有 stick-to-bottom / load-older |
+| Transcript 滚动 | stick-to-bottom + tail/load-older；**manual scroll 时不 autofill**；prepend 用 `markProgrammatic` 锚点恢复 |
 
 ## Rust 宿主 / Daemon 桥
 

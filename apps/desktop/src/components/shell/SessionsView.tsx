@@ -28,7 +28,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { VirtualTranscriptList } from "@/components/shell/VirtualTranscriptList";
 import { useUiStore } from "@/store/ui-store";
 import {
   useWorkspaceStore,
@@ -635,10 +634,11 @@ function TranscriptPane({
   const olderInFlightRef = useRef(false);
 
   const contentKey = useMemo(() => followContentKey(items), [items]);
-  const { scrollRef, contentRef, following, jumpToLatest } = useStickToBottom({
-    contentKey,
-    resetKey: sessionId,
-  });
+  const { scrollRef, contentRef, following, jumpToLatest, markProgrammatic } =
+    useStickToBottom({
+      contentKey,
+      resetKey: sessionId,
+    });
 
   const summary = useMemo(
     () => summarizeSessionFromTranscript(items),
@@ -687,10 +687,12 @@ function TranscriptPane({
     if (!el || !anchor) return;
     const delta = el.scrollHeight - anchor.height;
     if (delta > 0) {
+      // Do not let stick-to-bottom treat this as a user scroll (re-follow thrash).
+      markProgrammatic(100);
       el.scrollTop = anchor.top + delta;
     }
     scrollAnchorRef.current = null;
-  }, [items, scrollRef]);
+  }, [items, scrollRef, markProgrammatic]);
 
   // Init: tail only (fast). Older history streams in via infinite scroll.
   useEffect(() => {
@@ -702,12 +704,12 @@ function TranscriptPane({
     });
   }, [sessionId, source, loadTranscript]);
 
-  // Silent backfill while content does not fill the pane (short viewport /
-  // sparse events) so the user is not stuck with a non-scrollable window.
-  // Depend on firstLoadedStartSeq so each successful older page can re-check
-  // once — not on a freshly allocated history object.
+  // Silent backfill only while stick-to-bottom is active (opening a session /
+  // sparse tail). Never autofill while the user is reading older history —
+  // that used to race with manual scroll and cause viewport thrash.
   useEffect(() => {
     if (source !== "daemon") return;
+    if (!following) return;
     if (status?.phase !== "ready") return;
     if (!hasOlder || loadingOlder) return;
     const el = scrollRef.current;
@@ -717,6 +719,7 @@ function TranscriptPane({
     }
   }, [
     source,
+    following,
     status?.phase,
     hasOlder,
     loadingOlder,
@@ -726,19 +729,20 @@ function TranscriptPane({
     scrollRef,
   ]);
 
-  // Prefetch older when the user approaches the top (no spinner, no wait UX).
+  // Prefetch older when the user approaches the top (manual history browse).
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
 
     const onScroll = () => {
+      if (following) return;
       if (el.scrollTop > TRANSCRIPT_PREFETCH_TOP_PX) return;
       void loadOlder();
     };
 
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
-  }, [sessionId, loadOlder, scrollRef]);
+  }, [sessionId, loadOlder, scrollRef, following]);
 
   // Fallback append poll only without live push (ingest frames own live stream).
   useEffect(() => {
@@ -835,47 +839,43 @@ function TranscriptPane({
             className="scrollbar-thin min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-4 py-4 sm:px-5"
             style={{ flex: "1 1 0%" }}
           >
-            {phase === "loading" && !hasCache ? (
-              <p className="py-12 text-center text-[13px] text-ink-muted">
-                Loading transcript…
-              </p>
-            ) : phase === "error" && !hasCache ? (
-              <div className="flex flex-col items-center gap-3 py-12 text-center">
-                <p className="text-[13px] text-rose-600">
-                  {status?.error ?? "Failed to load transcript"}
+            <div ref={contentRef} className="mx-auto max-w-3xl space-y-2.5 pb-8">
+              {/* Tiny non-blocking marker at top while older pages stream in */}
+              {loadingOlder ? (
+                <div className="flex justify-center py-1" aria-hidden>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-ink-muted/50" />
+                </div>
+              ) : null}
+              {phase === "loading" && !hasCache ? (
+                <p className="py-12 text-center text-[13px] text-ink-muted">
+                  Loading transcript…
                 </p>
-                <button
-                  type="button"
-                  onClick={() =>
-                    void loadTranscript(sessionId, {
-                      tailWindow: TRANSCRIPT_PAGE_EVENTS,
-                      approvalStatusPolicy: "sync",
-                    })
-                  }
-                  className="rounded-lg bg-ink px-3 py-1.5 text-[12px] font-semibold text-white"
-                >
-                  Retry
-                </button>
-              </div>
-            ) : items.length === 0 ? (
-              <p className="py-12 text-center text-[13px] text-ink-muted">
-                No transcript events yet. They appear as the agent runs.
-              </p>
-            ) : (
-              <VirtualTranscriptList
-                items={items}
-                scrollRef={scrollRef}
-                contentRef={contentRef}
-                following={following}
-                header={
-                  loadingOlder ? (
-                    <div className="flex justify-center py-1" aria-hidden>
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-ink-muted/50" />
-                    </div>
-                  ) : null
-                }
-                renderItem={(item) => (
+              ) : phase === "error" && !hasCache ? (
+                <div className="flex flex-col items-center gap-3 py-12 text-center">
+                  <p className="text-[13px] text-rose-600">
+                    {status?.error ?? "Failed to load transcript"}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void loadTranscript(sessionId, {
+                        tailWindow: TRANSCRIPT_PAGE_EVENTS,
+                        approvalStatusPolicy: "sync",
+                      })
+                    }
+                    className="rounded-lg bg-ink px-3 py-1.5 text-[12px] font-semibold text-white"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : items.length === 0 ? (
+                <p className="py-12 text-center text-[13px] text-ink-muted">
+                  No transcript events yet. They appear as the agent runs.
+                </p>
+              ) : (
+                items.map((item) => (
                   <TranscriptItemView
+                    key={item.id}
                     item={item}
                     streaming={
                       liveStreaming &&
@@ -931,9 +931,9 @@ function TranscriptPane({
                         : undefined
                     }
                   />
-                )}
-              />
-            )}
+                ))
+              )}
+            </div>
           </div>
 
           {!following ? (
