@@ -93,103 +93,130 @@ export function WorkView() {
     );
   }
 
+  // Keep Conversations / Sessions / Board mounted (CSS hide) so tab switches
+  // do not remount transcript panes or re-fetch tails (avoids content flash).
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface">
       <ProjectHeader projectId={resolvedProjectId} />
-      {projectView === "board" ? (
-        <ProjectBoard key={resolvedProjectId} projectId={resolvedProjectId} />
-      ) : projectView === "sessions" ? (
-        <ErrorBoundary label="sessions">
-          <SessionsView key={resolvedProjectId} projectId={resolvedProjectId} />
-        </ErrorBoundary>
-      ) : (
-        <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-          {listCollapsed ? (
-            <>
-              <ConversationListRail />
-              <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-                {conversationId ? (
-                  <Timeline
-                    key={conversationId}
-                    conversationId={conversationId}
-                  />
-                ) : (
-                  <TimelineEmpty />
-                )}
-                {detailsOpen && conversationId ? (
-                  <SessionInspector conversationId={conversationId} />
-                ) : conversationId ? (
-                  <InspectorToggle onOpen={toggleDetails} />
-                ) : null}
-              </div>
-            </>
-          ) : (
-            <Group
-              orientation="horizontal"
-              className="flex min-h-0 min-w-0 flex-1 overflow-hidden"
-              defaultLayout={{
-                list: 22,
-                timeline: detailsOpen ? 53 : 78,
-                inspector: detailsOpen ? 25 : 0,
-              }}
-            >
-              <Panel
-                id="list"
-                minSize={180}
-                defaultSize="22"
-                className="min-h-0 min-w-0"
-              >
-                <ConversationList
-                  key={resolvedProjectId}
-                  projectId={resolvedProjectId}
-                  fill
+
+      <div
+        className={cn(
+          "flex min-h-0 min-w-0 flex-1 overflow-hidden",
+          projectView !== "conversations" && "hidden",
+        )}
+        // Inert when hidden so focus/shortcuts stay in the active view.
+        inert={projectView !== "conversations" ? true : undefined}
+        aria-hidden={projectView !== "conversations"}
+      >
+        {listCollapsed ? (
+          <>
+            <ConversationListRail />
+            <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+              {conversationId ? (
+                <Timeline
+                  key={conversationId}
+                  conversationId={conversationId}
                 />
-              </Panel>
-              <Separator
-                className={cn(
-                  "w-1.5 shrink-0 bg-transparent transition-colors duration-150",
-                  "hover:bg-accent/30 data-[separator-active]:bg-accent/40",
-                )}
-              />
-              <Panel
-                id="timeline"
-                minSize={280}
-                defaultSize={detailsOpen ? "53" : "78"}
-                className="min-h-0 min-w-0"
-              >
-                {conversationId ? (
-                  <Timeline
-                    key={conversationId}
-                    conversationId={conversationId}
-                  />
-                ) : (
-                  <TimelineEmpty />
-                )}
-              </Panel>
+              ) : (
+                <TimelineEmpty />
+              )}
               {detailsOpen && conversationId ? (
-                <>
-                  <Separator
-                    className={cn(
-                      "w-1.5 shrink-0 bg-transparent transition-colors duration-150",
-                      "hover:bg-accent/30 data-[separator-active]:bg-accent/40",
-                    )}
-                  />
-                  <Panel
-                    id="inspector"
-                    minSize={200}
-                    defaultSize="25"
-                    className="min-h-0 min-w-0"
-                  >
-                    <SessionInspector conversationId={conversationId} />
-                  </Panel>
-                </>
+                <SessionInspector conversationId={conversationId} />
               ) : conversationId ? (
                 <InspectorToggle onOpen={toggleDetails} />
               ) : null}
-            </Group>
-          )}
-        </div>
-      )}
+            </div>
+          </>
+        ) : (
+          <Group
+            orientation="horizontal"
+            className="flex min-h-0 min-w-0 flex-1 overflow-hidden"
+            defaultLayout={{
+              list: 22,
+              timeline: detailsOpen ? 53 : 78,
+              inspector: detailsOpen ? 25 : 0,
+            }}
+          >
+            <Panel
+              id="list"
+              minSize={180}
+              defaultSize="22"
+              className="min-h-0 min-w-0"
+            >
+              <ConversationList
+                key={resolvedProjectId}
+                projectId={resolvedProjectId}
+                fill
+              />
+            </Panel>
+            <Separator
+              className={cn(
+                "w-1.5 shrink-0 bg-transparent transition-colors duration-150",
+                "hover:bg-accent/30 data-[separator-active]:bg-accent/40",
+              )}
+            />
+            <Panel
+              id="timeline"
+              minSize={280}
+              defaultSize={detailsOpen ? "53" : "78"}
+              className="min-h-0 min-w-0"
+            >
+              {conversationId ? (
+                <Timeline
+                  key={conversationId}
+                  conversationId={conversationId}
+                />
+              ) : (
+                <TimelineEmpty />
+              )}
+            </Panel>
+            {detailsOpen && conversationId ? (
+              <>
+                <Separator
+                  className={cn(
+                    "w-1.5 shrink-0 bg-transparent transition-colors duration-150",
+                    "hover:bg-accent/30 data-[separator-active]:bg-accent/40",
+                  )}
+                />
+                <Panel
+                  id="inspector"
+                  minSize={200}
+                  defaultSize="25"
+                  className="min-h-0 min-w-0"
+                >
+                  <SessionInspector conversationId={conversationId} />
+                </Panel>
+              </>
+            ) : conversationId ? (
+              <InspectorToggle onOpen={toggleDetails} />
+            ) : null}
+          </Group>
+        )}
+      </div>
+
+      <div
+        className={cn(
+          "flex min-h-0 min-w-0 flex-1 overflow-hidden",
+          projectView !== "sessions" && "hidden",
+        )}
+        inert={projectView !== "sessions" ? true : undefined}
+        aria-hidden={projectView !== "sessions"}
+      >
+        <ErrorBoundary label="sessions">
+          <SessionsView key={resolvedProjectId} projectId={resolvedProjectId} />
+        </ErrorBoundary>
+      </div>
+
+      <div
+        className={cn(
+          "flex min-h-0 min-w-0 flex-1 overflow-hidden",
+          projectView !== "board" && "hidden",
+        )}
+        inert={projectView !== "board" ? true : undefined}
+        aria-hidden={projectView !== "board"}
+      >
+        <ProjectBoard key={resolvedProjectId} projectId={resolvedProjectId} />
+      </div>
     </div>
   );
 }

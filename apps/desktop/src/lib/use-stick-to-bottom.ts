@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   FOLLOW_THRESHOLD_PX,
   distanceFromBottom,
@@ -81,10 +87,12 @@ export function useStickToBottom({
     });
   }, [setFollowingBoth, markProgrammatic]);
 
-  // Session / conversation change → re-enter follow.
-  useEffect(() => {
+  // Session / conversation change → re-enter follow and pin before paint
+  // so the first frame is already at the tail (avoids top→bottom flash).
+  useLayoutEffect(() => {
     setFollowingBoth(true);
-  }, [resetKey, setFollowingBoth]);
+    pinBottom();
+  }, [resetKey, setFollowingBoth, pinBottom]);
 
   // User scroll / wheel drives follow on/off.
   useEffect(() => {
@@ -132,8 +140,9 @@ export function useStickToBottom({
     };
   }, [threshold, resetKey, setFollowingBoth]);
 
-  // Content identity / body growth while following.
-  useEffect(() => {
+  // Content identity / body growth while following — layout phase so stream
+  // updates do not paint one frame at the previous scroll offset.
+  useLayoutEffect(() => {
     if (followingRef.current) {
       pinBottom();
     }

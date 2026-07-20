@@ -126,6 +126,7 @@ function sessionBelongsToProject(
 
 export function SessionsView({ projectId }: { projectId: string }) {
   const selectedSessionId = useUiStore((s) => s.selectedSessionId);
+  const conversationId = useUiStore((s) => s.conversationId);
   const selectSession = useUiStore((s) => s.selectSession);
   const openConversation = useUiStore((s) => s.openConversation);
   const listCollapsed = useUiStore((s) => s.sessionsListCollapsed);
@@ -194,9 +195,14 @@ export function SessionsView({ projectId }: { projectId: string }) {
   );
 
   // Init: load project sessions for this projectId (re-run after boot wipe).
+  // Quiet when we already have rows so keep-alive re-entry / remount does not
+  // flash the list into "Loading…".
   useEffect(() => {
     if (source !== "daemon") return;
-    void loadProjectSessions(projectId);
+    const hasRows =
+      (useWorkspaceStore.getState().projectSessionsByProject[projectId]
+        ?.length ?? 0) > 0;
+    void loadProjectSessions(projectId, { quiet: hasRows });
   }, [projectId, source, loadProjectSessions, bootEpoch]);
 
   // Project switch: drop foreign selection + collapse state.
@@ -220,7 +226,8 @@ export function SessionsView({ projectId }: { projectId: string }) {
     selectSession,
   ]);
 
-  // Auto-select first root session for this project when nothing valid is selected.
+  // Auto-select a root session when nothing valid is selected.
+  // Prefer the session under the conversation the user just left (Conversations tab).
   useEffect(() => {
     if (selectedSessionId) {
       if (sessionBelongsToProject(selectedSessionId, displaySessions)) return;
@@ -228,7 +235,13 @@ export function SessionsView({ projectId }: { projectId: string }) {
       const phase = listStatus?.phase ?? "idle";
       if (phase === "loading" || phase === "idle") return;
     }
-    const firstRoot = groups[0]?.roots[0] ?? displaySessions[0];
+    const fromConversation = conversationId
+      ? displaySessions.find(
+          (s) => s.conversationId === conversationId && !s.parentId,
+        )
+      : undefined;
+    const firstRoot =
+      fromConversation ?? groups[0]?.roots[0] ?? displaySessions[0];
     if (firstRoot) selectSession(firstRoot.id);
     else if (selectedSessionId) selectSession(null);
   }, [
@@ -237,6 +250,7 @@ export function SessionsView({ projectId }: { projectId: string }) {
     selectedSessionId,
     selectSession,
     listStatus?.phase,
+    conversationId,
   ]);
 
   // Keep the conversation of the selected session expanded.
@@ -694,12 +708,19 @@ function TranscriptPane({
     scrollAnchorRef.current = null;
   }, [items, scrollRef, markProgrammatic]);
 
-  // Init: tail only (fast). Older history streams in via infinite scroll.
+  // Init / reopen: first open loads the tail; when cache exists only append
+  // new events (quiet) so switching tabs does not wipe older pages or flash
+  // the loading skeleton.
   useEffect(() => {
     if (source !== "daemon") return;
     olderInFlightRef.current = false;
+    const cached =
+      useWorkspaceStore.getState().transcriptsByThread[sessionId] ?? [];
+    const hasCache = cached.length > 0;
     void loadTranscript(sessionId, {
       tailWindow: TRANSCRIPT_PAGE_EVENTS,
+      quiet: hasCache,
+      append: hasCache,
       approvalStatusPolicy: "sync",
     });
   }, [sessionId, source, loadTranscript]);

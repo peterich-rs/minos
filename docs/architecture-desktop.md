@@ -88,6 +88,7 @@ apps/desktop/
 | 全局跳转 | ⌘/Ctrl+K → `CommandPalette` |
 | Daemon 连接反馈 | `ConnectionToasts` 监听 `connection.connected` 边沿 |
 | Transcript 滚动 | stick-to-bottom + tail/load-older；**manual scroll 时不 autofill**；prepend 用 `markProgrammatic` 锚点恢复 |
+| Project tab 切换 | Conversations / Sessions / Board **keep-alive**（`hidden` + `inert`，不 unmount）；有缓存时 transcript **quiet append**；`useLayoutEffect` 首帧 pin 到底 |
 
 ## Rust 宿主 / Daemon 桥
 
