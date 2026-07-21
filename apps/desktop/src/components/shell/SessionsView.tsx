@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ArrowDown,
   ArrowLeft,
@@ -40,6 +48,12 @@ import type { TranscriptItem } from "@/lib/daemon";
 import { followContentKey } from "@/lib/stick-to-bottom";
 import { useStickToBottom } from "@/lib/use-stick-to-bottom";
 import {
+  captureItemScrollAnchor,
+  queryScrollItem,
+  restoreItemScrollAnchor,
+  type ItemScrollAnchor,
+} from "@/lib/scroll-restore";
+import {
   buildToolHeader,
   collapsedThinkingSummary,
   displayToolDetail,
@@ -60,7 +74,6 @@ import {
   EMPTY_TRANSCRIPT_HISTORY,
   TRANSCRIPT_AUTOFILL_SLACK_PX,
   TRANSCRIPT_PAGE_EVENTS,
-  TRANSCRIPT_PREFETCH_TOP_PX,
 } from "@/lib/transcript-history";
 import { IncrementalText } from "@/components/IncrementalText";
 
@@ -646,20 +659,35 @@ function TranscriptPane({
   const [approving, setApproving] = useState<string | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(true);
 
-  /** Preserve viewport when older pages are prepended (no jump). */
-  const scrollAnchorRef = useRef<{
-    height: number;
-    top: number;
+  /**
+   * Identity-based restore for load-older prepends.
+   * Height-delta restore races concurrent stream merges; we only restore when
+   * `firstLoadedStartSeq` actually moves backward (older page applied).
+   */
+  const pendingOlderRestoreRef = useRef<{
+    anchor: ItemScrollAnchor;
+    firstLoadedStartSeqBefore: number;
   } | null>(null);
+  /** Suspend stick-to-bottom pin while we own scrollTop after prepend. */
+  const pinSuspendedRef = useRef(false);
   /** Prevent overlapping older fetches (state lag vs double effect fire). */
   const olderInFlightRef = useRef(false);
+  const topSentinelRef = useRef<HTMLDivElement>(null);
 
   const contentKey = useMemo(() => followContentKey(items), [items]);
-  const { scrollRef, contentRef, following, jumpToLatest, markProgrammatic } =
-    useStickToBottom({
-      contentKey,
-      resetKey: sessionId,
-    });
+  const {
+    scrollRef,
+    contentRef,
+    following,
+    followingRef,
+    jumpToLatest,
+    markProgrammatic,
+    cancelScheduledPin,
+  } = useStickToBottom({
+    contentKey,
+    resetKey: sessionId,
+    pinSuspendedRef,
+  });
 
   const summary = useMemo(
     () => summarizeSessionFromTranscript(items),
@@ -680,15 +708,37 @@ function TranscriptPane({
 
   const loadOlder = useCallback(async () => {
     if (source !== "daemon") return;
-    if (!hasOlder || loadingOlder || olderInFlightRef.current) return;
+    // Read live flags from store so this callback stays stable across stream ticks.
+    const hist =
+      useWorkspaceStore.getState().transcriptHistoryByThread[sessionId] ??
+      EMPTY_TRANSCRIPT_HISTORY;
+    if (!hist.hasOlder || hist.loadingOlder || olderInFlightRef.current) return;
     olderInFlightRef.current = true;
+
+    // Only capture a viewport anchor when the user is in manual-scroll mode.
+    // While following, stick-to-bottom owns the viewport (autofill / pin).
     const el = scrollRef.current;
-    if (el) {
-      scrollAnchorRef.current = {
-        height: el.scrollHeight,
-        top: el.scrollTop,
-      };
+    const content = contentRef.current;
+    const shouldRestore = !followingRef.current;
+    const currentItems =
+      useWorkspaceStore.getState().transcriptsByThread[sessionId] ?? [];
+    const seqBefore = hist.firstLoadedStartSeq;
+    if (shouldRestore && el && content && currentItems.length > 0) {
+      const topId = currentItems[0]!.id;
+      const itemEl = queryScrollItem(content, topId);
+      const anchor = captureItemScrollAnchor(el, topId, itemEl);
+      if (anchor) {
+        pendingOlderRestoreRef.current = {
+          anchor,
+          firstLoadedStartSeqBefore: seqBefore,
+        };
+      } else {
+        pendingOlderRestoreRef.current = null;
+      }
+    } else {
+      pendingOlderRestoreRef.current = null;
     }
+
     try {
       await loadTranscript(sessionId, {
         older: true,
@@ -696,24 +746,54 @@ function TranscriptPane({
         tailWindow: TRANSCRIPT_PAGE_EVENTS,
         approvalStatusPolicy: "sync",
       });
+    } catch {
+      pendingOlderRestoreRef.current = null;
     } finally {
       olderInFlightRef.current = false;
     }
-  }, [source, hasOlder, loadingOlder, loadTranscript, sessionId, scrollRef]);
+  }, [source, loadTranscript, sessionId, scrollRef, contentRef, followingRef]);
 
-  // After older items prepend, keep the same messages under the viewport.
+  // After an older page lands (`firstLoadedStartSeq` decreased), restore the
+  // anchored row. Ignore intermediate `items` updates (stream) while waiting.
   useLayoutEffect(() => {
-    const el = scrollRef.current;
-    const anchor = scrollAnchorRef.current;
-    if (!el || !anchor) return;
-    const delta = el.scrollHeight - anchor.height;
-    if (delta > 0) {
-      // Do not let stick-to-bottom treat this as a user scroll (re-follow thrash).
-      markProgrammatic(100);
-      el.scrollTop = anchor.top + delta;
+    const pending = pendingOlderRestoreRef.current;
+    if (!pending) return;
+    // Older page not applied yet — keep pending across stream merges.
+    if (firstLoadedStartSeq >= pending.firstLoadedStartSeqBefore) return;
+
+    // User re-followed while the fetch was in flight: drop restore, pin owns it.
+    if (followingRef.current) {
+      pendingOlderRestoreRef.current = null;
+      return;
     }
-    scrollAnchorRef.current = null;
-  }, [items, scrollRef, markProgrammatic]);
+
+    const el = scrollRef.current;
+    const content = contentRef.current;
+    if (!el || !content) {
+      pendingOlderRestoreRef.current = null;
+      return;
+    }
+
+    const itemEl = queryScrollItem(content, pending.anchor.itemId);
+    cancelScheduledPin();
+    pinSuspendedRef.current = true;
+    markProgrammatic(120);
+    restoreItemScrollAnchor(el, itemEl, pending.anchor);
+    pendingOlderRestoreRef.current = null;
+    // Release pin suspend after layout settles so live follow can resume later.
+    requestAnimationFrame(() => {
+      pinSuspendedRef.current = false;
+    });
+    // Depend on firstLoadedStartSeq (older page applied) — not every stream
+    // tick of `items`. DOM for the anchored id is updated in the same commit.
+  }, [
+    firstLoadedStartSeq,
+    scrollRef,
+    contentRef,
+    followingRef,
+    markProgrammatic,
+    cancelScheduledPin,
+  ]);
 
   // Init / reopen: first open loads the tail; when cache exists only append
   // new events (quiet) so switching tabs does not wipe older pages or flash
@@ -721,6 +801,8 @@ function TranscriptPane({
   useEffect(() => {
     if (source !== "daemon") return;
     olderInFlightRef.current = false;
+    pendingOlderRestoreRef.current = null;
+    pinSuspendedRef.current = false;
     const cached =
       useWorkspaceStore.getState().transcriptsByThread[sessionId] ?? [];
     const hasCache = cached.length > 0;
@@ -735,6 +817,7 @@ function TranscriptPane({
   // Silent backfill only while stick-to-bottom is active (opening a session /
   // sparse tail). Never autofill while the user is reading older history —
   // that used to race with manual scroll and cause viewport thrash.
+  // loadOlder skips identity restore while following, so pin is not fought.
   useEffect(() => {
     if (source !== "daemon") return;
     if (!following) return;
@@ -757,20 +840,27 @@ function TranscriptPane({
     scrollRef,
   ]);
 
-  // Prefetch older when the user approaches the top (manual history browse).
+  // Prefetch older via a top sentinel (not scrollTop threshold on every frame).
+  // Fires only when the sentinel enters the scrollport in manual-scroll mode.
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
+    const root = scrollRef.current;
+    const sentinel = topSentinelRef.current;
+    if (!root || !sentinel || typeof IntersectionObserver === "undefined") {
+      return;
+    }
 
-    const onScroll = () => {
-      if (following) return;
-      if (el.scrollTop > TRANSCRIPT_PREFETCH_TOP_PX) return;
-      void loadOlder();
-    };
-
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
-  }, [sessionId, loadOlder, scrollRef, following]);
+    const io = new IntersectionObserver(
+      (entries) => {
+        const hit = entries.some((e) => e.isIntersecting);
+        if (!hit) return;
+        if (followingRef.current) return;
+        void loadOlder();
+      },
+      { root, rootMargin: "120px 0px 0px 0px", threshold: 0 },
+    );
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, [sessionId, loadOlder, scrollRef, followingRef, hasOlder]);
 
   // Fallback append poll only without live push (ingest frames own live stream).
   useEffect(() => {
@@ -798,6 +888,50 @@ function TranscriptPane({
   const meta = agentMeta[session.agent as keyof typeof agentMeta];
   const phase = status?.phase ?? "idle";
   const hasCache = items.length > 0;
+
+  const onUserAction = useCallback(
+    async (item: TranscriptItem, action: UserAction) => {
+      if (!item.requestId) return;
+      setApproving(item.requestId);
+      try {
+        await handleUserAction(session.id, item, action, {
+          resolveApproval,
+          respondOpencodePermission,
+          respondOpencodeQuestion,
+        });
+        if (
+          action.type === "decision" &&
+          (item.kind === "approval" || item.kind === "question")
+        ) {
+          toast.success(
+            action.decision === "approve" ||
+              action.decision === "allow"
+              ? "Approved"
+              : action.decision === "deny" ||
+                  action.decision === "abandon"
+                ? "Denied"
+                : `Decision: ${action.decision}`,
+          );
+        } else if (action.type === "cancel") {
+          toast.info("Cancelled");
+        }
+      } catch (e) {
+        toast.error(
+          "Action failed",
+          e instanceof Error ? e.message : String(e),
+        );
+        throw e;
+      } finally {
+        setApproving(null);
+      }
+    },
+    [
+      session.id,
+      resolveApproval,
+      respondOpencodePermission,
+      respondOpencodeQuestion,
+    ],
+  );
 
   return (
     <section className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface">
@@ -864,10 +998,18 @@ function TranscriptPane({
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <div
             ref={scrollRef}
-            className="scrollbar-thin min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-4 py-4 sm:px-5"
+            className="scrollbar-thin min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-none px-4 py-4 sm:px-5"
             style={{ flex: "1 1 0%" }}
           >
             <div ref={contentRef} className="mx-auto max-w-3xl space-y-2.5 pb-8">
+              {/* Sentinel for IntersectionObserver load-older (manual scroll). */}
+              {hasOlder ? (
+                <div
+                  ref={topSentinelRef}
+                  className="h-px w-full shrink-0"
+                  aria-hidden
+                />
+              ) : null}
               {/* Tiny non-blocking marker at top while older pages stream in */}
               {loadingOlder ? (
                 <div className="flex justify-center py-1" aria-hidden>
@@ -902,63 +1044,25 @@ function TranscriptPane({
                 </p>
               ) : (
                 items.map((item) => (
-                  <TranscriptItemView
-                    key={item.id}
-                    item={item}
-                    streaming={
-                      liveStreaming &&
-                      item.id === lastStreamableId &&
-                      (item.kind === "assistant" ||
-                        item.kind === "text" ||
-                        item.kind === "reasoning")
-                    }
-                    approving={approving === item.requestId}
-                    onUserAction={
-                      item.requestId &&
-                      (item.kind === "approval" || item.kind === "question")
-                        ? async (action) => {
-                            setApproving(item.requestId!);
-                            try {
-                              await handleUserAction(
-                                session.id,
-                                item,
-                                action,
-                                {
-                                  resolveApproval,
-                                  respondOpencodePermission,
-                                  respondOpencodeQuestion,
-                                },
-                              );
-                              if (
-                                action.type === "decision" &&
-                                (item.kind === "approval" ||
-                                  item.kind === "question")
-                              ) {
-                                toast.success(
-                                  action.decision === "approve" ||
-                                    action.decision === "allow"
-                                    ? "Approved"
-                                    : action.decision === "deny" ||
-                                        action.decision === "abandon"
-                                      ? "Denied"
-                                      : `Decision: ${action.decision}`,
-                                );
-                              } else if (action.type === "cancel") {
-                                toast.info("Cancelled");
-                              }
-                            } catch (e) {
-                              toast.error(
-                                "Action failed",
-                                e instanceof Error ? e.message : String(e),
-                              );
-                              throw e;
-                            } finally {
-                              setApproving(null);
-                            }
-                          }
-                        : undefined
-                    }
-                  />
+                  <div key={item.id} data-scroll-id={item.id}>
+                    <TranscriptItemView
+                      item={item}
+                      streaming={
+                        liveStreaming &&
+                        item.id === lastStreamableId &&
+                        (item.kind === "assistant" ||
+                          item.kind === "text" ||
+                          item.kind === "reasoning")
+                      }
+                      approving={approving === item.requestId}
+                      onUserAction={
+                        item.requestId &&
+                        (item.kind === "approval" || item.kind === "question")
+                          ? onUserAction
+                          : undefined
+                      }
+                    />
+                  </div>
                 ))
               )}
             </div>
@@ -1372,8 +1476,9 @@ function ApprovalModal({
 
 /**
  * Grok / TUI AgentDetail-style transcript row (not messenger bubbles).
+ * Memoized so stream/store ticks only re-render the active row + changed props.
  */
-function TranscriptItemView({
+const TranscriptItemView = memo(function TranscriptItemView({
   item,
   streaming,
   onUserAction,
@@ -1381,12 +1486,20 @@ function TranscriptItemView({
 }: {
   item: TranscriptItem;
   streaming?: boolean;
-  onUserAction?: (action: UserAction) => void | Promise<void>;
+  onUserAction?: (
+    item: TranscriptItem,
+    action: UserAction,
+  ) => void | Promise<void>;
   approving?: boolean;
 }) {
   const time = item.tsMs ? formatLocalClock(item.tsMs) : "";
   const [open, setOpen] = useState(Boolean(streaming));
   const [planOpen, setPlanOpen] = useState(false);
+
+  const runAction = useCallback(
+    (action: UserAction) => onUserAction?.(item, action),
+    [onUserAction, item],
+  );
 
   // Stream start re-opens thinking (TUI default expand while streaming).
   useEffect(() => {
@@ -1417,7 +1530,7 @@ function TranscriptItemView({
                       type="button"
                       disabled={approving}
                       onClick={() => {
-                        void onUserAction?.({
+                        void runAction({
                           type: "decision",
                           decision: opt.label,
                         });
@@ -1431,7 +1544,7 @@ function TranscriptItemView({
                     type="button"
                     disabled={approving}
                     onClick={() => {
-                      void onUserAction?.({ type: "cancel" });
+                      void runAction({ type: "cancel" });
                     }}
                     className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-rose-700/80 hover:bg-rose-100/60 disabled:opacity-50"
                   >
@@ -1461,7 +1574,7 @@ function TranscriptItemView({
           open={planOpen}
           approving={approving}
           onClose={() => setPlanOpen(false)}
-          onUserAction={onUserAction}
+          onUserAction={runAction}
         />
       </>
     );
@@ -1638,4 +1751,4 @@ function TranscriptItemView({
       {item.text ? ` · ${item.text.slice(0, 120)}` : ""}
     </div>
   );
-}
+});

@@ -3,7 +3,7 @@
 mod daemon;
 
 use daemon::{
-    CliDto, ConnectionDto, ConversationDto, DaemonBridge, MessageDto, ProjectDto, SessionDto,
+    CliDto, ConnectionDto, ConversationDto, DaemonBridge, MessagePageDto, ProjectDto, SessionDto,
     StartAgentResultDto, TranscriptPageDto,
 };
 use std::sync::Arc;
@@ -80,10 +80,12 @@ async fn daemon_list_conversations(
 async fn daemon_list_messages(
     state: State<'_, AppState>,
     conversation_id: String,
-) -> Result<Vec<MessageDto>, String> {
+    before_seq: Option<i64>,
+    limit: Option<u32>,
+) -> Result<MessagePageDto, String> {
     state
         .daemon
-        .list_messages(conversation_id)
+        .list_messages(conversation_id, before_seq, limit)
         .await
         .map_err(|e| e.to_string())
 }

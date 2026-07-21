@@ -8,6 +8,7 @@ import {
   isVerticallyScrollable,
   shouldUnfollowOnWheelUp,
   FOLLOW_THRESHOLD_PX,
+  REFOLLOW_THRESHOLD_PX,
   SCROLLABLE_EPSILON_PX,
 } from "./stick-to-bottom.ts";
 
@@ -35,16 +36,31 @@ describe("distanceFromBottom", () => {
   });
 });
 
-describe("isNearBottom / followAfterUserScroll", () => {
+describe("isNearBottom / followAfterUserScroll hysteresis", () => {
   it("treats within threshold as near bottom", () => {
     assert.equal(isNearBottom(0), true);
     assert.equal(isNearBottom(FOLLOW_THRESHOLD_PX), true);
     assert.equal(isNearBottom(FOLLOW_THRESHOLD_PX + 1), false);
   });
 
-  it("unfollows when scrolled above threshold", () => {
-    assert.equal(followAfterUserScroll(200), false);
-    assert.equal(followAfterUserScroll(20), true);
+  it("unfollows when currently following and scrolled above unfollow threshold", () => {
+    assert.equal(followAfterUserScroll(200, true), false);
+    assert.equal(followAfterUserScroll(20, true), true);
+  });
+
+  it("does not re-follow until inside the tight refollow band", () => {
+    // Mid-zone: would have re-followed with the old single threshold.
+    const mid = REFOLLOW_THRESHOLD_PX + 20;
+    assert.ok(mid < FOLLOW_THRESHOLD_PX);
+    assert.equal(followAfterUserScroll(mid, false), false);
+    assert.equal(followAfterUserScroll(REFOLLOW_THRESHOLD_PX, false), true);
+    assert.equal(followAfterUserScroll(0, false), true);
+  });
+
+  it("stays following in the hysteresis band until past unfollow", () => {
+    const mid = REFOLLOW_THRESHOLD_PX + 20;
+    assert.equal(followAfterUserScroll(mid, true), true);
+    assert.equal(followAfterUserScroll(FOLLOW_THRESHOLD_PX + 1, true), false);
   });
 });
 

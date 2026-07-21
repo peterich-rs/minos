@@ -73,6 +73,13 @@ export type DaemonMessage = {
   mentions?: DaemonMention[];
 };
 
+/** One page of conversation messages (tail or older). */
+export type DaemonMessagePage = {
+  messages: DaemonMessage[];
+  /** True when more messages exist before this page. */
+  hasMore: boolean;
+};
+
 export type DaemonSession = {
   id: string;
   conversationId: string;
@@ -178,8 +185,20 @@ export const daemonApi = {
     call<DaemonProject>("daemon_create_project", { workspacePath }),
   listConversations: (projectId: string) =>
     call<DaemonConversation[]>("daemon_list_conversations", { projectId }),
-  listMessages: (conversationId: string) =>
-    call<DaemonMessage[]>("daemon_list_messages", { conversationId }),
+  /**
+   * Page conversation messages (ASC).
+   * - No `beforeSeq`: newest `limit` messages (tail).
+   * - With `beforeSeq`: older page strictly before that durable seq.
+   */
+  listMessages: (
+    conversationId: string,
+    opts?: { beforeSeq?: number; limit?: number },
+  ) =>
+    call<DaemonMessagePage>("daemon_list_messages", {
+      conversationId,
+      beforeSeq: opts?.beforeSeq ?? null,
+      limit: opts?.limit ?? null,
+    }),
   listSessions: (conversationId: string) =>
     call<DaemonSession[]>("daemon_list_sessions", { conversationId }),
   createConversation: (projectId: string, title: string) =>

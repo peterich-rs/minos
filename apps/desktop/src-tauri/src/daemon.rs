@@ -108,6 +108,15 @@ pub struct MessageDto {
     pub mentions: Vec<MentionDto>,
 }
 
+/// One page of conversation messages (tail or older).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessagePageDto {
+    pub messages: Vec<MessageDto>,
+    /// True when more messages exist before this page (older history).
+    pub has_more: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MentionDto {
@@ -598,12 +607,20 @@ impl DaemonBridge {
             .collect())
     }
 
-    pub async fn list_messages(&self, conversation_id: String) -> Result<Vec<MessageDto>> {
+    /// List conversation messages (newest-first from daemon, returned ASC).
+    /// `before_seq` pages older history; `limit` defaults to 80 (max 500).
+    pub async fn list_messages(
+        &self,
+        conversation_id: String,
+        before_seq: Option<i64>,
+        limit: Option<u32>,
+    ) -> Result<MessagePageDto> {
         let client = self.client().await?;
+        let page_limit = limit.unwrap_or(80).clamp(1, 500);
         let params = ListConversationMessagesParams {
             conversation_id,
-            before_seq: None,
-            limit: Some(200),
+            before_seq,
+            limit: Some(page_limit),
         };
         let response: minos_protocol::ListConversationMessagesResponse = client
             .request("minos_local_list_conversation_messages", [params])
@@ -614,7 +631,10 @@ impl DaemonBridge {
             response.messages.into_iter().map(map_message).collect();
         messages.reverse();
         messages.sort_by_key(|m| m.message_seq);
-        Ok(messages)
+        Ok(MessagePageDto {
+            messages,
+            has_more: response.has_more,
+        })
     }
 
     pub async fn list_sessions(&self, conversation_id: String) -> Result<Vec<SessionDto>> {

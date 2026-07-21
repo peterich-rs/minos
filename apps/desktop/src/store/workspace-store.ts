@@ -55,6 +55,20 @@ import {
   TRANSCRIPT_PAGE_EVENTS,
   type TranscriptHistoryMeta,
 } from "@/lib/transcript-history";
+import {
+  EMPTY_MESSAGE_HISTORY,
+  MESSAGE_PAGE_SIZE,
+  firstMessageSeq,
+  mergeMessagesOlder,
+  mergeMessagesQuietTail,
+  metaAfterMessageTail,
+  type MessageHistoryMeta,
+} from "@/lib/message-history";
+import {
+  reuseStableById,
+  timelineMessageEqual,
+  transcriptItemEqual,
+} from "@/lib/list-identity";
 
 const KNOWN_AGENTS_FALLBACK: {
   agent: string;
@@ -111,6 +125,8 @@ type WorkspaceState = {
   /** Per-project conversation list fetch status. */
   conversationsStatusByProject: Record<string, ResourceFetchStatus>;
   messagesByConversation: Record<string, TimelineMessage[]>;
+  /** Infinite-scroll cursor / loading flags per conversation timeline. */
+  messageHistoryByConversation: Record<string, MessageHistoryMeta>;
   sessionsByConversation: Record<string, ProjectSession[]>;
   /** Per-id load status for conversation timeline/detail. */
   detailStatusByConversation: Record<string, ResourceFetchStatus>;
@@ -144,12 +160,17 @@ type WorkspaceState = {
   ) => Promise<void>;
   /**
    * Load messages + agent sessions for one conversation.
-   * `quiet`: background refresh (poll) — keep prior data, skip loading flash.
+   * `quiet`: background refresh (poll) — keep prior data / older pages, skip loading flash.
    */
   loadConversationDetail: (
     conversationId: string,
     opts?: { quiet?: boolean },
   ) => Promise<void>;
+  /**
+   * Prepend one older page of conversation messages (infinite scroll).
+   * Always quiet — does not flash the main loading state.
+   */
+  loadOlderMessages: (conversationId: string) => Promise<void>;
   loadProjectSessions: (
     projectId: string,
     opts?: { quiet?: boolean },
@@ -283,10 +304,19 @@ export function mergeTranscriptItems(
     }
   });
   const out = [...prev];
+  let mutated = false;
   for (const item of incoming) {
     if (byId.has(item.id)) {
       const idx = out.findIndex((x) => x.id === item.id);
-      if (idx >= 0) out[idx] = item;
+      if (idx >= 0) {
+        const cur = out[idx]!;
+        // Preserve object identity when wire payload is unchanged so
+        // memoized TranscriptItemView rows skip re-render on quiet polls.
+        if (!transcriptItemEqual(cur, item)) {
+          out[idx] = item;
+          mutated = true;
+        }
+      }
       continue;
     }
     // Streaming text: same message_id → replace/extend last chunk.
@@ -298,15 +328,26 @@ export function mergeTranscriptItems(
       const idx = byMessage.get(key);
       if (idx !== undefined && out[idx]) {
         const cur = out[idx]!;
+        const nextText =
+          item.text.length >= cur.text.length
+            ? item.text
+            : cur.text + item.text;
+        const nextSeq = Math.max(cur.seq, item.seq);
+        const nextTs = item.tsMs || cur.tsMs;
+        if (
+          nextText === cur.text &&
+          nextSeq === cur.seq &&
+          nextTs === cur.tsMs
+        ) {
+          continue;
+        }
         out[idx] = {
           ...cur,
-          text:
-            item.text.length >= cur.text.length
-              ? item.text
-              : cur.text + item.text,
-          seq: Math.max(cur.seq, item.seq),
-          tsMs: item.tsMs || cur.tsMs,
+          text: nextText,
+          seq: nextSeq,
+          tsMs: nextTs,
         };
+        mutated = true;
         continue;
       }
       byMessage.set(key, out.length);
@@ -317,14 +358,19 @@ export function mergeTranscriptItems(
         (x) => x.kind === "approval" && x.requestId === item.requestId,
       );
       if (idx >= 0) {
-        out[idx] = item;
+        const cur = out[idx]!;
+        if (!transcriptItemEqual(cur, item)) {
+          out[idx] = item;
+          mutated = true;
+        }
         continue;
       }
     }
     byId.set(item.id, item);
     out.push(item);
+    mutated = true;
   }
-  return out;
+  return mutated ? out : prev;
 }
 
 function bumpStatus(
@@ -468,14 +514,18 @@ function toUiMessage(m: DaemonMessage): TimelineMessage {
         : "user";
   return {
     id: m.id,
+    messageSeq: m.messageSeq,
     role,
     agent: (m.agent as AgentRuntime | null) ?? undefined,
     sessionId: m.sessionId ?? undefined,
     body: m.body,
     // Format in the browser with the user's local timezone.
     time: m.createdAtMs ? formatLocalClock(m.createdAtMs) : m.time,
+    createdAtMs: m.createdAtMs,
     kind:
       m.kind === "approval" || m.kind === "tool_summary" ? m.kind : "text",
+    replyToMessageId: m.replyToMessageId ?? undefined,
+    delegationId: m.delegationId ?? undefined,
   };
 }
 
@@ -545,6 +595,7 @@ const emptyWorkspace = {
   conversations: [] as Conversation[],
   conversationsStatusByProject: {} as Record<string, ResourceFetchStatus>,
   messagesByConversation: {} as Record<string, TimelineMessage[]>,
+  messageHistoryByConversation: {} as Record<string, MessageHistoryMeta>,
   sessionsByConversation: {} as Record<string, ProjectSession[]>,
   detailStatusByConversation: {} as Record<string, ResourceFetchStatus>,
   projectSessionsByProject: {} as Record<string, ProjectSession[]>,
@@ -873,8 +924,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     }));
 
     try {
-      const [messages, sessions] = await Promise.all([
-        daemonApi.listMessages(conversationId),
+      const [messagePage, sessions] = await Promise.all([
+        daemonApi.listMessages(conversationId, { limit: MESSAGE_PAGE_SIZE }),
         daemonApi.listSessions(conversationId),
       ]);
       if (isStale()) return;
@@ -892,22 +943,47 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         daemonSessions,
         prevStatuses,
       );
-      const uiMessages = messages.map(toUiMessage);
-      set((s) => ({
-        messagesByConversation: {
-          ...s.messagesByConversation,
-          [conversationId]: uiMessages,
-        },
-        sessionsByConversation: {
-          ...s.sessionsByConversation,
-          [conversationId]: heldSessions,
-        },
-        detailStatusByConversation: {
-          ...s.detailStatusByConversation,
-          [conversationId]: { phase: "ready", generation },
-        },
-        error: null,
-      }));
+      const uiMessages = messagePage.messages.map(toUiMessage);
+      set((s) => {
+        const prevMessages = s.messagesByConversation[conversationId];
+        // Quiet re-list must keep already-loaded older pages and reuse row
+        // identity so TimelineRow/MarkdownText do not remount/reparse.
+        const merged = quiet
+          ? mergeMessagesQuietTail(prevMessages, uiMessages)
+          : reuseStableById(prevMessages, uiMessages, timelineMessageEqual);
+        const prevHist =
+          s.messageHistoryByConversation[conversationId] ??
+          EMPTY_MESSAGE_HISTORY;
+        // On open: trust daemon hasMore. On quiet: never clear hasOlder if we
+        // already know there is history above (tail page alone cannot prove it).
+        const nextHist: MessageHistoryMeta = quiet
+          ? {
+              firstLoadedSeq:
+                firstMessageSeq(merged) ?? prevHist.firstLoadedSeq,
+              hasOlder: prevHist.hasOlder || messagePage.hasMore,
+              loadingOlder: false,
+            }
+          : metaAfterMessageTail(merged, messagePage.hasMore);
+        return {
+          messagesByConversation: {
+            ...s.messagesByConversation,
+            [conversationId]: merged,
+          },
+          messageHistoryByConversation: {
+            ...s.messageHistoryByConversation,
+            [conversationId]: nextHist,
+          },
+          sessionsByConversation: {
+            ...s.sessionsByConversation,
+            [conversationId]: heldSessions,
+          },
+          detailStatusByConversation: {
+            ...s.detailStatusByConversation,
+            [conversationId]: { phase: "ready", generation },
+          },
+          error: null,
+        };
+      });
 
       // At most one top-level interrupted session auto-continues on open.
       // Skip on quiet poll to avoid double-continue races.
@@ -1011,6 +1087,81 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           },
         },
       }));
+    }
+  },
+
+  loadOlderMessages: async (conversationId) => {
+    if (get().source !== "daemon" || !conversationId) return;
+    const hist =
+      get().messageHistoryByConversation[conversationId] ??
+      EMPTY_MESSAGE_HISTORY;
+    if (hist.loadingOlder || !hist.hasOlder) return;
+    const beforeSeq = hist.firstLoadedSeq;
+    if (beforeSeq == null || beforeSeq <= 1) {
+      set((s) => ({
+        messageHistoryByConversation: {
+          ...s.messageHistoryByConversation,
+          [conversationId]: {
+            firstLoadedSeq: hist.firstLoadedSeq,
+            hasOlder: false,
+            loadingOlder: false,
+          },
+        },
+      }));
+      return;
+    }
+
+    set((s) => ({
+      messageHistoryByConversation: {
+        ...s.messageHistoryByConversation,
+        [conversationId]: {
+          ...hist,
+          loadingOlder: true,
+        },
+      },
+    }));
+
+    try {
+      const page = await daemonApi.listMessages(conversationId, {
+        beforeSeq,
+        limit: MESSAGE_PAGE_SIZE,
+      });
+      if (get().source !== "daemon") return;
+      const older = page.messages.map(toUiMessage);
+      set((s) => {
+        const existing = s.messagesByConversation[conversationId] ?? [];
+        const merged = mergeMessagesOlder(older, existing);
+        return {
+          messagesByConversation: {
+            ...s.messagesByConversation,
+            [conversationId]: merged,
+          },
+          messageHistoryByConversation: {
+            ...s.messageHistoryByConversation,
+            [conversationId]: {
+              firstLoadedSeq: firstMessageSeq(merged),
+              hasOlder: page.hasMore,
+              loadingOlder: false,
+            },
+          },
+        };
+      });
+    } catch {
+      set((s) => {
+        const prev =
+          s.messageHistoryByConversation[conversationId] ??
+          EMPTY_MESSAGE_HISTORY;
+        return {
+          messageHistoryByConversation: {
+            ...s.messageHistoryByConversation,
+            [conversationId]: {
+              firstLoadedSeq: prev.firstLoadedSeq,
+              hasOlder: prev.hasOlder,
+              loadingOlder: false,
+            },
+          },
+        };
+      });
     }
   },
 

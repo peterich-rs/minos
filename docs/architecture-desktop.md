@@ -65,6 +65,11 @@ apps/desktop/
     lib/mock-data.ts
     lib/toast.ts         # sonner wrappers
     lib/use-stick-to-bottom.ts
+    lib/scroll-restore.ts      # identity-based prepend restore
+    lib/enter-animation.ts     # gate list enter anim to new ids only
+    lib/list-identity.ts       # reuse row objects across quiet reloads
+    lib/transcript-history.ts  # transcript tail/older page math
+    lib/message-history.ts     # conversation timeline tail/older page math
     store/ui-store.ts    # + commandPaletteOpen
     components/
       ui/                # Button · Dialog · Tooltip · Dropdown · Toaster (Radix+CVA)
@@ -87,7 +92,10 @@ apps/desktop/
 | Work 三栏可拖拽 | `react-resizable-panels`；列表折叠时退回 rail + flex |
 | 全局跳转 | ⌘/Ctrl+K → `CommandPalette` |
 | Daemon 连接反馈 | `ConnectionToasts` 监听 `connection.connected` 边沿 |
-| Transcript 滚动 | stick-to-bottom + tail/load-older；**manual scroll 时不 autofill**；prepend 用 `markProgrammatic` 锚点恢复 |
+| Transcript 滚动 | stick-to-bottom（rAF 合并 pin + wheel-up suppress re-follow/pin）+ tail/load-older；identity 锚点；top sentinel；`overscroll-y-none` |
+| Timeline 分页 | 打开只拉 tail（`MESSAGE_PAGE_SIZE`）；`loadOlderMessages(beforeSeq)`；quiet re-list 用 `mergeMessagesQuietTail` **保留已加载 older**；identity restore / following 不 restore |
+| Timeline 渲染 | 窄 selector；`sortTimelineMessages`；`MarkdownText` memo + streaming plain；`TimelineRow` memo；入场动画仅新增 id；`list-identity` 复用行对象 |
+| Follow 迟滞 | unfollow 80px / re-follow 12px；wheel-up 后 ~320ms 禁止 re-follow 与 pin，减轻到底回弹再上滑的抢滚动 |
 | Project tab 切换 | Conversations / Sessions / Board **keep-alive**（`hidden` + `inert`，不 unmount）；有缓存时 transcript **quiet append**；`useLayoutEffect` 首帧 pin 到底 |
 
 ## Rust 宿主 / Daemon 桥

@@ -3,8 +3,11 @@ import type { TranscriptItem } from "./daemon";
 /** Default raw-event window for first open (tail) and each older page. */
 export const TRANSCRIPT_PAGE_EVENTS = 400;
 
-/** Prefetch older history when within this many px of the top. */
-export const TRANSCRIPT_PREFETCH_TOP_PX = 720;
+/**
+ * Legacy scrollTop threshold (kept for tests). Prefer a top sentinel
+ * IntersectionObserver so fling-scroll does not chain-load pages.
+ */
+export const TRANSCRIPT_PREFETCH_TOP_PX = 160;
 
 /** If content does not fill the viewport, keep backfilling (silent). */
 export const TRANSCRIPT_AUTOFILL_SLACK_PX = 96;

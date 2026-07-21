@@ -4,9 +4,12 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type MutableRefObject,
+  type RefObject,
 } from "react";
 import {
   FOLLOW_THRESHOLD_PX,
+  UNFOLLOW_SUPPRESS_MS,
   distanceFromBottom,
   followAfterUserScroll,
   isVerticallyScrollable,
@@ -19,6 +22,11 @@ type Options = {
   /** Reset follow when this changes (session / conversation id). */
   resetKey?: string;
   threshold?: number;
+  /**
+   * When true, contentKey / ResizeObserver must not pin (e.g. load-older
+   * identity restore owns scrollTop for this layout pass).
+   */
+  pinSuspendedRef?: RefObject<boolean> | MutableRefObject<boolean>;
 };
 
 /**
@@ -28,12 +36,17 @@ type Options = {
  * growing content root (for ResizeObserver on expand/stream height).
  *
  * Scroll-up must win over programmatic pin: wheel/trackpad up immediately
- * unfollows so long transcripts stay readable while content is still growing.
+ * unfollows and suppresses re-follow/pin for a short window so rubber-band
+ * settle + stream growth cannot yank the viewport mid-gesture.
+ *
+ * Pin is coalesced to one rAF per frame so contentKey + ResizeObserver do not
+ * fight each other (or load-older restore) with multiple scrollTop writes.
  */
 export function useStickToBottom({
   contentKey,
   resetKey,
   threshold = FOLLOW_THRESHOLD_PX,
+  pinSuspendedRef,
 }: Options) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -43,6 +56,9 @@ export function useStickToBottom({
   const programmaticClearTimer = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+  const pinRafRef = useRef<number | null>(null);
+  /** performance.now() until which re-follow + pin are suppressed after wheel-up. */
+  const suppressRefollowUntilRef = useRef(0);
 
   const setFollowingBoth = useCallback((next: boolean) => {
     if (followingRef.current === next) return;
@@ -63,36 +79,72 @@ export function useStickToBottom({
     }, ms);
   }, []);
 
-  const pinBottom = useCallback(() => {
+  const cancelScheduledPin = useCallback(() => {
+    if (pinRafRef.current != null) {
+      cancelAnimationFrame(pinRafRef.current);
+      pinRafRef.current = null;
+    }
+  }, []);
+
+  const isPinSuppressed = useCallback(() => {
+    if (pinSuspendedRef?.current) return true;
+    if (performance.now() < suppressRefollowUntilRef.current) return true;
+    return false;
+  }, [pinSuspendedRef]);
+
+  const pinBottomNow = useCallback(() => {
     const el = scrollRef.current;
     if (!el || !followingRef.current) return;
+    if (isPinSuppressed()) return;
     markProgrammatic(80);
     el.scrollTop = el.scrollHeight;
-  }, [markProgrammatic]);
+  }, [markProgrammatic, isPinSuppressed]);
+
+  /** Coalesce pin to a single layout frame. */
+  const schedulePinBottom = useCallback(() => {
+    if (!followingRef.current) return;
+    if (isPinSuppressed()) return;
+    if (pinRafRef.current != null) return;
+    pinRafRef.current = requestAnimationFrame(() => {
+      pinRafRef.current = null;
+      pinBottomNow();
+    });
+  }, [pinBottomNow, isPinSuppressed]);
 
   const jumpToLatest = useCallback(() => {
+    cancelScheduledPin();
+    suppressRefollowUntilRef.current = 0;
     setFollowingBoth(true);
     // pin after follow latches; mark programmatic so the jump does not bounce.
     markProgrammatic(80);
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-    // second frame for late layout (markdown / images)
+    // second frame for late layout (markdown / images) — only if still following
+    // and user has not started scrolling up.
     requestAnimationFrame(() => {
       if (!followingRef.current) return;
+      if (isPinSuppressed()) return;
       const node = scrollRef.current;
       if (node) {
         markProgrammatic(80);
         node.scrollTop = node.scrollHeight;
       }
     });
-  }, [setFollowingBoth, markProgrammatic]);
+  }, [
+    setFollowingBoth,
+    markProgrammatic,
+    cancelScheduledPin,
+    isPinSuppressed,
+  ]);
 
   // Session / conversation change → re-enter follow and pin before paint
   // so the first frame is already at the tail (avoids top→bottom flash).
   useLayoutEffect(() => {
+    cancelScheduledPin();
+    suppressRefollowUntilRef.current = 0;
     setFollowingBoth(true);
-    pinBottom();
-  }, [resetKey, setFollowingBoth, pinBottom]);
+    pinBottomNow();
+  }, [resetKey, setFollowingBoth, pinBottomNow, cancelScheduledPin]);
 
   // User scroll / wheel drives follow on/off.
   useEffect(() => {
@@ -107,7 +159,24 @@ export function useStickToBottom({
         setFollowingBoth(true);
         return;
       }
-      const next = followAfterUserScroll(distanceFromBottom(el), threshold);
+
+      const dist = distanceFromBottom(el);
+      const now = performance.now();
+
+      // After wheel-up, do not re-latch follow from rubber-band settle samples.
+      if (now < suppressRefollowUntilRef.current) {
+        if (followingRef.current) {
+          const stillNear = followAfterUserScroll(dist, true, {
+            unfollow: threshold,
+          });
+          if (!stillNear) setFollowingBoth(false);
+        }
+        return;
+      }
+
+      const next = followAfterUserScroll(dist, followingRef.current, {
+        unfollow: threshold,
+      });
       setFollowingBoth(next);
     };
 
@@ -122,9 +191,21 @@ export function useStickToBottom({
           scrollable: isVerticallyScrollable(el),
         })
       ) {
+        // Even when already unfollowed, upward intent should block re-follow
+        // for a beat (user scrolled up from near-bottom rubber-band).
+        if (e.deltaY < 0 && isVerticallyScrollable(el)) {
+          suppressRefollowUntilRef.current =
+            performance.now() + UNFOLLOW_SUPPRESS_MS;
+          cancelScheduledPin();
+          programmaticRef.current = false;
+          if (followingRef.current) setFollowingBoth(false);
+        }
         return;
       }
       programmaticRef.current = false;
+      suppressRefollowUntilRef.current =
+        performance.now() + UNFOLLOW_SUPPRESS_MS;
+      cancelScheduledPin();
       setFollowingBoth(false);
     };
 
@@ -133,20 +214,21 @@ export function useStickToBottom({
     return () => {
       el.removeEventListener("scroll", onScroll);
       el.removeEventListener("wheel", onWheel);
+      cancelScheduledPin();
       if (programmaticClearTimer.current) {
         clearTimeout(programmaticClearTimer.current);
         programmaticClearTimer.current = null;
       }
     };
-  }, [threshold, resetKey, setFollowingBoth]);
+  }, [threshold, resetKey, setFollowingBoth, cancelScheduledPin]);
 
   // Content identity / body growth while following — layout phase so stream
   // updates do not paint one frame at the previous scroll offset.
   useLayoutEffect(() => {
     if (followingRef.current) {
-      pinBottom();
+      schedulePinBottom();
     }
-  }, [contentKey, pinBottom]);
+  }, [contentKey, schedulePinBottom]);
 
   // Height changes (stream growth, expand/collapse) while following.
   useEffect(() => {
@@ -155,22 +237,27 @@ export function useStickToBottom({
 
     const ro = new ResizeObserver(() => {
       if (followingRef.current) {
-        pinBottom();
+        schedulePinBottom();
       }
     });
     ro.observe(content);
     return () => ro.disconnect();
-  }, [resetKey, pinBottom]);
+  }, [resetKey, schedulePinBottom]);
 
   return {
     scrollRef,
     contentRef,
     following,
+    /** Live follow flag for async load-older (avoids stale React state). */
+    followingRef,
     jumpToLatest,
     /**
      * Mark the next scroll events as programmatic (load-older anchor restore).
      * Prevents mid-restore scroll handlers from flipping follow state.
      */
     markProgrammatic,
+    /** Immediate pin (skips rAF); still respects follow + pinSuspended. */
+    pinBottomNow,
+    cancelScheduledPin,
   };
 }

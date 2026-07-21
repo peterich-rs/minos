@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -6,12 +7,14 @@ import { cn } from "@/lib/utils";
 /**
  * Markdown for conversation timeline + agent transcripts.
  *
- * `react-markdown` + `remark-gfm`. Raw HTML off by default.
- * Keep component overrides minimal: only tone-aware colors / type scale.
- * Do **not** restyle block `code` as inline chips (bare fences have no
- * `language-*` class — that bug produced a gray bar under code blocks).
+ * `react-markdown` + `remark-gfm` for completed bodies.
+ * While `streaming` is true, render plain pre-wrap text so every token does
+ * not rebuild the full MDAST (dominant cost behind scroll jank during live
+ * runs). One markdown pass runs when streaming ends.
+ *
+ * Raw HTML off by default. Keep component overrides minimal.
  */
-export function MarkdownText({
+export const MarkdownText = memo(function MarkdownText({
   text,
   className,
   streaming,
@@ -24,33 +27,43 @@ export function MarkdownText({
 }) {
   const onDark = tone === "onDark";
   // Guard wire/IPC nulls — react-markdown throws on non-string children.
-  const body = typeof text === "string" ? text : text == null ? "" : String(text);
+  const body =
+    typeof text === "string" ? text : text == null ? "" : String(text);
+
+  const shell = cn(
+    "markdown-body text-[13.5px] leading-relaxed",
+    onDark ? "text-white markdown-tone-dark" : "text-ink markdown-tone-light",
+    className,
+  );
+
+  // Streaming path: avoid full GFM parse on every token.
+  if (streaming) {
+    return (
+      <div className={shell}>
+        <p className="mb-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+          {body}
+          <span
+            className={cn(
+              "inline-block animate-pulse",
+              onDark ? "text-white/60" : "text-ink-muted",
+            )}
+            aria-hidden
+          >
+            █
+          </span>
+        </p>
+      </div>
+    );
+  }
 
   return (
-    <div
-      className={cn(
-        "markdown-body text-[13.5px] leading-relaxed",
-        onDark ? "text-white markdown-tone-dark" : "text-ink markdown-tone-light",
-        className,
-      )}
-    >
+    <div className={shell}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {body}
       </ReactMarkdown>
-      {streaming ? (
-        <span
-          className={cn(
-            "inline-block animate-pulse",
-            onDark ? "text-white/60" : "text-ink-muted",
-          )}
-          aria-hidden
-        >
-          █
-        </span>
-      ) : null}
     </div>
   );
-}
+});
 
 /**
  * Shared element map. Visual differences for user bubbles use parent

@@ -2,14 +2,33 @@
  * Stick-to-bottom / follow semantics aligned with TUI ChatState:
  * - following → always pin to max scroll
  * - scroll away from bottom → unfollow
- * - return near bottom → re-follow
+ * - return *very* near bottom → re-follow (hysteresis)
  * - while not following, never programmatically move the viewport
+ *
+ * Hysteresis (unfollow threshold > re-follow threshold) avoids the macOS
+ * rubber-band / pin "rebound" loop: when the user flings to the bottom then
+ * immediately scrolls up, a single near-bottom sample must not re-arm follow
+ * and fight the next wheel frame.
  */
 
+/** Leave follow when the user is farther from bottom than this. */
 export const FOLLOW_THRESHOLD_PX = 80;
+
+/**
+ * Re-enter follow only when this close to the true bottom.
+ * Much tighter than FOLLOW_THRESHOLD so rubber-band settle does not re-latch
+ * while the user is still scrolling up.
+ */
+export const REFOLLOW_THRESHOLD_PX = 12;
 
 /** Sub-pixel / layout slack: treat as not overflow unless taller than this. */
 export const SCROLLABLE_EPSILON_PX = 1;
+
+/**
+ * After a deliberate wheel/trackpad up, suppress re-follow for this long so
+ * pin/ResizeObserver cannot yank the viewport mid-gesture.
+ */
+export const UNFOLLOW_SUPPRESS_MS = 320;
 
 export function distanceFromBottom(el: {
   scrollHeight: number;
@@ -38,12 +57,24 @@ export function isVerticallyScrollable(
   return el.scrollHeight > el.clientHeight + epsilon;
 }
 
-/** After a user scroll event, should we be following? */
+/**
+ * After a user scroll event, should we be following?
+ * Uses hysteresis relative to the current follow state.
+ */
 export function followAfterUserScroll(
   distance: number,
-  threshold: number = FOLLOW_THRESHOLD_PX,
+  currentlyFollowing: boolean = true,
+  thresholds: {
+    unfollow?: number;
+    refollow?: number;
+  } = {},
 ): boolean {
-  return isNearBottom(distance, threshold);
+  const unfollow = thresholds.unfollow ?? FOLLOW_THRESHOLD_PX;
+  const refollow = thresholds.refollow ?? REFOLLOW_THRESHOLD_PX;
+  if (currentlyFollowing) {
+    return distance <= unfollow;
+  }
+  return distance <= refollow;
 }
 
 /**
