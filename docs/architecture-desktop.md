@@ -11,6 +11,7 @@
 | 当前阶段 | **UI mock**：完整 IA + mock 数据，未接 daemon |
 | 视觉 | 暖色多栏（参考 `res/desktop.jpeg` 气质，非客服 Inbox 语义） |
 | 产品 spec | [2026-07-18-desktop-product-experience.md](superpowers/specs/2026-07-18-desktop-product-experience.md) |
+| 状态拆分 spec | [2026-07-21-desktop-state-by-consumption.md](superpowers/specs/2026-07-21-desktop-state-by-consumption.md)（按消费范围；目标契约，非当前实现） |
 
 ## 技术栈
 
