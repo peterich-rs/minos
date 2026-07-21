@@ -15,7 +15,11 @@ use minos_domain::AgentName;
 const TEAMWORK_MCP_SIDECAR: &str = "__minos-teamwork-mcp";
 
 #[derive(Parser, Debug)]
-#[command(name = "minos-desktop", disable_help_flag = true, disable_version_flag = true)]
+#[command(
+    name = "minos-desktop",
+    disable_help_flag = true,
+    disable_version_flag = true
+)]
 struct SidecarCli {
     #[command(subcommand)]
     command: Option<SidecarCommand>,

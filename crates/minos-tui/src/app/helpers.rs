@@ -116,7 +116,10 @@ pub(super) fn grok_user_question_decision(
     text: &str,
 ) -> serde_json::Value {
     let token = text.trim().to_ascii_lowercase();
-    if matches!(token.as_str(), "cancel" | "cancelled" | "no" | "n" | "skip" | "") {
+    if matches!(
+        token.as_str(),
+        "cancel" | "cancelled" | "no" | "n" | "skip" | ""
+    ) {
         return serde_json::json!({ "outcome": "cancelled" });
     }
     let answers = opencode_question_answers(questions, text);
@@ -128,12 +131,7 @@ pub(super) fn grok_user_question_decision(
         // Wire keys are question indices (Grok may omit ids on model-facing Question).
         map.insert(
             index.to_string(),
-            serde_json::Value::Array(
-                answer
-                    .into_iter()
-                    .map(serde_json::Value::String)
-                    .collect(),
-            ),
+            serde_json::Value::Array(answer.into_iter().map(serde_json::Value::String).collect()),
         );
     }
     if map.is_empty() {

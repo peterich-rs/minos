@@ -72,10 +72,7 @@ impl NotificationMeta {
             stream_start_ms: m.get("streamStartMs").and_then(Value::as_i64),
             turn_start_ms: m.get("turnStartMs").and_then(Value::as_i64),
             agent_timestamp_ms: m.get("agentTimestampMs").and_then(Value::as_i64),
-            prompt_id: m
-                .get("promptId")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
+            prompt_id: m.get("promptId").and_then(Value::as_str).map(str::to_owned),
             event_id: m.get("eventId").and_then(Value::as_str).map(str::to_owned),
             total_tokens: m.get("totalTokens").and_then(Value::as_u64),
             is_replay: m.get("isReplay").and_then(Value::as_bool).unwrap_or(false),
@@ -373,9 +370,7 @@ fn extract_tool_result_text(update: &Value) -> String {
 }
 
 fn extract_tool_result_text_raw(update: &Value) -> String {
-    let raw = update
-        .get("rawOutput")
-        .or_else(|| update.get("raw_output"));
+    let raw = update.get("rawOutput").or_else(|| update.get("raw_output"));
 
     // 1) Typed raw_output (pager path).
     if let Some(raw) = raw {
@@ -406,10 +401,7 @@ fn extract_tool_content_text(content: &Value) -> String {
     if let Some(arr) = content.as_array() {
         let mut parts: Vec<String> = Vec::new();
         for item in arr {
-            let ty = item
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let ty = item.get("type").and_then(Value::as_str).unwrap_or("");
             if ty.eq_ignore_ascii_case("diff") {
                 if let Some(patch) = project_acp_diff_item(item) {
                     if !patch.is_empty() {
@@ -433,10 +425,7 @@ fn extract_tool_content_text(content: &Value) -> String {
         }
         return parts.join("\n");
     }
-    content
-        .as_str()
-        .map(str::to_owned)
-        .unwrap_or_default()
+    content.as_str().map(str::to_owned).unwrap_or_default()
 }
 
 fn project_acp_diff_item(item: &Value) -> Option<String> {
@@ -469,13 +458,10 @@ fn project_acp_diff_item(item: &Value) -> Option<String> {
 }
 
 fn meta_edit_details(meta: &Value) -> Option<Vec<EditDetail>> {
-    let details = meta
-        .get("details")
-        .and_then(Value::as_array)
-        .or_else(|| {
-            // Sometimes meta is the SearchReplaceEditContextInformation object itself.
-            meta.as_array()
-        })?;
+    let details = meta.get("details").and_then(Value::as_array).or_else(|| {
+        // Sometimes meta is the SearchReplaceEditContextInformation object itself.
+        meta.as_array()
+    })?;
     let mut out = Vec::new();
     for d in details {
         out.push(EditDetail {
@@ -592,7 +578,13 @@ fn project_raw_output_text(raw: &Value) -> Option<String> {
                 return Some(listing.to_owned());
             }
         }
-        for key in ["NotFound", "IsAFile", "NotADirectory", "PermissionDenied", "Error"] {
+        for key in [
+            "NotFound",
+            "IsAFile",
+            "NotADirectory",
+            "PermissionDenied",
+            "Error",
+        ] {
             if let Some(msg) = raw.get(key).and_then(Value::as_str) {
                 return Some(msg.to_owned());
             }
@@ -619,7 +611,11 @@ fn project_raw_output_text(raw: &Value) -> Option<String> {
             return Some(s.to_owned());
         }
         if let Some(arr) = raw.get("output").and_then(Value::as_array) {
-            let bytes: Vec<u8> = arr.iter().filter_map(Value::as_u64).map(|n| n as u8).collect();
+            let bytes: Vec<u8> = arr
+                .iter()
+                .filter_map(Value::as_u64)
+                .map(|n| n as u8)
+                .collect();
             if !bytes.is_empty() {
                 return Some(String::from_utf8_lossy(&bytes).into_owned());
             }
@@ -665,9 +661,7 @@ fn project_raw_output_text(raw: &Value) -> Option<String> {
                 .or_else(|| obj.get("redirectUrl"))
                 .and_then(Value::as_str)
                 .unwrap_or("?");
-            return Some(format!(
-                "Error: cross-host redirect from {from} to {to}"
-            ));
+            return Some(format!("Error: cross-host redirect from {from} to {to}"));
         }
         if let Some(obj) = raw.get("Error") {
             if let Some(msg) = obj.get("message").and_then(Value::as_str) {
@@ -756,7 +750,11 @@ fn project_raw_output_text(raw: &Value) -> Option<String> {
         ty,
         "ImageGen" | "ImageToVideo" | "ReferenceToVideo" | "ImageEdit"
     ) {
-        if let Some(s) = raw.get("path").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        if let Some(s) = raw
+            .get("path")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
             return Some(format!("saved: {s}"));
         }
         if let Some(s) = raw
@@ -806,10 +804,7 @@ fn project_read_file_content(fc: &Value) -> Option<String> {
                 .map(strip_arrow_line_markers)
         })?;
 
-    let offset = fc
-        .get("offset")
-        .and_then(Value::as_u64)
-        .unwrap_or(0) as usize;
+    let offset = fc.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
     let start = offset.saturating_add(1);
 
     // Always densify so gutters are correct for offset reads.
@@ -888,7 +883,11 @@ fn project_grep_search(raw: &Value) -> Option<String> {
 
     // Decode stdout bytes when present (may include <workspace_result> wrapper).
     if let Some(arr) = raw.get("stdout").and_then(Value::as_array) {
-        let bytes: Vec<u8> = arr.iter().filter_map(Value::as_u64).map(|n| n as u8).collect();
+        let bytes: Vec<u8> = arr
+            .iter()
+            .filter_map(Value::as_u64)
+            .map(|n| n as u8)
+            .collect();
         if !bytes.is_empty() {
             let s = String::from_utf8_lossy(&bytes);
             return Some(strip_workspace_result_wrapper(&s));
@@ -1095,10 +1094,7 @@ fn unified_diff_from_strings(
     // Common prefix / suffix so small mid-file edits don't dump entire blocks as
     // pure delete+insert when old/new are full-file snapshots.
     let mut pref = 0usize;
-    while pref < old_lines.len()
-        && pref < new_lines.len()
-        && old_lines[pref] == new_lines[pref]
-    {
+    while pref < old_lines.len() && pref < new_lines.len() && old_lines[pref] == new_lines[pref] {
         pref += 1;
     }
     let mut suf = 0usize;
@@ -1192,16 +1188,8 @@ fn unified_diff_from_details(path: &str, details: &[EditDetail]) -> String {
 
         let old_count = before_lines.len() + old_lines.len() + after_lines.len();
         let new_count = before_lines.len() + new_lines.len() + after_lines.len();
-        let old_start = if old_count == 0 {
-            0
-        } else {
-            d.old_line.max(1)
-        };
-        let new_start = if new_count == 0 {
-            0
-        } else {
-            d.new_line.max(1)
-        };
+        let old_start = if old_count == 0 { 0 } else { d.old_line.max(1) };
+        let new_start = if new_count == 0 { 0 } else { d.new_line.max(1) };
 
         out.push_str(&format!(
             "@@ -{old_start},{old_count} +{new_start},{new_count} @@\n"
@@ -1528,7 +1516,8 @@ fn translate_agent_or_thought_chunk(
     if is_thought && session_update == "agent_thought_chunk" {
         // Thought does not force a new assistant text segment the way tools do,
         // but does not close agent text either until stream boundary / tool.
-        let (mid, mut events) = ensure_assistant_message(state, meta.agent_timestamp_ms.unwrap_or(0));
+        let (mid, mut events) =
+            ensure_assistant_message(state, meta.agent_timestamp_ms.unwrap_or(0));
         events.push(UiEventMessage::ReasoningDelta {
             message_id: mid,
             text: DisplayPayload::inline(text),
@@ -1722,9 +1711,7 @@ fn waiting_reason_for_suppressed(title: &str, raw_input: Option<&Value>) -> Stri
         .and_then(Value::as_str);
     if matches!(
         title,
-        "get_command_or_subagent_output"
-            | "get_task_output"
-            | "get_task_or_subagent_output"
+        "get_command_or_subagent_output" | "get_task_output" | "get_task_or_subagent_output"
     ) || variant == Some("TaskOutput")
     {
         return "waiting_task_output".into();
@@ -1749,7 +1736,10 @@ fn waiting_reason_for_suppressed(title: &str, raw_input: Option<&Value>) -> Stri
     "waiting_model".into()
 }
 
-fn translate_tool_call_update(state: &mut GrokTranslatorState, update: &Value) -> Vec<UiEventMessage> {
+fn translate_tool_call_update(
+    state: &mut GrokTranslatorState,
+    update: &Value,
+) -> Vec<UiEventMessage> {
     let tool_call_id = update
         .get("toolCallId")
         .and_then(Value::as_str)
@@ -1782,7 +1772,8 @@ fn translate_tool_call_update(state: &mut GrokTranslatorState, update: &Value) -
                 .is_some_and(|t| t.name.to_ascii_lowercase().contains("spawn_subagent"))
                 || content.contains("subagent_id:")
             {
-                if let Some(spawned) = maybe_spawn_from_tool_output(state, &tool_call_id, &content) {
+                if let Some(spawned) = maybe_spawn_from_tool_output(state, &tool_call_id, &content)
+                {
                     return vec![spawned];
                 }
             }
@@ -1797,9 +1788,7 @@ fn translate_tool_call_update(state: &mut GrokTranslatorState, update: &Value) -
 
     if !state.tool_calls.contains_key(&tool_call_id) {
         // Orphan: remember until tool_call arrives.
-        state
-            .orphan_updates
-            .insert(tool_call_id, update.clone());
+        state.orphan_updates.insert(tool_call_id, update.clone());
         return vec![];
     }
 
@@ -2167,10 +2156,10 @@ mod tests {
         assert!(!out
             .iter()
             .any(|e| matches!(e, UiEventMessage::ToolCallPlaced { .. })));
-        assert!(out.iter().any(
-            |e| matches!(e, UiEventMessage::Raw { kind, payload_json }
-                if kind == "grok/turn_activity" && payload_json.contains("suppressed"))
-        ));
+        assert!(out
+            .iter()
+            .any(|e| matches!(e, UiEventMessage::Raw { kind, payload_json }
+                if kind == "grok/turn_activity" && payload_json.contains("suppressed"))));
     }
 
     #[test]
@@ -2199,7 +2188,12 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(early.is_empty() || !early.iter().any(|e| matches!(e, UiEventMessage::ToolCallCompleted { .. })));
+        assert!(
+            early.is_empty()
+                || !early
+                    .iter()
+                    .any(|e| matches!(e, UiEventMessage::ToolCallCompleted { .. }))
+        );
 
         let placed = translate(
             &mut s,
@@ -2612,9 +2606,7 @@ mod tests {
         events
             .iter()
             .find_map(|e| match e {
-                UiEventMessage::ToolCallCompleted { output, .. } => {
-                    Some(output.render_preview())
-                }
+                UiEventMessage::ToolCallCompleted { output, .. } => Some(output.render_preview()),
                 _ => None,
             })
             .expect("ToolCallCompleted")
@@ -2625,8 +2617,7 @@ mod tests {
         let mut s = GrokTranslatorState::new("thr".into());
         let out = translate(
             &mut s,
-            &val(
-                r#"{
+            &val(r#"{
                   "kind":"acp_notification",
                   "params":{
                     "update":{
@@ -2654,8 +2645,7 @@ mod tests {
                       }]
                     }
                   }
-                }"#,
-            ),
+                }"#),
         )
         .unwrap();
         let text = tool_completed_output(&out);
@@ -2664,7 +2654,10 @@ mod tests {
             "expected unified headers, got: {text}"
         );
         assert!(text.contains("@@ "), "expected hunk header, got: {text}");
-        assert!(text.contains("-line two"), "expected delete line, got: {text}");
+        assert!(
+            text.contains("-line two"),
+            "expected delete line, got: {text}"
+        );
         assert!(
             text.contains("+line two plus"),
             "expected add line, got: {text}"
@@ -2682,8 +2675,7 @@ mod tests {
         let mut s = GrokTranslatorState::new("thr".into());
         let _ = translate(
             &mut s,
-            &val(
-                r#"{
+            &val(r#"{
                   "kind":"acp_notification",
                   "params":{
                     "update":{
@@ -2694,8 +2686,7 @@ mod tests {
                       "status":"pending"
                     }
                   }
-                }"#,
-            ),
+                }"#),
         )
         .unwrap();
         let out = translate(
@@ -2747,7 +2738,10 @@ mod tests {
             text.contains(" before") || text.contains("before"),
             "got: {text}"
         );
-        assert!(!text.contains("EditsApplied"), "must not dump raw JSON: {text}");
+        assert!(
+            !text.contains("EditsApplied"),
+            "must not dump raw JSON: {text}"
+        );
         assert!(
             !text.contains("tool_output_for_prompt"),
             "must not dump prompt fields as body: {text}"
@@ -2759,8 +2753,7 @@ mod tests {
         let mut s = GrokTranslatorState::new("thr".into());
         let out = translate(
             &mut s,
-            &val(
-                r#"{
+            &val(r#"{
                   "kind":"acp_notification",
                   "params":{
                     "update":{
@@ -2777,8 +2770,7 @@ mod tests {
                       }]
                     }
                   }
-                }"#,
-            ),
+                }"#),
         )
         .unwrap();
         let text = tool_completed_output(&out);
@@ -2791,8 +2783,7 @@ mod tests {
         let mut s = GrokTranslatorState::new("thr".into());
         let _ = translate(
             &mut s,
-            &val(
-                r#"{
+            &val(r#"{
                   "kind":"acp_notification",
                   "params":{
                     "update":{
@@ -2803,14 +2794,12 @@ mod tests {
                       "status":"pending"
                     }
                   }
-                }"#,
-            ),
+                }"#),
         )
         .unwrap();
         let out = translate(
             &mut s,
-            &val(
-                r#"{
+            &val(r#"{
                   "kind":"acp_notification",
                   "params":{
                     "update":{
@@ -2839,8 +2828,7 @@ mod tests {
                       }
                     }
                   }
-                }"#,
-            ),
+                }"#),
         )
         .unwrap();
         let text = tool_completed_output(&out);
@@ -2853,8 +2841,7 @@ mod tests {
     #[test]
     fn extract_tool_result_never_dumps_edits_applied_json() {
         // Unit-level: the raw object alone must not appear as tool output text.
-        let update = val(
-            r#"{
+        let update = val(r#"{
               "content": [],
               "rawOutput": {
                 "type": "SearchReplace",
@@ -2876,26 +2863,25 @@ mod tests {
                   }
                 }
               }
-            }"#,
-        );
+            }"#);
         let text = extract_tool_result_text(&update);
         assert!(!text.starts_with('{'), "got: {text}");
         assert!(!text.contains("EditsApplied"), "got: {text}");
-        assert!(text.contains("-old") && text.contains("+new"), "got: {text}");
+        assert!(
+            text.contains("-old") && text.contains("+new"),
+            "got: {text}"
+        );
     }
 
     #[test]
     fn unified_diff_from_strings_common_prefix_suffix() {
-        let patch = unified_diff_from_strings(
-            "f.rs",
-            "a\nb\nc\nd\n",
-            "a\nB\nc\nd\n",
-            1,
-            1,
-        );
+        let patch = unified_diff_from_strings("f.rs", "a\nb\nc\nd\n", "a\nB\nc\nd\n", 1, 1);
         assert!(patch.contains("-b") && patch.contains("+B"), "got: {patch}");
         // Context lines for a/c around the change
-        assert!(patch.contains(" a") || patch.contains("\n a\n"), "got: {patch}");
+        assert!(
+            patch.contains(" a") || patch.contains("\n a\n"),
+            "got: {patch}"
+        );
     }
 
     #[test]
@@ -2904,8 +2890,7 @@ mod tests {
         let mut s = GrokTranslatorState::new("thr".into());
         let _ = translate(
             &mut s,
-            &val(
-                r#"{
+            &val(r#"{
                   "kind":"acp_notification",
                   "params":{
                     "update":{
@@ -2916,8 +2901,7 @@ mod tests {
                       "status":"pending"
                     }
                   }
-                }"#,
-            ),
+                }"#),
         )
         .unwrap();
         // Real ESC bytes (not the JSON \u001b literal form alone).
@@ -2970,7 +2954,10 @@ mod tests {
         assert!(text.contains("881→  )"), "got: {text:?}");
         assert!(text.contains("882→  foo"), "got: {text:?}");
         // No sparse decade-only markers left without intermediate numbers.
-        assert!(!text.contains("890→"), "should densify, not keep decade: {text:?}");
+        assert!(
+            !text.contains("890→"),
+            "should densify, not keep decade: {text:?}"
+        );
     }
 
     #[test]
@@ -3015,7 +3002,10 @@ mod tests {
         let text = extract_tool_result_text(&update);
         assert!(text.contains("src/a.rs:10:fn foo() {}"), "got: {text:?}");
         assert!(text.contains("src/a.rs:20:fn bar() {}"), "got: {text:?}");
-        assert!(!text.starts_with("found 2 matches"), "should not use stub: {text:?}");
+        assert!(
+            !text.starts_with("found 2 matches"),
+            "should not use stub: {text:?}"
+        );
     }
 
     #[test]
@@ -3057,10 +3047,7 @@ mod tests {
         ] {
             let update = serde_json::json!({ "content": [], "rawOutput": raw });
             let text = extract_tool_result_text(&update);
-            assert!(
-                !text.trim_start().starts_with('{'),
-                "dumped JSON: {text:?}"
-            );
+            assert!(!text.trim_start().starts_with('{'), "dumped JSON: {text:?}");
             assert!(!text.contains("\"type\""), "dumped JSON: {text:?}");
         }
     }

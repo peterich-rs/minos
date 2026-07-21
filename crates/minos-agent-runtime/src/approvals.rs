@@ -275,15 +275,12 @@ pub(crate) fn validate_acp_permission_decision(
         .get("approved")
         .and_then(Value::as_bool)
         .or_else(|| {
-            decision
-                .get("decision")
-                .and_then(Value::as_str)
-                .map(|s| {
-                    matches!(
-                        s,
-                        "accept" | "accepted" | "approve" | "approved" | "allow" | "yes" | "y"
-                    )
-                })
+            decision.get("decision").and_then(Value::as_str).map(|s| {
+                matches!(
+                    s,
+                    "accept" | "accepted" | "approve" | "approved" | "allow" | "yes" | "y"
+                )
+            })
         })
         .unwrap_or(false);
 

@@ -1959,10 +1959,7 @@ fn format_questions_prompt(
     questions: &[serde_json::Value],
 ) -> (String, Option<Vec<TranscriptOptionDto>>) {
     if questions.is_empty() {
-        return (
-            format!("{prefix}\nReply with your answer."),
-            None,
-        );
+        return (format!("{prefix}\nReply with your answer."), None);
     }
     let mut lines = vec![prefix.to_owned()];
     let mut single_options: Option<Vec<TranscriptOptionDto>> = None;
@@ -2554,9 +2551,7 @@ fn frame_to_ingest_dto(frame: LocalIngestFrame) -> IngestEventDto {
     let items = assembler.finish();
     let has_pending_approval = items
         .iter()
-        .any(|it| {
-            (it.kind == "approval" || it.kind == "question") && it.request_id.is_some()
-        });
+        .any(|it| (it.kind == "approval" || it.kind == "question") && it.request_id.is_some());
     IngestEventDto {
         thread_id: frame.thread_id,
         seq: frame.seq,

@@ -1032,11 +1032,15 @@ mod tests {
         let lines = render_tool_read_body(body, "SessionsView.tsx", styles(), 12, 8);
         let rendered = lines.iter().map(text).collect::<Vec<_>>();
         assert!(
-            rendered.iter().any(|l| l.contains("880") && l.contains("    }")),
+            rendered
+                .iter()
+                .any(|l| l.contains("880") && l.contains("    }")),
             "missing file line 880: {rendered:?}"
         );
         assert!(
-            rendered.iter().any(|l| l.contains("890") && l.contains("{!following")),
+            rendered
+                .iter()
+                .any(|l| l.contains("890") && l.contains("{!following")),
             "missing file line 890: {rendered:?}"
         );
         // Arrow marker must not appear in source column.

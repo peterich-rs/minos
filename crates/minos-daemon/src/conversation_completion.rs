@@ -250,7 +250,8 @@ impl ThreadProjection {
                     } else {
                         // Unknown tool — close every open assistant segment so a
                         // post-tool final answer is not glued to progress text.
-                        let ids: Vec<String> = self.assistant_roles
+                        let ids: Vec<String> = self
+                            .assistant_roles
                             .iter()
                             .filter_map(|(id, role)| {
                                 matches!(role, MessageRole::Assistant).then(|| id.clone())

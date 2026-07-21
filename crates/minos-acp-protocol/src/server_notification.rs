@@ -193,15 +193,11 @@ mod tests {
 
     #[test]
     fn agent_thought_chunk_and_legacy_thought_alias() {
-        let modern = r#"{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"hmm"}}"#;
+        let modern =
+            r#"{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"hmm"}}"#;
         match serde_json::from_str::<SessionUpdate>(modern).unwrap() {
             SessionUpdate::AgentThoughtChunk { content } => {
-                assert_eq!(
-                    content,
-                    ContentBlock::Text {
-                        text: "hmm".into()
-                    }
-                );
+                assert_eq!(content, ContentBlock::Text { text: "hmm".into() });
             }
             _ => panic!("expected agent_thought_chunk"),
         }

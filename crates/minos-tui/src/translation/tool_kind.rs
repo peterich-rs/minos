@@ -151,7 +151,10 @@ mod tests {
 
     #[test]
     fn classifies_unified_kind_prefix_from_any_agent() {
-        assert_eq!(ToolKind::from_tool_name("read: src/main.rs"), ToolKind::Read);
+        assert_eq!(
+            ToolKind::from_tool_name("read: src/main.rs"),
+            ToolKind::Read
+        );
         assert_eq!(
             ToolKind::from_tool_name("execute: cargo test"),
             ToolKind::Execute

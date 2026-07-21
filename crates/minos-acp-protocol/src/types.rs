@@ -152,7 +152,9 @@ pub struct ToolCallUpdate {
     rename_all_fields = "camelCase"
 )]
 pub enum ToolCallContent {
-    Content { content: ContentBlock },
+    Content {
+        content: ContentBlock,
+    },
     /// File modification shown as a diff (ACP standard; used by Grok SearchReplace / ApplyPatch).
     Diff {
         path: String,
@@ -162,7 +164,9 @@ pub enum ToolCallContent {
         #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
         meta: Option<serde_json::Value>,
     },
-    Terminal { terminal_id: String },
+    Terminal {
+        terminal_id: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
