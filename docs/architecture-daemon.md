@@ -164,7 +164,7 @@ Teamwork MCP 注入不依赖单一外部 sidecar。`AgentRuntimeConfig` 优先�
 
 Managed TUI/Desktop 退出会调用 `DaemonHandle::stop`：
 
-1. **`AgentGlue::shutdown`**：对每个内存中非 Closed 线程 `suspend_for_daemon_stop`（best-effort cancel + `Suspended { DaemonRestart }`），并按停机前状态写入 `needs_continue`（`running`/`starting`/`resuming` → 1，idle/已 suspended → 0）。**同步** `suspend_thread_for_daemon_restart` 落库（不依赖 async event bridge，避免进程退出丢写）。**不**调用 `close_thread`。
+1. **`AgentGlue::shutdown`**：对每个内存中非 Closed 线程 `suspend_for_daemon_stop`（best-effort cancel + 内存态 `Suspended { DaemonRestart }`），并按停机前状态写入 `needs_continue`（`running`/`starting`/`resuming` → 1，idle/已 suspended → 0）。**同步** `suspend_thread_for_daemon_restart` 落库：mid-flight → durable `suspended`；idle → durable **`idle`**（不把回合间停机标成用户 Pause）。Manager event bridge **不**把 `Suspended{DaemonRestart}` 再写一次 SQLite（避免与同步落库竞态）。**不**调用 `close_thread`。
 2. `shutdown_instances` SIGTERM/SIGKILL provider 进程组。
 3. 拆除 local RPC discovery + relay。
 

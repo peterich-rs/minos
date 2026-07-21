@@ -245,8 +245,25 @@ impl AgentGlue {
                                 at_ms,
                                 ..
                             } => {
-                                persist_runtime_state_inner(&store_clone, &thread_id, &new, at_ms)
+                                // DaemonRestart is owned by AgentGlue::shutdown's synchronous
+                                // suspend_thread_for_daemon_restart (idle vs suspended +
+                                // needs_continue). Persisting Suspended{DaemonRestart} here races
+                                // that path and rebrands finished turns as Paused.
+                                let skip_persist = matches!(
+                                    &new,
+                                    ThreadState::Suspended {
+                                        reason: minos_agent_runtime::PauseReason::DaemonRestart
+                                    }
+                                );
+                                if !skip_persist {
+                                    persist_runtime_state_inner(
+                                        &store_clone,
+                                        &thread_id,
+                                        &new,
+                                        at_ms,
+                                    )
                                     .await;
+                                }
                                 completion_for_state.on_thread_state(&thread_id, &new).await;
                                 let _ = state_tx_clone.send(new);
                             }

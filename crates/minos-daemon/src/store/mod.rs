@@ -180,12 +180,13 @@ impl LocalStore {
             .await?
         } else {
             // Between turns: durable ready state is idle (reattach on next use).
+            // Force idle even if a concurrent bridge briefly wrote suspended —
+            // shutdown is the authority for DaemonRestart durable status.
             sqlx::query(
                 "UPDATE threads SET status = 'idle', last_pause_reason = NULL, \
                                     last_close_reason = NULL, ended_at = NULL, \
                                     needs_continue = 0, last_activity_at = ? \
-                 WHERE thread_id = ? AND status != 'closed' \
-                   AND status NOT IN ('suspended')",
+                 WHERE thread_id = ? AND status != 'closed'",
             )
             .bind(ts_ms)
             .bind(thread_id)
