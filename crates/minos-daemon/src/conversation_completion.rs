@@ -253,9 +253,8 @@ impl ThreadProjection {
                         let ids: Vec<String> = self
                             .assistant_roles
                             .iter()
-                            .filter_map(|(id, role)| {
-                                matches!(role, MessageRole::Assistant).then(|| id.clone())
-                            })
+                            .filter(|(_, role)| matches!(role, MessageRole::Assistant))
+                            .map(|(id, _)| id.clone())
                             .collect();
                         for id in ids {
                             self.close_text_segment(&id);
