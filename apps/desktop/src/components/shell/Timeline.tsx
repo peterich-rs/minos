@@ -62,7 +62,7 @@ const EMPTY_SESSIONS: ProjectSession[] = [];
 /** Empty shell when no conversation is selected (outer nav owns selection). */
 export function TimelineEmpty() {
   return (
-    <div className="flex flex-1 items-center justify-center bg-surface text-[13px] text-ink-muted">
+    <div className="flex h-full min-h-0 flex-1 items-center justify-center bg-surface text-[13px] text-ink-muted">
       Select a conversation or create one to start.
     </div>
   );
@@ -437,7 +437,7 @@ export function Timeline({ conversationId }: { conversationId: string }) {
 
   if (!conversation) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-surface px-6 text-center text-[13px] text-ink-muted">
+      <div className="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-3 bg-surface px-6 text-center text-[13px] text-ink-muted">
         <p>Conversation not found in the current project list.</p>
         {source === "daemon" ? (
           <button
@@ -511,7 +511,9 @@ export function Timeline({ conversationId }: { conversationId: string }) {
   };
 
   return (
-    <section className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface">
+    // Fill the resizable panel / flex parent so the composer stays docked at the
+    // bottom (WeChat-style): only the message list scrolls, never the whole pane.
+    <section className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface">
       <header className="flex shrink-0 items-center justify-between gap-3 border-b border-ink/5 px-4 py-3 sm:px-5">
         <div className="min-w-0 flex-1">
           {editingTitle ? (
@@ -601,7 +603,6 @@ export function Timeline({ conversationId }: { conversationId: string }) {
       <div
         ref={scrollRef}
         className="scrollbar-thin min-h-0 flex-1 overflow-y-auto overscroll-y-none px-5 py-5"
-        style={{ flex: "1 1 0%" }}
       >
         <div ref={contentRef} className="space-y-4">
           {hasOlder ? (
@@ -676,7 +677,8 @@ export function Timeline({ conversationId }: { conversationId: string }) {
         </div>
       ) : null}
 
-      <div className="relative shrink-0 border-t border-ink/5 px-5 py-4">
+      {/* Composer stays outside the scrollport — always visible at the bottom. */}
+      <div className="relative shrink-0 border-t border-ink/5 bg-surface px-5 py-4">
         {mention && mentionOptions.length > 0 ? (
           <div className="absolute bottom-full left-5 right-5 mb-2 max-h-52 overflow-y-auto rounded-xl border border-ink/10 bg-surface py-1 shadow-lg">
             <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-muted">

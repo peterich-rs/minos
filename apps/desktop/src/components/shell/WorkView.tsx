@@ -160,7 +160,7 @@ export function WorkView() {
               id="timeline"
               minSize={280}
               defaultSize={detailsOpen ? "53" : "78"}
-              className="min-h-0 min-w-0"
+              className="flex min-h-0 min-w-0 flex-col overflow-hidden"
             >
               {conversationId ? (
                 <Timeline
