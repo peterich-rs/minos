@@ -286,16 +286,20 @@ export function SessionsView({ projectId }: { projectId: string }) {
     });
   }, [selectedSessionId, displaySessions]);
 
-  // Fallback list poll only without live push (manager events own live status).
+  // Reconcile project session list with daemon.
+  // - Without live push: poll while any session looks live (or on error).
+  // - With live push: still slow-reconcile while UI shows live status so a
+  //   missed ThreadStateChanged / ghost "Running" cannot stick forever.
   useEffect(() => {
-    if (source !== "daemon" || livePush) return;
+    if (source !== "daemon") return;
     const live = displaySessions.some(
       (s) => s.status === "running" || s.status === "needs_approval",
     );
     if (!live && listStatus?.phase !== "error") return;
+    const intervalMs = livePush ? 8000 : 2000;
     const id = window.setInterval(() => {
       void loadProjectSessions(projectId, { quiet: true });
-    }, 2000);
+    }, intervalMs);
     return () => window.clearInterval(id);
   }, [
     projectId,
@@ -635,6 +639,22 @@ function TranscriptPane({
     (s) => s.respondOpencodeQuestion,
   );
   const loadTranscript = useWorkspaceStore((s) => s.loadTranscript);
+  const resumeInterruptedSession = useWorkspaceStore(
+    (s) => s.resumeInterruptedSession,
+  );
+  // Live session row (status / needsContinue) — parent `session` prop may be
+  // stale after a quiet re-list until the parent re-renders.
+  const liveSession = useWorkspaceStore((s) => {
+    const fromProject = Object.values(s.projectSessionsByProject)
+      .flat()
+      .find((x) => x.id === sessionId);
+    if (fromProject) return fromProject;
+    return (
+      Object.values(s.sessionsByConversation)
+        .flat()
+        .find((x) => x.id === sessionId) ?? session
+    );
+  });
   const items = useWorkspaceStore(
     (s) => s.transcriptsByThread[sessionId] ?? EMPTY_TRANSCRIPT,
   );
@@ -814,6 +834,20 @@ function TranscriptPane({
       approvalStatusPolicy: "sync",
     });
   }, [sessionId, source, loadTranscript]);
+
+  // Desktop restart mid-turn leaves threads as suspended + needs_continue.
+  // Conversation open already auto-continues; opening a session transcript
+  // must do the same so Sessions-tab users are not stuck on Paused.
+  useEffect(() => {
+    if (source !== "daemon") return;
+    if (!liveSession.needsContinue) return;
+    void resumeInterruptedSession(sessionId);
+  }, [
+    sessionId,
+    source,
+    liveSession.needsContinue,
+    resumeInterruptedSession,
+  ]);
 
   // Silent backfill only while stick-to-bottom is active (opening a session /
   // sparse tail). Never autofill while the user is reading older history —

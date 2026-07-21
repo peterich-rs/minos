@@ -27,9 +27,9 @@ describe("sortTimelineMessages", () => {
     );
   });
 
-  it("keeps pending rows after durable seq when mixed", () => {
+  it("keeps sending rows after durable seq when mixed", () => {
     const sorted = sortTimelineMessages([
-      msg({ id: "pending", pending: true, createdAtMs: 999 }),
+      msg({ id: "pending", deliveryStatus: "sending", createdAtMs: 999 }),
       msg({ id: "durable", messageSeq: 5, createdAtMs: 1 }),
     ]);
     assert.equal(sorted[0]?.id, "durable");

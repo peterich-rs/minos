@@ -41,7 +41,8 @@ Sidebar
 Work → Project
   header: Conversations | Board
   Conversations view:
-    list | timeline + @input | session inspector
+    list (progress filter: All | To do | In progress | Done; default All)
+      | timeline + @input | session inspector
   Board view:
     backlog | running | needs_you | done  (cards = conversations)
 ```
@@ -98,6 +99,14 @@ apps/desktop/
 | Timeline 渲染 | 窄 selector；`sortTimelineMessages`；`MarkdownText` memo + streaming plain；`TimelineRow` memo；入场动画仅新增 id；`list-identity` 复用行对象 |
 | Follow 迟滞 | unfollow 80px / re-follow 12px；wheel-up 后 ~320ms 禁止 re-follow 与 pin，减轻到底回弹再上滑的抢滚动 |
 | Project tab 切换 | Conversations / Sessions / Board **keep-alive**（`hidden` + `inert`，不 unmount）；有缓存时 transcript **quiet append**；`useLayoutEffect` 首帧 pin 到底 |
+| Session 状态索引 | **双索引必须同写**：`sessionsByConversation`（对话详情 / inspector）与 `projectSessionsByProject`（Sessions 左栏）。`loadConversationDetail` 经 `withConversationSessions` 回写已加载的 project list；`ThreadAdded` 防抖 `loadProjectSessions`；`sendMessage` 启动后 quiet 刷新 project list |
+| Live status | Manager `ThreadStateChanged` 为主路径；`needs_approval` **仅**在 daemon 仍报 `running` 时 hold（Grok plan/permission）。`idle`/`done`/`suspended` 一律覆盖，避免 ghost Running。UI 仍显示 live 时：Sessions list 8s / Conversation detail 6s quiet reconcile（`listSessions` 为准），不因 `livePush` 关掉对账 |
+| Ghost Running 根因 | Daemon SQLite + `list_conversation_agent_sessions` 已是 `idle`，UI 缓存仍 `running`：漏推/ sticky elevation 后无对账。**以 listSessions 结果覆盖客户端 status**，不要用「有 livePush 就不 poll」 |
+| @agent 路由（TUI 对齐） | `@agent prompt` **始终新建** session；`@agent#short prompt` 续写已有 session；纯文本无 `@` 时复用该 agent 最近未关闭 session。补全：`@agent`（hint: new session）+ `@agent#id`（hint: continue · status） |
+| Timeline agent 身份 | Agent 气泡标题显示 `OpenCode #b15d06d4`（`sessionId` → short id，对齐 TUI `[OpenCode@short]`）；点击跳转 Sessions transcript |
+| OpenCode 双气泡 | OpenCode 在同 `message_id` 上 `text_delta*` → `tool_call` → 再 `text_replace` 全量快照。Assembler 若只认 timeline **tail**，会在 tool 后再插一条相同正文。修复：`text_replace` 按 `message_id` 回写已有 assistant 气泡（Desktop `TranscriptAssembler` + TUI `ChatState`） |
+| 重启后 Paused | Daemon 对 mid-turn 线程写 `suspended` + `needs_continue=1`。**仅** `loadConversationDetail(!quiet)` 原先会 `resume(autoContinue)`；只开 Sessions 不会。现：打开 transcript 时 `resumeInterruptedSession`（`needsContinue` → reattach + CONTINUE） |
+| OpenCode 僵尸 serve | **Bug**：`shutdown_instances` 原先只杀 Codex；OpenCode `serve`（`setpgid` 独立进程组）在 Desktop 退出时未 SIGTERM/SIGKILL，reparent 到 launchd（PPID=1），占满 `4096..=4106`。修复：shutdown 同时杀 opencode/gemini/grok 子进程；Desktop `RunEvent::Exit` 调 `DaemonBridge::shutdown_managed` → `DaemonHandle::stop` |
 
 ## Rust 宿主 / Daemon 桥
 

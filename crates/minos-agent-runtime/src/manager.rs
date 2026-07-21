@@ -2445,72 +2445,144 @@ impl AgentManager {
         result
     }
 
-    /// Shut every codex instance down with a polite SIGTERM to its process
-    /// group, wait `grace` for them to exit, and then escalate to a
-    /// group-wide SIGKILL. Drops every instance from the map. Used by
-    /// [`crate::manager::AgentManager`] callers (the daemon shutdown path
-    /// in C20).
+    /// Shut every **provider child process** down (Codex app-server, OpenCode
+    /// `serve`, Gemini/Grok ACP). Polite SIGTERM to each process group, wait
+    /// `grace`, then SIGKILL. Drops every instance map. Used by
+    /// [`DaemonHandle::stop`](minos_daemon path).
     ///
-    /// `process.rs` puts each codex child in its own process group via
-    /// `setpgid(0, 0)` in `pre_exec`, which is what makes the
-    /// `kill(-pgid, sig)` call below propagate to whatever shell helpers /
-    /// model-invocation subprocesses codex itself forked. Without that
-    /// signalling-by-group, only codex's main pid was reaped and its
-    /// subprocesses were reparented to launchd on macOS, surviving
-    /// `daemon.stop()`.
+    /// Each provider is spawned with `setpgid(0, 0)` so group signals reach
+    /// helpers the CLI forked. Without this, only the leader was reaped and
+    /// children were reparented to launchd on macOS — classic OpenCode port
+    /// leak (`4096..=4106 all occupied`) after Desktop restart.
+    ///
+    /// Historically this method only drained Codex `instances`. OpenCode /
+    /// Gemini / Grok were left alive across daemon stop → zombie `opencode
+    /// serve` processes with PPID=1.
     pub async fn shutdown_instances(&self, grace: std::time::Duration) {
-        let mut g = self.instances.lock().await;
+        // Snapshot group-leader pids from every provider map first so we can
+        // signal without holding locks across the grace sleep.
+        let mut pgids: Vec<i32> = Vec::new();
 
-        // Snapshot every group leader pid up front so the signalling phase
-        // can release the instances lock before sleeping, and so we still
-        // know which groups to kill if `inst.child` was somehow drained
-        // between phases (defence-in-depth).
-        let mut pgids: Vec<i32> = Vec::with_capacity(g.len());
-        for inst in g.values() {
-            if let Some(child) = inst.child.lock().await.as_ref() {
-                if let Some(pid) = child.id() {
-                    if let Ok(pid_i32) = i32::try_from(pid) {
-                        pgids.push(pid_i32);
+        {
+            let g = self.instances.lock().await;
+            for inst in g.values() {
+                if let Some(child) = inst.child.lock().await.as_ref() {
+                    if let Some(pid) = child.id() {
+                        if let Ok(pid_i32) = i32::try_from(pid) {
+                            pgids.push(pid_i32);
+                        }
+                    }
+                }
+            }
+        }
+        {
+            let g = self.opencode_instances.lock().await;
+            for inst in g.values() {
+                if let Some(child) = inst.lock().await.child.as_ref() {
+                    if let Some(pid) = child.id() {
+                        if let Ok(pid_i32) = i32::try_from(pid) {
+                            pgids.push(pid_i32);
+                        }
+                    }
+                }
+            }
+        }
+        {
+            let g = self.gemini_instances.lock().await;
+            for inst in g.values() {
+                if let Some(child) = inst.child.lock().await.as_ref() {
+                    if let Some(pid) = child.id() {
+                        if let Ok(pid_i32) = i32::try_from(pid) {
+                            pgids.push(pid_i32);
+                        }
+                    }
+                }
+            }
+        }
+        {
+            let g = self.grok_instances.lock().await;
+            for inst in g.values() {
+                if let Some(child) = inst.child.lock().await.as_ref() {
+                    if let Some(pid) = child.id() {
+                        if let Ok(pid_i32) = i32::try_from(pid) {
+                            pgids.push(pid_i32);
+                        }
                     }
                 }
             }
         }
 
-        // Phase 1: polite SIGTERM to each codex process group. The negative
-        // pid argument is the POSIX convention for "signal the group whose
-        // leader has this pid" — we set the leader = the codex pid in
-        // `process.rs::spawn`.
+        // Phase 1: SIGTERM each process group (negative pid = group whose
+        // leader is this pid; set in each driver's pre_exec setpgid).
         #[cfg(unix)]
         for &pgid in &pgids {
-            // SAFETY: kill(2) is async-signal-safe and re-entrant; passing a
-            // negative pid is the documented "signal the group" form. The
-            // worst case is errno = ESRCH when the group is already gone,
-            // which we intentionally ignore via `let _`.
+            // SAFETY: kill(2) with negative pid is the documented group form.
             let _ = unsafe { libc::kill(-pgid, libc::SIGTERM) };
         }
 
         tokio::time::sleep(grace).await;
 
-        // Phase 2: SIGKILL the same groups as a backstop for any straggler
-        // subprocess that ignored SIGTERM. The wait below then reaps the
-        // codex leader itself.
+        // Phase 2: SIGKILL stragglers.
         #[cfg(unix)]
         for &pgid in &pgids {
-            // SAFETY: same as the SIGTERM call above — negative-pid kill(2)
-            // is the documented group-signal form.
             let _ = unsafe { libc::kill(-pgid, libc::SIGKILL) };
         }
 
-        for (_, inst) in std::mem::take(&mut *g) {
-            let child_opt = inst.child.lock().await.take();
-            drop(inst);
-            if let Some(mut child) = child_opt {
-                // `kill().await` sends SIGKILL to the leader and awaits its
-                // exit (reaping any zombie). Kept as belt-and-braces for the
-                // non-Unix path where we did not signal by group above.
-                let _ = child.kill().await;
+        // Drain maps and reap leaders (also covers non-Unix kill_on_drop paths).
+        {
+            let mut g = self.instances.lock().await;
+            for (_, inst) in std::mem::take(&mut *g) {
+                let child_opt = inst.child.lock().await.take();
+                drop(inst);
+                if let Some(mut child) = child_opt {
+                    let _ = child.kill().await;
+                }
             }
         }
+        {
+            let mut g = self.opencode_instances.lock().await;
+            for (_, inst) in std::mem::take(&mut *g) {
+                // Prefer the dedicated close path (SIGTERM → wait → SIGKILL).
+                let taken = {
+                    let mut guard = inst.lock().await;
+                    // Swap out so Drop of Arc doesn't double-kill; close consumes child.
+                    let child = guard.child.take();
+                    (child, guard.workspace.clone())
+                };
+                if let Some(mut child) = taken.0 {
+                    #[cfg(unix)]
+                    if let Some(pid) = child.id() {
+                        if let Ok(pid_i32) = i32::try_from(pid) {
+                            let _ = unsafe { libc::kill(-pid_i32, libc::SIGKILL) };
+                        }
+                    }
+                    let _ = child.kill().await;
+                }
+                tracing::info!(
+                    target: "minos_agent_runtime::manager",
+                    workspace = %taken.1.display(),
+                    "opencode server instance shut down"
+                );
+            }
+        }
+        {
+            let mut g = self.gemini_instances.lock().await;
+            for (_, inst) in std::mem::take(&mut *g) {
+                if let Some(mut child) = inst.child.lock().await.take() {
+                    let _ = child.kill().await;
+                }
+            }
+        }
+        {
+            let mut g = self.grok_instances.lock().await;
+            for (_, inst) in std::mem::take(&mut *g) {
+                if let Some(mut child) = inst.child.lock().await.take() {
+                    let _ = child.kill().await;
+                }
+            }
+        }
+        // Clear session maps so a later resume cannot target dead provider ids.
+        self.opencode_session_map.lock().await.clear();
     }
 
     pub async fn list_threads(&self) -> Vec<crate::store_facing::ThreadSnapshot> {

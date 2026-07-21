@@ -1,8 +1,21 @@
-import { useEffect, useMemo } from "react";
-import { MessageSquare, PanelLeftClose } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ChevronDown, ListFilter, MessageSquare, PanelLeftClose } from "lucide-react";
 import type { Conversation } from "@/lib/mock-data";
+import {
+  matchesProgressFilter,
+  progressFilterLabel,
+  PROGRESS_FILTER_OPTIONS,
+  type ConversationProgressFilter,
+} from "@/lib/conversation-meta";
 import { sortByAttentionThenTime } from "@/lib/list-sort";
 import { PriorityTag, ProgressTag } from "@/components/Tag";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useUiStore } from "@/store/ui-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { cn } from "@/lib/utils";
@@ -30,6 +43,9 @@ export function ConversationList({
   const listStatus = useWorkspaceStore(
     (s) => s.conversationsStatusByProject[projectId],
   );
+  /** Default All: show every conversation in the project. */
+  const [progressFilter, setProgressFilter] =
+    useState<ConversationProgressFilter>("all");
 
   // Declarative init: load when project mounts / boot epoch advances.
   useEffect(() => {
@@ -37,11 +53,12 @@ export function ConversationList({
     void loadConversations(projectId);
   }, [projectId, source, loadConversations, bootEpoch]);
 
-  const items = useMemo(() => {
-    const sorted = [...conversations].filter(
-      (c) => c.projectId === projectId,
+  const { items, projectCount } = useMemo(() => {
+    const inProject = conversations.filter((c) => c.projectId === projectId);
+    const filtered = inProject.filter((c) =>
+      matchesProgressFilter(c.progress, progressFilter),
     );
-    sorted.sort((a, b) => {
+    filtered.sort((a, b) => {
       const aAttn = (a.unread ?? 0) + (a.approvalCount ?? 0);
       const bAttn = (b.unread ?? 0) + (b.approvalCount ?? 0);
       const aMs = a.updatedAtMs ?? 0;
@@ -51,10 +68,24 @@ export function ConversationList({
         { hasUnread: bAttn > 0, lastAttentionMs: bMs, updatedAtMs: bMs },
       );
     });
-    return sorted;
-  }, [conversations, projectId]);
+    return { items: filtered, projectCount: inProject.length };
+  }, [conversations, projectId, progressFilter]);
 
   const phase = listStatus?.phase ?? "idle";
+  const filterLabel = progressFilterLabel(progressFilter);
+  const isFiltered = progressFilter !== "all";
+  const countLabel = (() => {
+    if (
+      (phase === "loading" || phase === "idle") &&
+      projectCount === 0
+    ) {
+      return "Loading…";
+    }
+    if (!isFiltered) {
+      return `${projectCount} in project`;
+    }
+    return `${items.length} of ${projectCount} · ${filterLabel}`;
+  })();
 
   return (
     <section
@@ -65,28 +96,57 @@ export function ConversationList({
           : "w-[min(280px,34vw)] min-w-[220px] max-w-[340px] shrink-0",
       )}
     >
-      <div className="flex shrink-0 items-center justify-between border-b border-ink/5 px-3 py-2.5">
+      <div className="flex shrink-0 items-center justify-between gap-1 border-b border-ink/5 px-3 py-2.5">
         <div className="min-w-0 pl-1">
           <div className="text-[13px] font-semibold text-ink">Conversations</div>
-          <div className="text-[11px] text-ink-muted">
-            {phase === "loading" && items.length === 0
-              ? "Loading…"
-              : phase === "idle" && items.length === 0
-                ? "Loading…"
-                : `${items.length} in project`}
-          </div>
+          <div className="truncate text-[11px] text-ink-muted">{countLabel}</div>
         </div>
-        <button
-          type="button"
-          title="Collapse conversation list"
-          onClick={toggleConversationList}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-muted transition-colors hover:bg-surface-hover hover:text-ink"
-        >
-          <PanelLeftClose className="h-4 w-4" strokeWidth={1.8} />
-        </button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                title={`Filter by status: ${filterLabel}`}
+                aria-label={`Filter conversations by status, currently ${filterLabel}`}
+                className={cn(
+                  "flex h-8 max-w-[7.5rem] items-center gap-1 rounded-lg px-1.5 text-ink-muted transition-colors hover:bg-surface-hover hover:text-ink",
+                  isFiltered && "bg-surface-muted text-ink",
+                )}
+              >
+                <ListFilter className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
+                <span className="truncate text-[11px] font-medium">
+                  {filterLabel}
+                </span>
+                <ChevronDown className="h-3 w-3 shrink-0 opacity-70" strokeWidth={2} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[10rem]">
+              <DropdownMenuRadioGroup
+                value={progressFilter}
+                onValueChange={(value) =>
+                  setProgressFilter(value as ConversationProgressFilter)
+                }
+              >
+                {PROGRESS_FILTER_OPTIONS.map((opt) => (
+                  <DropdownMenuRadioItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <button
+            type="button"
+            title="Collapse conversation list"
+            onClick={toggleConversationList}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-muted transition-colors hover:bg-surface-hover hover:text-ink"
+          >
+            <PanelLeftClose className="h-4 w-4" strokeWidth={1.8} />
+          </button>
+        </div>
       </div>
       <div className="scrollbar-thin min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
-        {phase === "error" && items.length === 0 ? (
+        {phase === "error" && projectCount === 0 ? (
           <div className="flex flex-col items-center gap-2 px-2 py-8 text-center">
             <p className="text-[12px] text-rose-600">
               {listStatus?.error ?? "Failed to load conversations"}
@@ -108,12 +168,26 @@ export function ConversationList({
             onSelect={() => selectConversation(item.id)}
           />
         ))}
-        {phase === "ready" && items.length === 0 ? (
+        {phase === "ready" && projectCount === 0 ? (
           <p className="px-2 py-6 text-center text-[12px] text-ink-muted">
             No conversations in this project.
           </p>
         ) : null}
-        {(phase === "loading" || phase === "idle") && items.length === 0 ? (
+        {phase === "ready" && projectCount > 0 && items.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 px-2 py-6 text-center">
+            <p className="text-[12px] text-ink-muted">
+              No {filterLabel.toLowerCase()} conversations.
+            </p>
+            <button
+              type="button"
+              onClick={() => setProgressFilter("all")}
+              className="rounded-lg bg-surface-muted px-3 py-1.5 text-[11px] font-semibold text-ink ring-1 ring-ink/10 transition-colors hover:bg-surface-hover"
+            >
+              Show all
+            </button>
+          </div>
+        ) : null}
+        {(phase === "loading" || phase === "idle") && projectCount === 0 ? (
           <p className="px-2 py-6 text-center text-[12px] text-ink-muted">
             Loading conversations…
           </p>

@@ -33,7 +33,6 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
-use uuid::Uuid;
 
 /// Frontend event channels (push path, TUI-parity).
 pub const EVENT_INGEST: &str = "daemon://ingest";
@@ -520,6 +519,30 @@ impl DaemonBridge {
         }
     }
 
+    /// Graceful teardown of a managed in-process daemon. Provider children
+    /// (including OpenCode `serve`) are killed via `DaemonHandle::stop` →
+    /// `shutdown_instances`. Call on app exit so processes are not reparented
+    /// to launchd and left holding ports 4096..=4106.
+    pub async fn shutdown_managed(&self) {
+        let managed = {
+            let mut guard = self.inner.lock().await;
+            guard.client = None;
+            guard.endpoint = None;
+            guard.managed.take()
+        };
+        if let Some(handle) = managed {
+            if let Err(e) = handle.stop().await {
+                warn!(
+                    target: "minos_desktop",
+                    error = %e,
+                    "managed daemon stop failed on app exit"
+                );
+            } else {
+                info!(target: "minos_desktop", "managed daemon stopped on app exit");
+            }
+        }
+    }
+
     /// Start (or restart) JSON-RPC subscription pumps that emit Tauri events.
     /// Mirrors TUI `DaemonBackend` ingest/manager/conversation pumps.
     async fn ensure_event_pumps(&self, client: Arc<WsClient>) {
@@ -765,11 +788,16 @@ impl DaemonBridge {
         Ok(map_conversation(response.conversation))
     }
 
-    pub async fn append_user_message(&self, conversation_id: String, body: String) -> Result<()> {
+    pub async fn append_user_message(
+        &self,
+        conversation_id: String,
+        message_id: String,
+        body: String,
+    ) -> Result<i64> {
         let client = self.client().await?;
         let params = AppendConversationMessageParams {
             conversation_id,
-            message_id: format!("msg_{}", Uuid::new_v4()),
+            message_id,
             thread_id: None,
             sender_role: "user".into(),
             agent: None,
@@ -778,11 +806,11 @@ impl DaemonBridge {
             delegation_id: None,
             mentions: vec![],
         };
-        let _: minos_protocol::AppendConversationMessageResponse = client
+        let response: minos_protocol::AppendConversationMessageResponse = client
             .request("minos_local_append_conversation_message", [params])
             .await
             .context("minos_local_append_conversation_message")?;
-        Ok(())
+        Ok(response.message_seq)
     }
 
     pub async fn list_clis(&self) -> Result<Vec<CliDto>> {
@@ -1293,6 +1321,22 @@ impl TranscriptAssembler {
         )
     }
 
+    /// Last text bubble for this message_id (may sit *above* later tool rows).
+    ///
+    /// OpenCode streams `text_delta`s, then places tools on the same
+    /// `message_id`, then re-emits a full `text_replace` snapshot. If we only
+    /// match the timeline *tail*, that replace becomes a twin assistant bubble
+    /// with the same body ("现在让我读取…") after the Read tools.
+    fn find_text_item_mut(
+        &mut self,
+        message_id: &str,
+        kind: &str,
+    ) -> Option<&mut TranscriptItemDto> {
+        self.items.iter_mut().rev().find(|item| {
+            item.kind == kind && item.message_id.as_deref() == Some(message_id)
+        })
+    }
+
     fn append_text(
         &mut self,
         seq: u64,
@@ -1311,35 +1355,41 @@ impl TranscriptAssembler {
             MessageRole::System => "system",
             MessageRole::Assistant => "assistant",
         };
-        if self.tail_text_matches(&message_id, kind) {
+        // Contiguous stream: update tail when it is still this bubble.
+        // Replace: also update a non-tail bubble for the same message_id so
+        // OpenCode's post-tool text_replace does not invent a duplicate row.
+        if replace {
+            if let Some(item) = self.find_text_item_mut(&message_id, kind) {
+                item.text = chunk;
+                item.ts_ms = ts_ms;
+                item.seq = seq;
+                return;
+            }
+        } else if self.tail_text_matches(&message_id, kind) {
             if let Some(last) = self.items.last_mut() {
-                if replace {
-                    last.text = chunk;
-                } else {
-                    last.text.push_str(&chunk);
-                }
+                last.text.push_str(&chunk);
                 last.ts_ms = ts_ms;
                 last.seq = seq;
+                return;
             }
-        } else {
-            let id = self.next_id("msg");
-            self.items.push(TranscriptItemDto {
-                id,
-                kind: kind.into(),
-                role: Some(kind.into()),
-                text: chunk,
-                detail: None,
-                title: None,
-                ts_ms,
-                seq,
-                message_id: Some(message_id),
-                request_id: None,
-                approval_method: None,
-                options: None,
-                approve_response: None,
-                decline_response: None,
-            });
         }
+        let id = self.next_id("msg");
+        self.items.push(TranscriptItemDto {
+            id,
+            kind: kind.into(),
+            role: Some(kind.into()),
+            text: chunk,
+            detail: None,
+            title: None,
+            ts_ms,
+            seq,
+            message_id: Some(message_id),
+            request_id: None,
+            approval_method: None,
+            options: None,
+            approve_response: None,
+            decline_response: None,
+        });
     }
 
     fn push_simple(
@@ -2839,6 +2889,62 @@ mod conversation_message_kind_tests {
                 "body={body:?} must stay text on conversation timeline"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod transcript_assembler_tests {
+    use super::*;
+    use minos_ui_protocol::{MessageRole, UiEventMessage};
+
+    #[test]
+    fn text_replace_after_tools_does_not_duplicate_assistant_bubble() {
+        // Reproduces OpenCode seq pattern from daemon.sqlite thread 91fbcdd1:
+        // text_delta* → tool_call_placed(read) → text_replace(full same narration).
+        let mut a = TranscriptAssembler::new("thr-opencode".into());
+        let mid = "msg_f83e32698001L2Zjg3C87TJQ45".to_string();
+        a.ingest_frame(
+            1,
+            1,
+            vec![
+                UiEventMessage::MessageStarted {
+                    message_id: mid.clone(),
+                    role: MessageRole::Assistant,
+                    started_at_ms: 0,
+                },
+                UiEventMessage::TextDelta {
+                    message_id: mid.clone(),
+                    text: "现在让我读取 workspace-store".into(),
+                },
+                UiEventMessage::ToolCallPlaced {
+                    message_id: mid.clone(),
+                    tool_call_id: "call_read_1".into(),
+                    name: "read".into(),
+                    args_json: r#"{"path":"workspace-store.ts"}"#.into(),
+                },
+                UiEventMessage::TextReplace {
+                    message_id: mid.clone(),
+                    text: "现在让我读取 workspace-store.ts 的 sendMessage 区域、Rust 文件以及 list-identity.ts。"
+                        .into(),
+                },
+            ],
+        );
+        let items = a.finish();
+        let assistants: Vec<_> = items.iter().filter(|i| i.kind == "assistant").collect();
+        assert_eq!(
+            assistants.len(),
+            1,
+            "expected one assistant bubble, got {:?}",
+            items
+                .iter()
+                .map(|i| (i.kind.as_str(), i.text.as_str()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            assistants[0].text,
+            "现在让我读取 workspace-store.ts 的 sendMessage 区域、Rust 文件以及 list-identity.ts。"
+        );
+        assert!(items.iter().any(|i| i.kind == "tool"));
     }
 }
 

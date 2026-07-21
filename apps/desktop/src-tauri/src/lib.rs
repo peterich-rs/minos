@@ -134,11 +134,12 @@ async fn daemon_update_conversation(
 async fn daemon_append_user_message(
     state: State<'_, AppState>,
     conversation_id: String,
+    message_id: String,
     body: String,
-) -> Result<(), String> {
+) -> Result<i64, String> {
     state
         .daemon
-        .append_user_message(conversation_id, body)
+        .append_user_message(conversation_id, message_id, body)
         .await
         .map_err(|e| e.to_string())
 }
@@ -336,6 +337,7 @@ async fn daemon_read_transcript(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let daemon = Arc::new(DaemonBridge::new());
+    let daemon_for_exit = Arc::clone(&daemon);
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -377,6 +379,19 @@ pub fn run() {
             daemon_respond_opencode_permission,
             daemon_respond_opencode_question,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Minos desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building Minos desktop")
+        .run(move |_app, event| {
+            // Kill provider children (OpenCode serve, Codex, …) on exit.
+            // Without this, `opencode serve` is reparented to launchd and
+            // exhausts ports 4096..=4106 across Desktop restarts.
+            if let tauri::RunEvent::Exit = event {
+                let daemon = Arc::clone(&daemon_for_exit);
+                // Block until stop finishes — Exit is the last chance before
+                // process teardown drops the runtime without group signals.
+                tauri::async_runtime::block_on(async move {
+                    daemon.shutdown_managed().await;
+                });
+            }
+        });
 }

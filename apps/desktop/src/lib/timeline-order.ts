@@ -2,7 +2,7 @@ import type { TimelineMessage } from "@/lib/mock-data";
 
 /**
  * Canonical conversation timeline order: durable `messageSeq` ASC.
- * Pending rows (no seq) sort after durable messages when needed.
+ * Optimistic rows (no seq, e.g. `deliveryStatus: "sending"`) sort after durable.
  */
 export function sortTimelineMessages(
   messages: TimelineMessage[],

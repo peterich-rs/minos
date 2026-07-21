@@ -220,8 +220,16 @@ export const daemonApi = {
       priority: patch.priority ?? null,
       progress: patch.progress ?? null,
     }),
-  appendUserMessage: (conversationId: string, body: string) =>
-    call<void>("daemon_append_user_message", { conversationId, body }),
+  appendUserMessage: (
+    conversationId: string,
+    body: string,
+    messageId: string,
+  ) =>
+    call<{ messageSeq: number }>("daemon_append_user_message", {
+      conversationId,
+      body,
+      messageId,
+    }),
   listClis: () =>
     call<
       {

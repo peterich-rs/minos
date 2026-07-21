@@ -46,7 +46,7 @@ export function timelineMessageEqual(
     kind?: string;
     replyToMessageId?: string;
     delegationId?: string;
-    pending?: boolean;
+    deliveryStatus?: string;
   },
   b: {
     id: string;
@@ -60,7 +60,7 @@ export function timelineMessageEqual(
     kind?: string;
     replyToMessageId?: string;
     delegationId?: string;
-    pending?: boolean;
+    deliveryStatus?: string;
   },
 ): boolean {
   return (
@@ -75,7 +75,7 @@ export function timelineMessageEqual(
     a.kind === b.kind &&
     a.replyToMessageId === b.replyToMessageId &&
     a.delegationId === b.delegationId &&
-    a.pending === b.pending
+    a.deliveryStatus === b.deliveryStatus
   );
 }
 

@@ -88,3 +88,21 @@ export function nextSessionStatusAfterTranscript(options: {
   if (current === "needs_approval") return "running";
   return current;
 }
+
+/**
+ * Merge a daemon manager ThreadStateChanged status into client UI status.
+ *
+ * Grok parks on permission/plan while daemon still reports `running` — hold
+ * client `needs_approval` only against that running signal. Idle / done /
+ * suspended / failed always win so a cleared turn cannot leave a ghost Running
+ * after a later transcript demote.
+ */
+export function nextStatusFromManagerEvent(
+  prev: SessionStatus,
+  daemonStatus: SessionStatus,
+): SessionStatus {
+  if (prev === "needs_approval" && daemonStatus === "running") {
+    return prev;
+  }
+  return daemonStatus;
+}

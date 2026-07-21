@@ -20,6 +20,44 @@ export const PROGRESS_CYCLE: ConversationProgress[] = [
   "done",
 ];
 
+/** Conversation list progress filter; `all` shows every conversation. */
+export type ConversationProgressFilter = "all" | ConversationProgress;
+
+/** User-facing list filters only — no `in_review` (not a product status). */
+export const PROGRESS_FILTER_OPTIONS: Array<{
+  value: ConversationProgressFilter;
+  label: string;
+}> = [
+  { value: "all", label: "All" },
+  { value: "todo", label: "To do" },
+  { value: "in_progress", label: "In progress" },
+  { value: "done", label: "Done" },
+];
+
+export function progressFilterLabel(
+  filter: ConversationProgressFilter,
+): string {
+  return (
+    PROGRESS_FILTER_OPTIONS.find((o) => o.value === filter)?.label ?? "All"
+  );
+}
+
+/**
+ * Missing progress is treated as `todo` (same as parseProgress).
+ * Legacy `in_review` rows (if any) fold into the In progress filter.
+ */
+export function matchesProgressFilter(
+  progress: ConversationProgress | undefined,
+  filter: ConversationProgressFilter,
+): boolean {
+  if (filter === "all") return true;
+  const p = progress ?? "todo";
+  if (filter === "in_progress") {
+    return p === "in_progress" || p === "in_review";
+  }
+  return p === filter;
+}
+
 export function parsePriority(
   value: string | null | undefined,
 ): ConversationPriority | undefined {

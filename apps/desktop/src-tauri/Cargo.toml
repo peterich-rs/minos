@@ -23,7 +23,6 @@ tokio = { workspace = true }
 anyhow = { workspace = true }
 jsonrpsee = { workspace = true }
 futures = { workspace = true }
-uuid = { workspace = true }
 clap = { workspace = true }
 minos-protocol = { path = "../../../crates/minos-protocol" }
 minos-domain = { path = "../../../crates/minos-domain" }

@@ -433,7 +433,59 @@ fn text_replace_without_delta_creates_streaming_item_for_open_message() {
         }
         other => panic!("expected AssistantText, got {other:?}"),
     }
-    assert!(cs.open_message_ids.contains("m1"));
+}
+
+#[test]
+fn text_replace_after_tools_updates_same_message_not_duplicate() {
+    // OpenCode: stream text → tool_call(s) on same message_id → full text_replace.
+    // Must not leave "现在让我读取…" twice in the transcript.
+    let mut cs = ChatState::new("t1".into(), AgentName::Opencode);
+    let mid = "msg_open_1";
+    cs.apply_ui_events(vec![
+        UiEventMessage::MessageStarted {
+            message_id: mid.into(),
+            role: MessageRole::Assistant,
+            started_at_ms: 0,
+        },
+        UiEventMessage::TextDelta {
+            message_id: mid.into(),
+            text: "现在让我读取 workspace-store".into(),
+        },
+        UiEventMessage::ToolCallPlaced {
+            message_id: mid.into(),
+            tool_call_id: "call_read_1".into(),
+            name: "read".into(),
+            args_json: "{}".into(),
+        },
+        UiEventMessage::TextReplace {
+            message_id: mid.into(),
+            text: "现在让我读取 workspace-store.ts 的 sendMessage 区域。".into(),
+        },
+    ]);
+
+    let assistant_count = cs
+        .items
+        .iter()
+        .filter(|item| matches!(item, ChatItem::AssistantText { .. }))
+        .count();
+    assert_eq!(
+        assistant_count, 1,
+        "text_replace after tools must update the existing bubble, not twin it"
+    );
+    match &cs.items[0] {
+        ChatItem::AssistantText { text_parts, .. } => {
+            assert_eq!(
+                *text_parts,
+                plain_parts("现在让我读取 workspace-store.ts 的 sendMessage 区域。")
+            );
+        }
+        other => panic!("expected first item AssistantText, got {other:?}"),
+    }
+    assert!(
+        matches!(cs.items[1], ChatItem::ToolCall { .. }),
+        "tool row should remain after the narration"
+    );
+    assert_eq!(cs.items.len(), 2);
 }
 
 #[test]

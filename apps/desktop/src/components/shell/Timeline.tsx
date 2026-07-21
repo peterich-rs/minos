@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  AlertCircle,
   ArrowDown,
   AtSign,
   Bold,
@@ -21,8 +22,9 @@ import {
 } from "lucide-react";
 import { agentMeta, type TimelineMessage } from "@/lib/mock-data";
 import {
-  KNOWN_AGENTS,
+  buildAgentMentionOptions,
   mentionQueryAtCursor,
+  shortThreadId,
   type KnownAgent,
 } from "@/lib/agent-route";
 import { Avatar } from "@/components/Avatar";
@@ -344,44 +346,9 @@ export function Timeline({ conversationId }: { conversationId: string }) {
   const mention = mentionQueryAtCursor(draft, cursor);
   const mentionOptions = useMemo(() => {
     if (!mention) return [];
-    const q = mention.query.toLowerCase();
-    const fromCli = clis
-      .filter((c) => c.agent.includes(q))
-      .map((c) => ({
-        id: c.agent,
-        label: `@${c.agent}`,
-        hint: c.installed ? c.status : "not installed",
-        insert: `@${c.agent} `,
-        disabled: !c.installed,
-      }));
-    // existing sessions in this conversation
-    const fromSessions = sessions
-      .filter((s) => !s.parentId)
-      .filter(
-        (s) =>
-          s.agent.includes(q) ||
-          s.shortId.toLowerCase().includes(q) ||
-          `@${s.agent}#${s.shortId}`.includes(q),
-      )
-      .map((s) => ({
-        id: s.id,
-        label: `@${s.agent}#${s.shortId}`,
-        hint: s.status,
-        insert: `@${s.agent}#${s.shortId} `,
-        disabled: false,
-      }));
-    // always offer known agents if cli list empty
-    const base =
-      fromCli.length > 0
-        ? fromCli
-        : KNOWN_AGENTS.filter((a) => a.includes(q)).map((a) => ({
-            id: a,
-            label: `@${a}`,
-            hint: "agent",
-            insert: `@${a} `,
-            disabled: false,
-          }));
-    return [...base, ...fromSessions].slice(0, 12);
+    // TUI parity: always list bare `@agent` (new session) + `@agent#short`
+    // (continue), even when this conversation already has that agent.
+    return buildAgentMentionOptions(mention.query, clis, sessions);
   }, [mention, clis, sessions]);
 
   const bootEpoch = useWorkspaceStore((s) => s.bootEpoch);
@@ -394,21 +361,25 @@ export function Timeline({ conversationId }: { conversationId: string }) {
     void loadConversationDetail(conversationId);
   }, [conversationId, source, loadConversationDetail, bootEpoch]);
 
-  // Fallback quiet poll ONLY when live push is unavailable (browser mock or
-  // subscribe failure). With daemon://* pumps, status/messages arrive via events.
+  // Reconcile conversation sessions/messages with daemon.
+  // Live push is primary, but a missed ThreadStateChanged leaves ghost
+  // Running in sessionsByConversation (inspector pills). While the UI still
+  // thinks something is live, quiet re-list against listSessions (authoritative
+  // idle/running). Without live push, poll more aggressively.
   const hasLiveSession = sessions.some(
     (s) => s.status === "running" || s.status === "needs_approval",
   );
   const expectHistoryEmpty =
     (conversation?.messageCount ?? 0) > 0 && messages.length === 0;
   useEffect(() => {
-    if (source !== "daemon" || livePush) return;
+    if (source !== "daemon") return;
     const needPoll =
       hasLiveSession || phase === "error" || expectHistoryEmpty;
     if (!needPoll) return;
+    const intervalMs = livePush ? 6000 : 2500;
     const id = window.setInterval(() => {
       void loadConversationDetail(conversationId, { quiet: true });
-    }, 2500);
+    }, intervalMs);
     return () => window.clearInterval(id);
   }, [
     conversationId,
@@ -472,12 +443,16 @@ export function Timeline({ conversationId }: { conversationId: string }) {
   const onSend = async () => {
     const text = draft.trim();
     if (!text || !conversationId) return;
+    // WeChat-style: empty the composer immediately. The message body is
+    // already captured in `text`; the optimistic `sending` row (inserted by
+    // sendMessage before any throwing step) carries it. On failure the row
+    // becomes a failed bubble with a red `!`, so the draft is never refilled.
+    setDraft("");
+    setCursor(0);
     setSending(true);
     setSendError(null);
     try {
       await sendMessage(conversationId, text);
-      setDraft("");
-      setCursor(0);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setSendError(msg);
@@ -652,6 +627,7 @@ export function Timeline({ conversationId }: { conversationId: string }) {
               <div key={message.id} data-scroll-id={message.id}>
                 <TimelineRow
                   message={message}
+                  conversationId={conversationId}
                   replyParent={
                     message.replyToMessageId
                       ? messageById.get(message.replyToMessageId)
@@ -799,7 +775,7 @@ export function Timeline({ conversationId }: { conversationId: string }) {
         </div>
         <p className="mt-2 px-1 text-[11px] text-ink-muted">
           {source === "daemon"
-            ? "Connected · @agent starts a session · ⌘/Ctrl+Enter to send"
+            ? "Connected · @agent new session · @agent#id continue · ⌘/Ctrl+Enter send"
             : "Mock mode"}
           {phase === "loading" && hasCachedMessages ? " · refreshing…" : ""}
         </p>
@@ -833,23 +809,56 @@ function replyAuthorLabel(parent: TimelineMessage): string {
   if (parent.role === "user") return "You";
   if (parent.role === "system") return "System";
   const agentKey = parent.agent as KnownAgent | undefined;
-  if (agentKey && agentMeta[agentKey]) return agentMeta[agentKey].label;
-  return parent.agent ?? "Agent";
+  const name =
+    (agentKey && agentMeta[agentKey]?.label) || parent.agent || "Agent";
+  if (parent.sessionId) {
+    return `${name} #${shortThreadId(parent.sessionId)}`;
+  }
+  return name;
 }
 
 const TimelineRow = memo(function TimelineRow({
   message,
+  conversationId,
   replyParent,
   animateIn = false,
+  onRetry,
 }: {
   message: TimelineMessage;
+  conversationId: string;
   replyParent?: TimelineMessage;
   /** Only newly appended rows play enter animation (never bulk history). */
   animateIn?: boolean;
+  /** Retry callback for failed user messages (red `!` icon). */
+  onRetry?: (messageId: string) => void;
 }) {
+  const openSessionTranscript = useUiStore((s) => s.openSessionTranscript);
+  const retryFailedMessage = useWorkspaceStore((s) => s.retryFailedMessage);
+  const [retrying, setRetrying] = useState(false);
   const enterClass = animateIn
     ? "animate-message-in motion-reduce:animate-none"
     : undefined;
+  const delivery = message.deliveryStatus;
+  // Bubble is in sending state when the row says so, or while a retry is in
+  // flight (the store patches deliveryStatus asynchronously).
+  const isSending = delivery === "sending" || retrying;
+  const isFailed = delivery === "failed" && !retrying;
+
+  const onRetryClick = () => {
+    setRetrying(true);
+    void retryFailedMessage(conversationId, message.id)
+      .catch(() => {
+        /* store sets actionError + patches row back to failed */
+      })
+      .finally(() => setRetrying(false));
+  };
+  const handleRetry = () => {
+    if (onRetry) {
+      onRetry(message.id);
+    } else {
+      void retryFailedMessage(conversationId, message.id);
+    }
+  };
 
   if (message.role === "system") {
     return (
@@ -867,6 +876,11 @@ const TimelineRow = memo(function TimelineRow({
   const isUser = message.role === "user";
   const agentKey = message.agent as KnownAgent | undefined;
   const agent = agentKey && agentMeta[agentKey] ? agentMeta[agentKey] : null;
+  // TUI labels agent replies as `[OpenCode@b15d06d4]` — surface session short id.
+  const sessionShort = message.sessionId
+    ? shortThreadId(message.sessionId)
+    : undefined;
+  const agentLabel = agent?.label ?? message.agent ?? "Agent";
 
   // Conversation timeline must not invent "approval" cards from free text.
   // Real approvals (permission / plan / opencode question) live on the session
@@ -898,15 +912,31 @@ const TimelineRow = memo(function TimelineRow({
       )}
     >
       {!isUser ? (
-        <Avatar name={agent?.label ?? "Agent"} tone={agent?.tone ?? "slate"} />
+        <Avatar name={agentLabel} tone={agent?.tone ?? "slate"} />
       ) : null}
       <div className={cn("max-w-[78%] space-y-1", isUser && "items-end")}>
         {!isUser ? (
           <div className="flex items-center gap-1.5 px-1 text-[12px]">
-            <span className="font-medium text-ink">
-              {agent?.label ?? message.agent ?? "Agent"}
-            </span>
-            {message.pending ? (
+            {message.sessionId ? (
+              <button
+                type="button"
+                title={`Open ${agentLabel} #${sessionShort} transcript`}
+                onClick={() =>
+                  openSessionTranscript(message.sessionId!, conversationId)
+                }
+                className="inline-flex min-w-0 items-center gap-1 rounded-md px-0.5 hover:bg-surface-hover"
+              >
+                <span className="font-medium text-ink">{agentLabel}</span>
+                {sessionShort ? (
+                  <span className="font-mono text-[11px] font-normal text-ink-muted">
+                    #{sessionShort}
+                  </span>
+                ) : null}
+              </button>
+            ) : (
+              <span className="font-medium text-ink">{agentLabel}</span>
+            )}
+            {isSending ? (
               <span className="text-[11px] text-ink-muted">sending…</span>
             ) : null}
           </div>
@@ -930,20 +960,33 @@ const TimelineRow = memo(function TimelineRow({
             </div>
           </div>
         ) : null}
-        <div
-          className={cn(
-            "rounded-2xl px-3.5 py-2.5 text-[13.5px] leading-relaxed shadow-sm",
-            isUser
-              ? "rounded-br-md bg-bubble-out text-white"
-              : "rounded-bl-md border border-ink/5 bg-surface-muted/60 text-ink",
-            message.pending && "opacity-70",
-          )}
-        >
-          <MarkdownText
-            text={message.body}
-            tone={isUser ? "onDark" : "default"}
-            className="text-[13.5px]"
-          />
+        <div className={cn("flex items-end gap-1.5", isUser && "flex-row-reverse")}>
+          {isUser && isFailed ? (
+            <button
+              type="button"
+              onClick={handleRetry}
+              title="Message failed to send — click to retry"
+              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-rose-600 text-[12px] font-bold leading-none text-white shadow-sm hover:bg-rose-700"
+              aria-label="Retry failed message"
+            >
+              !
+            </button>
+          ) : null}
+          <div
+            className={cn(
+              "rounded-2xl px-3.5 py-2.5 text-[13.5px] leading-relaxed shadow-sm",
+              isUser
+                ? "rounded-br-md bg-bubble-out text-white"
+                : "rounded-bl-md border border-ink/5 bg-surface-muted/60 text-ink",
+              isSending && "opacity-70",
+            )}
+          >
+            <MarkdownText
+              text={message.body}
+              tone={isUser ? "onDark" : "default"}
+              className="text-[13.5px]"
+            />
+          </div>
         </div>
         <div
           className={cn(
@@ -951,7 +994,7 @@ const TimelineRow = memo(function TimelineRow({
             isUser && "text-right",
           )}
         >
-          {message.pending ? "sending…" : message.time}
+          {isSending ? "sending…" : isFailed ? "failed" : message.time}
         </div>
       </div>
     </div>

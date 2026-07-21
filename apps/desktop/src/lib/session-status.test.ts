@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   deriveSessionStatus,
   nextSessionStatusAfterTranscript,
+  nextStatusFromManagerEvent,
   transcriptHasPendingApproval,
   withDerivedSessionStatuses,
 } from "./session-status.ts"; // .ts required for node --experimental-strip-types
@@ -166,5 +167,29 @@ describe("nextSessionStatusAfterTranscript", () => {
       }),
       "running",
     );
+  });
+});
+
+describe("nextStatusFromManagerEvent", () => {
+  it("holds needs_approval only while daemon still says running", () => {
+    assert.equal(
+      nextStatusFromManagerEvent("needs_approval", "running"),
+      "needs_approval",
+    );
+  });
+
+  it("applies idle/done so ghost running cannot stick after turn ends", () => {
+    assert.equal(nextStatusFromManagerEvent("needs_approval", "idle"), "idle");
+    assert.equal(nextStatusFromManagerEvent("needs_approval", "done"), "done");
+    assert.equal(
+      nextStatusFromManagerEvent("needs_approval", "suspended"),
+      "suspended",
+    );
+  });
+
+  it("passes through normal running → idle / done transitions", () => {
+    assert.equal(nextStatusFromManagerEvent("running", "idle"), "idle");
+    assert.equal(nextStatusFromManagerEvent("running", "done"), "done");
+    assert.equal(nextStatusFromManagerEvent("idle", "running"), "running");
   });
 });

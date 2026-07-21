@@ -89,6 +89,8 @@ export type TimelineMention = {
   threadShortId?: string;
 };
 
+export type DeliveryStatus = "sending" | "sent" | "failed";
+
 export type TimelineMessage = {
   id: string;
   /** Durable sort key from daemon; optimistic rows may omit until reload. */
@@ -103,8 +105,14 @@ export type TimelineMessage = {
   replyToMessageId?: string;
   delegationId?: string;
   mentions?: TimelineMention[];
-  /** Local-only optimistic bubble; dropped on next server list. */
-  pending?: boolean;
+  /**
+   * Local delivery lifecycle for user messages.
+   * - `sending`: optimistic bubble shown immediately, awaiting append/RPC ack.
+   * - `failed`: append or send pipeline threw; row stays until retry succeeds.
+   * - `sent`: append succeeded (durable). Omitted on durable rows loaded from
+   *   daemon — absence is treated as `sent` by render.
+   */
+  deliveryStatus?: DeliveryStatus;
 };
 
 export type AgentSession = {

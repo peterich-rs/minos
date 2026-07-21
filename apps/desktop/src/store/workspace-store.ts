@@ -7,6 +7,7 @@ import {
   agentSessions as mockSessions,
   type Conversation,
   type ConversationProgress,
+  type DeliveryStatus,
   type Project,
   type TimelineMessage,
   type AgentSession,
@@ -197,6 +198,12 @@ type WorkspaceState = {
       approvalStatusPolicy?: ApprovalStatusPolicy;
     },
   ) => Promise<void>;
+  /**
+   * After daemon restart, reattach a suspended session. When `needsContinue` is
+   * set, inject CONTINUE so a mid-turn agent keeps working. Idempotent per
+   * thread for the current boot (StrictMode / double-open safe).
+   */
+  resumeInterruptedSession: (threadId: string) => Promise<void>;
   /** Load attention queue across all projects (approvals / failed / suspended). */
   loadAttentionSessions: (opts?: { quiet?: boolean }) => Promise<void>;
   resolveApproval: (
@@ -217,7 +224,20 @@ type WorkspaceState = {
   /** Mark conversation messages as read (clears unread badge). */
   markConversationRead: (conversationId: string) => void;
   clearActionError: () => void;
-  sendMessage: (conversationId: string, body: string) => Promise<void>;
+  sendMessage: (
+    conversationId: string,
+    body: string,
+    messageId?: string,
+  ) => Promise<void>;
+  /**
+   * Retry a failed user message by reusing its original message_id (store
+   * append is idempotent upsert). Patches the existing failed row in place;
+   * does NOT push a new optimistic bubble.
+   */
+  retryFailedMessage: (
+    conversationId: string,
+    messageId: string,
+  ) => Promise<void>;
   createConversation: (projectId: string, title: string) => Promise<string | null>;
   updateConversationTitle: (
     conversationId: string,
@@ -641,6 +661,43 @@ function patchProjectAggregates(
         }
       : p,
   );
+}
+
+/**
+ * Start a fresh agent session in a conversation. Resolves the create-time
+ * model/reasoning/instructions from the newest host profile for this runtime
+ * (optional — falls back to daemon defaults) and returns the new thread id.
+ * Extracted from the historical inline sendMessage logic so both the send
+ * and retry paths can share it.
+ */
+async function startNewAgentSession(
+  conversationId: string,
+  agent: KnownAgent,
+  workspacePath: string,
+): Promise<string> {
+  let model: string | undefined;
+  let reasoningEffort: string | undefined;
+  let instructions: string | undefined;
+  try {
+    const { profiles } = await daemonApi.listAgentProfiles();
+    const match = (profiles ?? [])
+      .filter((p) => p.runtime_agent === agent)
+      .sort((a, b) => (b.updated_at_ms ?? 0) - (a.updated_at_ms ?? 0))[0];
+    if (match?.model) {
+      model = match.model;
+      reasoningEffort = match.reasoning_effort?.trim() || undefined;
+      instructions = match.instructions?.trim() || undefined;
+    }
+  } catch {
+    /* profiles optional */
+  }
+  const started = await daemonApi.startAgentInConversation(
+    conversationId,
+    agent,
+    workspacePath,
+    { model, reasoningEffort, instructions },
+  );
+  return started.threadId;
 }
 
 export const useWorkspaceStore = create<WorkspaceState>()(
@@ -1475,6 +1532,62 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     }
   },
 
+  resumeInterruptedSession: async (threadId) => {
+    if (get().source !== "daemon" || !threadId) return;
+    const w = window as unknown as {
+      __minosResumedInterrupted?: Set<string>;
+      __minosResumeInFlight?: Set<string>;
+    };
+    w.__minosResumedInterrupted = w.__minosResumedInterrupted ?? new Set();
+    w.__minosResumeInFlight = w.__minosResumeInFlight ?? new Set();
+    if (
+      w.__minosResumedInterrupted.has(threadId) ||
+      w.__minosResumeInFlight.has(threadId)
+    ) {
+      return;
+    }
+
+    const findSession = (): ProjectSession | undefined =>
+      get().projectSessions.find((s) => s.id === threadId) ??
+      Object.values(get().projectSessionsByProject)
+        .flat()
+        .find((s) => s.id === threadId) ??
+      Object.values(get().sessionsByConversation)
+        .flat()
+        .find((s) => s.id === threadId);
+
+    const session = findSession();
+    if (!session) return;
+    // Only auto-continue mid-turn death. Plain suspended/idle reattach happens
+    // on the next user send (sendMessage → resume false).
+    if (!session.needsContinue) return;
+
+    w.__minosResumeInFlight.add(threadId);
+    try {
+      await daemonApi.resumeThread(threadId, true);
+      w.__minosResumedInterrupted.add(threadId);
+      // Refresh list status (suspended → running/idle) without flashing loaders.
+      const convId = session.conversationId;
+      const projectId = get().conversations.find((c) => c.id === convId)
+        ?.projectId;
+      if (convId) {
+        await get().loadConversationDetail(convId, { quiet: true });
+      }
+      if (projectId) {
+        await get().loadProjectSessions(projectId, { quiet: true });
+      }
+    } catch (e) {
+      // Leave needsContinue set server-side so a later open/send can retry.
+      console.warn(
+        "[minos] resumeInterruptedSession failed",
+        threadId,
+        e instanceof Error ? e.message : e,
+      );
+    } finally {
+      w.__minosResumeInFlight.delete(threadId);
+    }
+  },
+
   loadAttentionSessions: async (opts) => {
     if (get().source !== "daemon") return;
     const quiet = opts?.quiet === true;
@@ -1805,58 +1918,20 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     }, 200);
   },
 
-  sendMessage: async (conversationId, body) => {
+  sendMessage: async (conversationId, body, messageId) => {
     const messageBody = body.trimEnd();
     if (!messageBody.trim()) return;
 
-    if (get().source !== "daemon") {
-      const msg: TimelineMessage = {
-        id: `local-${Date.now()}`,
-        role: "user",
-        body: messageBody,
-        time: "now",
-      };
-      set((s) => ({
-        messagesByConversation: {
-          ...s.messagesByConversation,
-          [conversationId]: [
-            ...(s.messagesByConversation[conversationId] ?? []),
-            msg,
-          ],
-        },
-      }));
-      return;
-    }
-
-    const conv = get().conversations.find((c) => c.id === conversationId);
-    const project = get().projects.find((p) => p.id === conv?.projectId);
-    if (!conv || !project) {
-      throw new Error("conversation or project not found");
-    }
-
-    const routed = parseAgentRouting(messageBody);
-    let agent: KnownAgent | null = routed?.target.agent ?? null;
-    let prompt = routed?.prompt ?? messageBody;
-
-    if (!agent) {
-      const firstOk = get().clis.find((c) => c.installed);
-      agent = (firstOk?.agent as KnownAgent | undefined) ?? null;
-      prompt = messageBody;
-    }
-    if (!agent) {
-      throw new Error(
-        "No agents available. Install codex/claude/gemini/opencode/grok.",
-      );
-    }
-    if (!prompt.trim() && !routed) {
-      throw new Error("Cannot start an agent session with an empty prompt.");
-    }
-
+    // Constraint #1: generate messageId + optimistic `sending` insert BEFORE
+    // any business validation that may throw, so the user always sees their
+    // bubble immediately (WeChat: empty composer + sending row).
+    const resolvedId = messageId ?? `msg_${crypto.randomUUID()}`;
     const optimistic: TimelineMessage = {
-      id: `opt-${Date.now()}`,
+      id: resolvedId,
       role: "user",
       body: messageBody,
       time: "now",
+      deliveryStatus: "sending",
     };
     set((s) => ({
       messagesByConversation: {
@@ -1869,8 +1944,70 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       error: null,
     }));
 
+    const patchDelivery = (
+      status: DeliveryStatus,
+      seq?: number,
+      time?: string,
+    ) => {
+      set((s) => ({
+        messagesByConversation: {
+          ...s.messagesByConversation,
+          [conversationId]: (s.messagesByConversation[conversationId] ?? []).map(
+            (m) =>
+              m.id === resolvedId
+                ? {
+                    ...m,
+                    deliveryStatus: status,
+                    messageSeq: seq ?? m.messageSeq,
+                    time: time ?? m.time,
+                  }
+                : m,
+          ),
+        },
+      }));
+    };
+
+    // Mock backend has no RPC: flip to sent synchronously.
+    if (get().source !== "daemon") {
+      patchDelivery("sent");
+      return;
+    }
+
     try {
-      await daemonApi.appendUserMessage(conversationId, messageBody);
+      const conv = get().conversations.find((c) => c.id === conversationId);
+      const project = get().projects.find((p) => p.id === conv?.projectId);
+      if (!conv || !project) {
+        throw new Error("conversation or project not found");
+      }
+
+      const routed = parseAgentRouting(messageBody);
+      let agent: KnownAgent | null = routed?.target.agent ?? null;
+      let prompt = routed?.prompt ?? messageBody;
+
+      if (!agent) {
+        const firstOk = get().clis.find((c) => c.installed);
+        agent = (firstOk?.agent as KnownAgent | undefined) ?? null;
+        prompt = messageBody;
+      }
+      if (!agent) {
+        throw new Error(
+          "No agents available. Install codex/claude/gemini/opencode/grok.",
+        );
+      }
+      if (!prompt.trim() && !routed) {
+        throw new Error("Cannot start an agent session with an empty prompt.");
+      }
+
+      // Append is idempotent by message_id (store upsert). Constraint #3:
+      // success here only means durable; later session steps may still throw,
+      // in which case the row stays `failed` but the message may be durable.
+      // That is the defined send-pipeline-failed semantics.
+      const { messageSeq } = await daemonApi.appendUserMessage(
+        conversationId,
+        messageBody,
+        resolvedId,
+      );
+      patchDelivery("sent", messageSeq);
 
       let threadId: string | undefined;
       const sessions = get().sessionsByConversation[conversationId] ?? [];
@@ -1947,6 +2084,155 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       set({ actionError: message });
+      patchDelivery("failed");
+      await get().loadConversationDetail(conversationId);
+      throw e;
+    }
+  },
+
+  retryFailedMessage: async (conversationId, messageId) => {
+    // Constraint #2: never insert a new optimistic row on retry. The original
+    // failed bubble already exists; reuse its message_id (store append is
+    // idempotent by id) and patch delivery status in place.
+    const list = get().messagesByConversation[conversationId] ?? [];
+    const failed = list.find((m) => m.id === messageId);
+    if (!failed) throw new Error("message not found");
+    if (failed.deliveryStatus !== "failed") {
+      throw new Error("message is not in a failed state");
+    }
+    const messageBody = failed.body;
+
+    const patchDelivery = (
+      status: DeliveryStatus,
+      seq?: number,
+    ) => {
+      set((s) => ({
+        messagesByConversation: {
+          ...s.messagesByConversation,
+          [conversationId]: (s.messagesByConversation[conversationId] ?? []).map(
+            (m) =>
+              m.id === messageId
+                ? {
+                    ...m,
+                    deliveryStatus: status,
+                    messageSeq: seq ?? m.messageSeq,
+                  }
+                : m,
+          ),
+        },
+      }));
+    };
+
+    patchDelivery("sending");
+
+    // Mock backend has no RPC: flip to sent synchronously.
+    if (get().source !== "daemon") {
+      patchDelivery("sent");
+      return;
+    }
+
+    try {
+      const conv = get().conversations.find((c) => c.id === conversationId);
+      const project = get().projects.find((p) => p.id === conv?.projectId);
+      if (!conv || !project) {
+        throw new Error("conversation or project not found");
+      }
+
+      // Idempotent append by message_id — durable row (if any) is updated in
+      // place rather than duplicated. This is the A9 main path.
+      const { messageSeq } = await daemonApi.appendUserMessage(
+        conversationId,
+        messageBody,
+        messageId,
+      );
+      patchDelivery("sent", messageSeq);
+
+      const routed = parseAgentRouting(messageBody);
+      let agent: KnownAgent | null = routed?.target.agent ?? null;
+      const prompt = routed?.prompt ?? messageBody;
+      if (!agent) {
+        const firstOk = get().clis.find((c) => c.installed);
+        agent = (firstOk?.agent as KnownAgent | undefined) ?? null;
+      }
+      if (!agent) {
+        throw new Error(
+          "No agents available. Install codex/claude/gemini/opencode/grok.",
+        );
+      }
+
+      // Re-run the session segment: resolve or create a thread, then deliver.
+      let threadId: string | undefined;
+      const sessions = get().sessionsByConversation[conversationId] ?? [];
+      if (routed?.target.threadShortId) {
+        const match = sessions.find(
+          (s) =>
+            s.agent === agent &&
+            (s.shortId === routed.target.threadShortId ||
+              s.id.endsWith(routed.target.threadShortId!) ||
+              s.id.startsWith(routed.target.threadShortId!)),
+        );
+        if (!match) {
+          throw new Error(
+            `No existing ${agent} session matches #${routed.target.threadShortId}`,
+          );
+        }
+        threadId = match.id;
+      } else {
+        const reusable = sessions
+          .filter(
+            (s) =>
+              s.agent === agent &&
+              !s.parentId &&
+              s.status !== "done" &&
+              s.status !== "failed",
+          )
+          .sort((a, b) => (b.lastTsMs ?? 0) - (a.lastTsMs ?? 0))[0];
+        if (reusable) {
+          threadId = reusable.id;
+        } else {
+          // Prefer create-time model from the newest host profile for this runtime.
+          let model: string | undefined;
+          let reasoningEffort: string | undefined;
+          let instructions: string | undefined;
+          try {
+            const { profiles } = await daemonApi.listAgentProfiles();
+            const match = (profiles ?? [])
+              .filter((p) => p.runtime_agent === agent)
+              .sort((a, b) => (b.updated_at_ms ?? 0) - (a.updated_at_ms ?? 0))[0];
+            if (match?.model) {
+              model = match.model;
+              reasoningEffort = match.reasoning_effort?.trim() || undefined;
+              instructions = match.instructions?.trim() || undefined;
+            }
+          } catch {
+            /* profiles optional */
+          }
+          const started = await daemonApi.startAgentInConversation(
+            conversationId,
+            agent,
+            project.workspacePath,
+            { model, reasoningEffort, instructions },
+          );
+          threadId = started.threadId;
+        }
+      }
+
+      if (prompt.trim()) {
+        try {
+          await daemonApi.resumeThread(threadId, false);
+        } catch {
+          /* not needed when already live */
+        }
+        await daemonApi.sendUserMessage(threadId, prompt);
+      }
+
+      await get().loadConversationDetail(conversationId);
+      await get().loadConversations(conv.projectId);
+      set({ actionError: null });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      set({ actionError: message });
+      patchDelivery("failed");
       await get().loadConversationDetail(conversationId);
       throw e;
     }

@@ -307,26 +307,27 @@ impl ChatState {
             }
             UiEventMessage::TextReplace { message_id, text } => {
                 let text = text.render_preview();
-                if self.tail_text_item_matches(&message_id) {
-                    if let Some(item) = self.items.last_mut() {
-                        let replacement = if text.is_empty() {
-                            Vec::new()
-                        } else {
-                            vec![TextPart::Plain(text)]
-                        };
-                        match item {
-                            ChatItem::UserMessage { text_parts, .. }
-                            | ChatItem::AssistantText { text_parts, .. } => {
-                                *text_parts = replacement;
-                            }
-                            _ => {}
+                let is_streaming = self.open_message_ids.contains(&message_id);
+                // Prefer updating an existing bubble for this message_id even when
+                // tools sit after it (OpenCode: stream text → tools → full
+                // text_replace snapshot). Tail-only match would spawn a twin.
+                if let Some(item) = self.find_text_item_mut(&message_id) {
+                    let replacement = if text.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![TextPart::Plain(text)]
+                    };
+                    match item {
+                        ChatItem::UserMessage { text_parts, .. }
+                        | ChatItem::AssistantText { text_parts, .. } => {
+                            *text_parts = replacement;
                         }
-                        item.set_streaming(self.open_message_ids.contains(&message_id));
+                        _ => {}
                     }
+                    item.set_streaming(is_streaming);
                     self.bump_content();
                 } else if !text.is_empty() {
                     self.finish_open_content_streaming();
-                    let is_streaming = self.open_message_ids.contains(&message_id);
                     self.push_text_item(message_id, text, is_streaming);
                     self.bump_structure();
                 }
@@ -637,6 +638,21 @@ impl ChatState {
                 ..
             }) if existing_id == message_id
         )
+    }
+
+    /// Last user/assistant text item for `message_id` (may sit above tools).
+    fn find_text_item_mut(&mut self, message_id: &str) -> Option<&mut ChatItem> {
+        self.items.iter_mut().rev().find(|item| match item {
+            ChatItem::UserMessage {
+                message_id: existing_id,
+                ..
+            }
+            | ChatItem::AssistantText {
+                message_id: existing_id,
+                ..
+            } => existing_id == message_id,
+            _ => false,
+        })
     }
 
     /// Clear streaming flags on open text/reasoning rows that are no longer
