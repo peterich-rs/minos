@@ -6,6 +6,7 @@ import {
   followContentKey,
   isNearBottom,
   isVerticallyScrollable,
+  shouldShowJumpToLatest,
   shouldUnfollowOnWheelUp,
   FOLLOW_THRESHOLD_PX,
   REFOLLOW_THRESHOLD_PX,
@@ -36,7 +37,7 @@ describe("distanceFromBottom", () => {
   });
 });
 
-describe("isNearBottom / followAfterUserScroll hysteresis", () => {
+describe("isNearBottom / followAfterUserScroll", () => {
   it("treats within threshold as near bottom", () => {
     assert.equal(isNearBottom(0), true);
     assert.equal(isNearBottom(FOLLOW_THRESHOLD_PX), true);
@@ -48,19 +49,55 @@ describe("isNearBottom / followAfterUserScroll hysteresis", () => {
     assert.equal(followAfterUserScroll(20, true), true);
   });
 
-  it("does not re-follow until inside the tight refollow band", () => {
-    // Mid-zone: would have re-followed with the old single threshold.
+  it("re-follows in the normal bottom band by default (no permanent gap)", () => {
+    // Default: same band both ways so docking at bottom clears Jump.
     const mid = REFOLLOW_THRESHOLD_PX + 20;
     assert.ok(mid < FOLLOW_THRESHOLD_PX);
-    assert.equal(followAfterUserScroll(mid, false), false);
-    assert.equal(followAfterUserScroll(REFOLLOW_THRESHOLD_PX, false), true);
+    assert.equal(followAfterUserScroll(mid, false), true);
+    assert.equal(followAfterUserScroll(FOLLOW_THRESHOLD_PX, false), true);
+    assert.equal(followAfterUserScroll(FOLLOW_THRESHOLD_PX + 1, false), false);
     assert.equal(followAfterUserScroll(0, false), true);
   });
 
-  it("stays following in the hysteresis band until past unfollow", () => {
+  it("honors a tight refollow only when caller passes it (suppress window)", () => {
     const mid = REFOLLOW_THRESHOLD_PX + 20;
-    assert.equal(followAfterUserScroll(mid, true), true);
+    assert.equal(
+      followAfterUserScroll(mid, false, {
+        unfollow: FOLLOW_THRESHOLD_PX,
+        refollow: REFOLLOW_THRESHOLD_PX,
+      }),
+      false,
+    );
+    assert.equal(
+      followAfterUserScroll(REFOLLOW_THRESHOLD_PX, false, {
+        unfollow: FOLLOW_THRESHOLD_PX,
+        refollow: REFOLLOW_THRESHOLD_PX,
+      }),
+      true,
+    );
+  });
+
+  it("stays following until past unfollow threshold", () => {
+    assert.equal(followAfterUserScroll(FOLLOW_THRESHOLD_PX, true), true);
     assert.equal(followAfterUserScroll(FOLLOW_THRESHOLD_PX + 1, true), false);
+  });
+});
+
+describe("shouldShowJumpToLatest", () => {
+  it("hides when following", () => {
+    assert.equal(shouldShowJumpToLatest(true, 500), false);
+  });
+
+  it("hides when already in the bottom band even if unfollowed", () => {
+    assert.equal(shouldShowJumpToLatest(false, 0), false);
+    assert.equal(shouldShowJumpToLatest(false, FOLLOW_THRESHOLD_PX), false);
+  });
+
+  it("shows only when unfollowed and scrolled above the band", () => {
+    assert.equal(
+      shouldShowJumpToLatest(false, FOLLOW_THRESHOLD_PX + 1),
+      true,
+    );
   });
 });
 

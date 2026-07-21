@@ -9,10 +9,12 @@ import {
 } from "react";
 import {
   FOLLOW_THRESHOLD_PX,
+  REFOLLOW_THRESHOLD_PX,
   UNFOLLOW_SUPPRESS_MS,
   distanceFromBottom,
   followAfterUserScroll,
   isVerticallyScrollable,
+  shouldShowJumpToLatest,
   shouldUnfollowOnWheelUp,
 } from "./stick-to-bottom";
 
@@ -51,20 +53,33 @@ export function useStickToBottom({
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(true);
+  /** UI for Jump chip — false when following or already in the bottom band. */
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const followingRef = useRef(true);
   const programmaticRef = useRef(false);
   const programmaticClearTimer = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
   const pinRafRef = useRef<number | null>(null);
-  /** performance.now() until which re-follow + pin are suppressed after wheel-up. */
+  /** performance.now() until which mid-band re-follow + pin are suppressed after wheel-up. */
   const suppressRefollowUntilRef = useRef(0);
+  const suppressSettleTimer = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   const setFollowingBoth = useCallback((next: boolean) => {
     if (followingRef.current === next) return;
     followingRef.current = next;
     setFollowing(next);
+    if (next) setShowJumpToLatest(false);
   }, []);
+
+  const syncJumpVisibility = useCallback(
+    (dist: number, isFollowing: boolean) => {
+      setShowJumpToLatest(shouldShowJumpToLatest(isFollowing, dist, threshold));
+    },
+    [threshold],
+  );
 
   const markProgrammatic = useCallback((ms = 80) => {
     programmaticRef.current = true;
@@ -151,39 +166,68 @@ export function useStickToBottom({
     const el = scrollRef.current;
     if (!el) return;
 
+    const applyFollowFromDistance = (dist: number) => {
+      const now = performance.now();
+      const suppressed = now < suppressRefollowUntilRef.current;
+      // During suppress: only re-latch at the true bottom (tight band).
+      // Outside suppress: same band both ways so docking at bottom always
+      // clears the Jump chip.
+      const next = followAfterUserScroll(dist, followingRef.current, {
+        unfollow: threshold,
+        refollow: suppressed ? REFOLLOW_THRESHOLD_PX : threshold,
+      });
+      setFollowingBoth(next);
+      syncJumpVisibility(dist, next);
+    };
+
+    const scheduleSuppressSettle = () => {
+      if (suppressSettleTimer.current) {
+        clearTimeout(suppressSettleTimer.current);
+      }
+      const delay = Math.max(
+        0,
+        suppressRefollowUntilRef.current - performance.now(),
+      );
+      suppressSettleTimer.current = setTimeout(() => {
+        suppressSettleTimer.current = null;
+        const node = scrollRef.current;
+        if (!node || programmaticRef.current) return;
+        if (!isVerticallyScrollable(node)) {
+          setFollowingBoth(true);
+          return;
+        }
+        // Last scroll sample may have landed during suppress; re-sample once
+        // the window ends so a settled bottom does not leave Jump stuck on.
+        applyFollowFromDistance(distanceFromBottom(node));
+      }, delay + 16);
+    };
+
     const onScroll = () => {
       if (programmaticRef.current) return;
       // Short lists never leave the bottom; keep following so the jump chip
       // does not appear when the viewport cannot actually scroll.
       if (!isVerticallyScrollable(el)) {
         setFollowingBoth(true);
+        setShowJumpToLatest(false);
         return;
       }
-
-      const dist = distanceFromBottom(el);
-      const now = performance.now();
-
-      // After wheel-up, do not re-latch follow from rubber-band settle samples.
-      if (now < suppressRefollowUntilRef.current) {
-        if (followingRef.current) {
-          const stillNear = followAfterUserScroll(dist, true, {
-            unfollow: threshold,
-          });
-          if (!stillNear) setFollowingBoth(false);
-        }
-        return;
-      }
-
-      const next = followAfterUserScroll(dist, followingRef.current, {
-        unfollow: threshold,
-      });
-      setFollowingBoth(next);
+      applyFollowFromDistance(distanceFromBottom(el));
     };
 
     // Wheel/trackpad: unfollow *before* scroll settles so pin/ResizeObserver
     // cannot yank the viewport back to bottom mid-gesture — but only when
     // content actually overflows (wheel fires even on non-scrollable lists).
     const onWheel = (e: WheelEvent) => {
+      // Toward bottom: drop suppress so intentional fling-to-tail re-follows.
+      if (e.deltaY > 0) {
+        suppressRefollowUntilRef.current = 0;
+        if (suppressSettleTimer.current) {
+          clearTimeout(suppressSettleTimer.current);
+          suppressSettleTimer.current = null;
+        }
+        return;
+      }
+
       if (
         !shouldUnfollowOnWheelUp({
           deltaY: e.deltaY,
@@ -191,14 +235,14 @@ export function useStickToBottom({
           scrollable: isVerticallyScrollable(el),
         })
       ) {
-        // Even when already unfollowed, upward intent should block re-follow
-        // for a beat (user scrolled up from near-bottom rubber-band).
+        // Already unfollowed but still scrolling up — keep mid-band re-follow
+        // blocked briefly (rubber-band from near bottom).
         if (e.deltaY < 0 && isVerticallyScrollable(el)) {
           suppressRefollowUntilRef.current =
             performance.now() + UNFOLLOW_SUPPRESS_MS;
           cancelScheduledPin();
           programmaticRef.current = false;
-          if (followingRef.current) setFollowingBoth(false);
+          scheduleSuppressSettle();
         }
         return;
       }
@@ -207,6 +251,8 @@ export function useStickToBottom({
         performance.now() + UNFOLLOW_SUPPRESS_MS;
       cancelScheduledPin();
       setFollowingBoth(false);
+      syncJumpVisibility(distanceFromBottom(el), false);
+      scheduleSuppressSettle();
     };
 
     el.addEventListener("scroll", onScroll, { passive: true });
@@ -215,12 +261,22 @@ export function useStickToBottom({
       el.removeEventListener("scroll", onScroll);
       el.removeEventListener("wheel", onWheel);
       cancelScheduledPin();
+      if (suppressSettleTimer.current) {
+        clearTimeout(suppressSettleTimer.current);
+        suppressSettleTimer.current = null;
+      }
       if (programmaticClearTimer.current) {
         clearTimeout(programmaticClearTimer.current);
         programmaticClearTimer.current = null;
       }
     };
-  }, [threshold, resetKey, setFollowingBoth, cancelScheduledPin]);
+  }, [
+    threshold,
+    resetKey,
+    setFollowingBoth,
+    cancelScheduledPin,
+    syncJumpVisibility,
+  ]);
 
   // Content identity / body growth while following — layout phase so stream
   // updates do not paint one frame at the previous scroll offset.
@@ -248,6 +304,8 @@ export function useStickToBottom({
     scrollRef,
     contentRef,
     following,
+    /** Show “Jump to latest” only when unfollowed and not near the bottom. */
+    showJumpToLatest,
     /** Live follow flag for async load-older (avoids stale React state). */
     followingRef,
     jumpToLatest,

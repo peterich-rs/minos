@@ -194,6 +194,7 @@ export function Timeline({ conversationId }: { conversationId: string }) {
     scrollRef,
     contentRef,
     following,
+    showJumpToLatest,
     followingRef,
     jumpToLatest,
     markProgrammatic,
@@ -664,7 +665,7 @@ export function Timeline({ conversationId }: { conversationId: string }) {
         </div>
       </div>
 
-      {!following ? (
+      {showJumpToLatest ? (
         <div className="pointer-events-none absolute inset-x-0 bottom-[7.5rem] z-10 flex justify-center sm:bottom-36">
           <button
             type="button"

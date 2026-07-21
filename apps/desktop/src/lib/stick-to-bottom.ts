@@ -2,22 +2,22 @@
  * Stick-to-bottom / follow semantics aligned with TUI ChatState:
  * - following → always pin to max scroll
  * - scroll away from bottom → unfollow
- * - return *very* near bottom → re-follow (hysteresis)
+ * - return near bottom → re-follow
  * - while not following, never programmatically move the viewport
  *
- * Hysteresis (unfollow threshold > re-follow threshold) avoids the macOS
- * rubber-band / pin "rebound" loop: when the user flings to the bottom then
- * immediately scrolls up, a single near-bottom sample must not re-arm follow
- * and fight the next wheel frame.
+ * Rubber-band / rebound is handled by a short *suppress window* after wheel-up
+ * (see UNFOLLOW_SUPPRESS_MS + tight REFOLLOW during that window), not by a
+ * permanent wide hysteresis gap — a permanent 12px re-follow band left the
+ * "Jump to latest" chip visible while the user was already visually at bottom.
  */
 
-/** Leave follow when the user is farther from bottom than this. */
+/** Leave follow / re-enter follow (outside suppress) at this distance. */
 export const FOLLOW_THRESHOLD_PX = 80;
 
 /**
- * Re-enter follow only when this close to the true bottom.
- * Much tighter than FOLLOW_THRESHOLD so rubber-band settle does not re-latch
- * while the user is still scrolling up.
+ * During the post-wheel-up suppress window only: re-enter follow only when
+ * this close to the true bottom, so rubber-band settle mid-gesture does not
+ * re-arm follow and fight the next upward frame.
  */
 export const REFOLLOW_THRESHOLD_PX = 12;
 
@@ -25,8 +25,8 @@ export const REFOLLOW_THRESHOLD_PX = 12;
 export const SCROLLABLE_EPSILON_PX = 1;
 
 /**
- * After a deliberate wheel/trackpad up, suppress re-follow for this long so
- * pin/ResizeObserver cannot yank the viewport mid-gesture.
+ * After a deliberate wheel/trackpad up, suppress mid-band re-follow for this
+ * long so pin/ResizeObserver cannot yank the viewport mid-gesture.
  */
 export const UNFOLLOW_SUPPRESS_MS = 320;
 
@@ -59,7 +59,10 @@ export function isVerticallyScrollable(
 
 /**
  * After a user scroll event, should we be following?
- * Uses hysteresis relative to the current follow state.
+ *
+ * Defaults use a single band (FOLLOW_THRESHOLD) both ways so docking at the
+ * bottom always re-arms follow. Callers pass a tighter `refollow` only while
+ * post-wheel-up suppress is active.
  */
 export function followAfterUserScroll(
   distance: number,
@@ -70,11 +73,21 @@ export function followAfterUserScroll(
   } = {},
 ): boolean {
   const unfollow = thresholds.unfollow ?? FOLLOW_THRESHOLD_PX;
-  const refollow = thresholds.refollow ?? REFOLLOW_THRESHOLD_PX;
+  const refollow = thresholds.refollow ?? FOLLOW_THRESHOLD_PX;
   if (currentlyFollowing) {
     return distance <= unfollow;
   }
   return distance <= refollow;
+}
+
+/** Jump chip: hide when following or already within the normal bottom band. */
+export function shouldShowJumpToLatest(
+  following: boolean,
+  distance: number,
+  threshold: number = FOLLOW_THRESHOLD_PX,
+): boolean {
+  if (following) return false;
+  return distance > threshold;
 }
 
 /**
