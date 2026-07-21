@@ -14,6 +14,7 @@ use crate::message::{
 use minos_domain::AgentName;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use uuid::Uuid;
 
 pub struct GrokTranslatorState {
@@ -345,7 +346,7 @@ fn tool_display_name(update: &Value) -> String {
         .or_else(|| tool_path_hint(update))
         .unwrap_or_else(|| title.to_owned());
     if subject.is_empty() {
-        kind.to_owned()
+        kind
     } else {
         format!("{kind}: {subject}")
     }
@@ -631,7 +632,7 @@ fn project_raw_output_text(raw: &Value) -> Option<String> {
                 if !links.is_empty() {
                     out.push_str("\n\n");
                     for (i, u) in links.iter().enumerate() {
-                        out.push_str(&format!("[{}] {}\n", i + 1, u));
+                        let _ = writeln!(out, "[{}] {}", i + 1, u);
                     }
                 }
             }
@@ -815,7 +816,7 @@ fn project_read_file_content(fc: &Value) -> Option<String> {
     let mut out = String::with_capacity(plain.len() + lines.len() * 8);
     for (i, line) in lines.iter().enumerate() {
         let n = start + i;
-        out.push_str(&format!("{n}→{line}\n"));
+        let _ = writeln!(out, "{n}→{line}");
     }
     // Keep trailing newline consistency with source.
     if !plain.ends_with('\n') && out.ends_with('\n') {
@@ -867,7 +868,7 @@ fn project_grep_search(raw: &Value) -> Option<String> {
                                 .and_then(Value::as_u64)
                                 .unwrap_or(0);
                             let content = m.get("content").and_then(Value::as_str).unwrap_or("");
-                            out.push_str(&format!("{path}:{ln}:{content}\n"));
+                            let _ = writeln!(out, "{path}:{ln}:{content}");
                         }
                     } else {
                         out.push_str(path);
@@ -1122,9 +1123,10 @@ fn unified_diff_from_strings(
     let new_count = before.len() + new_change.len() + after.len();
 
     let mut out = String::new();
-    out.push_str(&format!("--- a/{path}\n+++ b/{path}\n"));
-    out.push_str(&format!(
-        "@@ -{},{} +{},{} @@\n",
+    let _ = write!(out, "--- a/{path}\n+++ b/{path}\n");
+    let _ = writeln!(
+        out,
+        "@@ -{},{} +{},{} @@",
         if old_count == 0 {
             0
         } else {
@@ -1137,7 +1139,7 @@ fn unified_diff_from_strings(
             new_hunk_start.max(1)
         },
         new_count
-    ));
+    );
     for line in before {
         out.push(' ');
         out.push_str(line);
@@ -1167,7 +1169,7 @@ fn unified_diff_from_details(path: &str, details: &[EditDetail]) -> String {
     }
     let path = display_diff_path(path);
     let mut out = String::new();
-    out.push_str(&format!("--- a/{path}\n+++ b/{path}\n"));
+    let _ = write!(out, "--- a/{path}\n+++ b/{path}\n");
 
     for d in details {
         let before_lines = split_diff_lines(&d.context_before);
@@ -1191,9 +1193,10 @@ fn unified_diff_from_details(path: &str, details: &[EditDetail]) -> String {
         let old_start = if old_count == 0 { 0 } else { d.old_line.max(1) };
         let new_start = if new_count == 0 { 0 } else { d.new_line.max(1) };
 
-        out.push_str(&format!(
-            "@@ -{old_start},{old_count} +{new_start},{new_count} @@\n"
-        ));
+        let _ = writeln!(
+            out,
+            "@@ -{old_start},{old_count} +{new_start},{new_count} @@"
+        );
         for line in &before_lines {
             out.push(' ');
             out.push_str(line);
@@ -1384,8 +1387,7 @@ fn translate_acp_prompt_response(
             state.suppressed_tools.clear();
             state.orphan_updates.clear();
             state.force_new_assistant_on_text = false;
-            let events = complete_open_assistant_message(state, finished);
-            events
+            complete_open_assistant_message(state, finished)
         }
         "cancelled" => {
             let mut events = complete_open_assistant_message(state, finished);
