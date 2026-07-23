@@ -307,25 +307,53 @@ impl ChatState {
             }
             UiEventMessage::TextReplace { message_id, text } => {
                 let text = text.render_preview();
-                let is_streaming = self.open_message_ids.contains(&message_id);
-                // Prefer updating an existing bubble for this message_id even when
-                // tools sit after it (OpenCode: stream text → tools → full
-                // text_replace snapshot). Tail-only match would spawn a twin.
-                if let Some(item) = self.find_text_item_mut(&message_id) {
-                    let replacement = if text.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![TextPart::Plain(text)]
-                    };
-                    match item {
-                        ChatItem::UserMessage { text_parts, .. }
-                        | ChatItem::AssistantText { text_parts, .. } => {
-                            *text_parts = replacement;
+                let base_id = message_id
+                    .split('\u{1e}')
+                    .next()
+                    .unwrap_or(message_id.as_str());
+                let is_streaming = self.open_message_ids.contains(base_id)
+                    || self.open_message_ids.contains(&message_id);
+                // Tail-only replace/update. Non-tail same-body snapshot (OpenCode
+                // finished part after tools) is ignored to freeze mid-timeline.
+                // Different body → new bubble at end (part segments).
+                if self.tail_text_item_matches(&message_id) {
+                    if let Some(item) = self.items.last_mut() {
+                        let replacement = if text.is_empty() {
+                            Vec::new()
+                        } else {
+                            vec![TextPart::Plain(text)]
+                        };
+                        match item {
+                            ChatItem::UserMessage { text_parts, .. }
+                            | ChatItem::AssistantText { text_parts, .. } => {
+                                *text_parts = replacement;
+                            }
+                            _ => {}
                         }
-                        _ => {}
+                        item.set_streaming(is_streaming);
+                        self.bump_content();
                     }
-                    item.set_streaming(is_streaming);
-                    self.bump_content();
+                } else if let Some(item) = self.find_text_item_mut(&message_id) {
+                    let existing = match item {
+                        ChatItem::UserMessage { text_parts, .. }
+                        | ChatItem::AssistantText { text_parts, .. } => text_parts
+                            .iter()
+                            .map(|p| match p {
+                                TextPart::Plain(s) => s.as_str(),
+                                _ => "",
+                            })
+                            .collect::<String>(),
+                        _ => String::new(),
+                    };
+                    if existing == text {
+                        // Finished-part snapshot equal to frozen row — drop.
+                        return;
+                    }
+                    if !text.is_empty() {
+                        self.finish_open_content_streaming();
+                        self.push_text_item(message_id, text, is_streaming);
+                        self.bump_structure();
+                    }
                 } else if !text.is_empty() {
                     self.finish_open_content_streaming();
                     self.push_text_item(message_id, text, is_streaming);

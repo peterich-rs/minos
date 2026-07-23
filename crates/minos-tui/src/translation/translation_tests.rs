@@ -436,9 +436,52 @@ fn text_replace_without_delta_creates_streaming_item_for_open_message() {
 }
 
 #[test]
-fn text_replace_after_tools_updates_same_message_not_duplicate() {
-    // OpenCode: stream text → tool_call(s) on same message_id → full text_replace.
-    // Must not leave "现在让我读取…" twice in the transcript.
+fn text_replace_same_body_after_tools_freezes_mid_timeline() {
+    // OpenCode finished-part snapshot equal to the frozen row → drop (no twin, no rewrite).
+    let mut cs = ChatState::new("t1".into(), AgentName::Opencode);
+    let mid = "msg_open_1";
+    let body = "现在让我读取 workspace-store";
+    cs.apply_ui_events(vec![
+        UiEventMessage::MessageStarted {
+            message_id: mid.into(),
+            role: MessageRole::Assistant,
+            started_at_ms: 0,
+        },
+        UiEventMessage::TextDelta {
+            message_id: mid.into(),
+            text: body.into(),
+        },
+        UiEventMessage::ToolCallPlaced {
+            message_id: mid.into(),
+            tool_call_id: "call_read_1".into(),
+            name: "read".into(),
+            args_json: "{}".into(),
+        },
+        UiEventMessage::TextReplace {
+            message_id: mid.into(),
+            text: body.into(),
+        },
+    ]);
+
+    let assistant_count = cs
+        .items
+        .iter()
+        .filter(|item| matches!(item, ChatItem::AssistantText { .. }))
+        .count();
+    assert_eq!(assistant_count, 1, "same-body replace after tools must not twin");
+    match &cs.items[0] {
+        ChatItem::AssistantText { text_parts, .. } => {
+            assert_eq!(*text_parts, plain_parts(body));
+        }
+        other => panic!("expected first item AssistantText, got {other:?}"),
+    }
+    assert!(matches!(cs.items[1], ChatItem::ToolCall { .. }));
+    assert_eq!(cs.items.len(), 2);
+}
+
+#[test]
+fn text_replace_new_body_after_tools_appends_at_end() {
+    // Different body (new part / post-tool narration) → append; freeze early row.
     let mut cs = ChatState::new("t1".into(), AgentName::Opencode);
     let mid = "msg_open_1";
     cs.apply_ui_events(vec![
@@ -449,7 +492,7 @@ fn text_replace_after_tools_updates_same_message_not_duplicate() {
         },
         UiEventMessage::TextDelta {
             message_id: mid.into(),
-            text: "现在让我读取 workspace-store".into(),
+            text: "first segment".into(),
         },
         UiEventMessage::ToolCallPlaced {
             message_id: mid.into(),
@@ -458,34 +501,30 @@ fn text_replace_after_tools_updates_same_message_not_duplicate() {
             args_json: "{}".into(),
         },
         UiEventMessage::TextReplace {
-            message_id: mid.into(),
-            text: "现在让我读取 workspace-store.ts 的 sendMessage 区域。".into(),
+            message_id: format!("{mid}\u{1e}prt_2"),
+            text: "second segment after tools".into(),
         },
     ]);
 
-    let assistant_count = cs
+    let assistants: Vec<_> = cs
         .items
         .iter()
         .filter(|item| matches!(item, ChatItem::AssistantText { .. }))
-        .count();
-    assert_eq!(
-        assistant_count, 1,
-        "text_replace after tools must update the existing bubble, not twin it"
-    );
+        .collect();
+    assert_eq!(assistants.len(), 2);
     match &cs.items[0] {
         ChatItem::AssistantText { text_parts, .. } => {
-            assert_eq!(
-                *text_parts,
-                plain_parts("现在让我读取 workspace-store.ts 的 sendMessage 区域。")
-            );
+            assert_eq!(*text_parts, plain_parts("first segment"));
         }
-        other => panic!("expected first item AssistantText, got {other:?}"),
+        other => panic!("expected first AssistantText, got {other:?}"),
     }
-    assert!(
-        matches!(cs.items[1], ChatItem::ToolCall { .. }),
-        "tool row should remain after the narration"
-    );
-    assert_eq!(cs.items.len(), 2);
+    assert!(matches!(cs.items[1], ChatItem::ToolCall { .. }));
+    match &cs.items[2] {
+        ChatItem::AssistantText { text_parts, .. } => {
+            assert_eq!(*text_parts, plain_parts("second segment after tools"));
+        }
+        other => panic!("expected trailing AssistantText, got {other:?}"),
+    }
 }
 
 #[test]
