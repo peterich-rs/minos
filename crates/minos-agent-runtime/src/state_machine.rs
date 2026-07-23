@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
-pub enum ThreadState {
+pub enum SessionState {
     Starting,
     Idle,
     Running { turn_started_at_ms: i64 },
@@ -31,15 +31,15 @@ pub enum CloseReason {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("illegal thread state transition: {from:?} -> {to:?}")]
+#[error("illegal session state transition: {from:?} -> {to:?}")]
 pub struct IllegalTransition {
-    pub from: ThreadState,
-    pub to: ThreadState,
+    pub from: SessionState,
+    pub to: SessionState,
 }
 
 #[allow(clippy::unnested_or_patterns, clippy::enum_glob_use)]
-pub fn validate_transition(from: &ThreadState, to: &ThreadState) -> Result<(), IllegalTransition> {
-    use ThreadState::*;
+pub fn validate_transition(from: &SessionState, to: &SessionState) -> Result<(), IllegalTransition> {
+    use SessionState::*;
     let ok = matches!(
         (from, to),
         (Starting, Idle)
@@ -76,14 +76,14 @@ pub fn validate_transition(from: &ThreadState, to: &ThreadState) -> Result<(), I
     }
 }
 
-pub fn status_str(state: &ThreadState) -> &'static str {
+pub fn status_str(state: &SessionState) -> &'static str {
     match state {
-        ThreadState::Starting => "starting",
-        ThreadState::Idle => "idle",
-        ThreadState::Running { .. } => "running",
-        ThreadState::Suspended { .. } => "suspended",
-        ThreadState::Resuming => "resuming",
-        ThreadState::Closed { .. } => "closed",
+        SessionState::Starting => "starting",
+        SessionState::Idle => "idle",
+        SessionState::Running { .. } => "running",
+        SessionState::Suspended { .. } => "suspended",
+        SessionState::Resuming => "resuming",
+        SessionState::Closed { .. } => "closed",
     }
 }
 
@@ -94,8 +94,8 @@ mod tests {
     #[test]
     fn legal_transition_idle_to_running() {
         validate_transition(
-            &ThreadState::Idle,
-            &ThreadState::Running {
+            &SessionState::Idle,
+            &SessionState::Running {
                 turn_started_at_ms: 1,
             },
         )
@@ -105,10 +105,10 @@ mod tests {
     #[test]
     fn illegal_transition_running_to_starting() {
         let err = validate_transition(
-            &ThreadState::Running {
+            &SessionState::Running {
                 turn_started_at_ms: 1,
             },
-            &ThreadState::Starting,
+            &SessionState::Starting,
         )
         .unwrap_err();
         assert!(format!("{err}").contains("illegal"));
@@ -117,17 +117,17 @@ mod tests {
     #[test]
     fn suspended_can_resume_or_close() {
         validate_transition(
-            &ThreadState::Suspended {
+            &SessionState::Suspended {
                 reason: PauseReason::UserInterrupt,
             },
-            &ThreadState::Resuming,
+            &SessionState::Resuming,
         )
         .unwrap();
         validate_transition(
-            &ThreadState::Suspended {
+            &SessionState::Suspended {
                 reason: PauseReason::UserInterrupt,
             },
-            &ThreadState::Closed {
+            &SessionState::Closed {
                 reason: CloseReason::UserClose,
             },
         )
@@ -137,24 +137,24 @@ mod tests {
     #[test]
     fn starting_and_resuming_can_suspend_for_daemon_stop() {
         validate_transition(
-            &ThreadState::Starting,
-            &ThreadState::Suspended {
+            &SessionState::Starting,
+            &SessionState::Suspended {
                 reason: PauseReason::DaemonRestart,
             },
         )
         .unwrap();
         validate_transition(
-            &ThreadState::Resuming,
-            &ThreadState::Suspended {
+            &SessionState::Resuming,
+            &SessionState::Suspended {
                 reason: PauseReason::DaemonRestart,
             },
         )
         .unwrap();
         validate_transition(
-            &ThreadState::Suspended {
+            &SessionState::Suspended {
                 reason: PauseReason::UserInterrupt,
             },
-            &ThreadState::Suspended {
+            &SessionState::Suspended {
                 reason: PauseReason::DaemonRestart,
             },
         )

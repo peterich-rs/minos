@@ -235,7 +235,7 @@ impl GeminiAcpInstance {
 
 pub(crate) fn spawn_acp_pump(
     client: Arc<AcpClient>,
-    thread_id: String,
+    session_id: String,
     events_tx: IngestSink,
     pending_approvals: crate::manager::PendingApprovals,
 ) -> JoinHandle<()> {
@@ -246,7 +246,7 @@ pub(crate) fn spawn_acp_pump(
                     if let Err(error) = events_tx
                         .emit(RawIngest::from_json(
                             AgentName::Gemini,
-                            thread_id.clone(),
+                            session_id.clone(),
                             serde_json::json!({
                                 "kind": "acp_notification",
                                 "method": method,
@@ -259,7 +259,7 @@ pub(crate) fn spawn_acp_pump(
                         tracing::warn!(
                             target: "minos_agent_runtime::gemini_driver",
                             error = %error,
-                            thread_id = %thread_id,
+                            session_id = %session_id,
                             "durable ingest sink closed while reading gemini notification",
                         );
                         break;
@@ -270,7 +270,7 @@ pub(crate) fn spawn_acp_pump(
                         if let Err(error) = register_acp_permission_request(
                             AgentName::Gemini,
                             &client,
-                            &thread_id,
+                            &session_id,
                             id,
                             params,
                             &events_tx,
@@ -281,7 +281,7 @@ pub(crate) fn spawn_acp_pump(
                             tracing::warn!(
                                 target: "minos_agent_runtime::gemini_driver",
                                 error = %error,
-                                thread_id = %thread_id,
+                                session_id = %session_id,
                                 "failed to register gemini ACP permission request",
                             );
                         }
@@ -291,7 +291,7 @@ pub(crate) fn spawn_acp_pump(
                     if let Err(error) = events_tx
                         .emit(RawIngest::from_json(
                             AgentName::Gemini,
-                            thread_id.clone(),
+                            session_id.clone(),
                             serde_json::json!({
                                 "kind": "acp_server_request",
                                 "id": id,
@@ -305,7 +305,7 @@ pub(crate) fn spawn_acp_pump(
                         tracing::warn!(
                             target: "minos_agent_runtime::gemini_driver",
                             error = %error,
-                            thread_id = %thread_id,
+                            session_id = %session_id,
                             "durable ingest sink closed while reading gemini server request",
                         );
                         break;
@@ -317,20 +317,20 @@ pub(crate) fn spawn_acp_pump(
                             target: "minos_agent_runtime::gemini_driver",
                             error = %error,
                             method = %method,
-                            thread_id = %thread_id,
+                            session_id = %session_id,
                             "failed to reply to gemini ACP server request"
                         );
                     }
                 }
                 Some(crate::acp_client::Inbound::Closed) => {
-                    info!(target: "minos_agent_runtime::gemini_driver", thread_id = %thread_id, "gemini ACP stream closed");
+                    info!(target: "minos_agent_runtime::gemini_driver", session_id = %session_id, "gemini ACP stream closed");
                     if let Err(error) = events_tx
                         .emit(RawIngest::from_json(
                             AgentName::Gemini,
-                            thread_id.clone(),
+                            session_id.clone(),
                             serde_json::json!({
                                 "kind": "acp_closed",
-                                "thread_id": thread_id,
+                                "session_id": session_id,
                             }),
                             chrono::Utc::now().timestamp_millis(),
                         ))
@@ -339,7 +339,7 @@ pub(crate) fn spawn_acp_pump(
                         tracing::warn!(
                             target: "minos_agent_runtime::gemini_driver",
                             error = %error,
-                            thread_id = %thread_id,
+                            session_id = %session_id,
                             "failed to emit gemini closed ingest",
                         );
                     }
@@ -354,7 +354,7 @@ pub(crate) fn spawn_acp_pump(
 async fn register_acp_permission_request(
     agent: AgentName,
     client: &Arc<AcpClient>,
-    thread_id: &str,
+    session_id: &str,
     id: serde_json::Value,
     params: serde_json::Value,
     events_tx: &IngestSink,
@@ -371,7 +371,7 @@ async fn register_acp_permission_request(
     events_tx
         .emit(crate::manager::approval_request_ingest(
             agent,
-            thread_id.to_string(),
+            session_id.to_string(),
             request_id.clone(),
             String::new(),
             "session/request_permission".into(),
@@ -385,7 +385,7 @@ async fn register_acp_permission_request(
     events_tx
         .emit(RawIngest::from_json(
             agent,
-            thread_id.to_string(),
+            session_id.to_string(),
             serde_json::json!({
                 "kind": "acp_server_request",
                 "id": id,
@@ -403,7 +403,7 @@ async fn register_acp_permission_request(
     pending_approvals.insert(
         request_id.clone(),
         crate::manager::PendingApproval {
-            thread_id: thread_id.to_string(),
+            session_id: session_id.to_string(),
             target: crate::manager::PendingApprovalTarget::Acp {
                 request_id: id,
                 client: client.clone(),

@@ -17,13 +17,13 @@ use tracing::{info, warn};
 use crate::config::RawIngest;
 use crate::manager::IngestSink;
 use crate::manager_event::ManagerEvent;
-use crate::state_machine::ThreadState;
-use crate::thread_handle::ThreadHandle;
+use crate::state_machine::SessionState;
+use crate::session_handle::SessionHandle;
 
 const KILL_ESCALATION: Duration = Duration::from_secs(3);
 
 pub struct ClaudeNdjsonSession {
-    pub thread_id: String,
+    pub session_id: String,
     pub workspace: PathBuf,
     pub claude_session_id: Option<String>,
     pub(crate) current_turn_child: Option<Child>,
@@ -35,11 +35,11 @@ impl ClaudeNdjsonSession {
     pub async fn start_turn(
         cli_path: &Path,
         workspace: &Path,
-        thread_id: String,
+        session_id: String,
         user_text: &str,
-        session_id: Option<&str>,
+        claude_session_id: Option<&str>,
         resume_session_id: Option<&str>,
-        threads: Arc<Mutex<HashMap<String, ThreadHandle>>>,
+        sessions: Arc<Mutex<HashMap<String, SessionHandle>>>,
         manager_tx: broadcast::Sender<ManagerEvent>,
         events_tx: IngestSink,
         subprocess_env: &Arc<HashMap<String, String>>,
@@ -49,7 +49,7 @@ impl ClaudeNdjsonSession {
     ) -> anyhow::Result<Self> {
         let args = build_claude_args(
             user_text,
-            session_id,
+            claude_session_id,
             resume_session_id,
             mcp_config_json,
             model,
@@ -84,8 +84,8 @@ impl ClaudeNdjsonSession {
 
         let stdout_task = stdout.map(|out| {
             let tx = events_tx.clone();
-            let tid = thread_id.clone();
-            let threads = threads.clone();
+            let tid = session_id.clone();
+            let sessions = sessions.clone();
             let manager_tx = manager_tx.clone();
             tokio::spawn(async move {
                 let reader = BufReader::new(out);
@@ -99,7 +99,7 @@ impl ClaudeNdjsonSession {
                             "payload_json": serde_json::to_string(&line).unwrap_or_default()
                         }),
                     };
-                    sync_thread_from_payload(&payload, &tid, &threads, &manager_tx).await;
+                    sync_session_from_payload(&payload, &tid, &sessions, &manager_tx).await;
                     if let Err(error) = tx
                         .emit(RawIngest::from_json(
                             AgentName::Claude,
@@ -112,7 +112,7 @@ impl ClaudeNdjsonSession {
                         warn!(
                             target: "minos_agent_runtime::claude_driver",
                             error = %error,
-                            thread_id = %tid,
+                            session_id = %tid,
                             "durable ingest sink closed while reading claude stdout",
                         );
                         break;
@@ -139,14 +139,14 @@ impl ClaudeNdjsonSession {
             target: "minos_agent_runtime::claude_driver",
             cli = %cli_path.display(),
             workspace = %workspace.display(),
-            thread_id = %thread_id,
+            session_id = %session_id,
             "claude ndjson session started"
         );
 
         Ok(Self {
-            thread_id,
+            session_id,
             workspace: workspace.to_path_buf(),
-            claude_session_id: resume_session_id.or(session_id).map(str::to_string),
+            claude_session_id: resume_session_id.or(claude_session_id).map(str::to_string),
             current_turn_child: Some(child),
             stdout_task,
             stderr_task,
@@ -182,7 +182,7 @@ impl ClaudeNdjsonSession {
             if exited.is_err() {
                 warn!(
                     target: "minos_agent_runtime::claude_driver",
-                    thread_id = %self.thread_id,
+                    session_id = %self.session_id,
                     "claude did not exit after SIGTERM, sending SIGKILL"
                 );
                 let _ = child.kill().await;
@@ -199,10 +199,10 @@ impl ClaudeNdjsonSession {
         if let Err(error) = events_tx
             .emit(RawIngest::from_json(
                 AgentName::Claude,
-                self.thread_id.clone(),
+                self.session_id.clone(),
                 serde_json::json!({
                     "kind": "thread_closed",
-                    "thread_id": self.thread_id,
+                    "session_id": self.session_id,
                     "reason": { "kind": "user_stopped" },
                     "closed_at_ms": chrono::Utc::now().timestamp_millis()
                 }),
@@ -213,14 +213,14 @@ impl ClaudeNdjsonSession {
             warn!(
                 target: "minos_agent_runtime::claude_driver",
                 error = %error,
-                thread_id = %self.thread_id,
+                session_id = %self.session_id,
                 "failed to emit thread_closed ingest",
             );
         }
 
         info!(
             target: "minos_agent_runtime::claude_driver",
-            thread_id = %self.thread_id,
+            session_id = %self.session_id,
             "claude ndjson session closed"
         );
     }
@@ -271,34 +271,34 @@ fn build_claude_args(
     args
 }
 
-async fn sync_thread_from_payload(
+async fn sync_session_from_payload(
     payload: &Value,
-    thread_id: &str,
-    threads: &Arc<Mutex<HashMap<String, ThreadHandle>>>,
+    session_id: &str,
+    sessions: &Arc<Mutex<HashMap<String, SessionHandle>>>,
     manager_tx: &broadcast::Sender<ManagerEvent>,
 ) {
-    let session_id = payload.get("session_id").and_then(Value::as_str);
+    let provider_session_id = payload.get("session_id").and_then(Value::as_str);
     let should_idle = matches!(
         payload.get("type").and_then(Value::as_str),
         Some("result") | Some("error")
     );
 
     let maybe_transition = {
-        let mut guard = threads.lock().await;
-        let Some(handle) = guard.get_mut(thread_id) else {
+        let mut guard = sessions.lock().await;
+        let Some(handle) = guard.get_mut(session_id) else {
             return;
         };
 
-        if let Some(session_id) = session_id {
-            handle.codex_session_id = Some(session_id.to_string());
+        if let Some(provider_session_id) = provider_session_id {
+            handle.codex_session_id = Some(provider_session_id.to_string());
         }
 
         if should_idle {
             handle.set_active_turn_id(None);
             let old = handle.current_state();
-            if matches!(old, ThreadState::Running { .. } | ThreadState::Resuming) {
-                if handle.transition(ThreadState::Idle).is_ok() {
-                    Some((old, ThreadState::Idle))
+            if matches!(old, SessionState::Running { .. } | SessionState::Resuming) {
+                if handle.transition(SessionState::Idle).is_ok() {
+                    Some((old, SessionState::Idle))
                 } else {
                     None
                 }
@@ -311,8 +311,8 @@ async fn sync_thread_from_payload(
     };
 
     if let Some((old, new)) = maybe_transition {
-        let _ = manager_tx.send(ManagerEvent::ThreadStateChanged {
-            thread_id: thread_id.to_string(),
+        let _ = manager_tx.send(ManagerEvent::SessionStateChanged {
+            session_id: session_id.to_string(),
             old,
             new,
             at_ms: chrono::Utc::now().timestamp_millis(),
@@ -324,8 +324,8 @@ async fn sync_thread_from_payload(
 mod tests {
     use super::*;
     use crate::manager_event::ManagerEvent;
-    use crate::state_machine::ThreadState;
-    use crate::thread_handle::ThreadHandle;
+    use crate::state_machine::SessionState;
+    use crate::session_handle::SessionHandle;
 
     fn val(s: &str) -> Value {
         serde_json::from_str(s).expect("json fixture should parse")
@@ -383,15 +383,15 @@ mod tests {
 
     #[tokio::test]
     async fn sync_thread_from_result_updates_state_and_session_id() {
-        let thread_id = "thr_claude".to_string();
-        let threads = Arc::new(Mutex::new(HashMap::new()));
-        threads.lock().await.insert(
-            thread_id.clone(),
-            ThreadHandle::new(
-                thread_id.clone(),
+        let session_id = "thr_claude".to_string();
+        let sessions = Arc::new(Mutex::new(HashMap::new()));
+        sessions.lock().await.insert(
+            session_id.clone(),
+            SessionHandle::new(
+                session_id.clone(),
                 "/tmp".into(),
                 AgentName::Claude,
-                ThreadState::Running {
+                SessionState::Running {
                     turn_started_at_ms: 1,
                 },
                 0,
@@ -399,17 +399,17 @@ mod tests {
         );
         let (manager_tx, mut manager_rx) = broadcast::channel::<ManagerEvent>(8);
 
-        sync_thread_from_payload(
+        sync_session_from_payload(
             &val(r#"{"type":"result","session_id":"sess_resume","is_error":false}"#),
-            &thread_id,
-            &threads,
+            &session_id,
+            &sessions,
             &manager_tx,
         )
         .await;
 
-        let guard = threads.lock().await;
-        let handle = guard.get(&thread_id).expect("thread should exist");
-        assert!(matches!(handle.current_state(), ThreadState::Idle));
+        let guard = sessions.lock().await;
+        let handle = guard.get(&session_id).expect("thread should exist");
+        assert!(matches!(handle.current_state(), SessionState::Idle));
         assert_eq!(handle.codex_session_id.as_deref(), Some("sess_resume"));
         drop(guard);
 
@@ -419,8 +419,8 @@ mod tests {
             .expect("manager event should be emitted");
         assert!(matches!(
             event,
-            ManagerEvent::ThreadStateChanged { thread_id, new: ThreadState::Idle, .. }
-                if thread_id == "thr_claude"
+            ManagerEvent::SessionStateChanged { session_id, new: SessionState::Idle, .. }
+                if session_id == "thr_claude"
         ));
     }
 }

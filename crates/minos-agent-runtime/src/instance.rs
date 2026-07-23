@@ -24,7 +24,7 @@ pub struct AppServerInstance {
     pub(crate) child: Mutex<Option<tokio::process::Child>>,
     pub(crate) client: Arc<CodexClient>,
     pub(crate) thread_start_timeout: Duration,
-    pub threads: Mutex<HashSet<String>>,
+    pub sessions: Mutex<HashSet<String>>,
     pub spawned_at: Instant,
     pub last_activity_at: Mutex<Instant>,
     pub crash_signal: mpsc::Sender<()>,
@@ -44,7 +44,7 @@ impl AppServerInstance {
             child: Mutex::new(Some(child)),
             client,
             thread_start_timeout,
-            threads: Mutex::new(HashSet::new()),
+            sessions: Mutex::new(HashSet::new()),
             spawned_at: now,
             last_activity_at: Mutex::new(now),
             crash_signal,
@@ -55,16 +55,16 @@ impl AppServerInstance {
         *self.last_activity_at.lock().await = Instant::now();
     }
 
-    pub async fn add_thread(&self, thread_id: String) {
-        self.threads.lock().await.insert(thread_id);
+    pub async fn add_thread(&self, session_id: String) {
+        self.sessions.lock().await.insert(session_id);
     }
 
-    pub async fn remove_thread(&self, thread_id: &str) {
-        self.threads.lock().await.remove(thread_id);
+    pub async fn remove_thread(&self, session_id: &str) {
+        self.sessions.lock().await.remove(session_id);
     }
 
-    pub async fn thread_ids(&self) -> Vec<String> {
-        self.threads.lock().await.iter().cloned().collect()
+    pub async fn session_ids(&self) -> Vec<String> {
+        self.sessions.lock().await.iter().cloned().collect()
     }
 
     /// Issue `thread/start` and return the provider id used for resume.
@@ -109,11 +109,11 @@ impl AppServerInstance {
         .await
     }
 
-    /// Resume an existing codex thread under the same `thread_id`.
+    /// Resume an existing codex thread under the same `session_id`.
     #[allow(dead_code)]
     pub(crate) async fn start_thread_resume(
         &self,
-        thread_id: &str,
+        session_id: &str,
         _codex_session_id: &str,
     ) -> anyhow::Result<()> {
         let params = ThreadResumeParams {
@@ -130,7 +130,8 @@ impl AppServerInstance {
             personality: None,
             sandbox: None,
             service_tier: None,
-            thread_id: thread_id.to_string(),
+            // Codex app-server wire field (not Minos session_id).
+            thread_id: session_id.to_string(),
         };
         tokio::time::timeout(RESUME_TIMEOUT, self.client.call_typed(params))
             .await
@@ -142,7 +143,7 @@ impl AppServerInstance {
     /// Forward a user turn to the codex app-server via `turn/start`.
     pub(crate) async fn send_user_message(
         &self,
-        thread_id: &str,
+        session_id: &str,
         text: &str,
     ) -> anyhow::Result<String> {
         let params = TurnStartParams {
@@ -161,7 +162,8 @@ impl AppServerInstance {
             sandbox_policy: None,
             service_tier: None,
             summary: None,
-            thread_id: thread_id.to_string(),
+            // Codex app-server wire field (not Minos session_id).
+            thread_id: session_id.to_string(),
         };
         let response: TurnStartResponse =
             tokio::time::timeout(TURN_START_TIMEOUT, self.client.call_typed(params))
@@ -174,7 +176,7 @@ impl AppServerInstance {
     /// Forward user text into an already-running turn via `turn/steer`.
     pub(crate) async fn steer_turn(
         &self,
-        thread_id: &str,
+        session_id: &str,
         expected_turn_id: &str,
         text: &str,
     ) -> anyhow::Result<String> {
@@ -184,7 +186,8 @@ impl AppServerInstance {
                 text: text.to_string(),
                 text_elements: Vec::new(),
             }],
-            thread_id: thread_id.to_string(),
+            // Codex app-server wire field (not Minos session_id).
+            thread_id: session_id.to_string(),
         };
         let response: TurnSteerResponse =
             tokio::time::timeout(TURN_START_TIMEOUT, self.client.call_typed(params))
@@ -230,9 +233,10 @@ impl AppServerInstance {
     /// codex side responds with an error if there is no active turn — that is
     /// fine, callers always treat interrupt as best-effort.
     #[allow(dead_code)]
-    pub(crate) async fn interrupt_turn(&self, thread_id: &str) -> anyhow::Result<()> {
+    pub(crate) async fn interrupt_turn(&self, session_id: &str) -> anyhow::Result<()> {
         let params = TurnInterruptParams {
-            thread_id: thread_id.to_string(),
+            // Codex app-server wire field (not Minos session_id).
+            thread_id: session_id.to_string(),
             turn_id: String::new(),
         };
         let _ =

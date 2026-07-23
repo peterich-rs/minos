@@ -3,10 +3,10 @@ use std::time::Duration;
 
 use minos_agent_runtime::config::AgentRuntimeConfig;
 use minos_agent_runtime::test_support::{FakeCodexServer, Step};
-use minos_agent_runtime::{AgentKind, AgentManager, InstanceCaps, ThreadState};
+use minos_agent_runtime::{AgentKind, AgentManager, InstanceCaps, SessionState};
 use serde_json::json;
 
-fn fake_thread_response(thread_id: &str) -> serde_json::Value {
+fn fake_thread_response(session_id: &str) -> serde_json::Value {
     json!({
         "approvalPolicy": "never",
         "approvalsReviewer": "user",
@@ -16,7 +16,7 @@ fn fake_thread_response(thread_id: &str) -> serde_json::Value {
         "modelProvider": "fake",
         "sandbox": { "type": "dangerFullAccess" },
         "thread": {
-            "id": thread_id,
+            "id": session_id,
             "cliVersion": "0.0.0-fake",
             "createdAt": 0,
             "cwd": "/tmp",
@@ -34,11 +34,11 @@ fn fake_thread_response(thread_id: &str) -> serde_json::Value {
 #[tokio::test(flavor = "multi_thread")]
 async fn turn_completed_notification_returns_thread_to_idle() {
     let tmp = tempfile::tempdir().unwrap();
-    let thread_id = "thr-turn-complete";
+    let session_id = "thr-turn-complete";
     let script = vec![
         Step::ExpectRequest {
             method: "thread/start".into(),
-            reply: fake_thread_response(thread_id),
+            reply: fake_thread_response(session_id),
         },
         Step::ExpectRequest {
             method: "turn/start".into(),
@@ -53,7 +53,7 @@ async fn turn_completed_notification_returns_thread_to_idle() {
         Step::EmitNotification {
             method: "turn/completed".into(),
             params: json!({
-                "threadId": thread_id,
+                "sessionId": session_id,
                 "finishedAtMs": 123
             }),
         },
@@ -70,15 +70,15 @@ async fn turn_completed_notification_returns_thread_to_idle() {
         .start_agent(AgentKind::Codex, "/w-turn-complete".into())
         .await
         .unwrap();
-    assert_eq!(session.thread_id, thread_id);
+    assert_eq!(session.session_id, session_id);
 
-    mgr.send_user_message(thread_id, "hello".into())
+    mgr.send_user_message(session_id, "hello".into())
         .await
         .unwrap();
 
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if matches!(mgr.thread_state(thread_id).await, Some(ThreadState::Idle)) {
+            if matches!(mgr.session_state(session_id).await, Some(SessionState::Idle)) {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;

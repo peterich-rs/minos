@@ -8,7 +8,7 @@
 use minos_agent_runtime::config::AgentRuntimeConfig;
 use minos_agent_runtime::state_machine::{CloseReason, PauseReason};
 use minos_agent_runtime::test_support::FakeCodexBackend;
-use minos_agent_runtime::{AgentKind, AgentManager, InstanceCaps, ThreadState};
+use minos_agent_runtime::{AgentKind, AgentManager, InstanceCaps, SessionState};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,7 +24,7 @@ async fn multi_session_smoke() {
     };
     let mgr = Arc::new(AgentManager::new(cfg, caps));
 
-    // 1. Two workspaces, two threads each.
+    // 1. Two workspaces, two sessions each.
     let a1 = mgr
         .start_agent(AgentKind::Codex, "/w-A".into())
         .await
@@ -46,51 +46,51 @@ async fn multi_session_smoke() {
 
     // 2. send_user_message on a1 — the test relies on the auto-responder
     //    accepting `turn/start`. The Idle -> Running transition is observable
-    //    via the per-thread state stream.
-    mgr.send_user_message(&a1.thread_id, "hello".into())
+    //    via the per-session state stream.
+    mgr.send_user_message(&a1.session_id, "hello".into())
         .await
         .unwrap();
     assert!(matches!(
-        mgr.thread_state(&a1.thread_id).await.unwrap(),
-        ThreadState::Running { .. }
+        mgr.session_state(&a1.session_id).await.unwrap(),
+        SessionState::Running { .. }
     ));
 
     // 3. interrupt a2; verify Suspended.
-    // Move a2 to Running first so interrupt is legal (Idle threads also
+    // Move a2 to Running first so interrupt is legal (Idle sessions also
     // accept interrupt per the validator, but Running is the production
     // case).
-    mgr.send_user_message(&a2.thread_id, "ping".into())
+    mgr.send_user_message(&a2.session_id, "ping".into())
         .await
         .unwrap();
-    mgr.interrupt_thread(&a2.thread_id).await.unwrap();
+    mgr.interrupt_session(&a2.session_id).await.unwrap();
     assert!(matches!(
-        mgr.thread_state(&a2.thread_id).await.unwrap(),
-        ThreadState::Suspended {
+        mgr.session_state(&a2.session_id).await.unwrap(),
+        SessionState::Suspended {
             reason: PauseReason::UserInterrupt
         }
     ));
 
     // 4. send_user_message on a2 (suspended) -> Resuming -> Idle -> Running.
-    mgr.send_user_message(&a2.thread_id, "resume me".into())
+    mgr.send_user_message(&a2.session_id, "resume me".into())
         .await
         .unwrap();
     assert!(matches!(
-        mgr.thread_state(&a2.thread_id).await.unwrap(),
-        ThreadState::Running { .. }
+        mgr.session_state(&a2.session_id).await.unwrap(),
+        SessionState::Running { .. }
     ));
 
-    // 5. close_thread on b2 (Idle); verify Closed.
-    mgr.close_thread(&b2.thread_id).await.unwrap();
+    // 5. close_session on b2 (Idle); verify Closed.
+    mgr.close_session(&b2.session_id).await.unwrap();
     assert!(matches!(
-        mgr.thread_state(&b2.thread_id).await.unwrap(),
-        ThreadState::Closed {
+        mgr.session_state(&b2.session_id).await.unwrap(),
+        SessionState::Closed {
             reason: CloseReason::UserClose
         }
     ));
 
-    // 6. Wait past the idle timeout, then drive the reaper. Both threads on
+    // 6. Wait past the idle timeout, then drive the reaper. Both sessions on
     //    /w-B are non-Running (b1 Idle, b2 Closed), so /w-B should reap.
-    //    /w-A still has Running threads (a1 / a2) so it stays.
+    //    /w-A still has Running sessions (a1 / a2) so it stays.
     tokio::time::sleep(Duration::from_millis(300)).await;
     mgr.tick_reaper_once().await;
     let open = mgr.open_workspaces().await;
@@ -100,8 +100,8 @@ async fn multi_session_smoke() {
     );
     assert!(open.contains(&std::path::PathBuf::from("/w-A")));
     assert!(matches!(
-        mgr.thread_state(&b1.thread_id).await.unwrap(),
-        ThreadState::Suspended {
+        mgr.session_state(&b1.session_id).await.unwrap(),
+        SessionState::Suspended {
             reason: PauseReason::InstanceReaped
         }
     ));

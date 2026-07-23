@@ -14,9 +14,9 @@
 //! 2. A bounded `mpsc` channel serialises outbound writes so `push()` is
 //!    safe to call from the agent-runtime's event pump task without holding
 //!    the socket.
-//! 3. A per-thread seq counter lives here (`DashMap<String, u64>`). Seq is
+//! 3. A per-session seq counter lives here (`DashMap<String, u64>`). Seq is
 //!    a transport concern — the agent runtime's `RawIngest` broadcast does
-//!    not carry it. The backend idempotently inserts on `(thread_id, seq)`
+//!    not carry it. The backend idempotently inserts on `(session_id, seq)`
 //!    so retransmits are safe.
 //! 4. Inbound `Envelope::Event` frames are logged at debug level for now;
 //!    the agent-host does not need to consume them in Phase B. Later phases
@@ -143,19 +143,19 @@ impl Ingestor {
     }
 
     /// Push one raw event for ingest. Builds the `Envelope::Ingest` with a
-    /// monotonic per-thread seq and sends it through the outbound channel.
+    /// monotonic per-session seq and sends it through the outbound channel.
     /// Blocks on backpressure (bounded channel capacity 256).
     pub async fn push(
         &self,
         agent: AgentName,
-        thread_id: &str,
+        session_id: &str,
         payload: serde_json::Value,
     ) -> Result<(), MinosError> {
-        let seq = self.next_seq(thread_id);
+        let seq = self.next_seq(session_id);
         let env = Envelope::Ingest {
             version: 1,
             agent,
-            thread_id: thread_id.to_string(),
+            session_id: session_id.to_string(),
             seq,
             payload,
             ts_ms: current_unix_ms(),
@@ -169,8 +169,8 @@ impl Ingestor {
         Ok(())
     }
 
-    fn next_seq(&self, thread_id: &str) -> u64 {
-        let mut entry = self.seqs.entry(thread_id.to_string()).or_insert(0);
+    fn next_seq(&self, session_id: &str) -> u64 {
+        let mut entry = self.seqs.entry(session_id.to_string()).or_insert(0);
         *entry += 1;
         *entry
     }

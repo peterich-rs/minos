@@ -1,10 +1,10 @@
-use crate::state_machine::ThreadState;
+use crate::state_machine::SessionState;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
-pub struct ThreadSnapshot {
-    pub thread_id: String,
+pub struct SessionSnapshot {
+    pub session_id: String,
     pub workspace: PathBuf,
-    pub state: ThreadState,
-    pub parent_thread_id: Option<String>,
+    pub state: SessionState,
+    pub parent_session_id: Option<String>,
 }

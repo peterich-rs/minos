@@ -348,7 +348,7 @@ pub enum ToolStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RawIngest {
     pub agent: AgentName,
-    pub thread_id: String,
+    pub session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -361,14 +361,14 @@ pub struct RawIngest {
 
 impl RawIngest {
     #[must_use]
-    pub fn from_json(agent: AgentName, thread_id: String, payload: Value, ts_ms: i64) -> Self {
+    pub fn from_json(agent: AgentName, session_id: String, payload: Value, ts_ms: i64) -> Self {
         let provider_session_id = provider_session_id_from_value(agent, &payload);
         let event_type = event_type_from_value(agent, &payload);
         let provider_event_id = provider_event_id_from_value(&payload);
         let bytes = serde_json::to_vec(&payload).unwrap_or_else(|_| b"null".to_vec());
         Self::from_bytes_with_meta(
             agent,
-            thread_id,
+            session_id,
             bytes,
             "application/json".to_string(),
             ts_ms,
@@ -381,14 +381,14 @@ impl RawIngest {
     #[must_use]
     pub fn from_bytes(
         agent: AgentName,
-        thread_id: String,
+        session_id: String,
         bytes: Vec<u8>,
         media_type: impl Into<String>,
         ts_ms: i64,
     ) -> Self {
         Self::from_bytes_with_meta(
             agent,
-            thread_id,
+            session_id,
             bytes,
             media_type.into(),
             ts_ms,
@@ -401,7 +401,7 @@ impl RawIngest {
     #[must_use]
     pub fn from_bytes_with_meta(
         agent: AgentName,
-        thread_id: String,
+        session_id: String,
         bytes: Vec<u8>,
         media_type: String,
         ts_ms: i64,
@@ -411,7 +411,7 @@ impl RawIngest {
     ) -> Self {
         Self {
             agent,
-            thread_id,
+            session_id,
             provider_session_id,
             provider_event_id,
             event_type,

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactRef {
-    pub thread_id: String,
+    pub session_id: String,
     pub artifact_id: String,
     pub size_bytes: u64,
     pub sha256: String,
@@ -95,20 +95,20 @@ impl PartialEq<&str> for DisplayPayload {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum UiEventMessage {
-    // ── Thread lifecycle ─────────────
-    ThreadOpened {
-        thread_id: String,
+    // ── Session lifecycle ────────────
+    SessionOpened {
+        session_id: String,
         agent: AgentName,
         title: Option<String>,
         opened_at_ms: i64,
     },
-    ThreadTitleUpdated {
-        thread_id: String,
+    SessionTitleUpdated {
+        session_id: String,
         title: String,
     },
-    ThreadClosed {
-        thread_id: String,
-        reason: ThreadEndReason,
+    SessionClosed {
+        session_id: String,
+        reason: SessionEndReason,
         closed_at_ms: i64,
     },
 
@@ -154,8 +154,8 @@ pub enum UiEventMessage {
         is_error: bool,
     },
     SubagentSpawned {
-        parent_thread_id: String,
-        sub_thread_id: String,
+        parent_session_id: String,
+        sub_session_id: String,
         tool_call_id: String,
         agent: AgentName,
         model: Option<String>,
@@ -163,7 +163,7 @@ pub enum UiEventMessage {
         title: Option<String>,
     },
     SubagentStatusUpdated {
-        sub_thread_id: String,
+        sub_session_id: String,
         status: SubagentStatus,
     },
 
@@ -202,7 +202,7 @@ pub enum SubagentStatus {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ThreadEndReason {
+pub enum SessionEndReason {
     UserStopped,
     AgentDone,
     Crashed { message: String },
@@ -232,24 +232,24 @@ mod tests {
     }
 
     #[test]
-    fn thread_opened_serialises_snake_case_agent() {
-        let ev = UiEventMessage::ThreadOpened {
-            thread_id: "thr_1".into(),
+    fn session_opened_serialises_snake_case_agent() {
+        let ev = UiEventMessage::SessionOpened {
+            session_id: "thr_1".into(),
             agent: AgentName::Codex,
             title: Some("hi".into()),
             opened_at_ms: 1_714_000_000_000,
         };
         let json = serde_json::to_string(&ev).unwrap();
-        assert!(json.contains(r#""kind":"thread_opened""#));
+        assert!(json.contains(r#""kind":"session_opened""#));
         assert!(json.contains(r#""agent":"codex""#));
         let back: UiEventMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(ev, back);
     }
 
     #[test]
-    fn thread_opened_with_null_title_round_trip() {
-        let ev = UiEventMessage::ThreadOpened {
-            thread_id: "thr_2".into(),
+    fn session_opened_with_null_title_round_trip() {
+        let ev = UiEventMessage::SessionOpened {
+            session_id: "thr_2".into(),
             agent: AgentName::Claude,
             title: None,
             opened_at_ms: 1_714_000_000_001,
@@ -261,9 +261,9 @@ mod tests {
 
     #[test]
     fn thread_closed_reason_crashed_has_nested_message() {
-        let ev = UiEventMessage::ThreadClosed {
-            thread_id: "thr_1".into(),
-            reason: ThreadEndReason::Crashed {
+        let ev = UiEventMessage::SessionClosed {
+            session_id: "thr_1".into(),
+            reason: SessionEndReason::Crashed {
                 message: "oom".into(),
             },
             closed_at_ms: 1_714_000_000_000,
@@ -305,8 +305,8 @@ mod tests {
     #[test]
     fn subagent_spawned_round_trip() {
         let ev = UiEventMessage::SubagentSpawned {
-            parent_thread_id: "parent".into(),
-            sub_thread_id: "sub".into(),
+            parent_session_id: "parent".into(),
+            sub_session_id: "sub".into(),
             tool_call_id: "tool-1".into(),
             agent: AgentName::Codex,
             model: Some("gpt-5".into()),

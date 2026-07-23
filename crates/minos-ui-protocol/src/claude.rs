@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 const TOOL_ARGS_DISPLAY_LIMIT: usize = 64 * 1024;
 
 pub struct ClaudeTranslatorState {
-    thread_id: String,
+    session_id: String,
     claude_session_id: Option<String>,
     open_assistant_message_id: Option<String>,
     emitted_message_ids: HashSet<String>,
@@ -29,9 +29,9 @@ enum StreamBlockState {
 
 impl ClaudeTranslatorState {
     #[must_use]
-    pub fn new(thread_id: String) -> Self {
+    pub fn new(session_id: String) -> Self {
         Self {
-            thread_id,
+            session_id,
             claude_session_id: None,
             open_assistant_message_id: None,
             emitted_message_ids: HashSet::new(),
@@ -115,8 +115,8 @@ fn translate_synthetic_user_message(raw: &Value) -> Option<Vec<UiEventMessage>> 
 fn translate_system(state: &mut ClaudeTranslatorState, raw: &Value) -> Vec<UiEventMessage> {
     let subtype = raw.get("subtype").and_then(Value::as_str).unwrap_or("");
     if subtype == "init" {
-        return vec![UiEventMessage::ThreadOpened {
-            thread_id: state.thread_id.clone(),
+        return vec![UiEventMessage::SessionOpened {
+            session_id: state.session_id.clone(),
             agent: AgentName::Claude,
             title: None,
             opened_at_ms: 0,
@@ -482,7 +482,7 @@ mod tests {
     }
 
     #[test]
-    fn system_init_emits_thread_opened() {
+    fn system_init_emits_session_opened() {
         let mut state = ClaudeTranslatorState::new("thr_x".into());
         let out = translate(
             &mut state,
@@ -491,8 +491,8 @@ mod tests {
         .expect("translation should succeed");
         assert!(matches!(
             &out[0],
-            UiEventMessage::ThreadOpened { thread_id, agent, .. }
-                if thread_id == "thr_x" && *agent == AgentName::Claude
+            UiEventMessage::SessionOpened { session_id, agent, .. }
+                if session_id == "thr_x" && *agent == AgentName::Claude
         ));
         assert_eq!(state.claude_session_id.as_deref(), Some("sess_1"));
     }

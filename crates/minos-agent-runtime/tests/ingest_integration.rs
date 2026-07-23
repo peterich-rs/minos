@@ -42,7 +42,7 @@ async fn ingestor_sends_one_envelope_ingest_frame() {
     assert_eq!(env["kind"], "ingest");
     assert_eq!(env["v"], 1);
     assert_eq!(env["agent"], "codex");
-    assert_eq!(env["thread_id"], "thr_1");
+    assert_eq!(env["session_id"], "thr_1");
     assert_eq!(env["seq"], 1);
     assert_eq!(env["payload"]["method"], "item/started");
     // ts_ms must be present and non-zero on a non-degenerate clock.
@@ -88,12 +88,12 @@ async fn ingestor_seq_counter_increments_per_thread() {
 
     let frames = server.await.unwrap();
     assert_eq!(frames[0]["seq"], 1);
-    assert_eq!(frames[0]["thread_id"], "thr_1");
+    assert_eq!(frames[0]["session_id"], "thr_1");
     assert_eq!(frames[1]["seq"], 2);
-    assert_eq!(frames[1]["thread_id"], "thr_1");
+    assert_eq!(frames[1]["session_id"], "thr_1");
     assert_eq!(frames[2]["seq"], 3);
-    assert_eq!(frames[2]["thread_id"], "thr_1");
+    assert_eq!(frames[2]["session_id"], "thr_1");
     // thr_2 counter is independent: starts at 1.
     assert_eq!(frames[3]["seq"], 1);
-    assert_eq!(frames[3]["thread_id"], "thr_2");
+    assert_eq!(frames[3]["session_id"], "thr_2");
 }

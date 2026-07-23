@@ -26,7 +26,7 @@ mod opencode;
 pub use ansi::strip_ansi_escapes;
 pub use error::TranslationError;
 pub use message::{
-    ArtifactRef, DisplayPayload, MessageRole, SubagentStatus, ThreadEndReason, UiEventMessage,
+    ArtifactRef, DisplayPayload, MessageRole, SubagentStatus, SessionEndReason, UiEventMessage,
 };
 pub use minos_domain::AgentName as AgentKind;
 
@@ -38,7 +38,7 @@ pub use opencode::{translate as translate_opencode, OpencodeTranslatorState};
 
 /// One-shot dispatch convenience for the backend: given an agent kind
 /// and one raw native event, return all resulting UI events. Used when
-/// the caller does not carry per-thread translator state across calls
+/// the caller does not carry per-session translator state across calls
 /// (e.g., a one-off history replay).
 ///
 /// **Beware:** for codex, the translator is stateful across a thread

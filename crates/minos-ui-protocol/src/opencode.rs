@@ -5,13 +5,13 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 pub struct OpencodeTranslatorState {
-    thread_id: String,
+    session_id: String,
     opencode_session_id: Option<String>,
     open_assistant_message_id: Option<String>,
     open_user_message_id: Option<String>,
     emitted_message_ids: HashSet<String>,
     tool_calls: HashSet<String>,
-    /// Maps parent `task` tool call IDs to registered subagent session/thread IDs.
+    /// Maps parent `task` tool call IDs to registered subagent session/session IDs.
     task_tool_subagents: HashMap<String, String>,
     message_roles: HashMap<String, MessageRole>,
     part_kinds: HashMap<String, TrackedPartKind>,
@@ -30,9 +30,9 @@ enum TrackedPartKind {
 
 impl OpencodeTranslatorState {
     #[must_use]
-    pub fn new(thread_id: String) -> Self {
+    pub fn new(session_id: String) -> Self {
         Self {
-            thread_id,
+            session_id,
             opencode_session_id: None,
             open_assistant_message_id: None,
             open_user_message_id: None,
@@ -89,17 +89,17 @@ fn translate_synthetic_subagent_spawned(
     raw: &Value,
 ) -> Vec<UiEventMessage> {
     let properties = props(raw);
-    let parent_thread_id = properties
-        .get("parent_thread_id")
+    let parent_session_id = properties
+        .get("parent_session_id")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let sub_thread_id = properties
-        .get("sub_thread_id")
+    let sub_session_id = properties
+        .get("sub_session_id")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    if parent_thread_id.is_empty() || sub_thread_id.is_empty() {
+    if parent_session_id.is_empty() || sub_session_id.is_empty() {
         return Vec::new();
     }
     let tool_call_id = properties
@@ -110,11 +110,11 @@ fn translate_synthetic_subagent_spawned(
     if !tool_call_id.is_empty() {
         state
             .task_tool_subagents
-            .insert(tool_call_id.clone(), sub_thread_id.clone());
+            .insert(tool_call_id.clone(), sub_session_id.clone());
     }
     vec![UiEventMessage::SubagentSpawned {
-        parent_thread_id,
-        sub_thread_id,
+        parent_session_id,
+        sub_session_id,
         tool_call_id,
         agent: AgentName::Opencode,
         model: properties
@@ -187,8 +187,8 @@ fn translate_session_created(
         state.opencode_session_id = Some(session_id.to_string());
     }
 
-    vec![UiEventMessage::ThreadOpened {
-        thread_id: state.thread_id.clone(),
+    vec![UiEventMessage::SessionOpened {
+        session_id: state.session_id.clone(),
         agent: AgentName::Opencode,
         title: info
             .get("title")
@@ -212,8 +212,8 @@ fn translate_session_updated(
     if title.is_empty() {
         Vec::new()
     } else {
-        vec![UiEventMessage::ThreadTitleUpdated {
-            thread_id: state.thread_id.clone(),
+        vec![UiEventMessage::SessionTitleUpdated {
+            session_id: state.session_id.clone(),
             title: title.to_string(),
         }]
     }
@@ -713,15 +713,15 @@ fn task_tool_subagent_status_event(
     if name != "task" {
         return None;
     }
-    let sub_thread_id = state
+    let sub_session_id = state
         .task_tool_subagents
         .remove(tool_call_id)
-        .or_else(|| sub_thread_id_from_task_output(output))?;
-    if sub_thread_id.is_empty() {
+        .or_else(|| sub_session_id_from_task_output(output))?;
+    if sub_session_id.is_empty() {
         return None;
     }
     Some(UiEventMessage::SubagentStatusUpdated {
-        sub_thread_id,
+        sub_session_id,
         status: if is_error {
             SubagentStatus::Failed
         } else {
@@ -730,7 +730,7 @@ fn task_tool_subagent_status_event(
     })
 }
 
-fn sub_thread_id_from_task_output(output: &str) -> Option<String> {
+fn sub_session_id_from_task_output(output: &str) -> Option<String> {
     // opencode task results look like: <task id="ses_..." state="completed">
     let task_tag_start = output.find("<task")?;
     let tag = &output[task_tag_start..];
@@ -907,8 +907,8 @@ mod tests {
 
         assert!(matches!(
             &events[0],
-            UiEventMessage::ThreadOpened { thread_id, agent, title, .. }
-                if thread_id == "thr_1"
+            UiEventMessage::SessionOpened { session_id, agent, title, .. }
+                if session_id == "thr_1"
                     && *agent == AgentName::Opencode
                     && title.as_deref() == Some("Workspace Session")
         ));
@@ -1385,8 +1385,8 @@ mod tests {
             &val(r#"{
                 "type":"minos.subagent.spawned",
                 "properties":{
-                    "parent_thread_id":"parent",
-                    "sub_thread_id":"sub",
+                    "parent_session_id":"parent",
+                    "sub_session_id":"sub",
                     "tool_call_id":"tool-task",
                     "prompt":"inspect"
                 }
@@ -1397,14 +1397,14 @@ mod tests {
         assert!(matches!(
             events.as_slice(),
             [UiEventMessage::SubagentSpawned {
-                parent_thread_id,
-                sub_thread_id,
+                parent_session_id,
+                sub_session_id,
                 tool_call_id,
                 agent: AgentName::Opencode,
                 prompt,
                 ..
-            }] if parent_thread_id == "parent"
-                && sub_thread_id == "sub"
+            }] if parent_session_id == "parent"
+                && sub_session_id == "sub"
                 && tool_call_id == "tool-task"
                 && prompt.as_deref() == Some("inspect")
         ));
@@ -1448,8 +1448,8 @@ mod tests {
             &val(r#"{
                 "type":"minos.subagent.spawned",
                 "properties":{
-                    "parent_thread_id":"parent",
-                    "sub_thread_id":"ses_sub_1",
+                    "parent_session_id":"parent",
+                    "sub_session_id":"ses_sub_1",
                     "tool_call_id":"call_task",
                     "prompt":"audit unwrap"
                 }
@@ -1489,10 +1489,10 @@ mod tests {
                     ..
                 },
                 UiEventMessage::SubagentStatusUpdated {
-                    sub_thread_id,
+                    sub_session_id,
                     status: SubagentStatus::Completed,
                 }
-            ] if tool_call_id == "call_task" && sub_thread_id == "ses_sub_1"
+            ] if tool_call_id == "call_task" && sub_session_id == "ses_sub_1"
         ));
     }
 
@@ -1537,10 +1537,10 @@ mod tests {
             [
                 UiEventMessage::ToolCallCompleted { .. },
                 UiEventMessage::SubagentStatusUpdated {
-                    sub_thread_id,
+                    sub_session_id,
                     status: SubagentStatus::Completed,
                 }
-            ] if sub_thread_id == "ses_from_output"
+            ] if sub_session_id == "ses_from_output"
         ));
     }
 
@@ -1588,10 +1588,10 @@ mod tests {
                     ..
                 },
                 UiEventMessage::SubagentStatusUpdated {
-                    sub_thread_id,
+                    sub_session_id,
                     status: SubagentStatus::Failed,
                 }
-            ] if sub_thread_id == "ses_err"
+            ] if sub_session_id == "ses_err"
         ));
     }
 }

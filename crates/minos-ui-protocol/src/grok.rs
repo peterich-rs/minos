@@ -9,7 +9,7 @@
 
 use crate::error::TranslationError;
 use crate::message::{
-    DisplayPayload, MessageRole, SubagentStatus, ThreadEndReason, UiEventMessage,
+    DisplayPayload, MessageRole, SubagentStatus, SessionEndReason, UiEventMessage,
 };
 use minos_domain::AgentName;
 use serde_json::Value;
@@ -18,9 +18,9 @@ use std::fmt::Write as _;
 use uuid::Uuid;
 
 pub struct GrokTranslatorState {
-    thread_id: String,
+    session_id: String,
     #[allow(dead_code)]
-    session_id: Option<String>,
+    provider_session_id: Option<String>,
     open_assistant_message_id: Option<String>,
     open_user_message_id: Option<String>,
     emitted_message_ids: HashSet<String>,
@@ -83,10 +83,10 @@ impl NotificationMeta {
 
 impl GrokTranslatorState {
     #[must_use]
-    pub fn new(thread_id: String) -> Self {
+    pub fn new(session_id: String) -> Self {
         Self {
-            thread_id,
-            session_id: None,
+            session_id,
+            provider_session_id: None,
             open_assistant_message_id: None,
             open_user_message_id: None,
             emitted_message_ids: HashSet::new(),
@@ -1323,9 +1323,9 @@ pub fn translate(
             state.orphan_updates.clear();
             state.force_new_assistant_on_text = false;
             state.last_stream_start_ms = None;
-            events.push(UiEventMessage::ThreadClosed {
-                thread_id: state.thread_id.clone(),
-                reason: ThreadEndReason::AgentDone,
+            events.push(UiEventMessage::SessionClosed {
+                session_id: state.session_id.clone(),
+                reason: SessionEndReason::AgentDone,
                 closed_at_ms: finished,
             });
             Ok(events)
@@ -1395,9 +1395,9 @@ fn translate_acp_prompt_response(
             state.suppressed_tools.clear();
             state.orphan_updates.clear();
             state.force_new_assistant_on_text = false;
-            events.push(UiEventMessage::ThreadClosed {
-                thread_id: state.thread_id.clone(),
-                reason: ThreadEndReason::UserStopped,
+            events.push(UiEventMessage::SessionClosed {
+                session_id: state.session_id.clone(),
+                reason: SessionEndReason::UserStopped,
                 closed_at_ms: finished,
             });
             events
@@ -1842,24 +1842,24 @@ fn child_session_id(update: &Value) -> Option<String> {
 
 fn maybe_spawn_subagent(
     state: &mut GrokTranslatorState,
-    sub_thread_id: String,
+    sub_session_id: String,
     tool_call_id: String,
     title: Option<String>,
     prompt: Option<String>,
 ) -> Option<UiEventMessage> {
-    if state.known_subagents.contains_key(&sub_thread_id) {
+    if state.known_subagents.contains_key(&sub_session_id) {
         return None;
     }
     state.known_subagents.insert(
-        sub_thread_id.clone(),
+        sub_session_id.clone(),
         GrokSubagentMeta {
             tool_call_id: tool_call_id.clone(),
             title: title.clone(),
         },
     );
     Some(UiEventMessage::SubagentSpawned {
-        parent_thread_id: state.thread_id.clone(),
-        sub_thread_id,
+        parent_session_id: state.session_id.clone(),
+        sub_session_id,
         tool_call_id,
         agent: AgentName::Grok,
         model: None,
@@ -1913,7 +1913,7 @@ fn translate_subagent_progress(
         events.push(spawned);
     }
     events.push(UiEventMessage::SubagentStatusUpdated {
-        sub_thread_id: sub_id,
+        sub_session_id: sub_id,
         status: SubagentStatus::Running,
     });
     // Compact progress metrics only (no per-chunk activity spam).
@@ -1949,7 +1949,7 @@ fn translate_subagent_finished(
             .and_then(Value::as_bool)
             .unwrap_or(false);
     events.push(UiEventMessage::SubagentStatusUpdated {
-        sub_thread_id: sub_id,
+        sub_session_id: sub_id,
         status: if failed {
             SubagentStatus::Failed
         } else {
@@ -2268,7 +2268,7 @@ mod tests {
         let mut s = GrokTranslatorState::new("thr_x".into());
         let out = translate(
             &mut s,
-            &val(r#"{"kind":"user_message","messageId":"u1","text":"你好","threadId":"thr_x"}"#),
+            &val(r#"{"kind":"user_message","messageId":"u1","text":"你好","sessionId":"thr_x"}"#),
         )
         .unwrap();
 
@@ -2337,21 +2337,21 @@ mod tests {
         assert!(out.iter().any(|e| matches!(
             e,
             UiEventMessage::SubagentSpawned {
-                parent_thread_id,
-                sub_thread_id,
+                parent_session_id,
+                sub_session_id,
                 agent: AgentName::Grok,
                 title: Some(t),
                 ..
-            } if parent_thread_id == "parent-thr"
-                && sub_thread_id == "child-1"
+            } if parent_session_id == "parent-thr"
+                && sub_session_id == "child-1"
                 && t == "Explore lifecycle"
         )));
         assert!(out.iter().any(|e| matches!(
             e,
             UiEventMessage::SubagentStatusUpdated {
-                sub_thread_id,
+                sub_session_id,
                 status: SubagentStatus::Running,
-            } if sub_thread_id == "child-1"
+            } if sub_session_id == "child-1"
         )));
         let out2 = translate(
             &mut s,
@@ -2378,17 +2378,17 @@ mod tests {
         assert!(out.iter().any(|e| matches!(
             e,
             UiEventMessage::SubagentSpawned {
-                sub_thread_id,
+                sub_session_id,
                 agent: AgentName::Grok,
                 ..
-            } if sub_thread_id == "child-2"
+            } if sub_session_id == "child-2"
         )));
         assert!(out.iter().any(|e| matches!(
             e,
             UiEventMessage::SubagentStatusUpdated {
-                sub_thread_id,
+                sub_session_id,
                 status: SubagentStatus::Completed,
-            } if sub_thread_id == "child-2"
+            } if sub_session_id == "child-2"
         )));
     }
 
@@ -2537,8 +2537,8 @@ mod tests {
             .any(|e| matches!(e, UiEventMessage::MessageCompleted { .. })));
         assert!(out.iter().any(|e| matches!(
             e,
-            UiEventMessage::ThreadClosed {
-                reason: ThreadEndReason::AgentDone,
+            UiEventMessage::SessionClosed {
+                reason: SessionEndReason::AgentDone,
                 ..
             }
         )));
@@ -2594,7 +2594,7 @@ mod tests {
     fn approval_request_envelope_becomes_raw_for_overlay() {
         let mut s = GrokTranslatorState::new("thr_x".into());
         let raw = val(
-            r#"{"method":"approval/request","params":{"request_id":"perm-1","thread_id":"thr_x","turn_id":"","method":"session/request_permission","params":{"toolCall":{"title":"ls","kind":"other"}}}}"#,
+            r#"{"method":"approval/request","params":{"request_id":"perm-1","session_id":"thr_x","turn_id":"","method":"session/request_permission","params":{"toolCall":{"title":"ls","kind":"other"}}}}"#,
         );
         let out = translate(&mut s, &raw).unwrap();
         assert!(matches!(

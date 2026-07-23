@@ -18,8 +18,8 @@ use crate::acp_client::AcpClient;
 use crate::config::RawIngest;
 use crate::manager::IngestSink;
 use crate::manager_event::ManagerEvent;
-use crate::state_machine::ThreadState;
-use crate::thread_handle::ThreadHandle;
+use crate::state_machine::SessionState;
+use crate::session_handle::SessionHandle;
 use minos_domain::AgentName;
 use serde_json::Value;
 use tracing::info as log_info;
@@ -287,11 +287,11 @@ impl GrokAcpInstance {
 
 pub(crate) fn spawn_acp_pump(
     client: Arc<AcpClient>,
-    thread_id: String,
+    session_id: String,
     events_tx: IngestSink,
     pending_approvals: crate::manager::PendingApprovals,
-    threads: Arc<
-        tokio::sync::Mutex<std::collections::HashMap<String, crate::thread_handle::ThreadHandle>>,
+    sessions: Arc<
+        tokio::sync::Mutex<std::collections::HashMap<String, crate::session_handle::SessionHandle>>,
     >,
     manager_tx: tokio::sync::broadcast::Sender<crate::manager_event::ManagerEvent>,
     workspace: std::path::PathBuf,
@@ -305,9 +305,9 @@ pub(crate) fn spawn_acp_pump(
                     // show parent → child like Codex/Opencode.
                     if method == "session/update" {
                         register_grok_subagent_from_session_update(
-                            &thread_id,
+                            &session_id,
                             &params,
-                            &threads,
+                            &sessions,
                             &manager_tx,
                             &workspace,
                         )
@@ -316,7 +316,7 @@ pub(crate) fn spawn_acp_pump(
                     if let Err(error) = events_tx
                         .emit(RawIngest::from_json(
                             AgentName::Grok,
-                            thread_id.clone(),
+                            session_id.clone(),
                             serde_json::json!({
                                 "kind": "acp_notification",
                                 "method": method,
@@ -329,7 +329,7 @@ pub(crate) fn spawn_acp_pump(
                         tracing::warn!(
                             target: "minos_agent_runtime::grok_driver",
                             error = %error,
-                            thread_id = %thread_id,
+                            session_id = %session_id,
                             "durable ingest sink closed while reading grok notification",
                         );
                         break;
@@ -340,7 +340,7 @@ pub(crate) fn spawn_acp_pump(
                         if let Err(error) = register_acp_permission_request(
                             AgentName::Grok,
                             &client,
-                            &thread_id,
+                            &session_id,
                             id,
                             params,
                             &events_tx,
@@ -351,7 +351,7 @@ pub(crate) fn spawn_acp_pump(
                             tracing::warn!(
                                 target: "minos_agent_runtime::grok_driver",
                                 error = %error,
-                                thread_id = %thread_id,
+                                session_id = %session_id,
                                 "failed to register grok ACP permission request",
                             );
                         }
@@ -370,7 +370,7 @@ pub(crate) fn spawn_acp_pump(
                         if is_known_grok_ext_method(nested_method) {
                             if let Err(error) = handle_grok_ext_method(
                                 &client,
-                                &thread_id,
+                                &session_id,
                                 id,
                                 nested_method,
                                 params,
@@ -382,7 +382,7 @@ pub(crate) fn spawn_acp_pump(
                                 tracing::warn!(
                                     target: "minos_agent_runtime::grok_driver",
                                     error = %error,
-                                    thread_id = %thread_id,
+                                    session_id = %session_id,
                                     method = %method,
                                     "failed to handle grok ACP ext_method",
                                 );
@@ -394,7 +394,7 @@ pub(crate) fn spawn_acp_pump(
                     if let Err(error) = events_tx
                         .emit(RawIngest::from_json(
                             AgentName::Grok,
-                            thread_id.clone(),
+                            session_id.clone(),
                             serde_json::json!({
                                 "kind": "acp_server_request",
                                 "id": id,
@@ -408,7 +408,7 @@ pub(crate) fn spawn_acp_pump(
                         tracing::warn!(
                             target: "minos_agent_runtime::grok_driver",
                             error = %error,
-                            thread_id = %thread_id,
+                            session_id = %session_id,
                             "durable ingest sink closed while reading grok server request",
                         );
                         break;
@@ -420,20 +420,20 @@ pub(crate) fn spawn_acp_pump(
                             target: "minos_agent_runtime::grok_driver",
                             error = %error,
                             method = %method,
-                            thread_id = %thread_id,
+                            session_id = %session_id,
                             "failed to reply to grok ACP server request"
                         );
                     }
                 }
                 Some(crate::acp_client::Inbound::Closed) => {
-                    info!(target: "minos_agent_runtime::grok_driver", thread_id = %thread_id, "grok ACP stream closed");
+                    info!(target: "minos_agent_runtime::grok_driver", session_id = %session_id, "grok ACP stream closed");
                     if let Err(error) = events_tx
                         .emit(RawIngest::from_json(
                             AgentName::Grok,
-                            thread_id.clone(),
+                            session_id.clone(),
                             serde_json::json!({
                                 "kind": "acp_closed",
-                                "thread_id": thread_id,
+                                "session_id": session_id,
                             }),
                             chrono::Utc::now().timestamp_millis(),
                         ))
@@ -442,7 +442,7 @@ pub(crate) fn spawn_acp_pump(
                         tracing::warn!(
                             target: "minos_agent_runtime::grok_driver",
                             error = %error,
-                            thread_id = %thread_id,
+                            session_id = %session_id,
                             "failed to emit grok closed ingest",
                         );
                     }
@@ -457,7 +457,7 @@ pub(crate) fn spawn_acp_pump(
 async fn register_acp_permission_request(
     agent: AgentName,
     client: &Arc<AcpClient>,
-    thread_id: &str,
+    session_id: &str,
     id: serde_json::Value,
     params: serde_json::Value,
     events_tx: &IngestSink,
@@ -474,7 +474,7 @@ async fn register_acp_permission_request(
     events_tx
         .emit(crate::manager::approval_request_ingest(
             agent,
-            thread_id.to_string(),
+            session_id.to_string(),
             request_id.clone(),
             String::new(),
             "session/request_permission".into(),
@@ -488,7 +488,7 @@ async fn register_acp_permission_request(
     events_tx
         .emit(RawIngest::from_json(
             agent,
-            thread_id.to_string(),
+            session_id.to_string(),
             serde_json::json!({
                 "kind": "acp_server_request",
                 "id": id,
@@ -506,7 +506,7 @@ async fn register_acp_permission_request(
     pending_approvals.insert(
         request_id.clone(),
         crate::manager::PendingApproval {
-            thread_id: thread_id.to_string(),
+            session_id: session_id.to_string(),
             target: crate::manager::PendingApprovalTarget::Acp {
                 request_id: id,
                 client: client.clone(),
@@ -550,7 +550,7 @@ pub(crate) fn parks_for_user_approval(nested_method: &str) -> bool {
 /// (e.g. `{sessionId, toolCallId, planContent}`), NOT a nested envelope.
 async fn handle_grok_ext_method(
     client: &Arc<AcpClient>,
-    thread_id: &str,
+    session_id: &str,
     id: serde_json::Value,
     nested_method: &str,
     params: serde_json::Value,
@@ -560,7 +560,7 @@ async fn handle_grok_ext_method(
     if parks_for_user_approval(nested_method) {
         return register_grok_ext_method_approval(
             client,
-            thread_id,
+            session_id,
             id,
             nested_method,
             params,
@@ -573,7 +573,7 @@ async fn handle_grok_ext_method(
     let _ = events_tx
         .emit(RawIngest::from_json(
             AgentName::Grok,
-            thread_id.to_owned(),
+            session_id.to_owned(),
             serde_json::json!({
                 "kind": "acp_server_request",
                 "id": id,
@@ -587,7 +587,7 @@ async fn handle_grok_ext_method(
     if let Some(result) = auto_reply_for_ext_method(nested_method) {
         info!(
             target: "minos_agent_runtime::grok_driver",
-            thread_id = %thread_id,
+            session_id = %session_id,
             method = %nested_method,
             "auto-replying grok ext_method (Minos UI not implemented)"
         );
@@ -596,7 +596,7 @@ async fn handle_grok_ext_method(
 
     tracing::warn!(
         target: "minos_agent_runtime::grok_driver",
-        thread_id = %thread_id,
+        session_id = %session_id,
         method = %nested_method,
         "unsupported grok ext_method; returning method-not-found"
     );
@@ -611,7 +611,7 @@ async fn handle_grok_ext_method(
 
 async fn register_grok_ext_method_approval(
     client: &Arc<AcpClient>,
-    thread_id: &str,
+    session_id: &str,
     id: serde_json::Value,
     nested_method: &str,
     nested_params: serde_json::Value,
@@ -630,7 +630,7 @@ async fn register_grok_ext_method_approval(
         .unwrap_or(0);
     info!(
         target: "minos_agent_runtime::grok_driver",
-        thread_id = %thread_id,
+        session_id = %session_id,
         request_id = %request_id,
         method = %nested_method,
         plan_chars,
@@ -640,7 +640,7 @@ async fn register_grok_ext_method_approval(
     events_tx
         .emit(crate::manager::approval_request_ingest(
             AgentName::Grok,
-            thread_id.to_owned(),
+            session_id.to_owned(),
             request_id.clone(),
             String::new(),
             nested_method.to_owned(),
@@ -655,7 +655,7 @@ async fn register_grok_ext_method_approval(
     pending_approvals.insert(
         request_id,
         crate::manager::PendingApproval {
-            thread_id: thread_id.to_owned(),
+            session_id: session_id.to_owned(),
             target: crate::manager::PendingApprovalTarget::GrokExtMethod {
                 request_id: id,
                 client: client.clone(),
@@ -703,9 +703,9 @@ async fn reply_to_unsupported_acp_server_request(
 /// `spawn_subagent` tool), register a Minos child thread under the parent so
 /// Desktop/TUI session trees match Codex/Opencode.
 async fn register_grok_subagent_from_session_update(
-    parent_thread_id: &str,
+    parent_session_id: &str,
     params: &Value,
-    threads: &Arc<Mutex<HashMap<String, ThreadHandle>>>,
+    sessions: &Arc<Mutex<HashMap<String, SessionHandle>>>,
     manager_tx: &tokio::sync::broadcast::Sender<ManagerEvent>,
     workspace: &Path,
 ) {
@@ -740,60 +740,60 @@ async fn register_grok_subagent_from_session_update(
     let Some(child_id) = child_id else {
         return;
     };
-    if child_id == parent_thread_id {
+    if child_id == parent_session_id {
         return;
     }
 
     let finished = session_update == "subagent_finished";
-    let mut guard = threads.lock().await;
+    let mut guard = sessions.lock().await;
     if let Some(handle) = guard.get(&child_id) {
         // Already registered — only flip terminal state on finish.
         if finished {
-            let _ = handle.transition(ThreadState::Closed {
+            let _ = handle.transition(SessionState::Closed {
                 reason: crate::state_machine::CloseReason::UserClose,
             });
         }
         return;
     }
     let ws = guard
-        .get(parent_thread_id)
+        .get(parent_session_id)
         .map(|h| h.workspace.clone())
         .unwrap_or_else(|| workspace.to_path_buf());
     let initial = if finished {
-        ThreadState::Closed {
+        SessionState::Closed {
             reason: crate::state_machine::CloseReason::UserClose,
         }
     } else {
-        ThreadState::Running {
+        SessionState::Running {
             turn_started_at_ms: chrono::Utc::now().timestamp_millis(),
         }
     };
     guard.insert(
         child_id.clone(),
-        ThreadHandle::new_subagent(
+        SessionHandle::new_subagent(
             child_id.clone(),
             ws.clone(),
             AgentName::Grok,
-            parent_thread_id.to_owned(),
+            parent_session_id.to_owned(),
             Some(child_id.clone()),
             initial,
             0,
         ),
     );
     drop(guard);
-    let _ = manager_tx.send(ManagerEvent::ThreadAdded {
-        thread_id: child_id.clone(),
+    let _ = manager_tx.send(ManagerEvent::SessionAdded {
+        session_id: child_id.clone(),
         workspace: ws.clone(),
         agent: AgentName::Grok,
-        parent_thread_id: Some(parent_thread_id.to_owned()),
+        parent_session_id: Some(parent_session_id.to_owned()),
     });
     log_info!(
         target: "minos_agent_runtime::grok_driver",
-        parent_thread_id = %parent_thread_id,
-        sub_thread_id = %child_id,
+        parent_session_id = %parent_session_id,
+        sub_session_id = %child_id,
         finished,
         workspace = %ws.display(),
-        "registered grok subagent thread",
+        "registered grok subagent session",
     );
 }
 
