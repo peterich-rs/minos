@@ -16,6 +16,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
+import { VirtualizedList } from "@/shared/ui/VirtualizedList";
 import { useUiStore } from "@/store/ui-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { cn } from "@/shared/lib/utils";
@@ -145,7 +146,7 @@ export function ConversationList({
           </button>
         </div>
       </div>
-      <div className="scrollbar-thin min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
+      <div className="flex min-h-0 flex-1 flex-col p-2">
         {phase === "error" && projectCount === 0 ? (
           <div className="flex flex-col items-center gap-2 px-2 py-8 text-center">
             <p className="text-[12px] text-rose-600">
@@ -160,14 +161,6 @@ export function ConversationList({
             </button>
           </div>
         ) : null}
-        {items.map((item) => (
-          <ConversationRow
-            key={item.id}
-            item={item}
-            selected={item.id === conversationId}
-            onSelect={() => selectConversation(item.id)}
-          />
-        ))}
         {phase === "ready" && projectCount === 0 ? (
           <p className="px-2 py-6 text-center text-[12px] text-ink-muted">
             No conversations in this project.
@@ -191,6 +184,24 @@ export function ConversationList({
           <p className="px-2 py-6 text-center text-[12px] text-ink-muted">
             Loading conversations…
           </p>
+        ) : null}
+        {items.length > 0 ? (
+          <VirtualizedList
+            className="min-h-0 flex-1"
+            items={items}
+            getItemKey={(item) => item.id}
+            estimateSize={88}
+            overscan={6}
+            renderItem={(item) => (
+              <div className="pb-0.5">
+                <ConversationRow
+                  item={item}
+                  selected={item.id === conversationId}
+                  onSelect={() => selectConversation(item.id)}
+                />
+              </div>
+            )}
+          />
         ) : null}
       </div>
     </section>

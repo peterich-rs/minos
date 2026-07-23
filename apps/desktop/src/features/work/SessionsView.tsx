@@ -16,12 +16,11 @@ import {
   FileDiff,
   Loader2,
   MessageSquare,
-  PanelLeftClose,
   PanelRightClose,
   PanelRightOpen,
   ShieldAlert,
 } from "lucide-react";
-import { agentMeta, statusMeta } from "@/shared/lib/mock-data";
+import { agentMeta } from "@/shared/lib/mock-data";
 import { Avatar } from "@/shared/ui/Avatar";
 import { DiffView } from "@/shared/ui/DiffView";
 import { ReadView, shouldUseReadView } from "@/shared/ui/ReadView";
@@ -41,7 +40,6 @@ import {
   useWorkspaceStore,
   type ProjectSession,
 } from "@/store/workspace-store";
-import { formatLocalClock, formatRelative } from "@/shared/lib/time";
 import { cn } from "@/shared/lib/utils";
 import { toast } from "@/shared/lib/toast";
 import type { TranscriptItem } from "@/shared/lib/daemon";
@@ -59,12 +57,7 @@ import {
   displayToolDetail,
   isDiffLike,
 } from "@/shared/lib/tool-present";
-import {
-  childrenOf,
-  groupSessionsByConversation,
-  sessionIsExecuting,
-  type ConversationSessionGroup,
-} from "@/shared/lib/session-list-group";
+import { groupSessionsByConversation } from "@/shared/lib/session-list-group";
 import {
   displayPath,
   summarizeSessionFromTranscript,
@@ -75,7 +68,12 @@ import {
   TRANSCRIPT_AUTOFILL_SLACK_PX,
   TRANSCRIPT_PAGE_EVENTS,
 } from "@/shared/lib/transcript-history";
+import {
+  itemShowsStreamingCursor,
+  streamingTailItemId,
+} from "@/shared/lib/transcript-streaming";
 import { IncrementalText } from "@/shared/ui/IncrementalText";
+import { SessionListPane } from "./SessionListPane";
 
 /** Stable empty list for Zustand selectors (never allocate in getSnapshot). */
 const EMPTY_PROJECT_SESSIONS: ProjectSession[] = [];
@@ -322,8 +320,6 @@ export function SessionsView({ projectId }: { projectId: string }) {
     conversationProjectById,
   );
   const phase = listStatus?.phase ?? "idle";
-  const conversationCount = groups.length;
-  const liveTotal = groups.reduce((n, g) => n + g.runningCount, 0);
 
   const toggleConversation = (conversationId: string) => {
     setCollapsedConvIds((prev) => {
@@ -348,65 +344,18 @@ export function SessionsView({ projectId }: { projectId: string }) {
           </button>
         </div>
       ) : (
-        <aside className="flex w-[min(300px,36vw)] min-w-[240px] max-w-[360px] shrink-0 flex-col overflow-hidden border-r border-ink/5 bg-surface">
-          <div className="flex shrink-0 items-center justify-between border-b border-ink/5 px-3 py-2.5">
-            <div className="min-w-0 pl-1">
-              <div className="text-[13px] font-semibold text-ink">Sessions</div>
-              <div className="text-[11px] text-ink-muted">
-                {phase === "loading" && projectSessions.length === 0
-                  ? "Loading…"
-                  : conversationCount === 0
-                    ? "No sessions"
-                    : `${conversationCount} conversation${conversationCount === 1 ? "" : "s"} · ${projectSessions.length} session${projectSessions.length === 1 ? "" : "s"}${liveTotal > 0 ? ` · ${liveTotal} live` : ""}`}
-              </div>
-            </div>
-            <button
-              type="button"
-              title="Collapse"
-              onClick={toggleSessionsList}
-              className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-muted hover:bg-surface-hover"
-            >
-              <PanelLeftClose className="h-4 w-4" />
-            </button>
-          </div>
-
-          <div className="scrollbar-thin min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
-            {phase === "error" && projectSessions.length === 0 ? (
-              <div className="flex flex-col items-center gap-2 px-2 py-8 text-center">
-                <p className="text-[12px] text-rose-600">
-                  {listStatus?.error ?? "Failed to load sessions"}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => void loadProjectSessions(projectId)}
-                  className="rounded-lg bg-ink px-3 py-1.5 text-[11px] font-semibold text-white"
-                >
-                  Retry
-                </button>
-              </div>
-            ) : null}
-            {groups.map((group) => (
-              <ConversationSessionFolder
-                key={group.conversationId}
-                group={group}
-                collapsed={collapsedConvIds.has(group.conversationId)}
-                selectedSessionId={selectedSessionId}
-                onToggle={() => toggleConversation(group.conversationId)}
-                onSelectSession={selectSession}
-              />
-            ))}
-            {phase === "loading" && projectSessions.length === 0 ? (
-              <p className="px-2 py-8 text-center text-[12px] text-ink-muted">
-                Loading sessions…
-              </p>
-            ) : null}
-            {phase === "ready" && projectSessions.length === 0 ? (
-              <p className="px-2 py-8 text-center text-[12px] text-ink-muted">
-                No agent sessions yet. Use @agent in a conversation.
-              </p>
-            ) : null}
-          </div>
-        </aside>
+        <SessionListPane
+          groups={groups}
+          projectSessionCount={projectSessions.length}
+          phase={phase}
+          error={listStatus?.error}
+          selectedSessionId={selectedSessionId}
+          collapsedConvIds={collapsedConvIds}
+          onToggleConversation={toggleConversation}
+          onSelectSession={selectSession}
+          onRetry={() => void loadProjectSessions(projectId)}
+          onCollapseList={toggleSessionsList}
+        />
       )}
 
       {selectedSessionId && selected ? (
@@ -423,198 +372,6 @@ export function SessionsView({ projectId }: { projectId: string }) {
           Select an agent session to view its full transcript.
         </div>
       )}
-    </div>
-  );
-}
-
-function ConversationSessionFolder({
-  group,
-  collapsed,
-  selectedSessionId,
-  onToggle,
-  onSelectSession,
-}: {
-  group: ConversationSessionGroup;
-  collapsed: boolean;
-  selectedSessionId: string | null;
-  onToggle: () => void;
-  onSelectSession: (id: string) => void;
-}) {
-  const hasSelected = group.sessions.some((s) => s.id === selectedSessionId);
-
-  return (
-    <div
-      className={cn(
-        "rounded-xl",
-        hasSelected && !collapsed ? "bg-surface-muted/40" : null,
-      )}
-    >
-      <button
-        type="button"
-        onClick={onToggle}
-        className={cn(
-          "flex w-full items-center gap-1.5 rounded-xl px-2 py-2 text-left transition-colors",
-          "hover:bg-surface-hover",
-          hasSelected && collapsed ? "bg-surface-muted/60" : null,
-        )}
-        aria-expanded={!collapsed}
-      >
-        {collapsed ? (
-          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-ink-muted" />
-        ) : (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-ink-muted" />
-        )}
-        <MessageSquare className="h-3.5 w-3.5 shrink-0 text-ink-muted" />
-        <span
-          className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-ink"
-          title={group.title}
-        >
-          {group.title}
-        </span>
-        {group.runningCount > 0 ? (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            {group.runningCount}
-          </span>
-        ) : null}
-        {group.attentionCount > 0 && group.runningCount === 0 ? (
-          <span className="shrink-0 rounded-full bg-rose-100 px-1.5 py-0.5 text-[10px] font-medium text-rose-800">
-            {group.attentionCount}
-          </span>
-        ) : null}
-        <span className="shrink-0 text-[10px] tabular-nums text-ink-muted">
-          {group.sessions.length}
-        </span>
-      </button>
-
-      {!collapsed ? (
-        <div className="space-y-0.5 pb-1 pl-1 pr-0.5">
-          {group.roots.length === 0 ? (
-            <p className="px-3 py-2 text-[11px] text-ink-muted">
-              No top-level sessions
-            </p>
-          ) : (
-            group.roots.map((session) => (
-              <SessionTreeRow
-                key={session.id}
-                session={session}
-                all={group.sessions}
-                depth={0}
-                selectedId={selectedSessionId}
-                onSelect={onSelectSession}
-              />
-            ))
-          )}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function SessionTreeRow({
-  session,
-  all,
-  depth,
-  selectedId,
-  onSelect,
-}: {
-  session: ProjectSession;
-  all: ProjectSession[];
-  depth: number;
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-}) {
-  const children = childrenOf(session.id, all);
-  const meta = agentMeta[session.agent as keyof typeof agentMeta];
-  const selected = selectedId === session.id;
-  const executing = sessionIsExecuting(session.status);
-  const status = statusMeta[session.status] ?? statusMeta.idle;
-  const when = session.lastTsMs ? formatRelative(session.lastTsMs) : undefined;
-
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={() => onSelect(session.id)}
-        style={{ paddingLeft: 8 + depth * 12 }}
-        className={cn(
-          "flex w-full gap-2 rounded-lg py-2 pr-2 text-left transition-colors",
-          selected
-            ? "bg-surface-muted shadow-panel ring-1 ring-ink/5"
-            : "hover:bg-surface-hover",
-        )}
-      >
-        <div className="relative shrink-0">
-          <Avatar
-            name={meta?.label ?? session.agent}
-            tone={meta?.tone ?? "slate"}
-            size="sm"
-          />
-          {executing ? (
-            <span
-              className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-surface ring-1 ring-ink/10"
-              title="Executing"
-            >
-              <Loader2 className="h-2.5 w-2.5 animate-spin text-amber-600" />
-            </span>
-          ) : null}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-2">
-            <span className="truncate text-[12.5px] font-semibold text-ink">
-              {meta?.label ?? session.agent}{" "}
-              <span className="font-mono text-[10.5px] font-normal text-ink-muted">
-                #{session.shortId}
-              </span>
-            </span>
-            {when ? (
-              <span className="text-[10.5px] tabular-nums text-ink-muted">
-                {when}
-              </span>
-            ) : null}
-          </div>
-          <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
-            <span
-              className={cn(
-                "inline-flex max-w-full items-center gap-1 truncate rounded-full px-1.5 py-0.5 text-[10px] font-medium",
-                status.pill,
-              )}
-            >
-              {executing ? (
-                <Loader2 className="h-2.5 w-2.5 shrink-0 animate-spin" />
-              ) : (
-                <span
-                  className={cn("h-1.5 w-1.5 shrink-0 rounded-full", status.dot)}
-                />
-              )}
-              {status.label}
-            </span>
-            {session.parentId ? (
-              <span className="truncate text-[10px] text-ink-muted">
-                subagent
-              </span>
-            ) : null}
-          </div>
-          {session.summary ? (
-            <p
-              className="mt-0.5 line-clamp-1 text-[11px] leading-snug text-ink-muted"
-              title={session.summary}
-            >
-              {session.summary}
-            </p>
-          ) : null}
-        </div>
-      </button>
-      {children.map((child) => (
-        <SessionTreeRow
-          key={child.id}
-          session={child}
-          all={all}
-          depth={depth + 1}
-          selectedId={selectedId}
-          onSelect={onSelect}
-        />
-      ))}
     </div>
   );
 }
@@ -733,17 +490,12 @@ function TranscriptPane({
     [items],
   );
 
+  // Cursor only while session is live *and* the timeline tail is still an
+  // open text/reasoning bubble. Walking back past tools left a stuck █ on
+  // finished narration (OpenCode task/subagent turns; same for other agents).
   const liveStreaming =
     session.status === "running" || session.status === "needs_approval";
-  const lastStreamableId = useMemo(() => {
-    for (let i = items.length - 1; i >= 0; i--) {
-      const k = items[i]!.kind;
-      if (k === "assistant" || k === "text" || k === "reasoning" || k === "user") {
-        return items[i]!.id;
-      }
-    }
-    return null;
-  }, [items]);
+  const streamingTailId = useMemo(() => streamingTailItemId(items), [items]);
 
   const loadOlder = useCallback(async () => {
     if (source !== "daemon") return;
@@ -1100,13 +852,10 @@ function TranscriptPane({
                   <div key={item.id} data-scroll-id={item.id}>
                     <TranscriptItemView
                       item={item}
-                      streaming={
-                        liveStreaming &&
-                        item.id === lastStreamableId &&
-                        (item.kind === "assistant" ||
-                          item.kind === "text" ||
-                          item.kind === "reasoning")
-                      }
+                      streaming={itemShowsStreamingCursor(item, {
+                        sessionLive: liveStreaming,
+                        streamingTailId,
+                      })}
                       approving={approving === item.requestId}
                       onUserAction={
                         item.requestId &&
@@ -1545,7 +1294,6 @@ const TranscriptItemView = memo(function TranscriptItemView({
   ) => void | Promise<void>;
   approving?: boolean;
 }) {
-  const time = item.tsMs ? formatLocalClock(item.tsMs) : "";
   const [open, setOpen] = useState(Boolean(streaming));
   const [planOpen, setPlanOpen] = useState(false);
 
@@ -1562,6 +1310,16 @@ const TranscriptItemView = memo(function TranscriptItemView({
   if (item.kind === "approval" || item.kind === "question") {
     const isPlan = item.approvalMethod === "x.ai/exit_plan_mode";
     const isQuestion = item.kind === "question";
+    // No requestId → already answered (history demote / local resolve). Do not
+    // re-show interactive plan/permission chrome for a finished reverse-request.
+    if (!item.requestId) {
+      return (
+        <div className="text-[12px] text-ink-muted">
+          {item.title ? `${item.title} · ` : null}
+          {item.text}
+        </div>
+      );
+    }
     return (
       <>
         <div className="rounded-xl border border-rose-200/80 bg-rose-50/80 p-3">
@@ -1613,9 +1371,6 @@ const TranscriptItemView = memo(function TranscriptItemView({
                   >
                     {isPlan ? "View plan" : "View details"}
                   </button>
-                  {time ? (
-                    <span className="text-[11px] text-ink-muted">{time}</span>
-                  ) : null}
                 </div>
               )}
             </div>
@@ -1693,6 +1448,45 @@ const TranscriptItemView = memo(function TranscriptItemView({
     );
   }
 
+  // OpenCode / Codex subagent card (TUI SubagentCall parity).
+  if (item.kind === "subagent") {
+    const running = /\bRunning\b/i.test(item.text) || /\brunning\b/.test(item.text);
+    const failed = /\bfailed\b/i.test(item.text) || /\binterrupted\b/i.test(item.text);
+    const desc = (item.detail ?? "").trim();
+    return (
+      <div className="text-[12.5px] leading-snug">
+        <div className="flex w-full max-w-full items-baseline gap-1.5">
+          <span className="inline-block w-3 shrink-0" />
+          <span
+            className={cn(
+              "shrink-0 font-medium",
+              failed ? "text-rose-700" : "text-ink-secondary",
+            )}
+          >
+            {item.text.split(/\s+/)[0] ?? (running ? "Running" : "Ran")}
+          </span>
+          <span
+            className={cn(
+              "min-w-0 truncate font-mono text-[12px]",
+              failed ? "text-rose-800/90" : "text-ink",
+            )}
+            title={item.text}
+          >
+            {item.text.replace(/^(Running|Ran)\s+/i, "")}
+          </span>
+          {running ? (
+            <span className="shrink-0 text-ink-muted">…</span>
+          ) : null}
+        </div>
+        {desc ? (
+          <p className="mt-0.5 pl-4 text-[12px] text-ink-muted line-clamp-2">
+            {desc}
+          </p>
+        ) : null}
+      </div>
+    );
+  }
+
   if (
     item.kind === "tool" ||
     item.kind === "tool_result" ||
@@ -1763,11 +1557,6 @@ const TranscriptItemView = memo(function TranscriptItemView({
               <span className="text-emerald-700">+{header.diffstat.add}</span>
               <span className="text-ink-muted">/</span>
               <span className="text-rose-600">-{header.diffstat.del}</span>
-            </span>
-          ) : null}
-          {time ? (
-            <span className="ml-auto shrink-0 text-[11px] tabular-nums text-ink-muted">
-              {time}
             </span>
           ) : null}
         </button>

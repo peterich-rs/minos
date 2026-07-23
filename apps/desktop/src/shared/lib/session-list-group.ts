@@ -88,3 +88,78 @@ export function childrenOf(
 export function sessionIsExecuting(status: SessionStatus): boolean {
   return status === "running" || status === "needs_approval";
 }
+
+/**
+ * Flatten conversation-folder session tree into virtual list rows.
+ * Collapsed folders emit only a folder header; expanded emit folder + DFS session rows.
+ */
+export type VirtualSessionListRow =
+  | {
+      type: "folder";
+      key: string;
+      group: ConversationSessionGroup;
+      collapsed: boolean;
+    }
+  | {
+      type: "session";
+      key: string;
+      session: ProjectSession;
+      all: ProjectSession[];
+      depth: number;
+      conversationId: string;
+    }
+  | {
+      type: "empty-roots";
+      key: string;
+      conversationId: string;
+    };
+
+export function flattenSessionListRows(
+  groups: readonly ConversationSessionGroup[],
+  collapsedConvIds: ReadonlySet<string>,
+): VirtualSessionListRow[] {
+  const rows: VirtualSessionListRow[] = [];
+  for (const group of groups) {
+    const collapsed = collapsedConvIds.has(group.conversationId);
+    rows.push({
+      type: "folder",
+      key: `folder:${group.conversationId}`,
+      group,
+      collapsed,
+    });
+    if (collapsed) continue;
+    if (group.roots.length === 0) {
+      rows.push({
+        type: "empty-roots",
+        key: `empty:${group.conversationId}`,
+        conversationId: group.conversationId,
+      });
+      continue;
+    }
+    const walk = (session: ProjectSession, depth: number) => {
+      rows.push({
+        type: "session",
+        key: `session:${session.id}`,
+        session,
+        all: group.sessions,
+        depth,
+        conversationId: group.conversationId,
+      });
+      for (const child of childrenOf(session.id, group.sessions)) {
+        walk(child, depth + 1);
+      }
+    };
+    for (const root of group.roots) {
+      walk(root, 0);
+    }
+  }
+  return rows;
+}
+
+/** Estimate row height for VirtualizedList (folder vs session). */
+export function estimateSessionListRowSize(row: VirtualSessionListRow): number {
+  if (row.type === "folder") return 40;
+  if (row.type === "empty-roots") return 32;
+  // Session row: avatar + status + optional summary line.
+  return row.session.summary ? 76 : 58;
+}

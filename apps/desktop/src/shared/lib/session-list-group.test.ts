@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   childrenOf,
+  flattenSessionListRows,
   groupSessionsByConversation,
   sessionIsExecuting,
 } from "./session-list-group.ts";
@@ -92,5 +93,69 @@ describe("sessionIsExecuting", () => {
     assert.equal(sessionIsExecuting("needs_approval"), true);
     assert.equal(sessionIsExecuting("idle"), false);
     assert.equal(sessionIsExecuting("done"), false);
+  });
+});
+
+describe("flattenSessionListRows", () => {
+  it("emits only folder rows when collapsed", () => {
+    const groups = groupSessionsByConversation([
+      sess({
+        id: "a1",
+        conversationId: "c1",
+        conversationTitle: "One",
+        lastTsMs: 10,
+      }),
+      sess({
+        id: "b1",
+        conversationId: "c2",
+        conversationTitle: "Two",
+        lastTsMs: 20,
+      }),
+    ]);
+    const rows = flattenSessionListRows(groups, new Set(["c1", "c2"]));
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0]?.type, "folder");
+    assert.equal(rows[1]?.type, "folder");
+  });
+
+  it("DFS expands roots and children when open", () => {
+    const groups = groupSessionsByConversation([
+      sess({
+        id: "root",
+        conversationId: "c1",
+        conversationTitle: "Tree",
+        lastTsMs: 30,
+      }),
+      sess({
+        id: "child",
+        conversationId: "c1",
+        parentId: "root",
+        lastTsMs: 20,
+      }),
+    ]);
+    const rows = flattenSessionListRows(groups, new Set());
+    assert.deepEqual(
+      rows.map((r) =>
+        r.type === "folder"
+          ? r.type
+          : r.type === "session"
+            ? `${r.type}:${r.session.id}:${r.depth}`
+            : r.type,
+      ),
+      ["folder", "session:root:0", "session:child:1"],
+    );
+  });
+
+  it("emits empty-roots when expanded group has no top-level sessions", () => {
+    const groups = groupSessionsByConversation([
+      sess({
+        id: "only-child",
+        conversationId: "c1",
+        parentId: "missing",
+        lastTsMs: 1,
+      }),
+    ]);
+    const rows = flattenSessionListRows(groups, new Set());
+    assert.equal(rows.some((r) => r.type === "empty-roots"), true);
   });
 });
