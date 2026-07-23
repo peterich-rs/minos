@@ -1,8 +1,9 @@
-import { memo } from "react";
+import { memo, type ReactNode } from "react";
 import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/shared/lib/utils";
+import { CodeBlock } from "@/shared/ui/markdown/CodeBlock";
 
 /**
  * Markdown for conversation timeline + agent transcripts.
@@ -120,7 +121,7 @@ const components: Components = {
     const text = String(children ?? "");
     const hasLang = Boolean(className?.includes("language-"));
     const multiline = text.includes("\n");
-    // Block code: language tag OR multiline (bare fence). Leave unstyled chip.
+    // Inline only — fenced blocks go through `pre` → CodeBlock (Shiki).
     if (hasLang || multiline) {
       return (
         <code className={cn("font-mono text-[12px] leading-relaxed", className)}>
@@ -132,11 +133,30 @@ const components: Components = {
       <code className="md-code-inline font-mono text-[12px]">{children}</code>
     );
   },
-  pre: ({ children }) => (
-    <pre className="md-pre scrollbar-thin mb-2.5 font-mono text-[12px] last:mb-0">
-      {children}
-    </pre>
-  ),
+  pre: ({ children }) => {
+    // react-markdown nests <code className="language-…"> inside <pre>.
+    const child = Array.isArray(children) ? children[0] : children;
+    if (
+      child &&
+      typeof child === "object" &&
+      "props" in child &&
+      child.props &&
+      typeof child.props === "object"
+    ) {
+      const props = child.props as {
+        className?: string;
+        children?: ReactNode;
+      };
+      return (
+        <CodeBlock className={props.className}>{props.children}</CodeBlock>
+      );
+    }
+    return (
+      <pre className="md-pre scrollbar-thin mb-2.5 font-mono text-[12px] last:mb-0">
+        {children}
+      </pre>
+    );
+  },
   ul: ({ children }) => (
     <ul className="mb-2 space-y-1 pl-5 last:mb-0">{children}</ul>
   ),
