@@ -48,7 +48,7 @@ pub enum ErrorKind {
     AgentNotSupported,
     AgentSessionIdMismatch,
     IngestSeqConflict,
-    ThreadNotFound,
+    SessionNotFound,
     TranslationNotImplemented,
     TranslationFailed,
     PairingQrVersionUnsupported,
@@ -148,8 +148,8 @@ impl ErrorKind {
             }
             (Self::IngestSeqConflict, Lang::Zh) => "事件序号冲突",
             (Self::IngestSeqConflict, Lang::En) => "Event sequence conflict",
-            (Self::ThreadNotFound, Lang::Zh) => "找不到该线程",
-            (Self::ThreadNotFound, Lang::En) => "Thread not found",
+            (Self::SessionNotFound, Lang::Zh) => "找不到该线程",
+            (Self::SessionNotFound, Lang::En) => "Thread not found",
             (Self::TranslationNotImplemented, Lang::Zh) => "该 CLI 尚未接入协议翻译",
             (Self::TranslationNotImplemented, Lang::En) => {
                 "Translator not implemented for this CLI"
@@ -272,11 +272,11 @@ pub enum MinosError {
     AgentSessionIdMismatch,
 
     // ── backend ingest / translation (spec §7.4 additions) ──
-    #[error("ingest seq conflict for thread {thread_id}: seq {seq} already present")]
-    IngestSeqConflict { thread_id: String, seq: u64 },
+    #[error("ingest seq conflict for thread {session_id}: seq {seq} already present")]
+    IngestSeqConflict { session_id: String, seq: u64 },
 
-    #[error("thread not found: {thread_id}")]
-    ThreadNotFound { thread_id: String },
+    #[error("thread not found: {session_id}")]
+    SessionNotFound { session_id: String },
 
     #[error("translation not implemented for agent {agent:?}")]
     TranslationNotImplemented { agent: crate::AgentName },
@@ -353,7 +353,7 @@ impl MinosError {
             Self::AgentNotSupported { .. } => ErrorKind::AgentNotSupported,
             Self::AgentSessionIdMismatch => ErrorKind::AgentSessionIdMismatch,
             Self::IngestSeqConflict { .. } => ErrorKind::IngestSeqConflict,
-            Self::ThreadNotFound { .. } => ErrorKind::ThreadNotFound,
+            Self::SessionNotFound { .. } => ErrorKind::SessionNotFound,
             Self::TranslationNotImplemented { .. } => ErrorKind::TranslationNotImplemented,
             Self::TranslationFailed { .. } => ErrorKind::TranslationFailed,
             Self::PairingQrVersionUnsupported { .. } => ErrorKind::PairingQrVersionUnsupported,
@@ -554,16 +554,16 @@ mod tests {
             ),
             (
                 MinosError::IngestSeqConflict {
-                    thread_id: String::new(),
+                    session_id: String::new(),
                     seq: 0,
                 },
                 ErrorKind::IngestSeqConflict,
             ),
             (
-                MinosError::ThreadNotFound {
-                    thread_id: String::new(),
+                MinosError::SessionNotFound {
+                    session_id: String::new(),
                 },
-                ErrorKind::ThreadNotFound,
+                ErrorKind::SessionNotFound,
             ),
             (
                 MinosError::TranslationNotImplemented {
@@ -651,7 +651,7 @@ mod tests {
         ErrorKind::AgentNotSupported,
         ErrorKind::AgentSessionIdMismatch,
         ErrorKind::IngestSeqConflict,
-        ErrorKind::ThreadNotFound,
+        ErrorKind::SessionNotFound,
         ErrorKind::TranslationNotImplemented,
         ErrorKind::TranslationFailed,
         ErrorKind::PairingQrVersionUnsupported,
@@ -705,7 +705,7 @@ mod tests {
     fn every_new_kind_has_messages_in_both_langs() {
         for kind in [
             ErrorKind::IngestSeqConflict,
-            ErrorKind::ThreadNotFound,
+            ErrorKind::SessionNotFound,
             ErrorKind::TranslationNotImplemented,
             ErrorKind::TranslationFailed,
             ErrorKind::PairingQrVersionUnsupported,
@@ -724,7 +724,7 @@ mod tests {
     #[test]
     fn ingest_seq_conflict_display() {
         let e = MinosError::IngestSeqConflict {
-            thread_id: "t".into(),
+            session_id: "t".into(),
             seq: 42,
         };
         assert_eq!(

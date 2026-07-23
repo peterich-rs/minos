@@ -3,10 +3,10 @@
 //! callers and tests; `minos-mobile` now uses the envelope/local-RPC path.
 
 use crate::{
-    ApprovalDecisionRequest, CloseThreadRequest, GetThreadParams, GetThreadResponse,
-    HealthResponse, InterruptThreadRequest, ListClisResponse, ListHostSkillsRequest,
+    ApprovalDecisionRequest, CloseSessionRequest, GetSessionParams, GetSessionResponse,
+    HealthResponse, InterruptSessionRequest, ListClisResponse, ListHostSkillsRequest,
     ListHostSkillsResponse, ListHostWorkspacesRequest, ListHostWorkspacesResponse,
-    ListThreadsParams, ListThreadsResponse, PairRequest, PairResponse,
+    ListSessionsParams, ListSessionsResponse, PairRequest, PairResponse,
     RespondOpencodeQuestionRequest, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
     WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
@@ -52,7 +52,7 @@ pub trait MinosRpc {
     /// session: subsequent calls with the same `workspace` reuse the existing
     /// codex app-server child while distinct workspaces each spawn their own
     /// instance. Response carries the `session_id` consumers must pass to
-    /// `send_user_message` / `interrupt_thread` / `close_thread`. See spec §5.2.
+    /// `send_user_message` / `interrupt_session` / `close_session`. See spec §5.2.
     #[method(name = "start_agent")]
     async fn start_agent(
         &self,
@@ -85,27 +85,27 @@ pub trait MinosRpc {
     /// Pause an in-flight turn on the named thread. Best-effort: the codex
     /// app-server may have already finished the turn — that is fine, the
     /// thread transitions to `Suspended { UserInterrupt }` either way.
-    #[method(name = "interrupt_thread")]
-    async fn interrupt_thread(&self, req: InterruptThreadRequest)
+    #[method(name = "interrupt_session")]
+    async fn interrupt_session(&self, req: InterruptSessionRequest)
         -> jsonrpsee::core::RpcResult<()>;
 
     /// Permanently close the named thread. Idempotent — re-closing a closed
     /// thread is a no-op.
-    #[method(name = "close_thread")]
-    async fn close_thread(&self, req: CloseThreadRequest) -> jsonrpsee::core::RpcResult<()>;
+    #[method(name = "close_session")]
+    async fn close_session(&self, req: CloseSessionRequest) -> jsonrpsee::core::RpcResult<()>;
 
     /// Paginated history list. Keyed by `last_activity_at` desc.
-    #[method(name = "list_threads")]
-    async fn list_threads(
+    #[method(name = "list_sessions")]
+    async fn list_sessions(
         &self,
-        req: ListThreadsParams,
-    ) -> jsonrpsee::core::RpcResult<ListThreadsResponse>;
+        req: ListSessionsParams,
+    ) -> jsonrpsee::core::RpcResult<ListSessionsResponse>;
 
-    /// Snapshot one thread's metadata + live state (intended for the chat
+    /// Snapshot one session's metadata + live state (intended for the chat
     /// detail screen first paint).
-    #[method(name = "get_thread")]
-    async fn get_thread(
+    #[method(name = "get_session")]
+    async fn get_session(
         &self,
-        req: GetThreadParams,
-    ) -> jsonrpsee::core::RpcResult<GetThreadResponse>;
+        req: GetSessionParams,
+    ) -> jsonrpsee::core::RpcResult<GetSessionResponse>;
 }

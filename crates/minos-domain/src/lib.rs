@@ -2,7 +2,7 @@
 //!
 //! Module layout follows hexagonal "Entities" concerns:
 //! - `ids`         identifier newtypes (DeviceId, DeviceSecret, PairingToken)
-//! - `agent`       AgentName / AgentStatus / AgentDescriptor
+//! - `agent`       AgentName / AgentStatus / AgentDescriptor / ModelDiscovery
 //! - `connection`  ConnectionState
 //! - `pairing_state`  PairingState (used inside MinosError)
 //! - `role`        DeviceRole (AgentHost / MobileClient / BrowserAdmin)

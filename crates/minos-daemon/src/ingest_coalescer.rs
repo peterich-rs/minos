@@ -32,21 +32,21 @@ impl IngestCoalescer {
     }
 
     pub async fn coalesce(&self, ingest: RawIngest) -> Result<IngestChunk> {
-        wait_for_thread_parent(&self.store, &ingest.thread_id).await?;
-        let seq = if let Some(seq) = self.take_next_seq(&ingest.thread_id).await {
+        wait_for_thread_parent(&self.store, &ingest.session_id).await?;
+        let seq = if let Some(seq) = self.take_next_seq(&ingest.session_id).await {
             seq
         } else {
             let thread = self
                 .store
-                .get_thread(&ingest.thread_id)
+                .get_session(&ingest.session_id)
                 .await?
                 .ok_or_else(|| {
-                    anyhow::anyhow!("thread parent row missing: {}", ingest.thread_id)
+                    anyhow::anyhow!("thread parent row missing: {}", ingest.session_id)
                 })?;
             let mut inner = self.inner.lock().await;
             let next = inner
                 .next_seq_by_thread
-                .entry(ingest.thread_id.clone())
+                .entry(ingest.session_id.clone())
                 .or_insert_with(|| thread.last_seq.max(0) as u64 + 1);
             let seq = *next;
             *next += 1;
@@ -57,27 +57,27 @@ impl IngestCoalescer {
         Ok(IngestChunk::new(ingest, seq, projection))
     }
 
-    async fn take_next_seq(&self, thread_id: &str) -> Option<u64> {
+    async fn take_next_seq(&self, session_id: &str) -> Option<u64> {
         let mut inner = self.inner.lock().await;
-        let next = inner.next_seq_by_thread.get_mut(thread_id)?;
+        let next = inner.next_seq_by_thread.get_mut(session_id)?;
         let seq = *next;
         *next += 1;
         Some(seq)
     }
 }
 
-async fn wait_for_thread_parent(store: &LocalStore, thread_id: &str) -> Result<()> {
+async fn wait_for_thread_parent(store: &LocalStore, session_id: &str) -> Result<()> {
     let started = Instant::now();
     for delay_ms in [0, 10, 25, 50, 100, 200, 400, 400, 400, 400, 400] {
         if delay_ms > 0 {
             sleep(Duration::from_millis(delay_ms)).await;
         }
-        if store.get_thread(thread_id).await?.is_some() {
+        if store.get_session(session_id).await?.is_some() {
             return Ok(());
         }
     }
     Err(anyhow::anyhow!(
-        "thread parent row missing for {thread_id} after {:?}",
+        "thread parent row missing for {session_id} after {:?}",
         started.elapsed()
     ))
 }

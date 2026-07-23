@@ -151,21 +151,23 @@ async fn probe_cli_models(bin: &str, args: &[&str], source: &str) -> Option<List
                 continue;
             }
             let is_default = line.contains("(default)");
+            // Only attach a static effort ladder when domain SSOT says the
+            // runtime supports reasoning effort (CLI list text has no efforts).
+            let (efforts, default_effort) = if runtime.supports_reasoning_effort() {
+                (
+                    vec!["low".into(), "medium".into(), "high".into()],
+                    Some("high".into()),
+                )
+            } else {
+                (vec![], None)
+            };
             models.push(ModelInfo {
                 id: cleaned.to_string(),
                 display_name: cleaned.to_string(),
                 description: None,
                 is_default,
-                supported_reasoning_efforts: if runtime == AgentName::Grok {
-                    vec!["low".into(), "medium".into(), "high".into()]
-                } else {
-                    vec![]
-                },
-                default_reasoning_effort: if runtime == AgentName::Grok {
-                    Some("high".into())
-                } else {
-                    None
-                },
+                supported_reasoning_efforts: efforts,
+                default_reasoning_effort: default_effort,
             });
         }
         let _ = child.wait().await;
@@ -307,5 +309,48 @@ mod tests {
         assert!(!static_claude().models.is_empty());
         assert!(static_claude().models.iter().any(|m| m.is_default));
         assert!(!static_gemini().models.is_empty());
+    }
+
+    #[test]
+    fn unsupported_runtimes_do_not_advertise_efforts() {
+        for m in static_claude().models {
+            assert!(
+                m.supported_reasoning_efforts.is_empty(),
+                "claude model {} invented efforts",
+                m.id
+            );
+            assert!(m.default_reasoning_effort.is_none());
+        }
+        for m in static_gemini().models {
+            assert!(
+                m.supported_reasoning_efforts.is_empty(),
+                "gemini model {} invented efforts",
+                m.id
+            );
+        }
+        for m in static_opencode().models {
+            assert!(
+                m.supported_reasoning_efforts.is_empty(),
+                "opencode model {} invented efforts",
+                m.id
+            );
+        }
+        assert!(!AgentName::Claude.supports_reasoning_effort());
+        assert!(!AgentName::Gemini.supports_reasoning_effort());
+        assert!(!AgentName::Opencode.supports_reasoning_effort());
+    }
+
+    #[test]
+    fn effort_capable_runtimes_list_honest_efforts() {
+        assert!(AgentName::Codex.supports_reasoning_effort());
+        assert!(AgentName::Grok.supports_reasoning_effort());
+        assert!(static_codex()
+            .models
+            .iter()
+            .any(|m| !m.supported_reasoning_efforts.is_empty()));
+        assert!(static_grok()
+            .models
+            .iter()
+            .any(|m| !m.supported_reasoning_efforts.is_empty()));
     }
 }

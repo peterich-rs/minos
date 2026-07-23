@@ -173,10 +173,10 @@ async fn recv_ui_event(ws: &mut WsClient) -> anyhow::Result<(String, u64, UiEven
             Envelope::Event {
                 event:
                     EventKind::UiEventMessage {
-                        thread_id, seq, ui, ..
+                        session_id, seq, ui, ..
                     },
                 ..
-            } => return Ok((thread_id, seq, ui)),
+            } => return Ok((session_id, seq, ui)),
             Envelope::Event { event, .. } => {
                 // Non-UI event (e.g., presence). Log and keep draining.
                 tracing::debug!(
@@ -239,41 +239,41 @@ async fn ingest_translates_and_fans_out_to_paired_mobile() -> anyhow::Result<()>
     let ingest = Envelope::Ingest {
         version: 1,
         agent: AgentName::Codex,
-        thread_id: "thr_test".into(),
+        session_id: "thr_test".into(),
         seq: 1,
         payload: serde_json::json!({
             "method":"thread/started",
-            "params":{"threadId":"thr_test","createdAtMs":1}
+            "params":{"sessionId":"thr_test","createdAtMs":1}
         }),
         ts_ms: 1,
     };
     send_envelope(&mut host, &ingest).await?;
 
-    // Phone should receive Envelope::Event with UiEventMessage::ThreadOpened.
+    // Phone should receive Envelope::Event with UiEventMessage::SessionOpened.
     // (PeerOnline for the host's reconnect may arrive first; `recv_ui_event`
     // skips non-UI events.)
-    let (thread_id, seq, ui) = recv_ui_event(&mut phone).await?;
-    assert_eq!(thread_id, "thr_test");
+    let (session_id, seq, ui) = recv_ui_event(&mut phone).await?;
+    assert_eq!(session_id, "thr_test");
     assert_eq!(seq, 1);
     match ui {
-        UiEventMessage::ThreadOpened {
-            thread_id, agent, ..
+        UiEventMessage::SessionOpened {
+            session_id, agent, ..
         } => {
-            assert_eq!(thread_id, "thr_test");
+            assert_eq!(session_id, "thr_test");
             assert_eq!(agent, AgentName::Codex);
         }
-        other => panic!("expected ThreadOpened, got {other:?}"),
+        other => panic!("expected SessionOpened, got {other:?}"),
     }
 
-    // Verify the raw event was persisted + the thread row created.
+    // Verify the raw event was persisted + the session row created.
     let raw_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM raw_events WHERE thread_id = 'thr_test'")
+        sqlx::query_scalar("SELECT COUNT(*) FROM raw_events WHERE session_id = 'thr_test'")
             .fetch_one(&relay.pool)
             .await?;
     assert_eq!(raw_count, 1);
 
     let thread_row: (String, String) =
-        sqlx::query_as("SELECT thread_id, agent FROM threads WHERE thread_id = 'thr_test'")
+        sqlx::query_as("SELECT session_id, agent FROM sessions WHERE session_id = 'thr_test'")
             .fetch_one(&relay.pool)
             .await?;
     assert_eq!(thread_row.0, "thr_test");
@@ -301,7 +301,7 @@ async fn ingest_retransmit_is_no_op() -> anyhow::Result<()> {
     let ingest = Envelope::Ingest {
         version: 1,
         agent: AgentName::Codex,
-        thread_id: "thr_dedup".into(),
+        session_id: "thr_dedup".into(),
         seq: 1,
         payload: serde_json::json!({"method":"item/plan/delta","params":{"step":"compile"}}),
         ts_ms: 1,
@@ -313,7 +313,7 @@ async fn ingest_retransmit_is_no_op() -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     let row_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM raw_events WHERE thread_id = 'thr_dedup'")
+        sqlx::query_scalar("SELECT COUNT(*) FROM raw_events WHERE session_id = 'thr_dedup'")
             .fetch_one(&relay.pool)
             .await?;
     assert_eq!(row_count, 1, "retransmit must be a no-op at the DB layer");
@@ -358,7 +358,7 @@ async fn ingest_derives_title_from_first_user_message_and_fans_out_synthetic_upd
         &Envelope::Ingest {
             version: 1,
             agent: AgentName::Codex,
-            thread_id: "thr_title".into(),
+            session_id: "thr_title".into(),
             seq: 1,
             payload: serde_json::json!({
                 "method": "item/started",
@@ -374,19 +374,19 @@ async fn ingest_derives_title_from_first_user_message_and_fans_out_synthetic_upd
     )
     .await?;
 
-    let (thread_id, seq, ui) = recv_ui_event(&mut phone).await?;
-    assert_eq!(thread_id, "thr_title");
+    let (session_id, seq, ui) = recv_ui_event(&mut phone).await?;
+    assert_eq!(session_id, "thr_title");
     assert_eq!(seq, 1);
     match ui {
-        UiEventMessage::ThreadTitleUpdated { thread_id, title } => {
-            assert_eq!(thread_id, "thr_title");
+        UiEventMessage::SessionTitleUpdated { session_id, title } => {
+            assert_eq!(session_id, "thr_title");
             assert_eq!(title, prompt);
         }
-        other => panic!("expected ThreadTitleUpdated, got {other:?}"),
+        other => panic!("expected SessionTitleUpdated, got {other:?}"),
     }
 
     let stored_title: Option<String> =
-        sqlx::query_scalar("SELECT title FROM threads WHERE thread_id = 'thr_title'")
+        sqlx::query_scalar("SELECT title FROM sessions WHERE session_id = 'thr_title'")
             .fetch_one(&relay.pool)
             .await?;
     assert_eq!(stored_title.as_deref(), Some(prompt));

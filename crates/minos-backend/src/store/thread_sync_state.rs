@@ -17,7 +17,7 @@ pub async fn upsert_manifest(
 pub async fn mark_backend_acked(
     store: &impl AsStorePool,
     host_device_id: &str,
-    thread_id: &str,
+    session_id: &str,
     accepted_to_seq: u64,
     now_ms: i64,
 ) -> Result<(), BackendError> {
@@ -25,16 +25,16 @@ pub async fn mark_backend_acked(
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query(
             "INSERT INTO thread_sync_state( \
-                host_device_id, thread_id, backend_acked_seq, missing_ranges_json, updated_at_ms \
+                host_device_id, session_id, backend_acked_seq, missing_ranges_json, updated_at_ms \
              ) VALUES (?, ?, ?, '[]', ?) \
-             ON CONFLICT(host_device_id, thread_id) DO UPDATE SET \
+             ON CONFLICT(host_device_id, session_id) DO UPDATE SET \
                 backend_acked_seq = CASE \
                     WHEN backend_acked_seq < excluded.backend_acked_seq \
                     THEN excluded.backend_acked_seq ELSE backend_acked_seq END, \
                 updated_at_ms = excluded.updated_at_ms",
         )
         .bind(host_device_id)
-        .bind(thread_id)
+        .bind(session_id)
         .bind(accepted)
         .bind(now_ms)
         .execute(pool)
@@ -42,16 +42,16 @@ pub async fn mark_backend_acked(
         .map(|_| ()),
         StorePoolRef::Postgres(pool) => sqlx::query(
             "INSERT INTO thread_sync_state( \
-                host_device_id, thread_id, backend_acked_seq, missing_ranges_json, updated_at_ms \
+                host_device_id, session_id, backend_acked_seq, missing_ranges_json, updated_at_ms \
              ) VALUES ($1, $2, $3, '[]', $4) \
-             ON CONFLICT(host_device_id, thread_id) DO UPDATE SET \
+             ON CONFLICT(host_device_id, session_id) DO UPDATE SET \
                 backend_acked_seq = GREATEST( \
                     thread_sync_state.backend_acked_seq, excluded.backend_acked_seq \
                 ), \
                 updated_at_ms = excluded.updated_at_ms",
         )
         .bind(host_device_id)
-        .bind(thread_id)
+        .bind(session_id)
         .bind(accepted)
         .bind(now_ms)
         .execute(pool)
@@ -64,26 +64,26 @@ pub async fn mark_backend_acked(
 pub async fn backend_acked_seq(
     store: &impl AsStorePool,
     host_device_id: &str,
-    thread_id: &str,
+    session_id: &str,
 ) -> Result<u64, BackendError> {
     let value: Option<i64> = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_scalar(
                 "SELECT backend_acked_seq FROM thread_sync_state \
-                 WHERE host_device_id = ?1 AND thread_id = ?2",
+                 WHERE host_device_id = ?1 AND session_id = ?2",
             )
             .bind(host_device_id)
-            .bind(thread_id)
+            .bind(session_id)
             .fetch_optional(pool)
             .await
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_scalar(
                 "SELECT backend_acked_seq FROM thread_sync_state \
-                 WHERE host_device_id = $1 AND thread_id = $2",
+                 WHERE host_device_id = $1 AND session_id = $2",
             )
             .bind(host_device_id)
-            .bind(thread_id)
+            .bind(session_id)
             .fetch_optional(pool)
             .await
         }
@@ -113,10 +113,10 @@ async fn upsert_session_manifest(
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query(
             "INSERT INTO thread_sync_state( \
-                host_device_id, thread_id, backend_acked_seq, local_from_seq, local_to_seq, \
+                host_device_id, session_id, backend_acked_seq, local_from_seq, local_to_seq, \
                 missing_ranges_json, bytes, event_count, first_ts_ms, last_ts_ms, running, updated_at_ms \
              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT(host_device_id, thread_id) DO UPDATE SET \
+             ON CONFLICT(host_device_id, session_id) DO UPDATE SET \
                 backend_acked_seq = excluded.backend_acked_seq, \
                 local_from_seq = excluded.local_from_seq, \
                 local_to_seq = excluded.local_to_seq, \
@@ -129,7 +129,7 @@ async fn upsert_session_manifest(
                 updated_at_ms = excluded.updated_at_ms",
         )
         .bind(host_device_id)
-        .bind(&session.thread_id)
+        .bind(&session.session_id)
         .bind(backend_acked_seq)
         .bind(local_from_seq)
         .bind(local_to_seq)
@@ -145,10 +145,10 @@ async fn upsert_session_manifest(
         .map(|_| ()),
         StorePoolRef::Postgres(pool) => sqlx::query(
             "INSERT INTO thread_sync_state( \
-                host_device_id, thread_id, backend_acked_seq, local_from_seq, local_to_seq, \
+                host_device_id, session_id, backend_acked_seq, local_from_seq, local_to_seq, \
                 missing_ranges_json, bytes, event_count, first_ts_ms, last_ts_ms, running, updated_at_ms \
              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
-             ON CONFLICT(host_device_id, thread_id) DO UPDATE SET \
+             ON CONFLICT(host_device_id, session_id) DO UPDATE SET \
                 backend_acked_seq = excluded.backend_acked_seq, \
                 local_from_seq = excluded.local_from_seq, \
                 local_to_seq = excluded.local_to_seq, \
@@ -161,7 +161,7 @@ async fn upsert_session_manifest(
                 updated_at_ms = excluded.updated_at_ms",
         )
         .bind(host_device_id)
-        .bind(&session.thread_id)
+        .bind(&session.session_id)
         .bind(backend_acked_seq)
         .bind(local_from_seq)
         .bind(local_to_seq)

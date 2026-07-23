@@ -17,8 +17,17 @@ pub enum SocketRequest {
     DelegateToAgent {
         conversation_id: String,
         source_agent: Option<String>,
-        source_thread_id: Option<String>,
-        target_agent: String,
+        source_session_id: Option<String>,
+        /// Runtime agent name (codex/claude/…). Optional when `profile_id` or
+        /// `target_profile` is set; daemon may also apply newest-profile convenience.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_agent: Option<String>,
+        /// Explicit host agent profile id (stable). Prefer over name when known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile_id: Option<String>,
+        /// Profile display name; daemon resolves to a unique profile.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_profile: Option<String>,
         prompt: String,
     },
     GetDelegationStatus {
@@ -38,7 +47,7 @@ pub enum SocketRequest {
     PostConversationUpdate {
         conversation_id: String,
         source_agent: Option<String>,
-        source_thread_id: Option<String>,
+        source_session_id: Option<String>,
         message: String,
     },
     Ping,

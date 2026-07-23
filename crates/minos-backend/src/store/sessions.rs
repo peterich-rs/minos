@@ -1,10 +1,10 @@
-//! `threads` table CRUD (see spec §9.1).
+//! `sessions` table CRUD (see spec §9.1).
 //!
-//! A `thread` is one live session on an agent-host. Rows are created
+//! A `session` is one live session on an agent-host. Rows are created
 //! implicitly by the first `raw_event` ingest (`upsert`) and mutated as
 //! subsequent events arrive: `update_title` when the translator produces a
-//! `ThreadTitleUpdated`, `increment_message_count` when a new message is
-//! placed, `mark_ended` when the backend sees `ThreadClosed`.
+//! `SessionTitleUpdated`, `increment_message_count` when a new message is
+//! placed, `mark_ended` when the backend sees `SessionClosed`.
 //!
 //! The formal agent-session and project APIs still use these summaries while
 //! the ingest path is being folded into room-first storage.
@@ -12,13 +12,13 @@
 use std::collections::HashMap;
 
 use minos_domain::AgentName;
-use minos_ui_protocol::ThreadEndReason;
+use minos_ui_protocol::SessionEndReason;
 use sqlx::{Postgres, QueryBuilder, Sqlite};
 
 use crate::error::BackendError;
 use crate::store::{AsStorePool, StorePoolRef};
 
-type ThreadSummaryRow = (
+type SessionSummaryRow = (
     String,
     String,
     Option<String>,
@@ -41,11 +41,11 @@ fn agent_str(a: AgentName) -> &'static str {
 }
 
 /// Insert-or-bump: on first ingest, create the row; on subsequent ingests
-/// for the same `thread_id`, update `last_ts_ms` to `ts_ms`. `first_ts_ms`
+/// for the same `session_id`, update `last_ts_ms` to `ts_ms`. `first_ts_ms`
 /// is frozen at insert time, `message_count` starts at 0.
 pub async fn upsert(
     store: &impl AsStorePool,
-    thread_id: &str,
+    session_id: &str,
     agent: AgentName,
     owner_device_id: &str,
     ts_ms: i64,
@@ -53,11 +53,11 @@ pub async fn upsert(
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query(
-                r"INSERT INTO threads (thread_id, agent, owner_device_id, first_ts_ms, last_ts_ms, message_count)
+                r"INSERT INTO sessions (session_id, agent, owner_device_id, first_ts_ms, last_ts_ms, message_count)
                    VALUES (?1, ?2, ?3, ?4, ?4, 0)
-                   ON CONFLICT(thread_id) DO UPDATE SET last_ts_ms = ?4",
+                   ON CONFLICT(session_id) DO UPDATE SET last_ts_ms = ?4",
             )
-            .bind(thread_id)
+            .bind(session_id)
             .bind(agent_str(agent))
             .bind(owner_device_id)
             .bind(ts_ms)
@@ -67,11 +67,11 @@ pub async fn upsert(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query(
-                r"INSERT INTO threads (thread_id, agent, owner_device_id, first_ts_ms, last_ts_ms, message_count)
+                r"INSERT INTO sessions (session_id, agent, owner_device_id, first_ts_ms, last_ts_ms, message_count)
                    VALUES ($1, $2, $3, $4, $4, 0)
-                   ON CONFLICT(thread_id) DO UPDATE SET last_ts_ms = $4",
+                   ON CONFLICT(session_id) DO UPDATE SET last_ts_ms = $4",
             )
-            .bind(thread_id)
+            .bind(session_id)
             .bind(agent_str(agent))
             .bind(owner_device_id)
             .bind(ts_ms)
@@ -81,104 +81,104 @@ pub async fn upsert(
         }
     }
     .map_err(|e| BackendError::StoreQuery {
-        operation: "threads.upsert".into(),
+        operation: "sessions.upsert".into(),
         message: e.to_string(),
     })?;
     Ok(())
 }
 
-/// Mark a thread as ended. `reason` is serialised as the same JSON the wire
-/// protocol uses — `serde_json::to_string` on a `ThreadEndReason` produces
+/// Mark a session as ended. `reason` is serialised as the same JSON the wire
+/// protocol uses — `serde_json::to_string` on a `SessionEndReason` produces
 /// `{"kind":"agent_done"}` etc.
 pub async fn mark_ended(
     store: &impl AsStorePool,
-    thread_id: &str,
-    reason: &ThreadEndReason,
+    session_id: &str,
+    reason: &SessionEndReason,
     ts_ms: i64,
 ) -> Result<(), BackendError> {
     let reason_json = serde_json::to_string(reason).map_err(|e| BackendError::StoreQuery {
-        operation: "threads.mark_ended.serialise".into(),
+        operation: "sessions.mark_ended.serialise".into(),
         message: e.to_string(),
     })?;
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query(
-            r"UPDATE threads SET ended_at_ms = ?1, end_reason = ?2 WHERE thread_id = ?3",
+            r"UPDATE sessions SET ended_at_ms = ?1, end_reason = ?2 WHERE session_id = ?3",
         )
         .bind(ts_ms)
         .bind(&reason_json)
-        .bind(thread_id)
+        .bind(session_id)
         .execute(pool)
         .await
         .map(|_| ()),
         StorePoolRef::Postgres(pool) => sqlx::query(
-            r"UPDATE threads SET ended_at_ms = $1, end_reason = $2 WHERE thread_id = $3",
+            r"UPDATE sessions SET ended_at_ms = $1, end_reason = $2 WHERE session_id = $3",
         )
         .bind(ts_ms)
         .bind(&reason_json)
-        .bind(thread_id)
+        .bind(session_id)
         .execute(pool)
         .await
         .map(|_| ()),
     }
     .map_err(|e| BackendError::StoreQuery {
-        operation: "threads.mark_ended".into(),
+        operation: "sessions.mark_ended".into(),
         message: e.to_string(),
     })?;
     Ok(())
 }
 
 /// Set the human-friendly title. Called when the translator emits
-/// `ThreadTitleUpdated` (codex surfaces this as a separate notification).
+/// `SessionTitleUpdated` (codex surfaces this as a separate notification).
 pub async fn update_title(
     store: &impl AsStorePool,
-    thread_id: &str,
+    session_id: &str,
     title: &str,
 ) -> Result<(), BackendError> {
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
-            sqlx::query(r"UPDATE threads SET title = ?1 WHERE thread_id = ?2")
+            sqlx::query(r"UPDATE sessions SET title = ?1 WHERE session_id = ?2")
                 .bind(title)
-                .bind(thread_id)
+                .bind(session_id)
                 .execute(pool)
                 .await
                 .map(|_| ())
         }
         StorePoolRef::Postgres(pool) => {
-            sqlx::query(r"UPDATE threads SET title = $1 WHERE thread_id = $2")
+            sqlx::query(r"UPDATE sessions SET title = $1 WHERE session_id = $2")
                 .bind(title)
-                .bind(thread_id)
+                .bind(session_id)
                 .execute(pool)
                 .await
                 .map(|_| ())
         }
     }
     .map_err(|e| BackendError::StoreQuery {
-        operation: "threads.update_title".into(),
+        operation: "sessions.update_title".into(),
         message: e.to_string(),
     })?;
     Ok(())
 }
 
-/// Check whether a thread exists and belongs to a device owned by the
+/// Check whether a session exists and belongs to a device owned by the
 /// given `account_id`. Used for authorization checks on thread-scoped
 /// endpoints.
 pub async fn exists_for_account(
     store: &impl AsStorePool,
-    thread_id: &str,
+    session_id: &str,
     account_id: &str,
 ) -> Result<bool, BackendError> {
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*)
-                   FROM threads t
-                  WHERE t.thread_id = ?
+                   FROM sessions t
+                  WHERE t.session_id = ?
                     AND EXISTS (
                         SELECT 1 FROM devices d
                          WHERE d.device_id = t.owner_device_id
                            AND d.account_id = ?
                     )",
         )
-        .bind(thread_id)
+        .bind(session_id)
         .bind(account_id)
         .fetch_one(pool)
         .await
@@ -187,8 +187,8 @@ pub async fn exists_for_account(
             sqlx::query_scalar::<_, bool>(
                 "SELECT EXISTS (
                     SELECT 1
-                      FROM threads t
-                     WHERE t.thread_id = $1
+                      FROM sessions t
+                     WHERE t.session_id = $1
                        AND EXISTS (
                            SELECT 1 FROM devices d
                             WHERE d.device_id = t.owner_device_id
@@ -196,14 +196,14 @@ pub async fn exists_for_account(
                        )
                 )",
             )
-            .bind(thread_id)
+            .bind(session_id)
             .bind(account_id)
             .fetch_one(pool)
             .await
         }
     }
     .map_err(|e| BackendError::StoreQuery {
-        operation: "threads.exists_for_account".into(),
+        operation: "sessions.exists_for_account".into(),
         message: e.to_string(),
     })
 }
@@ -211,11 +211,11 @@ pub async fn exists_for_account(
 /// List thread summaries for formal agent-session/project query responses.
 ///
 /// Filters (all optional):
-/// - `owner_device_id`  — restrict to threads owned by this device.
+/// - `owner_device_id`  — restrict to sessions owned by this device.
 /// - `agent`            — restrict to a single CLI agent.
-/// - `before_ts_ms`     — only threads whose `last_ts_ms` is strictly less
+/// - `before_ts_ms`     — only sessions whose `last_ts_ms` is strictly less
 ///   than this (exclusive cursor for pagination).
-/// - `account_id`       — restrict to threads whose `owner_device_id`
+/// - `account_id`       — restrict to sessions whose `owner_device_id`
 ///   belongs to a device row with this `account_id`. Spec §5.5; Phase 2
 ///   Task 2.6. The check uses an `EXISTS` clause against `devices` rather
 ///   than a `JOIN` so the optional-cursor + ordering plan stays simple.
@@ -229,13 +229,13 @@ pub async fn list(
     before_ts_ms: Option<i64>,
     limit: u32,
     account_id: Option<&str>,
-) -> Result<Vec<minos_protocol::ThreadSummary>, BackendError> {
+) -> Result<Vec<minos_protocol::SessionSummary>, BackendError> {
     let agent_s = agent.map(agent_str);
     let rows = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
-            sqlx::query_as::<_, ThreadSummaryRow>(
-                r"SELECT thread_id, agent, title, first_ts_ms, last_ts_ms, message_count, ended_at_ms, end_reason
-                   FROM threads
+            sqlx::query_as::<_, SessionSummaryRow>(
+                r"SELECT session_id, agent, title, first_ts_ms, last_ts_ms, message_count, ended_at_ms, end_reason
+                   FROM sessions
                    WHERE (?1 IS NULL OR owner_device_id = ?1)
                      AND (?2 IS NULL OR agent = ?2)
                      AND (?3 IS NULL OR last_ts_ms < ?3)
@@ -243,7 +243,7 @@ pub async fn list(
                          ?5 IS NULL
                          OR EXISTS (
                              SELECT 1 FROM devices d
-                             WHERE d.device_id = threads.owner_device_id
+                             WHERE d.device_id = sessions.owner_device_id
                                AND d.account_id = ?5
                          )
                      )
@@ -259,9 +259,9 @@ pub async fn list(
             .await
         }
         StorePoolRef::Postgres(pool) => {
-            sqlx::query_as::<_, ThreadSummaryRow>(
-                r"SELECT thread_id, agent, title, first_ts_ms, last_ts_ms, message_count, ended_at_ms, end_reason
-                   FROM threads
+            sqlx::query_as::<_, SessionSummaryRow>(
+                r"SELECT session_id, agent, title, first_ts_ms, last_ts_ms, message_count, ended_at_ms, end_reason
+                   FROM sessions
                    WHERE ($1::TEXT IS NULL OR owner_device_id = $1)
                      AND ($2::TEXT IS NULL OR agent = $2)
                      AND ($3::BIGINT IS NULL OR last_ts_ms < $3)
@@ -269,7 +269,7 @@ pub async fn list(
                          $5::TEXT IS NULL
                          OR EXISTS (
                              SELECT 1 FROM devices d
-                             WHERE d.device_id = threads.owner_device_id
+                             WHERE d.device_id = sessions.owner_device_id
                                AND d.account_id = $5
                          )
                      )
@@ -286,7 +286,7 @@ pub async fn list(
         }
     }
     .map_err(|e| BackendError::StoreQuery {
-        operation: "threads.list".into(),
+        operation: "sessions.list".into(),
         message: e.to_string(),
     })?;
 
@@ -297,28 +297,28 @@ pub async fn list(
 pub async fn summaries_for_ids(
     store: &impl AsStorePool,
     account_id: &str,
-    thread_ids: &[String],
-) -> Result<HashMap<String, minos_protocol::ThreadSummary>, BackendError> {
-    if thread_ids.is_empty() {
+    session_ids: &[String],
+) -> Result<HashMap<String, minos_protocol::SessionSummary>, BackendError> {
+    if session_ids.is_empty() {
         return Ok(HashMap::new());
     }
 
-    let rows: Vec<ThreadSummaryRow> = match store.as_store_pool() {
+    let rows: Vec<SessionSummaryRow> = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             let mut query = QueryBuilder::<Sqlite>::new(
-                "SELECT thread_id, agent, title, first_ts_ms, last_ts_ms, message_count, ended_at_ms, end_reason \
-                 FROM threads WHERE thread_id IN (",
+                "SELECT session_id, agent, title, first_ts_ms, last_ts_ms, message_count, ended_at_ms, end_reason \
+                 FROM sessions WHERE session_id IN (",
             );
             {
                 let mut separated = query.separated(", ");
-                for thread_id in thread_ids {
-                    separated.push_bind(thread_id);
+                for session_id in session_ids {
+                    separated.push_bind(session_id);
                 }
             }
             query.push(
                 ") AND EXISTS (\
                     SELECT 1 FROM devices d \
-                    WHERE d.device_id = threads.owner_device_id \
+                    WHERE d.device_id = sessions.owner_device_id \
                       AND d.account_id = ",
             );
             query.push_bind(account_id);
@@ -328,19 +328,19 @@ pub async fn summaries_for_ids(
         }
         StorePoolRef::Postgres(pool) => {
             let mut query = QueryBuilder::<Postgres>::new(
-                "SELECT thread_id, agent, title, first_ts_ms, last_ts_ms, message_count, ended_at_ms, end_reason \
-                 FROM threads WHERE thread_id IN (",
+                "SELECT session_id, agent, title, first_ts_ms, last_ts_ms, message_count, ended_at_ms, end_reason \
+                 FROM sessions WHERE session_id IN (",
             );
             {
                 let mut separated = query.separated(", ");
-                for thread_id in thread_ids {
-                    separated.push_bind(thread_id);
+                for session_id in session_ids {
+                    separated.push_bind(session_id);
                 }
             }
             query.push(
                 ") AND EXISTS (\
                     SELECT 1 FROM devices d \
-                    WHERE d.device_id = threads.owner_device_id \
+                    WHERE d.device_id = sessions.owner_device_id \
                       AND d.account_id = ",
             );
             query.push_bind(account_id);
@@ -350,14 +350,14 @@ pub async fn summaries_for_ids(
         }
     }
     .map_err(|e| BackendError::StoreQuery {
-        operation: "threads.summaries_for_ids".into(),
+        operation: "sessions.summaries_for_ids".into(),
         message: e.to_string(),
     })?;
 
     let mut summaries = HashMap::with_capacity(rows.len());
     for row in rows {
         let summary = decode_thread_summary_row(row)?;
-        summaries.insert(summary.thread_id.clone(), summary);
+        summaries.insert(summary.session_id.clone(), summary);
     }
     Ok(summaries)
 }
@@ -366,26 +366,26 @@ pub async fn summaries_for_ids(
 /// `MessageStarted` — gives the list view a cheap "N messages" badge.
 pub async fn increment_message_count(
     store: &impl AsStorePool,
-    thread_id: &str,
+    session_id: &str,
 ) -> Result<(), BackendError> {
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query(
-            r"UPDATE threads SET message_count = message_count + 1 WHERE thread_id = ?1",
+            r"UPDATE sessions SET message_count = message_count + 1 WHERE session_id = ?1",
         )
-        .bind(thread_id)
+        .bind(session_id)
         .execute(pool)
         .await
         .map(|_| ()),
         StorePoolRef::Postgres(pool) => sqlx::query(
-            r"UPDATE threads SET message_count = message_count + 1 WHERE thread_id = $1",
+            r"UPDATE sessions SET message_count = message_count + 1 WHERE session_id = $1",
         )
-        .bind(thread_id)
+        .bind(session_id)
         .execute(pool)
         .await
         .map(|_| ()),
     }
     .map_err(|e| BackendError::StoreQuery {
-        operation: "threads.increment_message_count".into(),
+        operation: "sessions.increment_message_count".into(),
         message: e.to_string(),
     })?;
     Ok(())
@@ -393,7 +393,7 @@ pub async fn increment_message_count(
 
 fn decode_thread_summary_row(
     (
-        thread_id,
+        session_id,
         agent_s,
         title,
         first_ts_ms,
@@ -401,8 +401,8 @@ fn decode_thread_summary_row(
         message_count,
         ended_at_ms,
         end_reason_json,
-    ): ThreadSummaryRow,
-) -> Result<minos_protocol::ThreadSummary, BackendError> {
+    ): SessionSummaryRow,
+) -> Result<minos_protocol::SessionSummary, BackendError> {
     let agent = match agent_s.as_str() {
         "codex" => AgentName::Codex,
         "claude" => AgentName::Claude,
@@ -411,28 +411,28 @@ fn decode_thread_summary_row(
         "grok" => AgentName::Grok,
         other => {
             return Err(BackendError::StoreDecode {
-                column: "threads.agent".into(),
+                column: "sessions.agent".into(),
                 message: other.to_string(),
             })
         }
     };
     let end_reason = end_reason_json
         .as_ref()
-        .map(|s| serde_json::from_str::<ThreadEndReason>(s))
+        .map(|s| serde_json::from_str::<SessionEndReason>(s))
         .transpose()
         .map_err(|e| BackendError::StoreDecode {
-            column: "threads.end_reason".into(),
+            column: "sessions.end_reason".into(),
             message: e.to_string(),
         })?;
     let state = if ended_at_ms.is_some() {
-        minos_protocol::ThreadState::Closed {
+        minos_protocol::SessionState::Closed {
             reason: minos_protocol::CloseReason::UserClose,
         }
     } else {
-        minos_protocol::ThreadState::Idle
+        minos_protocol::SessionState::Idle
     };
-    Ok(minos_protocol::ThreadSummary {
-        thread_id,
+    Ok(minos_protocol::SessionSummary {
+        session_id,
         agent,
         title,
         first_ts_ms,
@@ -440,7 +440,7 @@ fn decode_thread_summary_row(
         message_count: u32::try_from(message_count).unwrap_or(u32::MAX),
         ended_at_ms,
         end_reason,
-        parent_thread_id: None,
+        parent_session_id: None,
         state,
         needs_continue: false,
     })
@@ -475,7 +475,7 @@ mod tests {
             .unwrap();
 
         let (first, last): (i64, i64) =
-            sqlx::query_as("SELECT first_ts_ms, last_ts_ms FROM threads WHERE thread_id = 'thr1'")
+            sqlx::query_as("SELECT first_ts_ms, last_ts_ms FROM sessions WHERE session_id = 'thr1'")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
@@ -492,12 +492,12 @@ mod tests {
             .await
             .unwrap();
 
-        mark_ended(&pool, "thr1", &ThreadEndReason::HostDisconnected, 2000)
+        mark_ended(&pool, "thr1", &SessionEndReason::HostDisconnected, 2000)
             .await
             .unwrap();
 
         let (ended_at, reason): (Option<i64>, Option<String>) =
-            sqlx::query_as("SELECT ended_at_ms, end_reason FROM threads WHERE thread_id = 'thr1'")
+            sqlx::query_as("SELECT ended_at_ms, end_reason FROM sessions WHERE session_id = 'thr1'")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
@@ -520,7 +520,7 @@ mod tests {
         update_title(&pool, "thr1", "rename branch").await.unwrap();
 
         let title: Option<String> =
-            sqlx::query_scalar("SELECT title FROM threads WHERE thread_id = 'thr1'")
+            sqlx::query_scalar("SELECT title FROM sessions WHERE session_id = 'thr1'")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
@@ -540,7 +540,7 @@ mod tests {
         increment_message_count(&pool, "thr1").await.unwrap();
 
         let n: i64 =
-            sqlx::query_scalar("SELECT message_count FROM threads WHERE thread_id = 'thr1'")
+            sqlx::query_scalar("SELECT message_count FROM sessions WHERE session_id = 'thr1'")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
@@ -567,9 +567,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(r.len(), 3);
-        assert_eq!(r[0].thread_id, "thr4");
-        assert_eq!(r[1].thread_id, "thr3");
-        assert_eq!(r[2].thread_id, "thr2");
+        assert_eq!(r[0].session_id, "thr4");
+        assert_eq!(r[1].session_id, "thr3");
+        assert_eq!(r[2].session_id, "thr2");
     }
 
     #[tokio::test]
@@ -595,13 +595,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(r.len(), 1);
-        assert_eq!(r[0].thread_id, "mine");
+        assert_eq!(r[0].session_id, "mine");
     }
 
     #[tokio::test]
     async fn list_filters_by_account_id() {
         // Phase 2 Task 2.6: when an `account_id` is supplied, only
-        // threads whose owner device row carries that account_id are
+        // sessions whose owner device row carries that account_id are
         // returned. Threads owned by devices on a different account, or
         // by devices with no account_id, must be excluded.
         let pool = memory_pool().await;
@@ -651,7 +651,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(r.len(), 1);
-        assert_eq!(r[0].thread_id, "thr-a");
+        assert_eq!(r[0].session_id, "thr-a");
 
         // No account filter: all three.
         let r = list(&pool, None, None, None, 50, None).await.unwrap();
@@ -679,6 +679,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(r.len(), 3);
-        assert_eq!(r[0].thread_id, "thr2");
+        assert_eq!(r[0].session_id, "thr2");
     }
 }

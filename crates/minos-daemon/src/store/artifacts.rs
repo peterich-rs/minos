@@ -30,13 +30,13 @@ impl ArtifactStore {
 
     pub async fn write_bytes(
         &self,
-        thread_id: &str,
+        session_id: &str,
         bytes: &[u8],
         media_type: &str,
     ) -> Result<ArtifactRef> {
         let sha256 = hex_sha256(bytes);
         let artifact_id = format!("art_{sha256}");
-        let dir = self.thread_dir(thread_id);
+        let dir = self.session_dir(session_id);
         fs::create_dir_all(&dir)
             .await
             .with_context(|| format!("create artifact dir {}", dir.display()))?;
@@ -45,7 +45,7 @@ impl ArtifactStore {
             .await
             .with_context(|| format!("write artifact {}", path.display()))?;
         Ok(ArtifactRef {
-            thread_id: thread_id.to_string(),
+            session_id: session_id.to_string(),
             artifact_id,
             size_bytes: bytes.len() as u64,
             sha256,
@@ -55,12 +55,12 @@ impl ArtifactStore {
 
     pub async fn read_range(
         &self,
-        thread_id: &str,
+        session_id: &str,
         artifact_id: &str,
         offset: u64,
         limit: u32,
     ) -> Result<ArtifactRange> {
-        let path = self.thread_dir(thread_id).join(artifact_id);
+        let path = self.session_dir(session_id).join(artifact_id);
         let bytes = fs::read(&path)
             .await
             .with_context(|| format!("read artifact {}", path.display()))?;
@@ -76,8 +76,8 @@ impl ArtifactStore {
         })
     }
 
-    pub async fn delete_thread_artifacts(&self, thread_id: &str) -> Result<()> {
-        let dir = self.thread_dir(thread_id);
+    pub async fn delete_session_artifacts(&self, session_id: &str) -> Result<()> {
+        let dir = self.session_dir(session_id);
         if fs::try_exists(&dir).await.unwrap_or(false) {
             fs::remove_dir_all(&dir)
                 .await
@@ -86,8 +86,8 @@ impl ArtifactStore {
         Ok(())
     }
 
-    fn thread_dir(&self, thread_id: &str) -> PathBuf {
-        self.root.join("threads").join(thread_id)
+    fn session_dir(&self, session_id: &str) -> PathBuf {
+        self.root.join("sessions").join(session_id)
     }
 }
 

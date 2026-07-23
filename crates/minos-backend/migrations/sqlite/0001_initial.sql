@@ -1,7 +1,5 @@
--- Formal-development baseline schema.
---
--- The MVP incremental migrations have been collapsed into a single
--- bootstrapping schema so new environments start from the current model.
+-- Canonical SQLite schema (latest-only).
+-- Incremental migration history has been collapsed; wipe local DBs on upgrade.
 
 CREATE TABLE accounts (
     account_id     TEXT PRIMARY KEY,
@@ -177,6 +175,16 @@ CREATE TABLE conversation_reads (
 CREATE INDEX idx_conversation_reads_account
     ON conversation_reads(account_id, updated_at_ms DESC);
 
+CREATE TABLE conversation_deletions (
+    conversation_id  TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+    account_id       TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    deleted_at_ms    INTEGER NOT NULL,
+    PRIMARY KEY (conversation_id, account_id)
+) STRICT;
+
+CREATE INDEX idx_conversation_deletions_account
+    ON conversation_deletions(account_id, deleted_at_ms DESC);
+
 CREATE TABLE agents (
     agent_id          TEXT PRIMARY KEY,
     owner_account_id  TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
@@ -184,6 +192,7 @@ CREATE TABLE agents (
     description       TEXT NOT NULL DEFAULT '',
     runtime_agent     TEXT NOT NULL CHECK (runtime_agent IN ('codex', 'claude', 'gemini', 'opencode', 'grok')),
     model             TEXT NOT NULL DEFAULT '',
+    workspace_path    TEXT,
     created_at_ms     INTEGER NOT NULL,
     updated_at_ms     INTEGER NOT NULL
 ) STRICT;
@@ -234,12 +243,13 @@ CREATE INDEX idx_chat_message_mentions_account
     ON chat_message_mentions(mentioned_account_id, message_id);
 
 CREATE TABLE projects (
-    project_id      TEXT PRIMARY KEY,
-    account_id      TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    name            TEXT NOT NULL,
-    workspace_slug  TEXT NOT NULL,
-    created_at_ms   INTEGER NOT NULL,
-    updated_at_ms   INTEGER NOT NULL,
+    project_id       TEXT PRIMARY KEY,
+    account_id       TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    name             TEXT NOT NULL,
+    workspace_slug   TEXT NOT NULL,
+    workspace_path   TEXT,
+    created_at_ms    INTEGER NOT NULL,
+    updated_at_ms    INTEGER NOT NULL,
     UNIQUE(account_id, workspace_slug)
 ) STRICT;
 
@@ -313,8 +323,8 @@ CREATE INDEX idx_approval_session_state
 CREATE INDEX idx_approval_deadline_state
     ON approval_requests(deadline_at_ms, state);
 
-CREATE TABLE threads (
-    thread_id        TEXT PRIMARY KEY,
+CREATE TABLE sessions (
+    session_id        TEXT PRIMARY KEY,
     agent            TEXT NOT NULL CHECK (agent IN ('codex', 'claude', 'gemini', 'opencode', 'grok')),
     owner_device_id  TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
     title            TEXT,
@@ -326,17 +336,17 @@ CREATE TABLE threads (
     project_id       TEXT REFERENCES projects(project_id) ON DELETE SET NULL
 ) STRICT;
 
-CREATE INDEX idx_threads_last_ts
-    ON threads(last_ts_ms DESC);
-CREATE INDEX idx_threads_owner
-    ON threads(owner_device_id, last_ts_ms DESC);
-CREATE INDEX idx_threads_project_last
-    ON threads(project_id, last_ts_ms DESC)
+CREATE INDEX idx_sessions_last_ts
+    ON sessions(last_ts_ms DESC);
+CREATE INDEX idx_sessions_owner
+    ON sessions(owner_device_id, last_ts_ms DESC);
+CREATE INDEX idx_sessions_project_last
+    ON sessions(project_id, last_ts_ms DESC)
     WHERE project_id IS NOT NULL;
 
 CREATE TABLE raw_events (
     host_device_id   TEXT NOT NULL DEFAULT '',
-    thread_id        TEXT NOT NULL REFERENCES threads(thread_id) ON DELETE CASCADE,
+    session_id        TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
     seq              INTEGER NOT NULL,
     event_id         TEXT NOT NULL DEFAULT '',
     kind             TEXT NOT NULL DEFAULT 'agent_event',
@@ -345,18 +355,18 @@ CREATE TABLE raw_events (
     ts_ms            INTEGER NOT NULL,
     checksum_sha256  TEXT NOT NULL DEFAULT '',
     byte_len         INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (host_device_id, thread_id, seq)
+    PRIMARY KEY (host_device_id, session_id, seq)
 ) STRICT;
 
 CREATE INDEX idx_raw_events_thread_seq
-    ON raw_events(thread_id, seq);
+    ON raw_events(session_id, seq);
 CREATE UNIQUE INDEX idx_raw_events_event_id
     ON raw_events(event_id)
     WHERE event_id != '';
 
 CREATE TABLE thread_sync_state (
     host_device_id       TEXT NOT NULL,
-    thread_id            TEXT NOT NULL,
+    session_id            TEXT NOT NULL,
     backend_acked_seq    INTEGER NOT NULL DEFAULT 0,
     local_from_seq       INTEGER,
     local_to_seq         INTEGER,
@@ -367,23 +377,23 @@ CREATE TABLE thread_sync_state (
     last_ts_ms           INTEGER NOT NULL DEFAULT 0,
     running              INTEGER NOT NULL DEFAULT 0,
     updated_at_ms        INTEGER NOT NULL,
-    PRIMARY KEY (host_device_id, thread_id)
+    PRIMARY KEY (host_device_id, session_id)
 ) STRICT;
 
-CREATE TABLE project_threads (
+CREATE TABLE project_sessions (
     project_id    TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
-    thread_id     TEXT NOT NULL,
+    session_id     TEXT NOT NULL,
     account_id    TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
     linked_at_ms  INTEGER NOT NULL,
-    PRIMARY KEY (project_id, thread_id)
+    PRIMARY KEY (project_id, session_id)
 ) STRICT;
 
-CREATE INDEX idx_project_threads_account_project
-    ON project_threads(account_id, project_id, linked_at_ms DESC);
+CREATE INDEX idx_project_sessions_account_project
+    ON project_sessions(account_id, project_id, linked_at_ms DESC);
 
 CREATE TABLE pending_approvals (
     request_id      TEXT PRIMARY KEY,
-    thread_id       TEXT NOT NULL,
+    session_id       TEXT NOT NULL,
     turn_id         TEXT NOT NULL,
     host_device_id  TEXT NOT NULL,
     method          TEXT NOT NULL,
@@ -400,7 +410,7 @@ CREATE INDEX idx_pending_approvals_timeout
     ON pending_approvals(timeout_at_ms)
     WHERE resolved_at_ms IS NULL;
 CREATE INDEX idx_pending_approvals_thread
-    ON pending_approvals(thread_id)
+    ON pending_approvals(session_id)
     WHERE resolved_at_ms IS NULL;
 
 CREATE TABLE host_commands (
@@ -457,3 +467,40 @@ CREATE INDEX idx_outbox_events_status_available
     ON outbox_events(status, available_at_ms);
 CREATE INDEX idx_outbox_events_event_id
     ON outbox_events(topic_kind, event_id);
+
+CREATE TABLE push_tokens (
+    token_hash       TEXT PRIMARY KEY,
+    account_id       TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    installation_id  TEXT NOT NULL,
+    kind             TEXT NOT NULL CHECK (kind IN ('apns', 'fcm')),
+    locale           TEXT,
+    created_at_ms    INTEGER NOT NULL,
+    last_used_at_ms  INTEGER NOT NULL,
+    revoked_at_ms    INTEGER
+) STRICT;
+
+CREATE INDEX idx_push_tokens_account
+    ON push_tokens(account_id)
+    WHERE revoked_at_ms IS NULL;
+
+CREATE TABLE notification_preferences (
+    account_id                  TEXT PRIMARY KEY REFERENCES accounts(account_id) ON DELETE CASCADE,
+    direct_message_enabled      INTEGER NOT NULL DEFAULT 1,
+    group_mention_enabled       INTEGER NOT NULL DEFAULT 1,
+    approval_required_enabled   INTEGER NOT NULL DEFAULT 1,
+    agent_session_ended_enabled INTEGER NOT NULL DEFAULT 0,
+    quiet_hours_start_minute    INTEGER,
+    quiet_hours_end_minute      INTEGER,
+    quiet_hours_timezone        TEXT,
+    updated_at_ms               INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE notification_cooldowns (
+    account_id       TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    cooldown_key     TEXT NOT NULL,
+    last_sent_at_ms  INTEGER NOT NULL,
+    PRIMARY KEY (account_id, cooldown_key)
+) STRICT;
+
+CREATE INDEX idx_notif_cooldowns_last_sent
+    ON notification_cooldowns(last_sent_at_ms);

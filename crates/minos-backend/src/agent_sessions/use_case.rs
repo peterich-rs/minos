@@ -541,7 +541,7 @@ impl AgentSessionService for DefaultAgentSessionService {
             .and_then(Self::parse_host_device_id)?;
 
         let params = minos_protocol::RespondOpencodeQuestionRequest {
-            thread_id: session.session_id.clone(),
+            session_id: session.session_id.clone(),
             question_id: input.question_id.clone(),
             answers: input.answers,
         };

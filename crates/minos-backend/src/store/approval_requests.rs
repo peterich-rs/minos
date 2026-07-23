@@ -115,8 +115,8 @@ pub async fn get(
                    FROM approval_requests ar
                    LEFT JOIN agent_sessions s
                      ON s.session_id = ar.agent_session_id
-                   LEFT JOIN threads t
-                     ON t.thread_id = ar.agent_session_id
+                   LEFT JOIN sessions t
+                     ON t.session_id = ar.agent_session_id
                   WHERE ar.request_id = ?",
         )
         .bind(request_id)
@@ -204,8 +204,8 @@ pub async fn list_expired_pending(
                    FROM approval_requests ar
                    LEFT JOIN agent_sessions s
                      ON s.session_id = ar.agent_session_id
-                   LEFT JOIN threads t
-                     ON t.thread_id = ar.agent_session_id
+                   LEFT JOIN sessions t
+                     ON t.session_id = ar.agent_session_id
                   WHERE ar.state = ?
                     AND ar.deadline_at_ms <= ?
                   ORDER BY ar.deadline_at_ms ASC
@@ -284,8 +284,8 @@ pub async fn list_pending_for_hosts(
                    FROM approval_requests ar
                    LEFT JOIN agent_sessions s
                      ON s.session_id = ar.agent_session_id
-                   LEFT JOIN threads t
-                     ON t.thread_id = ar.agent_session_id
+                   LEFT JOIN sessions t
+                     ON t.session_id = ar.agent_session_id
                   WHERE ar.state = ",
             );
             builder.push_bind(ApprovalRequestState::Pending.as_str());

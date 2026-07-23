@@ -1,6 +1,9 @@
 {
   "name": "codex",
+  "display_name": "Codex",
   "path": "/usr/local/bin/codex",
   "version": "0.18.2",
-  "status": { "kind": "ok" }
+  "status": { "kind": "ok" },
+  "supports_model_selection": true,
+  "supports_reasoning_effort": true
 }

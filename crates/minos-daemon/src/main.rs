@@ -46,9 +46,9 @@ enum Command {
     Peers(OutputArgs),
     /// Forget one paired mobile/account row, or the first row when omitted.
     ForgetPeer(ForgetPeerArgs),
-    /// Read persisted thread summaries from the local daemon store.
+    /// Read persisted session summaries from the local daemon store.
     Threads(ThreadsArgs),
-    /// Read one persisted thread summary + live state from the local store.
+    /// Read one persisted session summary + live state from the local store.
     Thread(ThreadArgs),
     /// Start the daemon (dials the relay) and keep it running until Ctrl-C.
     Start(StartArgs),
@@ -82,7 +82,7 @@ struct McpSidecarArgs {
     source_agent: Option<String>,
 
     #[arg(long)]
-    source_thread_id: Option<String>,
+    source_session_id: Option<String>,
 
     #[arg(long)]
     disable_list_conversation_messages: bool,
@@ -114,7 +114,7 @@ impl McpSidecarArgs {
             socket_path: self.socket_path,
             conversation_id: self.conversation_id,
             source_agent,
-            source_thread_id: self.source_thread_id,
+            source_session_id: self.source_session_id,
             permissions: minos_chat_store::mcp_server::McpToolPermissions {
                 list_conversation_messages: !self.disable_list_conversation_messages,
                 delegate_to_agent: !self.disable_delegate_to_agent,
@@ -183,8 +183,8 @@ struct ThreadsArgs {
 
 #[derive(Args, Debug, Clone)]
 struct ThreadArgs {
-    /// Thread id to inspect.
-    thread_id: String,
+    /// Session id to inspect.
+    session_id: String,
     /// Print JSON instead of human-readable text.
     #[arg(long)]
     json: bool,
@@ -265,7 +265,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::PairingQr(args) => pairing_qr(args, &resolved_paths).await,
         Command::Peers(args) => peers(args, &resolved_paths).await,
         Command::ForgetPeer(args) => forget_peer(args, &resolved_paths).await,
-        Command::Threads(args) => threads(args, &resolved_paths).await,
+        Command::Threads(args) => sessions(args, &resolved_paths).await,
         Command::Thread(args) => thread(args, &resolved_paths).await,
         Command::Start(args) => {
             let home_guard = maybe_apply_minos_home_override(&resolved_paths);
@@ -541,7 +541,7 @@ async fn forget_peer(
     action
 }
 
-async fn threads(
+async fn sessions(
     args: ThreadsArgs,
     paths: &ResolvedPaths,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -549,7 +549,7 @@ async fn threads(
     let action = async {
         let response = started
             .handle
-            .list_threads(minos_protocol::ListThreadsParams {
+            .list_sessions(minos_protocol::ListSessionsParams {
                 limit: args.limit,
                 before_ts_ms: args.before_ts_ms,
                 agent: args.agent.as_deref().map(parse_agent_name).transpose()?,
@@ -558,7 +558,7 @@ async fn threads(
         if args.json {
             println!("{}", serde_json::to_string_pretty(&response)?);
         } else {
-            print_threads(&response.threads);
+            print_threads(&response.sessions);
             if let Some(next) = response.next_before_ts_ms {
                 println!("next_before_ts_ms: {next}");
             }
@@ -575,8 +575,8 @@ async fn thread(args: ThreadArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn s
     let action = async {
         let response = started
             .handle
-            .get_thread(minos_protocol::GetThreadParams {
-                thread_id: args.thread_id.clone(),
+            .get_session(minos_protocol::GetSessionParams {
+                session_id: args.session_id.clone(),
             })
             .await?;
         if args.json {
@@ -698,7 +698,7 @@ struct StatusSnapshot {
     relay_link: minos_domain::RelayLinkState,
     peer: minos_domain::PeerState,
     peers: Vec<minos_protocol::HostPeerSummary>,
-    agent_state: minos_daemon::ThreadState,
+    agent_state: minos_daemon::SessionState,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_error: Option<String>,
 }
@@ -808,7 +808,7 @@ fn print_status_snapshot(snapshot: &StatusSnapshot) {
     println!("peer state:  {}", format_peer_state(&snapshot.peer));
     println!(
         "agent state: {}",
-        format_thread_state(&snapshot.agent_state)
+        format_session_state(&snapshot.agent_state)
     );
     println!("peers:       {}", snapshot.peers.len());
     if let Some(error) = snapshot.last_error.as_deref() {
@@ -857,25 +857,25 @@ fn format_peer_state(state: &minos_domain::PeerState) -> String {
     }
 }
 
-fn format_thread_state(state: &minos_daemon::ThreadState) -> &'static str {
+fn format_session_state(state: &minos_daemon::SessionState) -> &'static str {
     match state {
-        minos_daemon::ThreadState::Starting => "starting",
-        minos_daemon::ThreadState::Idle => "idle",
-        minos_daemon::ThreadState::Running { .. } => "running",
-        minos_daemon::ThreadState::Suspended { .. } => "suspended",
-        minos_daemon::ThreadState::Resuming => "resuming",
-        minos_daemon::ThreadState::Closed { .. } => "closed",
+        minos_daemon::SessionState::Starting => "starting",
+        minos_daemon::SessionState::Idle => "idle",
+        minos_daemon::SessionState::Running { .. } => "running",
+        minos_daemon::SessionState::Suspended { .. } => "suspended",
+        minos_daemon::SessionState::Resuming => "resuming",
+        minos_daemon::SessionState::Closed { .. } => "closed",
     }
 }
 
-fn format_protocol_thread_state(state: &minos_protocol::ThreadState) -> &'static str {
+fn format_protocol_session_state(state: &minos_protocol::SessionState) -> &'static str {
     match state {
-        minos_protocol::ThreadState::Starting => "starting",
-        minos_protocol::ThreadState::Idle => "idle",
-        minos_protocol::ThreadState::Running { .. } => "running",
-        minos_protocol::ThreadState::Suspended { .. } => "suspended",
-        minos_protocol::ThreadState::Resuming => "resuming",
-        minos_protocol::ThreadState::Closed { .. } => "closed",
+        minos_protocol::SessionState::Starting => "starting",
+        minos_protocol::SessionState::Idle => "idle",
+        minos_protocol::SessionState::Running { .. } => "running",
+        minos_protocol::SessionState::Suspended { .. } => "suspended",
+        minos_protocol::SessionState::Resuming => "resuming",
+        minos_protocol::SessionState::Closed { .. } => "closed",
     }
 }
 
@@ -956,16 +956,16 @@ fn print_host_skills(response: &minos_protocol::ListHostSkillsResponse) {
     }
 }
 
-fn print_threads(threads: &[minos_protocol::ThreadSummary]) {
-    if threads.is_empty() {
-        println!("no persisted threads");
+fn print_threads(sessions: &[minos_protocol::SessionSummary]) {
+    if sessions.is_empty() {
+        println!("no persisted sessions");
         return;
     }
 
-    for thread in threads {
+    for thread in sessions {
         println!(
             "{}  agent={}  title={}  messages={}  last_ts_ms={}",
-            thread.thread_id,
+            thread.session_id,
             format_agent_name(thread.agent),
             thread.title.as_deref().unwrap_or("<untitled>"),
             thread.message_count,
@@ -974,12 +974,12 @@ fn print_threads(threads: &[minos_protocol::ThreadSummary]) {
     }
 }
 
-fn print_thread_snapshot(thread: &minos_protocol::GetThreadResponse) {
-    println!("thread id:     {}", thread.thread.thread_id);
+fn print_thread_snapshot(thread: &minos_protocol::GetSessionResponse) {
+    println!("session id:     {}", thread.thread.session_id);
     println!("agent:         {}", format_agent_name(thread.thread.agent));
     println!(
         "state:         {}",
-        format_protocol_thread_state(&thread.state)
+        format_protocol_session_state(&thread.state)
     );
     println!(
         "title:         {}",

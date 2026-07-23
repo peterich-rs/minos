@@ -79,7 +79,7 @@ async fn formal_project_routes_expose_canonical_conversation_and_agent_session_f
     )
     .await
     .unwrap();
-    minos_backend::store::threads::upsert(
+    minos_backend::store::sessions::upsert(
         &state.store,
         "sess-project-link-1",
         AgentName::Codex,
@@ -88,14 +88,14 @@ async fn formal_project_routes_expose_canonical_conversation_and_agent_session_f
     )
     .await
     .unwrap();
-    minos_backend::store::threads::update_title(
+    minos_backend::store::sessions::update_title(
         &state.store,
         "sess-project-link-1",
         "Project Session",
     )
     .await
     .unwrap();
-    minos_backend::store::threads::increment_message_count(&state.store, "sess-project-link-1")
+    minos_backend::store::sessions::increment_message_count(&state.store, "sess-project-link-1")
         .await
         .unwrap();
 
@@ -191,14 +191,14 @@ async fn formal_project_routes_expose_canonical_conversation_and_agent_session_f
         .expect("project compatibility checks run only against sqlite test state");
 
     let compat_rows: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM project_threads WHERE project_id = ?")
+        sqlx::query_scalar("SELECT COUNT(*) FROM project_sessions WHERE project_id = ?")
             .bind(&project_id)
             .fetch_one(pool)
             .await
             .unwrap();
     assert_eq!(
         compat_rows, 0,
-        "project_threads compatibility storage is retired"
+        "project_sessions compatibility storage is retired"
     );
 
     let linked_project_id: Option<String> =
@@ -212,7 +212,7 @@ async fn formal_project_routes_expose_canonical_conversation_and_agent_session_f
     let (status, _) = common::send(
         &mut app,
         authed_post(
-            "/v1/projects/threads/query",
+            "/v1/projects/sessions/query",
             device_id,
             &account.account_id,
             serde_json::json!({

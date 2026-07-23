@@ -521,7 +521,7 @@ async fn dispatch_envelope(
         Envelope::Ingest {
             version,
             agent,
-            thread_id,
+            session_id,
             seq,
             payload,
             ts_ms,
@@ -539,7 +539,7 @@ async fn dispatch_envelope(
             }
             let command = IngestCommand {
                 agent,
-                thread_id: thread_id.clone(),
+                session_id: session_id.clone(),
                 seq,
                 payload,
                 ts_ms,
@@ -549,7 +549,7 @@ async fn dispatch_envelope(
                 tracing::warn!(
                     target: "minos_backend::envelope",
                     error = ?e,
-                    thread_id = %thread_id,
+                    session_id = %session_id,
                     seq,
                     "ingest dispatch failed; keeping session open"
                 );

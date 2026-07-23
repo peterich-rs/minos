@@ -24,11 +24,11 @@ pub mod rpc_server;
 pub mod store;
 pub mod subscription;
 
-pub use agent::{AgentGlue, AgentThreadSnapshot};
+pub use agent::{AgentGlue, AgentSessionSnapshot};
 pub use config::{RelayConfig, BACKEND_URL};
 pub use handle::*;
 pub use local_state::LocalState;
-pub use minos_agent_runtime::ThreadState;
+pub use minos_agent_runtime::SessionState;
 pub use relay_client::RelayClient;
 pub use relay_pairing::{PeerRecord, RelayQrPayload};
 pub use subscription::{

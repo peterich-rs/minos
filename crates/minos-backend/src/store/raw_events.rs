@@ -1,8 +1,8 @@
 //! `raw_events` table CRUD.
 //!
-//! Verbatim native events keyed on `(thread_id, seq)`. The backend persists
+//! Verbatim native events keyed on `(session_id, seq)`. The backend persists
 //! them on ingest and the translator re-reads them for history (`ReadThread`,
-//! task C2). Exact retransmits are deduped, while `(thread_id, seq)`
+//! task C2). Exact retransmits are deduped, while `(session_id, seq)`
 //! collisions with different payloads are appended at a fresh backend seq so
 //! daemon restart/resume cannot silently drop new output.
 
@@ -53,12 +53,12 @@ fn parse_agent(s: &str) -> Result<AgentName, BackendError> {
     }
 }
 
-/// Insert one raw event. If `(thread_id, seq)` already exists, the insert
+/// Insert one raw event. If `(session_id, seq)` already exists, the insert
 /// is a no-op (retransmit safety) and we return `Ok(false)`; otherwise
 /// `Ok(true)`.
 pub async fn insert_if_absent(
     pool: &SqlitePool,
-    thread_id: &str,
+    session_id: &str,
     seq: u64,
     agent: AgentName,
     payload: &Value,
@@ -69,10 +69,10 @@ pub async fn insert_if_absent(
         message: e.to_string(),
     })?;
     let result = sqlx::query(
-        r"INSERT OR IGNORE INTO raw_events (thread_id, seq, agent, payload_json, ts_ms)
+        r"INSERT OR IGNORE INTO raw_events (session_id, seq, agent, payload_json, ts_ms)
            VALUES (?1, ?2, ?3, ?4, ?5)",
     )
-    .bind(thread_id)
+    .bind(session_id)
     .bind(i64::try_from(seq).unwrap_or(i64::MAX))
     .bind(agent_str(agent))
     .bind(payload_s)
@@ -91,15 +91,15 @@ pub async fn insert_if_absent(
 /// Host-side sequence counters are process-local. After a daemon restart or
 /// a stopped session resume, the host can legitimately restart a thread's
 /// outgoing seq at 1 while the backend already has older rows for that
-/// thread. Treating every `(thread_id, seq)` collision as a retransmit would
+/// thread. Treating every `(session_id, seq)` collision as a retransmit would
 /// silently drop fresh Codex output. To keep reconnect/resume safe:
 ///
-/// - same `(thread_id, seq, payload)` is a retransmit and returns `Ok(None)`;
-/// - same `(thread_id, seq)` with a different payload is appended at the next
+/// - same `(session_id, seq, payload)` is a retransmit and returns `Ok(None)`;
+/// - same `(session_id, seq)` with a different payload is appended at the next
 ///   available seq and returns that assigned value.
 pub async fn insert_assigning_seq(
     store: &impl AsStorePool,
-    thread_id: &str,
+    session_id: &str,
     requested_seq: u64,
     agent: AgentName,
     payload: &Value,
@@ -110,7 +110,7 @@ pub async fn insert_assigning_seq(
         message: e.to_string(),
     })?;
 
-    if insert_payload_at_seq(store, thread_id, requested_seq, agent, &payload_s, ts_ms).await? {
+    if insert_payload_at_seq(store, session_id, requested_seq, agent, &payload_s, ts_ms).await? {
         return Ok(Some(requested_seq));
     }
 
@@ -118,18 +118,18 @@ pub async fn insert_assigning_seq(
     let existing: Option<String> = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_scalar(
-                "SELECT payload_json FROM raw_events WHERE thread_id = ?1 AND seq = ?2",
+                "SELECT payload_json FROM raw_events WHERE session_id = ?1 AND seq = ?2",
             )
-            .bind(thread_id)
+            .bind(session_id)
             .bind(requested_seq_i64)
             .fetch_optional(pool)
             .await
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_scalar(
-                "SELECT payload_json FROM raw_events WHERE thread_id = $1 AND seq = $2",
+                "SELECT payload_json FROM raw_events WHERE session_id = $1 AND seq = $2",
             )
-            .bind(thread_id)
+            .bind(session_id)
             .bind(requested_seq_i64)
             .fetch_optional(pool)
             .await
@@ -145,11 +145,11 @@ pub async fn insert_assigning_seq(
     }
 
     for _ in 0..8 {
-        let next = last_seq(store, thread_id).await?.saturating_add(1);
-        if insert_payload_at_seq(store, thread_id, next, agent, &payload_s, ts_ms).await? {
+        let next = last_seq(store, session_id).await?.saturating_add(1);
+        if insert_payload_at_seq(store, session_id, next, agent, &payload_s, ts_ms).await? {
             tracing::warn!(
                 target: "minos_backend::raw_events",
-                thread_id,
+                session_id,
                 requested_seq,
                 assigned_seq = next,
                 "raw event seq collision with different payload; appended at next seq",
@@ -168,7 +168,7 @@ pub async fn insert_assigning_seq(
 pub async fn insert_host_ingest_chunk(
     store: &impl AsStorePool,
     host_device_id: &str,
-    thread_id: &str,
+    session_id: &str,
     seq: u64,
     event_id: &str,
     kind: &str,
@@ -187,12 +187,12 @@ pub async fn insert_host_ingest_chunk(
     let inserted = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query(
             r"INSERT OR IGNORE INTO raw_events (
-                    host_device_id, thread_id, seq, event_id, kind, agent,
+                    host_device_id, session_id, seq, event_id, kind, agent,
                     payload_json, ts_ms, checksum_sha256, byte_len
                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         )
         .bind(host_device_id)
-        .bind(thread_id)
+        .bind(session_id)
         .bind(seq_i64)
         .bind(event_id)
         .bind(kind)
@@ -206,13 +206,13 @@ pub async fn insert_host_ingest_chunk(
         .map(|result| result.rows_affected() == 1),
         StorePoolRef::Postgres(pool) => sqlx::query(
             r"INSERT INTO raw_events (
-                    host_device_id, thread_id, seq, event_id, kind, agent,
+                    host_device_id, session_id, seq, event_id, kind, agent,
                     payload_json, ts_ms, checksum_sha256, byte_len
                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-               ON CONFLICT (host_device_id, thread_id, seq) DO NOTHING",
+               ON CONFLICT (host_device_id, session_id, seq) DO NOTHING",
         )
         .bind(host_device_id)
-        .bind(thread_id)
+        .bind(session_id)
         .bind(seq_i64)
         .bind(event_id)
         .bind(kind)
@@ -234,7 +234,7 @@ pub async fn insert_host_ingest_chunk(
         return Ok(HostIngestInsert::Inserted);
     }
 
-    let existing = lookup_host_ingest_collision(store, host_device_id, thread_id, seq_i64).await?;
+    let existing = lookup_host_ingest_collision(store, host_device_id, session_id, seq_i64).await?;
     let Some((existing_checksum, existing_payload)) = existing else {
         return Err(BackendError::StoreQuery {
             operation: "raw_events.insert_host_ingest_chunk.lookup".into(),
@@ -247,7 +247,7 @@ pub async fn insert_host_ingest_chunk(
     Err(BackendError::StoreQuery {
         operation: "raw_events.insert_host_ingest_chunk.invariant".into(),
         message: format!(
-            "host-local ingest collision for host={host_device_id} thread={thread_id} seq={seq}"
+            "host-local ingest collision for host={host_device_id} thread={session_id} seq={seq}"
         ),
     })
 }
@@ -255,17 +255,17 @@ pub async fn insert_host_ingest_chunk(
 async fn lookup_host_ingest_collision(
     store: &impl AsStorePool,
     host_device_id: &str,
-    thread_id: &str,
+    session_id: &str,
     seq: i64,
 ) -> Result<Option<(String, String)>, BackendError> {
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, (String, String)>(
                 "SELECT checksum_sha256, payload_json FROM raw_events \
-             WHERE host_device_id = ?1 AND thread_id = ?2 AND seq = ?3",
+             WHERE host_device_id = ?1 AND session_id = ?2 AND seq = ?3",
             )
             .bind(host_device_id)
-            .bind(thread_id)
+            .bind(session_id)
             .bind(seq)
             .fetch_optional(pool)
             .await
@@ -273,10 +273,10 @@ async fn lookup_host_ingest_collision(
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, (String, String)>(
                 "SELECT checksum_sha256, payload_json FROM raw_events \
-             WHERE host_device_id = $1 AND thread_id = $2 AND seq = $3",
+             WHERE host_device_id = $1 AND session_id = $2 AND seq = $3",
             )
             .bind(host_device_id)
-            .bind(thread_id)
+            .bind(session_id)
             .bind(seq)
             .fetch_optional(pool)
             .await
@@ -290,7 +290,7 @@ async fn lookup_host_ingest_collision(
 
 async fn insert_payload_at_seq(
     store: &impl AsStorePool,
-    thread_id: &str,
+    session_id: &str,
     seq: u64,
     agent: AgentName,
     payload_s: &str,
@@ -298,10 +298,10 @@ async fn insert_payload_at_seq(
 ) -> Result<bool, BackendError> {
     let rows_affected = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query(
-            r"INSERT OR IGNORE INTO raw_events (thread_id, seq, agent, payload_json, ts_ms)
+            r"INSERT OR IGNORE INTO raw_events (session_id, seq, agent, payload_json, ts_ms)
                    VALUES (?1, ?2, ?3, ?4, ?5)",
         )
-        .bind(thread_id)
+        .bind(session_id)
         .bind(i64::try_from(seq).unwrap_or(i64::MAX))
         .bind(agent_str(agent))
         .bind(payload_s)
@@ -310,11 +310,11 @@ async fn insert_payload_at_seq(
         .await
         .map(|result| result.rows_affected()),
         StorePoolRef::Postgres(pool) => sqlx::query(
-            r"INSERT INTO raw_events (thread_id, seq, agent, payload_json, ts_ms)
+            r"INSERT INTO raw_events (session_id, seq, agent, payload_json, ts_ms)
                    VALUES ($1, $2, $3, $4, $5)
-                   ON CONFLICT (thread_id, seq) DO NOTHING",
+                   ON CONFLICT (session_id, seq) DO NOTHING",
         )
-        .bind(thread_id)
+        .bind(session_id)
         .bind(i64::try_from(seq).unwrap_or(i64::MAX))
         .bind(agent_str(agent))
         .bind(payload_s)
@@ -330,12 +330,12 @@ async fn insert_payload_at_seq(
     Ok(rows_affected == 1)
 }
 
-/// Read a contiguous window of raw events for `thread_id` starting at
+/// Read a contiguous window of raw events for `session_id` starting at
 /// `from_seq` (inclusive), capped at `limit`. Rows are returned in
 /// ascending `seq` order.
 pub async fn read_range(
     store: &impl AsStorePool,
-    thread_id: &str,
+    session_id: &str,
     from_seq: u64,
     limit: u32,
 ) -> Result<Vec<RawEventRow>, BackendError> {
@@ -343,10 +343,10 @@ pub async fn read_range(
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, (i64, String, String, i64)>(
                 r"SELECT seq, agent, payload_json, ts_ms FROM raw_events
-                   WHERE thread_id = ?1 AND seq >= ?2
+                   WHERE session_id = ?1 AND seq >= ?2
                    ORDER BY seq ASC LIMIT ?3",
             )
-            .bind(thread_id)
+            .bind(session_id)
             .bind(i64::try_from(from_seq).unwrap_or(i64::MAX))
             .bind(i64::from(limit))
             .fetch_all(pool)
@@ -355,10 +355,10 @@ pub async fn read_range(
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, (i64, String, String, i64)>(
                 r"SELECT seq, agent, payload_json, ts_ms FROM raw_events
-                   WHERE thread_id = $1 AND seq >= $2
+                   WHERE session_id = $1 AND seq >= $2
                    ORDER BY seq ASC LIMIT $3",
             )
-            .bind(thread_id)
+            .bind(session_id)
             .bind(i64::try_from(from_seq).unwrap_or(i64::MAX))
             .bind(i64::from(limit))
             .fetch_all(pool)
@@ -388,7 +388,7 @@ pub async fn read_range(
         .collect()
 }
 
-/// Return the largest `seq` per thread across every thread owned by
+/// Return the largest `seq` per session across every thread owned by
 /// `owner_device_id`. Threads with zero raw events are omitted (the
 /// `INNER JOIN` excludes them).
 ///
@@ -402,11 +402,11 @@ pub async fn last_seq_per_owner(
     let rows = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, (String, i64)>(
-                r"SELECT t.thread_id, MAX(r.seq)
+                r"SELECT t.session_id, MAX(r.seq)
                    FROM raw_events r
-                   INNER JOIN threads t ON t.thread_id = r.thread_id
+                   INNER JOIN sessions t ON t.session_id = r.session_id
                    WHERE t.owner_device_id = ?1
-                   GROUP BY t.thread_id",
+                   GROUP BY t.session_id",
             )
             .bind(owner_device_id)
             .fetch_all(pool)
@@ -414,11 +414,11 @@ pub async fn last_seq_per_owner(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, (String, i64)>(
-                r"SELECT t.thread_id, MAX(r.seq)
+                r"SELECT t.session_id, MAX(r.seq)
                    FROM raw_events r
-                   INNER JOIN threads t ON t.thread_id = r.thread_id
+                   INNER JOIN sessions t ON t.session_id = r.session_id
                    WHERE t.owner_device_id = $1
-                   GROUP BY t.thread_id",
+                   GROUP BY t.session_id",
             )
             .bind(owner_device_id)
             .fetch_all(pool)
@@ -432,24 +432,24 @@ pub async fn last_seq_per_owner(
 
     Ok(rows
         .into_iter()
-        .map(|(thread_id, max_seq)| (thread_id, u64::try_from(max_seq).unwrap_or(0)))
+        .map(|(session_id, max_seq)| (session_id, u64::try_from(max_seq).unwrap_or(0)))
         .collect())
 }
 
-/// Return the largest `seq` ever persisted for `thread_id`, or `0` if no
+/// Return the largest `seq` ever persisted for `session_id`, or `0` if no
 /// rows exist. Used by the agent-host to decide whether to re-ingest on
 /// startup/resume cursors.
-pub async fn last_seq(store: &impl AsStorePool, thread_id: &str) -> Result<u64, BackendError> {
+pub async fn last_seq(store: &impl AsStorePool, session_id: &str) -> Result<u64, BackendError> {
     let v: Option<i64> = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
-            sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM raw_events WHERE thread_id = ?1")
-                .bind(thread_id)
+            sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM raw_events WHERE session_id = ?1")
+                .bind(session_id)
                 .fetch_one(pool)
                 .await
         }
         StorePoolRef::Postgres(pool) => {
-            sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM raw_events WHERE thread_id = $1")
-                .bind(thread_id)
+            sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM raw_events WHERE session_id = $1")
+                .bind(session_id)
                 .fetch_one(pool)
                 .await
         }
@@ -464,18 +464,18 @@ pub async fn last_seq(store: &impl AsStorePool, thread_id: &str) -> Result<u64, 
 pub async fn contiguous_host_seq_after(
     store: &impl AsStorePool,
     host_device_id: &str,
-    thread_id: &str,
+    session_id: &str,
     after_seq: u64,
 ) -> Result<u64, BackendError> {
     let rows = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_scalar(
                 "SELECT seq FROM raw_events \
-                 WHERE host_device_id = ?1 AND thread_id = ?2 AND seq > ?3 \
+                 WHERE host_device_id = ?1 AND session_id = ?2 AND seq > ?3 \
                  ORDER BY seq ASC",
             )
             .bind(host_device_id)
-            .bind(thread_id)
+            .bind(session_id)
             .bind(i64::try_from(after_seq).unwrap_or(i64::MAX))
             .fetch_all(pool)
             .await
@@ -483,11 +483,11 @@ pub async fn contiguous_host_seq_after(
         StorePoolRef::Postgres(pool) => {
             sqlx::query_scalar(
                 "SELECT seq FROM raw_events \
-                 WHERE host_device_id = $1 AND thread_id = $2 AND seq > $3 \
+                 WHERE host_device_id = $1 AND session_id = $2 AND seq > $3 \
                  ORDER BY seq ASC",
             )
             .bind(host_device_id)
-            .bind(thread_id)
+            .bind(session_id)
             .bind(i64::try_from(after_seq).unwrap_or(i64::MAX))
             .fetch_all(pool)
             .await
@@ -532,7 +532,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            r"INSERT INTO threads (thread_id, agent, owner_device_id, first_ts_ms, last_ts_ms)
+            r"INSERT INTO sessions (session_id, agent, owner_device_id, first_ts_ms, last_ts_ms)
                VALUES ('thr1','codex','dev1',0,0)",
         )
         .execute(pool)
@@ -551,7 +551,7 @@ mod tests {
                 .await
                 .unwrap()
         );
-        // Second insert with same (thread_id, seq) must be a no-op.
+        // Second insert with same (session_id, seq) must be a no-op.
         assert!(
             !insert_if_absent(&pool, "thr1", 1, AgentName::Codex, &payload, 100)
                 .await
@@ -742,7 +742,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            r"INSERT INTO threads (thread_id, agent, owner_device_id, first_ts_ms, last_ts_ms)
+            r"INSERT INTO sessions (session_id, agent, owner_device_id, first_ts_ms, last_ts_ms)
                VALUES ('thr_1','codex','host_a',0,0),
                       ('thr_2','codex','host_a',0,0),
                       ('thr_3','codex','host_b',0,0),

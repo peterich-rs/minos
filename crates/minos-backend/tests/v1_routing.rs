@@ -70,13 +70,13 @@ async fn retired_v1_thread_routes_return_404() {
     let mut app = router(state);
 
     for path in [
-        "/v1/threads",
-        "/v1/threads/query",
-        "/v1/threads/read",
-        "/v1/threads/last-seq",
-        "/v1/threads/thread_probe/events",
-        "/v1/threads/thread_probe/last_seq",
-        "/v1/threads/approval-decision",
+        "/v1/sessions",
+        "/v1/sessions/query",
+        "/v1/sessions/read",
+        "/v1/sessions/last-seq",
+        "/v1/sessions/thread_probe/events",
+        "/v1/sessions/thread_probe/last_seq",
+        "/v1/sessions/approval-decision",
     ] {
         let req = Request::builder()
             .method(Method::POST)

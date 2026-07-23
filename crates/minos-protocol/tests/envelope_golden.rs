@@ -137,7 +137,7 @@ fn ingest() {
     let Envelope::Ingest {
         version,
         agent,
-        thread_id,
+        session_id,
         seq,
         payload,
         ts_ms,
@@ -147,7 +147,7 @@ fn ingest() {
     };
     assert_eq!(version, 1);
     assert_eq!(agent, minos_domain::AgentName::Codex);
-    assert_eq!(thread_id, "thr_abc");
+    assert_eq!(session_id, "thr_abc");
     assert_eq!(seq, 42);
     assert_eq!(payload["method"], "item/agentMessage/delta");
     assert_eq!(payload["params"]["delta"], "Hi");
@@ -162,7 +162,7 @@ fn event_ui_event_message() {
     };
     assert_eq!(version, 1);
     let EventKind::UiEventMessage {
-        thread_id,
+        session_id,
         seq,
         ui,
         ts_ms,
@@ -170,7 +170,7 @@ fn event_ui_event_message() {
     else {
         panic!("expected UiEventMessage");
     };
-    assert_eq!(thread_id, "thr_abc");
+    assert_eq!(session_id, "thr_abc");
     assert_eq!(seq, 42);
     assert_eq!(ts_ms, 1_714_000_000_000);
     let UiEventMessage::TextDelta { message_id, text } = ui else {
@@ -188,7 +188,7 @@ fn event_approval_request() {
     };
     assert_eq!(version, 1);
     let EventKind::ApprovalRequest {
-        thread_id,
+        session_id,
         turn_id,
         request_id,
         method,
@@ -198,7 +198,7 @@ fn event_approval_request() {
     else {
         panic!("expected ApprovalRequest");
     };
-    assert_eq!(thread_id, "thr_approval");
+    assert_eq!(session_id, "thr_approval");
     assert_eq!(turn_id, "turn_123");
     assert_eq!(request_id, "req_123");
     assert_eq!(method, "exec_command");
@@ -214,14 +214,14 @@ fn event_approval_timeout() {
     };
     assert_eq!(version, 1);
     let EventKind::ApprovalTimeout {
-        thread_id,
+        session_id,
         request_id,
         reason,
     } = event
     else {
         panic!("expected ApprovalTimeout");
     };
-    assert_eq!(thread_id, "thr_approval");
+    assert_eq!(session_id, "thr_approval");
     assert_eq!(request_id, "req_123");
     assert_eq!(reason, "timeout");
 }

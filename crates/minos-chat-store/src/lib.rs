@@ -43,10 +43,10 @@ pub struct TeamworkDelegation {
     pub updated_at_ms: i64,
     pub status: TeamworkDelegationStatus,
     pub source_agent: Option<AgentName>,
-    pub source_thread_id: Option<String>,
+    pub source_session_id: Option<String>,
     pub target_agent: AgentName,
     pub prompt: String,
-    pub thread_id: Option<String>,
+    pub session_id: Option<String>,
     pub request_message_id: Option<String>,
     pub result_message_id: Option<String>,
     pub result_text: Option<String>,
@@ -66,7 +66,7 @@ pub struct TeamworkSourceDelivery {
     pub delivery_id: String,
     pub conversation_id: String,
     pub delegation_id: String,
-    pub source_thread_id: String,
+    pub source_session_id: String,
     pub body: String,
     pub status: TeamworkSourceDeliveryStatus,
     pub attempts: i64,
@@ -147,10 +147,10 @@ impl TeamworkStore {
         &self,
         conversation_id: &str,
         source_agent: Option<AgentName>,
-        source_thread_id: Option<String>,
+        source_session_id: Option<String>,
         target_agent: AgentName,
         prompt: String,
-        thread_id: Option<String>,
+        session_id: Option<String>,
     ) -> Result<TeamworkDelegation> {
         let prompt = prompt.trim().to_owned();
         anyhow::ensure!(!prompt.is_empty(), "delegation prompt must not be empty");
@@ -166,7 +166,7 @@ impl TeamworkStore {
         sqlx::query(
             "INSERT INTO teamwork_delegations( \
                 delegation_seq, delegation_id, conversation_id, created_at_ms, updated_at_ms, \
-                status, source_agent, source_thread_id, target_agent, prompt, thread_id, \
+                status, source_agent, source_session_id, target_agent, prompt, session_id, \
                 request_message_id, result_message_id, result_text, error \
              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
@@ -177,10 +177,10 @@ impl TeamworkStore {
         .bind(now)
         .bind(status.as_db())
         .bind(source_agent.map(|agent| agent.bin_name().to_owned()))
-        .bind(source_thread_id.as_deref())
+        .bind(source_session_id.as_deref())
         .bind(target_agent.bin_name())
         .bind(&prompt)
-        .bind(thread_id.as_deref())
+        .bind(session_id.as_deref())
         .bind(Option::<String>::None)
         .bind(Option::<String>::None)
         .bind(Option::<String>::None)
@@ -196,10 +196,10 @@ impl TeamworkStore {
             updated_at_ms: now,
             status,
             source_agent,
-            source_thread_id,
+            source_session_id,
             target_agent,
             prompt,
-            thread_id,
+            session_id,
             request_message_id: None,
             result_message_id: None,
             result_text: None,
@@ -236,7 +236,7 @@ impl TeamworkStore {
         &self,
         conversation_id: &str,
         delegation_id: &str,
-        source_thread_id: &str,
+        source_session_id: &str,
         body: &str,
     ) -> Result<TeamworkSourceDelivery> {
         let now = chrono::Utc::now().timestamp_millis();
@@ -244,14 +244,14 @@ impl TeamworkStore {
         let status = TeamworkSourceDeliveryStatus::Pending;
         sqlx::query(
             "INSERT INTO teamwork_source_deliveries( \
-                delivery_id, conversation_id, delegation_id, source_thread_id, body, \
+                delivery_id, conversation_id, delegation_id, source_session_id, body, \
                 status, attempts, last_error, created_at_ms, updated_at_ms \
              ) VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)",
         )
         .bind(&delivery_id)
         .bind(conversation_id)
         .bind(delegation_id)
-        .bind(source_thread_id)
+        .bind(source_session_id)
         .bind(body)
         .bind(status.as_db())
         .bind(now)
@@ -262,7 +262,7 @@ impl TeamworkStore {
             delivery_id,
             conversation_id: conversation_id.to_owned(),
             delegation_id: delegation_id.to_owned(),
-            source_thread_id: source_thread_id.to_owned(),
+            source_session_id: source_session_id.to_owned(),
             body: body.to_owned(),
             status,
             attempts: 0,
@@ -274,14 +274,14 @@ impl TeamworkStore {
 
     pub async fn list_pending_source_deliveries_for_thread(
         &self,
-        source_thread_id: &str,
+        source_session_id: &str,
     ) -> Result<Vec<TeamworkSourceDelivery>> {
         let rows = sqlx::query(
             "SELECT * FROM teamwork_source_deliveries \
-             WHERE source_thread_id = ? AND status = ? \
+             WHERE source_session_id = ? AND status = ? \
              ORDER BY created_at_ms ASC",
         )
-        .bind(source_thread_id)
+        .bind(source_session_id)
         .bind(TeamworkSourceDeliveryStatus::Pending.as_db())
         .fetch_all(&self.pool)
         .await?;
@@ -355,11 +355,11 @@ impl TeamworkStore {
     pub async fn running_delegation_for_thread(
         &self,
         conversation_id: &str,
-        thread_id: &str,
+        session_id: &str,
     ) -> Result<Option<TeamworkDelegation>> {
         self.latest_delegation_for_thread(
             conversation_id,
-            thread_id,
+            session_id,
             Some(TeamworkDelegationStatus::Running),
         )
         .await
@@ -368,26 +368,26 @@ impl TeamworkStore {
     pub async fn ensure_delegate_target_allowed(
         &self,
         conversation_id: &str,
-        source_thread_id: Option<&str>,
+        source_session_id: Option<&str>,
         target_agent: AgentName,
     ) -> Result<()> {
-        let Some(source_thread_id) = source_thread_id else {
+        let Some(source_session_id) = source_session_id else {
             return Ok(());
         };
         let Some(source_delegation) = self
-            .latest_delegation_for_thread(conversation_id, source_thread_id, None)
+            .latest_delegation_for_thread(conversation_id, source_session_id, None)
             .await?
         else {
             return Ok(());
         };
         let Some(original_agent) = source_delegation.source_agent else {
             anyhow::bail!(
-                "delegate_to_agent depth limit reached: delegated thread {source_thread_id} cannot delegate again"
+                "delegate_to_agent depth limit reached: delegated thread {source_session_id} cannot delegate again"
             );
         };
         anyhow::ensure!(
             target_agent == original_agent,
-            "delegate_to_agent depth limit reached: delegated thread {source_thread_id} may only delegate back to {}, not {}",
+            "delegate_to_agent depth limit reached: delegated thread {source_session_id} may only delegate back to {}, not {}",
             original_agent.bin_name(),
             target_agent.bin_name()
         );
@@ -397,12 +397,12 @@ impl TeamworkStore {
     pub async fn complete_delegation_for_thread(
         &self,
         conversation_id: &str,
-        thread_id: &str,
+        session_id: &str,
         result_message_id: Option<&str>,
         result_text: &str,
     ) -> Result<Option<TeamworkDelegation>> {
         let Some(delegation) = self
-            .running_delegation_for_thread(conversation_id, thread_id)
+            .running_delegation_for_thread(conversation_id, session_id)
             .await?
         else {
             return Ok(None);
@@ -450,28 +450,28 @@ impl TeamworkStore {
     async fn latest_delegation_for_thread(
         &self,
         conversation_id: &str,
-        thread_id: &str,
+        session_id: &str,
         status: Option<TeamworkDelegationStatus>,
     ) -> Result<Option<TeamworkDelegation>> {
         let row = if let Some(status) = status {
             sqlx::query(
                 "SELECT * FROM teamwork_delegations \
-                 WHERE conversation_id = ? AND thread_id = ? AND status = ? \
+                 WHERE conversation_id = ? AND session_id = ? AND status = ? \
                  ORDER BY delegation_seq DESC LIMIT 1",
             )
             .bind(conversation_id)
-            .bind(thread_id)
+            .bind(session_id)
             .bind(status.as_db())
             .fetch_optional(&self.pool)
             .await?
         } else {
             sqlx::query(
                 "SELECT * FROM teamwork_delegations \
-                 WHERE conversation_id = ? AND thread_id = ? \
+                 WHERE conversation_id = ? AND session_id = ? \
                  ORDER BY delegation_seq DESC LIMIT 1",
             )
             .bind(conversation_id)
-            .bind(thread_id)
+            .bind(session_id)
             .fetch_optional(&self.pool)
             .await?
         };
@@ -533,10 +533,10 @@ impl TeamworkStore {
                 updated_at_ms INTEGER NOT NULL, \
                 status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'cancelled', 'failed')), \
                 source_agent TEXT, \
-                source_thread_id TEXT, \
+                source_session_id TEXT, \
                 target_agent TEXT NOT NULL, \
                 prompt TEXT NOT NULL, \
-                thread_id TEXT, \
+                session_id TEXT, \
                 request_message_id TEXT, \
                 result_message_id TEXT, \
                 result_text TEXT, \
@@ -550,7 +550,7 @@ impl TeamworkStore {
         // table without newer columns (CREATE IF NOT EXISTS does not alter shape).
         // Ignore "duplicate column" errors from already-upgraded databases.
         for ddl in [
-            "ALTER TABLE teamwork_delegations ADD COLUMN source_thread_id TEXT",
+            "ALTER TABLE teamwork_delegations ADD COLUMN source_session_id TEXT",
             "ALTER TABLE teamwork_delegations ADD COLUMN request_message_id TEXT",
             "ALTER TABLE teamwork_delegations ADD COLUMN result_message_id TEXT",
             "ALTER TABLE teamwork_delegations ADD COLUMN result_text TEXT",
@@ -570,7 +570,7 @@ impl TeamworkStore {
                 delivery_id TEXT PRIMARY KEY, \
                 conversation_id TEXT NOT NULL, \
                 delegation_id TEXT NOT NULL, \
-                source_thread_id TEXT NOT NULL, \
+                source_session_id TEXT NOT NULL, \
                 body TEXT NOT NULL, \
                 status TEXT NOT NULL CHECK(status IN ('pending', 'delivered', 'failed')), \
                 attempts INTEGER NOT NULL DEFAULT 0, \
@@ -584,7 +584,7 @@ impl TeamworkStore {
 
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS teamwork_source_deliveries_by_source_pending \
-             ON teamwork_source_deliveries(source_thread_id, status, created_at_ms)",
+             ON teamwork_source_deliveries(source_session_id, status, created_at_ms)",
         )
         .execute(pool)
         .await?;
@@ -681,11 +681,11 @@ fn delegation_from_row(row: sqlx::sqlite::SqliteRow) -> Result<TeamworkDelegatio
         updated_at_ms: row.try_get("updated_at_ms")?,
         status: TeamworkDelegationStatus::from_db(&status)?,
         source_agent: parse_agent(row.try_get::<Option<String>, _>("source_agent")?)?,
-        source_thread_id: row.try_get("source_thread_id")?,
+        source_session_id: row.try_get("source_session_id")?,
         target_agent: parse_agent(Some(target_agent))?
             .context("teamwork_delegations.target_agent is NULL")?,
         prompt: row.try_get("prompt")?,
-        thread_id: row.try_get("thread_id")?,
+        session_id: row.try_get("session_id")?,
         request_message_id: row.try_get("request_message_id").unwrap_or(None),
         result_message_id: row.try_get("result_message_id")?,
         result_text: row.try_get("result_text")?,
@@ -699,7 +699,7 @@ fn source_delivery_from_row(row: sqlx::sqlite::SqliteRow) -> Result<TeamworkSour
         delivery_id: row.try_get("delivery_id")?,
         conversation_id: row.try_get("conversation_id")?,
         delegation_id: row.try_get("delegation_id")?,
-        source_thread_id: row.try_get("source_thread_id")?,
+        source_session_id: row.try_get("source_session_id")?,
         body: row.try_get("body")?,
         status: TeamworkSourceDeliveryStatus::from_db(&status)?,
         attempts: row.try_get("attempts")?,
@@ -753,7 +753,7 @@ mod tests {
         assert_eq!(delegation.delegation_id, "delegation-1");
         assert_eq!(delegation.conversation_id, "conversation-main");
         assert_eq!(delegation.status, TeamworkDelegationStatus::Running);
-        assert_eq!(delegation.source_thread_id.as_deref(), Some("thread-codex"));
+        assert_eq!(delegation.source_session_id.as_deref(), Some("thread-codex"));
         assert_eq!(
             store
                 .get_delegation("conversation-main", &delegation.delegation_id)
@@ -777,7 +777,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delegation_can_be_completed_by_target_thread() {
+    async fn delegation_can_be_completed_by_target_session() {
         let tmp = tempfile::tempdir().unwrap();
         let store = TeamworkStore::open(&tmp.path().join("teamwork.sqlite"))
             .await
@@ -814,14 +814,14 @@ mod tests {
         assert_eq!(completed.result_text.as_deref(), Some("hi"));
         assert_eq!(completed.source_agent, Some(AgentName::Opencode));
         assert_eq!(
-            completed.source_thread_id.as_deref(),
+            completed.source_session_id.as_deref(),
             Some("thread-opencode")
         );
     }
 
     #[tokio::test]
-    async fn migrate_adds_source_thread_id_to_legacy_delegations_table() {
-        // Simulate a pre-source_thread_id schema (matches production daemon.sqlite
+    async fn migrate_adds_source_session_id_to_legacy_delegations_table() {
+        // Simulate a pre-source_session_id schema (matches production daemon.sqlite
         // that only received the request_message_id ALTER).
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("legacy.sqlite");
@@ -856,7 +856,7 @@ mod tests {
                     source_agent TEXT, \
                     target_agent TEXT NOT NULL, \
                     prompt TEXT NOT NULL, \
-                    thread_id TEXT, \
+                    session_id TEXT, \
                     error TEXT, \
                     request_message_id TEXT \
                  )",
@@ -879,9 +879,9 @@ mod tests {
                 Some("thread-target".into()),
             )
             .await
-            .expect("INSERT with source_thread_id must work after migrate");
+            .expect("INSERT with source_session_id must work after migrate");
         assert_eq!(
-            delegation.source_thread_id.as_deref(),
+            delegation.source_session_id.as_deref(),
             Some("thread-source")
         );
     }

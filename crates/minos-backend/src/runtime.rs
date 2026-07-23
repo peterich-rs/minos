@@ -17,7 +17,7 @@ use crate::config::{
 };
 use crate::host_commands::{HostCommandService, RuntimeHostCommandService};
 use crate::http::{self, BackendState, RouteContract};
-use crate::ingest::{translate::ThreadTranslators, use_case::IngestUseCase};
+use crate::ingest::{translate::SessionTranslators, use_case::IngestUseCase};
 use crate::notifications::channels::composite::CompositeChannel;
 use crate::notifications::use_case::DefaultNotificationService;
 use crate::notifications::NotificationService;
@@ -126,7 +126,7 @@ impl AppContext {
         peer_target_cache: PeerTargetCacheBackend,
         realtime_tickets: Arc<RealtimeTicketStore>,
     ) -> Arc<Self> {
-        let translators = ThreadTranslators::new();
+        let translators = SessionTranslators::new();
         let data = AppDataContext::new(store.clone());
         configure_peer_target_cache(peer_target_cache);
         let subscription_mgr = Arc::new(SubscriptionManager::default());

@@ -229,7 +229,7 @@ pub mod raw_events;
 pub mod refresh_tokens;
 pub mod social;
 pub mod thread_sync_state;
-pub mod threads;
+pub mod sessions;
 pub mod tokens;
 
 pub use devices::{get_device, get_secret_hash, insert_device, upsert_secret_hash, DeviceRow};

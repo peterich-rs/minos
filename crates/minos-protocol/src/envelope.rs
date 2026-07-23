@@ -70,13 +70,13 @@ pub enum Envelope {
         event: EventKind,
     },
     /// Agent-host → Backend. Raw native event from a CLI for persistence
-    /// and fan-out. No response expected. (seq, thread_id) must be unique
+    /// and fan-out. No response expected. (seq, session_id) must be unique
     /// server-side; the host treats conflicts as a no-op.
     Ingest {
         #[serde(rename = "v")]
         version: u8,
         agent: minos_domain::AgentName,
-        thread_id: String,
+        session_id: String,
         seq: u64,
         payload: serde_json::Value,
         ts_ms: i64,
@@ -125,9 +125,9 @@ pub enum EventKind {
     ServerShutdown,
     /// Backend → Mobile. One translated UI event from backend's live
     /// fan-out. `seq` matches the underlying `raw_events` row so mobile
-    /// can dedupe against its per-thread watermark.
+    /// can dedupe against its per-session watermark.
     UiEventMessage {
-        thread_id: String,
+        session_id: String,
         seq: u64,
         ui: minos_ui_protocol::UiEventMessage,
         ts_ms: i64,
@@ -135,7 +135,7 @@ pub enum EventKind {
     /// Backend → Mobile. Approval request forwarded from the host for an
     /// in-flight turn and awaiting explicit user action.
     ApprovalRequest {
-        thread_id: String,
+        session_id: String,
         turn_id: String,
         request_id: String,
         method: String,
@@ -145,7 +145,7 @@ pub enum EventKind {
     /// Backend → Mobile. A pending approval auto-expired or was declined due
     /// to disconnect before the user responded.
     ApprovalTimeout {
-        thread_id: String,
+        session_id: String,
         request_id: String,
         reason: String,
     },
@@ -353,7 +353,7 @@ mod tests {
         let env = Envelope::Event {
             version: 1,
             event: EventKind::ApprovalRequest {
-                thread_id: "thr-approval".into(),
+                session_id: "thr-approval".into(),
                 turn_id: "turn-123".into(),
                 request_id: "req-123".into(),
                 method: "exec_command".into(),
@@ -376,7 +376,7 @@ mod tests {
         let env = Envelope::Event {
             version: 1,
             event: EventKind::ApprovalTimeout {
-                thread_id: "thr-approval".into(),
+                session_id: "thr-approval".into(),
                 request_id: "req-123".into(),
                 reason: "timeout".into(),
             },
@@ -409,7 +409,7 @@ mod tests {
         let e = Envelope::Ingest {
             version: 1,
             agent: minos_domain::AgentName::Codex,
-            thread_id: "thr_1".into(),
+            session_id: "thr_1".into(),
             seq: 42,
             payload: serde_json::json!({"method":"item/agentMessage/delta","params":{"delta":"Hi"}}),
             ts_ms: 1_714_000_000_000,
@@ -426,7 +426,7 @@ mod tests {
         let e = Envelope::Event {
             version: 1,
             event: EventKind::UiEventMessage {
-                thread_id: "thr_1".into(),
+                session_id: "thr_1".into(),
                 seq: 42,
                 ui: minos_ui_protocol::UiEventMessage::TextDelta {
                     message_id: "msg_1".into(),

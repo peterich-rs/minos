@@ -5,7 +5,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
 use minos_domain::AgentName;
-use minos_ui_protocol::ThreadEndReason;
+use minos_ui_protocol::SessionEndReason;
 use serde::{Deserialize, Serialize};
 
 use crate::agent_sessions::{
@@ -102,7 +102,7 @@ struct AgentSessionSummaryResponse {
     title: Option<String>,
     last_activity_at_ms: i64,
     message_count: u32,
-    end_reason: Option<ThreadEndReason>,
+    end_reason: Option<SessionEndReason>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -269,7 +269,7 @@ async fn list_sessions(
         .map(|session| session.session_id.clone())
         .collect::<Vec<_>>();
     let thread_summaries =
-        crate::store::threads::summaries_for_ids(&state.store, &account_id, &session_ids)
+        crate::store::sessions::summaries_for_ids(&state.store, &account_id, &session_ids)
             .await
             .map_err(|error| {
                 (
@@ -293,7 +293,7 @@ async fn list_sessions(
 
 fn agent_session_summary_response(
     session: crate::agent_sessions::AgentSessionSummary,
-    thread: Option<&minos_protocol::ThreadSummary>,
+    thread: Option<&minos_protocol::SessionSummary>,
 ) -> AgentSessionSummaryResponse {
     let agent = thread.map(|summary| summary.agent).or_else(|| {
         session

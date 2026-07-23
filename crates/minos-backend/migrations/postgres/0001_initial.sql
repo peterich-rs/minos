@@ -1,4 +1,5 @@
--- Postgres-first baseline schema for the Phase 0 formal backend runtime.
+-- Canonical Postgres schema (latest-only).
+-- Incremental migration history has been collapsed; wipe local DBs on upgrade.
 
 CREATE EXTENSION IF NOT EXISTS citext;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
@@ -101,12 +102,13 @@ CREATE INDEX idx_host_links_account ON host_links(account_id);
 CREATE INDEX idx_host_links_host ON host_links(host_installation_id);
 
 CREATE TABLE agents (
-    agent_id       TEXT PRIMARY KEY,
-    runtime_kind   TEXT NOT NULL,
-    display_name   TEXT NOT NULL,
-    description    TEXT,
-    enabled        BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at_ms  BIGINT NOT NULL
+    agent_id         TEXT PRIMARY KEY,
+    runtime_kind     TEXT NOT NULL,
+    display_name     TEXT NOT NULL,
+    description      TEXT,
+    enabled          BOOLEAN NOT NULL DEFAULT TRUE,
+    workspace_path   TEXT,
+    created_at_ms    BIGINT NOT NULL
 );
 
 INSERT INTO agents (agent_id, runtime_kind, display_name, created_at_ms)
@@ -118,13 +120,14 @@ VALUES
 ON CONFLICT (agent_id) DO NOTHING;
 
 CREATE TABLE projects (
-    project_id      TEXT PRIMARY KEY,
-    account_id      TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    name            TEXT NOT NULL,
-    workspace_root  TEXT NOT NULL,
-    created_at_ms   BIGINT NOT NULL,
-    updated_at_ms   BIGINT NOT NULL,
-    archived_at_ms  BIGINT,
+    project_id       TEXT PRIMARY KEY,
+    account_id       TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    name             TEXT NOT NULL,
+    workspace_root   TEXT NOT NULL,
+    workspace_path   TEXT,
+    created_at_ms    BIGINT NOT NULL,
+    updated_at_ms    BIGINT NOT NULL,
+    archived_at_ms   BIGINT,
     UNIQUE (account_id, workspace_root)
 );
 
@@ -208,6 +211,16 @@ CREATE TABLE conversation_reads (
     updated_at_ms    BIGINT NOT NULL,
     PRIMARY KEY (conversation_id, account_id)
 );
+
+CREATE TABLE conversation_deletions (
+    conversation_id  TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+    account_id       TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    deleted_at_ms    BIGINT NOT NULL,
+    PRIMARY KEY (conversation_id, account_id)
+);
+
+CREATE INDEX idx_conversation_deletions_account
+    ON conversation_deletions(account_id, deleted_at_ms DESC);
 
 CREATE TABLE message_mentions (
     message_id            TEXT NOT NULL REFERENCES conversation_messages(message_id) ON DELETE CASCADE,
@@ -387,3 +400,25 @@ CREATE TABLE push_tokens (
 CREATE INDEX idx_push_tokens_account
     ON push_tokens(account_id)
     WHERE revoked_at_ms IS NULL;
+
+CREATE TABLE notification_preferences (
+    account_id                  TEXT PRIMARY KEY REFERENCES accounts(account_id) ON DELETE CASCADE,
+    direct_message_enabled      BOOLEAN NOT NULL DEFAULT TRUE,
+    group_mention_enabled       BOOLEAN NOT NULL DEFAULT TRUE,
+    approval_required_enabled   BOOLEAN NOT NULL DEFAULT TRUE,
+    agent_session_ended_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    quiet_hours_start_minute    SMALLINT,
+    quiet_hours_end_minute      SMALLINT,
+    quiet_hours_timezone        TEXT,
+    updated_at_ms               BIGINT NOT NULL
+);
+
+CREATE TABLE notification_cooldowns (
+    account_id       TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    cooldown_key     TEXT NOT NULL,
+    last_sent_at_ms  BIGINT NOT NULL,
+    PRIMARY KEY (account_id, cooldown_key)
+);
+
+CREATE INDEX idx_notif_cooldowns_last_sent
+    ON notification_cooldowns(last_sent_at_ms);

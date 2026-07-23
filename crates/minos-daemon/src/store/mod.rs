@@ -67,17 +67,17 @@ impl LocalStore {
         &self.artifact_store
     }
 
-    pub async fn list_threads(
+    pub async fn list_sessions(
         &self,
         before_ts_ms: Option<i64>,
         limit: Option<u32>,
         agent: Option<&str>,
-    ) -> anyhow::Result<Vec<ThreadRow>> {
+    ) -> anyhow::Result<Vec<SessionRow>> {
         let limit = limit.unwrap_or(50).min(500) as i64;
         let rows = match before_ts_ms {
             Some(ts) => {
-                sqlx::query_as::<_, ThreadRow>(
-                    "SELECT * FROM threads \
+                sqlx::query_as::<_, SessionRow>(
+                    "SELECT * FROM sessions \
                      WHERE last_activity_at < ? AND (? IS NULL OR agent = ?) \
                      ORDER BY last_activity_at DESC LIMIT ?",
                 )
@@ -89,8 +89,8 @@ impl LocalStore {
                 .await?
             }
             None => {
-                sqlx::query_as::<_, ThreadRow>(
-                    "SELECT * FROM threads \
+                sqlx::query_as::<_, SessionRow>(
+                    "SELECT * FROM sessions \
                      WHERE (? IS NULL OR agent = ?) \
                      ORDER BY last_activity_at DESC LIMIT ?",
                 )
@@ -104,10 +104,10 @@ impl LocalStore {
         Ok(rows)
     }
 
-    pub async fn get_thread(&self, thread_id: &str) -> anyhow::Result<Option<ThreadRow>> {
+    pub async fn get_session(&self, session_id: &str) -> anyhow::Result<Option<SessionRow>> {
         Ok(
-            sqlx::query_as::<_, ThreadRow>("SELECT * FROM threads WHERE thread_id = ?")
-                .bind(thread_id)
+            sqlx::query_as::<_, SessionRow>("SELECT * FROM sessions WHERE session_id = ?")
+                .bind(session_id)
                 .fetch_optional(&self.pool)
                 .await?,
         )
@@ -115,23 +115,23 @@ impl LocalStore {
 
     pub async fn read_events(
         &self,
-        thread_id: &str,
+        session_id: &str,
         from_seq: u64,
         to_seq: u64,
     ) -> anyhow::Result<Vec<EventRow>> {
         Ok(sqlx::query_as::<_, EventRow>(
-            "SELECT thread_id, seq, body_kind, body_inline, artifact_id, artifact_size_bytes, \
+            "SELECT session_id, seq, body_kind, body_inline, artifact_id, artifact_size_bytes, \
                     artifact_sha256, artifact_media_type, projection_json, ts_ms, source \
-             FROM events WHERE thread_id = ? AND seq BETWEEN ? AND ? ORDER BY seq ASC",
+             FROM events WHERE session_id = ? AND seq BETWEEN ? AND ? ORDER BY seq ASC",
         )
-        .bind(thread_id)
+        .bind(session_id)
         .bind(from_seq as i64)
         .bind(to_seq as i64)
         .fetch_all(&self.pool)
         .await?)
     }
 
-    /// Recover orphan threads after unclean process death.
+    /// Recover orphan sessions after unclean process death.
     ///
     /// - **Mid-flight** (`running` / `starting` / `resuming`) → `suspended` +
     ///   `needs_continue=1` so open path can inject CONTINUE.
@@ -140,10 +140,10 @@ impl LocalStore {
     ///   surface as user-visible **Paused** after Desktop/daemon restart.
     /// - Already `closed` / `suspended` rows are untouched.
     ///
-    /// `resume_thread` reattaches when the row is idle but no live process exists.
+    /// `resume_session` reattaches when the row is idle but no live process exists.
     pub async fn mark_orphans_suspended(&self) -> anyhow::Result<u64> {
         let r = sqlx::query(
-            "UPDATE threads SET \
+            "UPDATE sessions SET \
                 needs_continue = 1, \
                 status = 'suspended', \
                 last_pause_reason = 'daemon_restart', \
@@ -156,26 +156,26 @@ impl LocalStore {
         Ok(r.rows_affected())
     }
 
-    /// Persist daemon-stop outcome for one thread (sync path; survives process exit).
+    /// Persist daemon-stop outcome for one session (sync path; survives process exit).
     ///
     /// - `needs_continue == true` (was mid-flight): `suspended` + flag for CONTINUE.
     /// - `needs_continue == false` (was idle / already paused without mid-flight):
     ///   keep **`idle`** so restart does not rebrand a finished turn as Paused.
     pub async fn suspend_thread_for_daemon_restart(
         &self,
-        thread_id: &str,
+        session_id: &str,
         needs_continue: bool,
         ts_ms: i64,
     ) -> anyhow::Result<u64> {
         let result = if needs_continue {
             sqlx::query(
-                "UPDATE threads SET status = 'suspended', last_pause_reason = 'daemon_restart', \
+                "UPDATE sessions SET status = 'suspended', last_pause_reason = 'daemon_restart', \
                                     last_close_reason = NULL, ended_at = NULL, \
                                     needs_continue = 1, last_activity_at = ? \
-                 WHERE thread_id = ? AND status != 'closed'",
+                 WHERE session_id = ? AND status != 'closed'",
             )
             .bind(ts_ms)
-            .bind(thread_id)
+            .bind(session_id)
             .execute(&self.pool)
             .await?
         } else {
@@ -183,13 +183,13 @@ impl LocalStore {
             // Force idle even if a concurrent bridge briefly wrote suspended —
             // shutdown is the authority for DaemonRestart durable status.
             sqlx::query(
-                "UPDATE threads SET status = 'idle', last_pause_reason = NULL, \
+                "UPDATE sessions SET status = 'idle', last_pause_reason = NULL, \
                                     last_close_reason = NULL, ended_at = NULL, \
                                     needs_continue = 0, last_activity_at = ? \
-                 WHERE thread_id = ? AND status != 'closed'",
+                 WHERE session_id = ? AND status != 'closed'",
             )
             .bind(ts_ms)
-            .bind(thread_id)
+            .bind(session_id)
             .execute(&self.pool)
             .await?
         };
@@ -198,12 +198,12 @@ impl LocalStore {
 
     /// Atomically clear `needs_continue` and return whether it was set.
     /// Used so user-send and auto-continue cannot both inject a continue turn.
-    pub async fn take_needs_continue(&self, thread_id: &str) -> anyhow::Result<bool> {
+    pub async fn take_needs_continue(&self, session_id: &str) -> anyhow::Result<bool> {
         let result = sqlx::query(
-            "UPDATE threads SET needs_continue = 0 \
-             WHERE thread_id = ? AND needs_continue != 0",
+            "UPDATE sessions SET needs_continue = 0 \
+             WHERE session_id = ? AND needs_continue != 0",
         )
-        .bind(thread_id)
+        .bind(session_id)
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() > 0)
@@ -211,19 +211,19 @@ impl LocalStore {
 
     pub async fn set_needs_continue(
         &self,
-        thread_id: &str,
+        session_id: &str,
         needs_continue: bool,
     ) -> anyhow::Result<()> {
-        sqlx::query("UPDATE threads SET needs_continue = ? WHERE thread_id = ?")
+        sqlx::query("UPDATE sessions SET needs_continue = ? WHERE session_id = ?")
             .bind(i64::from(needs_continue))
-            .bind(thread_id)
+            .bind(session_id)
             .execute(&self.pool)
             .await?;
         Ok(())
     }
 
-    /// Idempotent workspace upsert. The `threads.workspace_root` FK requires
-    /// the parent row to exist before any `INSERT INTO threads` succeeds.
+    /// Idempotent workspace upsert. The `sessions.workspace_root` FK requires
+    /// the parent row to exist before any `INSERT INTO sessions` succeeds.
     /// `INSERT OR IGNORE` keeps `first_seen_at` from the original create and
     /// doesn't bump `last_seen_at` — `update_workspace_seen` does that.
     pub async fn upsert_workspace(&self, root: &str, ts_ms: i64) -> anyhow::Result<()> {
@@ -244,34 +244,34 @@ impl LocalStore {
         Ok(())
     }
 
-    /// Persist a freshly-spawned thread. Idempotent on `thread_id` so callers
+    /// Persist a freshly-spawned session. Idempotent on `session_id` so callers
     /// don't have to round-trip a SELECT before calling — `INSERT OR IGNORE`
     /// makes a duplicate `start_agent` (e.g. after a UI retry) a benign
-    /// no-op rather than a constraint violation. The `events.thread_id` FK
-    /// is the load-bearing reason this exists: without a parent threads row
-    /// every `EventWriter::write_live` for the thread fails with SQLite
+    /// no-op rather than a constraint violation. The `events.session_id` FK
+    /// is the load-bearing reason this exists: without a parent sessions row
+    /// every `EventWriter::write_live` for the session fails with SQLite
     /// error 787.
-    pub async fn insert_thread(
+    pub async fn insert_session(
         &self,
-        thread_id: &str,
+        session_id: &str,
         conversation_id: &str,
         workspace_root: &str,
         agent: &str,
         provider_session_id: Option<&str>,
-        parent_thread_id: Option<&str>,
+        parent_session_id: Option<&str>,
         status: &str,
         ts_ms: i64,
     ) -> anyhow::Result<()> {
         sqlx::query(
-            "INSERT OR IGNORE INTO threads( \
-                thread_id, conversation_id, workspace_root, parent_thread_id, agent, provider_session_id, status, \
+            "INSERT OR IGNORE INTO sessions( \
+                session_id, conversation_id, workspace_root, parent_session_id, agent, provider_session_id, status, \
                 last_seq, started_at, last_activity_at \
              ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
         )
-        .bind(thread_id)
+        .bind(session_id)
         .bind(conversation_id)
         .bind(workspace_root)
-        .bind(parent_thread_id)
+        .bind(parent_session_id)
         .bind(agent)
         .bind(provider_session_id)
         .bind(status)
@@ -282,46 +282,46 @@ impl LocalStore {
         Ok(())
     }
 
-    pub async fn update_thread_provider_session_id(
+    pub async fn update_session_provider_session_id(
         &self,
-        thread_id: &str,
+        session_id: &str,
         provider_session_id: Option<&str>,
     ) -> anyhow::Result<()> {
-        sqlx::query("UPDATE threads SET provider_session_id = ? WHERE thread_id = ?")
+        sqlx::query("UPDATE sessions SET provider_session_id = ? WHERE session_id = ?")
             .bind(provider_session_id)
-            .bind(thread_id)
+            .bind(session_id)
             .execute(&self.pool)
             .await?;
         Ok(())
     }
 
-    /// Stamp a thread closed: `status='closed'`, `ended_at=ts_ms`,
+    /// Stamp a session closed: `status='closed'`, `ended_at=ts_ms`,
     /// `last_close_reason=reason`. No-op (zero rows updated) if the row is
     /// missing — callers treat that as success because there's nothing left
-    /// to persist about a thread we never recorded.
-    pub async fn close_thread_row(
+    /// to persist about a session we never recorded.
+    pub async fn close_session_row(
         &self,
-        thread_id: &str,
+        session_id: &str,
         reason: &str,
         ts_ms: i64,
     ) -> anyhow::Result<()> {
         sqlx::query(
-            "UPDATE threads SET status = 'closed', last_close_reason = ?, \
+            "UPDATE sessions SET status = 'closed', last_close_reason = ?, \
                                 ended_at = ?, last_activity_at = ? \
-             WHERE thread_id = ?",
+             WHERE session_id = ?",
         )
         .bind(reason)
         .bind(ts_ms)
         .bind(ts_ms)
-        .bind(thread_id)
+        .bind(session_id)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
-    pub async fn update_thread_status(
+    pub async fn update_session_status(
         &self,
-        thread_id: &str,
+        session_id: &str,
         status: &str,
         pause_reason: Option<&str>,
         close_reason: Option<&str>,
@@ -329,48 +329,48 @@ impl LocalStore {
         ts_ms: i64,
     ) -> anyhow::Result<u64> {
         let result = sqlx::query(
-            "UPDATE threads SET status = ?, last_pause_reason = ?, \
+            "UPDATE sessions SET status = ?, last_pause_reason = ?, \
                                 last_close_reason = ?, ended_at = ?, \
                                 last_activity_at = ? \
-             WHERE thread_id = ?",
+             WHERE session_id = ?",
         )
         .bind(status)
         .bind(pause_reason)
         .bind(close_reason)
         .bind(ended_at)
         .bind(ts_ms)
-        .bind(thread_id)
+        .bind(session_id)
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected())
     }
 
-    pub async fn delete_thread(&self, thread_id: &str) -> anyhow::Result<u64> {
+    pub async fn delete_session(&self, session_id: &str) -> anyhow::Result<u64> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query("DELETE FROM events WHERE thread_id = ?")
-            .bind(thread_id)
+        sqlx::query("DELETE FROM events WHERE session_id = ?")
+            .bind(session_id)
             .execute(&mut *tx)
             .await?;
-        let result = sqlx::query("DELETE FROM threads WHERE thread_id = ?")
-            .bind(thread_id)
+        let result = sqlx::query("DELETE FROM sessions WHERE session_id = ?")
+            .bind(session_id)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
         self.artifact_store
-            .delete_thread_artifacts(thread_id)
+            .delete_session_artifacts(session_id)
             .await?;
         Ok(result.rows_affected())
     }
 
     pub async fn read_artifact_range(
         &self,
-        thread_id: &str,
+        session_id: &str,
         artifact_id: &str,
         offset: u64,
         limit: u32,
     ) -> anyhow::Result<ArtifactRange> {
         self.artifact_store
-            .read_range(thread_id, artifact_id, offset, limit)
+            .read_range(session_id, artifact_id, offset, limit)
             .await
     }
 
@@ -435,7 +435,7 @@ impl LocalStore {
         Ok(())
     }
 
-    /// Delete a project. Conversation/message/thread rows cascade through the
+    /// Delete a project. Conversation/message/session rows cascade through the
     /// schema; no legacy reassignment path is kept.
     pub async fn delete_project(&self, project_id: &str) -> anyhow::Result<()> {
         sqlx::query("DELETE FROM projects WHERE project_id = ?")
@@ -632,7 +632,7 @@ impl LocalStore {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT conversation_id, agent FROM threads \
+            "SELECT conversation_id, agent FROM sessions \
              WHERE conversation_id IN ({placeholders}) \
              GROUP BY conversation_id, agent \
              ORDER BY conversation_id, agent"
@@ -652,43 +652,43 @@ impl LocalStore {
         Ok(by_conversation)
     }
 
-    pub async fn list_threads_by_conversation(
+    pub async fn list_sessions_by_conversation(
         &self,
         conversation_id: &str,
-    ) -> anyhow::Result<Vec<ThreadRow>> {
-        Ok(sqlx::query_as::<_, ThreadRow>(
-            "SELECT * FROM threads \
+    ) -> anyhow::Result<Vec<SessionRow>> {
+        Ok(sqlx::query_as::<_, SessionRow>(
+            "SELECT * FROM sessions \
              WHERE conversation_id = ? \
-             ORDER BY last_activity_at DESC, thread_id",
+             ORDER BY last_activity_at DESC, session_id",
         )
         .bind(conversation_id)
         .fetch_all(&self.pool)
         .await?)
     }
 
-    pub async fn insert_thread_in_conversation(
+    pub async fn insert_session_in_conversation(
         &self,
-        thread_id: &str,
+        session_id: &str,
         conversation_id: &str,
         workspace_root: &str,
         agent: &str,
         provider_session_id: Option<&str>,
-        parent_thread_id: Option<&str>,
+        parent_session_id: Option<&str>,
         status: &str,
         ts_ms: i64,
         count_as_agent_session: bool,
     ) -> anyhow::Result<()> {
         let mut tx = self.pool.begin().await?;
         let inserted = sqlx::query(
-            "INSERT OR IGNORE INTO threads( \
-                thread_id, conversation_id, workspace_root, parent_thread_id, agent, provider_session_id, status, \
+            "INSERT OR IGNORE INTO sessions( \
+                session_id, conversation_id, workspace_root, parent_session_id, agent, provider_session_id, status, \
                 last_seq, started_at, last_activity_at \
              ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
         )
-        .bind(thread_id)
+        .bind(session_id)
         .bind(conversation_id)
         .bind(workspace_root)
-        .bind(parent_thread_id)
+        .bind(parent_session_id)
         .bind(agent)
         .bind(provider_session_id)
         .bind(status)
@@ -724,13 +724,13 @@ impl LocalStore {
     /// - `created_at_ms` is display-only; do not sort by it.
     /// - `reply_to_message_id` / `mentions_json` express causality (e.g. delegation
     ///   result → request) without changing sort order.
-    /// - List filters hide rows whose `thread_id` is a subagent (`parent_thread_id`
+    /// - List filters hide rows whose `session_id` is a subagent (`parent_session_id`
     ///   set); those belong in session transcript, not the group timeline.
     pub async fn upsert_conversation_message(
         &self,
         conversation_id: &str,
         message_id: &str,
-        thread_id: Option<&str>,
+        session_id: Option<&str>,
         sender_role: &str,
         agent: Option<&str>,
         body: &str,
@@ -750,11 +750,11 @@ impl LocalStore {
         let message_seq = if let Some(seq) = existing {
             sqlx::query(
                 "UPDATE chat_messages \
-                 SET thread_id = ?, sender_role = ?, agent = ?, body = ?, \
+                 SET session_id = ?, sender_role = ?, agent = ?, body = ?, \
                      reply_to_message_id = ?, delegation_id = ?, mentions_json = ? \
                  WHERE message_id = ?",
             )
-            .bind(thread_id)
+            .bind(session_id)
             .bind(sender_role)
             .bind(agent)
             .bind(body)
@@ -768,13 +768,13 @@ impl LocalStore {
         } else {
             let result = sqlx::query(
                 "INSERT INTO chat_messages( \
-                    message_id, conversation_id, thread_id, created_at_ms, sender_role, agent, body, \
+                    message_id, conversation_id, session_id, created_at_ms, sender_role, agent, body, \
                     reply_to_message_id, delegation_id, mentions_json \
                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(message_id)
             .bind(conversation_id)
-            .bind(thread_id)
+            .bind(session_id)
             .bind(ts_ms)
             .bind(sender_role)
             .bind(agent)
@@ -820,10 +820,10 @@ impl LocalStore {
             Some(seq) => {
                 sqlx::query_as::<_, ChatMessageRow>(
                     "SELECT m.* FROM chat_messages m \
-                     LEFT JOIN threads t ON t.thread_id = m.thread_id \
+                     LEFT JOIN sessions t ON t.session_id = m.session_id \
                      WHERE m.conversation_id = ? \
                        AND m.message_seq < ? \
-                       AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL) \
+                       AND (m.session_id IS NULL OR t.session_id IS NULL OR t.parent_session_id IS NULL) \
                      ORDER BY m.message_seq DESC LIMIT ?",
                 )
                 .bind(conversation_id)
@@ -835,9 +835,9 @@ impl LocalStore {
             None => {
                 sqlx::query_as::<_, ChatMessageRow>(
                     "SELECT m.* FROM chat_messages m \
-                     LEFT JOIN threads t ON t.thread_id = m.thread_id \
+                     LEFT JOIN sessions t ON t.session_id = m.session_id \
                      WHERE m.conversation_id = ? \
-                       AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL) \
+                       AND (m.session_id IS NULL OR t.session_id IS NULL OR t.parent_session_id IS NULL) \
                      ORDER BY m.message_seq DESC LIMIT ?",
                 )
                 .bind(conversation_id)
@@ -847,6 +847,107 @@ impl LocalStore {
             }
         };
         Ok(rows)
+    }
+
+    /// Load raw reaction rows for a batch of message ids (any order).
+    pub async fn list_reactions_for_messages(
+        &self,
+        message_ids: &[String],
+    ) -> anyhow::Result<Vec<ChatMessageReactionRow>> {
+        if message_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // sqlx SQLite has no array bind; build a small IN list of placeholders.
+        let placeholders = vec!["?"; message_ids.len()].join(", ");
+        let sql = format!(
+            "SELECT reaction_id, message_id, emoji, actor_id, actor_kind, display_name, created_at_ms \
+             FROM chat_message_reactions \
+             WHERE message_id IN ({placeholders}) \
+             ORDER BY message_id ASC, emoji ASC, created_at_ms ASC"
+        );
+        let mut query = sqlx::query_as::<_, ChatMessageReactionRow>(&sql);
+        for id in message_ids {
+            query = query.bind(id);
+        }
+        let rows = query.fetch_all(&self.pool).await?;
+        Ok(rows)
+    }
+
+    /// Look up conversation_id for a chat message (for reaction RPC validation).
+    pub async fn get_message_conversation_id(
+        &self,
+        message_id: &str,
+    ) -> anyhow::Result<Option<String>> {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT conversation_id FROM chat_messages WHERE message_id = ?",
+        )
+        .bind(message_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.0))
+    }
+
+    /// Idempotent toggle for the host local user: remove if present, else insert.
+    /// SELECT + DELETE/INSERT run in one write transaction so concurrent double-clicks
+    /// serialize instead of racing on the UNIQUE(message_id, emoji, actor_id) constraint.
+    /// Returns `(conversation_id, added)` after the mutation.
+    pub async fn toggle_local_message_reaction(
+        &self,
+        message_id: &str,
+        emoji: &str,
+        reaction_id: &str,
+        now_ms: i64,
+    ) -> anyhow::Result<(String, bool)> {
+        let mut tx = self.pool.begin().await?;
+
+        // Validate message exists and take a write lock on the parent row so
+        // concurrent toggles for this message_id queue (SQLite reserved lock).
+        let conversation_id: Option<String> = sqlx::query_scalar(
+            "UPDATE chat_messages SET message_id = message_id \
+             WHERE message_id = ? RETURNING conversation_id",
+        )
+        .bind(message_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let conversation_id = conversation_id
+            .ok_or_else(|| anyhow::anyhow!("message not found: {message_id}"))?;
+
+        let existing: Option<String> = sqlx::query_scalar(
+            "SELECT reaction_id FROM chat_message_reactions \
+             WHERE message_id = ? AND emoji = ? AND actor_id = ?",
+        )
+        .bind(message_id)
+        .bind(emoji)
+        .bind(minos_protocol::LOCAL_REACTION_ACTOR_ID)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let added = if let Some(existing_id) = existing {
+            sqlx::query("DELETE FROM chat_message_reactions WHERE reaction_id = ?")
+                .bind(&existing_id)
+                .execute(&mut *tx)
+                .await?;
+            false
+        } else {
+            sqlx::query(
+                "INSERT INTO chat_message_reactions \
+                 (reaction_id, message_id, emoji, actor_id, actor_kind, display_name, created_at_ms) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(reaction_id)
+            .bind(message_id)
+            .bind(emoji)
+            .bind(minos_protocol::LOCAL_REACTION_ACTOR_ID)
+            .bind(minos_protocol::LOCAL_REACTION_ACTOR_KIND)
+            .bind(minos_protocol::LOCAL_REACTION_DISPLAY_NAME)
+            .bind(now_ms)
+            .execute(&mut *tx)
+            .await?;
+            true
+        };
+
+        tx.commit().await?;
+        Ok((conversation_id, added))
     }
 
     /// Touch a project's `updated_at` timestamp.
@@ -884,13 +985,13 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for ProjectRow {
 }
 
 #[derive(Debug, Clone)]
-pub struct ThreadRow {
-    pub thread_id: String,
+pub struct SessionRow {
+    pub session_id: String,
     pub conversation_id: String,
     pub workspace_root: String,
     pub agent: String,
     pub provider_session_id: Option<String>,
-    pub parent_thread_id: Option<String>,
+    pub parent_session_id: Option<String>,
     pub status: String,
     pub last_pause_reason: Option<String>,
     pub last_close_reason: Option<String>,
@@ -901,16 +1002,16 @@ pub struct ThreadRow {
     pub needs_continue: bool,
 }
 
-impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for ThreadRow {
+impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for SessionRow {
     fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
         let needs_continue_i: i64 = row.try_get("needs_continue").unwrap_or(0);
         Ok(Self {
-            thread_id: row.try_get("thread_id")?,
+            session_id: row.try_get("session_id")?,
             conversation_id: row.try_get("conversation_id")?,
             workspace_root: row.try_get("workspace_root")?,
             agent: row.try_get("agent")?,
             provider_session_id: row.try_get("provider_session_id")?,
-            parent_thread_id: row.try_get("parent_thread_id")?,
+            parent_session_id: row.try_get("parent_session_id")?,
             status: row.try_get("status")?,
             last_pause_reason: row.try_get("last_pause_reason")?,
             last_close_reason: row.try_get("last_close_reason")?,
@@ -928,27 +1029,27 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for ThreadRow {
 const CONVERSATION_SELECT_COLS: &str = "\
     c.conversation_id, c.project_id, c.title, \
     (SELECT m.body FROM chat_messages m \
-     LEFT JOIN threads t ON t.thread_id = m.thread_id \
+     LEFT JOIN sessions t ON t.session_id = m.session_id \
      WHERE m.conversation_id = c.conversation_id \
-       AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL) \
+       AND (m.session_id IS NULL OR t.session_id IS NULL OR t.parent_session_id IS NULL) \
      ORDER BY m.message_seq DESC LIMIT 1) AS last_message_preview, \
     (SELECT COUNT(*) FROM chat_messages m \
-     LEFT JOIN threads t ON t.thread_id = m.thread_id \
+     LEFT JOIN sessions t ON t.session_id = m.session_id \
      WHERE m.conversation_id = c.conversation_id \
-       AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL)) AS message_count, \
+       AND (m.session_id IS NULL OR t.session_id IS NULL OR t.parent_session_id IS NULL)) AS message_count, \
     c.agent_session_count, c.created_at_ms, \
     COALESCE((SELECT MAX(m.created_at_ms) FROM chat_messages m \
-              LEFT JOIN threads t ON t.thread_id = m.thread_id \
+              LEFT JOIN sessions t ON t.session_id = m.session_id \
               WHERE m.conversation_id = c.conversation_id \
-                AND (m.thread_id IS NULL OR t.thread_id IS NULL OR t.parent_thread_id IS NULL)), c.created_at_ms) AS updated_at_ms, \
+                AND (m.session_id IS NULL OR t.session_id IS NULL OR t.parent_session_id IS NULL)), c.created_at_ms) AS updated_at_ms, \
     c.priority, \
     COALESCE(c.progress, 'todo') AS progress, \
     c.branch, \
     c.worktree_path, \
-    (SELECT COUNT(*) FROM threads th \
+    (SELECT COUNT(*) FROM sessions th \
      WHERE th.conversation_id = c.conversation_id \
        AND th.status IN ('starting', 'running', 'resuming')) AS running_count, \
-    (SELECT COUNT(*) FROM threads th \
+    (SELECT COUNT(*) FROM sessions th \
      WHERE th.conversation_id = c.conversation_id \
        AND th.status = 'suspended' \
        AND (th.needs_continue != 0 \
@@ -986,7 +1087,7 @@ pub struct ChatMessageRow {
     pub message_seq: i64,
     pub message_id: String,
     pub conversation_id: String,
-    pub thread_id: Option<String>,
+    pub session_id: Option<String>,
     pub created_at_ms: i64,
     pub sender_role: String,
     pub agent: Option<String>,
@@ -997,8 +1098,19 @@ pub struct ChatMessageRow {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ChatMessageReactionRow {
+    pub reaction_id: String,
+    pub message_id: String,
+    pub emoji: String,
+    pub actor_id: String,
+    pub actor_kind: String,
+    pub display_name: String,
+    pub created_at_ms: i64,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct EventRow {
-    pub thread_id: String,
+    pub session_id: String,
     pub seq: i64,
     pub body_kind: String,
     pub body_inline: Option<Vec<u8>>,
@@ -1237,7 +1349,7 @@ mod tests {
         .iter()
         .enumerate()
         {
-            sqlx::query("INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, 'c', '/w', 'codex', ?, 0, ?, ?)")
+            sqlx::query("INSERT INTO sessions(session_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, 'c', '/w', 'codex', ?, 0, ?, ?)")
                 .bind(format!("t{i}"))
                 .bind(*status)
                 .bind(i as i64)
@@ -1249,20 +1361,20 @@ mod tests {
         let n = store.mark_orphans_suspended().await.unwrap();
         // running, starting, resuming — idle stays idle
         assert_eq!(n, 3);
-        let running = store.get_thread("t0").await.unwrap().unwrap();
+        let running = store.get_session("t0").await.unwrap().unwrap();
         assert_eq!(running.status, "suspended");
         assert!(running.needs_continue);
-        let idle = store.get_thread("t1").await.unwrap().unwrap();
+        let idle = store.get_session("t1").await.unwrap().unwrap();
         assert_eq!(idle.status, "idle");
         assert!(!idle.needs_continue);
-        let closed = store.get_thread("t2").await.unwrap().unwrap();
+        let closed = store.get_session("t2").await.unwrap().unwrap();
         assert_eq!(closed.status, "closed");
-        let already = store.get_thread("t3").await.unwrap().unwrap();
+        let already = store.get_session("t3").await.unwrap().unwrap();
         assert_eq!(already.status, "suspended");
         assert!(!already.needs_continue);
-        let starting = store.get_thread("t4").await.unwrap().unwrap();
+        let starting = store.get_session("t4").await.unwrap().unwrap();
         assert!(starting.needs_continue);
-        let resuming = store.get_thread("t5").await.unwrap().unwrap();
+        let resuming = store.get_session("t5").await.unwrap().unwrap();
         assert!(resuming.needs_continue);
     }
 
@@ -1278,7 +1390,7 @@ mod tests {
             .unwrap();
         seed_conversation(&store).await;
         sqlx::query(
-            "INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, \
+            "INSERT INTO sessions(session_id, conversation_id, workspace_root, agent, status, \
              last_seq, started_at, last_activity_at, needs_continue) \
              VALUES ('t-nc', 'c', '/w', 'codex', 'suspended', 0, 0, 0, 1)",
         )
@@ -1289,7 +1401,7 @@ mod tests {
         assert!(!store.take_needs_continue("t-nc").await.unwrap());
         assert!(
             !store
-                .get_thread("t-nc")
+                .get_session("t-nc")
                 .await
                 .unwrap()
                 .unwrap()
@@ -1298,7 +1410,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_and_get_threads() {
+    async fn list_and_get_sessions() {
         let tmp = tempfile::tempdir().unwrap();
         let store = LocalStore::open(&tmp.path().join("t.sqlite"))
             .await
@@ -1311,7 +1423,7 @@ mod tests {
         .unwrap();
         seed_conversation(&store).await;
         for i in 0..3 {
-            sqlx::query("INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, 'c', '/w', 'codex', 'idle', 0, ?, ?)")
+            sqlx::query("INSERT INTO sessions(session_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, 'c', '/w', 'codex', 'idle', 0, ?, ?)")
                 .bind(format!("thr-{i}"))
                 .bind(i as i64)
                 .bind(i as i64)
@@ -1319,9 +1431,9 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let threads = store.list_threads(None, None, None).await.unwrap();
-        assert_eq!(threads.len(), 3);
-        let one = store.get_thread("thr-1").await.unwrap();
+        let sessions = store.list_sessions(None, None, None).await.unwrap();
+        assert_eq!(sessions.len(), 3);
+        let one = store.get_session("thr-1").await.unwrap();
         assert_eq!(one.unwrap().agent, "codex");
     }
 
@@ -1340,13 +1452,13 @@ mod tests {
         seed_conversation(&store).await;
 
         store
-            .insert_thread_in_conversation(
+            .insert_session_in_conversation(
                 "parent", "c", "/w", "codex", None, None, "idle", 10, true,
             )
             .await
             .unwrap();
         store
-            .insert_thread_in_conversation(
+            .insert_session_in_conversation(
                 "sub",
                 "c",
                 "/w",
@@ -1360,8 +1472,8 @@ mod tests {
             .await
             .unwrap();
 
-        let sub = store.get_thread("sub").await.unwrap().unwrap();
-        assert_eq!(sub.parent_thread_id.as_deref(), Some("parent"));
+        let sub = store.get_session("sub").await.unwrap().unwrap();
+        assert_eq!(sub.parent_session_id.as_deref(), Some("parent"));
         let count: (i64,) = sqlx::query_as(
             "SELECT agent_session_count FROM conversations WHERE conversation_id = 'c'",
         )
@@ -1385,13 +1497,13 @@ mod tests {
         .unwrap();
         seed_conversation(&store).await;
         store
-            .insert_thread_in_conversation(
+            .insert_session_in_conversation(
                 "parent", "c", "/w", "codex", None, None, "idle", 10, true,
             )
             .await
             .unwrap();
         store
-            .insert_thread_in_conversation(
+            .insert_session_in_conversation(
                 "sub",
                 "c",
                 "/w",
@@ -1478,11 +1590,11 @@ mod tests {
         .unwrap();
         seed_conversation(&store).await;
         store
-            .insert_thread_in_conversation("t-a", "c", "/w", "codex", None, None, "idle", 1, true)
+            .insert_session_in_conversation("t-a", "c", "/w", "codex", None, None, "idle", 1, true)
             .await
             .unwrap();
         store
-            .insert_thread_in_conversation("t-b", "c", "/w", "claude", None, None, "idle", 2, true)
+            .insert_session_in_conversation("t-b", "c", "/w", "claude", None, None, "idle", 2, true)
             .await
             .unwrap();
 
@@ -1603,7 +1715,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_thread_status_persists_runtime_state() {
+    async fn update_session_status_persists_runtime_state() {
         let tmp = tempfile::tempdir().unwrap();
         let store = LocalStore::open(&tmp.path().join("t.sqlite"))
             .await
@@ -1615,18 +1727,18 @@ mod tests {
         .await
         .unwrap();
         seed_conversation(&store).await;
-        sqlx::query("INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES ('thr-status', 'c', '/w', 'codex', 'idle', 0, 1, 1)")
+        sqlx::query("INSERT INTO sessions(session_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES ('thr-status', 'c', '/w', 'codex', 'idle', 0, 1, 1)")
             .execute(store.pool())
             .await
             .unwrap();
 
         let updated = store
-            .update_thread_status("thr-status", "running", None, None, None, 42)
+            .update_session_status("thr-status", "running", None, None, None, 42)
             .await
             .unwrap();
         assert_eq!(updated, 1);
 
-        let row = store.get_thread("thr-status").await.unwrap().unwrap();
+        let row = store.get_session("thr-status").await.unwrap().unwrap();
         assert_eq!(row.status, "running");
         assert_eq!(row.last_activity_at, 42);
         assert!(row.last_pause_reason.is_none());
@@ -1635,7 +1747,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_thread_removes_thread_and_events() {
+    async fn delete_session_removes_thread_and_events() {
         let tmp = tempfile::tempdir().unwrap();
         let store = LocalStore::open(&tmp.path().join("t.sqlite"))
             .await
@@ -1647,12 +1759,12 @@ mod tests {
         .await
         .unwrap();
         seed_conversation(&store).await;
-        sqlx::query("INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES ('thr-delete', 'c', '/w', 'codex', 'idle', 1, 0, 0)")
+        sqlx::query("INSERT INTO sessions(session_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES ('thr-delete', 'c', '/w', 'codex', 'idle', 1, 0, 0)")
             .execute(store.pool())
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO events(thread_id, seq, body_kind, body_inline, projection_json, ts_ms, source) VALUES ('thr-delete', 1, 'inline', ?, ?, 0, 'live')",
+            "INSERT INTO events(session_id, seq, body_kind, body_inline, projection_json, ts_ms, source) VALUES ('thr-delete', 1, 'inline', ?, ?, 0, 'live')",
         )
         .bind(br#"{"method":"item/started"}"#.as_slice())
         .bind(b"[]".as_slice())
@@ -1661,7 +1773,7 @@ mod tests {
         .unwrap();
         sqlx::query(
             "INSERT INTO ingest_sync_state( \
-                thread_id, backend_acked_seq, dirty_from_seq, dirty_to_seq, \
+                session_id, backend_acked_seq, dirty_from_seq, dirty_to_seq, \
                 dirty_bytes, dirty_events, updated_at \
              ) VALUES ('thr-delete', 0, 1, 1, 1, 1, 0)",
         )
@@ -1669,18 +1781,18 @@ mod tests {
         .await
         .unwrap();
 
-        let deleted = store.delete_thread("thr-delete").await.unwrap();
+        let deleted = store.delete_session("thr-delete").await.unwrap();
 
         assert_eq!(deleted, 1);
-        assert!(store.get_thread("thr-delete").await.unwrap().is_none());
-        let events: (i64,) = sqlx::query_as("SELECT count(*) FROM events WHERE thread_id = ?")
+        assert!(store.get_session("thr-delete").await.unwrap().is_none());
+        let events: (i64,) = sqlx::query_as("SELECT count(*) FROM events WHERE session_id = ?")
             .bind("thr-delete")
             .fetch_one(store.pool())
             .await
             .unwrap();
         assert_eq!(events.0, 0);
         let sync_rows: (i64,) =
-            sqlx::query_as("SELECT count(*) FROM ingest_sync_state WHERE thread_id = ?")
+            sqlx::query_as("SELECT count(*) FROM ingest_sync_state WHERE session_id = ?")
                 .bind("thr-delete")
                 .fetch_one(store.pool())
                 .await
@@ -1689,7 +1801,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_threads_filters_agent() {
+    async fn list_sessions_filters_agent() {
         let tmp = tempfile::tempdir().unwrap();
         let store = LocalStore::open(&tmp.path().join("t.sqlite"))
             .await
@@ -1701,9 +1813,9 @@ mod tests {
         .await
         .unwrap();
         seed_conversation(&store).await;
-        for (thread_id, agent, ts) in [("thr-a", "codex", 10), ("thr-b", "claude", 20)] {
-            sqlx::query("INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, 'c', '/w', ?, 'idle', 0, ?, ?)")
-                .bind(thread_id)
+        for (session_id, agent, ts) in [("thr-a", "codex", 10), ("thr-b", "claude", 20)] {
+            sqlx::query("INSERT INTO sessions(session_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, 'c', '/w', ?, 'idle', 0, ?, ?)")
+                .bind(session_id)
                 .bind(agent)
                 .bind(ts)
                 .bind(ts)
@@ -1712,13 +1824,99 @@ mod tests {
                 .unwrap();
         }
 
-        let threads = store
-            .list_threads(None, None, Some("claude"))
+        let sessions = store
+            .list_sessions(None, None, Some("claude"))
             .await
             .unwrap();
-        assert_eq!(threads.len(), 1);
-        assert_eq!(threads[0].thread_id, "thr-b");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "thr-b");
+    }
+
+    #[tokio::test]
+    async fn toggle_local_message_reaction_add_remove_and_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = LocalStore::open(&tmp.path().join("t.sqlite"))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO workspaces(root, first_seen_at, last_seen_at) VALUES ('/w', 0, 0)",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
+        seed_conversation(&store).await;
+        store
+            .upsert_conversation_message(
+                "c", "msg-react", None, "user", None, "hello", 10, None, None, "[]",
+            )
+            .await
+            .unwrap();
+
+        let (cid, added) = store
+            .toggle_local_message_reaction("msg-react", "👍", "rx-1", 20)
+            .await
+            .unwrap();
+        assert_eq!(cid, "c");
+        assert!(added);
+
+        let rows = store
+            .list_reactions_for_messages(&["msg-react".into()])
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].emoji, "👍");
+        assert_eq!(rows[0].actor_id, minos_protocol::LOCAL_REACTION_ACTOR_ID);
+
+        let (cid2, added2) = store
+            .toggle_local_message_reaction("msg-react", "👍", "rx-2", 30)
+            .await
+            .unwrap();
+        assert_eq!(cid2, "c");
+        assert!(!added2);
+        let rows2 = store
+            .list_reactions_for_messages(&["msg-react".into()])
+            .await
+            .unwrap();
+        assert!(rows2.is_empty());
+    }
+
+    #[tokio::test]
+    async fn toggle_local_message_reaction_concurrent_double_add_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = LocalStore::open(&tmp.path().join("t.sqlite"))
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO workspaces(root, first_seen_at, last_seen_at) VALUES ('/w', 0, 0)",
+        )
+        .execute(store.pool())
+        .await
+        .unwrap();
+        seed_conversation(&store).await;
+        store
+            .upsert_conversation_message(
+                "c", "msg-race", None, "user", None, "hello", 10, None, None, "[]",
+            )
+            .await
+            .unwrap();
+
+        let store_a = store.clone();
+        let store_b = store.clone();
+        let (a, b) = tokio::join!(
+            store_a.toggle_local_message_reaction("msg-race", "🎉", "rx-a", 20),
+            store_b.toggle_local_message_reaction("msg-race", "🎉", "rx-b", 21),
+        );
+        let (cid_a, added_a) = a.unwrap();
+        let (cid_b, added_b) = b.unwrap();
+        assert_eq!(cid_a, "c");
+        assert_eq!(cid_b, "c");
+        // One add + one remove (second toggle sees the row) — never unique-violation.
+        assert_ne!(added_a, added_b);
+        let rows = store
+            .list_reactions_for_messages(&["msg-race".into()])
+            .await
+            .unwrap();
+        assert!(rows.len() <= 1);
     }
 }
 
-// temporary test removed after

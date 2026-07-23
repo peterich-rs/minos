@@ -1,7 +1,7 @@
 //! Request and response payload types.
 
 use minos_domain::{AgentDescriptor, AgentName, DeviceId, PairingToken};
-use minos_ui_protocol::{ThreadEndReason, UiEventMessage};
+use minos_ui_protocol::{SessionEndReason, UiEventMessage};
 use serde::{Deserialize, Serialize};
 
 /// Response body for `GET /v1/me/peer` — the backend's view of the
@@ -565,6 +565,17 @@ pub enum AgentLaunchMode {
 }
 
 /// Parameters for the `start_agent` RPC. See spec §5.2.
+///
+/// # Profile resolution (latest-only)
+///
+/// 1. When `profile_id` is set: load the host agent profile. `agent` **must**
+///    equal `profile.runtime_agent` (clear error on mismatch). Launch fields
+///    start from the profile's model / reasoning_effort / instructions.
+/// 2. Explicit `model` / `reasoning_effort` / `instructions` on the request
+///    override the corresponding profile fields when provided (non-empty).
+///    Precedence: **explicit request > profile > None**.
+/// 3. When `profile_id` is absent: only the explicit request fields apply
+///    (same as pre-profile behavior).
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StartAgentRequest {
@@ -581,6 +592,9 @@ pub struct StartAgentRequest {
     /// it is silently treated as `Server`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<AgentLaunchMode>,
+    /// Host agent profile to bind at create time. See struct-level resolution order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
     /// Fixed model id for this session (create-time only; not mid-session switch).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -592,7 +606,7 @@ pub struct StartAgentRequest {
     pub instructions: Option<String>,
 }
 
-/// Result of a successful `start_agent` RPC — carries the codex `thread_id`
+/// Result of a successful `start_agent` RPC — carries the codex `session_id`
 /// as `session_id` and the resolved workspace path. See spec §5.2.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -645,50 +659,50 @@ pub struct AgentDispatchResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApprovalDecisionRequest {
     pub request_id: String,
-    pub thread_id: String,
+    pub session_id: String,
     pub decision: serde_json::Value,
 }
 
-/// Parameters for the `interrupt_thread` RPC. See spec §5.2.
+/// Parameters for the `interrupt_session` RPC. See spec §5.2.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct InterruptThreadRequest {
-    pub thread_id: String,
+pub struct InterruptSessionRequest {
+    pub session_id: String,
 }
 
-/// Parameters for the `close_thread` RPC. See spec §5.2.
+/// Parameters for the `close_session` RPC. See spec §5.2.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CloseThreadRequest {
-    pub thread_id: String,
+pub struct CloseSessionRequest {
+    pub session_id: String,
 }
 
-/// Parameters for the `get_thread` RPC. See spec §5.2.
+/// Parameters for the `get_session` RPC. See spec §5.2.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct GetThreadParams {
-    pub thread_id: String,
+pub struct GetSessionParams {
+    pub session_id: String,
 }
 
-/// Parameters for local `resume_thread`. Reattach only by default; optional
+/// Parameters for local `resume_session`. Reattach only by default; optional
 /// `auto_continue` injects a one-shot CONTINUE prompt when the store flag is set.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ResumeThreadRequest {
-    pub thread_id: String,
+pub struct ResumeSessionRequest {
+    pub session_id: String,
     /// When true, after reattach, if `needs_continue` is set, inject CONTINUE once.
     /// Send paths must leave this false so user text wins.
     #[serde(default)]
     pub auto_continue: bool,
 }
 
-/// Mirror of `minos_agent_runtime::ThreadState` published over the wire for
+/// Mirror of `minos_agent_runtime::SessionState` published over the wire for
 /// the host's JSON-RPC surface. Kept structurally identical to the runtime
 /// enum (same `tag = "kind"` / `snake_case` shape) so the two serialise
 /// interchangeably across the relay. Not exposed to UniFFI — the FFI surface
-/// uses `minos_agent_runtime::ThreadState` directly so Swift sees one
-/// canonical `ThreadState` type.
+/// uses `minos_agent_runtime::SessionState` directly so Swift sees one
+/// canonical `SessionState` type.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "kind")]
-pub enum ThreadState {
+pub enum SessionState {
     Starting,
     Idle,
     Running { turn_started_at_ms: i64 },
@@ -713,14 +727,14 @@ pub enum CloseReason {
     TerminalError,
 }
 
-/// Response from the `get_thread` RPC. Wraps the existing `ThreadSummary`
-/// metadata with the live `ThreadState` snapshot so the mobile UI can both
+/// Response from the `get_session` RPC. Wraps the existing `SessionSummary`
+/// metadata with the live `SessionState` snapshot so the mobile UI can both
 /// render the history list entry and decide whether to draw the running
 /// indicator without a second round-trip.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct GetThreadResponse {
-    pub thread: ThreadSummary,
-    pub state: ThreadState,
+pub struct GetSessionResponse {
+    pub thread: SessionSummary,
+    pub state: SessionState,
 }
 
 /// Deep-link QR payload minted by the Mac and scanned by iOS. Carries a
@@ -758,29 +772,29 @@ pub struct RequestPairingQrResponse {
     pub qr_payload: PairingQrPayload,
 }
 
-/// Compact summary of one persisted thread, returned by `list_threads`
+/// Compact summary of one persisted session, returned by `list_sessions`
 /// for the mobile history list.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct ThreadSummary {
-    pub thread_id: String,
+pub struct SessionSummary {
+    pub session_id: String,
     pub agent: AgentName,
     pub title: Option<String>,
     pub first_ts_ms: i64,
     pub last_ts_ms: i64,
     pub message_count: u32,
     pub ended_at_ms: Option<i64>,
-    pub end_reason: Option<ThreadEndReason>,
-    pub parent_thread_id: Option<String>,
-    pub state: ThreadState,
+    pub end_reason: Option<SessionEndReason>,
+    pub parent_session_id: Option<String>,
+    pub state: SessionState,
     /// Host should offer a one-shot continue turn after process-death recovery.
     #[serde(default)]
     pub needs_continue: bool,
 }
 
-/// Parameters for `list_threads`. `before_ts_ms` paginates older entries;
+/// Parameters for `list_sessions`. `before_ts_ms` paginates older entries;
 /// `agent` filters by CLI kind.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct ListThreadsParams {
+pub struct ListSessionsParams {
     pub limit: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub before_ts_ms: Option<i64>,
@@ -788,47 +802,47 @@ pub struct ListThreadsParams {
     pub agent: Option<AgentName>,
 }
 
-/// Response from `list_threads`; `next_before_ts_ms` is set iff there is
+/// Response from `list_sessions`; `next_before_ts_ms` is set iff there is
 /// a strictly older page the caller can request.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct ListThreadsResponse {
-    pub threads: Vec<ThreadSummary>,
+pub struct ListSessionsResponse {
+    pub sessions: Vec<SessionSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_before_ts_ms: Option<i64>,
 }
 
-/// Parameters for `read_thread`. `from_seq` resumes from after the given
+/// Parameters for `read_session`. `from_seq` resumes from after the given
 /// sequence; if omitted, the backend returns the oldest `limit` events.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct ReadThreadParams {
-    pub thread_id: String,
+pub struct ReadSessionParams {
+    pub session_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub from_seq: Option<u64>,
     pub limit: u32,
 }
 
-/// Response from `read_thread`. `next_seq` is set iff more events exist
-/// past the returned window. `thread_end_reason` is set iff the thread is
+/// Response from `read_session`. `next_seq` is set iff more events exist
+/// past the returned window. `session_end_reason` is set iff the session is
 /// closed.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct ReadThreadResponse {
+pub struct ReadSessionResponse {
     pub ui_events: Vec<UiEventMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_seq: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub thread_end_reason: Option<ThreadEndReason>,
+    pub session_end_reason: Option<SessionEndReason>,
 }
 
-/// Parameters for `get_thread_last_seq` (host-only helper).
+/// Parameters for `get_session_last_seq` (host-only helper).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct GetThreadLastSeqParams {
-    pub thread_id: String,
+pub struct GetSessionLastSeqParams {
+    pub session_id: String,
 }
 
-/// Response from `get_thread_last_seq`; `last_seq` is `0` when the thread
+/// Response from `get_session_last_seq`; `last_seq` is `0` when the thread
 /// is unknown or empty.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct GetThreadLastSeqResponse {
+pub struct GetSessionLastSeqResponse {
     pub last_seq: u64,
 }
 
@@ -884,7 +898,7 @@ pub struct DeleteProjectRequest {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct AssignProjectThreadRequest {
     pub project_id: String,
-    pub thread_id: String,
+    pub session_id: String,
 }
 
 /// Response from listing projects.
@@ -938,9 +952,29 @@ pub struct LocalConversationSummary {
 pub struct ConversationMention {
     pub agent: AgentName,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread_id: Option<String>,
+    pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread_short_id: Option<String>,
+    pub session_short_id: Option<String>,
+}
+
+/// One actor on a local conversation message reaction.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct LocalReactionActor {
+    pub actor_id: String,
+    /// `user` | `agent`
+    pub actor_kind: String,
+    pub display_name: String,
+}
+
+/// Aggregated reaction group for one emoji on a message.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct LocalReactionGroup {
+    pub emoji: String,
+    pub count: u32,
+    /// True when the host local user (`actor_id = "local"`) is among actors.
+    pub reacted_by_me: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actors: Vec<LocalReactionActor>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -949,7 +983,7 @@ pub struct LocalConversationMessage {
     pub message_id: String,
     pub conversation_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread_id: Option<String>,
+    pub session_id: Option<String>,
     pub created_at_ms: i64,
     pub sender_role: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -961,7 +995,29 @@ pub struct LocalConversationMessage {
     pub delegation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mentions: Vec<ConversationMention>,
+    /// Aggregated emoji reactions (durable local daemon). Empty when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reactions: Vec<LocalReactionGroup>,
 }
+
+/// Idempotent toggle: if local actor already reacted with `emoji`, remove; else add.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ToggleConversationMessageReactionParams {
+    pub message_id: String,
+    pub emoji: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ToggleConversationMessageReactionResponse {
+    pub message_id: String,
+    pub conversation_id: String,
+    pub reactions: Vec<LocalReactionGroup>,
+}
+
+/// Stable host-local actor for desktop single-user reactions.
+pub const LOCAL_REACTION_ACTOR_ID: &str = "local";
+pub const LOCAL_REACTION_ACTOR_KIND: &str = "user";
+pub const LOCAL_REACTION_DISPLAY_NAME: &str = "You";
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ListConversationsParams {
@@ -1030,14 +1086,22 @@ pub struct ListConversationAgentSessionsParams {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ListConversationAgentSessionsResponse {
-    pub threads: Vec<ThreadSummary>,
+    pub sessions: Vec<SessionSummary>,
 }
 
+/// Start an agent session bound to a conversation.
+///
+/// Profile resolution matches [`StartAgentRequest`]: when `profile_id` is set,
+/// `agent` must match the profile runtime; explicit model/effort/instructions
+/// override profile fields; without `profile_id` only explicit fields apply.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct StartAgentInConversationRequest {
     pub conversation_id: String,
     pub agent: AgentName,
     pub workspace: String,
+    /// Host agent profile to bind at create time. See [`StartAgentRequest`] resolution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
     /// Fixed model id for this session (create-time only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -1134,7 +1198,7 @@ pub struct AppendConversationMessageParams {
     pub conversation_id: String,
     pub message_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread_id: Option<String>,
+    pub session_id: Option<String>,
     pub sender_role: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<AgentName>,
@@ -1152,20 +1216,20 @@ pub struct AppendConversationMessageResponse {
     pub message_seq: i64,
 }
 
-/// Parameters for listing threads within a project.
+/// Parameters for listing sessions within a project.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct ListProjectThreadsParams {
+pub struct ListProjectSessionsParams {
     pub project_id: String,
     pub limit: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub before_ts_ms: Option<i64>,
 }
 
-/// Response from listing project threads.
+/// Response from listing project sessions.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct ListProjectThreadsResponse {
-    pub threads: Vec<ThreadSummary>,
+pub struct ListProjectSessionsResponse {
+    pub sessions: Vec<SessionSummary>,
 }
 
 #[cfg(test)]
@@ -1259,6 +1323,63 @@ mod tests {
     }
 
     #[test]
+    fn local_conversation_message_reactions_default_empty_and_skip() {
+        let msg = LocalConversationMessage {
+            message_seq: 1,
+            message_id: "m1".into(),
+            conversation_id: "c1".into(),
+            session_id: None,
+            created_at_ms: 10,
+            sender_role: "user".into(),
+            agent: None,
+            body: "hi".into(),
+            reply_to_message_id: None,
+            delegation_id: None,
+            mentions: vec![],
+            reactions: vec![],
+        };
+        let value = serde_json::to_value(&msg).unwrap();
+        assert!(
+            value.get("reactions").is_none(),
+            "empty reactions must be omitted"
+        );
+        let back: LocalConversationMessage = serde_json::from_value(value).unwrap();
+        assert!(back.reactions.is_empty());
+    }
+
+    #[test]
+    fn toggle_reaction_params_round_trip() {
+        let req = ToggleConversationMessageReactionParams {
+            message_id: "msg-1".into(),
+            emoji: "👍".into(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: ToggleConversationMessageReactionParams = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, req);
+    }
+
+    #[test]
+    fn toggle_reaction_response_round_trip() {
+        let resp = ToggleConversationMessageReactionResponse {
+            message_id: "msg-1".into(),
+            conversation_id: "c1".into(),
+            reactions: vec![LocalReactionGroup {
+                emoji: "👍".into(),
+                count: 1,
+                reacted_by_me: true,
+                actors: vec![LocalReactionActor {
+                    actor_id: LOCAL_REACTION_ACTOR_ID.into(),
+                    actor_kind: LOCAL_REACTION_ACTOR_KIND.into(),
+                    display_name: LOCAL_REACTION_DISPLAY_NAME.into(),
+                }],
+            }],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let back: ToggleConversationMessageReactionResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, resp);
+    }
+
+    #[test]
     fn health_response_round_trip() {
         let resp = HealthResponse {
             version: "0.1.0".into(),
@@ -1310,6 +1431,7 @@ mod tests {
             agent: AgentName::Codex,
             workspace: "/Users/fan/dev".into(),
             mode: None,
+            profile_id: None,
             model: None,
             reasoning_effort: None,
             instructions: None,
@@ -1329,6 +1451,7 @@ mod tests {
             agent: AgentName::Codex,
             workspace: "/Users/fan/dev".into(),
             mode: Some(AgentLaunchMode::Server),
+            profile_id: None,
             model: None,
             reasoning_effort: None,
             instructions: None,
@@ -1340,12 +1463,46 @@ mod tests {
     }
 
     #[test]
+    fn start_agent_request_with_profile_id_round_trip() {
+        let req = StartAgentRequest {
+            agent: AgentName::Grok,
+            workspace: "/w".into(),
+            mode: None,
+            profile_id: Some("profile-abc".into()),
+            model: Some("override-model".into()),
+            reasoning_effort: None,
+            instructions: None,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"profile_id\":\"profile-abc\""));
+        let back: StartAgentRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
+    }
+
+    #[test]
     fn start_agent_request_pre_mode_payload_decodes() {
         let json = r#"{"agent":"codex","workspace":"/w"}"#;
         let req: StartAgentRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.agent, AgentName::Codex);
         assert_eq!(req.workspace, "/w");
         assert_eq!(req.mode, None);
+        assert_eq!(req.profile_id, None);
+    }
+
+    #[test]
+    fn start_agent_in_conversation_request_with_profile_round_trip() {
+        let req = StartAgentInConversationRequest {
+            conversation_id: "c1".into(),
+            agent: AgentName::Claude,
+            workspace: "/w".into(),
+            profile_id: Some("profile-1".into()),
+            model: None,
+            reasoning_effort: Some("high".into()),
+            instructions: None,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let back: StartAgentInConversationRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(req, back);
     }
 
     #[test]
@@ -1430,7 +1587,7 @@ mod tests {
     fn approval_decision_request_round_trip() {
         let req = ApprovalDecisionRequest {
             request_id: "req-123".into(),
-            thread_id: "thread-abc12".into(),
+            session_id: "thread-abc12".into(),
             decision: serde_json::json!({
                 "decision": "approve",
                 "scope": "once",
@@ -1494,30 +1651,30 @@ mod new_type_tests {
 
     #[test]
     fn thread_summary_round_trip_with_end_reason() {
-        let s = ThreadSummary {
-            thread_id: "thr_1".into(),
+        let s = SessionSummary {
+            session_id: "thr_1".into(),
             agent: AgentName::Codex,
             title: Some("A thread".into()),
             first_ts_ms: 100,
             last_ts_ms: 200,
             message_count: 3,
             ended_at_ms: Some(300),
-            end_reason: Some(ThreadEndReason::AgentDone),
-            parent_thread_id: None,
-            state: ThreadState::Closed {
+            end_reason: Some(SessionEndReason::AgentDone),
+            parent_session_id: None,
+            state: SessionState::Closed {
                 reason: CloseReason::UserClose,
             },
             needs_continue: false,
         };
-        let back: ThreadSummary =
+        let back: SessionSummary =
             serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(s, back);
     }
 
     #[test]
     fn thread_summary_round_trip_open_thread() {
-        let s = ThreadSummary {
-            thread_id: "thr_2".into(),
+        let s = SessionSummary {
+            session_id: "thr_2".into(),
             agent: AgentName::Claude,
             title: None,
             first_ts_ms: 100,
@@ -1525,30 +1682,30 @@ mod new_type_tests {
             message_count: 1,
             ended_at_ms: None,
             end_reason: None,
-            parent_thread_id: Some("parent".into()),
-            state: ThreadState::Idle,
+            parent_session_id: Some("parent".into()),
+            state: SessionState::Idle,
             needs_continue: true,
         };
-        let back: ThreadSummary =
+        let back: SessionSummary =
             serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(s, back);
     }
 
     #[test]
-    fn list_threads_params_round_trip_filters() {
-        let p = ListThreadsParams {
+    fn list_sessions_params_round_trip_filters() {
+        let p = ListSessionsParams {
             limit: 50,
             before_ts_ms: Some(1_000),
             agent: Some(AgentName::Gemini),
         };
-        let back: ListThreadsParams =
+        let back: ListSessionsParams =
             serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
         assert_eq!(p, back);
     }
 
     #[test]
-    fn list_threads_params_round_trip_omits_none_fields() {
-        let p = ListThreadsParams {
+    fn list_sessions_params_round_trip_omits_none_fields() {
+        let p = ListSessionsParams {
             limit: 10,
             before_ts_ms: None,
             agent: None,
@@ -1559,10 +1716,10 @@ mod new_type_tests {
     }
 
     #[test]
-    fn list_threads_response_round_trip() {
-        let r = ListThreadsResponse {
-            threads: vec![ThreadSummary {
-                thread_id: "thr_1".into(),
+    fn list_sessions_response_round_trip() {
+        let r = ListSessionsResponse {
+            sessions: vec![SessionSummary {
+                session_id: "thr_1".into(),
                 agent: AgentName::Codex,
                 title: None,
                 first_ts_ms: 1,
@@ -1570,58 +1727,58 @@ mod new_type_tests {
                 message_count: 0,
                 ended_at_ms: None,
                 end_reason: None,
-                parent_thread_id: None,
-                state: ThreadState::Idle,
+                parent_session_id: None,
+                state: SessionState::Idle,
                 needs_continue: false,
             }],
             next_before_ts_ms: Some(1),
         };
-        let back: ListThreadsResponse =
+        let back: ListSessionsResponse =
             serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
         assert_eq!(r, back);
     }
 
     #[test]
-    fn read_thread_params_round_trip() {
-        let p = ReadThreadParams {
-            thread_id: "thr_1".into(),
+    fn read_session_params_round_trip() {
+        let p = ReadSessionParams {
+            session_id: "thr_1".into(),
             from_seq: Some(10),
             limit: 100,
         };
-        let back: ReadThreadParams =
+        let back: ReadSessionParams =
             serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
         assert_eq!(p, back);
     }
 
     #[test]
-    fn read_thread_response_round_trip() {
-        let r = ReadThreadResponse {
+    fn read_session_response_round_trip() {
+        let r = ReadSessionResponse {
             ui_events: vec![UiEventMessage::TextDelta {
                 message_id: "msg_1".into(),
                 text: "Hi".into(),
             }],
             next_seq: Some(2),
-            thread_end_reason: Some(ThreadEndReason::AgentDone),
+            session_end_reason: Some(SessionEndReason::AgentDone),
         };
-        let back: ReadThreadResponse =
+        let back: ReadSessionResponse =
             serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
         assert_eq!(r, back);
     }
 
     #[test]
-    fn get_thread_last_seq_params_round_trip() {
-        let p = GetThreadLastSeqParams {
-            thread_id: "thr_1".into(),
+    fn get_session_last_seq_params_round_trip() {
+        let p = GetSessionLastSeqParams {
+            session_id: "thr_1".into(),
         };
-        let back: GetThreadLastSeqParams =
+        let back: GetSessionLastSeqParams =
             serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
         assert_eq!(p, back);
     }
 
     #[test]
-    fn get_thread_last_seq_response_round_trip() {
-        let r = GetThreadLastSeqResponse { last_seq: 42 };
-        let back: GetThreadLastSeqResponse =
+    fn get_session_last_seq_response_round_trip() {
+        let r = GetSessionLastSeqResponse { last_seq: 42 };
+        let back: GetSessionLastSeqResponse =
             serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
         assert_eq!(r, back);
     }

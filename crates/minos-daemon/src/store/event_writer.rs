@@ -131,16 +131,16 @@ async fn process_batch(
     let mut checked_threads = HashSet::new();
     let mut parent_errors = HashMap::new();
     for job in &jobs {
-        if checked_threads.insert(job.ingest.thread_id.clone()) {
-            if let Err(e) = wait_for_thread_parent(store, &job.ingest.thread_id).await {
-                parent_errors.insert(job.ingest.thread_id.clone(), e.to_string());
+        if checked_threads.insert(job.ingest.session_id.clone()) {
+            if let Err(e) = wait_for_thread_parent(store, &job.ingest.session_id).await {
+                parent_errors.insert(job.ingest.session_id.clone(), e.to_string());
             }
         }
     }
 
     let mut ready_jobs = Vec::with_capacity(jobs.len());
     for job in jobs {
-        if let Some(error) = parent_errors.get(&job.ingest.thread_id) {
+        if let Some(error) = parent_errors.get(&job.ingest.session_id) {
             let _ = job.ack.send(Err(anyhow::anyhow!(error.clone())));
         } else {
             ready_jobs.push(job);
@@ -166,8 +166,8 @@ async fn process_batch(
             seq
         } else {
             let prev: Option<i64> =
-                match sqlx::query_scalar("SELECT last_seq FROM threads WHERE thread_id = ?")
-                    .bind(&job.ingest.thread_id)
+                match sqlx::query_scalar("SELECT last_seq FROM sessions WHERE session_id = ?")
+                    .bind(&job.ingest.session_id)
                     .fetch_optional(&mut *tx)
                     .await
                 {
@@ -180,7 +180,7 @@ async fn process_batch(
             let Some(prev) = prev else {
                 results.push(Err(anyhow::anyhow!(
                     "thread parent row disappeared before event write: {}",
-                    job.ingest.thread_id
+                    job.ingest.session_id
                 )));
                 continue;
             };
@@ -205,11 +205,11 @@ async fn process_batch(
         };
         if let Err(e) = sqlx::query(
             "INSERT INTO events( \
-                thread_id, seq, body_kind, body_inline, artifact_id, artifact_size_bytes, \
+                session_id, seq, body_kind, body_inline, artifact_id, artifact_size_bytes, \
                 artifact_sha256, artifact_media_type, projection_json, ts_ms, source \
              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(&job.ingest.thread_id)
+        .bind(&job.ingest.session_id)
         .bind(seq as i64)
         .bind(stored_body.body_kind)
         .bind(stored_body.body_inline)
@@ -232,27 +232,27 @@ async fn process_batch(
         let provider_session_id = provider_session_id_from_ingest(&job.ingest);
         let update_result = if let Some(provider_session_id) = provider_session_id.as_deref() {
             sqlx::query(
-                "UPDATE threads SET \
+                "UPDATE sessions SET \
                     last_seq = CASE WHEN last_seq < ? THEN ? ELSE last_seq END, \
-                    last_activity_at = ?, provider_session_id = ? WHERE thread_id = ?",
+                    last_activity_at = ?, provider_session_id = ? WHERE session_id = ?",
             )
             .bind(seq as i64)
             .bind(seq as i64)
             .bind(job.ingest.ts_ms)
             .bind(provider_session_id)
-            .bind(&job.ingest.thread_id)
+            .bind(&job.ingest.session_id)
             .execute(&mut *tx)
             .await
         } else {
             sqlx::query(
-                "UPDATE threads SET \
+                "UPDATE sessions SET \
                     last_seq = CASE WHEN last_seq < ? THEN ? ELSE last_seq END, \
-                    last_activity_at = ? WHERE thread_id = ?",
+                    last_activity_at = ? WHERE session_id = ?",
             )
             .bind(seq as i64)
             .bind(seq as i64)
             .bind(job.ingest.ts_ms)
-            .bind(&job.ingest.thread_id)
+            .bind(&job.ingest.session_id)
             .execute(&mut *tx)
             .await
         };
@@ -291,14 +291,14 @@ async fn prepare_raw_body(store: &LocalStore, ingest: &RawIngest) -> Result<Stor
         RawBody::InlineBytes { bytes, media_type } if bytes.len() >= INLINE_RAW_BODY_THRESHOLD => {
             let artifact = store
                 .artifacts()
-                .write_bytes(&ingest.thread_id, bytes, media_type)
+                .write_bytes(&ingest.session_id, bytes, media_type)
                 .await?;
             sqlx::query(
                 "INSERT OR IGNORE INTO artifacts( \
-                    thread_id, artifact_id, size_bytes, sha256, media_type, created_at \
+                    session_id, artifact_id, size_bytes, sha256, media_type, created_at \
                  ) VALUES (?, ?, ?, ?, ?, ?)",
             )
-            .bind(&artifact.thread_id)
+            .bind(&artifact.session_id)
             .bind(&artifact.artifact_id)
             .bind(artifact.size_bytes as i64)
             .bind(&artifact.sha256)
@@ -369,36 +369,36 @@ impl ProjectionTranslator {
             AgentName::Codex => {
                 let state = self
                     .codex
-                    .entry(ingest.thread_id.clone())
-                    .or_insert_with(|| CodexTranslatorState::new(ingest.thread_id.clone()));
+                    .entry(ingest.session_id.clone())
+                    .or_insert_with(|| CodexTranslatorState::new(ingest.session_id.clone()));
                 translate_codex(state, &payload)
             }
             AgentName::Claude => {
                 let state = self
                     .claude
-                    .entry(ingest.thread_id.clone())
-                    .or_insert_with(|| ClaudeTranslatorState::new(ingest.thread_id.clone()));
+                    .entry(ingest.session_id.clone())
+                    .or_insert_with(|| ClaudeTranslatorState::new(ingest.session_id.clone()));
                 translate_claude(state, &payload)
             }
             AgentName::Gemini => {
                 let state = self
                     .gemini
-                    .entry(ingest.thread_id.clone())
-                    .or_insert_with(|| GeminiTranslatorState::new(ingest.thread_id.clone()));
+                    .entry(ingest.session_id.clone())
+                    .or_insert_with(|| GeminiTranslatorState::new(ingest.session_id.clone()));
                 translate_gemini(state, &payload)
             }
             AgentName::Grok => {
                 let state = self
                     .grok
-                    .entry(ingest.thread_id.clone())
-                    .or_insert_with(|| GrokTranslatorState::new(ingest.thread_id.clone()));
+                    .entry(ingest.session_id.clone())
+                    .or_insert_with(|| GrokTranslatorState::new(ingest.session_id.clone()));
                 translate_grok(state, &payload)
             }
             AgentName::Opencode => {
                 let state = self
                     .opencode
-                    .entry(ingest.thread_id.clone())
-                    .or_insert_with(|| OpencodeTranslatorState::new(ingest.thread_id.clone()));
+                    .entry(ingest.session_id.clone())
+                    .or_insert_with(|| OpencodeTranslatorState::new(ingest.session_id.clone()));
                 translate_opencode(state, &payload)
             }
         };
@@ -423,14 +423,14 @@ fn raw_projection_fallback(ingest: &RawIngest) -> UiEventMessage {
     }
 }
 
-async fn wait_for_thread_parent(store: &LocalStore, thread_id: &str) -> Result<()> {
+async fn wait_for_thread_parent(store: &LocalStore, session_id: &str) -> Result<()> {
     let started = Instant::now();
     for delay_ms in [0, 10, 25, 50, 100, 200, 400, 400, 400, 400, 400] {
         if delay_ms > 0 {
             sleep(Duration::from_millis(delay_ms)).await;
         }
-        let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM threads WHERE thread_id = ?")
-            .bind(thread_id)
+        let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM sessions WHERE session_id = ?")
+            .bind(session_id)
             .fetch_optional(store.pool())
             .await?;
         if exists.is_some() {
@@ -438,7 +438,7 @@ async fn wait_for_thread_parent(store: &LocalStore, thread_id: &str) -> Result<(
         }
     }
     Err(anyhow::anyhow!(
-        "thread parent row missing for {thread_id} after {:?}",
+        "thread parent row missing for {session_id} after {:?}",
         started.elapsed()
     ))
 }
@@ -472,7 +472,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, ?, '/tmp/ws', 'codex', 'idle', 0, 0, 0)",
+            "INSERT INTO sessions(session_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) VALUES (?, ?, '/tmp/ws', 'codex', 'idle', 0, 0, 0)",
         )
         .bind(tid)
         .bind(format!("c-{tid}"))

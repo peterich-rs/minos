@@ -3,7 +3,7 @@
 //! When a top-level conversation agent finishes a **turn** (not each intermediate
 //! assistant message), this module:
 //! 1. Upserts a durable conversation message (`agent-result:…`)
-//! 2. Completes any running teamwork delegation for that thread
+//! 2. Completes any running teamwork delegation for that session
 //! 3. Delivers the result to the source thread (or queues if busy)
 //!
 //! Timeline order is the durable insert order of `chat_messages.message_seq`
@@ -29,7 +29,7 @@
 //!
 //! ## Turn-boundary latch
 //!
-//! Runtime `ThreadState::Idle`/`Closed` and ingest `MessageCompleted` race across
+//! Runtime `SessionState::Idle`/`Closed` and ingest `MessageCompleted` race across
 //! independent tasks. Neither alone is a safe write trigger for every agent:
 //!
 //! - Idle may arrive **before** the final `MessageCompleted` has been projected.
@@ -39,13 +39,13 @@
 //! Unified model:
 //! - `Idle`/`Closed` → set `pending_boundary` and `try_record` if text is ready.
 //! - Ingest terminal events → accumulate; `try_record` only when
-//!   `pending_boundary`, `ThreadClosed`, or Opencode terminal complete.
+//!   `pending_boundary`, `SessionClosed`, or Opencode terminal complete.
 //! - `Running` / user `MessageStarted` → reset turn-scoped projection fields.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use minos_agent_runtime::{AgentManager, ThreadState};
+use minos_agent_runtime::{AgentManager, SessionState};
 use minos_chat_store::{TeamworkSourceDeliveryStatus, TeamworkStore};
 use minos_domain::AgentName;
 use minos_protocol::{ConversationMention, LocalConversationEvent};
@@ -56,7 +56,7 @@ use tracing::{debug, info, warn};
 use crate::store::LocalStore;
 
 #[derive(Default)]
-struct ThreadProjection {
+struct SessionProjection {
     agent: Option<AgentName>,
     /// Current open assistant text segment by message_id (within the turn).
     /// After a tool/reasoning interrupt, the next TextDelta starts a fresh
@@ -87,7 +87,7 @@ struct ThreadProjection {
     turn_write_id: Option<String>,
 }
 
-impl ThreadProjection {
+impl SessionProjection {
     /// Clear turn-scoped fields so a new Running/user turn cannot resurrect
     /// the previous turn's `last_completed` after reset of write flags.
     fn begin_turn(&mut self) {
@@ -191,7 +191,7 @@ impl ThreadProjection {
                 UiEventMessage::MessageStarted {
                     message_id, role, ..
                 } => {
-                    // A new user message starts a turn even if ThreadState::Running
+                    // A new user message starts a turn even if SessionState::Running
                     // was missed or reordered relative to ingest.
                     if matches!(role, MessageRole::User) {
                         self.begin_turn();
@@ -262,7 +262,7 @@ impl ThreadProjection {
                     }
                 }
                 UiEventMessage::SubagentSpawned {
-                    parent_thread_id: _,
+                    parent_session_id: _,
                     tool_call_id,
                     ..
                 } => {
@@ -295,7 +295,7 @@ impl ThreadProjection {
                         }
                     }
                 }
-                UiEventMessage::ThreadClosed { .. } => {}
+                UiEventMessage::SessionClosed { .. } => {}
                 UiEventMessage::Error {
                     message,
                     message_id,
@@ -334,7 +334,7 @@ impl ThreadProjection {
         if !(has_message_completed || has_thread_closed) {
             return false;
         }
-        // ThreadClosed is always a boundary (thread gone).
+        // SessionClosed is always a boundary (thread gone).
         if has_thread_closed {
             return true;
         }
@@ -354,7 +354,7 @@ pub(crate) struct ConversationCompletion {
     manager: Arc<AgentManager>,
     default_workspace: std::path::PathBuf,
     local_conversation_event_tx: broadcast::Sender<LocalConversationEvent>,
-    projections: Arc<Mutex<HashMap<String, ThreadProjection>>>,
+    projections: Arc<Mutex<HashMap<String, SessionProjection>>>,
 }
 
 impl ConversationCompletion {
@@ -375,7 +375,7 @@ impl ConversationCompletion {
 
     pub(crate) async fn on_ingest_frame(
         &self,
-        thread_id: &str,
+        session_id: &str,
         agent: AgentName,
         ui_events: &[UiEventMessage],
     ) {
@@ -384,59 +384,59 @@ impl ConversationCompletion {
             .any(|event| matches!(event, UiEventMessage::MessageCompleted { .. }));
         let has_thread_closed = ui_events
             .iter()
-            .any(|event| matches!(event, UiEventMessage::ThreadClosed { .. }));
+            .any(|event| matches!(event, UiEventMessage::SessionClosed { .. }));
 
         let should_try = {
             let mut projections = self.projections.lock().await;
-            let projection = projections.entry(thread_id.to_owned()).or_default();
+            let projection = projections.entry(session_id.to_owned()).or_default();
             projection.apply_events(agent, ui_events);
             projection.should_try_record_on_ingest(has_message_completed, has_thread_closed)
         };
         if should_try {
-            self.try_record_result(thread_id).await;
+            self.try_record_result(session_id).await;
         }
     }
 
-    pub(crate) async fn on_thread_state(&self, thread_id: &str, state: &ThreadState) {
+    pub(crate) async fn on_session_state(&self, session_id: &str, state: &SessionState) {
         match state {
-            ThreadState::Starting | ThreadState::Resuming | ThreadState::Running { .. } => {
+            SessionState::Starting | SessionState::Resuming | SessionState::Running { .. } => {
                 let mut projections = self.projections.lock().await;
                 projections
-                    .entry(thread_id.to_owned())
+                    .entry(session_id.to_owned())
                     .or_default()
                     .begin_turn();
             }
-            ThreadState::Idle | ThreadState::Closed { .. } => {
+            SessionState::Idle | SessionState::Closed { .. } => {
                 {
                     let mut projections = self.projections.lock().await;
-                    let projection = projections.entry(thread_id.to_owned()).or_default();
+                    let projection = projections.entry(session_id.to_owned()).or_default();
                     projection.pending_boundary = true;
                 }
-                self.try_record_result(thread_id).await;
-                self.flush_pending_source_deliveries(thread_id).await;
+                self.try_record_result(session_id).await;
+                self.flush_pending_source_deliveries(session_id).await;
             }
-            ThreadState::Suspended { .. } => {
+            SessionState::Suspended { .. } => {
                 // Crash/suspend does not complete a turn into the conversation
                 // timeline (product: no partial write on instance death).
             }
         }
     }
 
-    async fn try_record_result(&self, thread_id: &str) {
-        let thread_row = match self.store.get_thread(thread_id).await {
+    async fn try_record_result(&self, session_id: &str) {
+        let thread_row = match self.store.get_session(session_id).await {
             Ok(Some(row)) => row,
             Ok(None) => return,
             Err(error) => {
                 warn!(
                     target: "minos_daemon::conversation_completion",
                     error = %error,
-                    thread_id,
+                    session_id,
                     "failed to load thread for completion"
                 );
                 return;
             }
         };
-        if thread_row.parent_thread_id.is_some() {
+        if thread_row.parent_session_id.is_some() {
             return;
         }
         if thread_row.conversation_id.trim().is_empty() {
@@ -446,7 +446,7 @@ impl ConversationCompletion {
 
         let (message_key, text, durable_id, agent) = {
             let mut projections = self.projections.lock().await;
-            let Some(projection) = projections.get_mut(thread_id) else {
+            let Some(projection) = projections.get_mut(session_id) else {
                 return;
             };
             let Some((key, text, durable)) = projection.claim_write() else {
@@ -461,33 +461,33 @@ impl ConversationCompletion {
 
         if text.trim().is_empty() {
             let mut projections = self.projections.lock().await;
-            if let Some(projection) = projections.get_mut(thread_id) {
+            if let Some(projection) = projections.get_mut(session_id) {
                 projection.finish_write_err();
             }
             return;
         }
 
         if let Err(error) = self
-            .write_result(&conversation_id, thread_id, &durable_id, &text, agent)
+            .write_result(&conversation_id, session_id, &durable_id, &text, agent)
             .await
         {
             warn!(
                 target: "minos_daemon::conversation_completion",
                 error = %error,
                 conversation_id = %conversation_id,
-                thread_id,
+                session_id,
                 message_key = %message_key,
                 "failed to write agent conversation result"
             );
             let mut projections = self.projections.lock().await;
-            if let Some(projection) = projections.get_mut(thread_id) {
+            if let Some(projection) = projections.get_mut(session_id) {
                 projection.finish_write_err();
             }
             return;
         }
 
         let mut projections = self.projections.lock().await;
-        if let Some(projection) = projections.get_mut(thread_id) {
+        if let Some(projection) = projections.get_mut(session_id) {
             projection.finish_write_ok();
         }
     }
@@ -495,7 +495,7 @@ impl ConversationCompletion {
     async fn write_result(
         &self,
         conversation_id: &str,
-        thread_id: &str,
+        session_id: &str,
         durable_id: &str,
         text: &str,
         agent: Option<AgentName>,
@@ -503,19 +503,19 @@ impl ConversationCompletion {
         let teamwork =
             open_teamwork_store(&self.store, conversation_id, &self.default_workspace).await?;
         let delegation = teamwork
-            .running_delegation_for_thread(conversation_id, thread_id)
+            .running_delegation_for_thread(conversation_id, session_id)
             .await?;
 
         // durable_id is turn-scoped (claimed once) so concurrent try_record paths
         // upsert the same chat_messages row instead of inserting siblings.
-        let message_id = format!("agent-result:{conversation_id}:{thread_id}:{durable_id}");
+        let message_id = format!("agent-result:{conversation_id}:{session_id}:{durable_id}");
         let (body, reply_to, mentions, delegation_id) =
             if let Some(delegation) = delegation.as_ref() {
                 let source_agent = delegation.source_agent;
-                let source_thread = delegation.source_thread_id.clone();
-                let short = source_thread
+                let source_session = delegation.source_session_id.clone();
+                let short = source_session
                     .as_deref()
-                    .map(short_thread_id)
+                    .map(short_session_id)
                     .unwrap_or_else(|| "unknown".into());
                 let body = match source_agent {
                     Some(source) => format!("@{}#{} {}", source.bin_name(), short, text.trim()),
@@ -525,8 +525,8 @@ impl ConversationCompletion {
                     .map(|source| {
                         vec![ConversationMention {
                             agent: source,
-                            thread_id: source_thread.clone(),
-                            thread_short_id: Some(short),
+                            session_id: source_session.clone(),
+                            session_short_id: Some(short),
                         }]
                     })
                     .unwrap_or_default();
@@ -548,7 +548,7 @@ impl ConversationCompletion {
             .upsert_conversation_message(
                 conversation_id,
                 &message_id,
-                Some(thread_id),
+                Some(session_id),
                 "agent",
                 agent_label.as_deref(),
                 &body,
@@ -567,11 +567,11 @@ impl ConversationCompletion {
 
         if delegation.is_some() {
             match teamwork
-                .complete_delegation_for_thread(conversation_id, thread_id, Some(&message_id), text)
+                .complete_delegation_for_thread(conversation_id, session_id, Some(&message_id), text)
                 .await
             {
                 Ok(Some(completed)) => {
-                    self.deliver_to_source(&teamwork, &completed, thread_id, &body)
+                    self.deliver_to_source(&teamwork, &completed, session_id, &body)
                         .await;
                 }
                 Ok(None) => {}
@@ -588,7 +588,7 @@ impl ConversationCompletion {
         info!(
             target: "minos_daemon::conversation_completion",
             conversation_id,
-            thread_id,
+            session_id,
             message_id = %message_id,
             "recorded agent conversation result"
         );
@@ -599,24 +599,24 @@ impl ConversationCompletion {
         &self,
         teamwork: &TeamworkStore,
         delegation: &minos_chat_store::TeamworkDelegation,
-        target_thread_id: &str,
+        target_session_id: &str,
         visible_body: &str,
     ) {
-        let Some(source_thread_id) = delegation.source_thread_id.as_deref() else {
+        let Some(source_session_id) = delegation.source_session_id.as_deref() else {
             return;
         };
-        if source_thread_id == target_thread_id {
+        if source_session_id == target_session_id {
             return;
         }
         let source_body = format!(
             "[{}#{}] {}",
             delegation.target_agent.bin_name(),
-            short_thread_id(target_thread_id),
+            short_session_id(target_session_id),
             visible_body
         );
 
         match self
-            .try_send_to_source(source_thread_id, &source_body)
+            .try_send_to_source(source_session_id, &source_body)
             .await
         {
             Ok(()) => {
@@ -624,7 +624,7 @@ impl ConversationCompletion {
                     .enqueue_source_delivery(
                         &delegation.conversation_id,
                         &delegation.delegation_id,
-                        source_thread_id,
+                        source_session_id,
                         &source_body,
                     )
                     .await
@@ -642,14 +642,14 @@ impl ConversationCompletion {
                 warn!(
                     target: "minos_daemon::conversation_completion",
                     error = %error,
-                    source_thread_id,
+                    source_session_id,
                     "source busy; queueing delegation result delivery"
                 );
                 let _ = teamwork
                     .enqueue_source_delivery(
                         &delegation.conversation_id,
                         &delegation.delegation_id,
-                        source_thread_id,
+                        source_session_id,
                         &source_body,
                     )
                     .await;
@@ -658,14 +658,14 @@ impl ConversationCompletion {
                 warn!(
                     target: "minos_daemon::conversation_completion",
                     error = %error,
-                    source_thread_id,
+                    source_session_id,
                     "failed to deliver delegation result to source"
                 );
                 if let Ok(delivery) = teamwork
                     .enqueue_source_delivery(
                         &delegation.conversation_id,
                         &delegation.delegation_id,
-                        source_thread_id,
+                        source_session_id,
                         &source_body,
                     )
                     .await
@@ -682,27 +682,27 @@ impl ConversationCompletion {
         }
     }
 
-    async fn try_send_to_source(&self, source_thread_id: &str, body: &str) -> anyhow::Result<()> {
+    async fn try_send_to_source(&self, source_session_id: &str, body: &str) -> anyhow::Result<()> {
         self.manager
-            .send_user_message(source_thread_id, body.to_owned())
+            .send_user_message(source_session_id, body.to_owned())
             .await
     }
 
-    async fn flush_pending_source_deliveries(&self, source_thread_id: &str) {
+    async fn flush_pending_source_deliveries(&self, source_session_id: &str) {
         let Ok(teamwork) =
             open_teamwork_store(&self.store, "unused", &self.default_workspace).await
         else {
             return;
         };
         let Ok(pending) = teamwork
-            .list_pending_source_deliveries_for_thread(source_thread_id)
+            .list_pending_source_deliveries_for_thread(source_session_id)
             .await
         else {
             return;
         };
         for delivery in pending {
             match self
-                .try_send_to_source(source_thread_id, &delivery.body)
+                .try_send_to_source(source_session_id, &delivery.body)
                 .await
             {
                 Ok(()) => {
@@ -752,8 +752,8 @@ async fn open_teamwork_store(
     Ok(teamwork)
 }
 
-fn short_thread_id(thread_id: &str) -> String {
-    thread_id[..8.min(thread_id.len())].to_owned()
+fn short_session_id(session_id: &str) -> String {
+    session_id[..8.min(session_id.len())].to_owned()
 }
 
 fn parse_agent_label(value: &str) -> Option<AgentName> {
@@ -835,7 +835,7 @@ mod tests {
 
     #[test]
     fn non_opencode_message_completed_without_boundary_does_not_try_record() {
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Grok,
             &[
@@ -851,7 +851,7 @@ mod tests {
 
     #[test]
     fn non_opencode_idle_first_then_completed_allows_record() {
-        let mut p = ThreadProjection {
+        let mut p = SessionProjection {
             agent: Some(AgentName::Codex),
             pending_boundary: true, // Idle latched first
             ..Default::default()
@@ -873,7 +873,7 @@ mod tests {
 
     #[test]
     fn multi_completed_defers_until_boundary_and_takes_last() {
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Grok,
             &[
@@ -896,7 +896,7 @@ mod tests {
 
     #[test]
     fn opencode_terminal_completed_can_record_without_idle() {
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Opencode,
             &[assistant_start("m1"), delta("m1", "done"), completed("m1")],
@@ -906,7 +906,7 @@ mod tests {
 
     #[test]
     fn begin_turn_clears_prior_completed_so_cancel_cannot_resurrect() {
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Claude,
             &[
@@ -926,7 +926,7 @@ mod tests {
 
     #[test]
     fn user_message_started_resets_turn_scope() {
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Gemini,
             &[assistant_start("m1"), delta("m1", "old"), completed("m1")],
@@ -944,7 +944,7 @@ mod tests {
 
     #[test]
     fn thread_closed_on_ingest_always_allows_try_record() {
-        let mut p = ThreadProjection {
+        let mut p = SessionProjection {
             agent: Some(AgentName::Codex),
             ..Default::default()
         };
@@ -958,7 +958,7 @@ mod tests {
 
     #[test]
     fn claim_write_is_single_flight_per_turn() {
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Opencode,
             &[assistant_start("m1"), delta("m1", "final"), completed("m1")],
@@ -978,7 +978,7 @@ mod tests {
 
     #[test]
     fn claim_write_reuses_stable_durable_id_after_failed_write() {
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Opencode,
             &[
@@ -1009,7 +1009,7 @@ mod tests {
 
     #[test]
     fn opencode_second_message_completed_does_not_try_after_recorded() {
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Opencode,
             &[assistant_start("m1"), delta("m1", "one"), completed("m1")],
@@ -1031,7 +1031,7 @@ mod tests {
     fn grok_style_progress_then_tools_then_final_keeps_only_last_segment() {
         // Mirrors session ChatState: intermediate agent_message_chunk progress
         // between tools must not be concatenated into conversation body.
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Grok,
             &[
@@ -1067,7 +1067,7 @@ mod tests {
 
     #[test]
     fn continuous_text_without_interrupt_stays_concatenated() {
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Grok,
             &[
@@ -1086,7 +1086,7 @@ mod tests {
     #[test]
     fn progress_only_before_tools_without_final_segment_is_not_recorded() {
         // Turn ends after tools with no post-tool answer → do not dump progress.
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Grok,
             &[
@@ -1108,7 +1108,7 @@ mod tests {
         //   → MessageStarted(m2) → ToolCallPlaced(m2, tc1) → ToolCallCompleted(tc1)
         // The tool event completes m1 first; m1's segment is open at that moment.
         // Turn ends with no post-tool final text → must NOT write progress back.
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Grok,
             &[
@@ -1133,7 +1133,7 @@ mod tests {
         // Real Grok shape with post-tool final answer under a fresh message_id:
         //   m1 progress → MessageCompleted(m1) → tool on m2 → m3 final text →
         //   MessageCompleted(m3). Only m3 must be written back.
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Grok,
             &[
@@ -1162,7 +1162,7 @@ mod tests {
         // Grok deliberately reuses the same message_id for thought interleaved
         // with text (see grok.rs comment ~697-699). ReasoningDelta must NOT
         // close the text segment — both halves concatenate into the final body.
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Grok,
             &[
@@ -1182,7 +1182,7 @@ mod tests {
 
     #[test]
     fn simple_answer_without_tools_still_records() {
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Codex,
             &[

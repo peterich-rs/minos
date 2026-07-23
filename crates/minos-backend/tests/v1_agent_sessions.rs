@@ -586,7 +586,7 @@ async fn send_input_dispatches_to_existing_session_and_appends_turn() {
 }
 
 #[tokio::test]
-async fn stop_session_dispatches_close_thread_and_marks_session_stopped() {
+async fn stop_session_dispatches_close_session_and_marks_session_stopped() {
     let state = backend_state().await;
     let (host_id, ios_id, secret, account_id) =
         paired_pair_with_account(&state, "agent-session-stop@example.com").await;

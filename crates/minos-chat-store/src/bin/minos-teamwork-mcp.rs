@@ -19,7 +19,7 @@ struct Args {
     source_agent: Option<String>,
 
     #[arg(long)]
-    source_thread_id: Option<String>,
+    source_session_id: Option<String>,
 
     #[arg(long)]
     disable_list_conversation_messages: bool,
@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
         socket_path: args.socket_path,
         conversation_id: args.conversation_id,
         source_agent,
-        source_thread_id: args.source_thread_id,
+        source_session_id: args.source_session_id,
         permissions: minos_chat_store::mcp_server::McpToolPermissions {
             list_conversation_messages: !args.disable_list_conversation_messages,
             delegate_to_agent: !args.disable_delegate_to_agent,

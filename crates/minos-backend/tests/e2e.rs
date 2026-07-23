@@ -4,7 +4,7 @@
 //! Spawns a real axum server on an ephemeral port with a `tempfile`-backed
 //! SQLite DB, drives it with raw `tokio-tungstenite` clients, and exercises
 //! the parts of the WS contract that survive after the LocalRpc dispatcher
-//! has been retired (HTTP `/v1/*` routes now own the pairing + threads
+//! has been retired (HTTP `/v1/*` routes now own the pairing + sessions
 //! surface; see `tests/v1_pairing.rs` and `tests/v1_threads.rs`).
 //!
 //! # Test layout
