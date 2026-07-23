@@ -439,6 +439,31 @@ async fn register_opencode_subagent_from_pending_task(
     pending_tasks: &Arc<Mutex<HashMap<String, PendingTaskTool>>>,
 ) -> Option<String> {
     let session_id = extract_session_id(payload)?.to_string();
+
+    // Already registered (same provider id) — never emit a second SessionAdded.
+    {
+        let map = session_map.lock().await;
+        if let Some((minos_id, _)) = map
+            .iter()
+            .find(|(_, provider_id)| *provider_id == &session_id)
+        {
+            return Some(minos_id.clone());
+        }
+        if map.contains_key(&session_id) {
+            return Some(session_id.clone());
+        }
+    }
+    {
+        let guard = sessions.lock().await;
+        if guard.contains_key(&session_id) {
+            session_map
+                .lock()
+                .await
+                .insert(session_id.clone(), session_id.clone());
+            return Some(session_id);
+        }
+    }
+
     let pending = {
         let guard = pending_tasks.lock().await;
         (guard.len() == 1)
@@ -449,6 +474,11 @@ async fn register_opencode_subagent_from_pending_task(
     let workspace = {
         let mut guard = sessions.lock().await;
         if guard.contains_key(&session_id) {
+            drop(guard);
+            session_map
+                .lock()
+                .await
+                .insert(session_id.clone(), session_id.clone());
             return Some(session_id);
         }
         let workspace = guard.get(&pending.parent_session_id)?.workspace.clone();

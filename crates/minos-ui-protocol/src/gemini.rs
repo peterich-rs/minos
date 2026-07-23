@@ -77,7 +77,7 @@ pub fn translate(
     // Minos synthetic envelopes shared with Codex (approval overlay path).
     if let Some(method) = raw.get("method").and_then(Value::as_str) {
         match method {
-            "approval/request" | "approval/timeout" => {
+            "approval/request" | "approval/timeout" | "approval/resolved" => {
                 let params = raw.get("params").cloned().unwrap_or(Value::Null);
                 return Ok(vec![UiEventMessage::Raw {
                     kind: method.to_string(),

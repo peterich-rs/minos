@@ -2352,7 +2352,14 @@ impl AgentManager {
         let Some((_, pending)) = self.pending_approvals.remove(request_id) else {
             return Ok(());
         };
-        match pending.target {
+        let agent = self
+            .sessions
+            .lock()
+            .await
+            .get(session_id)
+            .map(|h| h.agent)
+            .unwrap_or(AgentName::Codex);
+        let reply_result = match pending.target {
             PendingApprovalTarget::Codex {
                 request_id, client, ..
             } => client
@@ -2368,7 +2375,39 @@ impl AgentManager {
                 .reply(request_id, reply)
                 .await
                 .map_err(|error| anyhow::anyhow!("ACP approval reply failed: {error}")),
+        };
+        // Durable resolution marker so history replay / assemblers can demote the
+        // interactive approval card (request alone is not enough after approve).
+        if reply_result.is_ok() {
+            let decision_label = decision
+                .get("decision")
+                .or_else(|| decision.get("outcome"))
+                .and_then(Value::as_str)
+                .unwrap_or("resolved");
+            let ingest = RawIngest::from_json(
+                agent,
+                session_id.to_owned(),
+                serde_json::json!({
+                    "method": "approval/resolved",
+                    "params": {
+                        "request_id": request_id,
+                        "session_id": session_id,
+                        "decision": decision_label,
+                    }
+                }),
+                current_unix_ms(),
+            );
+            if let Err(error) = self.events_tx.emit(ingest).await {
+                warn!(
+                    target: "minos_agent_runtime::manager",
+                    error = %error,
+                    request_id,
+                    session_id,
+                    "failed to emit approval/resolved ingest"
+                );
+            }
         }
+        reply_result
     }
 
     pub async fn respond_opencode_permission(
