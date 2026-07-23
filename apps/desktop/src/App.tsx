@@ -1,10 +1,10 @@
 import { useEffect } from "react";
-import { AppShell } from "@/components/shell/AppShell";
-import { BootScreen } from "@/components/shell/BootScreen";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { AppShell } from "@/app/AppShell";
+import { BootScreen } from "@/app/BootScreen";
+import { ErrorBoundary } from "@/shared/ui/ErrorBoundary";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { useUiStore } from "@/store/ui-store";
-import { sortByAttentionThenTime } from "@/lib/list-sort";
+import { sortByAttentionThenTime } from "@/shared/lib/list-sort";
 
 export default function App() {
   const bootstrap = useWorkspaceStore((s) => s.bootstrap);

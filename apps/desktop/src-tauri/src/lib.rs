@@ -4,7 +4,7 @@ mod daemon;
 
 use daemon::{
     CliDto, ConnectionDto, ConversationDto, DaemonBridge, MessagePageDto, ProjectDto, SessionDto,
-    StartAgentResultDto, TranscriptPageDto,
+    StartAgentResultDto, ToggleReactionResultDto, TranscriptPageDto,
 };
 use std::sync::Arc;
 use tauri::State;
@@ -91,6 +91,19 @@ async fn daemon_list_messages(
 }
 
 #[tauri::command]
+async fn daemon_toggle_message_reaction(
+    state: State<'_, AppState>,
+    message_id: String,
+    emoji: String,
+) -> Result<ToggleReactionResultDto, String> {
+    state
+        .daemon
+        .toggle_message_reaction(message_id, emoji)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn daemon_list_sessions(
     state: State<'_, AppState>,
     conversation_id: String,
@@ -155,6 +168,7 @@ async fn daemon_start_agent_in_conversation(
     conversation_id: String,
     agent: String,
     workspace: String,
+    profile_id: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<String>,
     instructions: Option<String>,
@@ -165,6 +179,7 @@ async fn daemon_start_agent_in_conversation(
             conversation_id,
             agent,
             workspace,
+            profile_id,
             model,
             reasoning_effort,
             instructions,
@@ -242,25 +257,25 @@ async fn daemon_delete_agent_profile(state: State<'_, AppState>, id: String) -> 
 #[tauri::command]
 async fn daemon_send_user_message(
     state: State<'_, AppState>,
-    thread_id: String,
+    session_id: String,
     text: String,
 ) -> Result<(), String> {
     state
         .daemon
-        .send_user_message(thread_id, text)
+        .send_user_message(session_id, text)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn daemon_resume_thread(
+async fn daemon_resume_session(
     state: State<'_, AppState>,
-    thread_id: String,
+    session_id: String,
     auto_continue: Option<bool>,
 ) -> Result<(), String> {
     state
         .daemon
-        .resume_thread(thread_id, auto_continue.unwrap_or(false))
+        .resume_session(session_id, auto_continue.unwrap_or(false))
         .await
         .map_err(|e| e.to_string())
 }
@@ -269,12 +284,12 @@ async fn daemon_resume_thread(
 async fn daemon_resolve_approval(
     state: State<'_, AppState>,
     request_id: String,
-    thread_id: String,
+    session_id: String,
     decision: serde_json::Value,
 ) -> Result<(), String> {
     state
         .daemon
-        .resolve_approval(request_id, thread_id, decision)
+        .resolve_approval(request_id, session_id, decision)
         .await
         .map_err(|e| e.to_string())
 }
@@ -282,13 +297,13 @@ async fn daemon_resolve_approval(
 #[tauri::command]
 async fn daemon_respond_opencode_permission(
     state: State<'_, AppState>,
-    thread_id: String,
+    session_id: String,
     permission_id: String,
     response: String,
 ) -> Result<(), String> {
     state
         .daemon
-        .respond_opencode_permission(thread_id, permission_id, response)
+        .respond_opencode_permission(session_id, permission_id, response)
         .await
         .map_err(|e| e.to_string())
 }
@@ -296,13 +311,13 @@ async fn daemon_respond_opencode_permission(
 #[tauri::command]
 async fn daemon_respond_opencode_question(
     state: State<'_, AppState>,
-    thread_id: String,
+    session_id: String,
     question_id: String,
     answers: Vec<Vec<String>>,
 ) -> Result<(), String> {
     state
         .daemon
-        .respond_opencode_question(thread_id, question_id, answers)
+        .respond_opencode_question(session_id, question_id, answers)
         .await
         .map_err(|e| e.to_string())
 }
@@ -322,14 +337,14 @@ async fn daemon_list_project_sessions(
 #[tauri::command]
 async fn daemon_read_transcript(
     state: State<'_, AppState>,
-    thread_id: String,
+    session_id: String,
     from_seq: Option<u64>,
     limit: Option<u32>,
     full: Option<bool>,
 ) -> Result<TranscriptPageDto, String> {
     state
         .daemon
-        .read_transcript(thread_id, from_seq, limit, full.unwrap_or(false))
+        .read_transcript(session_id, from_seq, limit, full.unwrap_or(false))
         .await
         .map_err(|e| e.to_string())
 }
@@ -361,6 +376,7 @@ pub fn run() {
             daemon_create_project,
             daemon_list_conversations,
             daemon_list_messages,
+            daemon_toggle_message_reaction,
             daemon_list_sessions,
             daemon_list_project_sessions,
             daemon_read_transcript,
@@ -374,7 +390,7 @@ pub fn run() {
             daemon_create_agent_profile,
             daemon_delete_agent_profile,
             daemon_send_user_message,
-            daemon_resume_thread,
+            daemon_resume_session,
             daemon_resolve_approval,
             daemon_respond_opencode_permission,
             daemon_respond_opencode_question,

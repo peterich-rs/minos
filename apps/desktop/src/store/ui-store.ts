@@ -16,6 +16,12 @@ type UiState = {
   sessionsListCollapsed: boolean;
   /** Composer draft keyed by conversation (not shared across conversations). */
   draftByConversationId: Record<string, string>;
+  /**
+   * Reply-to target for the composer, keyed by conversation.
+   * Wave 2: local UI only; send attaches `replyToMessageId` on optimistic rows.
+   * Daemon reply protocol is deferred.
+   */
+  replyToMessageIdByConversation: Record<string, string | null>;
   /** Last conversation selected per project (restore on project switch). */
   lastConversationByProject: Record<string, string>;
 
@@ -32,6 +38,8 @@ type UiState = {
   toggleConversationList: () => void;
   toggleSessionsList: () => void;
   setDraft: (conversationId: string, value: string) => void;
+  setReplyTo: (conversationId: string, messageId: string | null) => void;
+  clearReplyTo: (conversationId: string) => void;
   commandPaletteOpen: boolean;
   setCommandPaletteOpen: (open: boolean) => void;
 };
@@ -48,6 +56,7 @@ export const useUiStore = create<UiState>()(
       conversationListCollapsed: false,
       sessionsListCollapsed: false,
       draftByConversationId: {},
+      replyToMessageIdByConversation: {},
       lastConversationByProject: {},
 
       setPrimaryNav: (nav) => set({ primaryNav: nav }),
@@ -130,6 +139,20 @@ export const useUiStore = create<UiState>()(
           draftByConversationId: {
             ...s.draftByConversationId,
             [conversationId]: draft,
+          },
+        })),
+      setReplyTo: (conversationId, messageId) =>
+        set((s) => ({
+          replyToMessageIdByConversation: {
+            ...s.replyToMessageIdByConversation,
+            [conversationId]: messageId,
+          },
+        })),
+      clearReplyTo: (conversationId) =>
+        set((s) => ({
+          replyToMessageIdByConversation: {
+            ...s.replyToMessageIdByConversation,
+            [conversationId]: null,
           },
         })),
       commandPaletteOpen: false,

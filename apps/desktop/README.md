@@ -55,10 +55,36 @@ just build-desktop
 # or: cd apps/desktop && pnpm tauri:build
 ```
 
+## Quality gates
+
+Lightweight gates (Buzz-inspired) so the React tree does not rot as it grows.
+
+```bash
+just check-desktop          # full gates (= pnpm check:all)
+# or from apps/desktop:
+pnpm check:all
+```
+
+| Script | What |
+|--------|------|
+| `pnpm check` | TypeScript (`tsc --noEmit`) |
+| `pnpm test` | Unit tests (`src/shared/lib/*.test.ts`, `src/features/chat/lib/*.test.ts`) |
+| `pnpm check:biome` | Biome **lint errors only** (format opt-in; warnings may remain) |
+| `pnpm check:file-sizes` | Soft file-size gate on `src/**/*.{ts,tsx}` |
+| `pnpm check:all` | All of the above in order |
+
+**Biome** (`biome.json`): double quotes + semicolons to match existing style. The gate fails only on lint **errors** — format is **not** required on every PR (`pnpm format` when you want Biome’s layout); remaining **warnings** are non-blocking. Excludes `dist/`, `src-tauri/`, `node_modules/`.
+
+**File sizes** (`scripts/check-file-sizes.mjs`): warn `>400` lines, hard fail `>800`. `SessionsView.tsx` is temporarily allowlisted with a freeze cap (~1850; do not raise without a split plan). Prefer splitting before raising caps.
+
+**Lockfile:** use **pnpm** only (`pnpm-lock.yaml`). Do not reintroduce `package-lock.json`.
+
 ## Architecture notes
 
 - Frontend lives in `src/` and is intentionally **not** shared with `apps/web` yet — visual baseline is the desktop mockup, not the current web admin demo.
 - Rust host process lives in `src-tauri/` as a **standalone Cargo package** (not a workspace member of the root `crates/*` workspace).
 - Bridge to `minos-daemon` will reuse the same local JSON-RPC surface the TUI uses (`minos_local_*`).
+- **Wave 1 Phase 4:** design tokens live in `src/index.css` (`:root` CSS vars) and map through `tailwind.config.js`. Markdown/code polish is in `shared/ui/MarkdownText.tsx` + tone CSS vars (streaming still plain text). See [docs/architecture-desktop.md](../../docs/architecture-desktop.md) § Design tokens + markdown.
+- **Chat reactions:** MessageRow action bar + emoji-mart picker; durable via local daemon (`toggle_conversation_message_reaction` / `chat_message_reactions`); `reaction-store` optimistic toggle (generation-gated) + hydrate from `list_conversation_messages`; mock seed only in browser Vite. See [docs/architecture-desktop.md](../../docs/architecture-desktop.md).
 
 See [docs/architecture-desktop.md](../../docs/architecture-desktop.md).

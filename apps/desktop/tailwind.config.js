@@ -1,33 +1,45 @@
 /** @type {import('tailwindcss').Config} */
+/**
+ * Theme maps to CSS variables in src/index.css (Wave 1 Phase 4).
+ * Use rgb(... / <alpha-value>) so utilities like bg-ink/5 keep working.
+ */
 export default {
   content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     extend: {
       colors: {
         canvas: {
-          DEFAULT: "#ebe4d8",
-          soft: "#f4efe6",
+          DEFAULT: "rgb(var(--color-canvas) / <alpha-value>)",
+          soft: "rgb(var(--color-canvas-soft) / <alpha-value>)",
         },
         surface: {
-          DEFAULT: "#fbf8f3",
-          raised: "#ffffff",
-          muted: "#f3eee5",
-          hover: "#efe8dc",
+          DEFAULT: "rgb(var(--color-surface) / <alpha-value>)",
+          raised: "rgb(var(--color-surface-raised) / <alpha-value>)",
+          muted: "rgb(var(--color-surface-muted) / <alpha-value>)",
+          hover: "rgb(var(--color-surface-hover) / <alpha-value>)",
         },
         ink: {
-          DEFAULT: "#1c1917",
-          secondary: "#57534e",
-          muted: "#a8a29e",
-          faint: "#d6d3d1",
+          DEFAULT: "rgb(var(--color-ink) / <alpha-value>)",
+          secondary: "rgb(var(--color-ink-secondary) / <alpha-value>)",
+          muted: "rgb(var(--color-ink-muted) / <alpha-value>)",
+          faint: "rgb(var(--color-ink-faint) / <alpha-value>)",
         },
         accent: {
-          DEFAULT: "#f472b6",
-          strong: "#ec4899",
-          soft: "#fce7f3",
+          DEFAULT: "rgb(var(--color-accent) / <alpha-value>)",
+          strong: "rgb(var(--color-accent-strong) / <alpha-value>)",
+          soft: "rgb(var(--color-accent-soft) / <alpha-value>)",
         },
         bubble: {
-          out: "#1c1917",
-          in: "#ffffff",
+          out: "rgb(var(--color-bubble-out) / <alpha-value>)",
+          in: "rgb(var(--color-bubble-in) / <alpha-value>)",
+        },
+        status: {
+          idle: "rgb(var(--color-status-idle) / <alpha-value>)",
+          running: "rgb(var(--color-status-running) / <alpha-value>)",
+          approval: "rgb(var(--color-status-approval) / <alpha-value>)",
+          suspended: "rgb(var(--color-status-suspended) / <alpha-value>)",
+          failed: "rgb(var(--color-status-failed) / <alpha-value>)",
+          done: "rgb(var(--color-status-done) / <alpha-value>)",
         },
       },
       fontFamily: {
@@ -41,20 +53,20 @@ export default {
         ],
       },
       boxShadow: {
-        shell:
-          "0 24px 80px rgba(28, 25, 23, 0.12), 0 2px 8px rgba(28, 25, 23, 0.04)",
-        panel: "0 1px 0 rgba(28, 25, 23, 0.04)",
+        shell: "var(--shadow-shell)",
+        panel: "var(--shadow-panel)",
       },
       borderRadius: {
-        shell: "18px",
-        panel: "14px",
+        shell: "var(--radius-shell)",
+        panel: "var(--radius-panel)",
+        code: "var(--radius-code)",
       },
       transitionDuration: {
-        150: "150ms",
-        200: "200ms",
+        150: "var(--duration-fast)",
+        200: "var(--duration-normal)",
       },
       transitionTimingFunction: {
-        out: "cubic-bezier(0, 0, 0.2, 1)",
+        out: "var(--ease-out)",
       },
       keyframes: {
         "message-in": {
@@ -63,7 +75,7 @@ export default {
         },
       },
       animation: {
-        "message-in": "message-in 150ms ease-out both",
+        "message-in": "message-in var(--duration-fast) ease-out both",
       },
     },
   },

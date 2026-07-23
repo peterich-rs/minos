@@ -14,15 +14,16 @@ use minos_daemon::local_rpc::LocalRpcConfig;
 use minos_daemon::{DaemonHandle, LocalState, RelayConfig};
 use minos_domain::AgentName;
 use minos_protocol::local_rpc::{
-    LocalConversationEvent, LocalIngestFrame, LocalManagerEvent, ReadThreadRawHistoryResponse,
+    LocalConversationEvent, LocalIngestFrame, LocalManagerEvent, ReadSessionRawHistoryResponse,
 };
 use minos_protocol::{
     AppendConversationMessageParams, ApprovalDecisionRequest, CreateConversationParams,
     CreateProjectRequest, ListClisResponse, ListConversationAgentSessionsParams,
     ListConversationMessagesParams, ListConversationsParams, ListProjectsResponse,
-    LocalConversationMessage, LocalConversationSummary, ProjectSummary, ReadThreadParams,
-    SendUserMessageRequest, StartAgentInConversationRequest, StartAgentResponse, ThreadState,
-    ThreadSummary, UpdateConversationParams,
+    LocalConversationMessage, LocalConversationSummary, LocalReactionGroup, ProjectSummary,
+    ReadSessionParams, SendUserMessageRequest, StartAgentInConversationRequest, StartAgentResponse,
+    SessionState, SessionSummary, ToggleConversationMessageReactionParams,
+    ToggleConversationMessageReactionResponse, UpdateConversationParams,
 };
 use minos_ui_protocol::UiEventMessage;
 use serde::Serialize;
@@ -38,6 +39,8 @@ use tracing::{info, warn};
 pub const EVENT_INGEST: &str = "daemon://ingest";
 pub const EVENT_MANAGER: &str = "daemon://manager";
 pub const EVENT_CONVERSATION: &str = "daemon://conversation";
+/// Live push health: pumps arm → live=true; any current-gen pump ends → live=false.
+pub const EVENT_PUSH_STATUS: &str = "daemon://push-status";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -88,6 +91,24 @@ pub struct ConversationDto {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ReactionActorDto {
+    pub actor_id: String,
+    pub actor_kind: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReactionGroupDto {
+    pub emoji: String,
+    pub count: u32,
+    pub reacted_by_me: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actors: Vec<ReactionActorDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MessageDto {
     pub id: String,
     /// Durable timeline sort key (`chat_messages.message_seq`). UI uses ASC.
@@ -105,6 +126,16 @@ pub struct MessageDto {
     pub delegation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mentions: Vec<MentionDto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reactions: Vec<ReactionGroupDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToggleReactionResultDto {
+    pub message_id: String,
+    pub conversation_id: String,
+    pub reactions: Vec<ReactionGroupDto>,
 }
 
 /// One page of conversation messages (tail or older).
@@ -121,9 +152,9 @@ pub struct MessagePageDto {
 pub struct MentionDto {
     pub agent: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub thread_id: Option<String>,
+    pub session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub thread_short_id: Option<String>,
+    pub session_short_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -186,7 +217,7 @@ pub struct TranscriptOptionDto {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptPageDto {
-    pub thread_id: String,
+    pub session_id: String,
     pub items: Vec<TranscriptItemDto>,
     pub next_seq: Option<u64>,
 }
@@ -195,16 +226,19 @@ pub struct TranscriptPageDto {
 #[serde(rename_all = "camelCase")]
 pub struct CliDto {
     pub agent: String,
+    pub display_name: String,
     pub installed: bool,
     pub path: Option<String>,
     pub version: Option<String>,
     pub status: String,
+    pub supports_model_selection: bool,
+    pub supports_reasoning_effort: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartAgentResultDto {
-    pub thread_id: String,
+    pub session_id: String,
     pub cwd: String,
 }
 
@@ -212,7 +246,7 @@ pub struct StartAgentResultDto {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IngestEventDto {
-    pub thread_id: String,
+    pub session_id: String,
     pub seq: u64,
     pub agent: String,
     pub ts_ms: i64,
@@ -220,37 +254,51 @@ pub struct IngestEventDto {
     pub has_pending_approval: bool,
 }
 
-/// Manager lifecycle event (thread status) for the webview.
+/// Manager lifecycle event (session status) for the webview.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum ManagerEventDto {
-    ThreadAdded {
-        thread_id: String,
+    SessionAdded {
+        session_id: String,
         agent: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        parent_thread_id: Option<String>,
+        parent_session_id: Option<String>,
         workspace: String,
     },
-    ThreadStateChanged {
-        thread_id: String,
+    SessionStateChanged {
+        session_id: String,
         /// idle | running | suspended | done
         status: String,
         at_ms: i64,
     },
-    ThreadClosed {
-        thread_id: String,
+    SessionClosed {
+        session_id: String,
     },
     InstanceCrashed {
-        affected_thread_ids: Vec<String>,
+        affected_session_ids: Vec<String>,
     },
 }
 
-/// Conversation timeline dirty signal (frontend re-lists messages).
+/// Conversation timeline push events (message append or reaction toggle).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum ConversationEventDto {
+    MessageAppended {
+        conversation_id: String,
+        message_seq: i64,
+    },
+    ReactionToggled {
+        conversation_id: String,
+        message_id: String,
+        reactions: Vec<ReactionGroupDto>,
+    },
+}
+
+/// Whether JSON-RPC subscription pumps are currently healthy for the webview.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ConversationEventDto {
-    pub conversation_id: String,
-    pub message_seq: i64,
+pub struct PushStatusDto {
+    pub live: bool,
 }
 
 pub struct DaemonBridge {
@@ -565,6 +613,10 @@ impl DaemonBridge {
             "starting daemon event subscription pumps"
         );
 
+        // Optimistic live=true so frontend can drop degraded polls; a pump that
+        // fails to subscribe or later ends will emit live=false for this gen.
+        emit_push_status(&app, true);
+
         let gen_flag = Arc::clone(&self.pump_generation);
         spawn_ingest_pump(app.clone(), Arc::clone(&client), gen, Arc::clone(&gen_flag));
         spawn_manager_pump(app.clone(), Arc::clone(&client), gen, Arc::clone(&gen_flag));
@@ -660,6 +712,32 @@ impl DaemonBridge {
         })
     }
 
+    /// Idempotent toggle of the host local user's reaction on a chat message.
+    pub async fn toggle_message_reaction(
+        &self,
+        message_id: String,
+        emoji: String,
+    ) -> Result<ToggleReactionResultDto> {
+        let client = self.client().await?;
+        let params = ToggleConversationMessageReactionParams {
+            message_id,
+            emoji,
+        };
+        let response: ToggleConversationMessageReactionResponse = client
+            .request("minos_local_toggle_conversation_message_reaction", [params])
+            .await
+            .context("minos_local_toggle_conversation_message_reaction")?;
+        Ok(ToggleReactionResultDto {
+            message_id: response.message_id,
+            conversation_id: response.conversation_id,
+            reactions: response
+                .reactions
+                .into_iter()
+                .map(map_reaction_group)
+                .collect(),
+        })
+    }
+
     pub async fn list_sessions(&self, conversation_id: String) -> Result<Vec<SessionDto>> {
         let client = self.client().await?;
         let params = ListConversationAgentSessionsParams {
@@ -670,7 +748,7 @@ impl DaemonBridge {
             .await
             .context("minos_local_list_conversation_agent_sessions")?;
         Ok(response
-            .threads
+            .sessions
             .into_iter()
             .map(|t| map_session(t, &conversation_id, None))
             .collect())
@@ -693,7 +771,7 @@ impl DaemonBridge {
 
     pub async fn read_transcript(
         &self,
-        thread_id: String,
+        session_id: String,
         from_seq: Option<u64>,
         limit: Option<u32>,
         full: bool,
@@ -701,7 +779,7 @@ impl DaemonBridge {
         let client = self.client().await?;
         // One assembler across all pages so TextDelta that spans RPC pages
         // still merges into a single transcript item.
-        let mut assembler = TranscriptAssembler::new(thread_id.clone());
+        let mut assembler = TranscriptAssembler::new(session_id.clone());
         let page_limit: u32 = if full {
             1000
         } else {
@@ -712,22 +790,22 @@ impl DaemonBridge {
         // Safety cap: 1000 * 100 = 100k raw frames max per full open.
         const MAX_FULL_PAGES: u32 = 100;
         loop {
-            let req = ReadThreadParams {
-                thread_id: thread_id.clone(),
+            let req = ReadSessionParams {
+                session_id: session_id.clone(),
                 from_seq: cursor,
                 limit: page_limit,
             };
-            let response: ReadThreadRawHistoryResponse = client
-                .request("minos_local_read_thread_raw_history", [req])
+            let response: ReadSessionRawHistoryResponse = client
+                .request("minos_local_read_session_raw_history", [req])
                 .await
-                .context("minos_local_read_thread_raw_history")?;
+                .context("minos_local_read_session_raw_history")?;
             for frame in response.events {
                 assembler.ingest_frame(frame.seq, frame.ts_ms, frame.ui_events);
             }
             pages += 1;
             if !full {
                 return Ok(TranscriptPageDto {
-                    thread_id,
+                    session_id,
                     items: assembler.finish(),
                     next_seq: response.next_seq,
                 });
@@ -738,7 +816,7 @@ impl DaemonBridge {
             if pages >= MAX_FULL_PAGES {
                 // Truncated full load — surface next_seq so UI can offer "load more".
                 return Ok(TranscriptPageDto {
-                    thread_id,
+                    session_id,
                     items: assembler.finish(),
                     next_seq: Some(next),
                 });
@@ -747,7 +825,7 @@ impl DaemonBridge {
             cursor = Some(next.saturating_sub(1));
         }
         Ok(TranscriptPageDto {
-            thread_id,
+            session_id,
             items: assembler.finish(),
             next_seq: None,
         })
@@ -798,7 +876,7 @@ impl DaemonBridge {
         let params = AppendConversationMessageParams {
             conversation_id,
             message_id,
-            thread_id: None,
+            session_id: None,
             sender_role: "user".into(),
             agent: None,
             body,
@@ -831,10 +909,13 @@ impl DaemonBridge {
                 };
                 CliDto {
                     agent: agent_label(d.name),
+                    display_name: d.display_name,
                     installed,
                     path: d.path,
                     version: d.version,
                     status,
+                    supports_model_selection: d.supports_model_selection,
+                    supports_reasoning_effort: d.supports_reasoning_effort,
                 }
             })
             .collect())
@@ -845,6 +926,7 @@ impl DaemonBridge {
         conversation_id: String,
         agent: String,
         workspace: String,
+        profile_id: Option<String>,
         model: Option<String>,
         reasoning_effort: Option<String>,
         instructions: Option<String>,
@@ -855,6 +937,7 @@ impl DaemonBridge {
             conversation_id,
             agent,
             workspace,
+            profile_id,
             model,
             reasoning_effort,
             instructions,
@@ -864,7 +947,7 @@ impl DaemonBridge {
             .await
             .context("minos_local_start_agent_in_conversation")?;
         Ok(StartAgentResultDto {
-            thread_id: response.session_id,
+            session_id: response.session_id,
             cwd: response.cwd,
         })
     }
@@ -911,10 +994,10 @@ impl DaemonBridge {
             .context("minos_local_delete_agent_profile")
     }
 
-    pub async fn send_user_message(&self, thread_id: String, text: String) -> Result<()> {
+    pub async fn send_user_message(&self, session_id: String, text: String) -> Result<()> {
         let client = self.client().await?;
         let req = SendUserMessageRequest {
-            session_id: thread_id,
+            session_id: session_id,
             text,
         };
         client
@@ -924,31 +1007,31 @@ impl DaemonBridge {
         Ok(())
     }
 
-    /// Reattach a suspended/persisted thread. When `auto_continue` is true and
+    /// Reattach a suspended/persisted session. When `auto_continue` is true and
     /// the store has `needs_continue`, injects a one-shot CONTINUE prompt.
-    pub async fn resume_thread(&self, thread_id: String, auto_continue: bool) -> Result<()> {
+    pub async fn resume_session(&self, session_id: String, auto_continue: bool) -> Result<()> {
         let client = self.client().await?;
-        let req = minos_protocol::ResumeThreadRequest {
-            thread_id,
+        let req = minos_protocol::ResumeSessionRequest {
+            session_id,
             auto_continue,
         };
         let _: StartAgentResponse = client
-            .request("minos_local_resume_thread", [req])
+            .request("minos_local_resume_session", [req])
             .await
-            .context("minos_local_resume_thread")?;
+            .context("minos_local_resume_session")?;
         Ok(())
     }
 
     pub async fn resolve_approval(
         &self,
         request_id: String,
-        thread_id: String,
+        session_id: String,
         decision: serde_json::Value,
     ) -> Result<()> {
         let client = self.client().await?;
         let params = ApprovalDecisionRequest {
             request_id,
-            thread_id,
+            session_id,
             decision,
         };
         client
@@ -960,13 +1043,13 @@ impl DaemonBridge {
 
     pub async fn respond_opencode_permission(
         &self,
-        thread_id: String,
+        session_id: String,
         permission_id: String,
         response: String,
     ) -> Result<()> {
         let client = self.client().await?;
         let params = minos_protocol::local_rpc::RespondOpencodePermissionRequest {
-            thread_id,
+            session_id,
             permission_id,
             response,
         };
@@ -979,13 +1062,13 @@ impl DaemonBridge {
 
     pub async fn respond_opencode_question(
         &self,
-        thread_id: String,
+        session_id: String,
         question_id: String,
         answers: Vec<Vec<String>>,
     ) -> Result<()> {
         let client = self.client().await?;
         let params = minos_protocol::local_rpc::RespondOpencodeQuestionRequest {
-            thread_id,
+            session_id,
             question_id,
             answers,
         };
@@ -1211,6 +1294,23 @@ fn conversation_timeline_kind(_body: &str) -> &'static str {
     "text"
 }
 
+fn map_reaction_group(g: LocalReactionGroup) -> ReactionGroupDto {
+    ReactionGroupDto {
+        emoji: g.emoji,
+        count: g.count,
+        reacted_by_me: g.reacted_by_me,
+        actors: g
+            .actors
+            .into_iter()
+            .map(|a| ReactionActorDto {
+                actor_id: a.actor_id,
+                actor_kind: a.actor_kind,
+                display_name: a.display_name,
+            })
+            .collect(),
+    }
+}
+
 fn map_message(m: LocalConversationMessage) -> MessageDto {
     let kind = conversation_timeline_kind(&m.body);
     let mentions = m
@@ -1218,8 +1318,8 @@ fn map_message(m: LocalConversationMessage) -> MessageDto {
         .into_iter()
         .map(|mention| MentionDto {
             agent: agent_label(mention.agent),
-            thread_id: mention.thread_id,
-            thread_short_id: mention.thread_short_id,
+            session_id: mention.session_id,
+            session_short_id: mention.session_short_id,
         })
         .collect();
     MessageDto {
@@ -1227,7 +1327,7 @@ fn map_message(m: LocalConversationMessage) -> MessageDto {
         message_seq: m.message_seq,
         role: m.sender_role,
         agent: m.agent.map(agent_label),
-        session_id: m.thread_id,
+        session_id: m.session_id,
         body: m.body,
         time: clock_time(m.created_at_ms),
         created_at_ms: m.created_at_ms,
@@ -1235,26 +1335,27 @@ fn map_message(m: LocalConversationMessage) -> MessageDto {
         reply_to_message_id: m.reply_to_message_id,
         delegation_id: m.delegation_id,
         mentions,
+        reactions: m.reactions.into_iter().map(map_reaction_group).collect(),
     }
 }
 
 fn map_session(
-    t: ThreadSummary,
+    t: SessionSummary,
     conversation_id: &str,
     conversation_title: Option<String>,
 ) -> SessionDto {
-    let short_id = short_thread_id(&t.thread_id);
+    let short_id = short_session_id(&t.session_id);
     let status = thread_status_label(&t);
     let agent = agent_label(t.agent);
     SessionDto {
-        id: t.thread_id,
+        id: t.session_id,
         conversation_id: conversation_id.to_owned(),
         conversation_title,
         agent: agent.clone(),
         short_id,
         status,
         model: "—".into(),
-        parent_id: t.parent_thread_id,
+        parent_id: t.parent_session_id,
         summary: t.title.unwrap_or_else(|| format!("{agent} session")),
         message_count: t.message_count,
         first_ts_ms: t.first_ts_ms,
@@ -1263,17 +1364,17 @@ fn map_session(
     }
 }
 
-fn short_thread_id(thread_id: &str) -> String {
-    let mut end = thread_id.len().min(8);
-    while end > 0 && !thread_id.is_char_boundary(end) {
+fn short_session_id(session_id: &str) -> String {
+    let mut end = session_id.len().min(8);
+    while end > 0 && !session_id.is_char_boundary(end) {
         end -= 1;
     }
-    thread_id[..end].to_owned()
+    session_id[..end].to_owned()
 }
 
 /// Folds raw UiEventMessage stream into chat-like items (aligned with TUI ChatState).
 struct TranscriptAssembler {
-    thread_id: String,
+    session_id: String,
     items: Vec<TranscriptItemDto>,
     /// message_id → role for open messages
     open_roles: std::collections::HashMap<String, minos_ui_protocol::MessageRole>,
@@ -1281,9 +1382,9 @@ struct TranscriptAssembler {
 }
 
 impl TranscriptAssembler {
-    fn new(thread_id: String) -> Self {
+    fn new(session_id: String) -> Self {
         Self {
-            thread_id,
+            session_id,
             items: Vec::new(),
             open_roles: std::collections::HashMap::new(),
             counter: 0,
@@ -1292,7 +1393,7 @@ impl TranscriptAssembler {
 
     fn next_id(&mut self, prefix: &str) -> String {
         self.counter += 1;
-        format!("{}-{prefix}-{}", self.thread_id, self.counter)
+        format!("{}-{prefix}-{}", self.session_id, self.counter)
     }
 
     fn ingest_frame(&mut self, seq: u64, ts_ms: i64, events: Vec<UiEventMessage>) {
@@ -1544,7 +1645,7 @@ impl TranscriptAssembler {
                     );
                 }
             }
-            UiEventMessage::ThreadOpened { title, agent, .. } => {
+            UiEventMessage::SessionOpened { title, agent, .. } => {
                 self.push_simple(
                     seq,
                     ts_ms,
@@ -1562,7 +1663,7 @@ impl TranscriptAssembler {
                     None,
                 );
             }
-            UiEventMessage::ThreadClosed { .. } => {
+            UiEventMessage::SessionClosed { .. } => {
                 self.push_simple(
                     seq,
                     ts_ms,
@@ -1589,7 +1690,7 @@ impl TranscriptAssembler {
                 );
             }
             UiEventMessage::SubagentSpawned {
-                sub_thread_id,
+                sub_session_id,
                 agent,
                 title,
                 prompt,
@@ -1602,7 +1703,7 @@ impl TranscriptAssembler {
                     format!(
                         "Subagent {} · #{}{}",
                         agent_label(agent),
-                        short_thread_id(&sub_thread_id),
+                        short_session_id(&sub_session_id),
                         title
                             .as_ref()
                             .or(prompt.as_ref())
@@ -1615,7 +1716,7 @@ impl TranscriptAssembler {
                 );
             }
             UiEventMessage::SubagentStatusUpdated {
-                sub_thread_id,
+                sub_session_id,
                 status,
             } => {
                 let label = match status {
@@ -1628,7 +1729,7 @@ impl TranscriptAssembler {
                     seq,
                     ts_ms,
                     "status",
-                    format!("Subagent #{} · {label}", short_thread_id(&sub_thread_id)),
+                    format!("Subagent #{} · {label}", short_session_id(&sub_session_id)),
                     Some("Subagent".into()),
                     None,
                     None,
@@ -1711,7 +1812,7 @@ impl TranscriptAssembler {
                     }
                 }
             }
-            UiEventMessage::ThreadTitleUpdated { .. } => {}
+            UiEventMessage::SessionTitleUpdated { .. } => {}
         }
     }
 }
@@ -2496,23 +2597,23 @@ fn agent_label(agent: AgentName) -> String {
     .into()
 }
 
-fn thread_status_label(t: &ThreadSummary) -> String {
-    use minos_protocol::{PauseReason, ThreadState};
+fn thread_status_label(t: &SessionSummary) -> String {
+    use minos_protocol::{PauseReason, SessionState};
     if t.ended_at_ms.is_some() {
         return "done".into();
     }
     match &t.state {
-        ThreadState::Starting | ThreadState::Resuming => "running".into(),
-        ThreadState::Idle => "idle".into(),
-        ThreadState::Running { .. } => "running".into(),
+        SessionState::Starting | SessionState::Resuming => "running".into(),
+        SessionState::Idle => "idle".into(),
+        SessionState::Running { .. } => "running".into(),
         // Between-turn daemon death was historically stored as
         // Suspended{DaemonRestart} + needs_continue=0. That is not a user pause —
         // show Idle (ready to reattach). Mid-flight recovery keeps Paused.
-        ThreadState::Suspended {
+        SessionState::Suspended {
             reason: PauseReason::DaemonRestart,
         } if !t.needs_continue => "idle".into(),
-        ThreadState::Suspended { .. } => "suspended".into(),
-        ThreadState::Closed { .. } => "done".into(),
+        SessionState::Suspended { .. } => "suspended".into(),
+        SessionState::Closed { .. } => "done".into(),
     }
 }
 
@@ -2550,60 +2651,84 @@ fn pump_still_current(my_gen: u64, flag: &AtomicU64) -> bool {
     flag.load(Ordering::SeqCst) == my_gen
 }
 
-fn thread_state_to_status(state: &ThreadState) -> String {
+fn emit_push_status(app: &AppHandle, live: bool) {
+    if let Err(e) = app.emit(EVENT_PUSH_STATUS, &PushStatusDto { live }) {
+        warn!(
+            target: "minos_desktop",
+            error = %e,
+            live,
+            "emit daemon://push-status failed"
+        );
+    }
+}
+
+/// When a pump ends while still current, notify the webview so livePush falls
+/// back and degraded quiet polls re-enable. Superseded gens stay silent.
+fn emit_push_dead_if_current(app: &AppHandle, my_gen: u64, gen_flag: &AtomicU64) {
+    if pump_still_current(my_gen, gen_flag) {
+        warn!(
+            target: "minos_desktop",
+            generation = my_gen,
+            "daemon push pump ended; signaling live=false"
+        );
+        emit_push_status(app, false);
+    }
+}
+
+fn session_state_to_status(state: &SessionState) -> String {
     match state {
-        ThreadState::Starting | ThreadState::Resuming | ThreadState::Running { .. } => {
+        SessionState::Starting | SessionState::Resuming | SessionState::Running { .. } => {
             "running".into()
         }
-        ThreadState::Idle => "idle".into(),
-        ThreadState::Suspended { .. } => "suspended".into(),
-        ThreadState::Closed { .. } => "done".into(),
+        SessionState::Idle => "idle".into(),
+        SessionState::Suspended { .. } => "suspended".into(),
+        SessionState::Closed { .. } => "done".into(),
     }
 }
 
 fn map_manager_event(ev: LocalManagerEvent) -> ManagerEventDto {
     match ev {
-        LocalManagerEvent::ThreadAdded {
-            thread_id,
+        LocalManagerEvent::SessionAdded {
+            session_id,
             workspace,
             agent,
-            parent_thread_id,
-        } => ManagerEventDto::ThreadAdded {
-            thread_id,
+            parent_session_id,
+        } => ManagerEventDto::SessionAdded {
+            session_id,
             agent: agent_label(agent),
-            parent_thread_id,
+            parent_session_id,
             workspace,
         },
-        LocalManagerEvent::ThreadStateChanged {
-            thread_id,
+        LocalManagerEvent::SessionStateChanged {
+            session_id,
             new,
             at_ms,
             ..
-        } => ManagerEventDto::ThreadStateChanged {
-            thread_id,
-            status: thread_state_to_status(&new),
+        } => ManagerEventDto::SessionStateChanged {
+            session_id,
+            status: session_state_to_status(&new),
             at_ms,
         },
-        LocalManagerEvent::ThreadClosed { thread_id, .. } => {
-            ManagerEventDto::ThreadClosed { thread_id }
+        LocalManagerEvent::SessionClosed { session_id, .. } => {
+            ManagerEventDto::SessionClosed { session_id }
         }
         LocalManagerEvent::InstanceCrashed {
             affected_threads, ..
         } => ManagerEventDto::InstanceCrashed {
-            affected_thread_ids: affected_threads,
+            affected_session_ids: affected_threads,
         },
     }
 }
 
 fn frame_to_ingest_dto(frame: LocalIngestFrame) -> IngestEventDto {
-    let mut assembler = TranscriptAssembler::new(frame.thread_id.clone());
+    let mut assembler = TranscriptAssembler::new(frame.session_id.clone());
     assembler.ingest_frame(frame.seq, frame.ts_ms, frame.ui_events);
     let items = assembler.finish();
     let has_pending_approval = items
         .iter()
         .any(|it| (it.kind == "approval" || it.kind == "question") && it.request_id.is_some());
     IngestEventDto {
-        thread_id: frame.thread_id,
+        session_id: frame.session_id,
         seq: frame.seq,
         agent: agent_label(frame.agent),
         ts_ms: frame.ts_ms,
@@ -2629,6 +2754,7 @@ fn spawn_ingest_pump(app: AppHandle, client: Arc<WsClient>, my_gen: u64, gen_fla
                     error = %e,
                     "ingest subscription failed"
                 );
+                emit_push_dead_if_current(&app, my_gen, &gen_flag);
                 return;
             }
         };
@@ -2662,6 +2788,7 @@ fn spawn_ingest_pump(app: AppHandle, client: Arc<WsClient>, my_gen: u64, gen_fla
                 }
             }
         }
+        emit_push_dead_if_current(&app, my_gen, &gen_flag);
     });
 }
 
@@ -2687,6 +2814,7 @@ fn spawn_manager_pump(
                     error = %e,
                     "manager subscription failed"
                 );
+                emit_push_dead_if_current(&app, my_gen, &gen_flag);
                 return;
             }
         };
@@ -2720,6 +2848,7 @@ fn spawn_manager_pump(
                 }
             }
         }
+        emit_push_dead_if_current(&app, my_gen, &gen_flag);
     });
 }
 
@@ -2745,6 +2874,7 @@ fn spawn_conversation_pump(
                     error = %e,
                     "conversation subscription failed"
                 );
+                emit_push_dead_if_current(&app, my_gen, &gen_flag);
                 return;
             }
         };
@@ -2758,7 +2888,7 @@ fn spawn_conversation_pump(
                     if !pump_still_current(my_gen, &gen_flag) {
                         break;
                     }
-                    let dto = ConversationEventDto {
+                    let dto = ConversationEventDto::MessageAppended {
                         conversation_id,
                         message_seq,
                     };
@@ -2767,6 +2897,27 @@ fn spawn_conversation_pump(
                             target: "minos_desktop",
                             error = %e,
                             "emit daemon://conversation failed"
+                        );
+                    }
+                }
+                Some(Ok(LocalConversationEvent::ConversationReactionToggled {
+                    conversation_id,
+                    message_id,
+                    reactions,
+                })) => {
+                    if !pump_still_current(my_gen, &gen_flag) {
+                        break;
+                    }
+                    let dto = ConversationEventDto::ReactionToggled {
+                        conversation_id,
+                        message_id,
+                        reactions: reactions.into_iter().map(map_reaction_group).collect(),
+                    };
+                    if let Err(e) = app.emit(EVENT_CONVERSATION, &dto) {
+                        warn!(
+                            target: "minos_desktop",
+                            error = %e,
+                            "emit daemon://conversation reaction failed"
                         );
                     }
                 }
@@ -2787,6 +2938,7 @@ fn spawn_conversation_pump(
                 }
             }
         }
+        emit_push_dead_if_current(&app, my_gen, &gen_flag);
     });
 }
 
@@ -2816,11 +2968,11 @@ mod tool_present_tests {
 mod thread_status_label_tests {
     use super::*;
     use minos_domain::AgentName;
-    use minos_protocol::{PauseReason, ThreadState, ThreadSummary};
+    use minos_protocol::{PauseReason, SessionState, SessionSummary};
 
-    fn summary(state: ThreadState, needs_continue: bool) -> ThreadSummary {
-        ThreadSummary {
-            thread_id: "t1".into(),
+    fn summary(state: SessionState, needs_continue: bool) -> SessionSummary {
+        SessionSummary {
+            session_id: "t1".into(),
             agent: AgentName::Codex,
             title: None,
             first_ts_ms: 0,
@@ -2828,7 +2980,7 @@ mod thread_status_label_tests {
             message_count: 0,
             ended_at_ms: None,
             end_reason: None,
-            parent_thread_id: None,
+            parent_session_id: None,
             state,
             needs_continue,
         }
@@ -2837,7 +2989,7 @@ mod thread_status_label_tests {
     #[test]
     fn daemon_restart_without_needs_continue_displays_idle() {
         let s = summary(
-            ThreadState::Suspended {
+            SessionState::Suspended {
                 reason: PauseReason::DaemonRestart,
             },
             false,
@@ -2848,7 +3000,7 @@ mod thread_status_label_tests {
     #[test]
     fn daemon_restart_with_needs_continue_displays_suspended() {
         let s = summary(
-            ThreadState::Suspended {
+            SessionState::Suspended {
                 reason: PauseReason::DaemonRestart,
             },
             true,
@@ -2859,7 +3011,7 @@ mod thread_status_label_tests {
     #[test]
     fn user_interrupt_displays_suspended_even_without_needs_continue() {
         let s = summary(
-            ThreadState::Suspended {
+            SessionState::Suspended {
                 reason: PauseReason::UserInterrupt,
             },
             false,
