@@ -40,9 +40,10 @@
 | 命令面板 | `cmdk` + Radix Dialog | 全局 ⌘K 跳转 project / conversation / session / nav |
 | Toast | `sonner` | 发送失败、daemon 断连/恢复、审批结果 |
 | 动效 | `motion`（layout 导航指示）+ CSS `duration-150/200`（`--duration-fast/normal`） | 克制动效；全局尊重 `prefers-reduced-motion`（`animate-spin` 除外） |
-| Markdown | `react-markdown` + `remark-gfm`（`MarkdownText`） | 完成态 GFM；streaming 纯文本；tone CSS vars light/dark |
-| 长列表 | 分页 tail + load-older（DOM list） | Transcript **不做** variable-height 虚拟化：测高与 stick-to-bottom/prepend 会抢滚动导致抖动；长历史靠事件分页 |
-| 状态 | Zustand 5 | nav / project / conversation / board |
+| Markdown | `react-markdown` + `remark-gfm` + Shiki `CodeBlock` | 完成态 GFM；streaming 纯文本；fenced code 懒加载 Shiki 高亮 |
+| 主题 | Shiki theme JSON → CSS vars（`ThemeProvider`） | Host → Appearance 选主题/强调色；FOUC 用 localStorage 缓存 vars；默认 `minos`（warm） |
+| 长列表 | `@tanstack/react-virtual`（侧栏）+ `virtua`（conversation timeline） | ConversationList + **Sessions 左栏**（`SessionListPane` + flatten 树）用 `VirtualizedList`；主时间线 `VList` + stick-to-bottom/`shift` prepend；session **transcript** 仍分页 DOM（硬上限 2000），避免与审批/流式测高互殴 |
+| 状态 | Zustand 5 + TanStack Query 5 | **混合**：RQ 管 catalog/index 只读列表（projects/conversations/**projectSessions**/inspectorSessions/clis/profiles/models）；Zustand 管 timeline/transcript/SessionEntity/乐观发送/UI 指针（L0–L6） |
 | 图标 | Lucide React | 导航与工具栏 |
 | 本机 API | `@tauri-apps/api` | `invoke` → Rust |
 
@@ -111,14 +112,17 @@ Feature-slice 布局（Wave 1 Phase 1–2）：按 **app 壳 / features / shared
 | Surfaces | `--color-canvas*`、`--color-surface*` | `bg-canvas`、`bg-surface` / `muted` / `hover` / `raised` |
 | Ink | `--color-ink*` | `text-ink` / `secondary` / `muted` / `faint` |
 | Accent | `--color-accent*` | `bg-accent` / `strong` / `soft` |
-| Bubbles | `--color-bubble-out/in` | `bg-bubble-out`、`bg-bubble-in` |
+| Bubbles（legacy tokens） | `--color-bubble-out/in` | Conversation 主时间线已改为 **Slack/Buzz 全宽行**（无左右气泡）；token 保留给其它 surface |
 | Status | `--color-status-{idle,running,approval,suspended,failed,done}` | `bg-status-running` 等（semantic；既有 `statusMeta` 仍可用 stone/amber 类） |
 | Radius / shadow | `--radius-shell/panel/code`、`--shadow-shell/panel` | `rounded-shell`、`shadow-panel`… |
 | Motion | `--duration-fast` (150)、`--duration-normal` (200)、`--ease-out` | `duration-150` / `duration-200` / `ease-out` |
 
 Markdown 呈现（`shared/ui/MarkdownText.tsx` + `index.css`）：
 - 完成态：`react-markdown` + `remark-gfm`；tone 通过 `.markdown-tone-light|dark` 切 CSS vars（链接 / 行内 code / fenced pre / quote / table / list marker）。
-- Streaming：仍为 plain pre-wrap + pulse cursor，避免逐 token 重建 MDAST。
+- Streaming：仍为 plain pre-wrap + pulse cursor，避免逐 token 重建 MDAST。光标仅当 **timeline tail** 仍是 open 的 text/reasoning 气泡时显示（`transcript-streaming.ts`）；tool / subagent 插入后立即关掉，与 TUI `finish_open_content_streaming`、mobile `closeTextSegment` 一致——禁止回找「最后一条 streamable 文本」而在 session 仍 `running` 时留下 █。
+- **时间线冻结**：`TextReplace` / live `mergeTranscriptItems` 不得改写 tool 上方的 assistant 行。同 body 的 OpenCode finished-part snapshot 丢弃；不同 body（新 part / tool 后叙述）在末尾 append。OpenCode text/reasoning 事件用 `message_id + U+001E + part_id` 绑定 part 段（`minos-ui-protocol` opencode translator）。
+- **Subagent 单卡**：OpenCode `task` + `SubagentSpawned` / `SubagentStatusUpdated` 投影为 `kind: "subagent"` 一行（TUI `SubagentCall` 对齐）；禁止 `Running task …`、禁止 header 展示 `<task id=…>` XML、禁止整段 prompt 当 status。
+- **Tool header**：优先 `state.title` / path / command；禁止 `Reading read`；禁止 XML 首行（`<path>` / `<task>`）当 target。
 - Code block：背景、圆角、padding、横向滚动；行内 code 对比度略加强。
 
 ```
@@ -135,7 +139,7 @@ apps/desktop/
     features/
       work/                      # Project → Conversations / Sessions / Board
         WorkView.tsx · ProjectHeader.tsx · ConversationList.tsx
-        SessionInspector.tsx · SessionsView.tsx
+        SessionInspector.tsx · SessionsView.tsx · SessionListPane.tsx
         ProjectBoard.tsx · CreateProjectEmpty.tsx
         # imports Timeline from features/chat (no local copy)
       attention/                 # AttentionView.tsx
@@ -208,14 +212,16 @@ apps/desktop/
 | 全局跳转 | ⌘/Ctrl+K → `CommandPalette` |
 | Daemon 连接反馈 | `ConnectionToasts` 监听 `connection.connected` 边沿 |
 | Transcript 滚动 | stick-to-bottom（rAF 合并 pin + wheel-up suppress re-follow/pin）+ tail/load-older；identity 锚点；top sentinel；`overscroll-y-none` |
-| Timeline 分页 | 打开只拉 tail（`MESSAGE_PAGE_SIZE`）；`loadOlderMessages(beforeSeq)`；quiet re-list 用 `mergeMessagesQuietTail` **保留已加载 older**；identity restore / following 不 restore |
+| Timeline 分页 | 打开只拉 tail（`MESSAGE_PAGE_SIZE`）；`loadOlderMessages(beforeSeq)`；**hard + quiet** 均 `mergeMessagesQuietTail`（保留 older + 并发更新）；identity restore / following 不 restore |
+| Transcript 打开 | 用 Entity/list `messageCount`（= last_seq）seek tail；ingest 抬升 `messageCount`；若 page `nextSeq` 仍指向更新事件则 catch-up 追到末尾，避免 stale last_seq 只看到中间窗 |
+| 已处理 approval 不回潮 | 历史仍保留 `approval/request` 帧；`demoteResolvedApprovalItems` 在 merge/load 后若卡片后有 agent/user progress 则降为 `status` 并清 `requestId`。`resolve_approval` 写 durable `approval/resolved`；assembler 处理 resolved/timeout。Attention/`hasPendingApproval` 只信 working-set 窗口 |
 | Timeline 渲染 | `features/chat`：窄 selector；`sortTimelineMessages`；`MarkdownText` memo + streaming plain；`MessageRow` memo；入场动画仅新增 id；`list-identity` 复用行对象 |
 | MessageRow polish（Wave 2） | 同作者 ~10min 内隐藏 avatar/header；hover/focus-within action bar（Reply + React）；可选 day divider（`createdAtMs`）；保留 delivery/retry/session short-id/markdown/tool_summary |
 | Reactions（local daemon） | `chat_message_reactions` 持久在 daemon SQLite；`list_conversation_messages` 嵌入聚合 `reactions`；`toggle_conversation_message_reaction` 幂等 add/remove（actor=`local`）；`ConversationReactionToggled` 推送完整聚合。Desktop：`reaction-store` 在 daemon bootstrap 时 `enterDurableMode`（丢 mock seed）→ timeline load hydrate → toggle 乐观 + RPC 回写 / 失败 rollback+toast → live `reactionToggled` 直接 apply。Mock seed 仅 browser Vite。**云端 social reactions / Nostr kind:7 延后** |
 | Reply draft（Wave 2） | `ui-store.replyToMessageIdByConversation`；Composer 显示 reply chip；`sendMessage(..., { replyToMessageId })` 写乐观行；daemon append 尚未持久化 reply_to |
 | Follow 迟滞 | unfollow 80px / re-follow 12px；wheel-up 后 ~320ms 禁止 re-follow 与 pin，减轻到底回弹再上滑的抢滚动 |
 | Project tab 切换 | Conversations / Sessions / Board **keep-alive**（`hidden` + `inert`，不 unmount）；有缓存时 transcript **quiet append**；`useLayoutEffect` 首帧 pin 到底。**Sessions keep-alive 不得**在 Conversations 下 `selectSession(null)` / auto-select（否则抹掉 Inspector 点选 SessionDetail）。`loadTranscript` quiet peek **不 bump** generation，避免与 hard open 竞态丢弃整页；打开 session 必建 `transcriptsBySession` key 供 ingest 合并 |
-| Session 状态 | **L4 `sessionsById`（SessionEntity）为 status / hasPendingApproval 唯一真相**；`sessionsByConversation` / `projectSessionsByProject` / Attention 经 `projectEntityIntoLists` 投影。hydrate 先 upsert Entity 再 `rowsFromEntities`，并同步兄弟 list。无 `projectSessions` 全局镜像。SessionList **只** `listProjectSessions(projectId)`；Attention 打开再跨 project hydrate（**不**驱动侧栏 badge） |
+| Session 状态 | **L4 `sessionsById`（SessionEntity）为 status / hasPendingApproval 唯一真相**；`sessionsByConversation` / `projectSessionsByProject` / Attention 经 `projectEntityIntoLists` 投影。hydrate：RQ 缓存 list 索引 → upsert Entity → `rowsFromEntities` 同步兄弟 list。无 `projectSessions` 全局镜像。SessionList **只** `listProjectSessions(projectId)`（`queryKeys.projectSessions`）；Inspector **只** `listSessions(conversationId)`（`queryKeys.inspectorSessions`）；Attention 打开再跨 project hydrate（**不**驱动侧栏 badge） |
 | Live status | Manager / ingest 经 Entity 写入；`hasPendingApproval` 抬 `needs_approval`，manager 不得在 pending 时降级。Transcript 淘汰后审批 fallback 看 Entity。**`livePush===true` 时不 setInterval 盲刷**；pump 结束 emit `daemon://push-status` → `livePush=false` 恢复 Timeline/Sessions 降级 quiet poll |
 | Attention badge | Σ `project.needsAttention`；bootstrap / refreshProjects 后 **quiet** `loadConversations` 全 known projects（有界并发），用 DTO `approvalCount`+unread 聚合；**不**常驻 Attention 队列 |
 | ensureLoaded | per-key single-flight（`shared/lib/desktop-inflight.ts`）；Timeline hardMax 500 / Transcript hardMax 2000；resume 去重用模块 Set（禁止 `window.__minos*`） |
@@ -389,9 +395,9 @@ Sessions 主区是 **Grok-style 日志 transcript** + 右侧 **session summary**
 | App boot | — | connect + listProjects + listClis + **subscribe pumps**（single-flight） | `error`（仅连接）；`bootEpoch++`、`livePush=true` |
 | Conversation list | `projectId` props/`key` | **`ConversationList`** → `loadConversations(projectId)`（依赖 `bootEpoch`） | `conversationsStatusByProject` |
 | Timeline | `conversationId` props/`key` | `loadTimeline`（`listMessages` only；依赖 `bootEpoch`） | `timelineStatusByConversation` |
-| Inspector | `conversationId` + `detailsOpen` | `loadInspector`（`listSessions` only；关栏不拉） | `inspectorStatusByConversation` |
-| Sessions list | `projectId` props/`key` | `loadProjectSessions`（依赖 `bootEpoch`） | `projectSessionsStatusByProject` |
-| Transcript | `sessionId` props/`key` | `loadTranscript` | `transcriptStatusBySession` |
+| Inspector | `conversationId` + `detailsOpen` | `loadInspector` → RQ `fetchQuery(inspectorSessions)` + Entity；关栏不拉 | `inspectorStatusByConversation` |
+| Sessions list | `projectId` props/`key` | `loadProjectSessions` → RQ `fetchQuery(projectSessions)` + Entity upsert；UI=`SessionListPane`/`VirtualizedList` | `projectSessionsStatusByProject` |
+| Transcript | `sessionId` props/`key` | `loadTranscript`（**不** RQ / **不** virtua） | `transcriptStatusBySession` |
 | Attention | — | `loadAttentionSessions` | `attentionStatus` |
 | Agents | CLI cards + Create agent dialog + host profiles | `loadClis` + profile/model RPCs | `clisStatus` |
 | Board | `projectId` | 吃 conversation list 缓存 | progress 单一真相（无 local override） |
@@ -408,7 +414,7 @@ Sessions 主区是 **Grok-style 日志 transcript** + 右侧 **session summary**
 |------|------|-------|
 | `minos_local_subscribe_ingest` | `daemon://ingest` | `applyIngestEvent` — **有** Transcript 工作集 key 才 merge items；无 key 只抬 `needs_approval`（不 `?? []` 建窗） |
 | `minos_local_subscribe_manager_events` | `daemon://manager` | `applyManagerEvent` — session status（**不**用 running 覆盖 needs_approval） |
-| `minos_local_subscribe_conversation_events` | `daemon://conversation` | `applyConversationEvent` — 防抖 ~200ms；有 Timeline 工作集时 quiet **`loadTimeline`（仅 listMessages）**；无 entry 只 mark `timelineDirty`、零 RPC |
+| `minos_local_subscribe_conversation_events` | `daemon://conversation` | `applyConversationEvent` — 防抖 ~200ms；有 Timeline 工作集时 quiet **`loadTimeline`（仅 listMessages）** + quiet `loadConversations`（`staleTime:0` 刷新 rail preview）；无 entry 只 mark `timelineDirty`、零 RPC。**`loadTimeline` 始终 `mergeMessagesQuietTail`**，避免 hard open 与 quiet 竞态把已到达的新消息冲掉 |
 | pump arm / death | `daemon://push-status` `{ live }` | `livePush` 门闸；`live=false` 时 View 降级 poll 重新启用 |
 
 - Hydrate 仍用 `list*` / `read_transcript`；**live 路径靠推送**。
