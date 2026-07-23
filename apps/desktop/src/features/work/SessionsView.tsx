@@ -14,11 +14,20 @@ import {
   ChevronDown,
   ChevronRight,
   FileDiff,
+  FilePenLine,
+  FileText,
+  FolderOpen,
+  Globe,
   Loader2,
   MessageSquare,
   PanelRightClose,
   PanelRightOpen,
+  Search,
   ShieldAlert,
+  Sparkles,
+  Terminal,
+  Wrench,
+  type LucideIcon,
 } from "lucide-react";
 import { agentMeta } from "@/shared/lib/mock-data";
 import { Avatar } from "@/shared/ui/Avatar";
@@ -56,6 +65,7 @@ import {
   collapsedThinkingSummary,
   displayToolDetail,
   isDiffLike,
+  type ToolKind,
 } from "@/shared/lib/tool-present";
 import { groupSessionsByConversation } from "@/shared/lib/session-list-group";
 import {
@@ -382,6 +392,19 @@ export function SessionsView({ projectId }: { projectId: string }) {
  * trips React useSyncExternalStore into "Maximum update depth exceeded".
  */
 const EMPTY_TRANSCRIPT: TranscriptItem[] = [];
+
+/** Small tool-kind glyphs for session transcript rows (Grok-style scanability). */
+const TOOL_KIND_ICON: Record<ToolKind, LucideIcon> = {
+  read: FileText,
+  edit: FilePenLine,
+  execute: Terminal,
+  search: Search,
+  list: FolderOpen,
+  web_fetch: Globe,
+  web_search: Globe,
+  skill: Sparkles,
+  other: Wrench,
+};
 
 function TranscriptPane({
   sessionId,
@@ -1457,8 +1480,16 @@ const TranscriptItemView = memo(function TranscriptItemView({
     const desc = (item.detail ?? "").trim();
     return (
       <div className="text-[12.5px] leading-snug">
-        <div className="flex w-full max-w-full items-baseline gap-1.5">
+        <div className="flex w-full max-w-full items-center gap-1.5">
           <span className="inline-block w-3 shrink-0" />
+          <Bot
+            className={cn(
+              "h-3.5 w-3.5 shrink-0",
+              failed ? "text-rose-600" : "text-ink-muted",
+            )}
+            strokeWidth={1.8}
+            aria-hidden
+          />
           <span
             className={cn(
               "shrink-0 font-medium",
@@ -1481,7 +1512,7 @@ const TranscriptItemView = memo(function TranscriptItemView({
           ) : null}
         </div>
         {desc ? (
-          <p className="mt-0.5 pl-4 text-[12px] text-ink-muted line-clamp-2">
+          <p className="mt-0.5 pl-8 text-[12px] text-ink-muted line-clamp-2">
             {desc}
           </p>
         ) : null}
@@ -1511,6 +1542,7 @@ const TranscriptItemView = memo(function TranscriptItemView({
       detail,
       isDiff: showDiff,
     });
+    const KindIcon = TOOL_KIND_ICON[header.toolKind];
     return (
       <div className="text-[12.5px] leading-snug">
         <button
@@ -1518,19 +1550,27 @@ const TranscriptItemView = memo(function TranscriptItemView({
           disabled={!expandable}
           onClick={() => expandable && setOpen((v) => !v)}
           className={cn(
-            "flex w-full max-w-full items-baseline gap-1.5 text-left",
+            "flex w-full max-w-full items-center gap-1.5 text-left",
             expandable ? "cursor-pointer hover:opacity-90" : "cursor-default",
           )}
         >
           {expandable ? (
             open ? (
-              <ChevronDown className="mt-0.5 h-3 w-3 shrink-0 text-ink-muted" />
+              <ChevronDown className="h-3 w-3 shrink-0 text-ink-muted" />
             ) : (
-              <ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-ink-muted" />
+              <ChevronRight className="h-3 w-3 shrink-0 text-ink-muted" />
             )
           ) : (
             <span className="inline-block w-3 shrink-0" />
           )}
+          <KindIcon
+            className={cn(
+              "h-3.5 w-3.5 shrink-0",
+              header.failed ? "text-rose-600" : "text-ink-muted",
+            )}
+            strokeWidth={1.8}
+            aria-hidden
+          />
           <span
             className={cn(
               "shrink-0 font-medium",
@@ -1544,7 +1584,7 @@ const TranscriptItemView = memo(function TranscriptItemView({
               "min-w-0 truncate font-mono text-[12px]",
               header.failed ? "text-rose-800/90" : "text-ink",
             )}
-            title={header.target}
+            title={header.targetFull}
           >
             {header.target}
           </span>

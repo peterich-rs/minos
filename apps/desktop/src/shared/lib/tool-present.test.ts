@@ -38,8 +38,25 @@ describe("buildToolHeader", () => {
     });
     assert.equal(h.verb, "Reading");
     assert.equal(h.target, "src/main.rs");
+    assert.equal(h.targetFull, "src/main.rs");
+    assert.equal(h.toolKind, "read");
     assert.equal(h.running, true);
     assert.equal(h.failed, false);
+  });
+
+  it("collapses home paths in the short target and keeps full in tooltip", () => {
+    const full =
+      "/Users/fannnzhang/code/github.com/Minos/apps/desktop/src/shared/ui/MarkdownText.tsx";
+    const h = buildToolHeader({
+      toolName: "read_file",
+      target: full,
+      kind: "tool_result",
+    });
+    assert.equal(h.targetFull, full);
+    assert.ok(h.target.startsWith("~/"));
+    assert.ok(!h.target.includes("/Users/"));
+    assert.ok(h.target.endsWith("MarkdownText.tsx"));
+    assert.equal(h.toolKind, "read");
   });
 
   it("builds failed execute header", () => {

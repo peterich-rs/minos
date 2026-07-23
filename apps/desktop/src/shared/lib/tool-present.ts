@@ -9,9 +9,15 @@ import {
   isDiffLike,
   parseDiffstat as parseDiffstatFromLine,
 } from "./diff-view.ts";
+import { formatToolTarget } from "./display-path.ts";
 
 export { isDiffLike, countDiffLines } from "./diff-view.ts";
 export { stripAnsiEscapes } from "./ansi.ts";
+export {
+  formatDisplayPath,
+  formatToolTarget,
+  looksLikeFilePath,
+} from "./display-path.ts";
 
 export type ToolKind =
   | "read"
@@ -161,7 +167,11 @@ export function parseDiffstat(
 
 export type ToolHeaderModel = {
   verb: string;
+  /** Short label for the row (home → `~`, tail-preferred). */
   target: string;
+  /** Original target for `title` tooltip. */
+  targetFull: string;
+  toolKind: ToolKind;
   running: boolean;
   failed: boolean;
   diffstat: { add: number; del: number } | null;
@@ -196,8 +206,8 @@ export function buildToolHeader(opts: {
 }): ToolHeaderModel {
   const running = opts.kind === "tool";
   const failed = opts.kind === "tool_error";
-  const kind = toolKindFromName(opts.toolName || "tool");
-  const verb = toolHeaderVerb(kind, running);
+  const toolKind = toolKindFromName(opts.toolName || "tool");
+  const verb = toolHeaderVerb(toolKind, running);
   const toolName = (opts.toolName || "tool").trim();
   let target = (opts.target || "").trim();
   // Legacy bridge text like "Done read_file · …" — fall back to subject.
@@ -216,6 +226,12 @@ export function buildToolHeader(opts: {
     target = "…";
   }
 
+  const targetFull = target;
+  // Paths: `~/…` + prefer trailing segments so rows stay scannable.
+  if (target !== "…") {
+    target = formatToolTarget(target);
+  }
+
   let diffstat: { add: number; del: number } | null = null;
   if (!running && !failed && opts.detail) {
     const detail = stripAnsiEscapes(opts.detail);
@@ -230,7 +246,7 @@ export function buildToolHeader(opts: {
     }
   }
 
-  return { verb, target, running, failed, diffstat };
+  return { verb, target, targetFull, toolKind, running, failed, diffstat };
 }
 
 /** Clean tool body text for expanded transcript rows (strip SGR colors). */

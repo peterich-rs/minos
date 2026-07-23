@@ -152,11 +152,18 @@ describe("summarizeSessionFromTranscript", () => {
 });
 
 describe("displayPath", () => {
-  it("shortens deep absolute paths", () => {
+  it("collapses home and keeps tail segments", () => {
     const p = displayPath(
       "/Users/me/develop/github.com/minos/apps/desktop/src/lib/foo.ts",
-      3,
+      { maxSegments: 3 },
     );
-    assert.equal(p, "…/src/lib/foo.ts");
+    assert.equal(p, "~/…/src/lib/foo.ts");
+  });
+
+  it("keeps short home paths fully under ~", () => {
+    assert.equal(
+      displayPath("/Users/me/code/Minos/README.md"),
+      "~/code/Minos/README.md",
+    );
   });
 });

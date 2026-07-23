@@ -8,12 +8,21 @@
  */
 
 import type { TranscriptItem } from "./daemon.ts";
+import { formatDisplayPath } from "./display-path.ts";
 import {
   countDiffLines,
   isDiffLike,
   parseDiffstat,
   toolKindFromName,
 } from "./tool-present.ts";
+
+/** Prefer `~` + trailing segments for summary file rows. */
+export function displayPath(
+  path: string,
+  opts?: { maxSegments?: number; maxChars?: number },
+): string {
+  return formatDisplayPath(path, opts);
+}
 
 export type FileChangeEntry = {
   path: string;
@@ -70,17 +79,6 @@ function lookLikePath(s: string): boolean {
     t.startsWith("./") ||
     t.startsWith("../")
   );
-}
-
-/** Prefer display-friendly relative tail when path is absolute. */
-export function displayPath(path: string, maxSegments = 4): string {
-  const normalized = path.replace(/\\/g, "/").trim();
-  if (!normalized) return path;
-  const parts = normalized.split("/").filter(Boolean);
-  if (parts.length <= maxSegments) return normalized.startsWith("/")
-    ? `/${parts.join("/")}`
-    : parts.join("/");
-  return `…/${parts.slice(-maxSegments).join("/")}`;
 }
 
 /**
