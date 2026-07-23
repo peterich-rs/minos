@@ -5,7 +5,7 @@ runtime compatibility gate for these paths.
 
 ## Removed HTTP Routes
 
-The legacy `/v1/threads/*` routes were removed. Clients must use:
+The legacy `/v1/sessions/*` routes were removed. Clients must use:
 
 - `POST /v1/agent-sessions/list`
 - `POST /v1/agent-sessions/read-turns`

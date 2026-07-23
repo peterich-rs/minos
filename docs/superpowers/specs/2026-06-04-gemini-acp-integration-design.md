@@ -251,7 +251,7 @@ pub struct GeminiAcpInstance {
 
 ```rust
 pub struct GeminiTranslatorState {
-    thread_id: String,
+    session_id: String,
     session_id: Option<String>,
     open_assistant_message_id: Option<String>,
     open_user_message_id: Option<String>,
@@ -274,8 +274,8 @@ Translation rules:
 | `session/update { available_commands_update }` | `Raw { kind: "gemini/commands_update" }` |
 | `session/update { session_info_update }` | `Raw { kind: "gemini/session_info" }` |
 | `PromptResponse { stopReason: end_turn }` | `MessageCompleted` |
-| `PromptResponse { stopReason: cancelled }` | `ThreadClosed { reason: UserStopped }` |
-| `PromptResponse { stopReason: max_tokens }` | `ThreadClosed { reason: Crashed { message } }` |
+| `PromptResponse { stopReason: cancelled }` | `SessionClosed { reason: UserStopped }` |
+| `PromptResponse { stopReason: max_tokens }` | `SessionClosed { reason: Crashed { message } }` |
 | Unknown sessionUpdate variant | `Raw { kind: "gemini/{variant}" }` |
 
 ### 3.7 Approval Flow Alignment
@@ -311,7 +311,7 @@ Phase 1 不实现。`clientCapabilities.fs.readTextFile` 和 `clientCapabilities
 | ACP version mismatch | Log warn + close + `UiEventMessage::Error { code: "acp_version_mismatch" }` |
 | Auth failure | `UiEventMessage::Error { code: "gemini_auth_failed" }` |
 | session/prompt error response | Map to `UiEventMessage::Error { code, message }` |
-| Agent process crash | pump reads EOF → `Inbound::Closed` → `ThreadClosed { reason: Crashed }` |
+| Agent process crash | pump reads EOF → `Inbound::Closed` → `SessionClosed { reason: Crashed }` |
 | JSON-RPC error | `MinosError::AcpProtocolError { method, message }` |
 | Unknown sessionUpdate variant | `UiEventMessage::Raw { kind: "gemini/{variant}" }` fallback |
 

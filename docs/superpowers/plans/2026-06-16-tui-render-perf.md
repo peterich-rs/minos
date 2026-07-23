@@ -4,7 +4,7 @@
 
 **Goal:** Eliminate per-frame full-transcript line rebuilding by slicing render to only the visible viewport window, using an incremental per-item visual-line index.
 
-**Architecture:** A `RenderCache` in the render layer stores `item_starts: Vec<usize>` (absolute visual line where each item begins), `total_lines`, and the `(thread_id, version, width)` it was built for. The `LineSink` trait lets the same `push_markdown_lines`/`push_code_block`/`push_tool_detail_lines` code paths either retain lines (for rendering) or count visual lines (for indexing) — guaranteeing consistency. `ChatState` gains a `version: u64` bumped by all item mutations, encapsulated behind methods so `items` becomes externally read-only.
+**Architecture:** A `RenderCache` in the render layer stores `item_starts: Vec<usize>` (absolute visual line where each item begins), `total_lines`, and the `(session_id, version, width)` it was built for. The `LineSink` trait lets the same `push_markdown_lines`/`push_code_block`/`push_tool_detail_lines` code paths either retain lines (for rendering) or count visual lines (for indexing) — guaranteeing consistency. `ChatState` gains a `version: u64` bumped by all item mutations, encapsulated behind methods so `items` becomes externally read-only.
 
 **Tech Stack:** Rust, ratatui 0.29, existing hand-rolled rendering in `crates/minos-tui/src/ui/chat.rs`.
 
@@ -45,7 +45,7 @@ In `src/translation.rs:63`, add `version` after `selection`:
 
 ```rust
 pub struct ChatState {
-    pub thread_id: String,
+    pub session_id: String,
     pub agent: AgentName,
     pub translation_state: AgentTranslationState,
     pub items: Vec<ChatItem>,
@@ -659,7 +659,7 @@ Add after the `LineSink` implementations (after the `CountingSink` impl):
 
 ```rust
 pub struct RenderCache {
-    indexed_thread_id: Option<String>,
+    indexed_session_id: Option<String>,
     item_starts: Vec<usize>,
     total_lines: usize,
     indexed_version: u64,
@@ -669,7 +669,7 @@ pub struct RenderCache {
 impl Default for RenderCache {
     fn default() -> Self {
         Self {
-            indexed_thread_id: None,
+            indexed_session_id: None,
             item_starts: Vec::new(),
             total_lines: 0,
             indexed_version: 0,
@@ -687,27 +687,27 @@ pub struct VisibleWindow<'a> {
 impl RenderCache {
     pub fn rebuild_if_stale(
         &mut self,
-        thread_id: &str,
+        session_id: &str,
         items: &[ChatItem],
         version: u64,
         width: u16,
     ) {
-        if self.is_valid(thread_id, version, width) {
+        if self.is_valid(session_id, version, width) {
             return;
         }
-        self.rebuild(thread_id, items, width);
+        self.rebuild(session_id, items, width);
         self.indexed_version = version;
         self.indexed_width = width;
-        self.indexed_thread_id = Some(thread_id.to_owned());
+        self.indexed_session_id = Some(session_id.to_owned());
     }
 
-    fn is_valid(&self, thread_id: &str, version: u64, width: u16) -> bool {
-        self.indexed_thread_id.as_deref() == Some(thread_id)
+    fn is_valid(&self, session_id: &str, version: u64, width: u16) -> bool {
+        self.indexed_session_id.as_deref() == Some(session_id)
             && self.indexed_version == version
             && self.indexed_width == width
     }
 
-    fn rebuild(&mut self, _thread_id: &str, items: &[ChatItem], width: u16) {
+    fn rebuild(&mut self, _session_id: &str, items: &[ChatItem], width: u16) {
         let mut item_starts = Vec::with_capacity(items.len());
         let mut current_start = 0usize;
 
@@ -826,7 +826,7 @@ Add to the test module:
     }
 
     #[test]
-    fn render_cache_rebuilds_on_thread_id_change() {
+    fn render_cache_rebuilds_on_session_id_change() {
         let mut cache = RenderCache::default();
         let items = vec![ChatItem::AssistantText {
             message_id: "m1".into(),
@@ -954,7 +954,7 @@ pub fn render_chat(
     let title = format!(
         "Chat: {} #{}{}",
         chat.agent.bin_name(),
-        short_thread_id(&chat.thread_id),
+        short_session_id(&chat.session_id),
         if chat.auto_scroll { "" } else { " [manual scroll]" }
     );
     let block = super::theme::border_block()
@@ -972,7 +972,7 @@ pub fn render_chat(
     }
 
     cache.rebuild_if_stale(
-        chat.thread_id.as_str(),
+        chat.session_id.as_str(),
         &chat.items,
         chat.version,
         inner.width,
@@ -1077,7 +1077,7 @@ pub fn render_chat(
     let title = format!(
         "Chat: {} #{}{}",
         chat.agent.bin_name(),
-        short_thread_id(&chat.thread_id),
+        short_session_id(&chat.session_id),
         if chat.auto_scroll { "" } else { " [manual scroll]" }
     );
     let block = super::theme::border_block()
@@ -1094,7 +1094,7 @@ pub fn render_chat(
     }
 
     cache.rebuild_if_stale(
-        chat.thread_id.as_str(),
+        chat.session_id.as_str(),
         &chat.items,
         chat.version,
         inner.width,
@@ -1431,7 +1431,7 @@ Update each call to pass `&self.ui.render_cache`.
             UiEventMessage::MessageCompleted { message_id: "m1".into() },
         ]);
         let mut cache = RenderCache::default();
-        cache.rebuild_if_stale(&chat.thread_id, &chat.items, chat.version, 80);
+        cache.rebuild_if_stale(&chat.session_id, &chat.items, chat.version, 80);
 
         // Select across two visual lines
         chat.selection = Some(ChatSelection {
@@ -1619,7 +1619,7 @@ git commit -m "style(tui): apply rustfmt"
 ## Self-Review Notes
 
 **Spec coverage check:**
-- RenderCache struct with thread_id, item_starts, total_lines, version, width ✓ (Task 5)
+- RenderCache struct with session_id, item_starts, total_lines, version, width ✓ (Task 5)
 - LineSink trait with CountingSink and VecSink ✓ (Task 3)
 - count_item_visual_lines via CountingSink ✓ (Task 3-4)
 - render_chat viewport-sliced ✓ (Task 6-7)

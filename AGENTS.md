@@ -85,4 +85,4 @@ Minos 当前处于主动开发阶段，没有需要支持的历史发布版本�
 ## 8. Observability and Comments
 - Add concise comments for non-obvious control flow, protocol boundaries, data-shape conversions, and concurrency decisions; avoid comments that restate the code.
 - Add structured logs at key lifecycle and failure points, especially RPC boundaries, background tasks, persistence writes, retries, and user-visible state transitions.
-- Logs must include enough stable fields to locate the failing object or operation, such as project_id, thread_id, workspace path, method name, and error; do not log secrets, tokens, or full sensitive payloads.
+- Logs must include enough stable fields to locate the failing object or operation, such as project_id, session_id, workspace path, method name, and error; do not log secrets, tokens, or full sensitive payloads.

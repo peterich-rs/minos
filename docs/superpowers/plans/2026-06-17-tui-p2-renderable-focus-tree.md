@@ -651,14 +651,14 @@ pub fn build_render_tree<'a>(state: &'a AppState, ui: &'a UiState) -> Box<dyn Re
     let main_row: Box<dyn Renderable> = if detail {
         Box::new(Row::new(vec![
             Box::new(GroupChatRenderable::new(&ui.group_chat, ui.focus.is(PaneId::GroupChat))),
-            Box::new(AgentListRenderable::new(&ui.threads, &ui.agent_list_state, ui.focus.is(PaneId::AgentList))),
+            Box::new(AgentListRenderable::new(&ui.sessions, &ui.agent_list_state, ui.focus.is(PaneId::AgentList))),
             Box::new(AgentChatRenderable::new(/* active chat state */, ui.focus.is(PaneId::AgentChat))),
         ], vec![45, 20, 35]))
     } else {
         Box::new(Row::new(vec![
             Box::new(RoomListRenderable::new(&ui.rooms, &ui.room_list_state, ui.focus.is(PaneId::RoomList))),
             Box::new(GroupChatRenderable::new(&ui.group_chat, ui.focus.is(PaneId::GroupChat))),
-            Box::new(AgentListRenderable::new(&ui.threads, &ui.agent_list_state, ui.focus.is(PaneId::AgentList))),
+            Box::new(AgentListRenderable::new(&ui.sessions, &ui.agent_list_state, ui.focus.is(PaneId::AgentList))),
         ], vec![20, 55, 25]))
     };
 

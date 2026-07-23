@@ -15,7 +15,7 @@ Build a `minos-tui` crate that:
 - Embeds `AgentManager` to spawn and control agent CLIs locally
 - Translates `RawIngest` events into `UiEventMessage` via the existing `minos-ui-protocol` translators
 - Renders a multi-thread chat TUI using ratatui
-- Supports sending messages, interrupting turns, and closing threads
+- Supports sending messages, interrupting turns, and closing sessions
 - Runs on macOS and Linux (any terminal with crossterm support)
 
 Out of scope for the initial implementation:
@@ -40,7 +40,7 @@ crates/minos-tui/
 │   │   └── embedded.rs      # EmbeddedBackend (wraps AgentManager)
 │   ├── ui/
 │   │   ├── mod.rs           # ratatui component composition
-│   │   ├── thread_list.rs   # Left panel: active thread list
+│   │   ├── thread_list.rs   # Left panel: active session list
 │   │   ├── chat.rs          # Right panel: message rendering
 │   │   ├── input_bar.rs     # Bottom: text input
 │   │   ├── status_bar.rs    # Top: CLI detection status + connection state
@@ -72,10 +72,10 @@ Not depended upon: `minos-daemon`, `minos-transport`, `minos-protocol`, `minos-b
 pub trait AgentBackend: Send + Sync {
     async fn detect_clis(&self) -> Result<Vec<AgentDescriptor>>;
     async fn start_agent(&self, agent: AgentName, workspace: PathBuf) -> Result<StartAgentOutcome>;
-    async fn send_message(&self, thread_id: &str, text: &str) -> Result<()>;
-    async fn interrupt_thread(&self, thread_id: &str) -> Result<()>;
-    async fn close_thread(&self, thread_id: &str) -> Result<()>;
-    async fn list_threads(&self) -> Result<Vec<ThreadSnapshot>>;
+    async fn send_message(&self, session_id: &str, text: &str) -> Result<()>;
+    async fn interrupt_session(&self, session_id: &str) -> Result<()>;
+    async fn close_session(&self, session_id: &str) -> Result<()>;
+    async fn list_sessions(&self) -> Result<Vec<ThreadSnapshot>>;
     async fn subscribe_ingest(&self) -> broadcast::Receiver<RawIngest>;
     async fn subscribe_manager_events(&self) -> broadcast::Receiver<ManagerEvent>;
 }
@@ -89,7 +89,7 @@ Future `DaemonRpcBackend` will implement the same trait by connecting to the dae
 
 ## 5. UI Layout
 
-The interaction model is **not** “one agent thread = one user conversation”. The primary object is a **chat room thread** that aggregates multiple agents. Individual agent transcripts are secondary detail views.
+The interaction model is **not** “one agent session = one user conversation”. The primary object is a **chat room thread** that aggregates multiple agents. Individual agent transcripts are secondary detail views.
 
 ### 5.1 Overview Mode
 
@@ -111,7 +111,7 @@ The interaction model is **not** “one agent thread = one user conversation”.
 
 ### 5.2 Agent Detail Mode
 
-When the user selects an agent from the right column, the TUI switches from room overview to agent inspection. The thread list is hidden temporarily because the user is already “inside” one chat room thread.
+When the user selects an agent from the right column, the TUI switches from room overview to agent inspection. The session list is hidden temporarily because the user is already “inside” one chat room thread.
 
 ```
 ┌─ Status ───────────────────────────────────────────────────────────────────────┐
@@ -134,7 +134,7 @@ Pressing `Esc` while the agent-detail pane is focused closes that pane and retur
 | Panel | Mode | Role |
 |-------|------|------|
 | Status Bar | Both | CLI detection status, backend state, high-level key hints |
-| Thread List | Overview only | Lists chat room threads, not agent execution sessions |
+| Thread List | Overview only | Lists chat room sessions, not agent execution sessions |
 | Chat Room Transcript | Both | Shows user messages plus agent result messages relevant to the room |
 | Agent List | Both | Lists agents participating in the selected chat room |
 | Agent Detail Transcript | Agent detail only | Full execution transcript for the selected agent |
@@ -156,8 +156,8 @@ Pressing `Esc` while the agent-detail pane is focused closes that pane and retur
 | `Ctrl+A` / `Ctrl+E` | Move input cursor to line start/end |
 | `Ctrl+W` / `Alt+D` | Delete previous / next word in input |
 | `Alt+B` / `Alt+F` | Move input cursor by word |
-| `Ctrl+C` | Interrupt the selected running agent thread |
-| `Ctrl+D` | Close current agent thread |
+| `Ctrl+C` | Interrupt the selected running agent session |
+| `Ctrl+D` | Close current agent session |
 
 ## 6. Message Rendering Rules
 
@@ -171,8 +171,8 @@ Pressing `Esc` while the agent-detail pane is focused closes that pane and retur
 | `MessageCompleted` | Removes the streaming cursor / pending state from the agent-detail pane |
 | `Error` | Room-level summary in the chat room transcript, with full details in agent detail |
 | `Raw` | Suppressed from the room transcript; may be exposed in agent detail for debugging |
-| `ThreadClosed` | System notice with reason in the relevant pane |
-| `ThreadTitleUpdated` | Update the chat room thread label |
+| `SessionClosed` | System notice with reason in the relevant pane |
+| `SessionTitleUpdated` | Update the chat room thread label |
 
 ### Code Block Detection
 
@@ -211,7 +211,7 @@ Agent CLI process
 AgentManager (spawns + manages process, speaks native protocol)
   │
   ▼ RawIngest (broadcast channel)
-ChatState.translation_state.translate(payload) (per-thread per-agent stateful translator)
+ChatState.translation_state.translate(payload) (per-session per-agent stateful translator)
   │
   ▼ Vec<UiEventMessage>
 ChatState.apply_ui_events() (updates RenderedMessage list)
@@ -246,11 +246,11 @@ impl AgentTranslationState {
 
 ## 9. ChatState
 
-One per active thread. Owns its own translation state so stateful translators accumulate correctly across the thread's lifetime.
+One per active session. Owns its own translation state so stateful translators accumulate correctly across the thread's lifetime.
 
 ```rust
 pub struct ChatState {
-    thread_id: String,
+    session_id: String,
     agent: AgentName,
     translation_state: AgentTranslationState,
     messages: Vec<RenderedMessage>,
@@ -294,7 +294,7 @@ The important flow is:
 3. The room transcript shows only result-level messages from participating agents.
 4. The right column lists available agents for that room.
 5. Selecting an agent opens agent-detail mode and reveals that agent’s full transcript plus a dedicated direct-input box.
-6. `Esc` from agent detail closes that pane and restores the thread list.
+6. `Esc` from agent detail closes that pane and restores the session list.
 
 ## 11. CLI Interface
 
@@ -346,8 +346,8 @@ struct Cli {
 
 ## 13. Shutdown Flow
 
-1. `Ctrl+Q` or `Esc` → if active threads exist, show confirmation dialog
-2. On confirm: call `backend.close_thread()` for each active thread
+1. `Ctrl+Q` or `Esc` → if active sessions exist, show confirmation dialog
+2. On confirm: call `backend.close_session()` for each active session
 3. `AgentManager` Drop sends SIGTERM → 3s grace → SIGKILL to all child processes
 4. Restore terminal to original mode via crossterm
 5. Exit with code 0

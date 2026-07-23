@@ -43,7 +43,7 @@ grok leader kill
 grok agent leader --no-exit-on-disconnect
 ```
 
-Use when multiple Grok clients intentionally share one backend. **Not** the primary Minos integration surface; Minos speaks ACP stdio per agent thread.
+Use when multiple Grok clients intentionally share one backend. **Not** the primary Minos integration surface; Minos speaks ACP stdio per agent session.
 
 ## 4. headless streaming-json (not ACP)
 

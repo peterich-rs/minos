@@ -393,12 +393,12 @@ fn envelope_schema() -> Value {
             {
                 "title": "IngestEnvelope",
                 "type": "object",
-                "required": ["kind", "v", "agent", "thread_id", "seq", "payload", "ts_ms"],
+                "required": ["kind", "v", "agent", "session_id", "seq", "payload", "ts_ms"],
                 "properties": {
                     "kind": { "const": "ingest" },
                     "v": { "const": 1 },
                     "agent": { "type": "string" },
-                    "thread_id": { "type": "string" },
+                    "session_id": { "type": "string" },
                     "seq": integer_schema(),
                     "payload": true,
                     "ts_ms": { "type": "integer" }
@@ -459,10 +459,10 @@ fn event_kind_schema() -> Value {
             {
                 "title": "UiEventMessageEvent",
                 "type": "object",
-                "required": ["type", "thread_id", "seq", "ui", "ts_ms"],
+                "required": ["type", "session_id", "seq", "ui", "ts_ms"],
                 "properties": {
                     "type": { "const": "ui_event_message" },
-                    "thread_id": { "type": "string" },
+                    "session_id": { "type": "string" },
                     "seq": integer_schema(),
                     "ui": true,
                     "ts_ms": { "type": "integer" }
@@ -471,10 +471,10 @@ fn event_kind_schema() -> Value {
             {
                 "title": "ApprovalRequestEvent",
                 "type": "object",
-                "required": ["type", "thread_id", "turn_id", "request_id", "method", "params", "timeout_ms"],
+                "required": ["type", "session_id", "turn_id", "request_id", "method", "params", "timeout_ms"],
                 "properties": {
                     "type": { "const": "approval_request" },
-                    "thread_id": { "type": "string" },
+                    "session_id": { "type": "string" },
                     "turn_id": { "type": "string" },
                     "request_id": { "type": "string" },
                     "method": { "type": "string" },
@@ -485,10 +485,10 @@ fn event_kind_schema() -> Value {
             {
                 "title": "ApprovalTimeoutEvent",
                 "type": "object",
-                "required": ["type", "thread_id", "request_id", "reason"],
+                "required": ["type", "session_id", "request_id", "reason"],
                 "properties": {
                     "type": { "const": "approval_timeout" },
-                    "thread_id": { "type": "string" },
+                    "session_id": { "type": "string" },
                     "request_id": { "type": "string" },
                     "reason": { "type": "string" }
                 }

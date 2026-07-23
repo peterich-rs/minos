@@ -10,14 +10,14 @@ All Minos MCP injections name the server `minos_teamwork`. The server is bound
 to the conversation that started the agent with:
 
 ```text
---conversation-id <conversation_id> --source-agent <agent> --source-thread-id <thread_id> --socket-path <path>
+--conversation-id <conversation_id> --source-agent <agent> --source-thread-id <session_id> --socket-path <path>
 ```
 
 Agents started outside a conversation do not receive the teamwork MCP server.
 Conversation-bound Codex and OpenCode runtime instances include the source
-thread id in their cache key so a process configured for one agent session is
+session id in their cache key so a process configured for one agent session is
 not reused for another session in the same conversation. Persisted conversation
-threads restore the same conversation id when they are registered back into the
+sessions restore the same conversation id when they are registered back into the
 runtime, so resumed sessions keep their conversation-bound MCP context.
 
 ## Tool Set
@@ -40,9 +40,23 @@ the update body starts with `@agent` or `@agent#short_thread`, Minos also sends
 the clean body to that target thread; `@agent` starts a new conversation-bound
 session, while `@agent#short_thread` routes to the exact existing session.
 Successful appends publish `ConversationMessageAppended` so TUI refreshes.
-`delegate_to_agent` starts the target agent through
-`start_agent_in_conversation`, sends the clean prompt to the target thread, then
-writes a visible source-agent message whose body is
+`delegate_to_agent` starts the target agent through the same conversation start
+path as UI (`start_agent_in_conversation` + optional host profile launch options).
+Tool args:
+
+| Arg | Role |
+| --- | --- |
+| `prompt` | Required task text |
+| `target_agent` | Runtime name (`codex`/`claude`/…); optional when `profile_id` or `target_profile` is set |
+| `profile_id` | Preferred stable host profile id; daemon loads profile and sets model/effort/instructions |
+| `target_profile` | Profile display name (unique case-insensitive match); ignored when `profile_id` is set |
+
+When only `target_agent` is given, Minos applies the **newest** host profile for
+that runtime if one exists (desktop bare-`@agent` convenience parity). Launch
+fields are server-owned — the tool does not accept model/effort/instructions.
+
+After start, Minos sends the clean prompt to the target thread, then writes a
+visible source-agent message whose body is
 `@target_agent#short_thread <prompt>` (with `delegation_id` + target mention
 metadata) and records delegation state. A thread that was itself created by
 delegation can only delegate back to the agent that delegated it.
@@ -59,7 +73,7 @@ latched**, not message-boundary:
 
 - `ThreadState::Idle` / `Closed` sets `pending_boundary` and tries to record.
 - Ingest `MessageCompleted` only **accumulates** for non-Opencode agents unless
-  `pending_boundary` (or `ThreadClosed`) is already set — so mid-turn completes
+  `pending_boundary` (or `SessionClosed`) is already set — so mid-turn completes
   never upsert `agent-result:…` or `complete_delegation`.
 - Opencode may record on terminal `MessageCompleted` (finish:stop) without Idle,
   because its Idle can race ahead of projected text.
@@ -87,9 +101,8 @@ On successful record for a top-level conversation thread the daemon:
 
 TUI only subscribes to conversation events for display.
 
-`TeamworkStore` migrate adds missing `teamwork_delegations` columns
-(`source_thread_id`, `result_message_id`, `result_text`, `request_message_id`)
-via best-effort `ALTER TABLE` so legacy `daemon.sqlite` files open cleanly.
+`TeamworkStore` schema is latest-only（与 daemon 本地库分离，属 minos-chat-store）。
+开发态若列形状变更，清库/重建即可；不维护对旧 `daemon.sqlite` 的 dual-read ALTER 链。
 
 ## Injection Paths
 

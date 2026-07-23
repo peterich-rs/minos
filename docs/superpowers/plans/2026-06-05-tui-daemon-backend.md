@@ -2,7 +2,7 @@
 
 ## Feasibility Assessment
 
-当前代码已经具备这次改造的核心拼图：`minos-tui` 已经把运行时依赖收敛到 `AgentBackend`（`crates/minos-tui/src/backend/mod.rs`），`minos-daemon` 已经有可复用的 `AgentGlue` / `RpcServerImpl` / `DaemonHandle::start` 组合（`crates/minos-daemon/src/agent.rs`, `crates/minos-daemon/src/rpc_server.rs`, `crates/minos-daemon/src/handle.rs`），而 `jsonrpsee` 也已经在 workspace 中启用 client/server/macros。真正的难点不在“能不能连上 daemon”，而在“不要把现有 shared RPC 面污染掉”和“不要假设 translated history 足够恢复 TUI 状态”。因此这项工作对 live daemon-backed 会话完全可行；对 persisted thread attach 也可行，但必须单独分 phase 处理 raw-ingest replay。Feasible with caveats.
+当前代码已经具备这次改造的核心拼图：`minos-tui` 已经把运行时依赖收敛到 `AgentBackend`（`crates/minos-tui/src/backend/mod.rs`），`minos-daemon` 已经有可复用的 `AgentGlue` / `RpcServerImpl` / `DaemonHandle::start` 组合（`crates/minos-daemon/src/agent.rs`, `crates/minos-daemon/src/rpc_server.rs`, `crates/minos-daemon/src/handle.rs`），而 `jsonrpsee` 也已经在 workspace 中启用 client/server/macros。真正的难点不在“能不能连上 daemon”，而在“不要把现有 shared RPC 面污染掉”和“不要假设 translated history 足够恢复 TUI 状态”。因此这项工作对 live daemon-backed 会话完全可行；对 persisted session attach 也可行，但必须单独分 phase 处理 raw-ingest replay。Feasible with caveats.
 
 ## Current Surface Inventory
 
@@ -12,9 +12,9 @@
 - `crates/minos-tui/src/ui/status_bar.rs` -- status bar 只展示 CLI 检测结果，没有 backend 连接态。
 - `crates/minos-daemon/src/handle.rs` (lines 73-177) -- `DaemonHandle::start` 负责拼装 `AgentGlue`、`RpcServerImpl` 和 relay client。
 - `crates/minos-daemon/src/rpc_server.rs` (lines 1-123) -- 当前 `RpcServerImpl` 实现的是 shared `MinosRpcServer`，用于 relay forwarded host commands，不再是本地监听器。
-- `crates/minos-daemon/src/agent.rs` (lines 168-420) -- 已有 `start_agent`、`resume_thread`、`ensure_thread_registered`、`read_thread_history`、`hydrate_translator` 等能力。
+- `crates/minos-daemon/src/agent.rs` (lines 168-420) -- 已有 `start_agent`、`resume_session`、`ensure_thread_registered`、`read_session_history`、`hydrate_translator` 等能力。
 - `crates/minos-protocol/src/rpc.rs` (lines 1-96) -- `MinosRpc` 是 shared host/mobile JSON-RPC 面，不应该承载 TUI local-only streaming 需求。
-- `crates/minos-protocol/src/messages.rs` (lines 595-727) -- 现有 `ThreadState` 可复用，但 `ThreadSummary` / `GetThreadResponse` / `ReadThreadResponse` 是 mobile/history 导向，不匹配 TUI attach 需求。
+- `crates/minos-protocol/src/messages.rs` (lines 595-727) -- 现有 `ThreadState` 可复用，但 `SessionSummary` / `GetSessionResponse` / `ReadSessionResponse` 是 mobile/history 导向，不匹配 TUI attach 需求。
 
 ## Design
 
@@ -48,13 +48,13 @@ Addressing review feedback:
    Rejected: 固定监听 `127.0.0.1:9123`。
    Why: 固定端口会引入冲突、crash 后 stale endpoint、以及并行测试互相踩踏的问题。`--daemon-url` 只作为 override 保留。
 
-5. Phase 1 只保证 live daemon-backed 会话；persisted thread attach 单独进 Phase 4。
-   Choice: 第一阶段支持 `detect_clis`、`start_agent`、`send_message`、`interrupt_thread`、`close_thread`、live ingest/manager events。
+5. Phase 1 只保证 live daemon-backed 会话；persisted session attach 单独进 Phase 4。
+   Choice: 第一阶段支持 `detect_clis`、`start_agent`、`send_message`、`interrupt_session`、`close_session`、live ingest/manager events。
    Rejected: 在第一版里就承诺“接到现有 daemon 后自动列出并恢复全部 thread”。
-   Why: 现有 protocol DTO 没有 workspace，也没有 raw ingest history；而 TUI 的 translator state 是 per-thread stateful 的，不能靠 `UiEventMessage` 历史直接恢复。
+   Why: 现有 protocol DTO 没有 workspace，也没有 raw ingest history；而 TUI 的 translator state 是 per-session stateful 的，不能靠 `UiEventMessage` 历史直接恢复。
 
 6. 只要定义 wire mirror，就必须 lossless mirror 当前 runtime 语义。
-   Choice: local RPC event DTO 保留 `RawIngest.ts_ms`、`ManagerEvent::ThreadStateChanged.at_ms`、`InstanceCrashed.workspace`。
+   Choice: local RPC event DTO 保留 `RawIngest.ts_ms`、`ManagerEvent::SessionStateChanged.at_ms`、`InstanceCrashed.workspace`。
    Rejected: 原文那套省略字段或自造字段的 `Streaming*` 草案。
    Why: 这些字段一旦丢掉，后续 replay、debug 和状态对账都做不干净，而且当前 runtime 根本没有 `instance_id` 这个事件字段。
 
@@ -73,7 +73,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LocalIngestFrame {
-    pub thread_id: String,
+    pub session_id: String,
     pub agent: minos_domain::AgentName,
     pub payload: serde_json::Value,
     pub ts_ms: i64,
@@ -82,19 +82,19 @@ pub struct LocalIngestFrame {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum LocalManagerEvent {
-    ThreadAdded {
-        thread_id: String,
+    SessionAdded {
+        session_id: String,
         workspace: String,
         agent: minos_domain::AgentName,
     },
-    ThreadStateChanged {
-        thread_id: String,
+    SessionStateChanged {
+        session_id: String,
         old: crate::ThreadState,
         new: crate::ThreadState,
         at_ms: i64,
     },
-    ThreadClosed {
-        thread_id: String,
+    SessionClosed {
+        session_id: String,
         reason: crate::CloseReason,
     },
     InstanceCrashed {
@@ -123,16 +123,16 @@ pub trait LocalDaemonRpc {
         req: crate::SendUserMessageRequest,
     ) -> jsonrpsee::core::RpcResult<()>;
 
-    #[method(name = "interrupt_thread")]
-    async fn interrupt_thread(
+    #[method(name = "interrupt_session")]
+    async fn interrupt_session(
         &self,
-        req: crate::InterruptThreadRequest,
+        req: crate::InterruptSessionRequest,
     ) -> jsonrpsee::core::RpcResult<()>;
 
-    #[method(name = "close_thread")]
-    async fn close_thread(
+    #[method(name = "close_session")]
+    async fn close_session(
         &self,
-        req: crate::CloseThreadRequest,
+        req: crate::CloseSessionRequest,
     ) -> jsonrpsee::core::RpcResult<()>;
 
     #[subscription(name = "subscribe_ingest", item = LocalIngestFrame)]
@@ -147,33 +147,33 @@ Phase 4 才扩展 persisted-thread attach 所需的接口：
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LocalThreadSnapshot {
-    pub thread_id: String,
+pub struct LocalSessionSnapshot {
+    pub session_id: String,
     pub agent: minos_domain::AgentName,
     pub workspace: String,
     pub state: crate::ThreadState,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ReadThreadRawHistoryResponse {
+pub struct ReadSessionRawHistoryResponse {
     pub events: Vec<LocalIngestFrame>,
     pub next_seq: Option<u64>,
 }
 
-#[method(name = "resume_thread")]
-async fn resume_thread(
+#[method(name = "resume_session")]
+async fn resume_session(
     &self,
-    req: crate::GetThreadParams,
+    req: crate::GetSessionParams,
 ) -> jsonrpsee::core::RpcResult<crate::StartAgentResponse>;
 
-#[method(name = "list_local_threads")]
-async fn list_local_threads(&self) -> jsonrpsee::core::RpcResult<Vec<LocalThreadSnapshot>>;
+#[method(name = "list_local_sessions")]
+async fn list_local_sessions(&self) -> jsonrpsee::core::RpcResult<Vec<LocalSessionSnapshot>>;
 
-#[method(name = "read_thread_raw_history")]
-async fn read_thread_raw_history(
+#[method(name = "read_session_raw_history")]
+async fn read_session_raw_history(
     &self,
-    req: crate::ReadThreadParams,
-) -> jsonrpsee::core::RpcResult<ReadThreadRawHistoryResponse>;
+    req: crate::ReadSessionParams,
+) -> jsonrpsee::core::RpcResult<ReadSessionRawHistoryResponse>;
 ```
 
 File: `crates/minos-tui/src/backend/mod.rs`
@@ -195,10 +195,10 @@ pub enum BackendConnectionState {
 pub trait AgentBackend: Send + Sync {
     async fn detect_clis(&self) -> Result<Vec<AgentDescriptor>>;
     async fn start_agent(&self, agent: AgentName, workspace: PathBuf) -> Result<StartAgentOutcome>;
-    async fn send_message(&self, thread_id: &str, text: &str) -> Result<()>;
-    async fn interrupt_thread(&self, thread_id: &str) -> Result<()>;
-    async fn close_thread(&self, thread_id: &str) -> Result<()>;
-    async fn list_threads(&self) -> Result<Vec<minos_agent_runtime::store_facing::ThreadSnapshot>>;
+    async fn send_message(&self, session_id: &str, text: &str) -> Result<()>;
+    async fn interrupt_session(&self, session_id: &str) -> Result<()>;
+    async fn close_session(&self, session_id: &str) -> Result<()>;
+    async fn list_sessions(&self) -> Result<Vec<minos_agent_runtime::store_facing::ThreadSnapshot>>;
     async fn subscribe_ingest(&self) -> broadcast::Receiver<RawIngest>;
     async fn subscribe_manager_events(&self) -> broadcast::Receiver<ManagerEvent>;
     fn connection_state(&self) -> BackendConnectionState;
@@ -281,13 +281,13 @@ Rationale: local listener 属于长期运行的 daemon instance，不属于所�
 - Start live subscription pumps inside `connect()` so callers拿到的是 ready backend，而不是一个还需要额外 `start_subscriptions()` 的半成品。
 - Convert `LocalIngestFrame` / `LocalManagerEvent` into runtime `RawIngest` / `ManagerEvent`.
 - Track current connection state and last transport error for the UI.
-- Do not fabricate thread snapshots from `ListThreadsResponse`; that mapping is wrong and phase 3 does not need it.
+- Do not fabricate thread snapshots from `ListSessionsResponse`; that mapping is wrong and phase 3 does not need it.
 
 **File: `crates/minos-tui/src/backend/mod.rs`**
 
 - Export `DaemonBackend`.
 - Add a cheap connection-state getter.
-- Keep `list_threads()` present, but treat it as live cache only until persisted-thread hydration lands.
+- Keep `list_sessions()` present, but treat it as live cache only until persisted-thread hydration lands.
 
 **File: `crates/minos-tui/src/main.rs`**
 
@@ -303,7 +303,7 @@ Rationale: local listener 属于长期运行的 daemon instance，不属于所�
 - Refactor `App` so it can hold `Arc<dyn AgentBackend>` at runtime, or relax the generic to `?Sized`.
 - Refresh backend connection state during `Tick`.
 - Surface disconnects to the UI instead of silently stopping ingest.
-- Keep the current live-thread behavior unchanged for newly started threads.
+- Keep the current live-thread behavior unchanged for newly started sessions.
 
 **File: `crates/minos-tui/src/ui/status_bar.rs`**
 
@@ -316,21 +316,21 @@ Rationale: 这一阶段只把 TUI 的运行时边界从 in-process 挪到 daemon
 
 **File: `crates/minos-protocol/src/local_rpc.rs`**
 
-- Add `resume_thread`, `list_local_threads`, and `read_thread_raw_history`.
+- Add `resume_session`, `list_local_sessions`, and `read_session_raw_history`.
 - Return raw ingest frames, not translated `UiEventMessage`s.
 
 **File: `crates/minos-daemon/src/agent.rs`**
 
 - Reuse the existing persisted-thread helpers:
-  - `resume_thread()` for explicit attach
+  - `resume_session()` for explicit attach
   - store-backed history reads for raw event replay
-- Do not reuse `read_thread_history()` for TUI hydration; it returns translated UI events and cannot rebuild translator state.
+- Do not reuse `read_session_history()` for TUI hydration; it returns translated UI events and cannot rebuild translator state.
 
 **File: `crates/minos-tui/src/app.rs`**
 
-- On daemon startup, optionally hydrate visible thread metadata from `list_local_threads`.
-- When the user selects or resumes a persisted thread, replay raw history through the existing per-agent translators before live events continue.
-- Lazily call `resume_thread` before the first send/interrupt on a persisted thread that is not currently registered in the daemon manager; the current `send_user_message` path does not call `ensure_thread_registered`.
+- On daemon startup, optionally hydrate visible thread metadata from `list_local_sessions`.
+- When the user selects or resumes a persisted session, replay raw history through the existing per-agent translators before live events continue.
+- Lazily call `resume_session` before the first send/interrupt on a persisted session that is not currently registered in the daemon manager; the current `send_user_message` path does not call `ensure_thread_registered`.
 
 **File: `crates/minos-tui/src/translation.rs`**
 
@@ -367,7 +367,7 @@ Rationale: 这条链路必须能在 CI 里直接测，`#[ignore]` + “先手工
 - Semver impact: 如果改动收敛在新的 `local_rpc` module，就不会破坏现有 `MinosRpc` shared contract。
 - Object safety: `AgentBackend` 只要新增的是 non-generic cheap getter，就仍然是 object-safe。
 - Not changed: relay/backend transport、forwarded host command dispatch、pairing、mobile-facing `MinosRpc` DTO 都不在本次变更范围。
-- History caveat: `ReadThreadResponse.ui_events` 适合 `minos-daemon history` 文本输出，但不适合 TUI attach；TUI 需要 raw ingest replay 来重建 translator state。
+- History caveat: `ReadSessionResponse.ui_events` 适合 `minos-daemon history` 文本输出，但不适合 TUI attach；TUI 需要 raw ingest replay 来重建 translator state。
 - Dependency changes: `minos-tui` 增加 `minos-protocol` 和 `jsonrpsee`；不应该反向依赖 `minos-daemon`。
 - Failure handling: missing discovery file、stale endpoint、mid-session disconnect 都必须是显式 UI-visible error，不能只表现成“没有线程”或“界面静默”。
 - Security boundary: Phase 1 只绑定 loopback，并通过 `run_dir` 发布 discovery file；如果后续需要收紧同机同用户信任边界，再引入 local bearer token，而不是去扩展 shared `MinosRpc`。

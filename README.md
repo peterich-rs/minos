@@ -83,8 +83,8 @@ cargo run -p minos-daemon -- set-host-skill ~/.codex/skills/my-skill enable
 cargo run -p minos-daemon -- forget-peer
 cargo run -p minos-daemon -- forget-peer --device-id <mobile-device-uuid>
 
-# Read persisted thread summaries or one thread snapshot from the local store.
-cargo run -p minos-daemon -- threads --limit 20
+# Read persisted session summaries or one session snapshot from the local store.
+cargo run -p minos-daemon -- sessions --limit 20
 cargo run -p minos-daemon -- thread <thread-id>
 cargo run -p minos-daemon -- history <thread-id>
 
@@ -95,7 +95,7 @@ cargo run -p minos-daemon -- run --thread <thread-id> "Continue this session"
 # Keep a local codex session open for multiple turns.
 cargo run -p minos-daemon -- chat --workspace ~/dev/my-repo
 
-# Re-attach to a persisted local thread.
+# Re-attach to a persisted local session.
 cargo run -p minos-daemon -- chat --thread <thread-id>
 
 # Start the daemon against the relay. Needs a reachable relay — boot a

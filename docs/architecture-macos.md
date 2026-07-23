@@ -120,7 +120,7 @@ Rust daemon 的 Swift 侧抽象。定义:
 
 Agent 运行时子视图:
 - 当前 agent 状态
-- 会话信息（thread ID, workspace 路径）
+- 会话信息（session ID, workspace 路径）
 - Debug 控制（启动/停止 Codex agent）
 
 ## App 生命周期

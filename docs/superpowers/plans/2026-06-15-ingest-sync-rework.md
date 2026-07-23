@@ -111,7 +111,7 @@ Host sends HostGapManifest metadata only
 
 7. **Backend owns historical backfill scheduling.** The backend knows which clients are online and which session they are viewing. It should pull "client-opened history" before idle backfill and pause pull traffic when live traffic is present.
 
-8. **All ingest writes are idempotent on stable host-local identity.** Use `(host_device_id, thread_id, seq)` or `event_id` as the uniqueness key. Same key with different payload is an invariant violation, not a reason to assign a new backend seq.
+8. **All ingest writes are idempotent on stable host-local identity.** Use `(host_device_id, session_id, seq)` or `event_id` as the uniqueness key. Same key with different payload is an invariant violation, not a reason to assign a new backend seq.
 
 9. **Clients see partial history explicitly.** If backend has only part of a session and host has missing ranges, read APIs return available data plus `history_state = partial`. The UI can show that older/missing content is being restored.
 
@@ -148,7 +148,7 @@ pub struct SeqRange {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HostIngestChunk {
     pub event_id: String,
-    pub thread_id: String,
+    pub session_id: String,
     pub seq: u64,
     pub agent: minos_domain::AgentName,
     pub kind: String,
@@ -169,7 +169,7 @@ pub struct HostIngestLiveBatch {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionGapManifest {
-    pub thread_id: String,
+    pub session_id: String,
     pub backend_acked_seq: u64,
     pub local_from_seq: u64,
     pub local_to_seq: u64,
@@ -191,7 +191,7 @@ pub struct HostGapManifest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HostIngestPullResponse {
     pub request_id: String,
-    pub thread_id: String,
+    pub session_id: String,
     pub from_seq: u64,
     pub to_seq: u64,
     pub chunks: Vec<HostIngestChunk>,
@@ -211,13 +211,13 @@ pub enum ClientFrame {
 
 pub enum ServerFrame {
     HostIngestAck {
-        thread_id: String,
+        session_id: String,
         accepted_to_seq: u64,
         batch_id: Option<String>,
     },
     PullIngestRange {
         request_id: String,
-        thread_id: String,
+        session_id: String,
         from_seq: u64,
         to_seq: u64,
         max_bytes: u64,
@@ -226,7 +226,7 @@ pub enum ServerFrame {
     },
     PullAck {
         request_id: String,
-        thread_id: String,
+        session_id: String,
         accepted_to_seq: u64,
     },
     // existing variants
@@ -240,7 +240,7 @@ Create `crates/minos-daemon/src/ingest_chunk.rs` or place these in `sync.rs` if 
 ```rust
 pub struct IngestChunk {
     pub event_id: String,
-    pub thread_id: String,
+    pub session_id: String,
     pub seq: u64,
     pub agent: minos_domain::AgentName,
     pub kind: String,
@@ -253,7 +253,7 @@ pub struct IngestChunk {
 }
 
 pub struct ThreadSyncWatermark {
-    pub thread_id: String,
+    pub session_id: String,
     pub local_last_seq: u64,
     pub local_persisted_seq: u64,
     pub backend_acked_seq: u64,
@@ -267,7 +267,7 @@ Backend must persist host availability separately from raw events:
 
 ```sql
 CREATE TABLE thread_sync_state (
-    thread_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
     host_device_id TEXT NOT NULL,
     backend_acked_seq INTEGER NOT NULL DEFAULT 0,
     host_local_from_seq INTEGER NOT NULL DEFAULT 0,
@@ -280,7 +280,7 @@ CREATE TABLE thread_sync_state (
     first_ts_ms INTEGER,
     last_ts_ms INTEGER,
     updated_at_ms INTEGER NOT NULL,
-    PRIMARY KEY (thread_id, host_device_id)
+    PRIMARY KEY (session_id, host_device_id)
 );
 ```
 
@@ -289,7 +289,7 @@ Raw event idempotency must include host identity:
 ```sql
 -- Shape may be adapted to existing migrations, but the invariant is required.
 CREATE UNIQUE INDEX raw_events_host_thread_seq_idx
-ON raw_events(host_device_id, thread_id, seq);
+ON raw_events(host_device_id, session_id, seq);
 ```
 
 ## Phased Implementation
@@ -308,7 +308,7 @@ ON raw_events(host_device_id, thread_id, seq);
 
 - Add `thread_sync_state`.
 - Add host identity to `raw_events` if missing.
-- Add unique constraint for `(host_device_id, thread_id, seq)`.
+- Add unique constraint for `(host_device_id, session_id, seq)`.
 
 **Verification**
 
@@ -329,7 +329,7 @@ Do not use `blocking_send`: current call sites run inside tokio tasks.
 **Files: `crates/minos-agent-runtime/src/*.rs` call sites**
 
 - Update all `.emit(...)` call sites to `.emit(...).await`.
-- Where an event cannot be persisted because the durable sink is closed, propagate a runtime error or mark the thread degraded. Do not log-and-continue as if the event was handled.
+- Where an event cannot be persisted because the durable sink is closed, propagate a runtime error or mark the session degraded. Do not log-and-continue as if the event was handled.
 
 **Tests**
 
@@ -343,7 +343,7 @@ Important correction from the previous draft: do not add `RawIngest::as_inline_j
 
 **File: `crates/minos-daemon/src/ingest_coalescer.rs`**
 
-- Add per-thread sequencer initialized from local `threads.last_seq`.
+- Add per-session sequencer initialized from local `sessions.last_seq`.
 - Convert `RawIngest` into canonical `IngestChunk`.
 - Coalesce only safe high-frequency event classes:
   - assistant text delta
@@ -386,7 +386,7 @@ Important correction from the previous draft: do not add `RawIngest::as_inline_j
 
 **File: `crates/minos-daemon/src/store/mod.rs`**
 
-- Add `read_ingest_chunks(thread_id, from_seq, to_seq, max_bytes)` for pull response.
+- Add `read_ingest_chunks(session_id, from_seq, to_seq, max_bytes)` for pull response.
 - The method must return raw payload, not only projection JSON.
 - If a local row points to an artifact body, resolve the artifact or return a typed pull error so the backend can retry later.
 
@@ -412,7 +412,7 @@ Important correction from the previous draft: do not add `RawIngest::as_inline_j
 
 **File: `crates/minos-daemon/src/sync.rs`**
 
-- Add `SyncState` with `local_last_seq`, `local_persisted_seq`, `backend_acked_seq`, and dirty ranges per thread.
+- Add `SyncState` with `local_last_seq`, `local_persisted_seq`, `backend_acked_seq`, and dirty ranges per session.
 - Add `LiveUploadWorker`:
   - consumes `IngestChunk` from ChunkBus
   - if connected and live lane accepts, sends `HostIngestLiveBatch`
@@ -478,7 +478,7 @@ Important correction from the previous draft: do not add `RawIngest::as_inline_j
 **File: `crates/minos-backend/src/store/raw_events.rs`**
 
 - Add `insert_host_ingest_chunk`.
-- Enforce idempotency on `(host_device_id, thread_id, seq)` or `event_id`.
+- Enforce idempotency on `(host_device_id, session_id, seq)` or `event_id`.
 - Same key + same checksum is duplicate success.
 - Same key + different checksum is a hard invariant error.
 - Remove the current "same seq different payload gets assigned next seq" behavior for host-ingest chunks.

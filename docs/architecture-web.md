@@ -78,7 +78,7 @@ src/
 
 - `RelaySocket.sendRpc()` 发送 `forward` envelope 到特定 host 设备
 - Payload 是 JSON-RPC 2.0（`{jsonrpc, id, method, params}`）
-- 方法: `minos_start_agent`, `minos_send_user_message`, `minos_interrupt_thread` 等
+- 方法: `minos_start_agent`, `minos_send_user_message`, `minos_interrupt_session` 等
 
 ## 状态管理 (Zustand)
 

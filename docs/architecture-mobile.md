@@ -46,8 +46,15 @@ lib/
       social/                        # 社交（好友/对话）
       projects/                      # 项目
       profile/                       # 个人资料
-  src/rust/                          # 自动生成的 FRB 代码
+  src/rust/                          # 自动生成的 FRB 代码（勿手改）
 ```
+
+### FRB 代码生成
+
+- **运行时 / pubspec 钉死版本**: `flutter_rust_bridge = "=2.12.0"`（`minos-ffi-frb`）与 `apps/mobile` pubspec `2.12.0`；codegen CLI 必须同版本。
+- **唯一入口**: 仓库根执行 `just gen-frb` 或 `cargo xtask gen-frb`（内部调用 `flutter_rust_bridge_codegen generate --config-file flutter_rust_bridge.yaml`，CWD 为 `apps/mobile` 以便 fvm 解析 Flutter）。
+- **安装**: `cargo xtask bootstrap` 安装 `flutter_rust_bridge_codegen` **2.12.0**（`--locked --force`）。
+- **产物**: `apps/mobile/lib/src/rust/**` + `crates/minos-ffi-frb/src/frb_generated.rs`（checked-in；改 `api/` mirror 后必须 regen，禁止手改 encode/decode）。
 
 ### 状态管理（Riverpod）
 
@@ -59,7 +66,7 @@ lib/
 |----------|------|------|
 | `authControllerProvider` | `@Riverpod(keepAlive: true)` | 认证状态 |
 | `activeSessionControllerProvider` | `@Riverpod(keepAlive: true)` | Agent 会话状态机 |
-| `threadEventsProvider(threadId)` | `@Riverpod(keepAlive: true)` | 线程事件 |
+| `threadEventsProvider(sessionId)` | `@Riverpod(keepAlive: true)` | 线程事件 |
 | `connectionStateProvider` | `@Riverpod(keepAlive: true)` | 连接状态 |
 | `pairedMacsProvider` | `AsyncNotifierProvider` | 已配对 Mac 列表 |
 | `pairingControllerProvider` | `@riverpod` | QR 配对生命周期 |
@@ -78,7 +85,7 @@ lib/
 | `/splash` | `_SplashScreen` | 启动加载 |
 | `/login` | `LoginPage` | 登录/注册 |
 | `/` | `AppShellPage` | 主壳（3 Tab） |
-| `/thread/:threadId` | `ThreadViewPage` | Agent 线程对话 |
+| `/thread/:sessionId` | `ThreadViewPage` | Agent 线程对话 |
 | `/thread/new` | `ThreadViewPage` | 新线程 |
 | `/agent-start` | `AgentStartPage` | Agent 选择 |
 | `/pairing` | `PairingPage` | QR 扫描配对 |
@@ -194,7 +201,7 @@ SessionIdle --send()--> SessionSending --first UI frame--> SessionStreaming
                                                                       v
                     SessionStreaming --MessageCompleted--> SessionAwaitingInput
                          |                                            |
-                         +--stop()/ThreadClosed--> SessionSuspended   |
+                         +--stop()/SessionClosed--> SessionSuspended   |
                          |                                            |
                          +--error--> SessionError<--send failure------+
                          <-----------send() (follow-up)---------------+

@@ -4,9 +4,9 @@
 
 **Goal:** Fix `@Agent#hashid` candidates leaking across conversations — when inside a conversation, the mention picker should only show agent sessions belonging to that conversation.
 
-**Implementation status (2026-06-24):** implemented in code. `ThreadSummary` / `ThreadSummaryEntry` now carry state, daemon conversation-session listing uses live-manager-state first with DB-row fallback, TUI mention candidates and short-id routing only expose existing sessions when a conversation is active, manager events keep `conversation_agent_sessions` state fresh, and targeted tests cover conversation-scoped behavior plus hiding existing sessions from the new-conversation input. Commit steps below are historical plan instructions, not completed by this document.
+**Implementation status (2026-06-24):** implemented in code. `SessionSummary` / `SessionSummaryEntry` now carry state, daemon conversation-session listing uses live-manager-state first with DB-row fallback, TUI mention candidates and short-id routing only expose existing sessions when a conversation is active, manager events keep `conversation_agent_sessions` state fresh, and targeted tests cover conversation-scoped behavior plus hiding existing sessions from the new-conversation input. Commit steps below are historical plan instructions, not completed by this document.
 
-**Architecture:** `room_agent_mention_candidates()` reads from `self.conversation_agent_sessions` (per-conversation) only when `nav_level().conversation_id()` is `Some`; outside an active conversation it only returns installed agents. The short-id resolver `thread_id_for_agent_short_id()` uses the same scoping and does not fall back to `self.threads`. `ThreadSummaryEntry` carries a `state` field to filter out closed sessions.
+**Architecture:** `room_agent_mention_candidates()` reads from `self.conversation_agent_sessions` (per-conversation) only when `nav_level().conversation_id()` is `Some`; outside an active conversation it only returns installed agents. The short-id resolver `session_id_for_agent_short_id()` uses the same scoping and does not fall back to `self.sessions`. `SessionSummaryEntry` carries a `state` field to filter out closed sessions.
 
 **Tech Stack:** Rust, ratatui, jsonrpsee
 
@@ -16,16 +16,16 @@
 
 | File | Responsibility | Change |
 |------|---------------|--------|
-| `crates/minos-tui/src/backend/mod.rs` | `ThreadSummaryEntry` struct | Add `state: ThreadState` field |
-| `crates/minos-protocol/src/messages.rs` | `ThreadSummary` protocol struct | Add `state: ThreadState` field (already has `end_reason`) |
+| `crates/minos-tui/src/backend/mod.rs` | `SessionSummaryEntry` struct | Add `state: ThreadState` field |
+| `crates/minos-protocol/src/messages.rs` | `SessionSummary` protocol struct | Add `state: ThreadState` field (already has `end_reason`) |
 | `crates/minos-tui/src/ui/mod.rs` | `room_agent_mention_candidates()` | Scope to conversation when inside one |
-| `crates/minos-tui/src/app/submission.rs` | `thread_id_for_agent_short_id()` | Scope to conversation when inside one |
+| `crates/minos-tui/src/app/submission.rs` | `session_id_for_agent_short_id()` | Scope to conversation when inside one |
 | `crates/minos-tui/src/app_tests/` | Test file | New tests for scoping |
-| `crates/minos-daemon/src/agent.rs` | `list_conversation_agent_sessions` impl | Include `state` in response, using **live-manager-state-first, DB-row-fallback** (same strategy as `get_thread`) |
+| `crates/minos-daemon/src/agent.rs` | `list_conversation_agent_sessions` impl | Include `state` in response, using **live-manager-state-first, DB-row-fallback** (same strategy as `get_session`) |
 
 ---
 
-## Task 1: Add `state` field to `ThreadSummaryEntry`
+## Task 1: Add `state` field to `SessionSummaryEntry`
 
 **Files:**
 - Modify: `crates/minos-tui/src/backend/mod.rs:69-94`
@@ -35,7 +35,7 @@
 - Modify: `crates/minos-tui/src/update/mod.rs:182-247` (ConversationAgentStarted handler)
 - Modify: `crates/minos-tui/src/ui/mod.rs:313-351` (subagent_tests fixture)
 
-- [ ] **Step 1: Add `state` field to `ThreadSummaryEntry` struct**
+- [ ] **Step 1: Add `state` field to `SessionSummaryEntry` struct**
 
 File: `crates/minos-tui/src/backend/mod.rs`
 
@@ -43,29 +43,29 @@ Add `state: minos_agent_runtime::ThreadState` field and update `from_summary`:
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ThreadSummaryEntry {
-    pub thread_id: String,
+pub struct SessionSummaryEntry {
+    pub session_id: String,
     pub agent: AgentName,
     pub title: Option<String>,
     pub first_ts_ms: i64,
     pub last_ts_ms: i64,
     pub message_count: u32,
     pub ended_at_ms: Option<i64>,
-    pub parent_thread_id: Option<String>,
+    pub parent_session_id: Option<String>,
     pub state: minos_agent_runtime::ThreadState,
 }
 
-impl ThreadSummaryEntry {
-    pub fn from_summary(s: &minos_protocol::ThreadSummary) -> Self {
+impl SessionSummaryEntry {
+    pub fn from_summary(s: &minos_protocol::SessionSummary) -> Self {
         Self {
-            thread_id: s.thread_id.clone(),
+            session_id: s.session_id.clone(),
             agent: s.agent,
             title: s.title.clone(),
             first_ts_ms: s.first_ts_ms,
             last_ts_ms: s.last_ts_ms,
             message_count: s.message_count,
             ended_at_ms: s.ended_at_ms,
-            parent_thread_id: s.parent_thread_id.clone(),
+            parent_session_id: s.parent_session_id.clone(),
             state: s.state.clone(),
         }
     }
@@ -74,14 +74,14 @@ impl ThreadSummaryEntry {
 
 Note: This requires `ThreadState` to derive `Clone, PartialEq, Eq`. Check `crates/minos-agent-runtime/src/state_machine.rs` — if it doesn't derive these, add them.
 
-- [ ] **Step 2: Add `state` field to protocol `ThreadSummary`**
+- [ ] **Step 2: Add `state` field to protocol `SessionSummary`**
 
 File: `crates/minos-protocol/src/messages.rs:739-750`
 
 ```rust
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct ThreadSummary {
-    pub thread_id: String,
+pub struct SessionSummary {
+    pub session_id: String,
     pub agent: AgentName,
     pub title: Option<String>,
     pub first_ts_ms: i64,
@@ -89,7 +89,7 @@ pub struct ThreadSummary {
     pub message_count: u32,
     pub ended_at_ms: Option<i64>,
     pub end_reason: Option<ThreadEndReason>,
-    pub parent_thread_id: Option<String>,
+    pub parent_session_id: Option<String>,
     pub state: ThreadState,
 }
 ```
@@ -98,9 +98,9 @@ pub struct ThreadSummary {
 
 File: `crates/minos-daemon/src/agent.rs:1094-1107`
 
-The current implementation (`agent.rs:1094`) only reads DB rows via `thread_summary_from_row` and never consults the live `AgentManager`. This means a thread that is `Running` in-memory but still `Suspended` in the DB would appear stale, and mention filtering by `Closed`/`Open` would be wrong.
+The current implementation (`agent.rs:1094`) only reads DB rows via `session_summary_from_row` and never consults the live `AgentManager`. This means a session that is `Running` in-memory but still `Suspended` in the DB would appear stale, and mention filtering by `Closed`/`Open` would be wrong.
 
-Adopt the **same strategy `get_thread` already uses** (`agent.rs:763-782`): live manager snapshot first, DB row as fallback. Concretely:
+Adopt the **same strategy `get_session` already uses** (`agent.rs:763-782`): live manager snapshot first, DB row as fallback. Concretely:
 
 ```rust
 pub async fn list_conversation_agent_sessions(
@@ -109,81 +109,81 @@ pub async fn list_conversation_agent_sessions(
 ) -> Result<minos_protocol::ListConversationAgentSessionsResponse, MinosError> {
     let rows = self
         .store
-        .list_threads_by_conversation(&req.conversation_id)
+        .list_sessions_by_conversation(&req.conversation_id)
         .await
         .map_err(|e| map_store_error("list_conversation_agent_sessions", e))?;
 
     // Build a live-state lookup from the in-memory manager, exactly like
-    // `get_thread` (agent.rs:770-776) does for a single thread.
+    // `get_session` (agent.rs:770-776) does for a single thread.
     let live_states: std::collections::HashMap<String, ProtoThreadState> = self
         .manager
-        .list_threads()
+        .list_sessions()
         .await
         .into_iter()
-        .map(|snapshot| (snapshot.thread_id.clone(), state_to_proto(&snapshot.state)))
+        .map(|snapshot| (snapshot.session_id.clone(), state_to_proto(&snapshot.state)))
         .collect();
 
-    let threads = rows
+    let sessions = rows
         .into_iter()
         .map(|row| {
-            let mut summary = thread_summary_from_row(row.clone())?;
+            let mut summary = session_summary_from_row(row.clone())?;
             // Live state wins; fall back to the DB row's state, propagating
-            // any conversion error exactly like `get_thread` does.
+            // any conversion error exactly like `get_session` does.
             let row_state = row_state_to_proto(&row)?;
             summary.state = live_states
-                .get(&summary.thread_id)
+                .get(&summary.session_id)
                 .cloned()
                 .unwrap_or(row_state);
             Ok(summary)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(minos_protocol::ListConversationAgentSessionsResponse { threads })
+    Ok(minos_protocol::ListConversationAgentSessionsResponse { sessions })
 }
 ```
 
 **Requirements:**
-- `thread_summary_from_row` must populate `state` from `row_state_to_proto(&row)` as the baseline (see `agent.rs:1399` for the existing helper).
-- After building each `ThreadSummary` from the row, override `state` with the live manager snapshot if present (same precedence as `get_thread` at `agent.rs:780`: `live_state.unwrap_or(row_state_to_proto(&row)?)`).
-- `row_state_to_proto` errors are **propagated** via `?` — identical to `get_thread`'s fallback path. Do not use `unwrap_or_default()` or any silent fallback: `ProtoThreadState` does not implement `Default`, and swallowing the error would diverge from `get_thread`.
-- Also update **every** other `ThreadSummary {` construction site in `crates/minos-daemon/src/` to include the new `state` field. Search for `ThreadSummary {` to find them all.
+- `session_summary_from_row` must populate `state` from `row_state_to_proto(&row)` as the baseline (see `agent.rs:1399` for the existing helper).
+- After building each `SessionSummary` from the row, override `state` with the live manager snapshot if present (same precedence as `get_session` at `agent.rs:780`: `live_state.unwrap_or(row_state_to_proto(&row)?)`).
+- `row_state_to_proto` errors are **propagated** via `?` — identical to `get_session`'s fallback path. Do not use `unwrap_or_default()` or any silent fallback: `ProtoThreadState` does not implement `Default`, and swallowing the error would diverge from `get_session`.
+- Also update **every** other `SessionSummary {` construction site in `crates/minos-daemon/src/` to include the new `state` field. Search for `SessionSummary {` to find them all.
 
 - [ ] **Step 4: Update `ConversationAgentStarted` handler to include `state`**
 
 File: `crates/minos-tui/src/update/mod.rs:203-213`
 
-The handler manually constructs a `ThreadSummaryEntry`. Add `state: minos_agent_runtime::ThreadState::Starting`:
+The handler manually constructs a `SessionSummaryEntry`. Add `state: minos_agent_runtime::ThreadState::Starting`:
 
 ```rust
 ui.conversation_agent_sessions
-    .push(crate::backend::ThreadSummaryEntry {
-        thread_id: thread_id.clone(),
+    .push(crate::backend::SessionSummaryEntry {
+        session_id: session_id.clone(),
         agent,
         title,
         first_ts_ms: 0,
         last_ts_ms: 0,
         message_count: 0,
         ended_at_ms: None,
-        parent_thread_id: None,
+        parent_session_id: None,
         state: minos_agent_runtime::ThreadState::Starting,
     });
 ```
 
-- [ ] **Step 5: Update all test fixtures that construct `ThreadSummaryEntry`**
+- [ ] **Step 5: Update all test fixtures that construct `SessionSummaryEntry`**
 
-Search for `ThreadSummaryEntry {` across `crates/minos-tui/src/` (including `app_tests/`, `ui/mod.rs` subagent_tests). Add `state: ThreadState::Idle` (or `Starting` as appropriate) to every construction site.
+Search for `SessionSummaryEntry {` across `crates/minos-tui/src/` (including `app_tests/`, `ui/mod.rs` subagent_tests). Add `state: ThreadState::Idle` (or `Starting` as appropriate) to every construction site.
 
 Test fixture in `crates/minos-tui/src/ui/mod.rs:317-328`:
 ```rust
-fn session(thread_id: &str, parent_thread_id: Option<&str>) -> ThreadSummaryEntry {
-    ThreadSummaryEntry {
-        thread_id: thread_id.into(),
+fn session(session_id: &str, parent_session_id: Option<&str>) -> SessionSummaryEntry {
+    SessionSummaryEntry {
+        session_id: session_id.into(),
         agent: AgentName::Codex,
         title: None,
         first_ts_ms: 0,
         last_ts_ms: 0,
         message_count: 0,
         ended_at_ms: None,
-        parent_thread_id: parent_thread_id.map(str::to_string),
+        parent_session_id: parent_session_id.map(str::to_string),
         state: minos_agent_runtime::ThreadState::Idle,
     }
 }
@@ -203,7 +203,7 @@ Expected: all existing tests pass
 
 ```bash
 git add -A
-git commit -m "feat: add state field to ThreadSummaryEntry for mention scoping"
+git commit -m "feat: add state field to SessionSummaryEntry for mention scoping"
 ```
 
 ---
@@ -216,37 +216,37 @@ git commit -m "feat: add state field to ThreadSummaryEntry for mention scoping"
 
 - [ ] **Step 1: Write failing test for conversation-scoped candidates**
 
-Add a test module in `crates/minos-tui/src/ui/mod.rs` (or extend the existing `subagent_tests` module at line 313). The test should verify that when `nav_stack` contains a `Conversation` level, only `conversation_agent_sessions` appear as `Existing` candidates, not threads from `self.threads`:
+Add a test module in `crates/minos-tui/src/ui/mod.rs` (or extend the existing `subagent_tests` module at line 313). The test should verify that when `nav_stack` contains a `Conversation` level, only `conversation_agent_sessions` appear as `Existing` candidates, not sessions from `self.sessions`:
 
 ```rust
 #[cfg(test)]
 mod mention_scope_tests {
     use super::*;
-    use crate::backend::ThreadSummaryEntry;
+    use crate::backend::SessionSummaryEntry;
     use crate::nav::NavLevel;
     use minos_agent_runtime::ThreadState;
     use minos_protocol::AgentName;
 
     fn make_thread_entry(id: &str, agent: AgentName, state: ThreadState) -> ThreadEntry {
         ThreadEntry {
-            thread_id: id.into(),
+            session_id: id.into(),
             agent,
             workspace: std::path::PathBuf::from("."),
             state,
-            parent_thread_id: None,
+            parent_session_id: None,
         }
     }
 
-    fn make_session(id: &str, agent: AgentName, state: ThreadState) -> ThreadSummaryEntry {
-        ThreadSummaryEntry {
-            thread_id: id.into(),
+    fn make_session(id: &str, agent: AgentName, state: ThreadState) -> SessionSummaryEntry {
+        SessionSummaryEntry {
+            session_id: id.into(),
             agent,
             title: None,
             first_ts_ms: 0,
             last_ts_ms: 0,
             message_count: 0,
             ended_at_ms: None,
-            parent_thread_id: None,
+            parent_session_id: None,
             state,
         }
     }
@@ -254,8 +254,8 @@ mod mention_scope_tests {
     #[test]
     fn mention_candidates_in_conversation_only_show_conversation_sessions() {
         let mut ui = UiState::default();
-        // Global threads: thread-a belongs to a DIFFERENT conversation
-        ui.threads.push(make_thread_entry("thread-aaaa1111", AgentName::Codex, ThreadState::Idle));
+        // Global sessions: thread-a belongs to a DIFFERENT conversation
+        ui.sessions.push(make_thread_entry("thread-aaaa1111", AgentName::Codex, ThreadState::Idle));
         // Conversation sessions: thread-bbbb belongs to THIS conversation
         ui.conversation_agent_sessions.push(make_session("thread-bbbb2222", AgentName::Codex, ThreadState::Idle));
         // Set nav to inside a conversation
@@ -266,36 +266,36 @@ mod mention_scope_tests {
         ];
 
         let candidates = ui.room_agent_mention_candidates();
-        let existing_thread_ids: Vec<&str> = candidates
+        let existing_session_ids: Vec<&str> = candidates
             .iter()
             .filter_map(|c| match &c.kind {
-                AgentMentionCandidateKind::Existing { thread_id } => Some(thread_id.as_str()),
+                AgentMentionCandidateKind::Existing { session_id } => Some(session_id.as_str()),
                 _ => None,
             })
             .collect();
 
-        // thread-aaaa1111 (from global threads) must NOT appear
-        assert!(!existing_thread_ids.contains(&"thread-aaaa1111"));
+        // thread-aaaa1111 (from global sessions) must NOT appear
+        assert!(!existing_session_ids.contains(&"thread-aaaa1111"));
         // thread-bbbb2222 (from conversation sessions) MUST appear
-        assert!(existing_thread_ids.contains(&"thread-bbbb2222"));
+        assert!(existing_session_ids.contains(&"thread-bbbb2222"));
     }
 
     #[test]
     fn mention_candidates_outside_conversation_hide_existing_threads() {
         let mut ui = UiState::default();
-        ui.threads.push(make_thread_entry("thread-aaaa1111", AgentName::Codex, ThreadState::Idle));
+        ui.sessions.push(make_thread_entry("thread-aaaa1111", AgentName::Codex, ThreadState::Idle));
         ui.nav_stack = vec![NavLevel::Projects, NavLevel::Conversations { project_id: "p1".into() }];
 
         let candidates = ui.room_agent_mention_candidates();
-        let existing_thread_ids: Vec<&str> = candidates
+        let existing_session_ids: Vec<&str> = candidates
             .iter()
             .filter_map(|c| match &c.kind {
-                AgentMentionCandidateKind::Existing { thread_id } => Some(thread_id.as_str()),
+                AgentMentionCandidateKind::Existing { session_id } => Some(session_id.as_str()),
                 _ => None,
             })
             .collect();
 
-        assert!(existing_thread_ids.is_empty());
+        assert!(existing_session_ids.is_empty());
     }
 
     #[test]
@@ -314,16 +314,16 @@ mod mention_scope_tests {
         ];
 
         let candidates = ui.room_agent_mention_candidates();
-        let existing_thread_ids: Vec<&str> = candidates
+        let existing_session_ids: Vec<&str> = candidates
             .iter()
             .filter_map(|c| match &c.kind {
-                AgentMentionCandidateKind::Existing { thread_id } => Some(thread_id.as_str()),
+                AgentMentionCandidateKind::Existing { session_id } => Some(session_id.as_str()),
                 _ => None,
             })
             .collect();
 
-        assert!(!existing_thread_ids.contains(&"thread-closed111"));
-        assert!(existing_thread_ids.contains(&"thread-open1111"));
+        assert!(!existing_session_ids.contains(&"thread-closed111"));
+        assert!(existing_session_ids.contains(&"thread-open1111"));
     }
 }
 ```
@@ -331,7 +331,7 @@ mod mention_scope_tests {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cargo test -p minos-tui mention_scope_tests -- --nocapture`
-Expected: FAIL — `mention_candidates_in_conversation_only_show_conversation_sessions` fails because `thread-aaaa1111` appears (it comes from `self.threads`). The outside-conversation test fails if existing session hashes are still exposed by the new-conversation input.
+Expected: FAIL — `mention_candidates_in_conversation_only_show_conversation_sessions` fails because `thread-aaaa1111` appears (it comes from `self.sessions`). The outside-conversation test fails if existing session hashes are still exposed by the new-conversation input.
 
 - [ ] **Step 3: Implement the scoped `room_agent_mention_candidates()`**
 
@@ -353,13 +353,13 @@ pub fn room_agent_mention_candidates(&self) -> Vec<AgentMentionCandidate> {
         candidates.extend(
             self.conversation_agent_sessions
                 .iter()
-                .filter(|session| session.parent_thread_id.is_none())
+                .filter(|session| session.parent_session_id.is_none())
                 .filter(|session| !matches!(session.state, ThreadState::Closed { .. }))
                 .map(|session| {
                     AgentMentionCandidate::existing(
                         session.agent,
-                        session.thread_id.clone(),
-                        short_thread_id(&session.thread_id),
+                        session.session_id.clone(),
+                        short_session_id(&session.session_id),
                     )
                 }),
         );
@@ -387,7 +387,7 @@ git commit -m "fix: scope @Agent mention candidates to current conversation"
 
 ---
 
-## Task 3: Scope `thread_id_for_agent_short_id()` to conversation
+## Task 3: Scope `session_id_for_agent_short_id()` to conversation
 
 **Files:**
 - Modify: `crates/minos-tui/src/app/submission.rs:414-429`
@@ -395,30 +395,30 @@ git commit -m "fix: scope @Agent mention candidates to current conversation"
 
 - [ ] **Step 1: Write failing test for scoped short-id resolution**
 
-Add a test in `crates/minos-tui/src/app_tests/input_and_routing.rs` (or a new test file). The test should verify that `thread_id_for_agent_short_id()` only resolves thread IDs from `conversation_agent_sessions` when inside a conversation:
+Add a test in `crates/minos-tui/src/app_tests/input_and_routing.rs` (or a new test file). The test should verify that `session_id_for_agent_short_id()` only resolves session IDs from `conversation_agent_sessions` when inside a conversation:
 
 ```rust
 #[tokio::test]
 async fn short_id_resolver_only_finds_conversation_sessions() {
     let (mut app, _backend) = App::test_app(TestBackend::default()).await;
     // Add a global thread that does NOT belong to this conversation
-    app.ui.threads.push(crate::ui::ThreadEntry {
-        thread_id: "thread-aaaa1111".into(),
+    app.ui.sessions.push(crate::ui::ThreadEntry {
+        session_id: "thread-aaaa1111".into(),
         agent: minos_protocol::AgentName::Codex,
         workspace: ".".into(),
         state: minos_agent_runtime::ThreadState::Idle,
-        parent_thread_id: None,
+        parent_session_id: None,
     });
     // Add a conversation session that DOES belong
-    app.ui.conversation_agent_sessions.push(crate::backend::ThreadSummaryEntry {
-        thread_id: "thread-bbbb2222".into(),
+    app.ui.conversation_agent_sessions.push(crate::backend::SessionSummaryEntry {
+        session_id: "thread-bbbb2222".into(),
         agent: minos_protocol::AgentName::Codex,
         title: None,
         first_ts_ms: 0,
         last_ts_ms: 0,
         message_count: 0,
         ended_at_ms: None,
-        parent_thread_id: None,
+        parent_session_id: None,
         state: minos_agent_runtime::ThreadState::Idle,
     });
     app.ui.nav_stack = vec![
@@ -429,12 +429,12 @@ async fn short_id_resolver_only_finds_conversation_sessions() {
 
     // Should NOT find the global thread
     assert_eq!(
-        app.thread_id_for_agent_short_id(minos_protocol::AgentName::Codex, "thread-a"),
+        app.session_id_for_agent_short_id(minos_protocol::AgentName::Codex, "thread-a"),
         None,
     );
     // SHOULD find the conversation session
     assert_eq!(
-        app.thread_id_for_agent_short_id(minos_protocol::AgentName::Codex, "thread-b"),
+        app.session_id_for_agent_short_id(minos_protocol::AgentName::Codex, "thread-b"),
         Some("thread-bbbb2222".into()),
     );
 }
@@ -445,14 +445,14 @@ Note: The test may need adjustment based on how `App::test_app` is structured in
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p minos-tui short_id_resolver_only_finds_conversation_sessions -- --nocapture`
-Expected: FAIL — the resolver finds `thread-aaaa1111` from `self.ui.threads`
+Expected: FAIL — the resolver finds `thread-aaaa1111` from `self.ui.sessions`
 
-- [ ] **Step 3: Implement scoped `thread_id_for_agent_short_id()`**
+- [ ] **Step 3: Implement scoped `session_id_for_agent_short_id()`**
 
 File: `crates/minos-tui/src/app/submission.rs:414-429`
 
 ```rust
-pub(super) fn thread_id_for_agent_short_id(
+pub(super) fn session_id_for_agent_short_id(
     &self,
     agent: AgentName,
     short_id: &str,
@@ -470,20 +470,20 @@ pub(super) fn thread_id_for_agent_short_id(
             .iter()
             .find(|session| {
                 session.agent == agent
-                    && (short_thread_id(&session.thread_id).to_ascii_lowercase() == short_id
-                        || session.thread_id.to_ascii_lowercase().starts_with(&short_id))
+                    && (short_session_id(&session.session_id).to_ascii_lowercase() == short_id
+                        || session.session_id.to_ascii_lowercase().starts_with(&short_id))
             })
-            .map(|session| session.thread_id.clone())
+            .map(|session| session.session_id.clone())
     } else {
         self.ui
-            .threads
+            .sessions
             .iter()
             .find(|thread| {
                 thread.agent == agent
-                    && (short_thread_id(&thread.thread_id).to_ascii_lowercase() == short_id
-                        || thread.thread_id.to_ascii_lowercase().starts_with(&short_id))
+                    && (short_session_id(&thread.session_id).to_ascii_lowercase() == short_id
+                        || thread.session_id.to_ascii_lowercase().starts_with(&short_id))
             })
-            .map(|thread| thread.thread_id.clone())
+            .map(|thread| thread.session_id.clone())
     }
 }
 ```
@@ -502,7 +502,7 @@ Expected: all tests pass
 
 ```bash
 git add -A
-git commit -m "fix: scope thread_id_for_agent_short_id to current conversation"
+git commit -m "fix: scope session_id_for_agent_short_id to current conversation"
 ```
 
 ---
@@ -510,23 +510,23 @@ git commit -m "fix: scope thread_id_for_agent_short_id to current conversation"
 ## Task 4: Sync `conversation_agent_sessions` state with live manager events
 
 **Files:**
-- Modify: `crates/minos-tui/src/app/` (wherever manager events update `ui.threads` state)
+- Modify: `crates/minos-tui/src/app/` (wherever manager events update `ui.sessions` state)
 
-When a thread transitions state (e.g. Idle → Running → Idle), the `conversation_agent_sessions` entry must also update. Currently these events update `ui.threads` but not `conversation_agent_sessions`.
+When a session transitions state (e.g. Idle → Running → Idle), the `conversation_agent_sessions` entry must also update. Currently these events update `ui.sessions` but not `conversation_agent_sessions`.
 
-- [ ] **Step 1: Find where thread state transitions update `ui.threads`**
+- [ ] **Step 1: Find where session state transitions update `ui.sessions`**
 
-Search in `crates/minos-tui/src/app/lifecycle.rs` and `crates/minos-tui/src/update/` for where `ThreadEntry.state` is mutated on manager events (e.g. `ThreadStateChanged`, `ThreadClosed`).
+Search in `crates/minos-tui/src/app/lifecycle.rs` and `crates/minos-tui/src/update/` for where `ThreadEntry.state` is mutated on manager events (e.g. `SessionStateChanged`, `SessionClosed`).
 
 - [ ] **Step 2: Add symmetric update to `conversation_agent_sessions`**
 
-At each location where `ui.threads[i].state` is updated, also update the matching entry in `ui.conversation_agent_sessions` (if it exists for the same `thread_id`):
+At each location where `ui.sessions[i].state` is updated, also update the matching entry in `ui.conversation_agent_sessions` (if it exists for the same `session_id`):
 
 ```rust
 if let Some(session) = ui
     .conversation_agent_sessions
     .iter_mut()
-    .find(|s| s.thread_id == thread_id)
+    .find(|s| s.session_id == session_id)
 {
     session.state = new_state.clone();
 }
@@ -535,7 +535,7 @@ if let Some(session) = ui
 Key transition points to handle:
 - Thread started (Starting → Idle/Running)
 - Thread running (→ Running)
-- Thread idle (→ Idle)
+- Session idle (→ Idle)
 - Thread closed (→ Closed)
 - Thread suspended (→ Suspended)
 

@@ -67,7 +67,7 @@ async function main() {
   const threadResp = await client.request("thread/start", { model: "gpt-5.4" });
   const thread = (threadResp.result as any).thread;
   await client.request("turn/start", {
-    threadId: thread.id,
+    sessionId: thread.id,
     input: [{ type: "text", text: "Summarize this repo." }],
   });
 }

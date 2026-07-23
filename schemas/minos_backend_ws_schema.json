@@ -21,7 +21,7 @@
         "cwd": "/Users/fan/dev/minos"
       },
       "request_id": "req_123",
-      "thread_id": "thr_approval",
+      "session_id": "thr_approval",
       "timeout_ms": 120000,
       "turn_id": "turn_123",
       "type": "approval_request",
@@ -31,7 +31,7 @@
       "kind": "event",
       "reason": "timeout",
       "request_id": "req_123",
-      "thread_id": "thr_approval",
+      "session_id": "thr_approval",
       "type": "approval_timeout",
       "v": 1
     },
@@ -63,7 +63,7 @@
     "event_ui_event_message": {
       "kind": "event",
       "seq": 42,
-      "thread_id": "thr_abc",
+      "session_id": "thr_abc",
       "ts_ms": 1714000000000,
       "type": "ui_event_message",
       "ui": {
@@ -111,7 +111,7 @@
         }
       },
       "seq": 42,
-      "thread_id": "thr_abc",
+      "session_id": "thr_abc",
       "ts_ms": 1714000000000,
       "v": 1
     }
@@ -245,7 +245,7 @@
               "minimum": 0,
               "type": "integer"
             },
-            "thread_id": {
+            "session_id": {
               "type": "string"
             },
             "ts_ms": {
@@ -259,7 +259,7 @@
             "kind",
             "v",
             "agent",
-            "thread_id",
+            "session_id",
             "seq",
             "payload",
             "ts_ms"
@@ -359,7 +359,7 @@
               "minimum": 0,
               "type": "integer"
             },
-            "thread_id": {
+            "session_id": {
               "type": "string"
             },
             "ts_ms": {
@@ -372,7 +372,7 @@
           },
           "required": [
             "type",
-            "thread_id",
+            "session_id",
             "seq",
             "ui",
             "ts_ms"
@@ -389,7 +389,7 @@
             "request_id": {
               "type": "string"
             },
-            "thread_id": {
+            "session_id": {
               "type": "string"
             },
             "timeout_ms": {
@@ -405,7 +405,7 @@
           },
           "required": [
             "type",
-            "thread_id",
+            "session_id",
             "turn_id",
             "request_id",
             "method",
@@ -423,7 +423,7 @@
             "request_id": {
               "type": "string"
             },
-            "thread_id": {
+            "session_id": {
               "type": "string"
             },
             "type": {
@@ -432,7 +432,7 @@
           },
           "required": [
             "type",
-            "thread_id",
+            "session_id",
             "request_id",
             "reason"
           ],

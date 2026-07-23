@@ -20,7 +20,7 @@
 
 ## Feasibility Assessment
 
-当前仓库已经实现了 auth、pairing、threads/ingest、projects、social、approvals、realtime 等完整业务面。真实代码分布在 `crates/minos-backend/src/http/`, `crates/minos-backend/src/auth/`, `crates/minos-backend/src/pairing/`, `crates/minos-backend/src/ingest/`, `crates/minos-backend/src/social/`, `crates/minos-backend/src/project/`, `crates/minos-backend/src/realtime.rs`, `crates/minos-backend/src/approval_relay.rs`, `crates/minos-backend/src/host_command_runtime.rs`, `crates/minos-backend/src/store/` 与 `crates/minos-backend/src/http/v1/contract.rs`。
+当前仓库已经实现了 auth、pairing、sessions/ingest、projects、social、approvals、realtime 等完整业务面。真实代码分布在 `crates/minos-backend/src/http/`, `crates/minos-backend/src/auth/`, `crates/minos-backend/src/pairing/`, `crates/minos-backend/src/ingest/`, `crates/minos-backend/src/social/`, `crates/minos-backend/src/project/`, `crates/minos-backend/src/realtime.rs`, `crates/minos-backend/src/approval_relay.rs`, `crates/minos-backend/src/host_command_runtime.rs`, `crates/minos-backend/src/store/` 与 `crates/minos-backend/src/http/v1/contract.rs`。
 
 现有代码已经验证了以下事实：
 
@@ -49,7 +49,7 @@
 - `crates/minos-backend/src/ingest/mod.rs` — 当前 host 原始事件入库、翻译、向 account peers 广播。
 - `crates/minos-backend/src/store/account_host_pairings.rs` — 当前 `(host_device_id, mobile_account_id)` 链接关系实现，已验证多账号链接成立。
 - `crates/minos-backend/src/store/raw_events.rs` — 当前 thread 级原始事件存储，后续会演化为 agent turn / stream recovery 的底层来源之一。
-- `crates/minos-backend/migrations/0001_initial.sql` — 当前仓库起始 schema，已不再保留 MVP 增量迁移链。
+- `crates/minos-backend/migrations/sqlite/0001_initial.sql` / `migrations/postgres/0001_initial.sql` — 各方言单一 canonical schema（latest-only，无增量迁移链）。
 
 ## Design
 
@@ -71,7 +71,7 @@
 - `x-role`、`x-device-role`、`x-device-secret` 这类 transport header 作为公共业务身份入口的做法。
 - 为旧客户端保留的兼容路由、兼容 schema、兼容 reply 路径。
 - “所有推送事件都写 DB outbox” 的统一化假设。正式开发明确区分 durable 领域事件和 ephemeral stream 事件。
-- `thread` 作为顶层领域名词。正式开发以 `conversation` 和 `agent_session` 为主；现有 `project_threads`、`threads/read` 等旧词仅作为迁移背景存在。
+- `session` 作为顶层领域名词。正式开发以 `conversation` 和 `agent_session` 为主；现有 `project_sessions`、`sessions/read` 等旧词仅作为迁移背景存在。
 - 将 host 平台硬编码为 macOS。平台差异只留在 installation metadata 和 host runtime 自身，不进入公开契约。
 
 显式不纳入本轮正式开发范围的内容：
@@ -118,8 +118,8 @@
 6. 删除 `forward_rpc.rs`，以持久化 `host_commands` 模型替代“全局 DashMap + oneshot 等待”。
 原因：approval 不是唯一需要 host 同步响应的场景；host command 必须可超时、可恢复、可跨实例投递、可审计。in-process waiter 只允许作为优化缓存，不能是真理来源。
 
-7. 领域模型围绕 `conversation`、`agent_session` 与 `project` 收敛，移除 `thread` 旧词。
-原因：conversation 是用户可见的聊天/协作边界，agent session 是一次执行生命周期；旧 `thread` 词义在当前代码里混合了流、会话和项目归档，继续沿用只会把 phase 4/5 反复拖回旧模型。
+7. 领域模型围绕 `conversation`、`agent_session` 与 `project` 收敛，移除 `session` 旧词。
+原因：conversation 是用户可见的聊天/协作边界，agent session 是一次执行生命周期；旧 `session` 词义在当前代码里混合了流、会话和项目归档，继续沿用只会把 phase 4/5 反复拖回旧模型。
 
 8. Worker plane 是逻辑 plane，不是 Day 0 的部署承诺。
 原因：approval timeout、refresh cleanup、ticket cleanup、outbox dispatch 都是低频后台任务。第一阶段默认以同进程 supervised task 运行，拆分部署是配置选项，不是基础架构义务。
@@ -536,7 +536,7 @@ durable resume cursor 固定为按 topic 维护的 `last_durable_seq`：
 - `agent_sessions.project_id` 与 `conversations.project_id` 的一致性由 use-case 在事务内校验，不用 DB trigger 表达。
 - `agent_turns(turn_id PK, agent_session_id, turn_seq, role, status, started_at_ms, finished_at_ms?)`；`(agent_session_id, turn_seq) UNIQUE` 与 `agent_session:<id>` topic 的 durable 序列一一对应。
 - `agent_turn_events(turn_id, event_seq, kind, payload jsonb, created_at_ms)`；主键 `(turn_id, event_seq)`，存放 turn 内所有 stream slice，是 stream cold replay 的唯一来源。
-- 旧 `project_threads` 概念被删除；conversation 通过 `conversations.project_id` 直接归属于 project，agent session 通过 `project_id` 镜像同一归属。
+- 旧 `project_sessions` 概念被删除；conversation 通过 `conversations.project_id` 直接归属于 project，agent session 通过 `project_id` 镜像同一归属。
 
 #### Key Index Inventory
 
@@ -766,7 +766,7 @@ Redis bucket 限流默认作用于以下路径，阈值由 `config.rs` 配置：
 - 新增 start / send-input / stop / list / read-turns endpoints。
 
 **File: `crates/minos-backend/src/http/v1/approvals.rs`**
-- 新增专属 approvals/respond 入口，从旧 threads 入口彻底解耦。
+- 新增专属 approvals/respond 入口，从旧 sessions 入口彻底解耦。
 
 验收：
 
@@ -790,7 +790,7 @@ Redis bucket 限流默认作用于以下路径，阈值由 `config.rs` 配置：
 
 **File: `crates/minos-backend/src/http/v1/projects.rs`**
 - 保持 POST-first，但将 list / create / rename / archive / conversations/link / agent-sessions/query|link 明确分组。
-- 旧 `projects/threads/*` 退化为兼容别名，新的权威 project 归属写入 `agent_sessions.project_id`。
+- 旧 `projects/sessions/*` 退化为兼容别名，新的权威 project 归属写入 `agent_sessions.project_id`。
 
 验收：
 
@@ -845,7 +845,7 @@ Redis bucket 限流默认作用于以下路径，阈值由 `config.rs` 配置：
 
 - PG + Redis CI matrix 持续绿。
 - OpenAPI / JSON schema 成为 SDK 生成输入而不是仅在 CI 中被动检查。
-- cutover checklist 明确列出 `/v1/me/*`, `/devices`, `forward_rpc.rs`, `thread` 旧词的退场状态。
+- cutover checklist 明确列出 `/v1/me/*`, `/devices`, `forward_rpc.rs`, `session` 旧词的退场状态。
 
 ## Architectural Notes
 
@@ -871,7 +871,7 @@ Redis bucket 限流默认作用于以下路径，阈值由 `config.rs` 配置：
 - `crates/minos-backend/src/http/v1/host.rs` -- 新增 host rail 接口。
 - `crates/minos-backend/src/http/v1/pairing.rs`, `crates/minos-backend/src/http/v1/host.rs` -- 承接已退役 `/v1/me/*` 的 pairing / host self surface。
 - `crates/minos-backend/src/http/v1/pairing.rs` -- 重写为 account-host link 领域接口。
-- `crates/minos-backend/src/http/v1/projects.rs` -- 扩展项目领域接口并移除 `thread` 旧词。
+- `crates/minos-backend/src/http/v1/projects.rs` -- 扩展项目领域接口并移除 `session` 旧词。
 - `crates/minos-backend/src/http/v1/social.rs` -- 按 profile / friendship / conversation 子域拆分。
 - `crates/minos-backend/src/http/ws_devices.rs` -- 复用共享 realtime upgrade / activation；公开入口收敛到 `/ws/client` 与 `/ws/host`，内部 compat auth 分支留待后续清理。
 - `crates/minos-backend/src/ingest/mod.rs` -- 改为持久化 + durable event + ephemeral stream，不直接 fan-out。

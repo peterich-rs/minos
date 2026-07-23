@@ -291,12 +291,12 @@ async fn codex_smoke_leg_async(codex_bin: PathBuf) -> Result<()> {
         .start_agent(AgentName::Codex, workspace_root)
         .await
         .context("codex smoke: start_agent failed")?;
-    let thread_id = outcome.thread_id;
+    let session_id = outcome.session_id;
     let watcher = tokio::spawn(wait_for_codex_ok_token(manager.ingest_stream()));
 
     let result = async {
         manager
-            .send_user_message(&thread_id, "reply with the word ok".into())
+            .send_user_message(&session_id, "reply with the word ok".into())
             .await
             .context("codex smoke: send_user_message failed")?;
         watcher
@@ -307,9 +307,9 @@ async fn codex_smoke_leg_async(codex_bin: PathBuf) -> Result<()> {
     .await;
 
     let stop_result = manager
-        .close_thread(&thread_id)
+        .close_session(&session_id)
         .await
-        .context("codex smoke: close_thread failed");
+        .context("codex smoke: close_session failed");
 
     match (result, stop_result) {
         (Ok(()), Ok(())) => Ok(()),
@@ -519,19 +519,22 @@ fn bootstrap() -> Result<()> {
         }
     }
 
-    eprintln!("==> installing flutter_rust_bridge_codegen (v2)");
-    // `cargo install` is idempotent for matching versions — if the binary is
-    // already present at a compatible version, cargo prints `already
-    // installed` and exits 0. `--locked` keeps the transitive graph pinned
-    // for reproducibility.
+    eprintln!(
+        "==> installing flutter_rust_bridge_codegen {FRB_CODEGEN_VERSION}"
+    );
+    // Must stay lockstep with `flutter_rust_bridge = "=2.12.0"` (Cargo) and
+    // `flutter_rust_bridge: 2.12.0` (apps/mobile pubspec). `--force` replaces
+    // a newer/older binary already on PATH (e.g. a beta) so bootstrap is the
+    // single pin path. `--locked` keeps the transitive graph reproducible.
     run(
         "cargo",
         &[
             "install",
             "flutter_rust_bridge_codegen",
             "--version",
-            "^2.11",
+            FRB_CODEGEN_VERSION,
             "--locked",
+            "--force",
         ],
         &workspace_root,
     )?;
@@ -744,6 +747,11 @@ fn acquire_build_macos_lock(root: &Path, configuration: &str) -> Result<std::fs:
 /// installed by `bootstrap`. Drift here is the macOS CI `gen-uniffi` footgun.
 const UNIFFI_CLI_VERSION: &str = "0.31.1";
 
+/// Must match `minos-ffi-frb`'s `flutter_rust_bridge = "=2.12.0"` and
+/// `apps/mobile` pubspec `flutter_rust_bridge: 2.12.0`. Drift here is the
+/// mobile FRB regen footgun (mismatched encode/decode / `@generated` headers).
+const FRB_CODEGEN_VERSION: &str = "2.12.0";
+
 fn gen_uniffi() -> Result<()> {
     let root = workspace_root()?;
     let out_dir = root.join("apps/macos/Minos/Generated");
@@ -837,13 +845,13 @@ fn gen_uniffi() -> Result<()> {
 
 fn verify_generated_uniffi_surface(out_dir: &Path) -> Result<()> {
     // Phase C retired the legacy single-session `AgentState`; the multi-thread
-    // `ThreadState` enum (in `minos-agent-runtime`) is its replacement. The
+    // `SessionState` enum (in `minos-agent-runtime`) is its replacement. The
     // `AgentStateObserver` protocol survives but its `on_state` argument now
-    // carries `ThreadState`.
+    // carries `SessionState`.
     require_generated_text(
         &out_dir.join("minos_agent_runtime.swift"),
-        "public enum ThreadState",
-        "generated Swift enum for runtime-owned ThreadState",
+        "public enum SessionState",
+        "generated Swift enum for runtime-owned SessionState",
     )?;
     require_generated_text(
         &out_dir.join("minos_daemon.swift"),
@@ -862,13 +870,13 @@ fn verify_generated_uniffi_surface(out_dir: &Path) -> Result<()> {
     )?;
     require_generated_text(
         &out_dir.join("minos_daemon.swift"),
-        "public struct AgentThreadSnapshot",
-        "generated Swift record for current agent thread snapshot",
+        "public struct AgentSessionSnapshot",
+        "generated Swift record for current agent session snapshot",
     )?;
     require_generated_text(
         &out_dir.join("minos_daemon.swift"),
-        "open func currentAgentThread()",
-        "generated DaemonHandle.currentAgentThread binding",
+        "open func currentAgentSession()",
+        "generated DaemonHandle.currentAgentSession binding",
     )?;
     require_generated_text(
         &out_dir.join("minos_protocol.swift"),
@@ -887,13 +895,13 @@ fn verify_generated_uniffi_surface(out_dir: &Path) -> Result<()> {
     )?;
     require_generated_text(
         &out_dir.join("minos_protocol.swift"),
-        "public struct InterruptThreadRequest",
-        "generated Swift record for InterruptThreadRequest (Phase C)",
+        "public struct InterruptSessionRequest",
+        "generated Swift record for InterruptSessionRequest (Phase C)",
     )?;
     require_generated_text(
         &out_dir.join("minos_protocol.swift"),
-        "public struct CloseThreadRequest",
-        "generated Swift record for CloseThreadRequest (Phase C)",
+        "public struct CloseSessionRequest",
+        "generated Swift record for CloseSessionRequest (Phase C)",
     )?;
 
     Ok(())
@@ -1122,10 +1130,11 @@ fn gen_frb() -> Result<()> {
     if which("flutter_rust_bridge_codegen").is_none() {
         bail!(
             "flutter_rust_bridge_codegen not found on PATH. Run `cargo xtask bootstrap` \
-             to install it (cargo install flutter_rust_bridge_codegen --version ^2.11 \
-             --locked)."
+             to install it (cargo install flutter_rust_bridge_codegen --version \
+             {FRB_CODEGEN_VERSION} --locked --force)."
         );
     }
+    ensure_frb_codegen_matches_workspace()?;
 
     let config = root.join("flutter_rust_bridge.yaml");
     if !config.exists() {
@@ -1151,7 +1160,8 @@ fn gen_frb() -> Result<()> {
     }
 
     eprintln!(
-        "==> flutter_rust_bridge_codegen generate --config-file {config_display}",
+        "==> flutter_rust_bridge_codegen generate --config-file {config_display} \
+         (pinned {FRB_CODEGEN_VERSION})",
         config_display = config.display()
     );
     run(
@@ -1159,6 +1169,43 @@ fn gen_frb() -> Result<()> {
         &["generate", "--config-file", config.to_str().unwrap()],
         &mobile_root,
     )
+}
+
+fn ensure_frb_codegen_matches_workspace() -> Result<()> {
+    let out = Command::new("flutter_rust_bridge_codegen")
+        .arg("--version")
+        .output()
+        .context("running flutter_rust_bridge_codegen --version")?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let text = format!("{stdout}{stderr}");
+    // CLI prints e.g. `flutter_rust_bridge_codegen 2.12.0`. Exact token match
+    // rejects betas (`2.12.0-beta.5`) and other minors.
+    if text
+        .split_whitespace()
+        .any(|tok| tok == FRB_CODEGEN_VERSION)
+    {
+        return Ok(());
+    }
+    let list = Command::new("cargo")
+        .args(["install", "--list"])
+        .output()
+        .context("running cargo install --list")?;
+    let list_text = String::from_utf8_lossy(&list.stdout);
+    let expected = format!("flutter_rust_bridge_codegen v{FRB_CODEGEN_VERSION}:");
+    if list_text.lines().any(|line| line.starts_with(&expected)) {
+        return Ok(());
+    }
+    bail!(
+        "flutter_rust_bridge_codegen is not version {FRB_CODEGEN_VERSION} (workspace pin). \
+         Run `cargo xtask bootstrap` to reinstall. --version output: {text:?}\n\
+         cargo install --list flutter_rust_bridge lines:\n{}",
+        list_text
+            .lines()
+            .filter(|line| line.contains("flutter_rust_bridge"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
 }
 
 fn build_ios() -> Result<()> {

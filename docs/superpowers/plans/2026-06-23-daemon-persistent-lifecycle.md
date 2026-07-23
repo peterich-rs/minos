@@ -433,7 +433,7 @@ false
 
 File: `crates/minos-tui/src/app/lifecycle.rs:254-270`
 
-The current `shutdown()` only closes embedded threads. Keep that logic, but the `QuitMode` will be consumed by `main.rs` (not by `shutdown()` itself). Leave `shutdown()` unchanged — it already does the right thing (no-op for daemon backend).
+The current `shutdown()` only closes embedded sessions. Keep that logic, but the `QuitMode` will be consumed by `main.rs` (not by `shutdown()` itself). Leave `shutdown()` unchanged — it already does the right thing (no-op for daemon backend).
 
 - [ ] **Step 5: Compile**
 
@@ -750,11 +750,11 @@ git commit -m "feat: spawn daemon as detached subprocess that survives TUI exit"
 - Modify: `crates/minos-tui/src/app_tests/navigation_and_lifecycle.rs` (update shutdown test)
 - Modify: `crates/minos-tui/src/main.rs` (update `#[cfg(test)]` tests)
 
-- [ ] **Step 1: Update `shutdown_does_not_close_threads_for_daemon_backend` test**
+- [ ] **Step 1: Update `shutdown_does_not_close_sessions_for_daemon_backend` test**
 
 File: `crates/minos-tui/src/app_tests/navigation_and_lifecycle.rs`
 
-This test previously verified that daemon-mode shutdown doesn't close threads. It should still pass since `shutdown()` is unchanged. Verify it still compiles and passes.
+This test previously verified that daemon-mode shutdown doesn't close sessions. It should still pass since `shutdown()` is unchanged. Verify it still compiles and passes.
 
 Run: `cargo test -p minos-tui shutdown_does_not_close -- --nocapture`
 Expected: PASS

@@ -85,7 +85,7 @@ Add two new fields to `ChatState`:
 
 ```rust
 pub struct ChatState {
-    pub thread_id: String,
+    pub session_id: String,
     pub agent: AgentName,
     pub translation_state: AgentTranslationState,
     pub messages: Vec<RenderedMessage>,  // kept temporarily
@@ -103,10 +103,10 @@ Initialize them in `ChatState::new`:
 
 ```rust
 impl ChatState {
-    pub fn new(thread_id: String, agent: AgentName) -> Self {
+    pub fn new(session_id: String, agent: AgentName) -> Self {
         Self {
-            translation_state: AgentTranslationState::new(agent, thread_id.clone()),
-            thread_id,
+            translation_state: AgentTranslationState::new(agent, session_id.clone()),
+            session_id,
             agent,
             messages: Vec::new(),
             items: Vec::new(),
@@ -407,8 +407,8 @@ mod item_tests {
                 message_id: "m1".into(),
                 text: "partial".into(),
             },
-            UiEventMessage::ThreadClosed {
-                thread_id: "t1".into(),
+            UiEventMessage::SessionClosed {
+                session_id: "t1".into(),
                 reason: minos_ui_protocol::ThreadEndReason::UserStopped,
                 closed_at_ms: 1,
             },
@@ -672,8 +672,8 @@ pub fn apply_item_event(&mut self, event: UiEventMessage) {
                 return;
             }
         }
-        UiEventMessage::ThreadOpened { .. } | UiEventMessage::ThreadTitleUpdated { .. } => {}
-        UiEventMessage::ThreadClosed { reason, .. } => {
+        UiEventMessage::SessionOpened { .. } | UiEventMessage::SessionTitleUpdated { .. } => {}
+        UiEventMessage::SessionClosed { reason, .. } => {
             self.finish_all_streaming();
             self.items.push(ChatItem::SystemMessage {
                 text: format!("Thread closed: {reason:?}"),
@@ -1161,7 +1161,7 @@ pub fn render_chat(f: &mut Frame, area: Rect, chat: &mut ChatState, focused: boo
     let title = format!(
         "Chat: {} #{}{}",
         chat.agent.bin_name(),
-        short_thread_id(&chat.thread_id),
+        short_session_id(&chat.session_id),
         if chat.auto_scroll {
             ""
         } else {
@@ -1255,8 +1255,8 @@ fn toggle_tool_expansion(&mut self) -> bool {
 }
 ```
 
-- `handle_manager_event` → `ThreadStateChanged`: `chat.finish_streaming_assistant_messages()` → `chat.finish_all_streaming()`
-- `handle_manager_event` → `ThreadClosed`: same
+- `handle_manager_event` → `SessionStateChanged`: `chat.finish_streaming_assistant_messages()` → `chat.finish_all_streaming()`
+- `handle_manager_event` → `SessionClosed`: same
 - `handle_manager_event` → `InstanceCrashed`: same
 
 - [ ] **Step 5: Update `last_completed_assistant_text` references**

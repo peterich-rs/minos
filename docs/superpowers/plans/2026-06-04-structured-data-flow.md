@@ -27,9 +27,9 @@
 
 - [ ] **1b.** Add opencode detection test in `minos-cli-detect/src/detect.rs` — since `detect_all` iterates `AgentName::all()`, it automatically picks up Opencode. Add a `detect_all_probes_opencode` test with ScriptRunner. Run `cargo test -p minos-cli-detect`.
 
-- [ ] **1c.** Rewrite `minos-ui-protocol/src/claude.rs` with `ClaudeTranslatorState` + `translate()`. Follow the `CodexTranslatorState` pattern: per-thread state tracking open message ids, emitted dedup set, tool call buffer. Map Claude stream-json events: `system/init` → ThreadOpened, `assistant/text` with `message` → MessageStarted + tool_use → ToolCallPlaced, `delta.text_delta` → TextDelta, `delta.thinking_delta` → ReasoningDelta, `tool_result` → ToolCallCompleted, `result` → MessageCompleted, `error` → Error, unknown → Raw. Capture `session_id` from `system/init`. Add comprehensive test module with golden fixtures. Run `cargo test -p minos-ui-protocol -- claude`.
+- [ ] **1c.** Rewrite `minos-ui-protocol/src/claude.rs` with `ClaudeTranslatorState` + `translate()`. Follow the `CodexTranslatorState` pattern: per-session state tracking open message ids, emitted dedup set, tool call buffer. Map Claude stream-json events: `system/init` → SessionOpened, `assistant/text` with `message` → MessageStarted + tool_use → ToolCallPlaced, `delta.text_delta` → TextDelta, `delta.thinking_delta` → ReasoningDelta, `tool_result` → ToolCallCompleted, `result` → MessageCompleted, `error` → Error, unknown → Raw. Capture `session_id` from `system/init`. Add comprehensive test module with golden fixtures. Run `cargo test -p minos-ui-protocol -- claude`.
 
-- [ ] **1d.** Create `minos-ui-protocol/src/opencode.rs` with `OpencodeTranslatorState` + `translate()`. Map opencode SSE events: `session.created` → ThreadOpened, `message.updated` → MessageStarted + TextDelta + ToolCallPlaced, `message.part.updated` with `text`/`reasoning`/`tool-call` parts → TextDelta/ReasoningDelta/ToolCallPlaced+Completed, `session.idle` → MessageCompleted, `session.error` → Error, `permission.updated` → Raw (v1 fallback), unknown → Raw. Capture `session.id` from `session.created`. Add comprehensive test module. Run `cargo test -p minos-ui-protocol -- opencode`.
+- [ ] **1d.** Create `minos-ui-protocol/src/opencode.rs` with `OpencodeTranslatorState` + `translate()`. Map opencode SSE events: `session.created` → SessionOpened, `message.updated` → MessageStarted + TextDelta + ToolCallPlaced, `message.part.updated` with `text`/`reasoning`/`tool-call` parts → TextDelta/ReasoningDelta/ToolCallPlaced+Completed, `session.idle` → MessageCompleted, `session.error` → Error, `permission.updated` → Raw (v1 fallback), unknown → Raw. Capture `session.id` from `session.created`. Add comprehensive test module. Run `cargo test -p minos-ui-protocol -- opencode`.
 
 - [ ] **1e.** Update `minos-ui-protocol/src/lib.rs`: add `mod opencode;`, export `ClaudeTranslatorState`, `OpencodeTranslatorState`, `translate_opencode`. Update `translate_stateless` to handle all 4 agents with fresh state. Run `cargo test -p minos-ui-protocol`.
 
@@ -39,7 +39,7 @@
 
 ## Phase 2: Agent Runtime Drivers
 
-**Scope:** Create the two driver structs (`ClaudeNdjsonSession`, `OpencodeServerInstance`), add required deps, and wire `AgentManager` to dispatch `start_agent`/`send_user_message`/`interrupt_thread`/`close_thread` by `AgentName`. After this phase, the runtime can launch and communicate with Claude and opencode agents, emitting structured `RawIngest` events into the existing broadcast pipeline.
+**Scope:** Create the two driver structs (`ClaudeNdjsonSession`, `OpencodeServerInstance`), add required deps, and wire `AgentManager` to dispatch `start_agent`/`send_user_message`/`interrupt_session`/`close_session` by `AgentName`. After this phase, the runtime can launch and communicate with Claude and opencode agents, emitting structured `RawIngest` events into the existing broadcast pipeline.
 
 **Commit:** One commit: `feat(agent-runtime): add Claude NDJSON + opencode server drivers with AgentManager dispatch`
 
@@ -54,7 +54,7 @@
 - [ ] **2a.** Add dependencies to `crates/minos-agent-runtime/Cargo.toml`: `reqwest` (with `json` + `stream` features), `eventsource-stream = "0.2"`, `base64` (for HTTP Basic auth). Check workspace Cargo.toml for existing versions; add to workspace if needed.
 
 - [ ] **2b.** Create `claude_driver.rs` with `ClaudeNdjsonSession`:
-  - `start_turn(cli_path, workspace, thread_id, user_text, resume_session_id, events_tx, subprocess_env)` — spawns `claude -p <text> --output-format stream-json --verbose --include-partial-messages [--resume <sid>]`, sets `setpgid(0,0)`, pipes stdout as NDJSON lines → `RawIngest { agent: Claude, payload: <parsed_json> }`, stderr → debug log. Non-JSON stdout lines emit as `Raw { raw_kind: "stdout" }`.
+  - `start_turn(cli_path, workspace, session_id, user_text, resume_session_id, events_tx, subprocess_env)` — spawns `claude -p <text> --output-format stream-json --verbose --include-partial-messages [--resume <sid>]`, sets `setpgid(0,0)`, pipes stdout as NDJSON lines → `RawIngest { agent: Claude, payload: <parsed_json> }`, stderr → debug log. Non-JSON stdout lines emit as `Raw { raw_kind: "stdout" }`.
   - `set_claude_session_id()`, `claude_session_id()`, `workspace()`
   - `close(events_tx)` — SIGTERM → 3s → SIGKILL, emit `minos_thread_closed` ingest, abort reader tasks.
   - Use `PathBuf` import, `#[cfg(unix)]` for setpgid, same pattern as `PtyAgent`.
@@ -68,23 +68,23 @@
   - `respond_permission(session_id, permission_id, response)` — `POST /session/:id/permissions/:permission_id` with `{ response }`.
   - `subscribe_sse_url()`, `auth_header()`, `workspace()`
   - `close()` — SIGTERM → 3s → SIGKILL.
-  - `spawn_sse_pump(base_url, auth_header, thread_id, events_tx)` — tokio task connecting to `/event` SSE, parsing each event data as JSON → `RawIngest { agent: Opencode }`, auto-reconnect on error with 2s backoff. Uses `eventsource_stream::Eventsource` + `reqwest`.
+  - `spawn_sse_pump(base_url, auth_header, session_id, events_tx)` — tokio task connecting to `/event` SSE, parsing each event data as JSON → `RawIngest { agent: Opencode }`, auto-reconnect on error with 2s backoff. Uses `eventsource_stream::Eventsource` + `reqwest`.
 
 - [ ] **2d.** Export new modules in `lib.rs`: `pub mod claude_driver; pub mod opencode_driver;` and `pub use claude_driver::ClaudeNdjsonSession; pub use opencode_driver::OpencodeServerInstance;`.
 
 - [ ] **2e.** Add opencode config fields to `AgentRuntimeConfig` in `config.rs`: `opencode_bin: Option<PathBuf>` (default None), `opencode_port_range: RangeInclusive<u16>` (default 4096..=4106).
 
 - [ ] **2f.** Wire `AgentManager` dispatch in `manager.rs`:
-  - Add new fields: `claude_sessions: Arc<Mutex<HashMap<String, ClaudeNdjsonSession>>>`, `opencode_instances: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<OpencodeServerInstance>>>>>`, `opencode_sessions: Arc<Mutex<HashMap<String, String>>>` (maps thread_id → opencode session_id).
+  - Add new fields: `claude_sessions: Arc<Mutex<HashMap<String, ClaudeNdjsonSession>>>`, `opencode_instances: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<OpencodeServerInstance>>>>>`, `opencode_sessions: Arc<Mutex<HashMap<String, String>>>` (maps session_id → opencode session_id).
   - In `start_agent_with_policies`: match on `agent` — Codex keeps existing path, Claude → `start_claude_agent()`, Opencode → `start_opencode_agent()`, Gemini → `start_pty_agent()`.
-  - `start_claude_agent()`: allocate Minos thread_id, create ThreadHandle(Starting), insert into threads map, broadcast ThreadAdded. Return `StartAgentOutcome`. (Actual claude process starts on first `send_user_message`.)
-  - `start_opencode_agent()`: ensure opencode server instance for workspace (spawn if needed), create opencode session via HTTP, allocate Minos thread_id, create ThreadHandle, store mapping. Return `StartAgentOutcome`.
+  - `start_claude_agent()`: allocate Minos session_id, create ThreadHandle(Starting), insert into sessions map, broadcast SessionAdded. Return `StartAgentOutcome`. (Actual claude process starts on first `send_user_message`.)
+  - `start_opencode_agent()`: ensure opencode server instance for workspace (spawn if needed), create opencode session via HTTP, allocate Minos session_id, create ThreadHandle, store mapping. Return `StartAgentOutcome`.
   - `start_pty_agent()`: thin wrapper around existing `PtyAgent::spawn` for Gemini.
   - In `send_user_message` Idle branch: match on `handle.agent` — Codex keeps existing path, Claude → `send_claude_message()`, Opencode → `send_opencode_message()`, Gemini → `send_pty_message()`.
   - `send_claude_message()`: synth user message ingest, spawn `ClaudeNdjsonSession::start_turn` with `--resume` if `claude_session_id` exists, store session in `claude_sessions`, transition to Running.
   - `send_opencode_message()`: synth user message ingest, call `instance.send_prompt()`, transition to Running.
-  - In `interrupt_thread`: match on agent — Claude kills turn child, Opencode calls abort, Gemini kills PtyAgent.
-  - In `close_thread`: match on agent — Claude/opencode clean up their session/instance entries, Gemini closes PtyAgent.
+  - In `interrupt_session`: match on agent — Claude kills turn child, Opencode calls abort, Gemini kills PtyAgent.
+  - In `close_session`: match on agent — Claude/opencode clean up their session/instance entries, Gemini closes PtyAgent.
 
 - [ ] **2g.** Run `cargo check -p minos-agent-runtime` to verify compilation.
 
@@ -106,7 +106,7 @@
 
 - [ ] **3a.** In `crates/minos-daemon/src/agent.rs`:
   - Add imports: `ClaudeTranslatorState`, `OpencodeTranslatorState`, `translate_claude`, `translate_opencode`.
-  - Create `TranslatorState` enum: `Codex(CodexTranslatorState)`, `Claude(ClaudeTranslatorState)`, `Opencode(OpencodeTranslatorState)`, `Gemini`. Add `new(thread_id, agent)` constructor and `translate(&mut self, raw) -> Vec<UiEventMessage>` method dispatching to the correct translator.
+  - Create `TranslatorState` enum: `Codex(CodexTranslatorState)`, `Claude(ClaudeTranslatorState)`, `Opencode(OpencodeTranslatorState)`, `Gemini`. Add `new(session_id, agent)` constructor and `translate(&mut self, raw) -> Vec<UiEventMessage>` method dispatching to the correct translator.
   - Rewrite `load_thread_history` to use `TranslatorState` instead of direct Codex-only translator. Return `TranslatorState` instead of `CodexTranslatorState` from the `(row, ui_events, translator)` tuple.
   - Update `hydrate_codex_translator` → `hydrate_translator` returning `TranslatorState`.
   - Update `parse_agent_label` to handle `"opencode"` → `AgentName::Opencode`.
@@ -175,13 +175,13 @@
 - [x] Opencode permission mapping (Raw fallback for v1) — Phase 1
 - [x] Claude direct CLI v1 no --dangerously-skip-permissions — Phase 2
 - [x] History replay determinism — Phase 3 (TranslatorState enum)
-- [x] list_threads agent filter supports opencode — Phase 3
+- [x] list_sessions agent filter supports opencode — Phase 3
 
 **2. Placeholder scan:** No TBD, TODO, or "implement later". All code blocks are complete.
 
 **3. Type consistency:**
-- `ClaudeTranslatorState::new(thread_id)` matches `CodexTranslatorState::new(thread_id)` pattern
-- `OpencodeTranslatorState::new(thread_id)` same pattern
+- `ClaudeTranslatorState::new(session_id)` matches `CodexTranslatorState::new(session_id)` pattern
+- `OpencodeTranslatorState::new(session_id)` same pattern
 - `translate_claude(&mut state, &raw)` signature matches `translate_codex(&mut state, &raw)`
 - `translate_opencode(&mut state, &raw)` same signature
 - `TranslatorState` enum uses consistent method names

@@ -299,7 +299,7 @@ Rationale: adding a tool becomes module registration plus host executor implemen
 **File: `crates/minos-daemon/src/agent.rs`**
 
 - Create delegation row before `AgentManager::dispatch_message`.
-- Update status with target thread id on success.
+- Update status with target session id on success.
 - Implement status and cancel requests.
 
 Rationale: delegation is business state and should survive process restarts.

@@ -29,7 +29,7 @@ Client                              Grok agent
 | `cancelled` | User/client cancelled |
 | `max_tokens` / `max_turn_requests` / `refusal` | Terminal conditions |
 
-Minos maps `end_turn` → complete open assistant message; `cancelled` → complete + `ThreadClosed(UserStopped)`.
+Minos maps `end_turn` → complete open assistant message; `cancelled` → complete + `SessionClosed(UserStopped)`.
 
 ## Permission outcome
 

@@ -48,14 +48,14 @@
 当前有两个概念：
 
 - **Room**（`UiState.rooms: Vec<RoomEntry>`）：workspace 派生的群聊通道。
-- **Thread**（`UiState.threads: Vec<ThreadEntry>`）：1:1 agent 会话。
+- **Thread**（`UiState.sessions: Vec<ThreadEntry>`）：1:1 agent 会话。
 
 **合并后**：Thread 就是对话。一个 thread 内可以有多个 agent 参与（通过 `@mention` 邀请）。群聊消息流和 agent 消息流在同一个 thread 内统一呈现。
 
 ```rust
 // 新 ThreadEntry（取代旧 RoomEntry + ThreadEntry）
 pub struct ThreadEntry {
-    pub thread_id: String,
+    pub session_id: String,
     pub project_id: String,
     pub title: String,              // 自动生成或用户设置
     pub created_at_ms: u64,
@@ -92,7 +92,7 @@ pub trait AgentBackend: Send + Sync {
 
     async fn list_projects(&self) -> Result<Vec<ProjectEntry>>;
     async fn create_project(&self, name: &str, workspace_path: &Path) -> Result<ProjectEntry>;
-    async fn list_project_threads(&self, project_id: &str) -> Result<Vec<ThreadEntry>>;
+    async fn list_project_sessions(&self, project_id: &str) -> Result<Vec<ThreadEntry>>;
     async fn start_agent_in_project(
         &self,
         project_id: &str,
@@ -102,8 +102,8 @@ pub trait AgentBackend: Send + Sync {
 }
 ```
 
-- **`DaemonBackend`**：直接转发到已存在的 `minos_list_projects` / `minos_create_project` / `minos_list_project_threads` / `minos_start_agent_in_project` RPC（`rpc_server.rs:284-346`）。
-- **`EmbeddedBackend`**：`AgentManager` 无 project 存储。方案：embedded 模式下维护一个内存 `Vec<ProjectEntry>`，`list_projects` 返回 cwd 自动生成的单个 project（兼容旧行为），`list_project_threads` 等同当前 `list_threads`。不实现 project 持久化——embedded 模式定位是开发/测试，project 管理不是核心需求。
+- **`DaemonBackend`**：直接转发到已存在的 `minos_list_projects` / `minos_create_project` / `minos_list_project_sessions` / `minos_start_agent_in_project` RPC（`rpc_server.rs:284-346`）。
+- **`EmbeddedBackend`**：`AgentManager` 无 project 存储。方案：embedded 模式下维护一个内存 `Vec<ProjectEntry>`，`list_projects` 返回 cwd 自动生成的单个 project（兼容旧行为），`list_project_sessions` 等同当前 `list_sessions`。不实现 project 持久化——embedded 模式定位是开发/测试，project 管理不是核心需求。
 
 ### 3.4 启动路径匹配逻辑
 
@@ -131,9 +131,9 @@ pub enum NavLevel {
     /// 二层：某项目下的对话列表
     Threads { project_id: String },
     /// 三层：某对话（多 agent 群聊）
-    Thread { project_id: String, thread_id: String },
+    Thread { project_id: String, session_id: String },
     /// 四层：某 agent 在此对话中的细节视图
-    Agent { project_id: String, thread_id: String, agent: AgentName },
+    Agent { project_id: String, session_id: String, agent: AgentName },
 }
 ```
 
@@ -144,9 +144,9 @@ pub struct UiState {
     pub nav_stack: Vec<NavLevel>,      // 导航栈
     pub projects: Vec<ProjectEntry>,   // 所有项目
     pub selected_project: Option<usize>,
-    pub threads: Vec<ThreadEntry>,     // 当前项目的对话
+    pub sessions: Vec<ThreadEntry>,     // 当前项目的对话
     pub selected_thread: Option<usize>,
-    pub chat_states: HashMap<String, ChatState>,  // thread_id → 对话状态
+    pub chat_states: HashMap<String, ChatState>,  // session_id → 对话状态
     // ... 现有字段保留 ...
 }
 ```
@@ -155,7 +155,7 @@ pub struct UiState {
 - Enter → `push(下一级)`
 - Esc → `pop()`；栈空时退出程序。
 
-**多 agent ChatState 说明**：当前 `ChatState` 是 per-thread 的，内部 `items: Vec<ChatItem>` 已混合所有参与 agent 的消息（`translation.rs:63-77`）。合并后不变——一个 thread 一个 `ChatState`，包含所有 agent 的消息。Agent 子视图复用同一个 `ChatState`，只过滤 `ChatItem.agent == selected_agent` 的条目渲染。
+**多 agent ChatState 说明**：当前 `ChatState` 是 per-session 的，内部 `items: Vec<ChatItem>` 已混合所有参与 agent 的消息（`translation.rs:63-77`）。合并后不变——一个 thread 一个 `ChatState`，包含所有 agent 的消息。Agent 子视图复用同一个 `ChatState`，只过滤 `ChatItem.agent == selected_agent` 的条目渲染。
 
 ### 4.3 Focus 枚举重构
 
@@ -235,7 +235,7 @@ fn split_main_sidebar(area: Rect, sidebar_overlay: bool) -> (Rect, Rect, Rect) {
 └──────────────────────────────────┴───────────────────┘
 ```
 
-- **主内容**：当前 project 的 thread 列表，每项显示 thread_id 前缀 + 标题。
+- **主内容**：当前 project 的 thread 列表，每项显示 session_id 前缀 + 标题。
 - **侧栏**：选中 thread 的统计信息。
 - **底部输入栏**：直接输入消息 + Enter → 创建新 thread 并进入 Thread 视图。
   - `@codex` 指定初始 agent（可多个）。
@@ -433,7 +433,7 @@ cwd 未命中任何 project 时：
   1. `start_agent_in_project(project_id, codex, "帮我重构 foo模块")`
   2. 创建新 thread，绑定到此 project
   3. 自动标题 = "帮我重构 foo模块"（截断至 ~30 字符）
-  4. `nav_stack.push(Thread { project_id, thread_id })`
+  4. `nav_stack.push(Thread { project_id, session_id })`
   5. 进入 Thread 群聊视图
 
 - Superseded on 2026-06-23: modal agent picker 已删除。无 `@` 时使用当前默认 agent；显式选择 agent 走 input bar 的 `@agent` 路由。

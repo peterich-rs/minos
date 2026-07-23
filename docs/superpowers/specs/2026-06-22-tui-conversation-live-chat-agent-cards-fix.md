@@ -13,7 +13,7 @@ Conversation 视图右侧 agent 卡片能从运行态变为空闲，但左侧 ch
 
 ## 2. 当前实现
 
-- `app/conversation_result.rs` 在 agent turn 完成时读取 `ChatState.last_completed_assistant_text`，生成稳定 `agent-result:{conversation_id}:{thread_id}:{message_id}`，调用 backend `append_conversation_message(role="agent")` 持久化，并在当前 conversation 可见时追加到 `ui.conversation_messages`。
+- `app/conversation_result.rs` 在 agent turn 完成时读取 `ChatState.last_completed_assistant_text`，生成稳定 `agent-result:{conversation_id}:{session_id}:{message_id}`，调用 backend `append_conversation_message(role="agent")` 持久化，并在当前 conversation 可见时追加到 `ui.conversation_messages`。
 - `app/submission.rs` 的 conversation 输入仍负责 user 消息：本地 pending 追加 + daemon `append_conversation_message(role="user")`。
 - `backend::{daemon,embedded}` 和 daemon local RPC 都只保留 conversation message API，不再暴露 `read_group_chat`。
 - `ui/conversation_view.rs` 渲染 conversation 主时间线；滚动目标统一为 `ConversationChat`。
@@ -27,7 +27,7 @@ Conversation 视图右侧 agent 卡片能从运行态变为空闲，但左侧 ch
 - `list_conversation_messages` 读取当前 conversation 的 daemon/local conversation messages。
 - `post_conversation_update` 使用 MCP sidecar 的 source agent/thread metadata 写入当前 conversation 的 agent-role message；body 以 `@agent` 或 `@agent#short_thread` 开头时，同时把 clean body 投递给目标 thread。daemon 模式写入成功后通过 `subscribe_conversation_events()` 的 `ConversationMessageAppended` 事件触发 TUI 刷新当前 conversation。
 - `delegate_to_agent` 先通过 `start_agent_in_conversation` 启动目标 agent，并且 clean prompt 成功提交给目标 thread 后，才写入一条带 source agent/thread metadata 的可见消息，body 形如 `@target_agent#short_thread <prompt>`，并把 delegation 状态存在 conversation-scoped teamwork store。
-- agent-runtime 的 Codex/OpenCode 实例缓存按 `(workspace, conversation_id, source_thread_id)` 隔离，避免同一 workspace/conversation 的不同 agent session 复用错误 MCP 配置；persisted conversation thread 恢复时也会恢复 `mcp_conversation_id`。
+- agent-runtime 的 Codex/OpenCode 实例缓存按 `(workspace, conversation_id, source_session_id)` 隔离，避免同一 workspace/conversation 的不同 agent session 复用错误 MCP 配置；persisted conversation thread 恢复时也会恢复 `mcp_conversation_id`。
 
 ## 4. 删除范围
 

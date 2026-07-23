@@ -674,8 +674,8 @@ In `src/app.rs`, modify `handle_ctrl_c` (line 1015):
 
         // Existing interrupt/quit logic
         if self.current_thread_is_interruptible() {
-            if let Some(thread_id) = self.ui.current_thread_id().map(String::from) {
-                if let Err(error) = self.backend.interrupt_thread(&thread_id).await {
+            if let Some(session_id) = self.ui.current_session_id().map(String::from) {
+                if let Err(error) = self.backend.interrupt_session(&session_id).await {
                     self.ui
                         .set_error(format!("Failed to interrupt thread: {error}"));
                 }

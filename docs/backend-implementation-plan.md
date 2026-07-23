@@ -21,16 +21,16 @@
 - **架构总览先固化，再编码**：任何 slice 在 PR 中改 `architecture-overview.md` / `backend-formal-development.md` 必须当作 breaking change，需要更新对应 ADR。
 - **每个 slice 必须可独立通过 CI、可独立 revert**：slice 之间允许串行依赖，但绝不允许"同一 PR 跨多个 slice"。
 - **测试强制写在 slice 内**："下个 slice 补测试"是反模式。每个 slice 在"验收"段会列出必须新增的测试文件。
-- **`thread` / `/v1/me/*` / `X-Device-*` / `forward_rpc` 是退场对象**：任何 slice 不允许新增对它们的引用；删除它们的 slice 在本文中显式列出（P8）。
+- **`session` / `/v1/me/*` / `X-Device-*` / `forward_rpc` 是退场对象**：任何 slice 不允许新增对它们的引用；删除它们的 slice 在本文中显式列出（P8）。
 - **所有 durable 用例必须事务三件套**：写 domain row、append `durable_event_log`、enqueue `outbox_events`。slice 评审会把它当作 mechanical check（自定义 clippy 或 PR template）。
 
 ### 0.2 命名约定
 
 - crate 内部模块路径以 `crates/minos-backend/src/` 为基准，省略时默认在该 crate。
-- migration 文件命名：
-  - SQLite：`migrations/sqlite/NNNN_<slug>.sql`
-  - Postgres：`migrations/postgres/NNNN_<slug>.sql`
-  - 序列号在两类下独立递增；Postgres 从 `0001_baseline.sql` 起步。
+- migration 文件命名（latest-only，每方言单一初始 schema）：
+  - SQLite：`migrations/sqlite/0001_initial.sql`
+  - Postgres：`migrations/postgres/0001_initial.sql`
+  - 不保留增量 ALTER 链；schema 变更直接改 canonical 文件并 wipe 本地 DB。
 - 测试文件命名：`tests/<area>_<scenario>.rs`，与 module 边界对齐。
 - HTTP route 在路由表（`http::formal_route_inventory`）中必须按 `(method, path, surface, auth)` 四元组登记。
 
@@ -138,7 +138,7 @@ HTTP status 映射（粗粒度，service 层不直接生成 status，由 `error_
 落地 P0.S3 的 `cargo xtask lint-conventions`，包含：
 
 1. **三件套 lint**：扫描 `*Service::*` 内所有 `async fn`，若出现 `BeginTransaction` / `pool.begin().await`，必须同时出现 `durable_event_store.record(` 与 `outbox_repo.enqueue(`。允许通过 `#[lint::durable_skip = "reason"]` 显式豁免。
-2. **退场词 lint**：禁用 `thread_id` / `X-Device-` / `/v1/me/` / `forward_rpc` / `paired_with` 在 P3 之后被新增。
+2. **退场词 lint**：禁用 `session_id` / `X-Device-` / `/v1/me/` / `forward_rpc` / `paired_with` 在 P3 之后被新增。
 3. **错误码 lint**：扫描 `err("..."`，要求出现的 code 必须在 `errors.toml` 注册表中。
 4. **路由 lint**：每个 axum `.route(` 必须在 `formal_route_inventory()` 有对应条目。
 
@@ -1691,7 +1691,7 @@ for topic in &newly {
 - `/v1/agent-sessions/start|send-input|stop|list|read-turns` 全部按新合同
 - `/v1/approvals/respond` 与超时 / 断线 worker 统一通过 `host_commands` 通知 host
 - 删除 `crates/minos-backend/src/approval_relay.rs` 与 `host_command_runtime.rs`，改名后的 `HostCommandService` 与 `ApprovalService` 接管
-- `thread_id` 在 `pending_approvals` 表回填到 `agent_session_id`（数据迁移在 P3.S5）
+- `session_id` 在 `pending_approvals` 表回填到 `agent_session_id`（数据迁移在 P3.S5）
 - 旧 `EventKind::ApprovalRequested` / `EventKind::Unpaired` / `EventKind::IngestCheckpoint` 不再由后端主动发出（保留 protocol enum 仅供 client cleanup 时识别）
 
 **Phase 输出依赖**：P2 的 host gateway 帧入口已可用（HostCommandAck / Result）。
@@ -2137,7 +2137,7 @@ pub enum ApprovalError {
 
 ### P3.S5 — 旧表/字段迁移：`pending_approvals` → `approval_requests`（0.5 天）
 
-**目标**：把现有 `pending_approvals.thread_id` 数据回填到 `approval_requests`，然后 drop 旧表。
+**目标**：把现有 `pending_approvals.session_id` 数据回填到 `approval_requests`，然后 drop 旧表。
 
 **Migration（postgres，0002_approval_migration.sql）**：
 
@@ -2145,8 +2145,8 @@ pub enum ApprovalError {
 INSERT INTO approval_requests (request_id, agent_session_id, turn_id, method, params_json, state, deadline_at_ms, created_at_ms, resolved_at_ms, resolution_json)
 SELECT
     p.request_id,
-    -- thread_id 在历史数据里其实是 session_id 的别名（旧 codex 路径）
-    p.thread_id AS agent_session_id,
+    -- session_id 在历史数据里其实是 session_id 的别名（旧 codex 路径）
+    p.session_id AS agent_session_id,
     p.turn_id,
     p.method,
     p.params_json::jsonb,
@@ -2181,7 +2181,7 @@ DROP TABLE pending_approvals;
 - [ ] `host_commands` 是后端 → host 同步请求唯一权威；in-memory 仅缓存等待
 - [ ] `ApprovalService` 把 respond / timeout / disconnect 三路统一通过 `host_commands`
 - [ ] `approval_relay.rs` / `host_command_runtime.rs` 删除（或改为薄 deprecated wrapper，发 lint warning）
-- [ ] 已退役 `/v1/me/*` / `/v1/threads/*` / `/devices` 调用点没有回归
+- [ ] 已退役 `/v1/me/*` / `/v1/sessions/*` / `/devices` 调用点没有回归
 
 ### P3 回退总结
 
@@ -2348,7 +2348,7 @@ pub enum ProjectError {
 - 写 archived_at_ms；durable
 - 后续业务逻辑（agent_sessions/start 等）必须校验 `project_archived`
 
-**HTTP**：路径与 architecture-overview / formal-development 对齐；`/v1/projects/list-conversations`、`/v1/projects/agent-sessions/query` 等。`/v1/projects/threads/*` 兼容别名删除（在 P8）。
+**HTTP**：路径与 architecture-overview / formal-development 对齐；`/v1/projects/list-conversations`、`/v1/projects/agent-sessions/query` 等。`/v1/projects/sessions/*` 兼容别名删除（在 P8）。
 
 **工作量**：3 单位（1.5 天）
 
