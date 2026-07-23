@@ -2,10 +2,24 @@
 //!
 //! Aligns with grok-build pager `AcpUpdateTracker` semantics:
 //! - Parse `SessionNotification._meta` (`streamStartMs`, timestamps, promptId…)
-//! - Close the open assistant text message on tool calls and stream boundaries
+//! - Close the open assistant text message on tool calls and **text** stream
+//!   boundaries (`agent_message_chunk` `streamStartMs` change only — not thought)
 //! - Suppress plumbing tools (todo/wait/task-output) from the session timeline
 //! - Prefer `rawInput.description` for tool display titles
 //! - Richer tool content / locations / failed status extraction
+//!
+//! Real wire quirks (from daemon.sqlite Grok sessions):
+//! - Concurrent `agent_thought_chunk` / `agent_message_chunk` streams carry
+//!   *different* `streamStartMs` and interleave. Closing text on every meta
+//!   change produced one assistant bubble per token (Desktop “vertical word
+//!   list”). Thought must not close open agent text.
+//! - `tool_call` often lacks `kind` and `rawInput.variant`; title is harness name
+//!   (`search_replace`) while the semantic tool is file edit — resolve kind from
+//!   title / `x.ai/tool` / rawInput shape so UI classifies as `edit:`.
+//! - Placed args must not dump full `old_string`/`new_string` (multi-KB nested JSON).
+//! - Intermediate `tool_call_update` may carry `content:[{type:diff}]` with
+//!   `status: null` before a later `completed`+`rawOutput`; project progressive
+//!   patch bodies so file/diff stats are not lost when terminal never arrives.
 
 use crate::error::TranslationError;
 use crate::message::{
@@ -38,6 +52,7 @@ pub struct GrokTranslatorState {
     last_stream_start_ms: Option<i64>,
 }
 
+#[derive(Clone)]
 struct OpenGrokToolCall {
     #[allow(dead_code)]
     message_id: String,
@@ -143,30 +158,41 @@ fn complete_open_assistant_message(
 }
 
 /// Apply `_meta` stream/turn boundaries. Returns events from closing the open message.
+///
+/// `session_update` gates stream segmentation: Grok stamps a **different**
+/// `streamStartMs` on concurrent `agent_thought_chunk` vs `agent_message_chunk`
+/// streams. Treating any `_meta.streamStartMs` change as a text boundary
+/// (including thought) closed the open assistant message on every interleave,
+/// which shattered live narration into one bubble per token (Desktop
+/// transcript looked like a vertical word list). Official pager: thought does
+/// **not** close agent text; only a new **text** stream (or tools) does.
 fn apply_notification_meta(
     state: &mut GrokTranslatorState,
     params: &Value,
+    session_update: &str,
 ) -> (NotificationMeta, Vec<UiEventMessage>) {
     let meta = NotificationMeta::from_params(params);
     let mut events = Vec::new();
     let finish_at = meta.agent_timestamp_ms.unwrap_or_else(now_ms);
 
-    if let Some(new_start) = meta.stream_start_ms {
-        if state
-            .last_stream_start_ms
-            .is_some_and(|prev| prev != new_start)
-        {
-            // New LLM stream iteration — finish prior agent text (official pager).
-            events.extend(complete_open_assistant_message(state, finish_at));
-            state.force_new_assistant_on_text = false;
+    if session_update == "agent_message_chunk" {
+        if let Some(new_start) = meta.stream_start_ms {
+            if state
+                .last_stream_start_ms
+                .is_some_and(|prev| prev != new_start)
+            {
+                // New agent-text stream iteration — finish prior agent text.
+                events.extend(complete_open_assistant_message(state, finish_at));
+                state.force_new_assistant_on_text = false;
+            }
+            state.last_stream_start_ms = Some(new_start);
         }
-        state.last_stream_start_ms = Some(new_start);
     }
 
     // Do NOT emit Raw meta on every notification — Grok stamps _meta on nearly
     // every session/update. Flooding Raw events balloons ingest frames and
     // Desktop live-merge/re-render, which breaks session scroll for Grok only.
-    // Segmentation uses streamStartMs above; other meta fields are unused.
+    // Text-stream segmentation uses streamStartMs above; thought/tools ignore it.
     let _ = (
         meta.prompt_id.as_ref(),
         meta.agent_timestamp_ms,
@@ -174,6 +200,7 @@ fn apply_notification_meta(
         meta.event_id.as_ref(),
         meta.turn_start_ms,
         meta.is_replay,
+        meta.stream_start_ms,
     );
 
     (meta, events)
@@ -264,6 +291,14 @@ fn tool_raw_input(update: &Value) -> Option<&Value> {
         })
 }
 
+/// `update._meta["x.ai/tool"]` (CanonicalToolMeta).
+fn xai_tool_meta(update: &Value) -> Option<&Value> {
+    let meta = update.get("_meta")?;
+    meta.get("x.ai/tool")
+        .or_else(|| meta.get("x.ai\\tool"))
+        .or_else(|| meta.get("tool"))
+}
+
 fn tool_description(update: &Value) -> Option<String> {
     tool_raw_input(update)
         .and_then(|r| r.get("description").and_then(Value::as_str))
@@ -295,6 +330,19 @@ fn tool_path_hint(update: &Value) -> Option<String> {
             }
         }
     }
+    // x.ai/tool.input often has normalized { path } / { directory }.
+    if let Some(input) = xai_tool_meta(update).and_then(|t| t.get("input")) {
+        for key in ["path", "file_path", "filePath", "directory", "target_file"] {
+            if let Some(p) = input
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                return Some(p.to_owned());
+            }
+        }
+    }
     let raw = tool_raw_input(update)?;
     for key in [
         "path",
@@ -302,6 +350,10 @@ fn tool_path_hint(update: &Value) -> Option<String> {
         "filePath",
         "target_file",
         "targetFile",
+        "absolute_path",
+        "absolutePath",
+        // Bash: use command as subject, not a path key — handled below only when
+        // no path-like key matched.
         "command",
     ] {
         if let Some(p) = raw
@@ -316,27 +368,130 @@ fn tool_path_hint(update: &Value) -> Option<String> {
     None
 }
 
+/// Map harness name / ACP kind / ToolInput variant → unified kind token.
 fn normalize_tool_kind(kind: &str) -> String {
     match kind.to_ascii_lowercase().as_str() {
-        "read" | "read_file" | "readfile" => "read".into(),
-        "edit" | "write" | "diff" | "search_replace" | "apply_patch" => "edit".into(),
-        "execute" | "terminal" | "bash" | "shell" | "run" => "execute".into(),
-        "search" | "grep" | "glob" => "search".into(),
+        "read" | "read_file" | "readfile" | "codex_read_file" | "codexreadfile" => "read".into(),
+        "edit"
+        | "write"
+        | "diff"
+        | "search_replace"
+        | "searchreplace"
+        | "str_replace"
+        | "string_replace"
+        | "apply_patch"
+        | "applypatch"
+        | "hashline_edit"
+        | "hashlineedit"
+        | "create_file"
+        | "delete_file"
+        | "delete" => "edit".into(),
+        "execute"
+        | "terminal"
+        | "bash"
+        | "shell"
+        | "run"
+        | "run_terminal_command"
+        | "command" => "execute".into(),
+        "search" | "grep" | "glob" | "codex_grep_files" | "codexgrepfiles" => "search".into(),
         "fetch" | "web_fetch" | "webfetch" => "web_fetch".into(),
         "web_search" | "websearch" => "web_search".into(),
-        "list" | "list_dir" | "listdir" => "list".into(),
-        "" => "other".into(),
+        "list" | "list_dir" | "listdir" | "list_directory" | "codex_list_dir" => "list".into(),
+        "think" | "plan" | "todo" | "todo_write" | "todowrite" => "think".into(),
+        "" | "other" => "other".into(),
         other => other.to_owned(),
     }
 }
 
-/// Human-facing tool name: prefer description, else path, else title.
-fn tool_display_name(update: &Value) -> String {
-    let kind_raw = update
-        .get("kind")
+/// Infer unified kind from wire fields. Grok `tool_call` often has empty `kind`
+/// and title=`search_replace` — that is still a file edit for UI/stats.
+fn resolve_tool_kind(update: &Value) -> String {
+    // 1) Explicit ACP kind when meaningful.
+    if let Some(k) = update.get("kind").and_then(Value::as_str) {
+        let n = normalize_tool_kind(k);
+        if n != "other" {
+            return n;
+        }
+    }
+    // 2) x.ai/tool.kind / .name
+    if let Some(xt) = xai_tool_meta(update) {
+        if let Some(k) = xt.get("kind").and_then(Value::as_str) {
+            let n = normalize_tool_kind(k);
+            if n != "other" {
+                return n;
+            }
+        }
+        if let Some(name) = xt.get("name").and_then(Value::as_str) {
+            let n = normalize_tool_kind(name);
+            if n != "other" {
+                return n;
+            }
+        }
+    }
+    // 3) title (harness model-facing name or "Edit `path`")
+    if let Some(title) = update.get("title").and_then(Value::as_str) {
+        let t = title.trim();
+        // "Edit `/path/...`" / "Read `...`" → verb token
+        if let Some(verb) = t.split_whitespace().next() {
+            let n = normalize_tool_kind(verb.trim_matches('`'));
+            if n != "other" {
+                return n;
+            }
+        }
+        let n = normalize_tool_kind(t);
+        if n != "other" {
+            return n;
+        }
+    }
+    // 4) rawInput.variant (SearchReplace, ReadFile, …)
+    if let Some(variant) = tool_raw_input(update)
+        .and_then(|r| r.get("variant"))
         .and_then(Value::as_str)
-        .unwrap_or("other");
-    let kind = normalize_tool_kind(kind_raw);
+    {
+        let n = normalize_tool_kind(variant);
+        if n != "other" {
+            return n;
+        }
+    }
+    // 5) Shape inference from rawInput fields (early tool_call before variant).
+    if let Some(raw) = tool_raw_input(update) {
+        let has_path = ["path", "file_path", "filePath", "target_file", "targetFile"]
+            .iter()
+            .any(|k| raw.get(k).and_then(Value::as_str).is_some_and(|s| !s.is_empty()));
+        let has_old_new = raw.get("old_string").is_some()
+            || raw.get("oldString").is_some()
+            || raw.get("new_string").is_some()
+            || raw.get("newString").is_some();
+        if has_path && has_old_new {
+            return "edit".into();
+        }
+        if has_path && raw.get("content").is_some() {
+            // write tool: { file_path, content }
+            return "edit".into();
+        }
+        if raw.get("command").is_some() {
+            return "execute".into();
+        }
+        if raw.get("pattern").is_some() {
+            return "search".into();
+        }
+    }
+    // 6) content blocks: diff ⇒ edit
+    if let Some(arr) = update.get("content").and_then(Value::as_array) {
+        if arr.iter().any(|item| {
+            item.get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|t| t.eq_ignore_ascii_case("diff"))
+        }) {
+            return "edit".into();
+        }
+    }
+    "other".into()
+}
+
+/// Human-facing tool name: `{kind}: {subject}` for UI classification + stats.
+fn tool_display_name(update: &Value) -> String {
+    let kind = resolve_tool_kind(update);
     let title = update
         .get("title")
         .and_then(Value::as_str)
@@ -344,12 +499,61 @@ fn tool_display_name(update: &Value) -> String {
         .trim();
     let subject = tool_description(update)
         .or_else(|| tool_path_hint(update))
-        .unwrap_or_else(|| title.to_owned());
+        .or_else(|| subject_from_edit_title(title))
+        .unwrap_or_else(|| {
+            // Avoid repeating kind as subject (`edit: search_replace`).
+            let t = title.to_owned();
+            if t.is_empty() || normalize_tool_kind(&t) == kind {
+                String::new()
+            } else {
+                t
+            }
+        });
     if subject.is_empty() {
         kind
     } else {
         format!("{kind}: {subject}")
     }
+}
+
+/// `Edit \`/path/foo.rs\`` → `/path/foo.rs` (only when the remainder looks path-like).
+fn subject_from_edit_title(title: &str) -> Option<String> {
+    let t = title.trim();
+    let rest = t
+        .strip_prefix("Edit ")
+        .or_else(|| t.strip_prefix("Read "))
+        .or_else(|| t.strip_prefix("Wrote "))
+        .or_else(|| t.strip_prefix("Write "))?;
+    let s = rest.trim().trim_matches('`').trim();
+    if s.is_empty() {
+        return None;
+    }
+    // Require path-ish remainder so "Edit file" stays a free-form title subject.
+    if s.contains('/') || s.contains('\\') || s.starts_with('.') {
+        Some(s.to_owned())
+    } else {
+        None
+    }
+}
+
+/// Normalize ACP / xAI status strings (`completed` / `Completed` / …).
+fn normalize_tool_status(status: &str) -> String {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "completed" | "complete" | "success" | "ok" => "completed".into(),
+        "failed" | "error" | "failure" => "failed".into(),
+        "cancelled" | "canceled" => "cancelled".into(),
+        "pending" => "pending".into(),
+        "in_progress" | "inprogress" | "running" => "in_progress".into(),
+        other => other.to_owned(),
+    }
+}
+
+fn tool_status_of(update: &Value) -> String {
+    update
+        .get("status")
+        .and_then(Value::as_str)
+        .map(normalize_tool_status)
+        .unwrap_or_default()
 }
 
 /// Project tool `content` + `rawOutput` into UI-facing text.
@@ -572,8 +776,10 @@ fn project_raw_output_text(raw: &Value) -> Option<String> {
         }
     }
 
-    // ── ListDir: content only lives in raw_output ───────────────────────
-    if ty == "ListDir" {
+    // ── ListDir: content only lives in raw_output (typed or untagged Content) ─
+    if ty == "ListDir"
+        || (ty.is_empty() && raw.get("Content").is_some() && raw.get("FileContent").is_none())
+    {
         if let Some(c) = raw.get("Content") {
             if let Some(listing) = c.get("content").and_then(Value::as_str) {
                 return Some(listing.to_owned());
@@ -1060,8 +1266,15 @@ fn display_diff_path(path: &str) -> String {
     if p.is_empty() {
         return "file".into();
     }
-    // Strip leading ./ for cleaner headers; keep absolute paths as-is for uniqueness.
-    p.trim_start_matches("./").to_owned()
+    // Unified headers are written as `--- a/{path}`. Strip a leading `/` so
+    // absolute paths become `--- a/Users/...` not `--- a//Users/...`.
+    let p = p.trim_start_matches("./");
+    let p = p.strip_prefix('/').unwrap_or(p);
+    if p.is_empty() {
+        "file".into()
+    } else {
+        p.to_owned()
+    }
 }
 
 fn split_diff_lines(text: &str) -> Vec<&str> {
@@ -1221,35 +1434,116 @@ fn unified_diff_from_details(path: &str, details: &[EditDetail]) -> String {
     out
 }
 
+/// Keys safe to surface in `ToolCallPlaced.args_json` (no multi-KB bodies).
+const COMPACT_RAW_INPUT_KEYS: &[&str] = &[
+    "variant",
+    "path",
+    "file_path",
+    "filePath",
+    "target_file",
+    "targetFile",
+    "absolute_path",
+    "absolutePath",
+    "command",
+    "description",
+    "pattern",
+    "glob",
+    "query",
+    "url",
+    "offset",
+    "limit",
+    "timeout",
+    "replace_all",
+    "replaceAll",
+    "is_background",
+    "isBackground",
+    "workdir",
+    "include",
+    "head_limit",
+    "output_mode",
+];
+
+/// Keys that must never appear in placed args (full file / edit payloads).
+fn is_bulky_raw_input_key(key: &str) -> bool {
+    matches!(
+        key,
+        "old_string"
+            | "oldString"
+            | "new_string"
+            | "newString"
+            | "content"
+            | "patch"
+            | "prompt"
+            | "todos"
+            | "raw"
+    )
+}
+
 fn compact_tool_args_json(update: &Value) -> String {
-    // Prefer a compact projection: kind/title/description/path/rawInput slice.
+    // Unified compact projection for Desktop/TUI headers + session file stats.
+    // Never dump full SearchReplace old/new strings (real tools are 3–7KB each).
     let mut obj = serde_json::Map::new();
-    if let Some(k) = update.get("kind") {
-        obj.insert("kind".into(), k.clone());
-    }
-    if let Some(t) = update.get("title") {
-        obj.insert("title".into(), t.clone());
-    }
+    let kind = resolve_tool_kind(update);
+    obj.insert("kind".into(), Value::String(kind));
     if let Some(d) = tool_description(update) {
         obj.insert("description".into(), Value::String(d));
     }
     if let Some(p) = tool_path_hint(update) {
         obj.insert("path".into(), Value::String(p));
+    } else if let Some(s) = update
+        .get("title")
+        .and_then(Value::as_str)
+        .and_then(subject_from_edit_title)
+    {
+        obj.insert("path".into(), Value::String(s));
     }
     if let Some(locs) = update.get("locations") {
         obj.insert("locations".into(), locs.clone());
     }
     if let Some(raw) = tool_raw_input(update) {
-        obj.insert("rawInput".into(), raw.clone());
+        if let Some(map) = raw.as_object() {
+            let mut compact = serde_json::Map::new();
+            for (k, v) in map {
+                if is_bulky_raw_input_key(k) {
+                    continue;
+                }
+                if COMPACT_RAW_INPUT_KEYS.contains(&k.as_str()) {
+                    // Truncate long scalar strings (e.g. huge commands).
+                    if let Some(s) = v.as_str() {
+                        if s.len() > 240 {
+                            compact.insert(
+                                k.clone(),
+                                Value::String(truncate_str_boundary(s, 240)),
+                            );
+                            continue;
+                        }
+                    }
+                    compact.insert(k.clone(), v.clone());
+                }
+            }
+            if !compact.is_empty() {
+                obj.insert("rawInput".into(), Value::Object(compact));
+            }
+        }
     }
-    if let Some(st) = update.get("status") {
-        obj.insert("status".into(), st.clone());
-    }
-    // Keep full update only when compact view is empty.
-    if obj.len() <= 1 {
-        return serde_json::to_string(update).unwrap_or_else(|_| "{}".into());
+    if let Some(st) = update.get("status").and_then(Value::as_str) {
+        obj.insert(
+            "status".into(),
+            Value::String(normalize_tool_status(st)),
+        );
     }
     serde_json::to_string(&Value::Object(obj)).unwrap_or_else(|_| "{}".into())
+}
+
+fn truncate_str_boundary(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_owned();
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
 }
 
 /// Only emit turn-activity for suppressed tools (otherwise scroll/timeline noise).
@@ -1276,7 +1570,7 @@ pub fn translate(
     // Minos synthetic envelopes shared with Codex (approval overlay path).
     if let Some(method) = raw.get("method").and_then(Value::as_str) {
         match method {
-            "approval/request" | "approval/timeout" => {
+            "approval/request" | "approval/timeout" | "approval/resolved" => {
                 let params = raw.get("params").cloned().unwrap_or(Value::Null);
                 return Ok(vec![UiEventMessage::Raw {
                     kind: method.to_string(),
@@ -1417,12 +1711,14 @@ fn translate_acp_notification(
     raw: &Value,
 ) -> Result<Vec<UiEventMessage>, TranslationError> {
     let params = raw.get("params").cloned().unwrap_or(Value::Null);
-    let (meta, mut prefix_events) = apply_notification_meta(state, &params);
     let update = params.get("update").cloned().unwrap_or(Value::Null);
     let session_update = update
         .get("sessionUpdate")
         .and_then(Value::as_str)
         .unwrap_or("");
+    // Pass sessionUpdate so streamStartMs only segments agent *text*, not thought.
+    let (meta, mut prefix_events) =
+        apply_notification_meta(state, &params, session_update);
 
     let body_events = match session_update {
         "agent_message_chunk" | "agent_thought_chunk" => {
@@ -1564,11 +1860,7 @@ fn translate_tool_call(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let kind = update
-        .get("kind")
-        .and_then(Value::as_str)
-        .unwrap_or("other")
-        .to_string();
+    let kind = resolve_tool_kind(update);
     let raw_input = tool_raw_input(update).cloned();
     let suppressed = is_suppressed_tool(&title, &kind, raw_input.as_ref());
     let display_name = tool_display_name(update);
@@ -1645,26 +1937,27 @@ fn translate_tool_call(
         // Orphans only carry terminal statuses (completed/failed/cancelled) —
         // derive error flag from the orphan payload so failed tools are not
         // mislabeled as successful on replay.
-        let orphan_is_error = orphan
-            .get("status")
-            .and_then(Value::as_str)
-            .is_some_and(|s| s == "failed" || s == "cancelled");
+        let orphan_status = tool_status_of(&orphan);
+        let orphan_is_error = matches!(orphan_status.as_str(), "failed" | "cancelled");
         events.extend(complete_tool_from_update(
             state,
             &tool_call_id,
             &orphan,
             orphan_is_error,
+            true, // terminal: close assistant segment
         ));
-        // `complete_tool_from_update` already closed the open assistant message
-        // and set force_new_assistant_on_text; nothing else to do here.
         return events;
     }
 
     // Already-completed tool_call (status on place).
-    let status = update
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("pending");
+    let status = {
+        let s = tool_status_of(update);
+        if s.is_empty() {
+            "pending".into()
+        } else {
+            s
+        }
+    };
     let (mid, start_events) = ensure_assistant_message(state, meta.agent_timestamp_ms.unwrap_or(0));
     events.extend(start_events);
     state.tool_calls.insert(
@@ -1682,7 +1975,7 @@ fn translate_tool_call(
         args_json: DisplayPayload::inline(compact_tool_args_json(update)),
     });
 
-    if matches!(status, "completed" | "failed") {
+    if matches!(status.as_str(), "completed" | "failed") {
         let content = extract_tool_result_text(update);
         let is_error = status == "failed";
         let open = state.tool_calls.remove(&tool_call_id);
@@ -1751,11 +2044,9 @@ fn translate_tool_call_update(
         return vec![];
     }
 
-    let status = update
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
+    let status = tool_status_of(update);
+    let is_terminal = matches!(status.as_str(), "completed" | "failed" | "cancelled");
+    let projected = extract_tool_result_text(update);
 
     // Suppressed tools: clear bookkeeping on terminal status, no UI tool events.
     if state.suppressed_tools.contains(&tool_call_id)
@@ -1764,17 +2055,17 @@ fn translate_tool_call_update(
             .get(&tool_call_id)
             .is_some_and(|t| t.suppressed)
     {
-        if matches!(status.as_str(), "completed" | "failed" | "cancelled") {
+        if is_terminal {
             state.suppressed_tools.remove(&tool_call_id);
             let open = state.tool_calls.remove(&tool_call_id);
-            let content = extract_tool_result_text(update);
             // spawn_subagent may only complete via update.
             if open
                 .as_ref()
                 .is_some_and(|t| t.name.to_ascii_lowercase().contains("spawn_subagent"))
-                || content.contains("subagent_id:")
+                || projected.contains("subagent_id:")
             {
-                if let Some(spawned) = maybe_spawn_from_tool_output(state, &tool_call_id, &content)
+                if let Some(spawned) =
+                    maybe_spawn_from_tool_output(state, &tool_call_id, &projected)
                 {
                     return vec![spawned];
                 }
@@ -1783,13 +2074,60 @@ fn translate_tool_call_update(
         return vec![];
     }
 
-    if !matches!(status.as_str(), "completed" | "failed" | "cancelled") {
-        // In-progress streaming output — stash as raw for debugging only when useful.
+    let known = state.tool_calls.contains_key(&tool_call_id);
+
+    if !is_terminal {
+        // Intermediate update (status null / in_progress). Real Grok edit tools
+        // often ship `content:[{type:diff}]` here *before* a terminal update —
+        // and sometimes never send terminal at all. Project progressive patch
+        // bodies so file/diff stats are not dropped.
+        if known && !projected.is_empty() && looks_like_progressive_tool_body(update, &projected) {
+            // Refresh display name when update carries better kind/title/path.
+            let mut events = Vec::new();
+            if let Some(open) = state.tool_calls.get_mut(&tool_call_id) {
+                let refined = tool_display_name(update);
+                if !refined.is_empty() && refined != open.name {
+                    open.name = refined.clone();
+                    events.push(UiEventMessage::ToolCallPlaced {
+                        message_id: open.message_id.clone(),
+                        tool_call_id: tool_call_id.clone(),
+                        name: refined,
+                        args_json: DisplayPayload::inline(compact_tool_args_json(update)),
+                    });
+                }
+            }
+            // Progressive complete: keep tool_calls entry so a later terminal
+            // update can refine output (EditsApplied) and close the segment.
+            events.push(UiEventMessage::ToolCallCompleted {
+                tool_call_id,
+                output: DisplayPayload::inline(projected),
+                is_error: false,
+            });
+            return events;
+        }
+        // Title/path refinement without body (e.g. grep title update).
+        if known {
+            if let Some(open) = state.tool_calls.get_mut(&tool_call_id) {
+                let refined = tool_display_name(update);
+                if !refined.is_empty() && refined != open.name && resolve_tool_kind(update) != "other"
+                {
+                    open.name = refined.clone();
+                    return vec![UiEventMessage::ToolCallPlaced {
+                        message_id: open.message_id.clone(),
+                        tool_call_id,
+                        name: refined,
+                        args_json: DisplayPayload::inline(compact_tool_args_json(update)),
+                    }];
+                }
+            }
+        }
         return vec![];
     }
 
-    if !state.tool_calls.contains_key(&tool_call_id) {
-        // Orphan: remember until tool_call arrives.
+    if !known {
+        // Terminal before place: orphan race — remember until tool_call.
+        // If we already progressive-completed and removed... we no longer remove
+        // on progressive, so this is true orphan only.
         state.orphan_updates.insert(tool_call_id, update.clone());
         return vec![];
     }
@@ -1798,8 +2136,37 @@ fn translate_tool_call_update(
         state,
         &tool_call_id,
         update,
-        status == "failed" || status == "cancelled",
+        matches!(status.as_str(), "failed" | "cancelled"),
+        true,
     )
+}
+
+/// Whether an intermediate update body is worth projecting as tool output.
+fn looks_like_progressive_tool_body(update: &Value, projected: &str) -> bool {
+    if projected.trim().is_empty() {
+        return false;
+    }
+    // Diff content blocks → file edit preview / result.
+    if let Some(arr) = update.get("content").and_then(Value::as_array) {
+        if arr.iter().any(|item| {
+            item.get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|t| t.eq_ignore_ascii_case("diff"))
+        }) {
+            return true;
+        }
+    }
+    // Already looks like unified patch (from rawOutput mid-flight).
+    if projected.contains("\n@@ ") || projected.starts_with("@@ ") || projected.contains("--- a/") {
+        return true;
+    }
+    // Typed rawOutput present on non-terminal (uncommon but valuable).
+    if update.get("rawOutput").or_else(|| update.get("raw_output")).is_some()
+        && resolve_tool_kind(update) == "edit"
+    {
+        return true;
+    }
+    false
 }
 
 fn complete_tool_from_update(
@@ -1807,15 +2174,35 @@ fn complete_tool_from_update(
     tool_call_id: &str,
     update: &Value,
     is_error: bool,
+    terminal_close: bool,
 ) -> Vec<UiEventMessage> {
     let content = extract_tool_result_text(update);
 
-    let open = state.tool_calls.remove(tool_call_id);
-    let mut events = vec![UiEventMessage::ToolCallCompleted {
+    let open = if terminal_close {
+        state.tool_calls.remove(tool_call_id)
+    } else {
+        state.tool_calls.get(tool_call_id).cloned()
+    };
+    // Refresh name on terminal if update has better metadata.
+    let mut events = Vec::new();
+    if terminal_close {
+        if let Some(ref o) = open {
+            let refined = tool_display_name(update);
+            if !refined.is_empty() && refined != o.name {
+                events.push(UiEventMessage::ToolCallPlaced {
+                    message_id: o.message_id.clone(),
+                    tool_call_id: tool_call_id.to_owned(),
+                    name: refined,
+                    args_json: DisplayPayload::inline(compact_tool_args_json(update)),
+                });
+            }
+        }
+    }
+    events.push(UiEventMessage::ToolCallCompleted {
         tool_call_id: tool_call_id.to_owned(),
         output: DisplayPayload::inline(content.clone()),
         is_error,
-    }];
+    });
     if open
         .as_ref()
         .is_some_and(|t| t.name.to_ascii_lowercase().contains("spawn_subagent"))
@@ -1825,9 +2212,11 @@ fn complete_tool_from_update(
             events.push(spawned);
         }
     }
-    // Close tool shell message so next agent text is a fresh segment.
-    events.extend(complete_open_assistant_message(state, now_ms()));
-    state.force_new_assistant_on_text = true;
+    if terminal_close {
+        // Close tool shell message so next agent text is a fresh segment.
+        events.extend(complete_open_assistant_message(state, now_ms()));
+        state.force_new_assistant_on_text = true;
+    }
     events
 }
 
@@ -2143,6 +2532,95 @@ mod tests {
         assert!(!second.iter().any(
             |e| matches!(e, UiEventMessage::Raw { kind, .. } if kind == "grok/notification_meta")
         ));
+    }
+
+    /// Real wire: thought and agent text run as concurrent streams with
+    /// *different* `streamStartMs` and interleave token-by-token. Closing text
+    /// on every thought meta change produced one assistant bubble per word.
+    #[test]
+    fn interleaved_thought_and_text_keep_one_assistant_message_id() {
+        let mut s = GrokTranslatorState::new("thr".into());
+        let text_ss = 1_784_789_343_651_i64;
+        let thought_ss = 1_784_789_344_139_i64;
+
+        let first = translate(
+            &mut s,
+            &val(&format!(
+                r#"{{"kind":"acp_notification","params":{{"_meta":{{"streamStartMs":{text_ss},"agentTimestampMs":1}},"update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"I'll"}}}}}}}}"#
+            )),
+        )
+        .unwrap();
+        let mid = assistant_id(&first);
+
+        // Thought stream with a different streamStartMs must NOT complete text.
+        let thought = translate(
+            &mut s,
+            &val(&format!(
+                r#"{{"kind":"acp_notification","params":{{"_meta":{{"streamStartMs":{thought_ss},"agentTimestampMs":2}},"update":{{"sessionUpdate":"agent_thought_chunk","content":{{"type":"text","text":"The"}}}}}}}}"#
+            )),
+        )
+        .unwrap();
+        assert!(
+            !thought.iter().any(|e| matches!(
+                e,
+                UiEventMessage::MessageCompleted { message_id, .. } if message_id == &mid
+            )),
+            "thought must not close open assistant text: {thought:?}"
+        );
+        assert!(thought.iter().any(|e| matches!(
+            e,
+            UiEventMessage::ReasoningDelta { message_id, text, .. }
+                if message_id == &mid && text == "The"
+        )));
+
+        // Continuing text on the original streamStartMs keeps the same mid.
+        let cont = translate(
+            &mut s,
+            &val(&format!(
+                r#"{{"kind":"acp_notification","params":{{"_meta":{{"streamStartMs":{text_ss},"agentTimestampMs":3}},"update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":" explore"}}}}}}}}"#
+            )),
+        )
+        .unwrap();
+        assert!(
+            !cont.iter().any(|e| matches!(e, UiEventMessage::MessageCompleted { .. })),
+            "same text stream must not re-open: {cont:?}"
+        );
+        assert!(cont.iter().any(|e| matches!(
+            e,
+            UiEventMessage::TextDelta { message_id, text, .. }
+                if message_id == &mid && text == " explore"
+        )));
+
+        // Alternating tokens stay on one message_id (the desktop word-list bug).
+        for (su, ss, chunk) in [
+            ("agent_thought_chunk", thought_ss, " user"),
+            ("agent_message_chunk", text_ss, " stores"),
+            ("agent_thought_chunk", thought_ss, " wants"),
+            ("agent_message_chunk", text_ss, ","),
+        ] {
+            let out = translate(
+                &mut s,
+                &val(&format!(
+                    r#"{{"kind":"acp_notification","params":{{"_meta":{{"streamStartMs":{ss},"agentTimestampMs":4}},"update":{{"sessionUpdate":"{su}","content":{{"type":"text","text":"{chunk}"}}}}}}}}"#
+                )),
+            )
+            .unwrap();
+            assert!(
+                !out.iter().any(|e| matches!(
+                    e,
+                    UiEventMessage::MessageCompleted { .. } | UiEventMessage::MessageStarted { .. }
+                )),
+                "interleave must not resegment mid={mid}: su={su} out={out:?}"
+            );
+            let ok = out.iter().any(|e| match e {
+                UiEventMessage::TextDelta { message_id, text, .. }
+                | UiEventMessage::ReasoningDelta { message_id, text, .. } => {
+                    message_id == &mid && text == chunk
+                }
+                _ => false,
+            });
+            assert!(ok, "expected delta on {mid} for {chunk:?}: {out:?}");
+        }
     }
 
     #[test]
@@ -3052,5 +3530,228 @@ mod tests {
             assert!(!text.trim_start().starts_with('{'), "dumped JSON: {text:?}");
             assert!(!text.contains("\"type\""), "dumped JSON: {text:?}");
         }
+    }
+
+    /// Real DB shape: tool_call lacks `kind`, title=`search_replace`, full old/new in rawInput.
+    #[test]
+    fn search_replace_tool_call_without_kind_classifies_as_edit() {
+        let mut s = GrokTranslatorState::new("thr".into());
+        let out = translate(
+            &mut s,
+            &val(
+                r#"{
+                  "kind":"acp_notification",
+                  "params":{
+                    "update":{
+                      "sessionUpdate":"tool_call",
+                      "toolCallId":"tc_sr1",
+                      "title":"search_replace",
+                      "status":"pending",
+                      "rawInput":{
+                        "file_path":"/Users/me/repo/src/WebViewFragment.kt",
+                        "old_string":"old line one\nold line two\n",
+                        "new_string":"new line one\nnew line two\n"
+                      },
+                      "_meta":{
+                        "x.ai/tool":{
+                          "kind":"edit",
+                          "name":"search_replace",
+                          "label":"Edit",
+                          "namespace":"grok_build",
+                          "read_only":false,
+                          "version":1
+                        }
+                      }
+                    }
+                  }
+                }"#,
+            ),
+        )
+        .unwrap();
+
+        let placed = out.iter().find_map(|e| match e {
+            UiEventMessage::ToolCallPlaced {
+                name, args_json, ..
+            } => Some((name.clone(), args_json.render_preview())),
+            _ => None,
+        });
+        let (name, args) = placed.expect("ToolCallPlaced");
+        assert!(
+            name.starts_with("edit:"),
+            "must classify as edit for session stats, got: {name}"
+        );
+        assert!(
+            name.contains("WebViewFragment.kt"),
+            "path subject expected, got: {name}"
+        );
+        assert!(
+            !args.contains("old line one"),
+            "must not dump old_string into args: {args}"
+        );
+        assert!(
+            !args.contains("new line one"),
+            "must not dump new_string into args: {args}"
+        );
+        assert!(
+            args.contains("WebViewFragment.kt") || args.contains("file_path"),
+            "compact args should keep path: {args}"
+        );
+    }
+
+    /// Intermediate tool_call_update with content diff and status=null must project a patch
+    /// (real sessions sometimes never emit terminal completed for that toolCallId).
+    #[test]
+    fn intermediate_search_replace_diff_projects_progressive_patch() {
+        let mut s = GrokTranslatorState::new("thr".into());
+        let _ = translate(
+            &mut s,
+            &val(
+                r#"{
+                  "kind":"acp_notification",
+                  "params":{
+                    "update":{
+                      "sessionUpdate":"tool_call",
+                      "toolCallId":"tc_sr2",
+                      "title":"search_replace",
+                      "status":"pending",
+                      "rawInput":{
+                        "file_path":"/repo/AppPlugin.java",
+                        "old_string":"  void a() {}\n",
+                        "new_string":"  void b() {}\n"
+                      }
+                    }
+                  }
+                }"#,
+            ),
+        )
+        .unwrap();
+
+        let mid = translate(
+            &mut s,
+            &val(
+                r#"{
+                  "kind":"acp_notification",
+                  "params":{
+                    "update":{
+                      "sessionUpdate":"tool_call_update",
+                      "toolCallId":"tc_sr2",
+                      "title":"Edit `/repo/AppPlugin.java`",
+                      "kind":"edit",
+                      "content":[{
+                        "type":"diff",
+                        "path":"/repo/AppPlugin.java",
+                        "oldText":"  void a() {}\n",
+                        "newText":"  void b() {}\n",
+                        "_meta":{"old_line":10,"new_line":10}
+                      }],
+                      "rawInput":{
+                        "variant":"SearchReplace",
+                        "file_path":"/repo/AppPlugin.java",
+                        "old_string":"  void a() {}\n",
+                        "new_string":"  void b() {}\n",
+                        "replace_all":false
+                      }
+                    }
+                  }
+                }"#,
+            ),
+        )
+        .unwrap();
+
+        let text = tool_completed_output(&mid);
+        assert!(
+            text.contains("--- a/") && text.contains("+++ b/"),
+            "expected unified patch from intermediate diff, got: {text}"
+        );
+        assert!(!text.contains("a//"), "no double-slash path: {text}");
+        assert!(text.contains("AppPlugin.java"), "got: {text}");
+        assert!(text.contains("-  void a() {}") || text.contains("-  void a()"), "got: {text}");
+        assert!(text.contains("+  void b() {}") || text.contains("+  void b()"), "got: {text}");
+        // Still tracked so a later terminal update can refine.
+        assert!(
+            s.tool_calls.contains_key("tc_sr2"),
+            "progressive complete must keep tool open for terminal refresh"
+        );
+
+        // Later terminal completed with EditsApplied still projects.
+        let done = translate(
+            &mut s,
+            &val(
+                r#"{
+                  "kind":"acp_notification",
+                  "params":{
+                    "update":{
+                      "sessionUpdate":"tool_call_update",
+                      "toolCallId":"tc_sr2",
+                      "status":"completed",
+                      "content":[{
+                        "type":"diff",
+                        "path":"/repo/AppPlugin.java",
+                        "oldText":"  void a() {}\n",
+                        "newText":"  void b() {}\n"
+                      }],
+                      "rawOutput":{
+                        "type":"SearchReplace",
+                        "EditsApplied":{
+                          "absolute_path":"/repo/AppPlugin.java",
+                          "old_string":"  void a() {}\n",
+                          "new_string":"  void b() {}\n",
+                          "tool_output_for_prompt":"ok",
+                          "edits":{
+                            "details":[{
+                              "old_string":"  void a() {}\n",
+                              "new_string":"  void b() {}\n",
+                              "old_line":10,
+                              "new_line":10,
+                              "context_before":"",
+                              "context_after":"",
+                              "line_prefix":""
+                            }]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }"#,
+            ),
+        )
+        .unwrap();
+        let final_text = tool_completed_output(&done);
+        assert!(final_text.contains("AppPlugin.java"), "got: {final_text}");
+        assert!(
+            !s.tool_calls.contains_key("tc_sr2"),
+            "terminal complete removes open tool"
+        );
+    }
+
+    #[test]
+    fn display_diff_path_avoids_double_slash_for_absolute() {
+        let patch = unified_diff_from_strings(
+            "/Users/me/repo/file.kt",
+            "a\n",
+            "b\n",
+            1,
+            1,
+        );
+        assert!(
+            patch.contains("--- a/Users/me/repo/file.kt"),
+            "got: {patch}"
+        );
+        assert!(!patch.contains("a//Users"), "got: {patch}");
+    }
+
+    #[test]
+    fn untagged_listdir_content_projects() {
+        let update = serde_json::json!({
+            "content": [],
+            "rawOutput": {
+                "Content": {
+                    "absolute_root_path": "/repo",
+                    "content": "src/\nCargo.toml\n"
+                }
+            }
+        });
+        let text = extract_tool_result_text(&update);
+        assert!(text.contains("Cargo.toml"), "got: {text:?}");
     }
 }

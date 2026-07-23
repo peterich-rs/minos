@@ -130,7 +130,7 @@ subagent 也是普通 thread，只是在 `SessionAdded` / `SessionSummary` / `Lo
 **Agent 终态正文（last segment）：** Grok/Gemini 等 ACP agent 常在同一 `message_id` 下用多段 `agent_message_chunk` 输出中间进度（「正在定位…」），工具/思考会把 session 时间线拆成多个气泡。`conversation_completion` 与 session `ChatState` 对齐：tool / reasoning / subagent 事件关闭当前文本 segment，turn 结束时只把**最后一个未关闭的 assistant 文本段**写入 conversation；不会把全过程进度日志与最终摘要拼接成一条。工具后若无新的最终文本，则不回写中间进度。显式 `post_conversation_update` 仍可单独追加中途状态条。
 
 **Grok 投影（Phase A–C）：** `translate_grok` 在 daemon 投影层对齐 grok-build pager：
-- **A**：读 `_meta.streamStartMs` / `agentTimestampMs` / `promptId`；`tool_call` 与 stream 边界 `MessageCompleted` 当前 assistant text，下一段 agent text 用新 `message_id`。
+- **A**：读 `_meta.streamStartMs` / `agentTimestampMs` / `promptId`；`tool_call` 与 **agent_message_chunk** 上的 `streamStartMs` 变化会 `MessageCompleted` 当前 assistant text，下一段 agent text 用新 `message_id`。`agent_thought_chunk` 使用独立的 concurrent `streamStartMs`，**不得**据此关闭 text（否则 thought/text 交错会把正文拆成逐 token 气泡）。
 - **B**：压制 todo/wait/task-output/spawn 等 plumbing（`grok/turn_activity` Raw 保留等待语义）；tool 标题优先 `rawInput.description` / path；thinking 附带 `elapsedMs` activity。
 - **C**：`minos-acp-protocol` 补齐 tool kind/locations/rawInput/Failed、`agent_thought_chunk`、notification `_meta`；translator 从 raw JSON 抽取 content/locations/orphan update。
 - **Grok ACP 双通道投影**（完整清单见 [architecture-grok-acp-projection.md](./architecture-grok-acp-projection.md)）：优先结构化 `raw_output`（pager 同款），再 `content`；禁止 dump ToolOutput JSON。覆盖 Edit→patch、Read→去模型行号 densify、Bash→`output_for_prompt`+ANSI strip、Grep→`file_matches`、ListDir 列表、Web/MCP/Skill 等。

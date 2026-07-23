@@ -45,7 +45,7 @@ Grok 事件以 JSON-RPC notification 的变体存入 Minos，由顶层 `kind` �
 | `promptId` | string | 当前 prompt/turn 的唯一 ID |
 | `agentTimestampMs` | i64 | agent 端时间戳（毫秒） |
 | `turnStartMs` | i64 | 当前 turn 开始时间 |
-| `streamStartMs` | i64 | 当前流式输出开始时间（变化 = 新 assistant message 边界） |
+| `streamStartMs` | i64 | 当前**该通道**流式输出开始时间。`agent_message_chunk` 上的变化 = 新 assistant text 边界；`agent_thought_chunk` 使用**并发独立**的 `streamStartMs`，**不得**据此关闭正文（否则 thought/text 交错会拆成逐 token 气泡） |
 | `chunkId` | i64 | 流式 chunk 序号（从 1 开始） |
 | `totalTokens` | i64 | 截至当前累计 token |
 | `updateType` | string | 冗余类型名（`"AgentMessageChunk"` / `"ToolCall"` 等） |
@@ -855,7 +855,7 @@ prompt 结束信号：
 
 ## 8. 单元测试注意事项
 
-1. **消息边界推断**：Grok 没有显式的 `item/started` / `item/completed`，翻译器必须通过 `streamStartMs` 变化来检测新消息边界。测试需覆盖：同一 stream 内连续 chunk、stream 切换、tool_call 后新 chunk。
+1. **消息边界推断**：Grok 没有显式的 `item/started` / `item/completed`，翻译器对 **agent text** 通过 `agent_message_chunk` 的 `streamStartMs` 变化检测新边界。Thought 是并发第二流（另一 `streamStartMs`），关闭 text 只能在 text stream 切换 / tool_call / prompt 完成时发生。测试需覆盖：同一 text stream 内连续 chunk、text stream 切换、tool_call 后新 chunk、**thought/text 交错仍保持同一 `message_id`**（`interleaved_thought_and_text_keep_one_assistant_message_id`）。
 
 2. **tool_call vs tool_call_update 时序**：`tool_call_update` 可能在 `tool_call` 之前到达（orphan race），翻译器有 `orphan_updates` 缓存。测试需覆盖两种到达顺序。
 

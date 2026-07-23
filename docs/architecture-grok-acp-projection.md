@@ -4,8 +4,26 @@
 > Codex app-server 的 tool item 多为「人可读」正文；Grok ACP 是 **双通道**：
 > `content`（常给模型/协议）+ `raw_output`（typed `ToolOutput`，pager 用来渲染）。
 
-Minos 投影入口：`minos-ui-protocol::grok::extract_tool_result_text`  
+Minos 投影入口：`minos-ui-protocol::grok::extract_tool_result_text` + `resolve_tool_kind` / `compact_tool_args_json`  
 策略：**先结构化 `raw_output`，再 ACP `content`，禁止整坨 JSON dump**；出口统一 strip ANSI。
+
+### Wire 嵌套解包（edit / search_replace）
+
+真实 Grok 会话里文件编辑不是扁平 item，而是多层：
+
+1. **`tool_call`**：`title=search_replace`，常 **无 `kind`**，`rawInput={file_path, old_string, new_string}`（尚无 `variant`）
+2. **中间 `tool_call_update`**：`status=null`，`content:[{type:diff, oldText, newText, path}]`，`rawInput.variant=SearchReplace`
+3. **终态 `tool_call_update`**：`status=completed`，`rawOutput={type:SearchReplace, EditsApplied:{…}}`（有时缺省，仅到 2）
+
+| 步骤 | 旧行为（错误） | 现行为（统一 schema） |
+|------|----------------|----------------------|
+| Placed name | `other: /path`（kind 缺失） | **`edit: /path`**（从 title / `x.ai/tool` / rawInput 形状推断） |
+| Placed args | 整份 rawInput 含 multi-KB old/new | **compact**：path + 安全字段；**禁止** `old_string`/`new_string`/`content` |
+| 中间 diff update | 因 status 非终态 **丢弃** | **progressive `ToolCallCompleted`**（unified patch）；仍保留 open tool 等终态刷新 |
+| 终态 EditsApplied | unified patch | 同左，并 close segment |
+| unified path 头 | `--- a//Users/...` | **`--- a/Users/...`**（strip 绝对路径前导 `/`） |
+
+Desktop `summarizeSessionFromTranscript` 依赖 `toolKindFromName(title)===edit` + `isDiffLike(detail)` 统计文件/行数；上述解包后 search_replace 才会进入 edit 统计。
 
 ## 工具 × 线格式 × 投影
 
@@ -14,12 +32,12 @@ Minos 投影入口：`minos-ui-protocol::grok::extract_tool_result_text`
 | **ReadFile::FileContent** | `N→line` 稀疏行号（首行+每10行） | `raw_output` 纯文本 + `offset`/`total_lines` | 纯文本 densify 为 `{offset+1+i}→line`（gutter 用） | ✅ |
 | **ReadFile** 错误 | 错误文案 | 同左 | 错误文案 | ✅ |
 | **ReadFile** Image/PDF | Image blocks | 结构化 | 空正文（见下方 backlog） | 📋 高优 backlog |
-| **SearchReplace::EditsApplied** | `type:diff` old/new + `_meta.details` | `EditsApplied{…}` | **unified patch** | ✅ |
+| **SearchReplace::EditsApplied** | `type:diff` old/new + `_meta.details` | `EditsApplied{…}` | **unified patch**；中间 diff update 亦 progressive 投影 | ✅ |
 | **SearchReplace** 错误 | 错误文案 | 错误变体 | 错误文案 | ✅ |
 | **ApplyPatch::Success** | 每文件一个 Diff | `Success.files[]` | 多文件 unified patch | ✅ |
 | **Bash** | **原始字节 + ANSI** | `output_for_prompt`（已 strip） | 优先 `output_for_prompt`；再 strip ANSI | ✅ |
 | **GrepSearch** | 仅 `"found N matches"` | `file_matches` / `stdout` | `path:line:content` 或 strip `<workspace_result>` | ✅ |
-| **ListDir** | **无 content** | `Content.content` 列表字符串 | 目录列表正文 | ✅ |
+| **ListDir** | **无 content** | `Content.content`（typed `type:ListDir` 或 untagged `{Content:{…}}`） | 目录列表正文 | ✅ |
 | **WebSearch** | 无 | `content` + `citations` | 正文 + 引用列表 | ✅ |
 | **WebFetch** | `to_prompt_format()` 文本 | 同结构化 | Content / 错误文案 | ✅ |
 | **Todo** | 无（另发 Plan） | todos | 成功无 body；错误文案；timeline 抑制 plumbing | ✅ 抑制 |
@@ -66,8 +84,14 @@ Minos 投影入口：`minos-ui-protocol::grok::extract_tool_result_text`
 ## 回归锚点（单测）
 
 - `search_replace_*` / `apply_patch_*` → patch，不 dump EditsApplied  
+- `search_replace_tool_call_without_kind_classifies_as_edit` — Placed `edit:` + 无 old/new dump  
+- `intermediate_search_replace_diff_projects_progressive_patch` — status=null diff → patch；终态仍可刷新  
+- `display_diff_path_avoids_double_slash_for_absolute`  
 - `read_file_prefers_raw_output_over_arrow_content`  
-- `list_dir_projects_listing_from_raw_output`  
+- `list_dir_projects_listing_from_raw_output` / `untagged_listdir_content_projects`  
 - `grep_projects_file_matches_not_stub_count`  
 - `bash_prefers_output_for_prompt` + ANSI strip  
 - `never_dumps_typed_tool_output_json_objects`  
+- `interleaved_thought_and_text_keep_one_assistant_message_id` — thought 的 `streamStartMs` 不得关闭 agent text（防 Desktop 逐 token 气泡）  
+- `stream_start_ms_change_closes_open_assistant_message` — 仅 **text** stream 切换才关正文 
+
