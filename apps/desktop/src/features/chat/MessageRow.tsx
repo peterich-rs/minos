@@ -10,8 +10,14 @@ import { cn } from "@/shared/lib/utils";
 import { ReplyPreview } from "./ReplyPreview";
 import { MessageReactions } from "./MessageReactions";
 import { MessageActionBar } from "./MessageActionBar";
+import { MessageAuthorText, MessageHeaderRow } from "./MessageHeader";
+import { MessageTimestamp } from "./MessageTimestamp";
 import { useReactionStore } from "./reaction-store";
 
+/**
+ * Slack/Buzz-style message row: full-width, left-aligned for every author.
+ * No left/right bubble split — user and agent share the same grammar.
+ */
 export const MessageRow = memo(function MessageRow({
   message,
   conversationId,
@@ -42,8 +48,6 @@ export const MessageRow = memo(function MessageRow({
     ? "animate-message-in motion-reduce:animate-none"
     : undefined;
   const delivery = message.deliveryStatus;
-  // Bubble is in sending state when the row says so, or while a retry is in
-  // flight (the store patches deliveryStatus asynchronously).
   const isSending = delivery === "sending" || retrying;
   const isFailed = delivery === "failed" && !retrying;
 
@@ -76,17 +80,12 @@ export const MessageRow = memo(function MessageRow({
   const isUser = message.role === "user";
   const agentKey = message.agent as KnownAgent | undefined;
   const agent = agentKey && agentMeta[agentKey] ? agentMeta[agentKey] : null;
-  // TUI labels agent replies as `[OpenCode@b15d06d4]` — surface session short id.
   const sessionShort = message.sessionId
     ? shortSessionId(message.sessionId)
     : undefined;
   const agentLabel = agent?.label ?? message.agent ?? "Agent";
-
-  // Conversation timeline must not invent "approval" cards from free text.
-  // Real approvals (permission / plan / opencode question) live on the session
-  // transcript with a requestId and wired Allow/Deny — same as TUI.
-  // Live run status / open-session CTAs stay in the right-hand Session inspector
-  // (TUI parity: do not pollute the chat timeline with session chrome).
+  const authorLabel = isUser ? "You" : agentLabel;
+  const avatarTone = isUser ? "slate" : (agent?.tone ?? "slate");
 
   if (message.kind === "tool_summary") {
     return (
@@ -103,125 +102,132 @@ export const MessageRow = memo(function MessageRow({
     );
   }
 
-  const showHeader = !isUser && !groupedWithPrevious;
-  const showAvatar = !isUser && !groupedWithPrevious;
+  const isContinuation = groupedWithPrevious;
+  const fullTitle =
+    message.createdAtMs && message.createdAtMs > 0
+      ? new Date(message.createdAtMs).toLocaleString()
+      : undefined;
 
-  return (
+  const avatarGutter = isContinuation ? (
     <div
+      aria-hidden
       className={cn(
-        "group flex gap-2.5",
-        enterClass,
-        isUser ? "justify-end" : "justify-start",
-        // Tighter vertical rhythm for continuation rows.
-        groupedWithPrevious && "-mt-2",
+        "flex w-9 shrink-0 items-start justify-end pt-0.5 self-stretch",
       )}
     >
-      {!isUser ? (
-        showAvatar ? (
-          <Avatar name={agentLabel} tone={agent?.tone ?? "slate"} />
-        ) : (
-          // Spacer keeps bubble aligned when avatar is hidden.
-          <div className="w-8 shrink-0" aria-hidden />
-        )
+      <MessageTimestamp
+        time={message.time}
+        title={fullTitle}
+        className="opacity-0 transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100"
+      />
+    </div>
+  ) : (
+    <div className="flex w-9 shrink-0 items-start justify-center pt-0.5">
+      <Avatar name={authorLabel} tone={avatarTone} size="md" />
+    </div>
+  );
+
+  const headerNode = isContinuation ? null : (
+    <MessageHeaderRow>
+      {message.sessionId && !isUser ? (
+        <button
+          type="button"
+          title={`Open ${agentLabel} #${sessionShort} transcript`}
+          onClick={() =>
+            openSessionTranscript(message.sessionId!, conversationId)
+          }
+          className="inline-flex min-w-0 items-center gap-1 rounded-md hover:bg-surface-hover"
+        >
+          <MessageAuthorText hoverUnderline as="span">
+            {authorLabel}
+          </MessageAuthorText>
+          {sessionShort ? (
+            <span className="font-mono text-[11px] font-normal text-ink-muted">
+              #{sessionShort}
+            </span>
+          ) : null}
+        </button>
+      ) : (
+        <MessageAuthorText as="h3">{authorLabel}</MessageAuthorText>
+      )}
+      <MessageTimestamp time={message.time} title={fullTitle} />
+      {isSending ? (
+        <span className="text-[11px] font-medium uppercase tracking-wide text-ink-muted/80">
+          Sending
+        </span>
       ) : null}
-      <div
-        className={cn(
-          "relative max-w-[78%] space-y-1",
-          isUser && "items-end",
-        )}
-      >
-        {showHeader ? (
-          <div className="flex items-center gap-1.5 px-1 text-[12px]">
-            {message.sessionId ? (
-              <button
-                type="button"
-                title={`Open ${agentLabel} #${sessionShort} transcript`}
-                onClick={() =>
-                  openSessionTranscript(message.sessionId!, conversationId)
-                }
-                className="inline-flex min-w-0 items-center gap-1 rounded-md px-0.5 hover:bg-surface-hover"
-              >
-                <span className="font-medium text-ink">{agentLabel}</span>
-                {sessionShort ? (
-                  <span className="font-mono text-[11px] font-normal text-ink-muted">
-                    #{sessionShort}
-                  </span>
-                ) : null}
-              </button>
-            ) : (
-              <span className="font-medium text-ink">{agentLabel}</span>
-            )}
-            {isSending ? (
-              <span className="text-[11px] text-ink-muted">sending…</span>
-            ) : null}
-          </div>
-        ) : null}
+      {isFailed ? (
+        <span className="text-[11px] font-medium text-rose-600">Failed</span>
+      ) : null}
+    </MessageHeaderRow>
+  );
+
+  return (
+    <article
+      className={cn(
+        "group/message relative z-10 flex gap-2.5 rounded-2xl px-2 py-1 transition-colors",
+        "mx-1 hover:bg-surface-hover/80 focus-within:bg-surface-hover/80",
+        isContinuation ? "items-center" : "items-start",
+        enterClass,
+        isContinuation && "-mt-0.5",
+      )}
+      data-message-id={message.id}
+      data-testid="message-row"
+    >
+      {avatarGutter}
+
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        {headerNode}
+
         {message.replyToMessageId ? (
           <ReplyPreview
             replyToMessageId={message.replyToMessageId}
             replyParent={replyParent}
-            isUser={isUser}
           />
         ) : null}
+
         <div
           className={cn(
-            "relative flex items-end gap-1.5",
-            isUser && "flex-row-reverse",
+            "relative max-w-full text-[13.5px] leading-relaxed text-ink",
+            isContinuation ? "mt-0" : "-mt-0.5",
+            isSending && "opacity-70",
           )}
         >
-          {isUser && isFailed ? (
-            <button
-              type="button"
-              onClick={handleRetry}
-              title="Message failed to send — click to retry"
-              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-rose-600 text-[12px] font-bold leading-none text-white shadow-sm hover:bg-rose-700"
-              aria-label="Retry failed message"
-            >
-              !
-            </button>
-          ) : null}
-          <div className="relative">
-            <div
-              className={cn(
-                "rounded-2xl px-3.5 py-2.5 text-[13.5px] leading-relaxed shadow-sm",
-                isUser
-                  ? "rounded-br-md bg-bubble-out text-white"
-                  : "rounded-bl-md border border-ink/5 bg-surface-muted/60 text-ink",
-                isSending && "opacity-70",
-              )}
-            >
+          <div className="flex items-start gap-1.5">
+            {isUser && isFailed ? (
+              <button
+                type="button"
+                onClick={handleRetry}
+                title="Message failed to send — click to retry"
+                className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-rose-600 text-[12px] font-bold leading-none text-white shadow-sm hover:bg-rose-700"
+                aria-label="Retry failed message"
+              >
+                !
+              </button>
+            ) : null}
+            <div className="min-w-0 flex-1">
               <MarkdownText
                 text={message.body}
-                tone={isUser ? "onDark" : "default"}
+                tone="default"
                 className="text-[13.5px]"
               />
             </div>
-            <MessageActionBar
-              isUser={isUser}
-              onReply={() => setReplyTo(conversationId, message.id)}
-              onReact={(emoji) => toggleReaction(message.id, emoji)}
-              className={cn(
-                "absolute -top-3 z-[1]",
-                isUser ? "left-0 -translate-x-1" : "right-0 translate-x-1",
-              )}
-            />
           </div>
         </div>
+
         <MessageReactions
           groups={reactions}
           onToggle={(emoji) => toggleReaction(message.id, emoji)}
-          align={isUser ? "end" : "start"}
         />
-        <div
-          className={cn(
-            "px-1 text-[11px] text-ink-muted",
-            isUser && "text-right",
-          )}
-        >
-          {isSending ? "sending…" : isFailed ? "failed" : message.time}
-        </div>
       </div>
-    </div>
+
+      <div className="absolute right-2 top-0 z-10 -translate-y-1/2 sm:top-1 sm:translate-y-0 sm:group-hover/message:top-0 sm:group-hover/message:-translate-y-1/2">
+        <MessageActionBar
+          onReply={() => setReplyTo(conversationId, message.id)}
+          onReact={(emoji) => toggleReaction(message.id, emoji)}
+        />
+      </div>
+    </article>
   );
 });
 

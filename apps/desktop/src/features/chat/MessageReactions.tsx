@@ -10,26 +10,20 @@ import {
 } from "./lib/reactions";
 
 /**
- * Reaction pills under a chat bubble. Click toggles the current user's
- * membership on that emoji (durable local daemon when connected; mock offline).
+ * Reaction pills under a message body (Buzz/Slack grammar — always start-aligned).
  */
 export function MessageReactions({
   groups,
   onToggle,
-  align = "start",
 }: {
   groups: ReactionGroup[];
   onToggle: (emoji: string) => void;
-  align?: "start" | "end";
 }) {
   if (groups.length === 0) return null;
 
   return (
     <div
-      className={cn(
-        "flex flex-wrap gap-1 px-0.5",
-        align === "end" ? "justify-end" : "justify-start",
-      )}
+      className="mt-1 flex flex-wrap gap-1.5"
       role="group"
       aria-label="Reactions"
     >
@@ -62,7 +56,7 @@ function ReactionPill({
           aria-label={`${group.emoji} ${group.count}. ${label}. Toggle reaction`}
           title={label}
           className={cn(
-            "inline-flex h-6 items-center gap-1 rounded-full border px-1.5 text-[12px] transition-colors",
+            "inline-flex h-7 items-center gap-1 rounded-full border px-2 text-[12px] transition-colors",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
             group.reactedByMe
               ? "border-accent/40 bg-accent-soft text-ink"

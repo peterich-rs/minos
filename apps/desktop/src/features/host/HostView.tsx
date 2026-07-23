@@ -3,6 +3,7 @@ import {
   ChevronDown,
   Circle,
   Link2,
+  Palette,
   QrCode,
   RefreshCw,
   Server,
@@ -14,6 +15,11 @@ import {
   presenceDotClass,
 } from "@/shared/lib/host-status";
 import { cn } from "@/shared/lib/utils";
+import {
+  ACCENT_COLORS,
+  useTheme,
+} from "@/shared/theme/ThemeProvider";
+import { THEME_LABELS, type SyntaxThemeName } from "@/shared/theme/theme-loader";
 
 export function HostView() {
   const connection = useWorkspaceStore((s) => s.connection);
@@ -22,6 +28,15 @@ export function HostView() {
   const actionError = useWorkspaceStore((s) => s.actionError);
   const bootstrap = useWorkspaceStore((s) => s.bootstrap);
   const [diagOpen, setDiagOpen] = useState(false);
+  const {
+    themeName,
+    themes,
+    setTheme,
+    accentColor,
+    setAccentColor,
+    isDark,
+    isLoading: themeLoading,
+  } = useTheme();
 
   // v1: local daemon only; wire relayLinked when daemon exposes relay status.
   const presence = deriveHostPresence({
@@ -124,6 +139,77 @@ export function HostView() {
                 mono={presence.runtimeReady}
               />
             </dl>
+          </section>
+
+          <section className="mt-3 overflow-hidden rounded-xl border border-ink/8 bg-surface">
+            <div className="flex items-center gap-2 border-b border-ink/5 bg-surface-muted/40 px-3.5 py-2">
+              <Palette
+                className="h-3.5 w-3.5 text-ink-muted"
+                strokeWidth={1.8}
+              />
+              <h2 className="text-[12px] font-semibold text-ink">Appearance</h2>
+              {themeLoading ? (
+                <span className="ml-auto text-[10px] text-ink-muted">
+                  Applying…
+                </span>
+              ) : (
+                <span className="ml-auto text-[10px] text-ink-muted">
+                  {isDark ? "Dark" : "Light"}
+                </span>
+              )}
+            </div>
+            <div className="space-y-3 px-3.5 py-3">
+              <div>
+                <p className="mb-1.5 text-[11px] font-medium text-ink-secondary">
+                  Theme (Shiki-driven)
+                </p>
+                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+                  {themes.map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => setTheme(name)}
+                      className={cn(
+                        "rounded-lg border px-2 py-1.5 text-left text-[11px] font-medium transition-colors",
+                        themeName === name
+                          ? "border-accent bg-accent-soft text-ink ring-1 ring-accent/30"
+                          : "border-ink/10 bg-surface-muted/60 text-ink-secondary hover:bg-surface-hover",
+                      )}
+                    >
+                      {THEME_LABELS[name as SyntaxThemeName] ?? name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="mb-1.5 text-[11px] font-medium text-ink-secondary">
+                  Accent
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {ACCENT_COLORS.map((c) => (
+                    <button
+                      key={c.value}
+                      type="button"
+                      title={c.name}
+                      onClick={() => setAccentColor(c.value)}
+                      className={cn(
+                        "h-7 w-7 rounded-full border-2 transition-transform hover:scale-105",
+                        accentColor === c.value
+                          ? "border-ink scale-105"
+                          : "border-transparent",
+                      )}
+                      style={{
+                        background:
+                          c.value === "neutral"
+                            ? "linear-gradient(135deg,#a8a29e,#57534e)"
+                            : c.value,
+                      }}
+                      aria-label={`Accent ${c.name}`}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
           </section>
 
           <section className="mt-3 overflow-hidden rounded-xl border border-ink/8 bg-white">

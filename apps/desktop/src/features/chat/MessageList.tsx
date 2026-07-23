@@ -1,5 +1,4 @@
 import {
-  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -8,35 +7,26 @@ import {
   useState,
 } from "react";
 import { ArrowDown, Loader2 } from "lucide-react";
+import { VList, type VListHandle } from "virtua";
 import type { TimelineMessage } from "@/shared/lib/mock-data";
 import { followContentKey } from "@/shared/lib/stick-to-bottom";
-import { useStickToBottom } from "@/shared/lib/use-stick-to-bottom";
-import { sortTimelineMessages } from "@/shared/lib/timeline-order";
 import { nextEnterAnimationIds } from "@/shared/lib/enter-animation";
-import {
-  EMPTY_MESSAGE_HISTORY,
-  MESSAGE_AUTOFILL_SLACK_PX,
-} from "@/shared/lib/message-history";
-import {
-  captureItemScrollAnchor,
-  queryScrollItem,
-  restoreItemScrollAnchor,
-  type ItemScrollAnchor,
-} from "@/shared/lib/scroll-restore";
+import { EMPTY_MESSAGE_HISTORY } from "@/shared/lib/message-history";
+import { sortTimelineMessages } from "@/shared/lib/timeline-order";
 import { useWorkspaceStore } from "@/store/workspace-store";
+import { formatDayDividerLabel } from "./lib/message-grouping";
 import {
-  formatDayDividerLabel,
-  isMessageGroupContinuation,
-  shouldShowDayDivider,
-} from "./lib/message-grouping";
+  buildVirtualTimelineItems,
+  type VirtualTimelineItem,
+} from "./lib/virtual-timeline-items";
 import { MessageRow } from "./MessageRow";
 
 /** Stable empty snapshot for Zustand selectors (never allocate in getSnapshot). */
 const EMPTY_MESSAGES: TimelineMessage[] = [];
 
 /**
- * Scrollable conversation message list: stick-to-bottom, load-older,
- * enter-animation gate, and jump-to-latest.
+ * Virtualized conversation message list (virtua):
+ * stick-to-bottom, load-older on scroll top, enter-animation gate, jump-to-latest.
  */
 export function MessageList({ conversationId }: { conversationId: string }) {
   const messagesRaw = useWorkspaceStore(
@@ -74,28 +64,35 @@ export function MessageList({ conversationId }: { conversationId: string }) {
     for (const m of messages) map.set(m.id, m);
     return map;
   }, [messages]);
+  const virtualItems = useMemo(
+    () => buildVirtualTimelineItems(messages),
+    [messages],
+  );
   const phase = timelineStatus?.phase ?? "idle";
   const detailError = timelineStatus?.error;
 
+  const listRef = useRef<VListHandle>(null);
+  const [following, setFollowing] = useState(true);
+  const followingRef = useRef(true);
+  const [shift, setShift] = useState(false);
+  const olderInFlightRef = useRef(false);
+  const prevFirstSeqRef = useRef<number | null | undefined>(undefined);
   const seenMessageIdsRef = useRef<Set<string>>(new Set());
   const [animateIds, setAnimateIds] = useState<Set<string>>(() => new Set());
-  const pendingOlderRestoreRef = useRef<{
-    anchor: ItemScrollAnchor;
-    firstLoadedSeqBefore: number;
-  } | null>(null);
-  const pinSuspendedRef = useRef(false);
-  const olderInFlightRef = useRef(false);
-  const topSentinelRef = useRef<HTMLDivElement>(null);
 
-  // Gate enter-animation: first paint / bulk load never blank the whole list.
+  const setFollowingState = useCallback((next: boolean) => {
+    followingRef.current = next;
+    setFollowing(next);
+  }, []);
+
   useEffect(() => {
-    // Conversation switch: reset seen set so the next list is treated as first paint.
     seenMessageIdsRef.current = new Set();
     setAnimateIds(new Set());
-    pendingOlderRestoreRef.current = null;
-    pinSuspendedRef.current = false;
     olderInFlightRef.current = false;
-  }, [conversationId]);
+    prevFirstSeqRef.current = undefined;
+    setShift(false);
+    setFollowingState(true);
+  }, [conversationId, setFollowingState]);
 
   useEffect(() => {
     const ids = messages.map((m) => m.id);
@@ -104,7 +101,6 @@ export function MessageList({ conversationId }: { conversationId: string }) {
       ids,
     );
     seenMessageIdsRef.current = nextSeen;
-    // Avoid re-render when nothing new entered (empty Set → empty Set).
     setAnimateIds((prev) => {
       if (prev.size === 0 && nextAnimate.size === 0) return prev;
       return nextAnimate;
@@ -123,20 +119,27 @@ export function MessageList({ conversationId }: { conversationId: string }) {
       ),
     [messages],
   );
-  const {
-    scrollRef,
-    contentRef,
-    following,
-    showJumpToLatest,
-    followingRef,
-    jumpToLatest,
-    markProgrammatic,
-    cancelScheduledPin,
-  } = useStickToBottom({
-    contentKey,
-    resetKey: conversationId,
-    pinSuspendedRef,
-  });
+
+  // Stick to bottom when following and tail content changes.
+  useLayoutEffect(() => {
+    if (!followingRef.current) return;
+    if (virtualItems.length === 0) return;
+    listRef.current?.scrollToIndex(virtualItems.length - 1, { align: "end" });
+  }, [contentKey, conversationId, virtualItems.length]);
+
+  // After older page prepends (firstLoadedSeq decreases), keep shift for one frame.
+  useLayoutEffect(() => {
+    const prev = prevFirstSeqRef.current;
+    if (
+      firstLoadedSeq != null &&
+      prev != null &&
+      firstLoadedSeq < prev
+    ) {
+      setShift(true);
+      requestAnimationFrame(() => setShift(false));
+    }
+    prevFirstSeqRef.current = firstLoadedSeq;
+  }, [firstLoadedSeq]);
 
   const loadOlder = useCallback(async () => {
     if (source !== "daemon") return;
@@ -148,99 +151,23 @@ export function MessageList({ conversationId }: { conversationId: string }) {
       return;
     }
     olderInFlightRef.current = true;
-
-    const el = scrollRef.current;
-    const content = contentRef.current;
-    const shouldRestore = !followingRef.current;
-    const current =
-      useWorkspaceStore.getState().messagesByConversation[conversationId] ??
-      [];
-    const seqBefore = hist.firstLoadedSeq;
-    if (
-      shouldRestore &&
-      el &&
-      content &&
-      current.length > 0 &&
-      seqBefore != null
-    ) {
-      const topId = current[0]!.id;
-      const itemEl = queryScrollItem(content, topId);
-      const anchor = captureItemScrollAnchor(el, topId, itemEl);
-      if (anchor) {
-        pendingOlderRestoreRef.current = {
-          anchor,
-          firstLoadedSeqBefore: seqBefore,
-        };
-      } else {
-        pendingOlderRestoreRef.current = null;
-      }
-    } else {
-      pendingOlderRestoreRef.current = null;
-    }
-
+    setShift(true);
     try {
       await loadOlderMessages(conversationId);
-    } catch {
-      pendingOlderRestoreRef.current = null;
     } finally {
       olderInFlightRef.current = false;
+      requestAnimationFrame(() => setShift(false));
     }
-  }, [
-    source,
-    conversationId,
-    loadOlderMessages,
-    scrollRef,
-    contentRef,
-    followingRef,
-  ]);
+  }, [source, conversationId, loadOlderMessages]);
 
-  // Restore viewport after older page lands (firstLoadedSeq decreased).
-  useLayoutEffect(() => {
-    const pending = pendingOlderRestoreRef.current;
-    if (!pending) return;
-    if (firstLoadedSeq == null) return;
-    if (firstLoadedSeq >= pending.firstLoadedSeqBefore) return;
-
-    if (followingRef.current) {
-      pendingOlderRestoreRef.current = null;
-      return;
-    }
-
-    const el = scrollRef.current;
-    const content = contentRef.current;
-    if (!el || !content) {
-      pendingOlderRestoreRef.current = null;
-      return;
-    }
-
-    const itemEl = queryScrollItem(content, pending.anchor.itemId);
-    cancelScheduledPin();
-    pinSuspendedRef.current = true;
-    markProgrammatic(120);
-    restoreItemScrollAnchor(el, itemEl, pending.anchor);
-    pendingOlderRestoreRef.current = null;
-    requestAnimationFrame(() => {
-      pinSuspendedRef.current = false;
-    });
-  }, [
-    firstLoadedSeq,
-    messages,
-    scrollRef,
-    contentRef,
-    followingRef,
-    markProgrammatic,
-    cancelScheduledPin,
-  ]);
-
-  // Silent backfill while following when the tail does not fill the viewport.
+  // Silent backfill while following when the virtual list is short.
   useEffect(() => {
     if (source !== "daemon") return;
     if (!following) return;
     if (phase !== "ready") return;
     if (!hasOlder || loadingOlder) return;
-    const el = scrollRef.current;
-    if (!el) return;
-    if (el.scrollHeight <= el.clientHeight + MESSAGE_AUTOFILL_SLACK_PX) {
+    // Cheap autofill when few rows (viewport not full).
+    if (messages.length < 24) {
       void loadOlder();
     }
   }, [
@@ -252,106 +179,115 @@ export function MessageList({ conversationId }: { conversationId: string }) {
     firstLoadedSeq,
     messages.length,
     loadOlder,
-    scrollRef,
   ]);
 
-  // Prefetch older via top sentinel (manual scroll only).
-  useEffect(() => {
-    const root = scrollRef.current;
-    const sentinel = topSentinelRef.current;
-    if (!root || !sentinel || typeof IntersectionObserver === "undefined") {
-      return;
-    }
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (!entries.some((e) => e.isIntersecting)) return;
-        if (followingRef.current) return;
+  const handleScroll = useCallback(
+    (offset: number) => {
+      const handle = listRef.current;
+      if (!handle) return;
+      const scrollSize = handle.scrollSize;
+      const viewport = handle.viewportSize;
+      const distanceFromBottom = scrollSize - viewport - offset;
+      const atBottom = distanceFromBottom < 80;
+      if (atBottom !== followingRef.current) {
+        setFollowingState(atBottom);
+      }
+      // Prefetch older near top (manual scroll only).
+      if (offset < 120 && !followingRef.current) {
         void loadOlder();
-      },
-      { root, rootMargin: "120px 0px 0px 0px", threshold: 0 },
+      }
+    },
+    [loadOlder, setFollowingState],
+  );
+
+  const jumpToLatest = useCallback(() => {
+    setFollowingState(true);
+    if (virtualItems.length > 0) {
+      listRef.current?.scrollToIndex(virtualItems.length - 1, {
+        align: "end",
+      });
+    }
+  }, [setFollowingState, virtualItems.length]);
+
+  const showJumpToLatest = !following && messages.length > 0;
+
+  const renderVirtualItem = (item: VirtualTimelineItem) => {
+    if (item.type === "day") {
+      return <DayDivider key={item.id} ms={item.ms} />;
+    }
+    return (
+      <div key={item.id} data-scroll-id={item.id}>
+        <MessageRow
+          message={item.message}
+          conversationId={conversationId}
+          replyParent={
+            item.message.replyToMessageId
+              ? messageById.get(item.message.replyToMessageId)
+              : undefined
+          }
+          animateIn={animateIds.has(item.id)}
+          groupedWithPrevious={item.groupedWithPrevious}
+        />
+      </div>
     );
-    io.observe(sentinel);
-    return () => io.disconnect();
-  }, [conversationId, loadOlder, scrollRef, followingRef, hasOlder]);
+  };
+
+  const emptyOrStatus =
+    phase === "loading" && !hasCachedMessages ? (
+      <div className="py-12 text-center text-[13px] text-ink-muted">
+        Loading messages…
+      </div>
+    ) : phase === "error" && !hasCachedMessages ? (
+      <div className="flex flex-col items-center gap-3 py-12 text-center">
+        <p className="text-[13px] text-rose-600">
+          {detailError || "Failed to load messages"}
+        </p>
+        <button
+          type="button"
+          onClick={() => void loadTimeline(conversationId)}
+          className="rounded-lg bg-ink px-3 py-1.5 text-[12px] font-semibold text-white hover:opacity-90"
+        >
+          Retry
+        </button>
+      </div>
+    ) : messages.length === 0 ? (
+      <div className="py-12 text-center text-[13px] text-ink-muted">
+        No messages yet. Type{" "}
+        <kbd className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[12px]">
+          @grok
+        </kbd>{" "}
+        or{" "}
+        <kbd className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[12px]">
+          @codex
+        </kbd>{" "}
+        to start an agent.
+      </div>
+    ) : null;
 
   return (
     <>
-      <div
-        ref={scrollRef}
-        className="scrollbar-thin min-h-0 flex-1 overflow-y-auto overscroll-y-none px-5 py-5"
-      >
-        <div ref={contentRef} className="space-y-4">
-          {hasOlder ? (
-            <div
-              ref={topSentinelRef}
-              className="h-px w-full shrink-0"
-              aria-hidden
-            />
-          ) : null}
-          {loadingOlder ? (
-            <div className="flex justify-center py-1" aria-hidden>
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-ink-muted/50" />
-            </div>
-          ) : null}
-          {phase === "loading" && !hasCachedMessages ? (
-            <div className="py-12 text-center text-[13px] text-ink-muted">
-              Loading messages…
-            </div>
-          ) : phase === "error" && !hasCachedMessages ? (
-            <div className="flex flex-col items-center gap-3 py-12 text-center">
-              <p className="text-[13px] text-rose-600">
-                {detailError || "Failed to load messages"}
-              </p>
-              <button
-                type="button"
-                onClick={() => void loadTimeline(conversationId)}
-                className="rounded-lg bg-ink px-3 py-1.5 text-[12px] font-semibold text-white hover:opacity-90"
-              >
-                Retry
-              </button>
-            </div>
-          ) : messages.length === 0 ? (
-            <div className="py-12 text-center text-[13px] text-ink-muted">
-              No messages yet. Type{" "}
-              <kbd className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[12px]">
-                @grok
-              </kbd>{" "}
-              or{" "}
-              <kbd className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[12px]">
-                @codex
-              </kbd>{" "}
-              to start an agent.
-            </div>
-          ) : (
-            messages.map((message, index) => {
-              const prev = index > 0 ? messages[index - 1] : undefined;
-              const showDay = shouldShowDayDivider(prev, message);
-              const grouped = isMessageGroupContinuation(prev, message);
-              // Day divider is a sibling of the scroll-identity wrapper so
-              // prepend restore / queryScrollItem only measure the message row.
-              return (
-                <Fragment key={message.id}>
-                  {showDay && message.createdAtMs ? (
-                    <DayDivider ms={message.createdAtMs} />
-                  ) : null}
-                  <div data-scroll-id={message.id}>
-                    <MessageRow
-                      message={message}
-                      conversationId={conversationId}
-                      replyParent={
-                        message.replyToMessageId
-                          ? messageById.get(message.replyToMessageId)
-                          : undefined
-                      }
-                      animateIn={animateIds.has(message.id)}
-                      groupedWithPrevious={grouped}
-                    />
-                  </div>
-                </Fragment>
-              );
-            })
-          )}
-        </div>
+      <div className="relative min-h-0 flex-1">
+        {emptyOrStatus ? (
+          <div className="px-5 py-5">{emptyOrStatus}</div>
+        ) : (
+          <VList
+            ref={listRef}
+            className="scrollbar-thin h-full px-5 py-5"
+            shift={shift}
+            onScroll={handleScroll}
+          >
+            {hasOlder || loadingOlder ? (
+              <div className="flex justify-center py-2" key="__older-head">
+                {loadingOlder ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-ink-muted/50" />
+                ) : (
+                  <span className="h-px w-full" aria-hidden />
+                )}
+              </div>
+            ) : null}
+            {virtualItems.map((item) => renderVirtualItem(item))}
+          </VList>
+        )}
       </div>
 
       {showJumpToLatest ? (
@@ -385,3 +321,5 @@ function DayDivider({ ms }: { ms: number }) {
     </div>
   );
 }
+
+
