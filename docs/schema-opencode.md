@@ -691,6 +691,16 @@ pending → running → completed
 
 翻译器从此格式中提取 `sub_session_id`。
 
+**Minos UI 投影（desktop / TUI，2026-07-23+）**：
+
+| Wire | UI |
+|------|-----|
+| `tool: task` + `minos.subagent.spawned` + status | 单张 `subagent` 卡：`Running/Ran subagent {agent} #{short} · {status}` + 短 description（非整段 prompt） |
+| task completed XML | 只用于抽 `sub_session_id` / 终态；**禁止**作为 transcript header（`Ran <task id=…>`） |
+| text/reasoning `part.id` | 事件 `message_id` 绑定为 `messageID + U+001E + partID`，多 part 分段；tool 后 `TextReplace` 不回写上方气泡 |
+
+详见 `architecture-desktop.md` timeline freeze / subagent 单卡。
+
 ### 4.5 `step-start` Part
 
 > **源码**：`packages/core/src/v1/session.ts:227`

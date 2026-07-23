@@ -423,17 +423,19 @@ fn translate_message_part_delta(
         .copied()
         .unwrap_or(TrackedPartKind::Text);
 
-    state.parts_with_streamed_delta.insert(part_id);
+    state.parts_with_streamed_delta.insert(part_id.clone());
 
     if let Some(started) = start_message(state, &message_id, role) {
         let mut events = vec![started];
-        if let Some(delta_event) = delta_to_ui_event(kind, &message_id, field, delta) {
+        if let Some(delta_event) =
+            delta_to_ui_event_with_part(kind, &message_id, &part_id, field, delta)
+        {
             events.push(delta_event);
         }
         return events;
     }
 
-    delta_to_ui_event(kind, &message_id, field, delta)
+    delta_to_ui_event_with_part(kind, &message_id, &part_id, field, delta)
         .into_iter()
         .collect()
 }
@@ -519,10 +521,11 @@ fn translate_inline_part(
                 return Vec::new();
             }
 
+            let stream_id = stream_message_id(message_id, part_id);
             if state.parts_with_streamed_delta.contains(part_id) {
                 if should_replace_streamed_part(message_id, part, delta, &text) {
                     return vec![UiEventMessage::TextReplace {
-                        message_id: message_id.to_string(),
+                        message_id: stream_id,
                         text: DisplayPayload::inline(text),
                     }];
                 }
@@ -533,7 +536,7 @@ fn translate_inline_part(
                 Vec::new()
             } else {
                 vec![UiEventMessage::TextDelta {
-                    message_id: message_id.to_string(),
+                    message_id: stream_id,
                     text: DisplayPayload::inline(text),
                 }]
             }
@@ -544,10 +547,11 @@ fn translate_inline_part(
                 .unwrap_or("")
                 .to_string();
 
+            let stream_id = stream_message_id(message_id, part_id);
             if state.parts_with_streamed_delta.contains(part_id) {
                 if should_replace_streamed_part(message_id, part, delta, &text) {
                     return vec![UiEventMessage::ReasoningReplace {
-                        message_id: message_id.to_string(),
+                        message_id: stream_id,
                         text: DisplayPayload::inline(text),
                     }];
                 }
@@ -558,7 +562,7 @@ fn translate_inline_part(
                 Vec::new()
             } else {
                 vec![UiEventMessage::ReasoningDelta {
-                    message_id: message_id.to_string(),
+                    message_id: stream_id,
                     text: DisplayPayload::inline(text),
                 }]
             }
@@ -744,7 +748,7 @@ fn sub_session_id_from_task_output(output: &str) -> Option<String> {
 }
 
 fn tool_args_json(part: &Value, tool_state: &Value) -> String {
-    tool_state
+    let mut raw = tool_state
         .get("raw")
         .and_then(Value::as_str)
         .map(str::to_string)
@@ -753,7 +757,46 @@ fn tool_args_json(part: &Value, tool_state: &Value) -> String {
         .or_else(|| serde_json::to_string(part.get("args").unwrap_or(&Value::Null)).ok())
         .filter(|value| value != "null")
         .or_else(|| serde_json::to_string(tool_state).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+
+    // Inject OpenCode state.title so desktop/TUI can prefer display path over tool name.
+    if let Some(title) = tool_state.get("title").and_then(Value::as_str) {
+        if !title.trim().is_empty() {
+            raw = inject_display_title(&raw, title);
+        }
+    }
+    raw
+}
+
+/// Merge `_display_title` into a JSON object args blob (best-effort).
+fn inject_display_title(args_json: &str, title: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<Value>(args_json) else {
+        return args_json.to_string();
+    };
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "_display_title".into(),
+            Value::String(title.trim().to_string()),
+        );
+        return serde_json::to_string(&value).unwrap_or_else(|_| args_json.to_string());
+    }
+    if value.is_null() || args_json.trim().is_empty() || args_json == "null" {
+        return serde_json::json!({ "_display_title": title.trim() }).to_string();
+    }
+    args_json.to_string()
+}
+
+/// Bind text/reasoning UI events to an OpenCode part so multi-part messages
+/// become separate timeline segments (`message_id` + RS + `part_id`).
+/// Desktop assembler freezes non-tail segments; part keys avoid mid-timeline rewrites.
+const MESSAGE_PART_SEP: char = '\u{1e}';
+
+fn stream_message_id(message_id: &str, part_id: &str) -> String {
+    if part_id.is_empty() {
+        message_id.to_string()
+    } else {
+        format!("{message_id}{MESSAGE_PART_SEP}{part_id}")
+    }
 }
 
 fn tracked_part_kind(part: &Value) -> Option<TrackedPartKind> {
@@ -765,24 +808,26 @@ fn tracked_part_kind(part: &Value) -> Option<TrackedPartKind> {
     })
 }
 
-fn delta_to_ui_event(
+fn delta_to_ui_event_with_part(
     part_kind: TrackedPartKind,
     message_id: &str,
+    part_id: &str,
     field: &str,
     delta: String,
 ) -> Option<UiEventMessage> {
     if delta.is_empty() || message_id.is_empty() {
         return None;
     }
+    let stream_id = stream_message_id(message_id, part_id);
 
     match (part_kind, field) {
         (TrackedPartKind::Reasoning, "text" | "") => Some(UiEventMessage::ReasoningDelta {
-            message_id: message_id.to_string(),
+            message_id: stream_id,
             text: DisplayPayload::inline(delta),
         }),
         (TrackedPartKind::Text | TrackedPartKind::Other, "text" | "") => {
             Some(UiEventMessage::TextDelta {
-                message_id: message_id.to_string(),
+                message_id: stream_id,
                 text: DisplayPayload::inline(delta),
             })
         }
@@ -989,10 +1034,11 @@ mod tests {
             }"#),
         )
         .expect("translation should succeed");
+        let stream_id = format!("msg_a1{MESSAGE_PART_SEP}part_1");
         assert!(matches!(
             &delta[0],
             UiEventMessage::TextDelta { message_id, text }
-                if message_id == "msg_a1" && text == "Hello"
+                if message_id == &stream_id && text == "Hello"
         ));
 
         let final_part = translate(
@@ -1008,7 +1054,7 @@ mod tests {
         assert!(matches!(
             &final_part[0],
             UiEventMessage::TextReplace { message_id, text }
-                if message_id == "msg_a1" && text == "Hello"
+                if message_id == &stream_id && text == "Hello"
         ));
     }
 
@@ -1101,10 +1147,11 @@ mod tests {
             }"#),
         )
         .expect("translation should succeed");
+        let stream_id = format!("msg_replace{MESSAGE_PART_SEP}part_replace");
         assert!(matches!(
             &delta[0],
             UiEventMessage::TextDelta { message_id, text }
-                if message_id == "msg_replace" && text == "）.rs了鼠标CP去路 call。"
+                if message_id == &stream_id && text == "）.rs了鼠标CP去路 call。"
         ));
 
         let final_part = translate(
@@ -1120,7 +1167,7 @@ mod tests {
         assert!(matches!(
             &final_part[0],
             UiEventMessage::TextReplace { message_id, text }
-                if message_id == "msg_replace" && text == "我检查了 Minos TUI 的 opencode 翻译路径。"
+                if message_id == &stream_id && text == "我检查了 Minos TUI 的 opencode 翻译路径。"
         ));
     }
 
@@ -1159,10 +1206,11 @@ mod tests {
             }"#),
         )
         .expect("translation should succeed");
+        let stream_id = format!("msg_reasoning{MESSAGE_PART_SEP}part_reasoning");
         assert!(matches!(
             &delta[0],
             UiEventMessage::ReasoningDelta { message_id, text }
-                if message_id == "msg_reasoning" && text == "scratch"
+                if message_id == &stream_id && text == "scratch"
         ));
 
         let final_part = translate(
@@ -1178,7 +1226,7 @@ mod tests {
         assert!(matches!(
             &final_part[0],
             UiEventMessage::ReasoningReplace { message_id, text }
-                if message_id == "msg_reasoning" && text == "final reasoning"
+                if message_id == &stream_id && text == "final reasoning"
         ));
     }
 
