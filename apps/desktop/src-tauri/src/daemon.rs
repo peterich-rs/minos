@@ -179,7 +179,7 @@ pub struct SessionDto {
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptItemDto {
     pub id: String,
-    /// assistant | user | tool | tool_result | reasoning | status | error | approval | question
+    /// assistant | user | tool | tool_result | tool_error | reasoning | status | error | approval | question | subagent
     pub kind: String,
     pub role: Option<String>,
     pub text: String,
@@ -1373,10 +1373,19 @@ fn short_session_id(session_id: &str) -> String {
 }
 
 /// Folds raw UiEventMessage stream into chat-like items (aligned with TUI ChatState).
+///
+/// Timeline policy (desktop parity with mobile + TUI after 2026-07-23):
+/// - Text only mutates the **timeline tail** bubble for that segment.
+/// - Non-tail `TextReplace` (OpenCode finished-part snapshot after tools) is
+///   ignored when content is unchanged; different content appends a **new** row
+///   at the end (part segments / post-tool narration) — never rewrites above tools.
+/// - OpenCode text parts may use `message_id + RS + part_id` segment keys
+///   (see minos-ui-protocol opencode translator).
+/// - `task` tools project as a single `subagent` card; raw XML output is not a row.
 struct TranscriptAssembler {
     session_id: String,
     items: Vec<TranscriptItemDto>,
-    /// message_id → role for open messages
+    /// message_id → role for open messages (base id, without part suffix)
     open_roles: std::collections::HashMap<String, minos_ui_protocol::MessageRole>,
     counter: u64,
 }
@@ -1402,13 +1411,38 @@ impl TranscriptAssembler {
         }
     }
 
-    fn finish(self) -> Vec<TranscriptItemDto> {
+    fn finish(mut self) -> Vec<TranscriptItemDto> {
+        // History keeps raw approval/request frames after the user decided;
+        // demote cards that are followed by later agent/user progress.
+        demote_resolved_approvals_in_place(&mut self.items);
         self.items
     }
 
+    /// Mark a reverse-request card non-actionable (clears request_id).
+    fn resolve_approval_card(&mut self, request_id: &str, text: &str) {
+        for item in self.items.iter_mut().rev() {
+            if item.request_id.as_deref() == Some(request_id)
+                && (item.kind == "approval" || item.kind == "question")
+            {
+                let is_plan = item.approval_method.as_deref() == Some("x.ai/exit_plan_mode");
+                item.kind = "status".into();
+                item.text = if is_plan {
+                    "Plan approved".into()
+                } else {
+                    text.into()
+                };
+                item.request_id = None;
+                item.options = None;
+                break;
+            }
+        }
+    }
+
     fn role_of(&self, message_id: &str) -> minos_ui_protocol::MessageRole {
+        let base = base_message_id(message_id);
         self.open_roles
-            .get(message_id)
+            .get(base)
+            .or_else(|| self.open_roles.get(message_id))
             .copied()
             .unwrap_or(minos_ui_protocol::MessageRole::Assistant)
     }
@@ -1422,20 +1456,9 @@ impl TranscriptAssembler {
         )
     }
 
-    /// Last text bubble for this message_id (may sit *above* later tool rows).
-    ///
-    /// OpenCode streams `text_delta`s, then places tools on the same
-    /// `message_id`, then re-emits a full `text_replace` snapshot. If we only
-    /// match the timeline *tail*, that replace becomes a twin assistant bubble
-    /// with the same body ("现在让我读取…") after the Read tools.
-    fn find_text_item_mut(
-        &mut self,
-        message_id: &str,
-        kind: &str,
-    ) -> Option<&mut TranscriptItemDto> {
-        self.items.iter_mut().rev().find(|item| {
-            item.kind == kind && item.message_id.as_deref() == Some(message_id)
-        })
+    /// Stable id for a text/reasoning segment so live frame merges hit by id.
+    fn stable_text_id(&self, kind: &str, message_id: &str) -> String {
+        format!("{}:{kind}:{message_id}", self.session_id)
     }
 
     fn append_text(
@@ -1456,25 +1479,75 @@ impl TranscriptAssembler {
             MessageRole::System => "system",
             MessageRole::Assistant => "assistant",
         };
-        // Contiguous stream: update tail when it is still this bubble.
-        // Replace: also update a non-tail bubble for the same message_id so
-        // OpenCode's post-tool text_replace does not invent a duplicate row.
-        if replace {
-            if let Some(item) = self.find_text_item_mut(&message_id, kind) {
-                item.text = chunk;
-                item.ts_ms = ts_ms;
-                item.seq = seq;
-                return;
-            }
-        } else if self.tail_text_matches(&message_id, kind) {
+
+        // 1) Tail match → in-place stream/replace (active bubble).
+        if self.tail_text_matches(&message_id, kind) {
             if let Some(last) = self.items.last_mut() {
-                last.text.push_str(&chunk);
+                if replace {
+                    last.text = chunk;
+                } else {
+                    last.text.push_str(&chunk);
+                }
                 last.ts_ms = ts_ms;
                 last.seq = seq;
                 return;
             }
         }
-        let id = self.next_id("msg");
+
+        // 2) Non-tail TextReplace for an existing segment: freeze mid-timeline.
+        //    Same body (OpenCode finished-part snapshot) → drop.
+        //    Different body → append new row at end (new part_id / post-tool text).
+        if replace {
+            if let Some(item) = self
+                .items
+                .iter()
+                .rev()
+                .find(|i| i.kind == kind && i.message_id.as_deref() == Some(message_id.as_str()))
+            {
+                if item.text == chunk {
+                    return;
+                }
+                // Fall through to append a new bubble with the new body.
+            }
+        }
+
+        // 3) Delta when not tail (tools/status already below) → new segment at end.
+        //    Use stable id keyed by segment message_id (OpenCode may encode part_id).
+        let id = self.stable_text_id(kind, &message_id);
+        if let Some(pos) = self.items.iter().position(|i| i.id == id) {
+            // Stable id already present. Only mutate if it is still the tail.
+            if pos + 1 == self.items.len() {
+                let existing = &mut self.items[pos];
+                if replace {
+                    existing.text = chunk;
+                } else {
+                    existing.text.push_str(&chunk);
+                }
+                existing.ts_ms = ts_ms;
+                existing.seq = seq;
+                return;
+            }
+            // Id exists above later rows — append with a distinct id for the new segment.
+            self.counter += 1;
+            self.items.push(TranscriptItemDto {
+                id: format!("{id}:s{}", self.counter),
+                kind: kind.into(),
+                role: Some(kind.into()),
+                text: chunk,
+                detail: None,
+                title: None,
+                ts_ms,
+                seq,
+                message_id: Some(message_id),
+                request_id: None,
+                approval_method: None,
+                options: None,
+                approve_response: None,
+                decline_response: None,
+            });
+            return;
+        }
+
         self.items.push(TranscriptItemDto {
             id,
             kind: kind.into(),
@@ -1527,9 +1600,11 @@ impl TranscriptAssembler {
             UiEventMessage::MessageStarted {
                 message_id, role, ..
             } => {
-                self.open_roles.insert(message_id, role);
+                self.open_roles
+                    .insert(base_message_id(&message_id).to_string(), role);
             }
             UiEventMessage::MessageCompleted { message_id, .. } => {
+                self.open_roles.remove(base_message_id(&message_id));
                 self.open_roles.remove(&message_id);
             }
             UiEventMessage::TextDelta { message_id, text } => {
@@ -1577,11 +1652,23 @@ impl TranscriptAssembler {
                 args_json,
             } => {
                 let args = args_json.render_preview();
+                // OpenCode `task` → single subagent card (TUI parity); never a bare tool row.
+                if is_task_tool_name(&name) {
+                    self.upsert_subagent_from_task(
+                        seq,
+                        ts_ms,
+                        &tool_call_id,
+                        None,
+                        &name,
+                        &args,
+                        "running",
+                    );
+                    return;
+                }
                 // text = bare target (path/cmd); title = tool name. UI derives Grok verbs.
                 let target = summarize_tool_args(&name, &args);
-                let id = self.next_id("tool");
                 self.items.push(TranscriptItemDto {
-                    id: format!("{id}:{tool_call_id}"),
+                    id: stable_tool_id(&tool_call_id),
                     kind: "tool".into(),
                     role: None,
                     text: target,
@@ -1594,7 +1681,7 @@ impl TranscriptAssembler {
                     ts_ms,
                     seq,
                     message_id: Some(message_id),
-                    request_id: None,
+                    request_id: Some(tool_call_id),
                     approval_method: None,
                     options: None,
                     approve_response: None,
@@ -1607,18 +1694,48 @@ impl TranscriptAssembler {
                 is_error,
             } => {
                 let out = output.render_preview();
+                // task tool completion → update subagent card only (no XML tool_result row).
+                if self.complete_subagent_for_tool(
+                    seq,
+                    ts_ms,
+                    &tool_call_id,
+                    &out,
+                    is_error,
+                ) {
+                    return;
+                }
                 // Keep bare target in `text`; put output into `detail` for expand.
                 let mut updated = false;
+                let tool_id = stable_tool_id(&tool_call_id);
                 for item in self.items.iter_mut().rev() {
-                    if item.kind == "tool" && item.id.ends_with(&format!(":{tool_call_id}")) {
+                    if item.kind == "tool"
+                        && (item.id == tool_id
+                            || item.request_id.as_deref() == Some(tool_call_id.as_str())
+                            || item.id.ends_with(&format!(":{tool_call_id}")))
+                    {
                         item.kind = if is_error {
                             "tool_error".into()
                         } else {
                             "tool_result".into()
                         };
+                        // Refresh target from detail/args if it was a useless fallback.
+                        if tool_target_is_useless(&item.text, item.title.as_deref()) {
+                            if let Some(better) =
+                                summarize_tool_args_from_detail(item.title.as_deref(), item.detail.as_deref())
+                            {
+                                item.text = better;
+                            }
+                        }
                         let detail = truncate_str(&out, 4000);
-                        item.detail = if detail.is_empty() {
-                            None
+                        item.detail = if detail.is_empty() || is_task_xml_output(&detail) {
+                            // Never surface raw OpenCode task XML as expand body title source.
+                            if is_task_xml_output(&detail) {
+                                None
+                            } else if detail.is_empty() {
+                                None
+                            } else {
+                                Some(detail)
+                            }
                         } else {
                             Some(detail)
                         };
@@ -1629,20 +1746,41 @@ impl TranscriptAssembler {
                     }
                 }
                 if !updated {
+                    // Orphan completion: if XML task output, project as subagent not tool.
+                    if is_task_xml_output(&out) {
+                        let sub = sub_session_id_from_task_xml(&out);
+                        self.upsert_subagent_from_task(
+                            seq,
+                            ts_ms,
+                            &tool_call_id,
+                            sub.as_deref(),
+                            "task",
+                            "{}",
+                            if is_error { "failed" } else { "completed" },
+                        );
+                        return;
+                    }
                     let summary = summarize_tool_output_line(&out, is_error);
-                    self.push_simple(
-                        seq,
-                        ts_ms,
-                        if is_error {
-                            "tool_error"
+                    self.items.push(TranscriptItemDto {
+                        id: tool_id,
+                        kind: if is_error {
+                            "tool_error".into()
                         } else {
-                            "tool_result"
+                            "tool_result".into()
                         },
-                        summary,
-                        Some(tool_call_id),
-                        Some(truncate_str(&out, 4000)),
-                        None,
-                    );
+                        role: None,
+                        text: summary,
+                        detail: Some(truncate_str(&out, 4000)).filter(|s| !s.is_empty()),
+                        title: Some(tool_call_id.clone()),
+                        ts_ms,
+                        seq,
+                        message_id: None,
+                        request_id: Some(tool_call_id),
+                        approval_method: None,
+                        options: None,
+                        approve_response: None,
+                        decline_response: None,
+                    });
                 }
             }
             UiEventMessage::SessionOpened { title, agent, .. } => {
@@ -1691,28 +1829,31 @@ impl TranscriptAssembler {
             }
             UiEventMessage::SubagentSpawned {
                 sub_session_id,
+                tool_call_id,
                 agent,
+                model,
                 title,
                 prompt,
                 ..
             } => {
-                self.push_simple(
+                let desc = title
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty())
+                    .map(|s| one_line(s))
+                    .or_else(|| prompt.as_deref().map(subagent_prompt_summary));
+                self.upsert_subagent_card(
                     seq,
                     ts_ms,
-                    "status",
-                    format!(
-                        "Subagent {} · #{}{}",
-                        agent_label(agent),
-                        short_session_id(&sub_session_id),
-                        title
-                            .as_ref()
-                            .or(prompt.as_ref())
-                            .map(|t| format!(" · {t}"))
-                            .unwrap_or_default()
-                    ),
-                    Some("Subagent".into()),
-                    None,
-                    None,
+                    if tool_call_id.is_empty() {
+                        None
+                    } else {
+                        Some(tool_call_id.as_str())
+                    },
+                    Some(sub_session_id.as_str()),
+                    &agent_label(agent),
+                    model.as_deref(),
+                    "running",
+                    desc,
                 );
             }
             UiEventMessage::SubagentStatusUpdated {
@@ -1725,14 +1866,27 @@ impl TranscriptAssembler {
                     minos_ui_protocol::SubagentStatus::Failed => "failed",
                     minos_ui_protocol::SubagentStatus::Interrupted => "interrupted",
                 };
-                self.push_simple(
+                // Prefer existing card's agent/detail; never invent a second row.
+                let (agent, desc, tool) = self
+                    .find_subagent_index(None, Some(sub_session_id.as_str()))
+                    .map(|i| {
+                        let it = &self.items[i];
+                        (
+                            it.title.clone().unwrap_or_else(|| "opencode".into()),
+                            it.detail.clone(),
+                            it.request_id.clone(),
+                        )
+                    })
+                    .unwrap_or_else(|| ("opencode".into(), None, None));
+                self.upsert_subagent_card(
                     seq,
                     ts_ms,
-                    "status",
-                    format!("Subagent #{} · {label}", short_session_id(&sub_session_id)),
-                    Some("Subagent".into()),
+                    tool.as_deref(),
+                    Some(sub_session_id.as_str()),
+                    &agent,
                     None,
-                    None,
+                    label,
+                    desc,
                 );
             }
             // Product-critical Raw: user-facing reverse-requests.
@@ -1742,16 +1896,36 @@ impl TranscriptAssembler {
                     if let Some(item) = approval_item_from_payload(seq, ts_ms, &payload_json) {
                         self.items.push(item);
                     }
-                } else if kind == "approval/timeout" {
-                    self.push_simple(
-                        seq,
-                        ts_ms,
-                        "status",
-                        "Approval timed out".into(),
-                        Some("Approval".into()),
-                        None,
-                        None,
-                    );
+                } else if kind == "approval/resolved" || kind == "approval/timeout" {
+                    // Clear the matching interactive card so history reload does
+                    // not re-open a finished plan/permission reverse-request.
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload_json) {
+                        let rid = value
+                            .pointer("/params/request_id")
+                            .or_else(|| value.get("request_id"))
+                            .and_then(|v| v.as_str());
+                        if let Some(rid) = rid {
+                            self.resolve_approval_card(
+                                rid,
+                                if kind == "approval/timeout" {
+                                    "Approval timed out"
+                                } else {
+                                    "Approval resolved"
+                                },
+                            );
+                        }
+                    }
+                    if kind == "approval/timeout" {
+                        self.push_simple(
+                            seq,
+                            ts_ms,
+                            "status",
+                            "Approval timed out".into(),
+                            Some("Approval".into()),
+                            None,
+                            None,
+                        );
+                    }
                 } else if kind == "opencode/permission.updated" {
                     if let Some(item) =
                         opencode_permission_item_from_payload(seq, ts_ms, &payload_json)
@@ -1813,6 +1987,381 @@ impl TranscriptAssembler {
                 }
             }
             UiEventMessage::SessionTitleUpdated { .. } => {}
+        }
+    }
+
+    /// Locate the single subagent card for this tool/session (if any).
+    fn find_subagent_index(
+        &self,
+        tool_call_id: Option<&str>,
+        sub_session_id: Option<&str>,
+    ) -> Option<usize> {
+        self.items.iter().position(|item| {
+            if item.kind != "subagent" {
+                return false;
+            }
+            if let Some(tc) = tool_call_id.filter(|s| !s.is_empty()) {
+                if item.request_id.as_deref() == Some(tc)
+                    || item.id == stable_subagent_id(Some(tc), None)
+                    || item.id.ends_with(&format!(":tool:{tc}"))
+                {
+                    return true;
+                }
+            }
+            if let Some(sid) = sub_session_id.filter(|s| !s.is_empty()) {
+                if item.message_id.as_deref() == Some(sid)
+                    || item.id == stable_subagent_id(None, Some(sid))
+                    || item.id == format!("subagent:{sid}")
+                    || item.id == format!("subagent:ses:{sid}")
+                {
+                    return true;
+                }
+            }
+            false
+        })
+    }
+
+    /// One card only: create or in-place update. Always prefer session-scoped id.
+    fn upsert_subagent_card(
+        &mut self,
+        seq: u64,
+        ts_ms: i64,
+        tool_call_id: Option<&str>,
+        sub_session_id: Option<&str>,
+        agent_name: &str,
+        model: Option<&str>,
+        status_label: &str,
+        description: Option<String>,
+    ) {
+        let running = status_label == "running";
+        let sid = sub_session_id.filter(|s| !s.is_empty());
+        let tc = tool_call_id.filter(|s| !s.is_empty());
+        let id_short = sid
+            .map(short_session_id)
+            .or_else(|| tc.map(short_session_id))
+            .unwrap_or_else(|| "sub".into());
+        let agent = if agent_name.is_empty() || agent_name == "subagent" {
+            "opencode"
+        } else {
+            agent_name
+        };
+        let header =
+            format_subagent_header(running, agent, &id_short, model, status_label);
+        let card_id = stable_subagent_id(tc, sid);
+
+        if let Some(idx) = self.find_subagent_index(tc, sid).or_else(|| {
+            // Single orphan running card (task placed, session id arrives later).
+            if sid.is_some() {
+                let running_orphans: Vec<usize> = self
+                    .items
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, it)| {
+                        it.kind == "subagent"
+                            && it.message_id.is_none()
+                            && it.text.contains("Running")
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
+                if running_orphans.len() == 1 {
+                    return Some(running_orphans[0]);
+                }
+            }
+            None
+        }) {
+            let item = &mut self.items[idx];
+            item.id = card_id;
+            item.kind = "subagent".into();
+            item.text = header;
+            // Keep a real agent label; don't clobber "opencode" with placeholder "subagent".
+            if agent != "subagent" {
+                item.title = Some(agent.to_string());
+            } else if item.title.as_deref().unwrap_or("").is_empty() {
+                item.title = Some("opencode".into());
+            }
+            if let Some(d) = description {
+                if !d.is_empty() {
+                    item.detail = Some(d);
+                }
+            }
+            if let Some(s) = sid {
+                item.message_id = Some(s.to_string());
+            }
+            if let Some(t) = tc {
+                item.request_id = Some(t.to_string());
+            }
+            item.ts_ms = ts_ms;
+            item.seq = seq;
+            return;
+        }
+
+        self.items.push(TranscriptItemDto {
+            id: card_id,
+            kind: "subagent".into(),
+            role: None,
+            text: header,
+            detail: description.filter(|d| !d.is_empty()),
+            title: Some(agent.to_string()),
+            ts_ms,
+            seq,
+            message_id: sid.map(str::to_string),
+            request_id: tc.map(str::to_string),
+            approval_method: None,
+            options: None,
+            approve_response: None,
+            decline_response: None,
+        });
+    }
+
+    fn upsert_subagent_from_task(
+        &mut self,
+        seq: u64,
+        ts_ms: i64,
+        tool_call_id: &str,
+        sub_session_id: Option<&str>,
+        _name: &str,
+        args_json: &str,
+        status_label: &str,
+    ) {
+        let (description, subagent_type, prompt_summary) = parse_task_tool_fields(args_json);
+        let agent_name = subagent_type
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "opencode".into());
+        let desc = description
+            .filter(|s| !s.is_empty())
+            .or(prompt_summary);
+        self.upsert_subagent_card(
+            seq,
+            ts_ms,
+            if tool_call_id.is_empty() {
+                None
+            } else {
+                Some(tool_call_id)
+            },
+            sub_session_id,
+            &agent_name,
+            None,
+            status_label,
+            desc,
+        );
+    }
+
+    /// Returns true when completion was absorbed by a subagent card.
+    fn complete_subagent_for_tool(
+        &mut self,
+        seq: u64,
+        ts_ms: i64,
+        tool_call_id: &str,
+        output: &str,
+        is_error: bool,
+    ) -> bool {
+        let from_xml = sub_session_id_from_task_xml(output);
+        let idx = self.find_subagent_index(Some(tool_call_id), from_xml.as_deref());
+        // Only absorb when we already have a task/subagent card or task XML output.
+        if idx.is_none() && !is_task_xml_output(output) {
+            return false;
+        }
+        let status = if is_error { "failed" } else { "completed" };
+        let (agent, desc) = idx
+            .map(|i| {
+                (
+                    self.items[i]
+                        .title
+                        .clone()
+                        .unwrap_or_else(|| "opencode".into()),
+                    self.items[i].detail.clone(),
+                )
+            })
+            .unwrap_or_else(|| ("opencode".into(), None));
+        self.upsert_subagent_card(
+            seq,
+            ts_ms,
+            Some(tool_call_id),
+            from_xml.as_deref(),
+            &agent,
+            None,
+            status,
+            desc,
+        );
+        true
+    }
+}
+
+/// Record separator used by OpenCode translator to bind text events to part_id.
+const MESSAGE_PART_SEP: char = '\u{1e}';
+
+fn base_message_id(message_id: &str) -> &str {
+    message_id
+        .split(MESSAGE_PART_SEP)
+        .next()
+        .unwrap_or(message_id)
+}
+
+fn stable_tool_id(tool_call_id: &str) -> String {
+    format!("tool:{tool_call_id}")
+}
+
+/// Canonical id: prefer sub_session once known so spawn/status/complete share one row.
+fn stable_subagent_id(tool_call_id: Option<&str>, sub_session_id: Option<&str>) -> String {
+    if let Some(sid) = sub_session_id.filter(|s| !s.is_empty()) {
+        return format!("subagent:{sid}");
+    }
+    if let Some(tc) = tool_call_id.filter(|s| !s.is_empty()) {
+        return format!("subagent:tool:{tc}");
+    }
+    "subagent:unknown".into()
+}
+
+fn is_task_tool_name(name: &str) -> bool {
+    let n = name.trim().to_ascii_lowercase();
+    n == "task" || n.ends_with(":task") || n == "subagent" || n.contains("collabagent")
+}
+
+fn is_task_xml_output(out: &str) -> bool {
+    let t = out.trim_start();
+    t.starts_with("<task") || t.contains("<task id=")
+}
+
+fn sub_session_id_from_task_xml(output: &str) -> Option<String> {
+    let task_tag_start = output.find("<task")?;
+    let tag = &output[task_tag_start..];
+    let tag_end = tag.find('>').unwrap_or(tag.len());
+    let tag = &tag[..tag_end];
+    let id_key = "id=\"";
+    let id_start = tag.find(id_key)? + id_key.len();
+    let id_end = tag[id_start..].find('"')? + id_start;
+    let id = tag[id_start..id_end].trim();
+    (!id.is_empty()).then(|| id.to_string())
+}
+
+fn subagent_prompt_summary(prompt: &str) -> String {
+    let first_line = prompt.lines().next().unwrap_or("").trim();
+    let mut summary: String = first_line.chars().take(100).collect();
+    if first_line.chars().count() > 100 {
+        summary.push('…');
+    }
+    summary
+}
+
+fn format_subagent_header(
+    running: bool,
+    agent: &str,
+    id_short: &str,
+    model: Option<&str>,
+    status: &str,
+) -> String {
+    let verb = if running { "Running" } else { "Ran" };
+    let mut s = format!("{verb} subagent {agent} #{id_short}");
+    if let Some(m) = model.filter(|m| !m.is_empty()) {
+        s.push_str(" · ");
+        s.push_str(m);
+    }
+    s.push_str(" · ");
+    s.push_str(status);
+    s
+}
+
+fn parse_task_tool_fields(
+    args_json: &str,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let Some(value) = parse_tool_args_json(args_json) else {
+        return (None, None, None);
+    };
+    let description = find_tool_stringish(
+        &value,
+        &["description", "title", "_display_title", "display_title"],
+    )
+    .map(|s| truncate_str(&one_line(&s), 120));
+    let subagent_type =
+        find_tool_stringish(&value, &["subagent_type", "subagentType", "agent", "type"]);
+    let prompt = find_tool_stringish(&value, &["prompt", "instructions", "task"])
+        .map(|s| subagent_prompt_summary(&s));
+    (description, subagent_type, prompt)
+}
+
+fn tool_target_is_useless(target: &str, tool_name: Option<&str>) -> bool {
+    let t = target.trim();
+    if t.is_empty() || t == "…" || t == "..." {
+        return true;
+    }
+    if let Some(name) = tool_name {
+        let n = name.trim().to_ascii_lowercase();
+        let tl = t.to_ascii_lowercase();
+        if tl == n || tl == tool_subject_from_name(name).to_ascii_lowercase() {
+            return true;
+        }
+    }
+    is_markupish_tool_line(t)
+}
+
+fn summarize_tool_args_from_detail(
+    tool_name: Option<&str>,
+    detail: Option<&str>,
+) -> Option<String> {
+    let detail = detail?;
+    let name = tool_name.unwrap_or("tool");
+    let target = summarize_tool_args(name, detail);
+    if tool_target_is_useless(&target, Some(name)) {
+        None
+    } else {
+        Some(target)
+    }
+}
+
+fn is_markupish_tool_line(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with('<')
+        && (t.starts_with("<task")
+            || t.starts_with("<path")
+            || t.starts_with("<type")
+            || t.starts_with("<content")
+            || t.starts_with("<tool")
+            || t.starts_with("<?xml"))
+}
+
+/// Kinds that prove the agent/user continued past a parked reverse-request.
+fn is_approval_progress_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "assistant"
+            | "text"
+            | "reasoning"
+            | "tool"
+            | "tool_result"
+            | "tool_error"
+            | "subagent"
+            | "user"
+    )
+}
+
+/// Demote approval/question cards followed by later progress (history repair).
+fn demote_resolved_approvals_in_place(items: &mut [TranscriptItemDto]) {
+    let mut max_progress_seq: Option<u64> = None;
+    for item in items.iter() {
+        if is_approval_progress_kind(&item.kind) {
+            max_progress_seq = Some(max_progress_seq.map_or(item.seq, |m| m.max(item.seq)));
+        }
+    }
+    let Some(max_progress_seq) = max_progress_seq else {
+        return;
+    };
+    for item in items.iter_mut() {
+        if (item.kind == "approval" || item.kind == "question")
+            && item.request_id.is_some()
+            && item.seq < max_progress_seq
+        {
+            let is_plan = item.approval_method.as_deref() == Some("x.ai/exit_plan_mode");
+            let is_question = item.kind == "question";
+            item.kind = "status".into();
+            item.text = if is_plan {
+                "Plan approved".into()
+            } else if is_question {
+                "Question answered".into()
+            } else {
+                "Approval resolved".into()
+            };
+            item.request_id = None;
+            item.options = None;
         }
     }
 }
@@ -2188,32 +2737,47 @@ fn truncate_str(s: &str, max: usize) -> String {
 /// Bare target for a tool header (path/cmd/pattern — no `file=` labels).
 /// Agent-agnostic: consumes unified translator names (`"read: path"`, …).
 /// Mirrors minos-tui `translation/tool_summary.rs` essentials.
+///
+/// Prefer OpenCode `state.title` / path / command. Never return the bare tool
+/// name as the target (avoids "Reading read"). Never return markup first lines.
 fn summarize_tool_args(tool_name: &str, args_json: &str) -> String {
     let subject_fallback = tool_subject_from_name(tool_name);
     let Some(value) = parse_tool_args_json(args_json) else {
-        if subject_fallback != tool_name.trim() && !subject_fallback.is_empty() {
-            return truncate_str(&one_line(subject_fallback), 120);
+        let line = one_line(args_json);
+        if is_markupish_tool_line(&line) {
+            return String::new();
         }
-        return truncate_str(&one_line(args_json), 180);
-    };
-    if value.is_null() {
-        if subject_fallback != tool_name.trim() && !subject_fallback.is_empty() {
+        if subject_fallback != tool_name.trim()
+            && !subject_fallback.is_empty()
+            && subject_fallback.to_ascii_lowercase() != tool_name.trim().to_ascii_lowercase()
+        {
             return truncate_str(&one_line(subject_fallback), 120);
         }
         return String::new();
+    };
+    if value.is_null() {
+        return String::new();
+    }
+
+    // OpenCode / translator may inject display title (state.title).
+    if let Some(title) = find_tool_stringish(
+        &value,
+        &["_display_title", "display_title", "title"],
+    ) {
+        let t = one_line(&title);
+        if !t.is_empty()
+            && !is_markupish_tool_line(&t)
+            && t.to_ascii_lowercase() != tool_name.trim().to_ascii_lowercase()
+        {
+            return truncate_str(&t, 120);
+        }
     }
 
     let kind = ToolKind::from_tool_name(tool_name);
-    match kind {
-        ToolKind::Read | ToolKind::Edit | ToolKind::List => {
-            if let Some(path) = find_tool_path(&value) {
-                return truncate_str(&one_line(&path), 120);
-            }
-        }
+    let candidate = match kind {
+        ToolKind::Read | ToolKind::Edit | ToolKind::List => find_tool_path(&value),
         ToolKind::Execute => {
-            if let Some(cmd) = find_tool_stringish(&value, &["cmd", "command", "script", "shell"]) {
-                return truncate_str(&one_line(&cmd), 120);
-            }
+            find_tool_stringish(&value, &["cmd", "command", "script", "shell", "description"])
         }
         ToolKind::Search => {
             let pattern = find_tool_stringish(
@@ -2221,73 +2785,69 @@ fn summarize_tool_args(tool_name: &str, args_json: &str) -> String {
                 &["pattern", "query", "regex", "search", "grep", "needle"],
             );
             let path = find_tool_path(&value);
-            return match (pattern, path) {
-                (Some(p), Some(path)) => {
-                    truncate_str(&format!("{} in {}", one_line(&p), one_line(&path)), 140)
-                }
-                (Some(p), None) => truncate_str(&one_line(&p), 120),
-                (None, Some(path)) => truncate_str(&one_line(&path), 120),
-                (None, None) => String::new(),
-            };
+            match (pattern, path) {
+                (Some(p), Some(path)) => Some(format!("{} in {}", one_line(&p), one_line(&path))),
+                (Some(p), None) => Some(p),
+                (None, Some(path)) => Some(path),
+                (None, None) => None,
+            }
         }
         ToolKind::WebSearch | ToolKind::WebFetch => {
-            if let Some(q) = find_tool_stringish(&value, &["query", "url", "uri", "href", "q"]) {
-                return truncate_str(&one_line(&q), 120);
-            }
+            find_tool_stringish(&value, &["query", "url", "uri", "href", "q"])
         }
-        ToolKind::Skill => {
-            if let Some(skill) = find_tool_stringish(
-                &value,
-                &[
-                    "skill",
-                    "skill_name",
-                    "skillName",
-                    "name",
-                    "skill_path",
-                    "skillPath",
-                ],
-            ) {
-                return truncate_str(&one_line(&skill), 90);
-            }
+        ToolKind::Skill => find_tool_stringish(
+            &value,
+            &[
+                "skill",
+                "skill_name",
+                "skillName",
+                "name",
+                "skill_path",
+                "skillPath",
+            ],
+        ),
+        ToolKind::Other => None,
+    };
+
+    if let Some(c) = candidate {
+        let t = one_line(&c);
+        if !t.is_empty()
+            && !is_markupish_tool_line(&t)
+            && t.to_ascii_lowercase() != tool_name.trim().to_ascii_lowercase()
+        {
+            return truncate_str(&t, 140);
         }
-        ToolKind::Other => {}
     }
 
-    if tool_name.to_ascii_lowercase().contains("task")
+    if is_task_tool_name(tool_name)
         || tool_name.eq_ignore_ascii_case("todo")
         || tool_name.eq_ignore_ascii_case("todowrite")
         || tool_name.eq_ignore_ascii_case("todo_write")
     {
-        if let Some(task) = find_tool_stringish(
-            &value,
-            &[
-                "task",
-                "description",
-                "prompt",
-                "instructions",
-                "question",
-                "subagent_type",
-                "subagentType",
-            ],
-        ) {
+        if let Some(task) =
+            find_tool_stringish(&value, &["description", "title", "subagent_type", "subagentType"])
+        {
             return truncate_str(&one_line(&task), 110);
         }
     }
 
     if let Some(path) = find_tool_path(&value) {
-        return truncate_str(&one_line(&path), 120);
+        let t = one_line(&path);
+        if !is_markupish_tool_line(&t) {
+            return truncate_str(&t, 120);
+        }
     }
     if let Some(cmd) = find_tool_stringish(&value, &["cmd", "command", "script", "shell"]) {
         return truncate_str(&one_line(&cmd), 120);
     }
-    if let Some(desc) = find_tool_stringish(&value, &["description", "task", "prompt", "query"]) {
-        return truncate_str(&one_line(&desc), 120);
+    if let Some(desc) = find_tool_stringish(&value, &["description", "query"]) {
+        let t = one_line(&desc);
+        if !is_markupish_tool_line(&t) {
+            return truncate_str(&t, 120);
+        }
     }
-    if subject_fallback != tool_name.trim() && !subject_fallback.is_empty() {
-        return truncate_str(&one_line(subject_fallback), 120);
-    }
-
-    compact_tool_args_json(args_json).unwrap_or_default()
+    // Never fall back to the bare tool name ("read") — UI would show "Reading read".
+    String::new()
 }
 
 /// Subject after unified `"kind: subject"` tool name, else full name.
@@ -2334,15 +2894,30 @@ fn summarize_tool_output_line(out: &str, is_error: bool) -> String {
             "Tool finished".into()
         };
     }
+    if is_task_xml_output(trimmed) {
+        return if is_error {
+            "Subagent failed".into()
+        } else {
+            "Subagent finished".into()
+        };
+    }
     if is_diff_like(trimmed) {
         let (add, del) = count_diff_lines(trimmed);
         return format!("+{add}/-{del}");
     }
+    // Skip OpenCode XML / markup first lines (`<path>`, `<type>`, …).
     let one = trimmed
         .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("")
-        .trim();
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !is_markupish_tool_line(l))
+        .unwrap_or("");
+    if one.is_empty() {
+        return if is_error {
+            "Tool failed".into()
+        } else {
+            "Tool finished".into()
+        };
+    }
     truncate_str(&one_line(one), 100)
 }
 
@@ -2448,6 +3023,7 @@ fn parse_tool_args_json(args_json: &str) -> Option<serde_json::Value> {
     serde_json::from_str(trimmed).ok()
 }
 
+#[allow(dead_code)] // retained for compact JSON fallback / debugging
 fn compact_tool_args_json(args_json: &str) -> Option<String> {
     let value = parse_tool_args_json(args_json)?;
     if value.is_null() {
@@ -3050,11 +3626,12 @@ mod transcript_assembler_tests {
     use minos_ui_protocol::{MessageRole, UiEventMessage};
 
     #[test]
-    fn text_replace_after_tools_does_not_duplicate_assistant_bubble() {
-        // Reproduces OpenCode seq pattern from daemon.sqlite thread 91fbcdd1:
-        // text_delta* → tool_call_placed(read) → text_replace(full same narration).
+    fn text_replace_same_body_after_tools_freezes_mid_timeline() {
+        // OpenCode: text_delta → tool → text_replace(full same narration snapshot).
+        // Must NOT rewrite the bubble above tools, and must NOT twin.
         let mut a = TranscriptAssembler::new("thr-opencode".into());
         let mid = "msg_f83e32698001L2Zjg3C87TJQ45".to_string();
+        let body = "现在让我读取 workspace-store";
         a.ingest_frame(
             1,
             1,
@@ -3066,18 +3643,17 @@ mod transcript_assembler_tests {
                 },
                 UiEventMessage::TextDelta {
                     message_id: mid.clone(),
-                    text: "现在让我读取 workspace-store".into(),
+                    text: body.into(),
                 },
                 UiEventMessage::ToolCallPlaced {
                     message_id: mid.clone(),
                     tool_call_id: "call_read_1".into(),
                     name: "read".into(),
-                    args_json: r#"{"path":"workspace-store.ts"}"#.into(),
+                    args_json: r#"{"filePath":"workspace-store.ts"}"#.into(),
                 },
                 UiEventMessage::TextReplace {
                     message_id: mid.clone(),
-                    text: "现在让我读取 workspace-store.ts 的 sendMessage 区域、Rust 文件以及 list-identity.ts。"
-                        .into(),
+                    text: body.into(),
                 },
             ],
         );
@@ -3086,17 +3662,181 @@ mod transcript_assembler_tests {
         assert_eq!(
             assistants.len(),
             1,
-            "expected one assistant bubble, got {:?}",
+            "same-body replace after tools must not twin: {:?}",
             items
                 .iter()
                 .map(|i| (i.kind.as_str(), i.text.as_str()))
                 .collect::<Vec<_>>()
         );
-        assert_eq!(
-            assistants[0].text,
-            "现在让我读取 workspace-store.ts 的 sendMessage 区域、Rust 文件以及 list-identity.ts。"
-        );
+        assert_eq!(assistants[0].text, body);
         assert!(items.iter().any(|i| i.kind == "tool"));
+        // Tool must sit *after* the frozen assistant row.
+        let a_pos = items.iter().position(|i| i.kind == "assistant").unwrap();
+        let t_pos = items.iter().position(|i| i.kind == "tool").unwrap();
+        assert!(a_pos < t_pos);
+    }
+
+    #[test]
+    fn text_replace_new_body_after_tools_appends_at_end() {
+        let mut a = TranscriptAssembler::new("thr-parts".into());
+        let mid = "msg_1".to_string();
+        a.ingest_frame(
+            1,
+            1,
+            vec![
+                UiEventMessage::MessageStarted {
+                    message_id: mid.clone(),
+                    role: MessageRole::Assistant,
+                    started_at_ms: 0,
+                },
+                UiEventMessage::TextDelta {
+                    message_id: mid.clone(),
+                    text: "first segment".into(),
+                },
+                UiEventMessage::ToolCallPlaced {
+                    message_id: mid.clone(),
+                    tool_call_id: "c1".into(),
+                    name: "read".into(),
+                    args_json: r#"{"filePath":"a.ts"}"#.into(),
+                },
+                // Different body (new part / post-tool narration) → new row at end.
+                UiEventMessage::TextReplace {
+                    message_id: format!("{mid}\u{1e}prt_2"),
+                    text: "second segment after tools".into(),
+                },
+            ],
+        );
+        let items = a.finish();
+        let kinds: Vec<_> = items.iter().map(|i| i.kind.as_str()).collect();
+        assert_eq!(kinds, vec!["assistant", "tool", "assistant"]);
+        assert_eq!(items[0].text, "first segment");
+        assert_eq!(items[2].text, "second segment after tools");
+    }
+
+    #[test]
+    fn task_tool_projects_single_subagent_card_not_xml() {
+        let mut a = TranscriptAssembler::new("thr-task".into());
+        a.ingest_frame(
+            1,
+            1,
+            vec![
+                UiEventMessage::ToolCallPlaced {
+                    message_id: "m1".into(),
+                    tool_call_id: "call_task".into(),
+                    name: "task".into(),
+                    args_json: r#"{"description":"Explore desktop","prompt":"long prompt here\nline2","subagent_type":"explore"}"#.into(),
+                },
+                UiEventMessage::SubagentSpawned {
+                    parent_session_id: "thr-task".into(),
+                    sub_session_id: "ses_072f".into(),
+                    tool_call_id: "call_task".into(),
+                    agent: minos_domain::AgentName::Opencode,
+                    model: None,
+                    prompt: Some("Explore the desktop architecture of the project at /long/path very thoroughly...".into()),
+                    title: Some("Explore desktop".into()),
+                },
+                UiEventMessage::ToolCallCompleted {
+                    tool_call_id: "call_task".into(),
+                    output: r#"<task id="ses_072f" state="completed">done</task>"#.into(),
+                    is_error: false,
+                },
+                UiEventMessage::SubagentStatusUpdated {
+                    sub_session_id: "ses_072f".into(),
+                    status: minos_ui_protocol::SubagentStatus::Completed,
+                },
+            ],
+        );
+        let items = a.finish();
+        let subs: Vec<_> = items.iter().filter(|i| i.kind == "subagent").collect();
+        assert_eq!(
+            subs.len(),
+            1,
+            "expected one subagent card, got {:?}",
+            items
+                .iter()
+                .map(|i| (i.kind.as_str(), i.text.as_str()))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !items.iter().any(|i| i.kind == "tool" || i.kind == "tool_result"),
+            "task must not leave raw tool rows"
+        );
+        assert!(
+            !subs[0].text.contains("<task"),
+            "header must not contain XML: {}",
+            subs[0].text
+        );
+        assert!(subs[0].text.contains("ses_072f") || subs[0].text.contains("#ses_072"));
+        assert!(
+            subs[0]
+                .detail
+                .as_deref()
+                .is_some_and(|d| d.contains("Explore desktop") && d.len() < 200),
+            "detail should be short description, got {:?}",
+            subs[0].detail
+        );
+        assert!(subs[0].text.contains("completed") || subs[0].text.starts_with("Ran"));
+        assert_eq!(subs[0].id, "subagent:ses_072f");
+    }
+
+    #[test]
+    fn subagent_status_only_frame_does_not_spawn_second_card_in_full_history() {
+        // Simulate: running card (tool id) then later status-only with session id.
+        let mut a = TranscriptAssembler::new("thr-task2".into());
+        a.ingest_frame(
+            1,
+            1,
+            vec![UiEventMessage::ToolCallPlaced {
+                message_id: "m1".into(),
+                tool_call_id: "call_only".into(),
+                name: "task".into(),
+                args_json: r#"{"description":"Do work","subagent_type":"explore"}"#.into(),
+            }],
+        );
+        a.ingest_frame(
+            2,
+            2,
+            vec![UiEventMessage::SubagentStatusUpdated {
+                sub_session_id: "ses_abc".into(),
+                status: minos_ui_protocol::SubagentStatus::Completed,
+            }],
+        );
+        let items = a.finish();
+        let subs: Vec<_> = items.iter().filter(|i| i.kind == "subagent").collect();
+        assert_eq!(
+            subs.len(),
+            1,
+            "running→completed must stay one card: {:?}",
+            items
+                .iter()
+                .map(|i| (i.id.as_str(), i.text.as_str()))
+                .collect::<Vec<_>>()
+        );
+        assert!(subs[0].text.contains("completed") || subs[0].text.starts_with("Ran"));
+    }
+
+    #[test]
+    fn read_tool_uses_path_not_tool_name_as_target() {
+        let mut a = TranscriptAssembler::new("thr-read".into());
+        a.ingest_frame(
+            1,
+            1,
+            vec![UiEventMessage::ToolCallPlaced {
+                message_id: "m1".into(),
+                tool_call_id: "c_read".into(),
+                name: "read".into(),
+                args_json: r#"{"filePath":"/Users/x/code/foo.ts","_display_title":"foo.ts"}"#.into(),
+            }],
+        );
+        let items = a.finish();
+        let tool = items.iter().find(|i| i.kind == "tool").expect("tool");
+        assert_ne!(tool.text, "read");
+        assert!(
+            tool.text.contains("foo.ts") || tool.text.contains("filePath") || !tool.text.is_empty(),
+            "target={}",
+            tool.text
+        );
+        assert!(!tool.text.eq_ignore_ascii_case("read"));
     }
 }
 
