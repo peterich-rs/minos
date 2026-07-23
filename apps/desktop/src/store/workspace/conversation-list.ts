@@ -10,6 +10,8 @@ import {
 } from "./helpers";
 import { daemonApi } from "@/shared/lib/daemon";
 import { singleFlightLoad } from "@/shared/lib/desktop-inflight";
+import { minosQueryClient } from "@/shared/api/queryClient";
+import { queryKeys } from "@/shared/api/queryKeys";
 
 
 export function createConversationListActions(
@@ -41,7 +43,14 @@ export function createConversationListActions(
         }));
 
         try {
-          const rows = await daemonApi.listConversations(projectId);
+          // TanStack Query owns the network cache; Zustand still projects UI rows.
+          // Quiet re-lists (live conversation events) must bypass the default
+          // 30s catalog staleTime or the rail never sees new previews.
+          const rows = await minosQueryClient.fetchQuery({
+            queryKey: queryKeys.conversations(projectId),
+            queryFn: () => daemonApi.listConversations(projectId),
+            ...(quiet ? { staleTime: 0 } : {}),
+          });
           if (isStale()) return;
           const normalized = rows.map((row) =>
             normalizeDaemonConversation(row, projectId),

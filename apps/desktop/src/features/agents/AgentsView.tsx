@@ -2,10 +2,10 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2,
   CircleDashed,
@@ -17,9 +17,14 @@ import {
 } from "lucide-react";
 import { agentMeta, type AgentRuntime } from "@/shared/lib/mock-data";
 import { useWorkspaceStore } from "@/store/workspace-store";
-import { daemonApi, isTauriRuntime } from "@/shared/lib/daemon";
+import { daemonApi } from "@/shared/lib/daemon";
 import { validateProfileName } from "@/shared/lib/agent-route";
 import { cn } from "@/shared/lib/utils";
+import {
+  useAgentProfilesQuery,
+  useModelsQuery,
+} from "@/shared/api/hooks";
+import { queryKeys } from "@/shared/api/queryKeys";
 import {
   defaultEffortForModel,
   defaultRuntimeId,
@@ -48,31 +53,35 @@ export function AgentsView() {
   const clisStatus = useWorkspaceStore((s) => s.clisStatus);
   const loadClis = useWorkspaceStore((s) => s.loadClis);
   const source = useWorkspaceStore((s) => s.source);
+  const queryClient = useQueryClient();
 
-  const [profiles, setProfiles] = useState<AgentProfile[]>([]);
-  const [profilesLoading, setProfilesLoading] = useState(false);
+  const profilesQuery = useAgentProfilesQuery();
+  const profiles = (profilesQuery.data ?? []) as AgentProfile[];
+  const profilesLoading = profilesQuery.isLoading || profilesQuery.isFetching;
+
   const [createOpen, setCreateOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadProfiles = useCallback(async () => {
-    if (!isTauriRuntime() || source !== "daemon") return;
-    setProfilesLoading(true);
-    try {
-      const res = await daemonApi.listAgentProfiles();
-      setProfiles(res.profiles ?? []);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setProfilesLoading(false);
-    }
-  }, [source]);
+    await queryClient.invalidateQueries({ queryKey: queryKeys.agentProfiles });
+  }, [queryClient]);
 
   useEffect(() => {
     if (source !== "daemon") return;
     void loadClis();
-    void loadProfiles();
-  }, [source, loadClis, loadProfiles]);
+  }, [source, loadClis]);
+
+  useEffect(() => {
+    if (profilesQuery.error) {
+      setError(
+        profilesQuery.error instanceof Error
+          ? profilesQuery.error.message
+          : String(profilesQuery.error),
+      );
+    } else if (profilesQuery.isSuccess) {
+      setError(null);
+    }
+  }, [profilesQuery.error, profilesQuery.isSuccess]);
 
   const phase = clisStatus.phase;
 
@@ -328,46 +337,42 @@ function CreateAgentDialog({
   const [model, setModel] = useState("");
   const [customModel, setCustomModel] = useState("");
   const [effort, setEffort] = useState("");
-  const [models, setModels] = useState<ModelCatalogEntry[]>([]);
-  const [modelsSource, setModelsSource] = useState("");
-  const [loadingModels, setLoadingModels] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const loadGen = useRef(0);
 
-  const loadModels = useCallback(async (rt: string) => {
-    const gen = ++loadGen.current;
-    setLoadingModels(true);
-    // Clear immediately so UI never shows the previous runtime's list.
-    setModels([]);
-    setModel("");
+  const queryClient = useQueryClient();
+  const modelsQuery = useModelsQuery(runtime);
+  const models = (modelsQuery.data?.models ?? []) as ModelCatalogEntry[];
+  const modelsSource = modelsQuery.data?.source ?? "";
+  const loadingModels = modelsQuery.isLoading || modelsQuery.isFetching;
+  const refreshModels = useCallback(() => {
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.models(runtime),
+    });
+  }, [queryClient, runtime]);
+
+  // Reset selection when runtime catalog changes.
+  useEffect(() => {
     setCustomModel("");
-    setModelsSource("");
-    setEffort("");
-    try {
-      const res = await daemonApi.listModels(rt);
-      if (gen !== loadGen.current) return;
-      const list = res.models ?? [];
-      setModels(list);
-      setModelsSource(res.source ?? "");
-      const def = list.find((m) => m.is_default) ?? list[0] ?? null;
-      setModel(def?.id ?? "");
-      setEffort(defaultEffortForModel(def));
-      setErr(null);
-    } catch (e) {
-      if (gen !== loadGen.current) return;
-      setModels([]);
+    if (modelsQuery.error) {
       setModel("");
       setEffort("");
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      if (gen === loadGen.current) setLoadingModels(false);
+      setErr(
+        modelsQuery.error instanceof Error
+          ? modelsQuery.error.message
+          : String(modelsQuery.error),
+      );
+      return;
     }
-  }, []);
-
-  useEffect(() => {
-    void loadModels(runtime);
-  }, [runtime, loadModels]);
+    if (!modelsQuery.isSuccess) return;
+    const list = models;
+    const def = list.find((m) => m.is_default) ?? list[0] ?? null;
+    setModel(def?.id ?? "");
+    setEffort(defaultEffortForModel(def));
+    setErr(null);
+    // Only re-seed defaults when the catalog identity changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- models list from query
+  }, [runtime, modelsQuery.isSuccess, modelsQuery.dataUpdatedAt, modelsQuery.error]);
 
   const selectedModelMeta = models.find((m) => m.id === model);
   const effortOptions = effortOptionsForModel(selectedModelMeta);
@@ -514,7 +519,7 @@ function CreateAgentDialog({
               <button
                 type="button"
                 title="Refresh models for this runtime"
-                onClick={() => void loadModels(runtime)}
+                onClick={() => refreshModels()}
                 className="inline-flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-[11px] text-ink-muted hover:bg-white hover:text-ink"
               >
                 <RefreshCw

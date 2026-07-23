@@ -11,6 +11,8 @@ import {
 } from "@/shared/lib/session-list-projection";
 import { daemonApi } from "@/shared/lib/daemon";
 import { singleFlightLoad } from "@/shared/lib/desktop-inflight";
+import { minosQueryClient } from "@/shared/api/queryClient";
+import { queryKeys } from "@/shared/api/queryKeys";
 
 
 export function createInspectorActions(
@@ -42,7 +44,12 @@ export function createInspectorActions(
         }));
 
         try {
-          const sessions = await daemonApi.listSessions(conversationId);
+          // RQ indexes conversation sessions; Entity projection stays Zustand.
+          const sessions = await minosQueryClient.fetchQuery({
+            queryKey: queryKeys.inspectorSessions(conversationId),
+            queryFn: () => daemonApi.listSessions(conversationId),
+            ...(quiet ? { staleTime: 0 } : {}),
+          });
           if (isStale()) return;
 
           const daemonSessions = sessions.map(toUiSession);

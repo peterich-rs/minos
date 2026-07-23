@@ -14,6 +14,8 @@ import {
 } from "./projection";
 import { patchSessionEntity } from "@/shared/lib/session-entity";
 import { daemonApi } from "@/shared/lib/daemon";
+import { minosQueryClient } from "@/shared/api/queryClient";
+import { queryKeys } from "@/shared/api/queryKeys";
 import { transcriptHasPendingApproval } from "@/shared/lib/session-status";
 import {
   parseAgentRouting,
@@ -443,6 +445,15 @@ export function createUseCasesActions(
       }
 
       await quietRefreshConversationSlices(get, conversationId);
+      await minosQueryClient.invalidateQueries({
+        queryKey: queryKeys.conversations(conv.projectId),
+      });
+      await minosQueryClient.invalidateQueries({
+        queryKey: queryKeys.projectSessions(conv.projectId),
+      });
+      await minosQueryClient.invalidateQueries({
+        queryKey: queryKeys.inspectorSessions(conversationId),
+      });
       await get().loadConversations(conv.projectId);
       set({ actionError: null });
     } catch (e) {
@@ -582,6 +593,15 @@ export function createUseCasesActions(
       }
 
       await quietRefreshConversationSlices(get, conversationId);
+      await minosQueryClient.invalidateQueries({
+        queryKey: queryKeys.conversations(conv.projectId),
+      });
+      await minosQueryClient.invalidateQueries({
+        queryKey: queryKeys.projectSessions(conv.projectId),
+      });
+      await minosQueryClient.invalidateQueries({
+        queryKey: queryKeys.inspectorSessions(conversationId),
+      });
       await get().loadConversations(conv.projectId);
       set({ actionError: null });
     } catch (e) {
@@ -615,6 +635,9 @@ export function createUseCasesActions(
       return id;
     }
     const created = await daemonApi.createConversation(projectId, title);
+    await minosQueryClient.invalidateQueries({
+      queryKey: queryKeys.conversations(projectId),
+    });
     await get().loadConversations(projectId);
     return created.id;
   },

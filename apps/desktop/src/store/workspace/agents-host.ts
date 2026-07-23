@@ -4,6 +4,8 @@
 import type { WorkspaceGet, WorkspaceSet, WorkspaceState } from "./types";
 import { bumpStatus } from "./helpers";
 import { daemonApi } from "@/shared/lib/daemon";
+import { minosQueryClient } from "@/shared/api/queryClient";
+import { queryKeys } from "@/shared/api/queryKeys";
 
 
 export function createAgentsHostActions(
@@ -22,7 +24,11 @@ export function createAgentsHostActions(
     const isStale = () => get().clisStatus.generation !== generation;
     set({ clisStatus: next });
     try {
-      const clis = (await daemonApi.listClis()).map((c) => ({
+      const raw = await minosQueryClient.fetchQuery({
+        queryKey: queryKeys.clis,
+        queryFn: () => daemonApi.listClis(),
+      });
+      const clis = raw.map((c) => ({
         agent: c.agent,
         displayName: c.displayName,
         installed: c.installed,

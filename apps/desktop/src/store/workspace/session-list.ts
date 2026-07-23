@@ -10,6 +10,8 @@ import { daemonApi } from "@/shared/lib/daemon";
 import { singleFlightLoad } from "@/shared/lib/desktop-inflight";
 import { transcriptHasPendingApproval } from "@/shared/lib/session-status";
 import { hasTranscriptWorkingSet } from "@/shared/lib/transcript-history";
+import { minosQueryClient } from "@/shared/api/queryClient";
+import { queryKeys } from "@/shared/api/queryKeys";
 
 
 export function createSessionListActions(
@@ -41,8 +43,15 @@ export function createSessionListActions(
         }));
 
         try {
+          // TanStack Query owns the network cache; Zustand still owns Entity.
+          // Quiet polls force network (staleTime:0) so degraded 2s re-list works
+          // under the default 30s catalog staleTime.
           const daemonSessions = (
-            await daemonApi.listProjectSessions(projectId)
+            await minosQueryClient.fetchQuery({
+              queryKey: queryKeys.projectSessions(projectId),
+              queryFn: () => daemonApi.listProjectSessions(projectId),
+              ...(quiet ? { staleTime: 0 } : {}),
+            })
           ).map(toUiSession);
           if (isStale()) return;
 
