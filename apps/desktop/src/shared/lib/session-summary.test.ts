@@ -112,6 +112,31 @@ describe("summarizeSessionFromTranscript", () => {
     assert.equal(summary.files[0]?.path, "foo.ts");
   });
 
+  it("does not count Place+Result twin as two tools or leave pending", () => {
+    const summary = summarizeSessionFromTranscript([
+      item({
+        id: "tool:tc1",
+        kind: "tool",
+        title: "search_replace",
+        text: "a.ts",
+        requestId: "tc1",
+      }),
+      item({
+        id: "tool:tc1",
+        kind: "tool_result",
+        title: "edit: a.ts",
+        text: "a.ts",
+        requestId: "tc1",
+        detail: "diff +2 -1",
+      }),
+    ]);
+    assert.equal(summary.toolCallCount, 1);
+    assert.equal(summary.editCallCount, 1);
+    assert.equal(summary.pendingEdits, 0);
+    assert.equal(summary.files[0]?.add, 2);
+    assert.equal(summary.files[0]?.del, 1);
+  });
+
   it("formats display line", () => {
     const line = formatFileChangeLine({
       path: "apps/desktop/src/lib/session-list-group.ts",

@@ -2,7 +2,12 @@
  * L3b Transcript window + resume interrupted session.
  */
 import type { WorkspaceGet, WorkspaceSet, WorkspaceState } from "./types";
-import { bumpStatus, mergeTranscriptItems, patchLocalConversation } from "./helpers";
+import {
+  bumpStatus,
+  dedupeTranscriptItemsById,
+  mergeTranscriptItems,
+  patchLocalConversation,
+} from "./helpers";
 import { commitSessionEntity, findSessionRow } from "./projection";
 import { mergeSessionEntity } from "@/shared/lib/session-entity";
 import { daemonApi } from "@/shared/lib/daemon";
@@ -267,12 +272,7 @@ export function createTranscriptActions(
             ? prevItems
             : (s.transcriptsBySession[sessionId] ?? []);
           const merged = mergeTranscriptItems(base, page.items);
-          const seen = new Set<string>();
-          let items = merged.filter((it) => {
-            if (seen.has(it.id)) return false;
-            seen.add(it.id);
-            return true;
-          });
+          let items = dedupeTranscriptItemsById(merged);
           // Quiet peek with empty page must not wipe a non-empty window that
           // was filled by ingest or a concurrent hard open (generation tied).
           if (quiet && items.length === 0 && base.length > 0) {

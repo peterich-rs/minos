@@ -1667,16 +1667,45 @@ impl TranscriptAssembler {
                 }
                 // text = bare target (path/cmd); title = tool name. UI derives Grok verbs.
                 let target = summarize_tool_args(&name, &args);
+                let tool_id = stable_tool_id(&tool_call_id);
+                let args_detail = if args.trim().is_empty() {
+                    None
+                } else {
+                    Some(truncate_str(&args, 2000))
+                };
+                // Upsert: Grok re-emits ToolCallPlaced for title/kind refine while a
+                // progressive ToolCallCompleted may already have flipped the row to
+                // tool_result. Never push a second card or demote completed → open.
+                if let Some(item) = self.items.iter_mut().rev().find(|i| {
+                    i.id == tool_id
+                        || i.request_id.as_deref() == Some(tool_call_id.as_str())
+                }) {
+                    if !name.is_empty() {
+                        item.title = Some(name);
+                    }
+                    if !tool_target_is_useless(&target, item.title.as_deref()) {
+                        item.text = target;
+                    }
+                    // Only refresh args detail while still open; keep result body.
+                    if item.kind == "tool" {
+                        if args_detail.is_some() {
+                            item.detail = args_detail;
+                        }
+                    }
+                    if item.message_id.is_none() {
+                        item.message_id = Some(message_id);
+                    }
+                    item.request_id = Some(tool_call_id);
+                    item.ts_ms = ts_ms;
+                    item.seq = seq;
+                    return;
+                }
                 self.items.push(TranscriptItemDto {
-                    id: stable_tool_id(&tool_call_id),
+                    id: tool_id,
                     kind: "tool".into(),
                     role: None,
                     text: target,
-                    detail: if args.trim().is_empty() {
-                        None
-                    } else {
-                        Some(truncate_str(&args, 2000))
-                    },
+                    detail: args_detail,
                     title: Some(name),
                     ts_ms,
                     seq,
@@ -1705,10 +1734,16 @@ impl TranscriptAssembler {
                     return;
                 }
                 // Keep bare target in `text`; put output into `detail` for expand.
+                // Match open *or* already-progressive-completed rows so terminal
+                // EditsApplied can refine without pushing a twin tool_result.
                 let mut updated = false;
                 let tool_id = stable_tool_id(&tool_call_id);
                 for item in self.items.iter_mut().rev() {
-                    if item.kind == "tool"
+                    let is_tool_row = matches!(
+                        item.kind.as_str(),
+                        "tool" | "tool_result" | "tool_error"
+                    );
+                    if is_tool_row
                         && (item.id == tool_id
                             || item.request_id.as_deref() == Some(tool_call_id.as_str())
                             || item.id.ends_with(&format!(":{tool_call_id}")))
@@ -3837,6 +3872,126 @@ mod transcript_assembler_tests {
             tool.text
         );
         assert!(!tool.text.eq_ignore_ascii_case("read"));
+    }
+
+    /// Grok progressive path re-Places with a refined title then Completes in the
+    /// same (or later) frame. Must stay one card — no orphan `tool` left open.
+    #[test]
+    fn tool_place_refine_then_complete_is_single_result() {
+        let mut a = TranscriptAssembler::new("thr-sr".into());
+        a.ingest_frame(
+            1,
+            1,
+            vec![UiEventMessage::ToolCallPlaced {
+                message_id: "m1".into(),
+                tool_call_id: "tc_sr".into(),
+                name: "search_replace".into(),
+                args_json: r#"{"file_path":"App.java"}"#.into(),
+            }],
+        );
+        a.ingest_frame(
+            2,
+            2,
+            vec![
+                UiEventMessage::ToolCallPlaced {
+                    message_id: "m1".into(),
+                    tool_call_id: "tc_sr".into(),
+                    name: "edit: App.java".into(),
+                    args_json: r#"{"file_path":"App.java"}"#.into(),
+                },
+                UiEventMessage::ToolCallCompleted {
+                    tool_call_id: "tc_sr".into(),
+                    output: "--- a/App.java\n+++ b/App.java\n@@\n-old\n+new\n".into(),
+                    is_error: false,
+                },
+            ],
+        );
+        // Terminal refine after progressive complete.
+        a.ingest_frame(
+            3,
+            3,
+            vec![UiEventMessage::ToolCallCompleted {
+                tool_call_id: "tc_sr".into(),
+                output: "--- a/App.java\n+++ b/App.java\n@@\n-old\n+new\n+newer\n".into(),
+                is_error: false,
+            }],
+        );
+        let items = a.finish();
+        let tools: Vec<_> = items
+            .iter()
+            .filter(|i| matches!(i.kind.as_str(), "tool" | "tool_result" | "tool_error"))
+            .collect();
+        assert_eq!(
+            tools.len(),
+            1,
+            "expected single tool card, got {:?}",
+            tools
+                .iter()
+                .map(|t| (t.kind.as_str(), t.title.as_deref(), t.text.as_str()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(tools[0].kind, "tool_result");
+        assert!(
+            tools[0]
+                .title
+                .as_deref()
+                .is_some_and(|t| t.contains("edit") || t.contains("App")),
+            "refined title kept: {:?}",
+            tools[0].title
+        );
+        assert!(
+            tools[0]
+                .detail
+                .as_deref()
+                .is_some_and(|d| d.contains("+newer")),
+            "terminal body wins: {:?}",
+            tools[0].detail
+        );
+        assert!(
+            !items.iter().any(|i| i.kind == "tool"),
+            "no open tool row after complete"
+        );
+    }
+
+    #[test]
+    fn tool_place_after_complete_does_not_reopen() {
+        let mut a = TranscriptAssembler::new("thr-reopen".into());
+        a.ingest_frame(
+            1,
+            1,
+            vec![
+                UiEventMessage::ToolCallPlaced {
+                    message_id: "m1".into(),
+                    tool_call_id: "tc1".into(),
+                    name: "search_replace".into(),
+                    args_json: r#"{"file_path":"a.ts"}"#.into(),
+                },
+                UiEventMessage::ToolCallCompleted {
+                    tool_call_id: "tc1".into(),
+                    output: "ok".into(),
+                    is_error: false,
+                },
+            ],
+        );
+        // Late title-only refine (live frame) must not demote tool_result → tool.
+        a.ingest_frame(
+            2,
+            2,
+            vec![UiEventMessage::ToolCallPlaced {
+                message_id: "m1".into(),
+                tool_call_id: "tc1".into(),
+                name: "edit: a.ts".into(),
+                args_json: r#"{"file_path":"a.ts"}"#.into(),
+            }],
+        );
+        let items = a.finish();
+        let tools: Vec<_> = items
+            .iter()
+            .filter(|i| matches!(i.kind.as_str(), "tool" | "tool_result" | "tool_error"))
+            .collect();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].kind, "tool_result");
+        assert_eq!(tools[0].title.as_deref(), Some("edit: a.ts"));
     }
 }
 

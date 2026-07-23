@@ -146,6 +146,89 @@ function isTranscriptSegmentBreaker(kind: string): boolean {
   );
 }
 
+function isToolLifecycleKind(kind: string): boolean {
+  return kind === "tool" || kind === "tool_result" || kind === "tool_error";
+}
+
+/**
+ * Merge same-id tool cards across live frames.
+ * Never demote tool_result/tool_error back to open `tool` (title refine frames).
+ */
+export function mergeToolLifecycleItems(
+  cur: TranscriptItem,
+  incoming: TranscriptItem,
+): TranscriptItem {
+  const curDone = cur.kind === "tool_result" || cur.kind === "tool_error";
+  const inDone =
+    incoming.kind === "tool_result" || incoming.kind === "tool_error";
+  let kind = cur.kind;
+  if (inDone) {
+    // Prefer error over success if either side failed.
+    kind =
+      cur.kind === "tool_error" || incoming.kind === "tool_error"
+        ? "tool_error"
+        : "tool_result";
+  } else if (!curDone && incoming.kind === "tool") {
+    kind = "tool";
+  }
+  // else curDone && incoming is tool → keep completed kind
+
+  const preferIncomingDetail =
+    inDone &&
+    (incoming.detail?.length ?? 0) >= (cur.detail?.length ?? 0);
+  const detail = preferIncomingDetail
+    ? (incoming.detail ?? cur.detail)
+    : (cur.detail ?? incoming.detail);
+
+  const title =
+    incoming.title && incoming.title.trim()
+      ? incoming.title
+      : cur.title;
+  // Prefer path-like targets over empty/tool-name fallbacks.
+  const text =
+    incoming.text &&
+    incoming.text.trim() &&
+    !(curDone && !inDone && incoming.text.length < cur.text.length)
+      ? incoming.text
+      : cur.text || incoming.text;
+
+  return {
+    ...cur,
+    ...incoming,
+    id: cur.id,
+    kind,
+    title,
+    text,
+    detail: detail ?? null,
+    requestId: incoming.requestId || cur.requestId,
+    messageId: incoming.messageId || cur.messageId,
+    seq: Math.max(cur.seq, incoming.seq),
+    tsMs: Math.max(cur.tsMs, incoming.tsMs),
+  };
+}
+
+/** Collapse same-id rows (legacy Place twin) preferring completed tools. */
+export function dedupeTranscriptItemsById(
+  items: TranscriptItem[],
+): TranscriptItem[] {
+  const byId = new Map<string, TranscriptItem>();
+  const order: string[] = [];
+  for (const it of items) {
+    const prev = byId.get(it.id);
+    if (!prev) {
+      byId.set(it.id, it);
+      order.push(it.id);
+      continue;
+    }
+    if (isToolLifecycleKind(prev.kind) && isToolLifecycleKind(it.kind)) {
+      byId.set(it.id, mergeToolLifecycleItems(prev, it));
+    } else if (it.seq >= prev.seq) {
+      byId.set(it.id, it);
+    }
+  }
+  return order.map((id) => byId.get(id)!);
+}
+
 /**
  * Index of the open streamable bubble for kind+messageId, or -1.
  * Open = last matching row with no segment-breaker after it (tools/subagent…).
@@ -215,6 +298,17 @@ export function mergeTranscriptItems(
             seq: Math.max(cur.seq, item.seq),
             tsMs: item.tsMs || cur.tsMs,
           };
+          if (!transcriptItemEqual(cur, next)) {
+            out[idx] = next;
+            byId.set(cur.id, next);
+            mutated = true;
+          }
+          continue;
+        }
+        // Tool lifecycle: progressive complete + late title Place must not
+        // demote tool_result → tool (would show "edit in flight" while Idle).
+        if (isToolLifecycleKind(cur.kind) && isToolLifecycleKind(item.kind)) {
+          const next = mergeToolLifecycleItems(cur, item);
           if (!transcriptItemEqual(cur, next)) {
             out[idx] = next;
             byId.set(cur.id, next);

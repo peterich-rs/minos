@@ -119,6 +119,45 @@ function findOpenStreamSlot(
   return -1;
 }
 
+function isToolLifecycleKind(kind: string): boolean {
+  return kind === "tool" || kind === "tool_result" || kind === "tool_error";
+}
+
+function mergeToolLifecycleItems(
+  cur: TranscriptItem,
+  incoming: TranscriptItem,
+): TranscriptItem {
+  const curDone = cur.kind === "tool_result" || cur.kind === "tool_error";
+  const inDone =
+    incoming.kind === "tool_result" || incoming.kind === "tool_error";
+  let kind = cur.kind;
+  if (inDone) {
+    kind =
+      cur.kind === "tool_error" || incoming.kind === "tool_error"
+        ? "tool_error"
+        : "tool_result";
+  } else if (!curDone && incoming.kind === "tool") {
+    kind = "tool";
+  }
+  const preferIncomingDetail =
+    inDone && (incoming.detail?.length ?? 0) >= (cur.detail?.length ?? 0);
+  return {
+    ...cur,
+    ...incoming,
+    id: cur.id,
+    kind,
+    title: incoming.title?.trim() ? incoming.title : cur.title,
+    text: incoming.text?.trim() ? incoming.text : cur.text,
+    detail: preferIncomingDetail
+      ? (incoming.detail ?? cur.detail)
+      : (cur.detail ?? incoming.detail),
+    requestId: incoming.requestId || cur.requestId,
+    messageId: incoming.messageId || cur.messageId,
+    seq: Math.max(cur.seq, incoming.seq),
+    tsMs: Math.max(cur.tsMs, incoming.tsMs),
+  };
+}
+
 function mergeTranscriptItems(
   prev: TranscriptItem[],
   incoming: TranscriptItem[],
@@ -161,6 +200,11 @@ function mergeTranscriptItems(
             seq: Math.max(cur.seq, item.seq),
             tsMs: item.tsMs || cur.tsMs,
           };
+          byId.set(cur.id, out[idx]!);
+          continue;
+        }
+        if (isToolLifecycleKind(cur.kind) && isToolLifecycleKind(item.kind)) {
+          out[idx] = mergeToolLifecycleItems(cur, item);
           byId.set(cur.id, out[idx]!);
           continue;
         }
@@ -401,5 +445,59 @@ describe("mergeTranscriptItems timeline freeze", () => {
     assert.equal(subs.length, 1, JSON.stringify(subs.map((s) => s.text)));
     assert.match(subs[0]!.text, /completed|Ran/);
     assert.ok(!/subagent subagent/.test(subs[0]!.text));
+  });
+
+  it("does not demote tool_result back to open tool on title refine", () => {
+    const prev = [
+      item({
+        id: "tool:tc1",
+        kind: "tool_result",
+        text: "a.ts",
+        title: "search_replace",
+        detail: "--- a/a.ts\n+++ b/a.ts\n+x",
+        requestId: "tc1",
+        seq: 2,
+      }),
+    ];
+    const out = mergeTranscriptItems(prev, [
+      item({
+        id: "tool:tc1",
+        kind: "tool",
+        text: "a.ts",
+        title: "edit: a.ts",
+        requestId: "tc1",
+        seq: 3,
+      }),
+    ]);
+    assert.equal(out.length, 1);
+    assert.equal(out[0]!.kind, "tool_result");
+    assert.equal(out[0]!.title, "edit: a.ts");
+    assert.ok(out[0]!.detail?.includes("+x"));
+  });
+
+  it("promotes open tool to tool_result on progressive complete", () => {
+    const prev = [
+      item({
+        id: "tool:tc2",
+        kind: "tool",
+        text: "b.ts",
+        title: "search_replace",
+        requestId: "tc2",
+        seq: 1,
+      }),
+    ];
+    const out = mergeTranscriptItems(prev, [
+      item({
+        id: "tool:tc2",
+        kind: "tool_result",
+        text: "b.ts",
+        title: "edit: b.ts",
+        detail: "+1 -0",
+        requestId: "tc2",
+        seq: 2,
+      }),
+    ]);
+    assert.equal(out[0]!.kind, "tool_result");
+    assert.equal(out[0]!.detail, "+1 -0");
   });
 });

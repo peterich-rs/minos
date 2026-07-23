@@ -165,6 +165,10 @@ function mergeInto(
 /**
  * Aggregate file modifications from a session transcript.
  * Multiple edits to the same path sum +/− counts.
+ *
+ * Tool activity counts unique tool_call ids (requestId / id). Legacy twin rows
+ * (open `tool` + completed `tool_result` for the same call) must not inflate
+ * Tools/Edits or leave a permanent "edit in flight" while the session is Idle.
  */
 export function summarizeSessionFromTranscript(
   items: readonly TranscriptItem[],
@@ -176,6 +180,9 @@ export function summarizeSessionFromTranscript(
   let toolCallCount = 0;
   let editCallCount = 0;
 
+  // Group tool lifecycle rows by call key so Place+Result twins count once.
+  const groups = new Map<string, TranscriptItem[]>();
+  const groupOrder: string[] = [];
   for (const item of items) {
     if (
       item.kind !== "tool" &&
@@ -184,25 +191,42 @@ export function summarizeSessionFromTranscript(
     ) {
       continue;
     }
+    const key = item.requestId || item.id;
+    if (!groups.has(key)) {
+      groups.set(key, []);
+      groupOrder.push(key);
+    }
+    groups.get(key)!.push(item);
+  }
+
+  for (const key of groupOrder) {
+    const group = groups.get(key)!;
     toolCallCount += 1;
-    const toolName = item.title ?? "";
+    // Prefer completed row for body/stats; only pending if *no* terminal row.
+    const terminal =
+      group.find((i) => i.kind === "tool_error") ??
+      group.find((i) => i.kind === "tool_result");
+    const open = group.find((i) => i.kind === "tool");
+    const item = terminal ?? open!;
+    const toolName = item.title ?? open?.title ?? "";
     const kind = toolKindFromName(toolName);
     // Codex thread items often use name "fileChange"; treat as edit.
-    if (kind !== "edit" && !/file\s*change/i.test(toolName)) continue;
-    editCallCount += 1;
+    const isEdit = kind === "edit" || /file\s*change/i.test(toolName);
+    if (isEdit) editCallCount += 1;
 
-    if (item.kind === "tool") {
-      pendingEdits += 1;
+    if (!terminal) {
+      if (isEdit) pendingEdits += 1;
       const path = (item.text ?? "").trim();
-      if (lookLikePath(path)) {
+      if (isEdit && lookLikePath(path)) {
         mergeInto(byPath, path, 0, 0, {});
       }
       continue;
     }
+    if (!isEdit) continue;
 
-    const failed = item.kind === "tool_error";
-    const detail = item.detail ?? "";
-    const target = (item.text ?? "").trim();
+    const failed = terminal.kind === "tool_error";
+    const detail = terminal.detail ?? "";
+    const target = (terminal.text ?? open?.text ?? "").trim();
 
     // Prefer multi-file patch parse from detail.
     const fromPatch = fileStatsFromPatchBody(detail);

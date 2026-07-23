@@ -921,7 +921,9 @@ function SessionSummaryPanel({
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <StatusPill status={session.status} />
-            {summary.pendingEdits > 0 ? (
+            {summary.pendingEdits > 0 &&
+            (session.status === "running" ||
+              session.status === "needs_approval") ? (
               <span className="inline-flex items-center gap-1 text-[11px] text-amber-800">
                 <Loader2 className="h-3 w-3 animate-spin" />
                 {summary.pendingEdits} edit
