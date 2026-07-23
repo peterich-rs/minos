@@ -311,7 +311,7 @@ class MinosCore implements MinosCoreProtocol {
   );
 
   @override
-  Future<ListThreadsResponse> listThreads(ListThreadsParams params) =>
+  Future<ListSessionsResponse> listThreads(ListSessionsParams params) =>
       _client.listThreads(req: params);
 
   @override
@@ -325,7 +325,7 @@ class MinosCore implements MinosCoreProtocol {
       _client.subscribeAgentSession(sessionId: sessionId);
 
   @override
-  Future<ReadThreadResponse> readThread(ReadThreadParams params) =>
+  Future<ReadSessionResponse> readThread(ReadSessionParams params) =>
       _client.readThread(req: params);
 
   // ---- Project forwarders ----
@@ -359,12 +359,12 @@ class MinosCore implements MinosCoreProtocol {
       _client.deleteProject(req: DeleteProjectRequest(projectId: projectId));
 
   @override
-  Future<ListProjectThreadsResponse> listProjectThreads({
+  Future<ListProjectSessionsResponse> listProjectThreads({
     required String projectId,
     int limit = 50,
     int? beforeTsMs,
   }) => _client.listProjectThreads(
-    req: ListProjectThreadsParams(
+    req: ListProjectSessionsParams(
       projectId: projectId,
       limit: limit,
       beforeTsMs: beforeTsMs == null ? null : platformInt64FromInt(beforeTsMs),
@@ -501,16 +501,16 @@ class MinosCore implements MinosCoreProtocol {
   }) => _client.sendUserMessage(sessionId: sessionId, text: text);
 
   @override
-  Future<void> interruptThread({required String threadId}) =>
-      _client.interruptThread(threadId: threadId);
+  Future<void> interruptThread({required String sessionId}) =>
+      _client.interruptThread(sessionId: sessionId);
 
   @override
-  Future<void> closeThread({required String threadId}) =>
-      _client.closeThread(threadId: threadId);
+  Future<void> closeThread({required String sessionId}) =>
+      _client.closeThread(sessionId: sessionId);
 
   @override
-  Future<void> deleteThread({required String threadId}) =>
-      _client.closeThread(threadId: threadId);
+  Future<void> deleteThread({required String sessionId}) =>
+      _client.closeThread(sessionId: sessionId);
 
   // ---- Lifecycle forwarders ----
 
@@ -546,11 +546,11 @@ class MinosCore implements MinosCoreProtocol {
   @override
   Future<void> sendApprovalDecision({
     required String requestId,
-    required String threadId,
+    required String sessionId,
     required Map<String, dynamic> decision,
   }) => _client.sendApprovalDecision(
     requestId: requestId,
-    threadId: threadId,
+    sessionId: sessionId,
     decisionJson: jsonEncode(decision),
   );
 

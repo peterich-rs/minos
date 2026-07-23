@@ -26,8 +26,8 @@ class _InputBarDraftController extends Notifier<String> {
 ///   - Idle / AwaitingInput / Stopped → Send button (gated on
 ///     `_canSend`: text non-empty + ≤ [_maxChars]).
 ///   - Starting / Streaming → destructive Stop button.
-///   - Error → Send retries; if the error has a thread id the parent resumes
-///     that thread instead of starting a new agent.
+///   - Error → Send retries; if the error has a session id the parent resumes
+///     that session instead of starting a new agent.
 ///
 /// The widget owns its own `TextEditingController`; the parent receives
 /// the message via `onSend(text)` and is responsible for clearing /

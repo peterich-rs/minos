@@ -87,19 +87,19 @@ pub fn kind_message(kind: ErrorKind, lang: Lang) -> String {
 }
 
 pub use minos_daemon::{
-    AgentStateObserver, AgentThreadSnapshot, DaemonHandle, PeerRecord, PeerStateObserver,
+    AgentStateObserver, AgentSessionSnapshot, DaemonHandle, PeerRecord, PeerStateObserver,
     RelayConfig, RelayLinkStateObserver, RelayQrPayload, Subscription,
 };
 pub use minos_domain::{
     AgentDescriptor, AgentName, AgentStatus, DeviceId, DeviceSecret, PeerState, RelayLinkState,
 };
-// `ThreadState` / `PauseReason` / `CloseReason` are exposed to Swift as the
+// `SessionState` / `PauseReason` / `CloseReason` are exposed to Swift as the
 // `minos_agent_runtime` enums. `minos_protocol` carries serde-only mirrors for
 // JSON-RPC (mobile) traffic — see `crates/minos-protocol/src/messages.rs` for
 // rationale on why those mirrors do not derive `uniffi::*`.
-pub use minos_agent_runtime::{CloseReason, PauseReason, ThreadState};
+pub use minos_agent_runtime::{CloseReason, PauseReason, SessionState};
 pub use minos_protocol::{
-    AgentLaunchMode, CloseThreadRequest, HostPeerSummary, InterruptThreadRequest,
+    AgentLaunchMode, CloseSessionRequest, HostPeerSummary, InterruptSessionRequest,
     SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
 };
-pub use minos_ui_protocol::ThreadEndReason;
+pub use minos_ui_protocol::SessionEndReason;

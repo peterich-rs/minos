@@ -363,5 +363,7 @@ String _runtimeLabel(AgentName agent) {
     AgentName.codex => 'Codex',
     AgentName.claude => 'Claude',
     AgentName.gemini => 'Gemini',
+    AgentName.opencode => 'OpenCode',
+    AgentName.grok => 'Grok',
   };
 }

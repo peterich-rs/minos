@@ -88,7 +88,7 @@ struct AgentSegmentView: View {
         }
     }
 
-    private func stateLabel(_ state: ThreadState) -> String {
+    private func stateLabel(_ state: SessionState) -> String {
         switch state {
         case .idle: return "Idle"
         case .starting: return "Starting"

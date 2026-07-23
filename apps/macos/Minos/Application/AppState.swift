@@ -25,8 +25,8 @@ final class AppState: @unchecked Sendable {
         let peer: PeerState
         let trustedDevice: PeerRecord?
         let peers: [HostPeerSummary]
-        let agentState: ThreadState
-        let agentThread: AgentThreadSnapshot?
+        let agentState: SessionState
+        let agentThread: AgentSessionSnapshot?
     }
 
     // ── Daemon + subscriptions ──
@@ -50,7 +50,7 @@ final class AppState: @unchecked Sendable {
     var isShowingQr: Bool = false
 
     // ── Agent runtime ──
-    var agentState: ThreadState = .idle
+    var agentState: SessionState = .idle
     var currentSession: StartAgentResponse?
     var agentError: MinosError?
 
@@ -180,8 +180,8 @@ final class AppState: @unchecked Sendable {
         trustedDevice: PeerRecord?,
         peers: [HostPeerSummary] = [],
         agentSubscription: (any SubscriptionHandle)? = nil,
-        agentState: ThreadState = .idle,
-        agentThread: AgentThreadSnapshot? = nil
+        agentState: SessionState = .idle,
+        agentThread: AgentSessionSnapshot? = nil
     ) {
         displayErrorTask?.cancel()
         agentErrorTask?.cancel()
@@ -197,7 +197,7 @@ final class AppState: @unchecked Sendable {
         self.peers = resolvedPeers
         self.peer = resolvedPeers.isEmpty ? peer : Self.aggregatePeerState(from: resolvedPeers)
         self.agentState = agentState
-        applyAgentThreadSnapshot(agentThread)
+        applyAgentSessionSnapshot(agentThread)
         self.trustedDevice = resolvedPeers.first.map(Self.peerRecord) ?? trustedDevice
         self.phase = .running
     }

@@ -10,7 +10,7 @@ import 'package:minos/src/rust/api/minos.dart'
         UiEventFrame,
         UiEventMessage_Error,
         UiEventMessage_MessageCompleted,
-        UiEventMessage_ThreadClosed;
+        UiEventMessage_SessionClosed;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'active_session_provider.g.dart';
@@ -40,41 +40,41 @@ class ActiveSessionController extends _$ActiveSessionController {
     if (s is SessionSending) {
       state = _nextStateForFrame(
         frame,
-        threadId: frame.threadId,
+        sessionId: frame.sessionId,
         agent: s.agent,
       );
       return;
     }
-    if (s is! SessionStreaming || s.threadId != frame.threadId) return;
+    if (s is! SessionStreaming || s.sessionId != frame.sessionId) return;
 
-    state = _nextStateForFrame(frame, threadId: s.threadId, agent: s.agent);
+    state = _nextStateForFrame(frame, sessionId: s.sessionId, agent: s.agent);
   }
 
   ActiveSession _nextStateForFrame(
     UiEventFrame frame, {
-    required String threadId,
+    required String sessionId,
     required AgentName agent,
   }) {
     switch (frame.ui) {
       case UiEventMessage_MessageCompleted():
-        return SessionAwaitingInput(threadId: threadId, agent: agent);
-      case UiEventMessage_ThreadClosed():
-        return SessionSuspended(threadId: threadId, agent: agent);
+        return SessionAwaitingInput(sessionId: sessionId, agent: agent);
+      case UiEventMessage_SessionClosed():
+        return SessionSuspended(sessionId: sessionId, agent: agent);
       case UiEventMessage_Error(:final message):
         return SessionError(
-          threadId: threadId,
+          sessionId: sessionId,
           error: MinosError.agentStartFailed(reason: message),
         );
       default:
-        return SessionStreaming(threadId: threadId, agent: agent);
+        return SessionStreaming(sessionId: sessionId, agent: agent);
     }
   }
 
   /// Dispatch a user message.
   ///
-  /// When the current state already carries a `thread_id`, a successful send
+  /// When the current state already carries a `session_id`, a successful send
   /// immediately re-enters [SessionStreaming]. Brand-new conversations stay in
-  /// [SessionSending] until the first matching UI frame binds the thread id.
+  /// [SessionSending] until the first matching UI frame binds the session id.
   Future<MinosError?> send({
     required AgentName agent,
     required String text,
@@ -88,19 +88,19 @@ class ActiveSessionController extends _$ActiveSessionController {
     state = SessionSending(agent: agent, text: text);
     try {
       await dispatch();
-      final threadId = switch (previous) {
-        SessionStreaming(threadId: final t) => t,
-        SessionAwaitingInput(threadId: final t) => t,
-        SessionSuspended(threadId: final t) => t,
-        SessionError(threadId: final t?) => t,
+      final sessionId = switch (previous) {
+        SessionStreaming(sessionId: final t) => t,
+        SessionAwaitingInput(sessionId: final t) => t,
+        SessionSuspended(sessionId: final t) => t,
+        SessionError(sessionId: final t?) => t,
         _ => null,
       };
-      if (threadId != null) {
-        state = SessionStreaming(threadId: threadId, agent: agent);
+      if (sessionId != null) {
+        state = SessionStreaming(sessionId: sessionId, agent: agent);
       }
       logFlutterDebug(
         'active_session',
-        'send dispatched agent=$agent threadId=${threadId ?? '<pending>'}',
+        'send dispatched agent=$agent sessionId=${sessionId ?? '<pending>'}',
       );
       return null;
     } on MinosError catch (e, stackTrace) {
@@ -120,52 +120,52 @@ class ActiveSessionController extends _$ActiveSessionController {
     MinosError error,
   ) {
     return switch (previous) {
-      SessionStreaming(threadId: final t, agent: final a) => SessionStreaming(
-        threadId: t,
+      SessionStreaming(sessionId: final t, agent: final a) => SessionStreaming(
+        sessionId: t,
         agent: a,
       ),
-      SessionAwaitingInput(threadId: final t, agent: final a) =>
-        SessionAwaitingInput(threadId: t, agent: a),
-      SessionSuspended(threadId: final t, agent: final a) => SessionSuspended(
-        threadId: t,
+      SessionAwaitingInput(sessionId: final t, agent: final a) =>
+        SessionAwaitingInput(sessionId: t, agent: a),
+      SessionSuspended(sessionId: final t, agent: final a) => SessionSuspended(
+        sessionId: t,
         agent: a,
       ),
-      SessionError(threadId: final t?, :final error) => SessionError(
-        threadId: t,
+      SessionError(sessionId: final t?, :final error) => SessionError(
+        sessionId: t,
         error: error,
       ),
       _ => SessionError(error: error),
     };
   }
 
-  /// Best-effort interrupt. Failures preserve the current `thread_id` in a
+  /// Best-effort interrupt. Failures preserve the current `session_id` in a
   /// [SessionError] so the UI can still recover.
   Future<void> stop() async {
     final s = state;
-    final (String? threadId, AgentName? agent) = switch (s) {
-      SessionStreaming(threadId: final t, agent: final a) => (t, a),
-      SessionAwaitingInput(threadId: final t, agent: final a) => (t, a),
+    final (String? sessionId, AgentName? agent) = switch (s) {
+      SessionStreaming(sessionId: final t, agent: final a) => (t, a),
+      SessionAwaitingInput(sessionId: final t, agent: final a) => (t, a),
       _ => (null, null),
     };
-    if (threadId == null || agent == null) return;
+    if (sessionId == null || agent == null) return;
 
     try {
       await ref
           .read(threadRepositoryProvider)
-          .interruptThread(threadId: threadId);
-      state = SessionSuspended(threadId: threadId, agent: agent);
+          .interruptThread(sessionId: sessionId);
+      state = SessionSuspended(sessionId: sessionId, agent: agent);
       logFlutterInfo(
         'active_session',
-        'stop succeeded threadId=$threadId agent=$agent',
+        'stop succeeded sessionId=$sessionId agent=$agent',
       );
     } on MinosError catch (error, stackTrace) {
       logFlutterError(
         'active_session',
-        'stop failed threadId=$threadId agent=$agent',
+        'stop failed sessionId=$sessionId agent=$agent',
         error: error,
         stackTrace: stackTrace,
       );
-      state = SessionError(threadId: threadId, error: error);
+      state = SessionError(sessionId: sessionId, error: error);
       return;
     }
   }

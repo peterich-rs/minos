@@ -4,13 +4,13 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'thread_list_provider.g.dart';
 
-/// Loads and caches the paged thread list. First build requests the
-/// freshest 50 threads; [refresh] reruns `list_threads` with the same
+/// Loads and caches the paged session list. First build requests the
+/// freshest 50 sessions; [refresh] reruns `list_sessions` with the same
 /// params.
 @Riverpod(keepAlive: false)
 class ThreadList extends _$ThreadList {
   @override
-  Future<List<ThreadSummary>> build() async {
+  Future<List<SessionSummary>> build() async {
     return ref.read(threadRepositoryProvider).listThreads();
   }
 

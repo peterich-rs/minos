@@ -11,7 +11,7 @@ final class AgentStateTests: XCTestCase {
     func testAgentObserverPushDrivesAppState() async {
         let daemon = MockDaemon()
         let appState = await bootedAppState(with: daemon)
-        let expected = ThreadState.running(turnStartedAtMs: 1_700_000_000_000)
+        let expected = SessionState.running(turnStartedAtMs: 1_700_000_000_000)
 
         daemon.emitAgentState(expected)
         await Task.yield()
@@ -22,10 +22,10 @@ final class AgentStateTests: XCTestCase {
 
     @MainActor
     func testAgentObserverRefreshesCurrentThreadSnapshot() async {
-        let expected = ThreadState.running(turnStartedAtMs: 1_700_000_000_000)
+        let expected = SessionState.running(turnStartedAtMs: 1_700_000_000_000)
         let daemon = MockDaemon(
-            currentAgentThread: MockDaemon.makeAgentThreadSnapshot(
-                threadId: "mobile-thread",
+            currentAgentSession: MockDaemon.makeAgentSessionSnapshot(
+                sessionId: "mobile-thread",
                 workspaceRoot: "/Users/fan/work",
                 state: expected
             )

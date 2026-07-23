@@ -305,14 +305,14 @@ class _TraceCard extends StatelessWidget {
                 style: theme.textTheme.titleSmall?.copyWith(fontWeight: .w700),
               ),
               const SizedBox(height: 6),
-              if (trace.threadId != null)
+              if (trace.sessionId != null)
                 Text(
-                  'thread ${trace.threadId}',
+                  'thread ${trace.sessionId}',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
-              if (trace.threadId != null) const SizedBox(height: 6),
+              if (trace.sessionId != null) const SizedBox(height: 6),
               Text(
                 summary,
                 maxLines: 2,
@@ -370,7 +370,7 @@ class _TraceCard extends StatelessWidget {
                       ? '—'
                       : _formatTimestamp(trace.completedAtMs!.toInt()),
                 ),
-                _DetailRow(label: 'thread', value: trace.threadId ?? '—'),
+                _DetailRow(label: 'thread', value: trace.sessionId ?? '—'),
                 _DetailBlock(label: '请求摘要', value: trace.requestSummary),
                 _DetailBlock(label: '响应摘要', value: trace.responseSummary),
                 _DetailBlock(label: '错误详情', value: trace.errorDetail),

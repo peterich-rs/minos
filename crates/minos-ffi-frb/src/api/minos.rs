@@ -47,13 +47,13 @@ pub use minos_protocol::{
     FriendRequestSummary, FriendRequestsResponse, FriendSummary, FriendsResponse, HostSkillError,
     HostSkillSummary, HostSkillsEntry, HostSummary, HostWorkspaceSummary, ListAgentsResponse,
     ListChatMessagesResponse, ListHostSkillsResponse, ListHostWorkspacesResponse,
-    ListProjectThreadsParams, ListProjectThreadsResponse, ListProjectsResponse, ListThreadsParams,
-    ListThreadsResponse, MyProfileResponse, PauseReason, ProjectSummary, ReadThreadParams,
-    ReadThreadResponse, SearchUsersResponse, SenderType, StartAgentResponse, ThreadState,
-    ThreadSummary, UpdateProjectRequest, UserSummary, WriteHostSkillConfigResponse,
+    ListProjectSessionsParams, ListProjectSessionsResponse, ListProjectsResponse, ListSessionsParams,
+    ListSessionsResponse, MyProfileResponse, PauseReason, ProjectSummary, ReadSessionParams,
+    ReadSessionResponse, SearchUsersResponse, SenderType, StartAgentResponse, SessionState,
+    SessionSummary, UpdateProjectRequest, UserSummary, WriteHostSkillConfigResponse,
 };
 pub use minos_ui_protocol::{
-    ArtifactRef, DisplayPayload, MessageRole, SubagentStatus, ThreadEndReason, UiEventMessage,
+    ArtifactRef, DisplayPayload, MessageRole, SubagentStatus, SessionEndReason, UiEventMessage,
 };
 
 // ───────────────────────────── opaque client ─────────────────────────────
@@ -99,7 +99,7 @@ where
 /// type (rather than mirrored) so the `ui` field lands as the mirrored
 /// `UiEventMessage` variant on the Dart side.
 pub struct UiEventFrame {
-    pub thread_id: String,
+    pub session_id: String,
     pub seq: u64,
     pub ui: UiEventMessage,
     pub ts_ms: i64,
@@ -184,7 +184,7 @@ impl From<HostSummary> for HostSummaryDto {
 impl From<MobileUiEventFrame> for UiEventFrame {
     fn from(f: MobileUiEventFrame) -> Self {
         Self {
-            thread_id: f.thread_id,
+            session_id: f.session_id,
             seq: f.seq,
             ui: f.ui,
             ts_ms: f.ts_ms,
@@ -489,11 +489,11 @@ impl MobileClient {
     }
 
     /// Request a page of thread summaries.
-    pub async fn list_threads(
+    pub async fn list_sessions(
         &self,
-        req: ListThreadsParams,
-    ) -> Result<ListThreadsResponse, MinosError> {
-        self.0.list_threads(req).await
+        req: ListSessionsParams,
+    ) -> Result<ListSessionsResponse, MinosError> {
+        self.0.list_sessions(req).await
     }
 
     pub async fn list_agent_sessions(
@@ -511,12 +511,12 @@ impl MobileClient {
         self.0.subscribe_agent_session(session_id).await
     }
 
-    /// Read a window of translated UI events for one thread.
-    pub async fn read_thread(
+    /// Read a window of translated UI events for one session.
+    pub async fn read_session(
         &self,
-        req: ReadThreadParams,
-    ) -> Result<ReadThreadResponse, MinosError> {
-        self.0.read_thread(req).await
+        req: ReadSessionParams,
+    ) -> Result<ReadSessionResponse, MinosError> {
+        self.0.read_session(req).await
     }
 
     /// Export the current pairing snapshot so Dart can mirror it into secure
@@ -673,7 +673,7 @@ impl MobileClient {
     pub async fn send_approval_decision(
         &self,
         request_id: String,
-        thread_id: String,
+        session_id: String,
         decision_json: String,
     ) -> Result<(), MinosError> {
         let decision =
@@ -682,7 +682,7 @@ impl MobileClient {
                 message: format!("invalid approval decision json: {error}"),
             })?;
         self.0
-            .send_approval_decision(request_id, thread_id, decision)
+            .send_approval_decision(request_id, session_id, decision)
             .await
     }
 
@@ -706,13 +706,13 @@ impl MobileClient {
     /// Pause an in-flight turn on the given thread. Best-effort. The thread
     /// transitions to `Suspended { UserInterrupt }` regardless of whether the
     /// codex side acknowledges in time.
-    pub async fn interrupt_thread(&self, thread_id: String) -> Result<(), MinosError> {
-        self.0.interrupt_thread(thread_id).await
+    pub async fn interrupt_session(&self, session_id: String) -> Result<(), MinosError> {
+        self.0.interrupt_session(session_id).await
     }
 
     /// Permanently close the given thread. Idempotent.
-    pub async fn close_thread(&self, thread_id: String) -> Result<(), MinosError> {
-        self.0.close_thread(thread_id).await
+    pub async fn close_session(&self, session_id: String) -> Result<(), MinosError> {
+        self.0.close_session(session_id).await
     }
 
     // ─────────────────────────── project rpcs ──────────────────────────────
@@ -740,12 +740,12 @@ impl MobileClient {
         self.0.delete_project(req).await
     }
 
-    /// List threads within a project.
-    pub async fn list_project_threads(
+    /// List sessions within a project.
+    pub async fn list_project_sessions(
         &self,
-        req: ListProjectThreadsParams,
-    ) -> Result<ListProjectThreadsResponse, MinosError> {
-        self.0.list_project_threads(req).await
+        req: ListProjectSessionsParams,
+    ) -> Result<ListProjectSessionsResponse, MinosError> {
+        self.0.list_project_sessions(req).await
     }
 
     // ─────────────────────────── lifecycle hooks ───────────────────────────
@@ -955,7 +955,7 @@ pub struct RequestTraceRecord {
     pub transport: RequestTraceTransport,
     pub method: String,
     pub target: String,
-    pub thread_id: Option<String>,
+    pub session_id: Option<String>,
     pub request_summary: Option<String>,
     pub response_summary: Option<String>,
     pub error_detail: Option<String>,
@@ -973,7 +973,7 @@ impl From<CoreRequestTraceRecord> for RequestTraceRecord {
             transport: record.transport.into(),
             method: record.method,
             target: record.target,
-            thread_id: record.thread_id,
+            session_id: record.session_id,
             request_summary: record.request_summary,
             response_summary: record.response_summary,
             error_detail: record.error_detail,
@@ -1055,6 +1055,8 @@ pub enum _AgentName {
     Codex,
     Claude,
     Gemini,
+    Opencode,
+    Grok,
 }
 
 #[allow(dead_code)]
@@ -1069,9 +1071,12 @@ pub enum _AgentStatus {
 #[frb(mirror(AgentDescriptor))]
 pub struct _AgentDescriptor {
     pub name: AgentName,
+    pub display_name: String,
     pub path: Option<String>,
     pub version: Option<String>,
     pub status: AgentStatus,
+    pub supports_model_selection: bool,
+    pub supports_reasoning_effort: bool,
 }
 
 #[allow(dead_code)]
@@ -1103,7 +1108,7 @@ pub enum _ErrorKind {
     AgentNotSupported,
     AgentSessionIdMismatch,
     IngestSeqConflict,
-    ThreadNotFound,
+    SessionNotFound,
     TranslationNotImplemented,
     TranslationFailed,
     PairingQrVersionUnsupported,
@@ -1147,8 +1152,8 @@ pub enum _MinosError {
     AgentNotRunning,
     AgentNotSupported { agent: AgentName },
     AgentSessionIdMismatch,
-    IngestSeqConflict { thread_id: String, seq: u64 },
-    ThreadNotFound { thread_id: String },
+    IngestSeqConflict { session_id: String, seq: u64 },
+    SessionNotFound { session_id: String },
     TranslationNotImplemented { agent: AgentName },
     TranslationFailed { agent: AgentName, message: String },
     PairingQrVersionUnsupported { version: u8 },
@@ -1167,49 +1172,49 @@ pub enum _MinosError {
 // ─────────────────────────── mirrored protocol types ──────────────────────────
 
 #[allow(dead_code)]
-#[frb(mirror(ListThreadsParams))]
-pub struct _ListThreadsParams {
+#[frb(mirror(ListSessionsParams))]
+pub struct _ListSessionsParams {
     pub limit: u32,
     pub before_ts_ms: Option<i64>,
     pub agent: Option<AgentName>,
 }
 
 #[allow(dead_code)]
-#[frb(mirror(ListThreadsResponse))]
-pub struct _ListThreadsResponse {
-    pub threads: Vec<ThreadSummary>,
+#[frb(mirror(ListSessionsResponse))]
+pub struct _ListSessionsResponse {
+    pub sessions: Vec<SessionSummary>,
     pub next_before_ts_ms: Option<i64>,
 }
 
 #[allow(dead_code)]
-#[frb(mirror(ReadThreadParams))]
-pub struct _ReadThreadParams {
-    pub thread_id: String,
+#[frb(mirror(ReadSessionParams))]
+pub struct _ReadSessionParams {
+    pub session_id: String,
     pub from_seq: Option<u64>,
     pub limit: u32,
 }
 
 #[allow(dead_code)]
-#[frb(mirror(ReadThreadResponse))]
-pub struct _ReadThreadResponse {
+#[frb(mirror(ReadSessionResponse))]
+pub struct _ReadSessionResponse {
     pub ui_events: Vec<UiEventMessage>,
     pub next_seq: Option<u64>,
-    pub thread_end_reason: Option<ThreadEndReason>,
+    pub session_end_reason: Option<SessionEndReason>,
 }
 
 #[allow(dead_code)]
-#[frb(mirror(ThreadSummary))]
-pub struct _ThreadSummary {
-    pub thread_id: String,
+#[frb(mirror(SessionSummary))]
+pub struct _SessionSummary {
+    pub session_id: String,
     pub agent: AgentName,
     pub title: Option<String>,
     pub first_ts_ms: i64,
     pub last_ts_ms: i64,
     pub message_count: u32,
     pub ended_at_ms: Option<i64>,
-    pub end_reason: Option<ThreadEndReason>,
-    pub parent_thread_id: Option<String>,
-    pub state: ThreadState,
+    pub end_reason: Option<SessionEndReason>,
+    pub parent_session_id: Option<String>,
+    pub state: SessionState,
     pub needs_continue: bool,
 }
 
@@ -1224,7 +1229,7 @@ pub struct AgentSessionSummaryDto {
     pub title: Option<String>,
     pub last_activity_at_ms: i64,
     pub message_count: u32,
-    pub end_reason: Option<ThreadEndReason>,
+    pub end_reason: Option<SessionEndReason>,
 }
 
 impl From<CoreAgentSessionSummary> for AgentSessionSummaryDto {
@@ -1254,8 +1259,8 @@ pub enum _MessageRole {
 }
 
 #[allow(dead_code)]
-#[frb(mirror(ThreadEndReason))]
-pub enum _ThreadEndReason {
+#[frb(mirror(SessionEndReason))]
+pub enum _SessionEndReason {
     UserStopped,
     AgentDone,
     Crashed { message: String },
@@ -1266,7 +1271,7 @@ pub enum _ThreadEndReason {
 #[allow(dead_code)]
 #[frb(mirror(ArtifactRef))]
 pub struct _ArtifactRef {
-    pub thread_id: String,
+    pub session_id: String,
     pub artifact_id: String,
     pub size_bytes: u64,
     pub sha256: String,
@@ -1304,19 +1309,19 @@ pub enum _SubagentStatus {
 #[allow(dead_code)]
 #[frb(mirror(UiEventMessage))]
 pub enum _UiEventMessage {
-    ThreadOpened {
-        thread_id: String,
+    SessionOpened {
+        session_id: String,
         agent: AgentName,
         title: Option<String>,
         opened_at_ms: i64,
     },
-    ThreadTitleUpdated {
-        thread_id: String,
+    SessionTitleUpdated {
+        session_id: String,
         title: String,
     },
-    ThreadClosed {
-        thread_id: String,
-        reason: ThreadEndReason,
+    SessionClosed {
+        session_id: String,
+        reason: SessionEndReason,
         closed_at_ms: i64,
     },
     MessageStarted {
@@ -1356,8 +1361,8 @@ pub enum _UiEventMessage {
         is_error: bool,
     },
     SubagentSpawned {
-        parent_thread_id: String,
-        sub_thread_id: String,
+        parent_session_id: String,
+        sub_session_id: String,
         tool_call_id: String,
         agent: AgentName,
         model: Option<String>,
@@ -1365,7 +1370,7 @@ pub enum _UiEventMessage {
         title: Option<String>,
     },
     SubagentStatusUpdated {
-        sub_thread_id: String,
+        sub_session_id: String,
         status: SubagentStatus,
     },
     Error {
@@ -1664,17 +1669,17 @@ pub struct _ListProjectsResponse {
 }
 
 #[allow(dead_code)]
-#[frb(mirror(ListProjectThreadsParams))]
-pub struct _ListProjectThreadsParams {
+#[frb(mirror(ListProjectSessionsParams))]
+pub struct _ListProjectSessionsParams {
     pub project_id: String,
     pub limit: u32,
     pub before_ts_ms: Option<i64>,
 }
 
 #[allow(dead_code)]
-#[frb(mirror(ListProjectThreadsResponse))]
-pub struct _ListProjectThreadsResponse {
-    pub threads: Vec<ThreadSummary>,
+#[frb(mirror(ListProjectSessionsResponse))]
+pub struct _ListProjectSessionsResponse {
+    pub sessions: Vec<SessionSummary>,
 }
 
 #[cfg(test)]

@@ -8,20 +8,20 @@ part of 'thread_list_provider.dart';
 
 // GENERATED CODE - DO NOT MODIFY BY HAND
 // ignore_for_file: type=lint, type=warning
-/// Loads and caches the paged thread list. First build requests the
-/// freshest 50 threads; [refresh] reruns `list_threads` with the same
+/// Loads and caches the paged session list. First build requests the
+/// freshest 50 sessions; [refresh] reruns `list_sessions` with the same
 /// params.
 
 @ProviderFor(ThreadList)
 final threadListProvider = ThreadListProvider._();
 
-/// Loads and caches the paged thread list. First build requests the
-/// freshest 50 threads; [refresh] reruns `list_threads` with the same
+/// Loads and caches the paged session list. First build requests the
+/// freshest 50 sessions; [refresh] reruns `list_sessions` with the same
 /// params.
 final class ThreadListProvider
-    extends $AsyncNotifierProvider<ThreadList, List<ThreadSummary>> {
-  /// Loads and caches the paged thread list. First build requests the
-  /// freshest 50 threads; [refresh] reruns `list_threads` with the same
+    extends $AsyncNotifierProvider<ThreadList, List<SessionSummary>> {
+  /// Loads and caches the paged session list. First build requests the
+  /// freshest 50 sessions; [refresh] reruns `list_sessions` with the same
   /// params.
   ThreadListProvider._()
     : super(
@@ -42,24 +42,28 @@ final class ThreadListProvider
   ThreadList create() => ThreadList();
 }
 
-String _$threadListHash() => r'2791e89e13861ecbccbf3f9b4b2dfab5ab003a59';
+String _$threadListHash() => r'a5101bb48da9838337a8659ebf38f551901c0219';
 
-/// Loads and caches the paged thread list. First build requests the
-/// freshest 50 threads; [refresh] reruns `list_threads` with the same
+/// Loads and caches the paged session list. First build requests the
+/// freshest 50 sessions; [refresh] reruns `list_sessions` with the same
 /// params.
 
-abstract class _$ThreadList extends $AsyncNotifier<List<ThreadSummary>> {
-  FutureOr<List<ThreadSummary>> build();
+abstract class _$ThreadList extends $AsyncNotifier<List<SessionSummary>> {
+  FutureOr<List<SessionSummary>> build();
   @$mustCallSuper
   @override
   void runBuild() {
     final ref =
-        this.ref as $Ref<AsyncValue<List<ThreadSummary>>, List<ThreadSummary>>;
+        this.ref
+            as $Ref<AsyncValue<List<SessionSummary>>, List<SessionSummary>>;
     final element =
         ref.element
             as $ClassProviderElement<
-              AnyNotifier<AsyncValue<List<ThreadSummary>>, List<ThreadSummary>>,
-              AsyncValue<List<ThreadSummary>>,
+              AnyNotifier<
+                AsyncValue<List<SessionSummary>>,
+                List<SessionSummary>
+              >,
+              AsyncValue<List<SessionSummary>>,
               Object?,
               Object?
             >;

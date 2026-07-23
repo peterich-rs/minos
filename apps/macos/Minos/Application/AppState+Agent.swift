@@ -4,7 +4,7 @@ import Foundation
 /// AppState type body stays under the swiftlint type-body-length cap.
 extension AppState {
     @MainActor
-    func applyAgentState(_ state: ThreadState) {
+    func applyAgentState(_ state: SessionState) {
         agentState = state
 
         // Post-Phase-C the daemon's legacy single-channel state mirror always
@@ -23,31 +23,31 @@ extension AppState {
         }
 
         Task { [weak self] in
-            await self?.refreshAgentThreadSnapshot()
+            await self?.refreshAgentSessionSnapshot()
         }
     }
 
     @MainActor
-    func refreshAgentThreadSnapshot() async {
+    func refreshAgentSessionSnapshot() async {
         guard phase == .running, let daemon else { return }
 
         do {
-            applyAgentThreadSnapshot(try await daemon.currentAgentThread())
+            applyAgentSessionSnapshot(try await daemon.currentAgentSession())
         } catch let error as MinosError {
-            AppLog.error("appState.agent", "currentAgentThread failed · \(error.technicalDetails)")
+            AppLog.error("appState.agent", "currentAgentSession failed · \(error.technicalDetails)")
         } catch {
-            AppLog.error("appState.agent", "Unexpected currentAgentThread failure: \(String(describing: error))")
+            AppLog.error("appState.agent", "Unexpected currentAgentSession failure: \(String(describing: error))")
         }
     }
 
     @MainActor
-    func applyAgentThreadSnapshot(_ snapshot: AgentThreadSnapshot?) {
+    func applyAgentSessionSnapshot(_ snapshot: AgentSessionSnapshot?) {
         guard let snapshot else {
             return
         }
 
         agentState = snapshot.state
-        currentSession = StartAgentResponse(sessionId: snapshot.threadId, cwd: snapshot.workspaceRoot)
+        currentSession = StartAgentResponse(sessionId: snapshot.sessionId, cwd: snapshot.workspaceRoot)
     }
 
     @MainActor

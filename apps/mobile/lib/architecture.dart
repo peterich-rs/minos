@@ -11,8 +11,8 @@
 /// │  ├── core/widgets/       Shared reusable widgets        │
 /// │  └── features/           Feature-grouped views          │
 /// │       ├── auth/          Login / register               │
-/// │       ├── chat/          Agent thread chat              │
-/// │       ├── projects/      Project CRUD + threads         │
+/// │       ├── chat/          Agent session chat              │
+/// │       ├── projects/      Project CRUD + sessions         │
 /// │       ├── agents/        Agent profile management       │
 /// │       ├── social/        Friends & conversations        │
 /// │       ├── pairing/       QR device pairing              │
@@ -35,7 +35,7 @@
 /// │  ├── repositories/       Single source of truth         │
 /// │  │   ├── auth_repository     Auth / session IO          │
 /// │  │   ├── runtime_repository  Pairing / host state       │
-/// │  │   ├── project_repository  Project + thread list      │
+/// │  │   ├── project_repository  Project + session list      │
 /// │  │   ├── thread_repository   Thread event / send IO     │
 /// │  │   ├── social_repository   Social remote + cache      │
 /// │  │   ├── agent_profile_repository  Local profile store  │

@@ -32,28 +32,28 @@ import 'package:shadcn_ui/shadcn_ui.dart';
 ///
 /// The page is the integration seam where:
 ///
-///   - `threadEventsProvider(threadId)` supplies the historical +
+///   - `threadEventsProvider(sessionId)` supplies the historical +
 ///     live event stream;
 ///   - `activeSessionControllerProvider` says whether the user can
 ///     compose, must wait, or should see a Stop button instead.
 ///
-/// `threadId == null` means the user just landed on a "new chat" — the
+/// `sessionId == null` means the user just landed on a "new chat" — the
 /// list renders empty and the first `onSend` dispatches via
 /// `sendChatMessage`. Once the controller transitions to
-/// `SessionStreaming` we follow that thread id for events.
+/// `SessionStreaming` we follow that session id for events.
 class ThreadViewPage extends ConsumerStatefulWidget {
   const ThreadViewPage({
     super.key,
-    this.threadId,
+    this.sessionId,
     this.agent,
     this.agentProfileId,
   });
 
   /// Pre-existing thread to load. Null = new chat.
-  final String? threadId;
+  final String? sessionId;
 
-  /// Agent the thread was started with. Set when navigating from the thread
-  /// list (we already have it on the [ThreadSummary]); the title falls back
+  /// Agent the session was started with. Set when navigating from the thread
+  /// list (we already have it on the [SessionSummary]); the title falls back
   /// to it whenever the global active session is bound to a *different*
   /// thread, so we never label a historical thread with the live session's
   /// agent.
@@ -79,7 +79,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
   @override
   void initState() {
     super.initState();
-    _viewStateId = widget.threadId ?? 'draft-${identityHashCode(this)}';
+    _viewStateId = widget.sessionId ?? 'draft-${identityHashCode(this)}';
     _scroll.addListener(_onScroll);
     _listenForApprovalEvents();
   }
@@ -101,31 +101,31 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
     _approvalSub = threadCommands.uiEvents.listen((frame) {
       if (!mounted) return;
       final session = ref.read(activeSessionControllerProvider);
-      final threadId = _resolvedThreadId(session);
-      if (threadId == null || frame.threadId != threadId) return;
+      final sessionId = _resolvedThreadId(session);
+      if (sessionId == null || frame.sessionId != sessionId) return;
 
       final event = frame.ui;
       if (event is UiEventMessage_Raw) {
-        _handleRawApprovalEvent(event, threadId);
+        _handleRawApprovalEvent(event, sessionId);
       }
     });
   }
 
-  void _handleRawApprovalEvent(UiEventMessage_Raw event, String threadId) {
+  void _handleRawApprovalEvent(UiEventMessage_Raw event, String sessionId) {
     if (event.kind == 'approval/request' || event.kind == 'approval_request') {
-      unawaited(_onApprovalRequest(event.payloadJson, threadId));
+      unawaited(_onApprovalRequest(event.payloadJson, sessionId));
     } else if (event.kind == 'approval/timeout' ||
         event.kind == 'approval_timeout') {
       _onApprovalTimeout(event.payloadJson);
     } else if (event.kind == 'opencode/question.asked') {
-      unawaited(_onAgentQuestionRequest(event.payloadJson, threadId));
+      unawaited(_onAgentQuestionRequest(event.payloadJson, sessionId));
     } else if (event.kind == 'opencode/question.replied' ||
         event.kind == 'opencode/question.rejected') {
       _onAgentQuestionResolved();
     }
   }
 
-  Future<void> _onApprovalRequest(String payloadJson, String threadId) async {
+  Future<void> _onApprovalRequest(String payloadJson, String sessionId) async {
     final threadViewState = ref.read(
       threadViewStateControllerProvider(_viewStateId),
     );
@@ -137,7 +137,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
     } catch (error, stackTrace) {
       logFlutterWarn(
         'thread_view',
-        'approval request decode failed threadId=$threadId',
+        'approval request decode failed sessionId=$sessionId',
         error: error,
         stackTrace: stackTrace,
       );
@@ -147,7 +147,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
     final request = ApprovalRequestData.fromJson(json);
     logFlutterInfo(
       'thread_view',
-      'approval request received threadId=$threadId requestId=${request.requestId} method=${request.method}',
+      'approval request received sessionId=$sessionId requestId=${request.requestId} method=${request.method}',
     );
     ref
         .read(threadViewStateControllerProvider(_viewStateId).notifier)
@@ -161,7 +161,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
     if (decision == null) {
       logFlutterInfo(
         'thread_view',
-        'approval request dismissed threadId=$threadId requestId=${request.requestId}',
+        'approval request dismissed sessionId=$sessionId requestId=${request.requestId}',
       );
       // Timeout or dismissed without decision — host auto-declines
       return;
@@ -174,7 +174,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
           .read(threadCommandsProvider)
           .sendApprovalDecision(
             requestId: request.requestId,
-            threadId: request.threadId,
+            sessionId: request.sessionId,
             decision: decisionPayload,
           );
     } catch (error) {
@@ -221,7 +221,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
 
   Future<void> _onAgentQuestionRequest(
     String payloadJson,
-    String threadId,
+    String sessionId,
   ) async {
     final threadViewState = ref.read(
       threadViewStateControllerProvider(_viewStateId),
@@ -234,7 +234,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
     } catch (error, stackTrace) {
       logFlutterWarn(
         'thread_view',
-        'agent question decode failed threadId=$threadId',
+        'agent question decode failed sessionId=$sessionId',
         error: error,
         stackTrace: stackTrace,
       );
@@ -245,7 +245,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
     if (request.requestId.isEmpty || request.questions.isEmpty) {
       logFlutterWarn(
         'thread_view',
-        'agent question payload missing request id or questions threadId=$threadId',
+        'agent question payload missing request id or questions sessionId=$sessionId',
       );
       return;
     }
@@ -265,7 +265,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
       await ref
           .read(threadCommandsProvider)
           .respondOpencodeQuestion(
-            sessionId: threadId,
+            sessionId: sessionId,
             questionId: request.requestId,
             answers: answers,
           );
@@ -337,29 +337,29 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
     // otherwise tapping an older thread would show the most-recently-started
     // session's events because the active-session controller is global.
     // The session-derived branch is only meant for the "new chat" path,
-    // where widget.threadId is null and we need sendChatMessage to mint one.
-    if (widget.threadId != null) return widget.threadId;
+    // where widget.sessionId is null and we need sendChatMessage to mint one.
+    if (widget.sessionId != null) return widget.sessionId;
     return _sessionThreadId(session);
   }
 
   static String? _sessionThreadId(ActiveSession session) {
     return switch (session) {
-      SessionStreaming(threadId: final t) => t,
-      SessionAwaitingInput(threadId: final t) => t,
-      SessionSuspended(threadId: final t) => t,
-      SessionError(threadId: final t?) => t,
+      SessionStreaming(sessionId: final t) => t,
+      SessionAwaitingInput(sessionId: final t) => t,
+      SessionSuspended(sessionId: final t) => t,
+      SessionError(sessionId: final t?) => t,
       _ => null,
     };
   }
 
-  /// Returns the global session if it is currently bound to the thread the
+  /// Returns the global session if it is currently bound to the session the
   /// page is rendering, otherwise [SessionIdle]. The whole page (title,
   /// subtitle, input bar, send/start decision) reads off this view-scoped
-  /// value so historical threads never inherit the live session's "回复中"
+  /// value so historical sessions never inherit the live session's "回复中"
   /// badge or "停止" button while the agent is busy on a different thread.
   ActiveSession _viewSession(ActiveSession session) {
-    if (widget.threadId == null) return session;
-    return _sessionThreadId(session) == widget.threadId
+    if (widget.sessionId == null) return session;
+    return _sessionThreadId(session) == widget.sessionId
         ? session
         : const SessionIdle();
   }
@@ -404,7 +404,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
   }
 
   void _handleThreadMetrics(
-    String threadId,
+    String sessionId,
     int eventCount,
     List<ThreadUserMessageEcho> userMessages,
   ) {
@@ -442,11 +442,11 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
 
   Future<void> _dispatchMessage(String text, ActiveSession viewSession) async {
     final controller = ref.read(activeSessionControllerProvider.notifier);
-    final targetThreadId = widget.threadId ?? _sessionThreadId(viewSession);
+    final targetThreadId = widget.sessionId ?? _sessionThreadId(viewSession);
     final selectedProfile = _dispatchProfile(targetThreadId);
     // AgentProfile selection: for new chats (no thread yet), use the
     // preferred agent from the profile or global preference. For existing
-    // threads, fall back through profile → widget.agent → session agent →
+    // sessions, fall back through profile → widget.agent → session agent →
     // global preference.
     final dispatchAgent =
         selectedProfile?.runtimeAgent ??
@@ -488,21 +488,21 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
         await ref
             .read(agentProfilesControllerProvider.notifier)
             .bindThreadToProfile(
-              threadId: startedThreadId,
+              sessionId: startedThreadId,
               profileId: selectedProfile.id,
             );
       }
     }
   }
 
-  AgentProfile? _dispatchProfile(String? threadId) {
+  AgentProfile? _dispatchProfile(String? sessionId) {
     final profiles = ref.read(agentProfilesControllerProvider).asData?.value;
     if (profiles == null) return null;
     if (widget.agentProfileId != null) {
       return profiles.profileById(widget.agentProfileId!);
     }
-    if (threadId != null) {
-      return profiles.profileForThread(threadId);
+    if (sessionId != null) {
+      return profiles.profileForThread(sessionId);
     }
     return profiles.preferredProfile;
   }
@@ -518,25 +518,25 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
       threadViewStateControllerProvider(_viewStateId),
     );
     final viewSession = _viewSession(session);
-    final threadId = _resolvedThreadId(session);
+    final sessionId = _resolvedThreadId(session);
     final selectedProfile = widget.agentProfileId != null
         ? ref
               .watch(agentProfilesControllerProvider)
               .asData
               ?.value
               .profileById(widget.agentProfileId!)
-        : (threadId == null
+        : (sessionId == null
               ? ref.watch(preferredAgentProfileProvider)
-              : ref.watch(threadBoundAgentProfileProvider(threadId)));
+              : ref.watch(threadBoundAgentProfileProvider(sessionId)));
 
-    final body = threadId == null && threadViewState.optimisticMessages.isEmpty
+    final body = sessionId == null && threadViewState.optimisticMessages.isEmpty
         ? _NewChatEmptyState()
-        : threadId == null
+        : sessionId == null
         ? _LoadingThreadState(
             optimisticUserMessages: threadViewState.optimisticMessages,
           )
         : _ThreadEventStream(
-            threadId: threadId,
+            sessionId: sessionId,
             optimisticUserMessages: threadViewState.optimisticMessages,
             scroll: _scroll,
             stickToBottom: threadViewState.stickToBottom,
@@ -544,7 +544,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
                 viewSession is SessionStreaming ||
                 viewSession is SessionSending,
             onMetricsChanged: (eventCount, userMessages) =>
-                _handleThreadMetrics(threadId, eventCount, userMessages),
+                _handleThreadMetrics(sessionId, eventCount, userMessages),
             unreadBelow: threadViewState.unreadBelow,
             onJumpToBottom: () {
               if (!_scroll.hasClients) return;
@@ -598,7 +598,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
             mainAxisSize: .min,
             children: <Widget>[
               Text(
-                threadId == null
+                sessionId == null
                     ? (selectedProfile?.name ?? '新对话')
                     : (selectedProfile?.name ??
                           (titleAgent == null
@@ -690,6 +690,8 @@ String _agentLabel(AgentName agent) {
     AgentName.codex => 'Codex',
     AgentName.claude => 'Claude',
     AgentName.gemini => 'Gemini',
+    AgentName.opencode => 'OpenCode',
+    AgentName.grok => 'Grok',
   };
 }
 
@@ -736,7 +738,7 @@ void _showThreadInfo(BuildContext context, String title) {
 
 class _ThreadEventStream extends ConsumerWidget {
   const _ThreadEventStream({
-    required this.threadId,
+    required this.sessionId,
     required this.optimisticUserMessages,
     required this.scroll,
     required this.stickToBottom,
@@ -746,7 +748,7 @@ class _ThreadEventStream extends ConsumerWidget {
     required this.onJumpToBottom,
   });
 
-  final String threadId;
+  final String sessionId;
   final List<ThreadOptimisticUserMessage> optimisticUserMessages;
   final ScrollController scroll;
   final bool stickToBottom;
@@ -758,7 +760,7 @@ class _ThreadEventStream extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final eventsAsync = ref.watch(threadEventsProvider(threadId));
+    final eventsAsync = ref.watch(threadEventsProvider(sessionId));
     return eventsAsync.when(
       loading: () =>
           _LoadingThreadState(optimisticUserMessages: optimisticUserMessages),

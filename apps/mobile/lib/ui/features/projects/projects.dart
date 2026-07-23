@@ -1,7 +1,7 @@
 /// Feature: Projects
 ///
 /// Project management — list, create, rename, delete projects and their
-/// associated threads. Discord-style project → thread hierarchy.
+/// associated sessions. Discord-style project → thread hierarchy.
 ///
 /// View Models:
 ///   - [ProjectList] (application/project_providers.dart)

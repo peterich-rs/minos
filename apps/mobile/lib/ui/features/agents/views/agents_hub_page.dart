@@ -2705,6 +2705,16 @@ class _AgentAvatar extends StatelessWidget {
         isDark ? const Color(0xFF164E63) : const Color(0xFFCFFAFE),
         isDark ? const Color(0xFF22D3EE) : const Color(0xFF0891B2),
       ),
+      AgentName.opencode => (
+        'O',
+        isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+        isDark ? const Color(0xFF94A3B8) : const Color(0xFF475569),
+      ),
+      AgentName.grok => (
+        'X',
+        isDark ? const Color(0xFF78350F) : const Color(0xFFFEF3C7),
+        isDark ? const Color(0xFFFBBF24) : const Color(0xFFB45309),
+      ),
     };
     return Container(
       width: size,
@@ -2739,6 +2749,8 @@ String _runtimeLabel(AgentName agent) {
     AgentName.codex => 'Codex CLI',
     AgentName.claude => 'Claude CLI',
     AgentName.gemini => 'Gemini CLI',
+    AgentName.opencode => 'OpenCode CLI',
+    AgentName.grok => 'Grok CLI',
   };
 }
 
@@ -2769,6 +2781,11 @@ List<String> _modelOptions(AgentName runtimeAgent) {
     AgentName.codex => const <String>['GPT-5.5', 'GPT-5.1', 'o4-mini'],
     AgentName.claude => const <String>['Claude Opus 4.1', 'Claude Sonnet 4'],
     AgentName.gemini => const <String>['Gemini 2.5 Pro', 'Gemini 2.5 Flash'],
+    AgentName.opencode => const <String>[
+      'openai/gpt-5.2',
+      'openai/gpt-5.2-codex',
+    ],
+    AgentName.grok => const <String>['grok-4.5'],
   };
 }
 

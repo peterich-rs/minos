@@ -62,11 +62,11 @@ class ProjectList extends _$ProjectList {
   }
 }
 
-/// Loads threads for a specific project.
+/// Loads sessions for a specific project.
 @Riverpod(keepAlive: false)
 class ProjectThreads extends _$ProjectThreads {
   @override
-  Future<List<ThreadSummary>> build(String projectId) async {
+  Future<List<SessionSummary>> build(String projectId) async {
     return ref.read(projectRepositoryProvider).listProjectThreads(projectId);
   }
 

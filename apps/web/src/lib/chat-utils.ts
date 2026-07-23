@@ -127,7 +127,7 @@ export function transcriptFromEvents(events: UiEventMessage[]) {
   }
 
   events.forEach((event, i) => {
-    if (event.kind === 'thread_opened') {
+    if (event.kind === 'session_opened') {
       title = event.title ?? title
       return
     }

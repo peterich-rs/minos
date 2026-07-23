@@ -63,15 +63,15 @@ abstract class _$ProjectList extends $AsyncNotifier<List<ProjectSummary>> {
   }
 }
 
-/// Loads threads for a specific project.
+/// Loads sessions for a specific project.
 
 @ProviderFor(ProjectThreads)
 final projectThreadsProvider = ProjectThreadsFamily._();
 
-/// Loads threads for a specific project.
+/// Loads sessions for a specific project.
 final class ProjectThreadsProvider
-    extends $AsyncNotifierProvider<ProjectThreads, List<ThreadSummary>> {
-  /// Loads threads for a specific project.
+    extends $AsyncNotifierProvider<ProjectThreads, List<SessionSummary>> {
+  /// Loads sessions for a specific project.
   ProjectThreadsProvider._({
     required ProjectThreadsFamily super.from,
     required String super.argument,
@@ -108,17 +108,17 @@ final class ProjectThreadsProvider
   }
 }
 
-String _$projectThreadsHash() => r'b4f1142e59e96c3bbb8d18827345890168bb7d3e';
+String _$projectThreadsHash() => r'db836391b18d388c019b229ba6130d5caf82fa55';
 
-/// Loads threads for a specific project.
+/// Loads sessions for a specific project.
 
 final class ProjectThreadsFamily extends $Family
     with
         $ClassFamilyOverride<
           ProjectThreads,
-          AsyncValue<List<ThreadSummary>>,
-          List<ThreadSummary>,
-          FutureOr<List<ThreadSummary>>,
+          AsyncValue<List<SessionSummary>>,
+          List<SessionSummary>,
+          FutureOr<List<SessionSummary>>,
           String
         > {
   ProjectThreadsFamily._()
@@ -130,7 +130,7 @@ final class ProjectThreadsFamily extends $Family
         isAutoDispose: true,
       );
 
-  /// Loads threads for a specific project.
+  /// Loads sessions for a specific project.
 
   ProjectThreadsProvider call(String projectId) =>
       ProjectThreadsProvider._(argument: projectId, from: this);
@@ -139,23 +139,27 @@ final class ProjectThreadsFamily extends $Family
   String toString() => r'projectThreadsProvider';
 }
 
-/// Loads threads for a specific project.
+/// Loads sessions for a specific project.
 
-abstract class _$ProjectThreads extends $AsyncNotifier<List<ThreadSummary>> {
+abstract class _$ProjectThreads extends $AsyncNotifier<List<SessionSummary>> {
   late final _$args = ref.$arg as String;
   String get projectId => _$args;
 
-  FutureOr<List<ThreadSummary>> build(String projectId);
+  FutureOr<List<SessionSummary>> build(String projectId);
   @$mustCallSuper
   @override
   void runBuild() {
     final ref =
-        this.ref as $Ref<AsyncValue<List<ThreadSummary>>, List<ThreadSummary>>;
+        this.ref
+            as $Ref<AsyncValue<List<SessionSummary>>, List<SessionSummary>>;
     final element =
         ref.element
             as $ClassProviderElement<
-              AnyNotifier<AsyncValue<List<ThreadSummary>>, List<ThreadSummary>>,
-              AsyncValue<List<ThreadSummary>>,
+              AnyNotifier<
+                AsyncValue<List<SessionSummary>>,
+                List<SessionSummary>
+              >,
+              AsyncValue<List<SessionSummary>>,
               Object?,
               Object?
             >;

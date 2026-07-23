@@ -25,8 +25,8 @@ UI needs them.
 | Feature   | Barrel                              | Description                    |
 |-----------|-------------------------------------|--------------------------------|
 | auth      | `ui/features/auth/auth.dart`        | Login / register               |
-| chat      | `ui/features/chat/chat.dart`        | Agent thread chat              |
-| projects  | `ui/features/projects/projects.dart`| Project CRUD + threads         |
+| chat      | `ui/features/chat/chat.dart`        | Agent session chat              |
+| projects  | `ui/features/projects/projects.dart`| Project CRUD + sessions         |
 | agents    | `ui/features/agents/agents.dart`    | Agent profile management       |
 | social    | `ui/features/social/social.dart`    | Friends & conversations        |
 | pairing   | `ui/features/pairing/pairing.dart`  | QR device pairing              |

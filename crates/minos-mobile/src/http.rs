@@ -22,18 +22,18 @@ use minos_protocol::{
     ConversationsResponse, CreateFriendRequestRequest, CreateGroupConversationRequest,
     CreateProjectRequest, CreateProjectResponse, DeleteProjectRequest,
     EnsureDirectConversationRequest, FriendRequestsResponse, FriendsResponse,
-    GetThreadLastSeqResponse, HostSummary, ListAgentsResponse, ListChatMessagesRequest,
+    GetSessionLastSeqResponse, HostSummary, ListAgentsResponse, ListChatMessagesRequest,
     ListChatMessagesResponse, ListHostClisRequest, ListHostSkillsCommandRequest,
     ListHostSkillsResponse, ListHostWorkspacesCommandRequest, ListHostWorkspacesResponse,
-    ListProjectThreadsParams, ListProjectThreadsResponse, ListProjectsResponse, ListThreadsParams,
-    ListThreadsResponse, LogoutRequest, MeHostsResponse, MyProfileResponse, ReadThreadParams,
-    ReadThreadResponse, RealtimeWsTicketRequest, RealtimeWsTicketResponse, RefreshRequest,
+    ListProjectSessionsParams, ListProjectSessionsResponse, ListProjectsResponse, ListSessionsParams,
+    ListSessionsResponse, LogoutRequest, MeHostsResponse, MyProfileResponse, ReadSessionParams,
+    ReadSessionResponse, RealtimeWsTicketRequest, RealtimeWsTicketResponse, RefreshRequest,
     RefreshResponse, RegisterAgentRequest, RemoveAgentFromGroupRequest, RemoveGroupMemberRequest,
     SearchUsersRequest, SearchUsersResponse, SendChatMessageRequest, SetMinosIdRequest,
     UpdateAgentRequest, UpdateProjectRequest, WriteHostSkillConfigCommandRequest,
     WriteHostSkillConfigResponse,
 };
-use minos_ui_protocol::{DisplayPayload, MessageRole, ThreadEndReason, UiEventMessage};
+use minos_ui_protocol::{DisplayPayload, MessageRole, SessionEndReason, UiEventMessage};
 use openwire::{Client, RequestBody, ResponseBody, WireError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use uuid::Uuid;
@@ -230,7 +230,7 @@ struct FormalAgentSessionSummary {
     title: Option<String>,
     last_activity_at_ms: i64,
     message_count: u32,
-    end_reason: Option<ThreadEndReason>,
+    end_reason: Option<SessionEndReason>,
 }
 
 #[derive(Debug, Clone)]
@@ -245,7 +245,7 @@ pub struct AgentSessionSummary {
     pub title: Option<String>,
     pub last_activity_at_ms: i64,
     pub message_count: u32,
-    pub end_reason: Option<ThreadEndReason>,
+    pub end_reason: Option<SessionEndReason>,
 }
 
 impl FormalAgentSessionSummary {
@@ -265,7 +265,7 @@ impl FormalAgentSessionSummary {
         }
     }
 
-    fn into_thread_summary(self) -> Result<minos_protocol::ThreadSummary, MinosError> {
+    fn into_session_summary(self) -> Result<minos_protocol::SessionSummary, MinosError> {
         let session_id = self.session_id;
         let agent = self
             .agent
@@ -281,14 +281,14 @@ impl FormalAgentSessionSummary {
             })?;
 
         let state = if self.ended_at_ms.is_some() {
-            minos_protocol::ThreadState::Closed {
+            minos_protocol::SessionState::Closed {
                 reason: minos_protocol::CloseReason::UserClose,
             }
         } else {
-            minos_protocol::ThreadState::Idle
+            minos_protocol::SessionState::Idle
         };
-        Ok(minos_protocol::ThreadSummary {
-            thread_id: session_id,
+        Ok(minos_protocol::SessionSummary {
+            session_id: session_id,
             agent,
             title: self.title,
             first_ts_ms: self.started_at_ms,
@@ -296,7 +296,7 @@ impl FormalAgentSessionSummary {
             message_count: self.message_count,
             ended_at_ms: self.ended_at_ms,
             end_reason: self.end_reason,
-            parent_thread_id: None,
+            parent_session_id: None,
             state,
             needs_continue: false,
         })
@@ -443,12 +443,12 @@ impl MobileHttpClient {
         }
     }
 
-    /// Bearer-only after ADR-0020. Lists the calling account's threads.
-    pub async fn list_threads(
+    /// Bearer-only after ADR-0020. Lists the calling account's sessions.
+    pub async fn list_sessions(
         &self,
         access_token: &str,
-        params: ListThreadsParams,
-    ) -> Result<ListThreadsResponse, MinosError> {
+        params: ListSessionsParams,
+    ) -> Result<ListSessionsResponse, MinosError> {
         let path = "/v1/agent-sessions/list";
         let trace_id = start_http_trace(
             Method::POST.as_str(),
@@ -473,22 +473,22 @@ impl MobileHttpClient {
         if status.is_success() {
             let body: AgentSessionsResponse =
                 decode_success_json(resp, "AgentSessionsResponse").await?;
-            let mut threads = body
+            let mut sessions = body
                 .sessions
                 .into_iter()
-                .map(FormalAgentSessionSummary::into_thread_summary)
+                .map(FormalAgentSessionSummary::into_session_summary)
                 .collect::<Result<Vec<_>, _>>()?;
             if let Some(agent) = params.agent {
-                threads.retain(|thread| thread.agent == agent);
+                sessions.retain(|thread| thread.agent == agent);
             }
             request_trace::finish_success(
                 trace_id,
                 Some(status.as_u16()),
-                Some(format!("threads={}", threads.len())),
+                Some(format!("sessions={}", sessions.len())),
                 None,
             );
-            Ok(ListThreadsResponse {
-                threads,
+            Ok(ListSessionsResponse {
+                sessions,
                 next_before_ts_ms: body.next_before_started_at_ms,
             })
         } else {
@@ -544,32 +544,32 @@ impl MobileHttpClient {
         }
     }
 
-    pub async fn read_thread(
+    pub async fn read_session(
         &self,
         access_token: &str,
-        params: ReadThreadParams,
-    ) -> Result<ReadThreadResponse, MinosError> {
-        let thread_id = params.thread_id.clone();
-        let after_turn_seq = optional_u64_to_i64(params.from_seq, "ReadThreadParams.from_seq")?;
+        params: ReadSessionParams,
+    ) -> Result<ReadSessionResponse, MinosError> {
+        let session_id = params.session_id.clone();
+        let after_turn_seq = optional_u64_to_i64(params.from_seq, "ReadSessionParams.from_seq")?;
         let turn_limit = params.limit.clamp(1, 200);
         let turns = self
             .read_agent_session_turns(
                 access_token,
                 ReadAgentSessionTurnsRequest {
-                    session_id: Some(thread_id.clone()),
+                    session_id: Some(session_id.clone()),
                     turn_id: None,
                     after_turn_seq,
                     after_event_seq: None,
                     limit: turn_limit,
                 },
-                Some(thread_id.clone()),
+                Some(session_id.clone()),
                 Some(format!(
                     "read_session_turns limit={} after_turn_seq={after_turn_seq:?}",
                     turn_limit
                 )),
             )
             .await
-            .map_err(|error| map_agent_session_not_found(error, &thread_id))?;
+            .map_err(|error| map_agent_session_not_found(error, &session_id))?;
 
         let next_seq = if turns.turns.len() == usize::try_from(turn_limit).unwrap_or(usize::MAX) {
             turns
@@ -591,25 +591,25 @@ impl MobileHttpClient {
                         after_event_seq: None,
                         limit: 200,
                     },
-                    Some(thread_id.clone()),
+                    Some(session_id.clone()),
                     Some(format!("read_turn_events turn_id={}", turn.turn_id)),
                 )
                 .await
-                .map_err(|error| map_agent_session_not_found(error, &thread_id))?;
+                .map_err(|error| map_agent_session_not_found(error, &session_id))?;
             append_turn_ui_events(&mut ui_events, &turn, events.events);
         }
-        Ok(ReadThreadResponse {
+        Ok(ReadSessionResponse {
             ui_events,
             next_seq,
-            thread_end_reason: None,
+            session_end_reason: None,
         })
     }
 
-    pub async fn get_thread_last_seq(
+    pub async fn get_session_last_seq(
         &self,
         access_token: &str,
-        thread_id: &str,
-    ) -> Result<GetThreadLastSeqResponse, MinosError> {
+        session_id: &str,
+    ) -> Result<GetSessionLastSeqResponse, MinosError> {
         let mut after_turn_seq = None;
         let mut last_seq = 0_u64;
         loop {
@@ -617,19 +617,19 @@ impl MobileHttpClient {
                 .read_agent_session_turns(
                     access_token,
                     ReadAgentSessionTurnsRequest {
-                        session_id: Some(thread_id.into()),
+                        session_id: Some(session_id.into()),
                         turn_id: None,
                         after_turn_seq,
                         after_event_seq: None,
                         limit: 200,
                     },
-                    Some(thread_id.into()),
+                    Some(session_id.into()),
                     Some(format!(
                         "get_session_last_turn after_turn_seq={after_turn_seq:?}"
                     )),
                 )
                 .await
-                .map_err(|error| map_agent_session_not_found(error, thread_id))?;
+                .map_err(|error| map_agent_session_not_found(error, session_id))?;
             let Some(last_turn) = page.turns.last() else {
                 break;
             };
@@ -647,14 +647,14 @@ impl MobileHttpClient {
             }
             after_turn_seq = Some(last_turn.turn_seq);
         }
-        Ok(GetThreadLastSeqResponse { last_seq })
+        Ok(GetSessionLastSeqResponse { last_seq })
     }
 
     async fn read_agent_session_turns(
         &self,
         access_token: &str,
         body: ReadAgentSessionTurnsRequest,
-        thread_id: Option<String>,
+        session_id: Option<String>,
         request_summary: Option<String>,
     ) -> Result<ReadAgentSessionTurnsResponse, MinosError> {
         let path = "/v1/agent-sessions/read-turns";
@@ -662,7 +662,7 @@ impl MobileHttpClient {
         let trace_id = start_http_trace(
             Method::POST.as_str(),
             path,
-            thread_id.clone(),
+            session_id.clone(),
             request_summary,
         );
         let request = self.request_with_json(Method::POST, &url, Some(access_token), &body)?;
@@ -679,7 +679,7 @@ impl MobileHttpClient {
                     turns.turns.len(),
                     turns.events.len()
                 )),
-                thread_id,
+                session_id,
             );
             Ok(turns)
         } else {
@@ -699,7 +699,7 @@ impl MobileHttpClient {
         let trace_id = start_http_trace(
             Method::POST.as_str(),
             path,
-            Some(req.thread_id.clone()),
+            Some(req.session_id.clone()),
             Some(format!("request_id={}", req.request_id)),
         );
         let request = self.request_with_json(
@@ -719,7 +719,7 @@ impl MobileHttpClient {
                 trace_id,
                 Some(status.as_u16()),
                 Some("approval decision forwarded".into()),
-                Some(req.thread_id),
+                Some(req.session_id),
             );
             Ok(())
         } else {
@@ -853,8 +853,8 @@ impl MobileHttpClient {
             path,
             None,
             Some(format!(
-                "project_id={} thread_id={}",
-                req.project_id, req.thread_id
+                "project_id={} session_id={}",
+                req.project_id, req.session_id
             )),
         );
         let request = self.request_with_json(
@@ -863,7 +863,7 @@ impl MobileHttpClient {
             Some(access_token),
             &LinkProjectAgentSessionRequest {
                 project_id: &req.project_id,
-                session_id: &req.thread_id,
+                session_id: &req.session_id,
             },
         )?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
@@ -878,11 +878,11 @@ impl MobileHttpClient {
         }
     }
 
-    pub async fn list_project_threads(
+    pub async fn list_project_sessions(
         &self,
         access_token: &str,
-        req: ListProjectThreadsParams,
-    ) -> Result<ListProjectThreadsResponse, MinosError> {
+        req: ListProjectSessionsParams,
+    ) -> Result<ListProjectSessionsResponse, MinosError> {
         let path = "/v1/projects/agent-sessions/query";
         let url = format!("{}{path}", self.base);
         let trace_id = start_http_trace(
@@ -909,18 +909,18 @@ impl MobileHttpClient {
         if status.is_success() {
             let body: ProjectAgentSessionsResponse =
                 decode_success_json(resp, "ProjectAgentSessionsResponse").await?;
-            let threads = body
+            let sessions = body
                 .sessions
                 .into_iter()
-                .map(FormalAgentSessionSummary::into_thread_summary)
+                .map(FormalAgentSessionSummary::into_session_summary)
                 .collect::<Result<Vec<_>, _>>()?;
             request_trace::finish_success(
                 trace_id,
                 Some(status.as_u16()),
-                Some(format!("threads={}", threads.len())),
+                Some(format!("sessions={}", sessions.len())),
                 None,
             );
-            Ok(ListProjectThreadsResponse { threads })
+            Ok(ListProjectSessionsResponse { sessions })
         } else {
             let error = decode_error(resp).await;
             request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
@@ -2413,13 +2413,13 @@ fn optional_u64_to_i64(value: Option<u64>, field: &str) -> Result<Option<i64>, M
         .transpose()
 }
 
-fn map_agent_session_not_found(error: MinosError, thread_id: &str) -> MinosError {
+fn map_agent_session_not_found(error: MinosError, session_id: &str) -> MinosError {
     match error {
         MinosError::RpcCallFailed { method, message }
             if method.contains("404") && message.contains("agent_session_not_found") =>
         {
-            MinosError::ThreadNotFound {
-                thread_id: thread_id.to_string(),
+            MinosError::SessionNotFound {
+                session_id: session_id.to_string(),
             }
         }
         other => other,
@@ -2598,14 +2598,14 @@ fn agent_name_from_session_agent_id(agent_id: &str) -> Option<AgentName> {
 fn start_http_trace(
     method: &str,
     target: &str,
-    thread_id: Option<String>,
+    session_id: Option<String>,
     request_summary: Option<String>,
 ) -> u64 {
     request_trace::start(
         RequestTransport::Http,
         method,
         target,
-        thread_id,
+        session_id,
         request_summary,
     )
 }
@@ -2631,8 +2631,8 @@ mod tests {
             end_reason: None,
         };
 
-        let thread = summary.into_thread_summary().unwrap();
-        assert_eq!(thread.thread_id, "sess-1");
+        let thread = summary.into_session_summary().unwrap();
+        assert_eq!(thread.session_id, "sess-1");
         assert_eq!(thread.agent, AgentName::Codex);
         assert_eq!(thread.title.as_deref(), Some("Thread title"));
         assert_eq!(thread.first_ts_ms, 100);
@@ -2658,7 +2658,7 @@ mod tests {
             end_reason: None,
         };
 
-        let thread = summary.into_thread_summary().unwrap();
+        let thread = summary.into_session_summary().unwrap();
         assert_eq!(thread.agent, AgentName::Claude);
     }
 

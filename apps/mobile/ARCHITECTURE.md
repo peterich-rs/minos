@@ -39,7 +39,7 @@ lib/
 │   ├── auth_provider.dart       # Auth state controller
 │   ├── active_session_provider.dart  # Agent session lifecycle
 │   ├── thread_events_provider.dart   # Live event stream
-│   ├── thread_list_provider.dart     # Thread list data
+│   ├── thread_list_provider.dart     # Session list data
 │   ├── project_providers.dart   # Project CRUD + selection
 │   ├── social_providers.dart    # Social chat state management
 │   ├── agent_profiles_provider.dart  # Agent profile CRUD
@@ -59,7 +59,7 @@ lib/
 │   │   └── widgets/widgets.dart # Shared widget exports
 │   └── features/
 │       ├── auth/                # Auth screens/widgets + barrel
-│       ├── chat/                # Agent thread screens/widgets + barrel
+│       ├── chat/                # Agent session screens/widgets + barrel
 │       ├── projects/            # Project screens/widgets + barrel
 │       ├── agents/              # Agent management screens/widgets + barrel
 │       ├── social/              # Social screens/widgets + barrel

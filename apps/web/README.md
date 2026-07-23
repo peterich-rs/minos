@@ -45,7 +45,7 @@ pnpm build
 
 - Browser-admin login/register
 - Host discovery
-- Thread list + thread history
+- Session list + session history
 - Live websocket subscription via short-lived ws ticket
 - Start thread / send follow-up turn / close thread
 

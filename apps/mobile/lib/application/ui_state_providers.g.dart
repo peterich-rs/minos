@@ -164,7 +164,7 @@ final class SelectedProjectThreadProvider
 }
 
 String _$selectedProjectThreadHash() =>
-    r'2609614bca62d4f4eba898614293813c3c84bfba';
+    r'2f3c29b6e23760e3d228073d22477e95fecd7138';
 
 final class SelectedProjectThreadFamily extends $Family
     with

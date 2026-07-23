@@ -64,7 +64,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -590906807;
+  int get rustContentHash => 1870449684;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -97,9 +97,9 @@ abstract class RustLibApi extends BaseApi {
     required String memberAccountId,
   });
 
-  Future<void> crateApiMinosMobileClientCloseThread({
+  Future<void> crateApiMinosMobileClientCloseSession({
     required MobileClient that,
-    required String threadId,
+    required String sessionId,
   });
 
   Future<ConversationMembersResponse>
@@ -162,9 +162,9 @@ abstract class RustLibApi extends BaseApi {
     required MobileClient that,
   });
 
-  Future<void> crateApiMinosMobileClientInterruptThread({
+  Future<void> crateApiMinosMobileClientInterruptSession({
     required MobileClient that,
-    required String threadId,
+    required String sessionId,
   });
 
   Future<List<AgentSessionSummaryDto>>
@@ -213,19 +213,19 @@ abstract class RustLibApi extends BaseApi {
     required MobileClient that,
   });
 
-  Future<ListProjectThreadsResponse>
-  crateApiMinosMobileClientListProjectThreads({
+  Future<ListProjectSessionsResponse>
+  crateApiMinosMobileClientListProjectSessions({
     required MobileClient that,
-    required ListProjectThreadsParams req,
+    required ListProjectSessionsParams req,
   });
 
   Future<ListProjectsResponse> crateApiMinosMobileClientListProjects({
     required MobileClient that,
   });
 
-  Future<ListThreadsResponse> crateApiMinosMobileClientListThreads({
+  Future<ListSessionsResponse> crateApiMinosMobileClientListSessions({
     required MobileClient that,
-    required ListThreadsParams req,
+    required ListSessionsParams req,
   });
 
   Future<AuthSummary> crateApiMinosMobileClientLogin({
@@ -270,9 +270,9 @@ abstract class RustLibApi extends BaseApi {
     required MobileClient that,
   });
 
-  Future<ReadThreadResponse> crateApiMinosMobileClientReadThread({
+  Future<ReadSessionResponse> crateApiMinosMobileClientReadSession({
     required MobileClient that,
-    required ReadThreadParams req,
+    required ReadSessionParams req,
   });
 
   Future<ChatMessageSummary> crateApiMinosMobileClientRecallChatMessage({
@@ -336,7 +336,7 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateApiMinosMobileClientSendApprovalDecision({
     required MobileClient that,
     required String requestId,
-    required String threadId,
+    required String sessionId,
     required String decisionJson,
   });
 
@@ -407,102 +407,102 @@ abstract class RustLibApi extends BaseApi {
     required bool enabled,
   });
 
-  AgentName crateApiMinosThreadSummaryAutoAccessorGetAgent({
-    required ThreadSummary that,
+  AgentName crateApiMinosSessionSummaryAutoAccessorGetAgent({
+    required SessionSummary that,
   });
 
-  ThreadEndReason? crateApiMinosThreadSummaryAutoAccessorGetEndReason({
-    required ThreadSummary that,
+  SessionEndReason? crateApiMinosSessionSummaryAutoAccessorGetEndReason({
+    required SessionSummary that,
   });
 
-  PlatformInt64? crateApiMinosThreadSummaryAutoAccessorGetEndedAtMs({
-    required ThreadSummary that,
+  PlatformInt64? crateApiMinosSessionSummaryAutoAccessorGetEndedAtMs({
+    required SessionSummary that,
   });
 
-  PlatformInt64 crateApiMinosThreadSummaryAutoAccessorGetFirstTsMs({
-    required ThreadSummary that,
+  PlatformInt64 crateApiMinosSessionSummaryAutoAccessorGetFirstTsMs({
+    required SessionSummary that,
   });
 
-  PlatformInt64 crateApiMinosThreadSummaryAutoAccessorGetLastTsMs({
-    required ThreadSummary that,
+  PlatformInt64 crateApiMinosSessionSummaryAutoAccessorGetLastTsMs({
+    required SessionSummary that,
   });
 
-  int crateApiMinosThreadSummaryAutoAccessorGetMessageCount({
-    required ThreadSummary that,
+  int crateApiMinosSessionSummaryAutoAccessorGetMessageCount({
+    required SessionSummary that,
   });
 
-  bool crateApiMinosThreadSummaryAutoAccessorGetNeedsContinue({
-    required ThreadSummary that,
+  bool crateApiMinosSessionSummaryAutoAccessorGetNeedsContinue({
+    required SessionSummary that,
   });
 
-  String? crateApiMinosThreadSummaryAutoAccessorGetParentThreadId({
-    required ThreadSummary that,
+  String? crateApiMinosSessionSummaryAutoAccessorGetParentSessionId({
+    required SessionSummary that,
   });
 
-  ThreadState crateApiMinosThreadSummaryAutoAccessorGetState({
-    required ThreadSummary that,
+  String crateApiMinosSessionSummaryAutoAccessorGetSessionId({
+    required SessionSummary that,
   });
 
-  String crateApiMinosThreadSummaryAutoAccessorGetThreadId({
-    required ThreadSummary that,
+  SessionState crateApiMinosSessionSummaryAutoAccessorGetState({
+    required SessionSummary that,
   });
 
-  String? crateApiMinosThreadSummaryAutoAccessorGetTitle({
-    required ThreadSummary that,
+  String? crateApiMinosSessionSummaryAutoAccessorGetTitle({
+    required SessionSummary that,
   });
 
-  void crateApiMinosThreadSummaryAutoAccessorSetAgent({
-    required ThreadSummary that,
+  void crateApiMinosSessionSummaryAutoAccessorSetAgent({
+    required SessionSummary that,
     required AgentName agent,
   });
 
-  void crateApiMinosThreadSummaryAutoAccessorSetEndReason({
-    required ThreadSummary that,
-    ThreadEndReason? endReason,
+  void crateApiMinosSessionSummaryAutoAccessorSetEndReason({
+    required SessionSummary that,
+    SessionEndReason? endReason,
   });
 
-  void crateApiMinosThreadSummaryAutoAccessorSetEndedAtMs({
-    required ThreadSummary that,
+  void crateApiMinosSessionSummaryAutoAccessorSetEndedAtMs({
+    required SessionSummary that,
     PlatformInt64? endedAtMs,
   });
 
-  void crateApiMinosThreadSummaryAutoAccessorSetFirstTsMs({
-    required ThreadSummary that,
+  void crateApiMinosSessionSummaryAutoAccessorSetFirstTsMs({
+    required SessionSummary that,
     required PlatformInt64 firstTsMs,
   });
 
-  void crateApiMinosThreadSummaryAutoAccessorSetLastTsMs({
-    required ThreadSummary that,
+  void crateApiMinosSessionSummaryAutoAccessorSetLastTsMs({
+    required SessionSummary that,
     required PlatformInt64 lastTsMs,
   });
 
-  void crateApiMinosThreadSummaryAutoAccessorSetMessageCount({
-    required ThreadSummary that,
+  void crateApiMinosSessionSummaryAutoAccessorSetMessageCount({
+    required SessionSummary that,
     required int messageCount,
   });
 
-  void crateApiMinosThreadSummaryAutoAccessorSetNeedsContinue({
-    required ThreadSummary that,
+  void crateApiMinosSessionSummaryAutoAccessorSetNeedsContinue({
+    required SessionSummary that,
     required bool needsContinue,
   });
 
-  void crateApiMinosThreadSummaryAutoAccessorSetParentThreadId({
-    required ThreadSummary that,
-    String? parentThreadId,
+  void crateApiMinosSessionSummaryAutoAccessorSetParentSessionId({
+    required SessionSummary that,
+    String? parentSessionId,
   });
 
-  void crateApiMinosThreadSummaryAutoAccessorSetState({
-    required ThreadSummary that,
-    required ThreadState state,
+  void crateApiMinosSessionSummaryAutoAccessorSetSessionId({
+    required SessionSummary that,
+    required String sessionId,
   });
 
-  void crateApiMinosThreadSummaryAutoAccessorSetThreadId({
-    required ThreadSummary that,
-    required String threadId,
+  void crateApiMinosSessionSummaryAutoAccessorSetState({
+    required SessionSummary that,
+    required SessionState state,
   });
 
-  void crateApiMinosThreadSummaryAutoAccessorSetTitle({
-    required ThreadSummary that,
+  void crateApiMinosSessionSummaryAutoAccessorSetTitle({
+    required SessionSummary that,
     String? title,
   });
 
@@ -538,21 +538,21 @@ abstract class RustLibApi extends BaseApi {
   CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_MobileClientPtr;
 
   RustArcIncrementStrongCountFnType
-  get rust_arc_increment_strong_count_ThreadState;
+  get rust_arc_increment_strong_count_SessionState;
 
   RustArcDecrementStrongCountFnType
-  get rust_arc_decrement_strong_count_ThreadState;
+  get rust_arc_decrement_strong_count_SessionState;
 
-  CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_ThreadStatePtr;
+  CrossPlatformFinalizerArg get rust_arc_decrement_strong_count_SessionStatePtr;
 
   RustArcIncrementStrongCountFnType
-  get rust_arc_increment_strong_count_ThreadSummary;
+  get rust_arc_increment_strong_count_SessionSummary;
 
   RustArcDecrementStrongCountFnType
-  get rust_arc_decrement_strong_count_ThreadSummary;
+  get rust_arc_decrement_strong_count_SessionSummary;
 
   CrossPlatformFinalizerArg
-  get rust_arc_decrement_strong_count_ThreadSummaryPtr;
+  get rust_arc_decrement_strong_count_SessionSummaryPtr;
 }
 
 class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
@@ -718,9 +718,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<void> crateApiMinosMobileClientCloseThread({
+  Future<void> crateApiMinosMobileClientCloseSession({
     required MobileClient that,
-    required String threadId,
+    required String sessionId,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -730,7 +730,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          sse_encode_String(threadId, serializer);
+          sse_encode_String(sessionId, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -742,17 +742,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_unit,
           decodeErrorData: sse_decode_minos_error,
         ),
-        constMeta: kCrateApiMinosMobileClientCloseThreadConstMeta,
-        argValues: [that, threadId],
+        constMeta: kCrateApiMinosMobileClientCloseSessionConstMeta,
+        argValues: [that, sessionId],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiMinosMobileClientCloseThreadConstMeta =>
+  TaskConstMeta get kCrateApiMinosMobileClientCloseSessionConstMeta =>
       const TaskConstMeta(
-        debugName: "MobileClient_close_thread",
-        argNames: ["that", "threadId"],
+        debugName: "MobileClient_close_session",
+        argNames: ["that", "sessionId"],
       );
 
   @override
@@ -1206,9 +1206,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<void> crateApiMinosMobileClientInterruptThread({
+  Future<void> crateApiMinosMobileClientInterruptSession({
     required MobileClient that,
-    required String threadId,
+    required String sessionId,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -1218,7 +1218,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          sse_encode_String(threadId, serializer);
+          sse_encode_String(sessionId, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -1230,17 +1230,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_unit,
           decodeErrorData: sse_decode_minos_error,
         ),
-        constMeta: kCrateApiMinosMobileClientInterruptThreadConstMeta,
-        argValues: [that, threadId],
+        constMeta: kCrateApiMinosMobileClientInterruptSessionConstMeta,
+        argValues: [that, sessionId],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiMinosMobileClientInterruptThreadConstMeta =>
+  TaskConstMeta get kCrateApiMinosMobileClientInterruptSessionConstMeta =>
       const TaskConstMeta(
-        debugName: "MobileClient_interrupt_thread",
-        argNames: ["that", "threadId"],
+        debugName: "MobileClient_interrupt_session",
+        argNames: ["that", "sessionId"],
       );
 
   @override
@@ -1557,10 +1557,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<ListProjectThreadsResponse>
-  crateApiMinosMobileClientListProjectThreads({
+  Future<ListProjectSessionsResponse>
+  crateApiMinosMobileClientListProjectSessions({
     required MobileClient that,
-    required ListProjectThreadsParams req,
+    required ListProjectSessionsParams req,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -1570,7 +1570,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          sse_encode_box_autoadd_list_project_threads_params(req, serializer);
+          sse_encode_box_autoadd_list_project_sessions_params(req, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -1579,19 +1579,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
         },
         codec: SseCodec(
-          decodeSuccessData: sse_decode_list_project_threads_response,
+          decodeSuccessData: sse_decode_list_project_sessions_response,
           decodeErrorData: sse_decode_minos_error,
         ),
-        constMeta: kCrateApiMinosMobileClientListProjectThreadsConstMeta,
+        constMeta: kCrateApiMinosMobileClientListProjectSessionsConstMeta,
         argValues: [that, req],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiMinosMobileClientListProjectThreadsConstMeta =>
+  TaskConstMeta get kCrateApiMinosMobileClientListProjectSessionsConstMeta =>
       const TaskConstMeta(
-        debugName: "MobileClient_list_project_threads",
+        debugName: "MobileClient_list_project_sessions",
         argNames: ["that", "req"],
       );
 
@@ -1632,9 +1632,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<ListThreadsResponse> crateApiMinosMobileClientListThreads({
+  Future<ListSessionsResponse> crateApiMinosMobileClientListSessions({
     required MobileClient that,
-    required ListThreadsParams req,
+    required ListSessionsParams req,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -1644,7 +1644,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          sse_encode_box_autoadd_list_threads_params(req, serializer);
+          sse_encode_box_autoadd_list_sessions_params(req, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -1653,19 +1653,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
         },
         codec: SseCodec(
-          decodeSuccessData: sse_decode_list_threads_response,
+          decodeSuccessData: sse_decode_list_sessions_response,
           decodeErrorData: sse_decode_minos_error,
         ),
-        constMeta: kCrateApiMinosMobileClientListThreadsConstMeta,
+        constMeta: kCrateApiMinosMobileClientListSessionsConstMeta,
         argValues: [that, req],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiMinosMobileClientListThreadsConstMeta =>
+  TaskConstMeta get kCrateApiMinosMobileClientListSessionsConstMeta =>
       const TaskConstMeta(
-        debugName: "MobileClient_list_threads",
+        debugName: "MobileClient_list_sessions",
         argNames: ["that", "req"],
       );
 
@@ -2010,9 +2010,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  Future<ReadThreadResponse> crateApiMinosMobileClientReadThread({
+  Future<ReadSessionResponse> crateApiMinosMobileClientReadSession({
     required MobileClient that,
-    required ReadThreadParams req,
+    required ReadSessionParams req,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -2022,7 +2022,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             that,
             serializer,
           );
-          sse_encode_box_autoadd_read_thread_params(req, serializer);
+          sse_encode_box_autoadd_read_session_params(req, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -2031,19 +2031,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
         },
         codec: SseCodec(
-          decodeSuccessData: sse_decode_read_thread_response,
+          decodeSuccessData: sse_decode_read_session_response,
           decodeErrorData: sse_decode_minos_error,
         ),
-        constMeta: kCrateApiMinosMobileClientReadThreadConstMeta,
+        constMeta: kCrateApiMinosMobileClientReadSessionConstMeta,
         argValues: [that, req],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiMinosMobileClientReadThreadConstMeta =>
+  TaskConstMeta get kCrateApiMinosMobileClientReadSessionConstMeta =>
       const TaskConstMeta(
-        debugName: "MobileClient_read_thread",
+        debugName: "MobileClient_read_session",
         argNames: ["that", "req"],
       );
 
@@ -2464,7 +2464,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Future<void> crateApiMinosMobileClientSendApprovalDecision({
     required MobileClient that,
     required String requestId,
-    required String threadId,
+    required String sessionId,
     required String decisionJson,
   }) {
     return handler.executeNormal(
@@ -2476,7 +2476,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             serializer,
           );
           sse_encode_String(requestId, serializer);
-          sse_encode_String(threadId, serializer);
+          sse_encode_String(sessionId, serializer);
           sse_encode_String(decisionJson, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
@@ -2490,7 +2490,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_minos_error,
         ),
         constMeta: kCrateApiMinosMobileClientSendApprovalDecisionConstMeta,
-        argValues: [that, requestId, threadId, decisionJson],
+        argValues: [that, requestId, sessionId, decisionJson],
         apiImpl: this,
       ),
     );
@@ -2499,7 +2499,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiMinosMobileClientSendApprovalDecisionConstMeta =>
       const TaskConstMeta(
         debugName: "MobileClient_send_approval_decision",
-        argNames: ["that", "requestId", "threadId", "decisionJson"],
+        argNames: ["that", "requestId", "sessionId", "decisionJson"],
       );
 
   @override
@@ -3008,14 +3008,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
-  AgentName crateApiMinosThreadSummaryAutoAccessorGetAgent({
-    required ThreadSummary that,
+  AgentName crateApiMinosSessionSummaryAutoAccessorGetAgent({
+    required SessionSummary that,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             that,
             serializer,
           );
@@ -3025,38 +3025,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_agent_name,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiMinosThreadSummaryAutoAccessorGetAgentConstMeta,
+        constMeta: kCrateApiMinosSessionSummaryAutoAccessorGetAgentConstMeta,
         argValues: [that],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiMinosThreadSummaryAutoAccessorGetAgentConstMeta =>
+  TaskConstMeta get kCrateApiMinosSessionSummaryAutoAccessorGetAgentConstMeta =>
       const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_get_agent",
+        debugName: "SessionSummary_auto_accessor_get_agent",
         argNames: ["that"],
       );
 
   @override
-  ThreadEndReason? crateApiMinosThreadSummaryAutoAccessorGetEndReason({
-    required ThreadSummary that,
+  SessionEndReason? crateApiMinosSessionSummaryAutoAccessorGetEndReason({
+    required SessionSummary that,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             that,
             serializer,
           );
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 65)!;
         },
         codec: SseCodec(
-          decodeSuccessData: sse_decode_opt_box_autoadd_thread_end_reason,
+          decodeSuccessData: sse_decode_opt_box_autoadd_session_end_reason,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiMinosThreadSummaryAutoAccessorGetEndReasonConstMeta,
+        constMeta:
+            kCrateApiMinosSessionSummaryAutoAccessorGetEndReasonConstMeta,
         argValues: [that],
         apiImpl: this,
       ),
@@ -3064,21 +3065,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta
-  get kCrateApiMinosThreadSummaryAutoAccessorGetEndReasonConstMeta =>
+  get kCrateApiMinosSessionSummaryAutoAccessorGetEndReasonConstMeta =>
       const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_get_end_reason",
+        debugName: "SessionSummary_auto_accessor_get_end_reason",
         argNames: ["that"],
       );
 
   @override
-  PlatformInt64? crateApiMinosThreadSummaryAutoAccessorGetEndedAtMs({
-    required ThreadSummary that,
+  PlatformInt64? crateApiMinosSessionSummaryAutoAccessorGetEndedAtMs({
+    required SessionSummary that,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             that,
             serializer,
           );
@@ -3088,7 +3089,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_opt_box_autoadd_i_64,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiMinosThreadSummaryAutoAccessorGetEndedAtMsConstMeta,
+        constMeta:
+            kCrateApiMinosSessionSummaryAutoAccessorGetEndedAtMsConstMeta,
         argValues: [that],
         apiImpl: this,
       ),
@@ -3096,21 +3098,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta
-  get kCrateApiMinosThreadSummaryAutoAccessorGetEndedAtMsConstMeta =>
+  get kCrateApiMinosSessionSummaryAutoAccessorGetEndedAtMsConstMeta =>
       const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_get_ended_at_ms",
+        debugName: "SessionSummary_auto_accessor_get_ended_at_ms",
         argNames: ["that"],
       );
 
   @override
-  PlatformInt64 crateApiMinosThreadSummaryAutoAccessorGetFirstTsMs({
-    required ThreadSummary that,
+  PlatformInt64 crateApiMinosSessionSummaryAutoAccessorGetFirstTsMs({
+    required SessionSummary that,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             that,
             serializer,
           );
@@ -3120,7 +3122,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_i_64,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiMinosThreadSummaryAutoAccessorGetFirstTsMsConstMeta,
+        constMeta:
+            kCrateApiMinosSessionSummaryAutoAccessorGetFirstTsMsConstMeta,
         argValues: [that],
         apiImpl: this,
       ),
@@ -3128,21 +3131,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta
-  get kCrateApiMinosThreadSummaryAutoAccessorGetFirstTsMsConstMeta =>
+  get kCrateApiMinosSessionSummaryAutoAccessorGetFirstTsMsConstMeta =>
       const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_get_first_ts_ms",
+        debugName: "SessionSummary_auto_accessor_get_first_ts_ms",
         argNames: ["that"],
       );
 
   @override
-  PlatformInt64 crateApiMinosThreadSummaryAutoAccessorGetLastTsMs({
-    required ThreadSummary that,
+  PlatformInt64 crateApiMinosSessionSummaryAutoAccessorGetLastTsMs({
+    required SessionSummary that,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             that,
             serializer,
           );
@@ -3152,7 +3155,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_i_64,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiMinosThreadSummaryAutoAccessorGetLastTsMsConstMeta,
+        constMeta: kCrateApiMinosSessionSummaryAutoAccessorGetLastTsMsConstMeta,
         argValues: [that],
         apiImpl: this,
       ),
@@ -3160,21 +3163,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta
-  get kCrateApiMinosThreadSummaryAutoAccessorGetLastTsMsConstMeta =>
+  get kCrateApiMinosSessionSummaryAutoAccessorGetLastTsMsConstMeta =>
       const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_get_last_ts_ms",
+        debugName: "SessionSummary_auto_accessor_get_last_ts_ms",
         argNames: ["that"],
       );
 
   @override
-  int crateApiMinosThreadSummaryAutoAccessorGetMessageCount({
-    required ThreadSummary that,
+  int crateApiMinosSessionSummaryAutoAccessorGetMessageCount({
+    required SessionSummary that,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             that,
             serializer,
           );
@@ -3185,7 +3188,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta:
-            kCrateApiMinosThreadSummaryAutoAccessorGetMessageCountConstMeta,
+            kCrateApiMinosSessionSummaryAutoAccessorGetMessageCountConstMeta,
         argValues: [that],
         apiImpl: this,
       ),
@@ -3193,21 +3196,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta
-  get kCrateApiMinosThreadSummaryAutoAccessorGetMessageCountConstMeta =>
+  get kCrateApiMinosSessionSummaryAutoAccessorGetMessageCountConstMeta =>
       const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_get_message_count",
+        debugName: "SessionSummary_auto_accessor_get_message_count",
         argNames: ["that"],
       );
 
   @override
-  bool crateApiMinosThreadSummaryAutoAccessorGetNeedsContinue({
-    required ThreadSummary that,
+  bool crateApiMinosSessionSummaryAutoAccessorGetNeedsContinue({
+    required SessionSummary that,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             that,
             serializer,
           );
@@ -3218,7 +3221,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta:
-            kCrateApiMinosThreadSummaryAutoAccessorGetNeedsContinueConstMeta,
+            kCrateApiMinosSessionSummaryAutoAccessorGetNeedsContinueConstMeta,
         argValues: [that],
         apiImpl: this,
       ),
@@ -3226,21 +3229,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta
-  get kCrateApiMinosThreadSummaryAutoAccessorGetNeedsContinueConstMeta =>
+  get kCrateApiMinosSessionSummaryAutoAccessorGetNeedsContinueConstMeta =>
       const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_get_needs_continue",
+        debugName: "SessionSummary_auto_accessor_get_needs_continue",
         argNames: ["that"],
       );
 
   @override
-  String? crateApiMinosThreadSummaryAutoAccessorGetParentThreadId({
-    required ThreadSummary that,
+  String? crateApiMinosSessionSummaryAutoAccessorGetParentSessionId({
+    required SessionSummary that,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             that,
             serializer,
           );
@@ -3251,7 +3254,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta:
-            kCrateApiMinosThreadSummaryAutoAccessorGetParentThreadIdConstMeta,
+            kCrateApiMinosSessionSummaryAutoAccessorGetParentSessionIdConstMeta,
         argValues: [that],
         apiImpl: this,
       ),
@@ -3259,63 +3262,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta
-  get kCrateApiMinosThreadSummaryAutoAccessorGetParentThreadIdConstMeta =>
+  get kCrateApiMinosSessionSummaryAutoAccessorGetParentSessionIdConstMeta =>
       const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_get_parent_thread_id",
+        debugName: "SessionSummary_auto_accessor_get_parent_session_id",
         argNames: ["that"],
       );
 
   @override
-  ThreadState crateApiMinosThreadSummaryAutoAccessorGetState({
-    required ThreadSummary that,
+  String crateApiMinosSessionSummaryAutoAccessorGetSessionId({
+    required SessionSummary that,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             that,
             serializer,
           );
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 72)!;
         },
         codec: SseCodec(
-          decodeSuccessData:
-              sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiMinosThreadSummaryAutoAccessorGetStateConstMeta,
-        argValues: [that],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiMinosThreadSummaryAutoAccessorGetStateConstMeta =>
-      const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_get_state",
-        argNames: ["that"],
-      );
-
-  @override
-  String crateApiMinosThreadSummaryAutoAccessorGetThreadId({
-    required ThreadSummary that,
-  }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
-            that,
-            serializer,
-          );
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 73)!;
-        },
-        codec: SseCodec(
           decodeSuccessData: sse_decode_String,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiMinosThreadSummaryAutoAccessorGetThreadIdConstMeta,
+        constMeta:
+            kCrateApiMinosSessionSummaryAutoAccessorGetSessionIdConstMeta,
         argValues: [that],
         apiImpl: this,
       ),
@@ -3323,21 +3295,53 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta
-  get kCrateApiMinosThreadSummaryAutoAccessorGetThreadIdConstMeta =>
+  get kCrateApiMinosSessionSummaryAutoAccessorGetSessionIdConstMeta =>
       const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_get_thread_id",
+        debugName: "SessionSummary_auto_accessor_get_session_id",
         argNames: ["that"],
       );
 
   @override
-  String? crateApiMinosThreadSummaryAutoAccessorGetTitle({
-    required ThreadSummary that,
+  SessionState crateApiMinosSessionSummaryAutoAccessorGetState({
+    required SessionSummary that,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
+            that,
+            serializer,
+          );
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 73)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData:
+              sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiMinosSessionSummaryAutoAccessorGetStateConstMeta,
+        argValues: [that],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosSessionSummaryAutoAccessorGetStateConstMeta =>
+      const TaskConstMeta(
+        debugName: "SessionSummary_auto_accessor_get_state",
+        argNames: ["that"],
+      );
+
+  @override
+  String? crateApiMinosSessionSummaryAutoAccessorGetTitle({
+    required SessionSummary that,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             that,
             serializer,
           );
@@ -3347,29 +3351,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_opt_String,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiMinosThreadSummaryAutoAccessorGetTitleConstMeta,
+        constMeta: kCrateApiMinosSessionSummaryAutoAccessorGetTitleConstMeta,
         argValues: [that],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiMinosThreadSummaryAutoAccessorGetTitleConstMeta =>
+  TaskConstMeta get kCrateApiMinosSessionSummaryAutoAccessorGetTitleConstMeta =>
       const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_get_title",
+        debugName: "SessionSummary_auto_accessor_get_title",
         argNames: ["that"],
       );
 
   @override
-  void crateApiMinosThreadSummaryAutoAccessorSetAgent({
-    required ThreadSummary that,
+  void crateApiMinosSessionSummaryAutoAccessorSetAgent({
+    required SessionSummary that,
     required AgentName agent,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             that,
             serializer,
           );
@@ -3380,40 +3384,41 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_unit,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiMinosThreadSummaryAutoAccessorSetAgentConstMeta,
+        constMeta: kCrateApiMinosSessionSummaryAutoAccessorSetAgentConstMeta,
         argValues: [that, agent],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiMinosThreadSummaryAutoAccessorSetAgentConstMeta =>
+  TaskConstMeta get kCrateApiMinosSessionSummaryAutoAccessorSetAgentConstMeta =>
       const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_set_agent",
+        debugName: "SessionSummary_auto_accessor_set_agent",
         argNames: ["that", "agent"],
       );
 
   @override
-  void crateApiMinosThreadSummaryAutoAccessorSetEndReason({
-    required ThreadSummary that,
-    ThreadEndReason? endReason,
+  void crateApiMinosSessionSummaryAutoAccessorSetEndReason({
+    required SessionSummary that,
+    SessionEndReason? endReason,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             that,
             serializer,
           );
-          sse_encode_opt_box_autoadd_thread_end_reason(endReason, serializer);
+          sse_encode_opt_box_autoadd_session_end_reason(endReason, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 76)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiMinosThreadSummaryAutoAccessorSetEndReasonConstMeta,
+        constMeta:
+            kCrateApiMinosSessionSummaryAutoAccessorSetEndReasonConstMeta,
         argValues: [that, endReason],
         apiImpl: this,
       ),
@@ -3421,22 +3426,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta
-  get kCrateApiMinosThreadSummaryAutoAccessorSetEndReasonConstMeta =>
+  get kCrateApiMinosSessionSummaryAutoAccessorSetEndReasonConstMeta =>
       const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_set_end_reason",
+        debugName: "SessionSummary_auto_accessor_set_end_reason",
         argNames: ["that", "endReason"],
       );
 
   @override
-  void crateApiMinosThreadSummaryAutoAccessorSetEndedAtMs({
-    required ThreadSummary that,
+  void crateApiMinosSessionSummaryAutoAccessorSetEndedAtMs({
+    required SessionSummary that,
     PlatformInt64? endedAtMs,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             that,
             serializer,
           );
@@ -3447,7 +3452,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_unit,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiMinosThreadSummaryAutoAccessorSetEndedAtMsConstMeta,
+        constMeta:
+            kCrateApiMinosSessionSummaryAutoAccessorSetEndedAtMsConstMeta,
         argValues: [that, endedAtMs],
         apiImpl: this,
       ),
@@ -3455,22 +3461,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta
-  get kCrateApiMinosThreadSummaryAutoAccessorSetEndedAtMsConstMeta =>
+  get kCrateApiMinosSessionSummaryAutoAccessorSetEndedAtMsConstMeta =>
       const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_set_ended_at_ms",
+        debugName: "SessionSummary_auto_accessor_set_ended_at_ms",
         argNames: ["that", "endedAtMs"],
       );
 
   @override
-  void crateApiMinosThreadSummaryAutoAccessorSetFirstTsMs({
-    required ThreadSummary that,
+  void crateApiMinosSessionSummaryAutoAccessorSetFirstTsMs({
+    required SessionSummary that,
     required PlatformInt64 firstTsMs,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             that,
             serializer,
           );
@@ -3481,7 +3487,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_unit,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiMinosThreadSummaryAutoAccessorSetFirstTsMsConstMeta,
+        constMeta:
+            kCrateApiMinosSessionSummaryAutoAccessorSetFirstTsMsConstMeta,
         argValues: [that, firstTsMs],
         apiImpl: this,
       ),
@@ -3489,22 +3496,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta
-  get kCrateApiMinosThreadSummaryAutoAccessorSetFirstTsMsConstMeta =>
+  get kCrateApiMinosSessionSummaryAutoAccessorSetFirstTsMsConstMeta =>
       const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_set_first_ts_ms",
+        debugName: "SessionSummary_auto_accessor_set_first_ts_ms",
         argNames: ["that", "firstTsMs"],
       );
 
   @override
-  void crateApiMinosThreadSummaryAutoAccessorSetLastTsMs({
-    required ThreadSummary that,
+  void crateApiMinosSessionSummaryAutoAccessorSetLastTsMs({
+    required SessionSummary that,
     required PlatformInt64 lastTsMs,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             that,
             serializer,
           );
@@ -3515,7 +3522,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_unit,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiMinosThreadSummaryAutoAccessorSetLastTsMsConstMeta,
+        constMeta: kCrateApiMinosSessionSummaryAutoAccessorSetLastTsMsConstMeta,
         argValues: [that, lastTsMs],
         apiImpl: this,
       ),
@@ -3523,22 +3530,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta
-  get kCrateApiMinosThreadSummaryAutoAccessorSetLastTsMsConstMeta =>
+  get kCrateApiMinosSessionSummaryAutoAccessorSetLastTsMsConstMeta =>
       const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_set_last_ts_ms",
+        debugName: "SessionSummary_auto_accessor_set_last_ts_ms",
         argNames: ["that", "lastTsMs"],
       );
 
   @override
-  void crateApiMinosThreadSummaryAutoAccessorSetMessageCount({
-    required ThreadSummary that,
+  void crateApiMinosSessionSummaryAutoAccessorSetMessageCount({
+    required SessionSummary that,
     required int messageCount,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             that,
             serializer,
           );
@@ -3550,7 +3557,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta:
-            kCrateApiMinosThreadSummaryAutoAccessorSetMessageCountConstMeta,
+            kCrateApiMinosSessionSummaryAutoAccessorSetMessageCountConstMeta,
         argValues: [that, messageCount],
         apiImpl: this,
       ),
@@ -3558,22 +3565,22 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta
-  get kCrateApiMinosThreadSummaryAutoAccessorSetMessageCountConstMeta =>
+  get kCrateApiMinosSessionSummaryAutoAccessorSetMessageCountConstMeta =>
       const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_set_message_count",
+        debugName: "SessionSummary_auto_accessor_set_message_count",
         argNames: ["that", "messageCount"],
       );
 
   @override
-  void crateApiMinosThreadSummaryAutoAccessorSetNeedsContinue({
-    required ThreadSummary that,
+  void crateApiMinosSessionSummaryAutoAccessorSetNeedsContinue({
+    required SessionSummary that,
     required bool needsContinue,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             that,
             serializer,
           );
@@ -3585,7 +3592,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta:
-            kCrateApiMinosThreadSummaryAutoAccessorSetNeedsContinueConstMeta,
+            kCrateApiMinosSessionSummaryAutoAccessorSetNeedsContinueConstMeta,
         argValues: [that, needsContinue],
         apiImpl: this,
       ),
@@ -3593,26 +3600,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   TaskConstMeta
-  get kCrateApiMinosThreadSummaryAutoAccessorSetNeedsContinueConstMeta =>
+  get kCrateApiMinosSessionSummaryAutoAccessorSetNeedsContinueConstMeta =>
       const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_set_needs_continue",
+        debugName: "SessionSummary_auto_accessor_set_needs_continue",
         argNames: ["that", "needsContinue"],
       );
 
   @override
-  void crateApiMinosThreadSummaryAutoAccessorSetParentThreadId({
-    required ThreadSummary that,
-    String? parentThreadId,
+  void crateApiMinosSessionSummaryAutoAccessorSetParentSessionId({
+    required SessionSummary that,
+    String? parentSessionId,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             that,
             serializer,
           );
-          sse_encode_opt_String(parentThreadId, serializer);
+          sse_encode_opt_String(parentSessionId, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 82)!;
         },
         codec: SseCodec(
@@ -3620,100 +3627,101 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: null,
         ),
         constMeta:
-            kCrateApiMinosThreadSummaryAutoAccessorSetParentThreadIdConstMeta,
-        argValues: [that, parentThreadId],
+            kCrateApiMinosSessionSummaryAutoAccessorSetParentSessionIdConstMeta,
+        argValues: [that, parentSessionId],
         apiImpl: this,
       ),
     );
   }
 
   TaskConstMeta
-  get kCrateApiMinosThreadSummaryAutoAccessorSetParentThreadIdConstMeta =>
+  get kCrateApiMinosSessionSummaryAutoAccessorSetParentSessionIdConstMeta =>
       const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_set_parent_thread_id",
-        argNames: ["that", "parentThreadId"],
+        debugName: "SessionSummary_auto_accessor_set_parent_session_id",
+        argNames: ["that", "parentSessionId"],
       );
 
   @override
-  void crateApiMinosThreadSummaryAutoAccessorSetState({
-    required ThreadSummary that,
-    required ThreadState state,
+  void crateApiMinosSessionSummaryAutoAccessorSetSessionId({
+    required SessionSummary that,
+    required String sessionId,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             that,
             serializer,
           );
-          sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
-            state,
-            serializer,
-          );
+          sse_encode_String(sessionId, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 83)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_unit,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiMinosThreadSummaryAutoAccessorSetStateConstMeta,
-        argValues: [that, state],
-        apiImpl: this,
-      ),
-    );
-  }
-
-  TaskConstMeta get kCrateApiMinosThreadSummaryAutoAccessorSetStateConstMeta =>
-      const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_set_state",
-        argNames: ["that", "state"],
-      );
-
-  @override
-  void crateApiMinosThreadSummaryAutoAccessorSetThreadId({
-    required ThreadSummary that,
-    required String threadId,
-  }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
-            that,
-            serializer,
-          );
-          sse_encode_String(threadId, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 84)!;
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_unit,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiMinosThreadSummaryAutoAccessorSetThreadIdConstMeta,
-        argValues: [that, threadId],
+        constMeta:
+            kCrateApiMinosSessionSummaryAutoAccessorSetSessionIdConstMeta,
+        argValues: [that, sessionId],
         apiImpl: this,
       ),
     );
   }
 
   TaskConstMeta
-  get kCrateApiMinosThreadSummaryAutoAccessorSetThreadIdConstMeta =>
+  get kCrateApiMinosSessionSummaryAutoAccessorSetSessionIdConstMeta =>
       const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_set_thread_id",
-        argNames: ["that", "threadId"],
+        debugName: "SessionSummary_auto_accessor_set_session_id",
+        argNames: ["that", "sessionId"],
       );
 
   @override
-  void crateApiMinosThreadSummaryAutoAccessorSetTitle({
-    required ThreadSummary that,
+  void crateApiMinosSessionSummaryAutoAccessorSetState({
+    required SessionSummary that,
+    required SessionState state,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
+            that,
+            serializer,
+          );
+          sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState(
+            state,
+            serializer,
+          );
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 84)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiMinosSessionSummaryAutoAccessorSetStateConstMeta,
+        argValues: [that, state],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMinosSessionSummaryAutoAccessorSetStateConstMeta =>
+      const TaskConstMeta(
+        debugName: "SessionSummary_auto_accessor_set_state",
+        argNames: ["that", "state"],
+      );
+
+  @override
+  void crateApiMinosSessionSummaryAutoAccessorSetTitle({
+    required SessionSummary that,
     String? title,
   }) {
     return handler.executeSync(
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+          sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             that,
             serializer,
           );
@@ -3724,16 +3732,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeSuccessData: sse_decode_unit,
           decodeErrorData: null,
         ),
-        constMeta: kCrateApiMinosThreadSummaryAutoAccessorSetTitleConstMeta,
+        constMeta: kCrateApiMinosSessionSummaryAutoAccessorSetTitleConstMeta,
         argValues: [that, title],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiMinosThreadSummaryAutoAccessorSetTitleConstMeta =>
+  TaskConstMeta get kCrateApiMinosSessionSummaryAutoAccessorSetTitleConstMeta =>
       const TaskConstMeta(
-        debugName: "ThreadSummary_auto_accessor_set_title",
+        debugName: "SessionSummary_auto_accessor_set_title",
         argNames: ["that", "title"],
       );
 
@@ -3970,20 +3978,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient;
 
   RustArcIncrementStrongCountFnType
-  get rust_arc_increment_strong_count_ThreadState => wire
-      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState;
+  get rust_arc_increment_strong_count_SessionState => wire
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState;
 
   RustArcDecrementStrongCountFnType
-  get rust_arc_decrement_strong_count_ThreadState => wire
-      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState;
+  get rust_arc_decrement_strong_count_SessionState => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState;
 
   RustArcIncrementStrongCountFnType
-  get rust_arc_increment_strong_count_ThreadSummary => wire
-      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary;
+  get rust_arc_increment_strong_count_SessionSummary => wire
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary;
 
   RustArcDecrementStrongCountFnType
-  get rust_arc_decrement_strong_count_ThreadSummary => wire
-      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary;
+  get rust_arc_decrement_strong_count_SessionSummary => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary;
 
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw) {
@@ -4001,30 +4009,30 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ThreadState
-  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+  SessionState
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState(
     dynamic raw,
   ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return ThreadStateImpl.frbInternalDcoDecode(raw as List<dynamic>);
+    return SessionStateImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
-  ThreadSummary
-  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  SessionSummary
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     dynamic raw,
   ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return ThreadSummaryImpl.frbInternalDcoDecode(raw as List<dynamic>);
+    return SessionSummaryImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
-  ThreadSummary
-  dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  SessionSummary
+  dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     dynamic raw,
   ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return ThreadSummaryImpl.frbInternalDcoDecode(raw as List<dynamic>);
+    return SessionSummaryImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
@@ -4037,12 +4045,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ThreadSummary
-  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  SessionSummary
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     dynamic raw,
   ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return ThreadSummaryImpl.frbInternalDcoDecode(raw as List<dynamic>);
+    return SessionSummaryImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
@@ -4055,21 +4063,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ThreadState
-  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+  SessionState
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState(
     dynamic raw,
   ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return ThreadStateImpl.frbInternalDcoDecode(raw as List<dynamic>);
+    return SessionStateImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
-  ThreadSummary
-  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  SessionSummary
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     dynamic raw,
   ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return ThreadSummaryImpl.frbInternalDcoDecode(raw as List<dynamic>);
+    return SessionSummaryImpl.frbInternalDcoDecode(raw as List<dynamic>);
   }
 
   @protected
@@ -4127,13 +4135,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   AgentDescriptor dco_decode_agent_descriptor(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 7)
+      throw Exception('unexpected arr length: expect 7 but see ${arr.length}');
     return AgentDescriptor(
       name: dco_decode_agent_name(arr[0]),
-      path: dco_decode_opt_String(arr[1]),
-      version: dco_decode_opt_String(arr[2]),
-      status: dco_decode_agent_status(arr[3]),
+      displayName: dco_decode_String(arr[1]),
+      path: dco_decode_opt_String(arr[2]),
+      version: dco_decode_opt_String(arr[3]),
+      status: dco_decode_agent_status(arr[4]),
+      supportsModelSelection: dco_decode_bool(arr[5]),
+      supportsReasoningEffort: dco_decode_bool(arr[6]),
     );
   }
 
@@ -4160,7 +4171,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       title: dco_decode_opt_String(arr[7]),
       lastActivityAtMs: dco_decode_i_64(arr[8]),
       messageCount: dco_decode_u_32(arr[9]),
-      endReason: dco_decode_opt_box_autoadd_thread_end_reason(arr[10]),
+      endReason: dco_decode_opt_box_autoadd_session_end_reason(arr[10]),
     );
   }
 
@@ -4205,7 +4216,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     if (arr.length != 5)
       throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return ArtifactRef(
-      threadId: dco_decode_String(arr[0]),
+      sessionId: dco_decode_String(arr[0]),
       artifactId: dco_decode_String(arr[1]),
       sizeBytes: dco_decode_u_64(arr[2]),
       sha256: dco_decode_String(arr[3]),
@@ -4307,17 +4318,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ListProjectThreadsParams dco_decode_box_autoadd_list_project_threads_params(
+  ListProjectSessionsParams dco_decode_box_autoadd_list_project_sessions_params(
     dynamic raw,
   ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return dco_decode_list_project_threads_params(raw);
+    return dco_decode_list_project_sessions_params(raw);
   }
 
   @protected
-  ListThreadsParams dco_decode_box_autoadd_list_threads_params(dynamic raw) {
+  ListSessionsParams dco_decode_box_autoadd_list_sessions_params(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return dco_decode_list_threads_params(raw);
+    return dco_decode_list_sessions_params(raw);
   }
 
   @protected
@@ -4335,15 +4346,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ReadThreadParams dco_decode_box_autoadd_read_thread_params(dynamic raw) {
+  ReadSessionParams dco_decode_box_autoadd_read_session_params(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return dco_decode_read_thread_params(raw);
+    return dco_decode_read_session_params(raw);
   }
 
   @protected
-  ThreadEndReason dco_decode_box_autoadd_thread_end_reason(dynamic raw) {
+  SessionEndReason dco_decode_box_autoadd_session_end_reason(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return dco_decode_thread_end_reason(raw);
+    return dco_decode_session_end_reason(raw);
   }
 
   @protected
@@ -4716,14 +4727,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  List<ThreadSummary>
-  dco_decode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  List<SessionSummary>
+  dco_decode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     dynamic raw,
   ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>)
         .map(
-          dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary,
+          dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary,
         )
         .toList();
   }
@@ -4877,18 +4888,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  List<ProjectSummary> dco_decode_list_project_summary(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    return (raw as List<dynamic>).map(dco_decode_project_summary).toList();
-  }
-
-  @protected
-  ListProjectThreadsParams dco_decode_list_project_threads_params(dynamic raw) {
+  ListProjectSessionsParams dco_decode_list_project_sessions_params(
+    dynamic raw,
+  ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
     if (arr.length != 3)
       throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
-    return ListProjectThreadsParams(
+    return ListProjectSessionsParams(
       projectId: dco_decode_String(arr[0]),
       limit: dco_decode_u_32(arr[1]),
       beforeTsMs: dco_decode_opt_box_autoadd_i_64(arr[2]),
@@ -4896,19 +4903,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ListProjectThreadsResponse dco_decode_list_project_threads_response(
+  ListProjectSessionsResponse dco_decode_list_project_sessions_response(
     dynamic raw,
   ) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
     if (arr.length != 1)
       throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
-    return ListProjectThreadsResponse(
-      threads:
-          dco_decode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    return ListProjectSessionsResponse(
+      sessions:
+          dco_decode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             arr[0],
           ),
     );
+  }
+
+  @protected
+  List<ProjectSummary> dco_decode_list_project_summary(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_project_summary).toList();
   }
 
   @protected
@@ -4929,12 +4942,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ListThreadsParams dco_decode_list_threads_params(dynamic raw) {
+  ListSessionsParams dco_decode_list_sessions_params(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
     if (arr.length != 3)
       throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
-    return ListThreadsParams(
+    return ListSessionsParams(
       limit: dco_decode_u_32(arr[0]),
       beforeTsMs: dco_decode_opt_box_autoadd_i_64(arr[1]),
       agent: dco_decode_opt_box_autoadd_agent_name(arr[2]),
@@ -4942,14 +4955,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ListThreadsResponse dco_decode_list_threads_response(dynamic raw) {
+  ListSessionsResponse dco_decode_list_sessions_response(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
     if (arr.length != 2)
       throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
-    return ListThreadsResponse(
-      threads:
-          dco_decode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    return ListSessionsResponse(
+      sessions:
+          dco_decode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
             arr[0],
           ),
       nextBeforeTsMs: dco_decode_opt_box_autoadd_i_64(arr[1]),
@@ -5089,11 +5102,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         return MinosError_AgentSessionIdMismatch();
       case 25:
         return MinosError_IngestSeqConflict(
-          threadId: dco_decode_String(raw[1]),
+          sessionId: dco_decode_String(raw[1]),
           seq: dco_decode_u_64(raw[2]),
         );
       case 26:
-        return MinosError_ThreadNotFound(threadId: dco_decode_String(raw[1]));
+        return MinosError_SessionNotFound(sessionId: dco_decode_String(raw[1]));
       case 27:
         return MinosError_TranslationNotImplemented(
           agent: dco_decode_agent_name(raw[1]),
@@ -5180,9 +5193,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ThreadEndReason? dco_decode_opt_box_autoadd_thread_end_reason(dynamic raw) {
+  SessionEndReason? dco_decode_opt_box_autoadd_session_end_reason(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
-    return raw == null ? null : dco_decode_box_autoadd_thread_end_reason(raw);
+    return raw == null ? null : dco_decode_box_autoadd_session_end_reason(raw);
   }
 
   @protected
@@ -5249,28 +5262,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ReadThreadParams dco_decode_read_thread_params(dynamic raw) {
+  ReadSessionParams dco_decode_read_session_params(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
     if (arr.length != 3)
       throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
-    return ReadThreadParams(
-      threadId: dco_decode_String(arr[0]),
+    return ReadSessionParams(
+      sessionId: dco_decode_String(arr[0]),
       fromSeq: dco_decode_opt_box_autoadd_u_64(arr[1]),
       limit: dco_decode_u_32(arr[2]),
     );
   }
 
   @protected
-  ReadThreadResponse dco_decode_read_thread_response(dynamic raw) {
+  ReadSessionResponse dco_decode_read_session_response(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
     if (arr.length != 3)
       throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
-    return ReadThreadResponse(
+    return ReadSessionResponse(
       uiEvents: dco_decode_list_ui_event_message(arr[0]),
       nextSeq: dco_decode_opt_box_autoadd_u_64(arr[1]),
-      threadEndReason: dco_decode_opt_box_autoadd_thread_end_reason(arr[2]),
+      sessionEndReason: dco_decode_opt_box_autoadd_session_end_reason(arr[2]),
     );
   }
 
@@ -5285,7 +5298,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       transport: dco_decode_request_trace_transport(arr[1]),
       method: dco_decode_String(arr[2]),
       target: dco_decode_String(arr[3]),
-      threadId: dco_decode_opt_String(arr[4]),
+      sessionId: dco_decode_opt_String(arr[4]),
       requestSummary: dco_decode_opt_String(arr[5]),
       responseSummary: dco_decode_opt_String(arr[6]),
       errorDetail: dco_decode_opt_String(arr[7]),
@@ -5316,6 +5329,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SessionEndReason dco_decode_session_end_reason(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    switch (raw[0]) {
+      case 0:
+        return SessionEndReason_UserStopped();
+      case 1:
+        return SessionEndReason_AgentDone();
+      case 2:
+        return SessionEndReason_Crashed(message: dco_decode_String(raw[1]));
+      case 3:
+        return SessionEndReason_Timeout();
+      case 4:
+        return SessionEndReason_HostDisconnected();
+      default:
+        throw Exception("unreachable");
+    }
+  }
+
+  @protected
   SocialEventFrame dco_decode_social_event_frame(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -5331,25 +5363,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   SubagentStatus dco_decode_subagent_status(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return SubagentStatus.values[raw as int];
-  }
-
-  @protected
-  ThreadEndReason dco_decode_thread_end_reason(dynamic raw) {
-    // Codec=Dco (DartCObject based), see doc to use other codecs
-    switch (raw[0]) {
-      case 0:
-        return ThreadEndReason_UserStopped();
-      case 1:
-        return ThreadEndReason_AgentDone();
-      case 2:
-        return ThreadEndReason_Crashed(message: dco_decode_String(raw[1]));
-      case 3:
-        return ThreadEndReason_Timeout();
-      case 4:
-        return ThreadEndReason_HostDisconnected();
-      default:
-        throw Exception("unreachable");
-    }
   }
 
   @protected
@@ -5383,7 +5396,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     if (arr.length != 4)
       throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return UiEventFrame(
-      threadId: dco_decode_String(arr[0]),
+      sessionId: dco_decode_String(arr[0]),
       seq: dco_decode_u_64(arr[1]),
       ui: dco_decode_ui_event_message(arr[2]),
       tsMs: dco_decode_i_64(arr[3]),
@@ -5395,21 +5408,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     switch (raw[0]) {
       case 0:
-        return UiEventMessage_ThreadOpened(
-          threadId: dco_decode_String(raw[1]),
+        return UiEventMessage_SessionOpened(
+          sessionId: dco_decode_String(raw[1]),
           agent: dco_decode_agent_name(raw[2]),
           title: dco_decode_opt_String(raw[3]),
           openedAtMs: dco_decode_i_64(raw[4]),
         );
       case 1:
-        return UiEventMessage_ThreadTitleUpdated(
-          threadId: dco_decode_String(raw[1]),
+        return UiEventMessage_SessionTitleUpdated(
+          sessionId: dco_decode_String(raw[1]),
           title: dco_decode_String(raw[2]),
         );
       case 2:
-        return UiEventMessage_ThreadClosed(
-          threadId: dco_decode_String(raw[1]),
-          reason: dco_decode_box_autoadd_thread_end_reason(raw[2]),
+        return UiEventMessage_SessionClosed(
+          sessionId: dco_decode_String(raw[1]),
+          reason: dco_decode_box_autoadd_session_end_reason(raw[2]),
           closedAtMs: dco_decode_i_64(raw[3]),
         );
       case 3:
@@ -5458,8 +5471,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         );
       case 11:
         return UiEventMessage_SubagentSpawned(
-          parentThreadId: dco_decode_String(raw[1]),
-          subThreadId: dco_decode_String(raw[2]),
+          parentSessionId: dco_decode_String(raw[1]),
+          subSessionId: dco_decode_String(raw[2]),
           toolCallId: dco_decode_String(raw[3]),
           agent: dco_decode_agent_name(raw[4]),
           model: dco_decode_opt_String(raw[5]),
@@ -5468,7 +5481,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         );
       case 12:
         return UiEventMessage_SubagentStatusUpdated(
-          subThreadId: dco_decode_String(raw[1]),
+          subSessionId: dco_decode_String(raw[1]),
           status: dco_decode_subagent_status(raw[2]),
         );
       case 13:
@@ -5557,36 +5570,36 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ThreadState
-  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+  SessionState
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return ThreadStateImpl.frbInternalSseDecode(
+    return SessionStateImpl.frbInternalSseDecode(
       sse_decode_usize(deserializer),
       sse_decode_i_32(deserializer),
     );
   }
 
   @protected
-  ThreadSummary
-  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  SessionSummary
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return ThreadSummaryImpl.frbInternalSseDecode(
+    return SessionSummaryImpl.frbInternalSseDecode(
       sse_decode_usize(deserializer),
       sse_decode_i_32(deserializer),
     );
   }
 
   @protected
-  ThreadSummary
-  sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  SessionSummary
+  sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return ThreadSummaryImpl.frbInternalSseDecode(
+    return SessionSummaryImpl.frbInternalSseDecode(
       sse_decode_usize(deserializer),
       sse_decode_i_32(deserializer),
     );
@@ -5605,12 +5618,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ThreadSummary
-  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  SessionSummary
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return ThreadSummaryImpl.frbInternalSseDecode(
+    return SessionSummaryImpl.frbInternalSseDecode(
       sse_decode_usize(deserializer),
       sse_decode_i_32(deserializer),
     );
@@ -5629,24 +5642,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ThreadState
-  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+  SessionState
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return ThreadStateImpl.frbInternalSseDecode(
+    return SessionStateImpl.frbInternalSseDecode(
       sse_decode_usize(deserializer),
       sse_decode_i_32(deserializer),
     );
   }
 
   @protected
-  ThreadSummary
-  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  SessionSummary
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return ThreadSummaryImpl.frbInternalSseDecode(
+    return SessionSummaryImpl.frbInternalSseDecode(
       sse_decode_usize(deserializer),
       sse_decode_i_32(deserializer),
     );
@@ -5710,14 +5723,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   AgentDescriptor sse_decode_agent_descriptor(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_name = sse_decode_agent_name(deserializer);
+    var var_displayName = sse_decode_String(deserializer);
     var var_path = sse_decode_opt_String(deserializer);
     var var_version = sse_decode_opt_String(deserializer);
     var var_status = sse_decode_agent_status(deserializer);
+    var var_supportsModelSelection = sse_decode_bool(deserializer);
+    var var_supportsReasoningEffort = sse_decode_bool(deserializer);
     return AgentDescriptor(
       name: var_name,
+      displayName: var_displayName,
       path: var_path,
       version: var_version,
       status: var_status,
+      supportsModelSelection: var_supportsModelSelection,
+      supportsReasoningEffort: var_supportsReasoningEffort,
     );
   }
 
@@ -5743,7 +5762,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_title = sse_decode_opt_String(deserializer);
     var var_lastActivityAtMs = sse_decode_i_64(deserializer);
     var var_messageCount = sse_decode_u_32(deserializer);
-    var var_endReason = sse_decode_opt_box_autoadd_thread_end_reason(
+    var var_endReason = sse_decode_opt_box_autoadd_session_end_reason(
       deserializer,
     );
     return AgentSessionSummaryDto(
@@ -5807,13 +5826,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   ArtifactRef sse_decode_artifact_ref(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_threadId = sse_decode_String(deserializer);
+    var var_sessionId = sse_decode_String(deserializer);
     var var_artifactId = sse_decode_String(deserializer);
     var var_sizeBytes = sse_decode_u_64(deserializer);
     var var_sha256 = sse_decode_String(deserializer);
     var var_mediaType = sse_decode_String(deserializer);
     return ArtifactRef(
-      threadId: var_threadId,
+      sessionId: var_sessionId,
       artifactId: var_artifactId,
       sizeBytes: var_sizeBytes,
       sha256: var_sha256,
@@ -5917,19 +5936,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ListProjectThreadsParams sse_decode_box_autoadd_list_project_threads_params(
+  ListProjectSessionsParams sse_decode_box_autoadd_list_project_sessions_params(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return (sse_decode_list_project_threads_params(deserializer));
+    return (sse_decode_list_project_sessions_params(deserializer));
   }
 
   @protected
-  ListThreadsParams sse_decode_box_autoadd_list_threads_params(
+  ListSessionsParams sse_decode_box_autoadd_list_sessions_params(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return (sse_decode_list_threads_params(deserializer));
+    return (sse_decode_list_sessions_params(deserializer));
   }
 
   @protected
@@ -5947,19 +5966,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ReadThreadParams sse_decode_box_autoadd_read_thread_params(
+  ReadSessionParams sse_decode_box_autoadd_read_session_params(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return (sse_decode_read_thread_params(deserializer));
+    return (sse_decode_read_session_params(deserializer));
   }
 
   @protected
-  ThreadEndReason sse_decode_box_autoadd_thread_end_reason(
+  SessionEndReason sse_decode_box_autoadd_session_end_reason(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    return (sse_decode_thread_end_reason(deserializer));
+    return (sse_decode_session_end_reason(deserializer));
   }
 
   @protected
@@ -6375,17 +6394,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  List<ThreadSummary>
-  sse_decode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  List<SessionSummary>
+  sse_decode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     var len_ = sse_decode_i_32(deserializer);
-    var ans_ = <ThreadSummary>[];
+    var ans_ = <SessionSummary>[];
     for (var idx_ = 0; idx_ < len_; ++idx_) {
       ans_.add(
-        sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+        sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
           deserializer,
         ),
       );
@@ -6637,6 +6656,33 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ListProjectSessionsParams sse_decode_list_project_sessions_params(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_projectId = sse_decode_String(deserializer);
+    var var_limit = sse_decode_u_32(deserializer);
+    var var_beforeTsMs = sse_decode_opt_box_autoadd_i_64(deserializer);
+    return ListProjectSessionsParams(
+      projectId: var_projectId,
+      limit: var_limit,
+      beforeTsMs: var_beforeTsMs,
+    );
+  }
+
+  @protected
+  ListProjectSessionsResponse sse_decode_list_project_sessions_response(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_sessions =
+        sse_decode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
+          deserializer,
+        );
+    return ListProjectSessionsResponse(sessions: var_sessions);
+  }
+
+  @protected
   List<ProjectSummary> sse_decode_list_project_summary(
     SseDeserializer deserializer,
   ) {
@@ -6648,33 +6694,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       ans_.add(sse_decode_project_summary(deserializer));
     }
     return ans_;
-  }
-
-  @protected
-  ListProjectThreadsParams sse_decode_list_project_threads_params(
-    SseDeserializer deserializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_projectId = sse_decode_String(deserializer);
-    var var_limit = sse_decode_u_32(deserializer);
-    var var_beforeTsMs = sse_decode_opt_box_autoadd_i_64(deserializer);
-    return ListProjectThreadsParams(
-      projectId: var_projectId,
-      limit: var_limit,
-      beforeTsMs: var_beforeTsMs,
-    );
-  }
-
-  @protected
-  ListProjectThreadsResponse sse_decode_list_project_threads_response(
-    SseDeserializer deserializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_threads =
-        sse_decode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
-          deserializer,
-        );
-    return ListProjectThreadsResponse(threads: var_threads);
   }
 
   @protected
@@ -6701,14 +6720,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ListThreadsParams sse_decode_list_threads_params(
+  ListSessionsParams sse_decode_list_sessions_params(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_limit = sse_decode_u_32(deserializer);
     var var_beforeTsMs = sse_decode_opt_box_autoadd_i_64(deserializer);
     var var_agent = sse_decode_opt_box_autoadd_agent_name(deserializer);
-    return ListThreadsParams(
+    return ListSessionsParams(
       limit: var_limit,
       beforeTsMs: var_beforeTsMs,
       agent: var_agent,
@@ -6716,17 +6735,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ListThreadsResponse sse_decode_list_threads_response(
+  ListSessionsResponse sse_decode_list_sessions_response(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_threads =
-        sse_decode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+    var var_sessions =
+        sse_decode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
           deserializer,
         );
     var var_nextBeforeTsMs = sse_decode_opt_box_autoadd_i_64(deserializer);
-    return ListThreadsResponse(
-      threads: var_threads,
+    return ListSessionsResponse(
+      sessions: var_sessions,
       nextBeforeTsMs: var_nextBeforeTsMs,
     );
   }
@@ -6893,15 +6912,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case 24:
         return MinosError_AgentSessionIdMismatch();
       case 25:
-        var var_threadId = sse_decode_String(deserializer);
+        var var_sessionId = sse_decode_String(deserializer);
         var var_seq = sse_decode_u_64(deserializer);
         return MinosError_IngestSeqConflict(
-          threadId: var_threadId,
+          sessionId: var_sessionId,
           seq: var_seq,
         );
       case 26:
-        var var_threadId = sse_decode_String(deserializer);
-        return MinosError_ThreadNotFound(threadId: var_threadId);
+        var var_sessionId = sse_decode_String(deserializer);
+        return MinosError_SessionNotFound(sessionId: var_sessionId);
       case 27:
         var var_agent = sse_decode_agent_name(deserializer);
         return MinosError_TranslationNotImplemented(agent: var_agent);
@@ -7023,13 +7042,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ThreadEndReason? sse_decode_opt_box_autoadd_thread_end_reason(
+  SessionEndReason? sse_decode_opt_box_autoadd_session_end_reason(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
-      return (sse_decode_box_autoadd_thread_end_reason(deserializer));
+      return (sse_decode_box_autoadd_session_end_reason(deserializer));
     } else {
       return null;
     }
@@ -7131,32 +7150,34 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  ReadThreadParams sse_decode_read_thread_params(SseDeserializer deserializer) {
+  ReadSessionParams sse_decode_read_session_params(
+    SseDeserializer deserializer,
+  ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_threadId = sse_decode_String(deserializer);
+    var var_sessionId = sse_decode_String(deserializer);
     var var_fromSeq = sse_decode_opt_box_autoadd_u_64(deserializer);
     var var_limit = sse_decode_u_32(deserializer);
-    return ReadThreadParams(
-      threadId: var_threadId,
+    return ReadSessionParams(
+      sessionId: var_sessionId,
       fromSeq: var_fromSeq,
       limit: var_limit,
     );
   }
 
   @protected
-  ReadThreadResponse sse_decode_read_thread_response(
+  ReadSessionResponse sse_decode_read_session_response(
     SseDeserializer deserializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_uiEvents = sse_decode_list_ui_event_message(deserializer);
     var var_nextSeq = sse_decode_opt_box_autoadd_u_64(deserializer);
-    var var_threadEndReason = sse_decode_opt_box_autoadd_thread_end_reason(
+    var var_sessionEndReason = sse_decode_opt_box_autoadd_session_end_reason(
       deserializer,
     );
-    return ReadThreadResponse(
+    return ReadSessionResponse(
       uiEvents: var_uiEvents,
       nextSeq: var_nextSeq,
-      threadEndReason: var_threadEndReason,
+      sessionEndReason: var_sessionEndReason,
     );
   }
 
@@ -7169,7 +7190,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_transport = sse_decode_request_trace_transport(deserializer);
     var var_method = sse_decode_String(deserializer);
     var var_target = sse_decode_String(deserializer);
-    var var_threadId = sse_decode_opt_String(deserializer);
+    var var_sessionId = sse_decode_opt_String(deserializer);
     var var_requestSummary = sse_decode_opt_String(deserializer);
     var var_responseSummary = sse_decode_opt_String(deserializer);
     var var_errorDetail = sse_decode_opt_String(deserializer);
@@ -7183,7 +7204,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       transport: var_transport,
       method: var_method,
       target: var_target,
-      threadId: var_threadId,
+      sessionId: var_sessionId,
       requestSummary: var_requestSummary,
       responseSummary: var_responseSummary,
       errorDetail: var_errorDetail,
@@ -7221,6 +7242,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  SessionEndReason sse_decode_session_end_reason(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var tag_ = sse_decode_i_32(deserializer);
+    switch (tag_) {
+      case 0:
+        return SessionEndReason_UserStopped();
+      case 1:
+        return SessionEndReason_AgentDone();
+      case 2:
+        var var_message = sse_decode_String(deserializer);
+        return SessionEndReason_Crashed(message: var_message);
+      case 3:
+        return SessionEndReason_Timeout();
+      case 4:
+        return SessionEndReason_HostDisconnected();
+      default:
+        throw UnimplementedError('');
+    }
+  }
+
+  @protected
   SocialEventFrame sse_decode_social_event_frame(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_conversationId = sse_decode_String(deserializer);
@@ -7236,28 +7279,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_i_32(deserializer);
     return SubagentStatus.values[inner];
-  }
-
-  @protected
-  ThreadEndReason sse_decode_thread_end_reason(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-
-    var tag_ = sse_decode_i_32(deserializer);
-    switch (tag_) {
-      case 0:
-        return ThreadEndReason_UserStopped();
-      case 1:
-        return ThreadEndReason_AgentDone();
-      case 2:
-        var var_message = sse_decode_String(deserializer);
-        return ThreadEndReason_Crashed(message: var_message);
-      case 3:
-        return ThreadEndReason_Timeout();
-      case 4:
-        return ThreadEndReason_HostDisconnected();
-      default:
-        throw UnimplementedError('');
-    }
   }
 
   @protected
@@ -7287,12 +7308,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   UiEventFrame sse_decode_ui_event_frame(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    var var_threadId = sse_decode_String(deserializer);
+    var var_sessionId = sse_decode_String(deserializer);
     var var_seq = sse_decode_u_64(deserializer);
     var var_ui = sse_decode_ui_event_message(deserializer);
     var var_tsMs = sse_decode_i_64(deserializer);
     return UiEventFrame(
-      threadId: var_threadId,
+      sessionId: var_sessionId,
       seq: var_seq,
       ui: var_ui,
       tsMs: var_tsMs,
@@ -7306,29 +7327,31 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var tag_ = sse_decode_i_32(deserializer);
     switch (tag_) {
       case 0:
-        var var_threadId = sse_decode_String(deserializer);
+        var var_sessionId = sse_decode_String(deserializer);
         var var_agent = sse_decode_agent_name(deserializer);
         var var_title = sse_decode_opt_String(deserializer);
         var var_openedAtMs = sse_decode_i_64(deserializer);
-        return UiEventMessage_ThreadOpened(
-          threadId: var_threadId,
+        return UiEventMessage_SessionOpened(
+          sessionId: var_sessionId,
           agent: var_agent,
           title: var_title,
           openedAtMs: var_openedAtMs,
         );
       case 1:
-        var var_threadId = sse_decode_String(deserializer);
+        var var_sessionId = sse_decode_String(deserializer);
         var var_title = sse_decode_String(deserializer);
-        return UiEventMessage_ThreadTitleUpdated(
-          threadId: var_threadId,
+        return UiEventMessage_SessionTitleUpdated(
+          sessionId: var_sessionId,
           title: var_title,
         );
       case 2:
-        var var_threadId = sse_decode_String(deserializer);
-        var var_reason = sse_decode_box_autoadd_thread_end_reason(deserializer);
+        var var_sessionId = sse_decode_String(deserializer);
+        var var_reason = sse_decode_box_autoadd_session_end_reason(
+          deserializer,
+        );
         var var_closedAtMs = sse_decode_i_64(deserializer);
-        return UiEventMessage_ThreadClosed(
-          threadId: var_threadId,
+        return UiEventMessage_SessionClosed(
+          sessionId: var_sessionId,
           reason: var_reason,
           closedAtMs: var_closedAtMs,
         );
@@ -7397,16 +7420,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           isError: var_isError,
         );
       case 11:
-        var var_parentThreadId = sse_decode_String(deserializer);
-        var var_subThreadId = sse_decode_String(deserializer);
+        var var_parentSessionId = sse_decode_String(deserializer);
+        var var_subSessionId = sse_decode_String(deserializer);
         var var_toolCallId = sse_decode_String(deserializer);
         var var_agent = sse_decode_agent_name(deserializer);
         var var_model = sse_decode_opt_String(deserializer);
         var var_prompt = sse_decode_opt_String(deserializer);
         var var_title = sse_decode_opt_String(deserializer);
         return UiEventMessage_SubagentSpawned(
-          parentThreadId: var_parentThreadId,
-          subThreadId: var_subThreadId,
+          parentSessionId: var_parentSessionId,
+          subSessionId: var_subSessionId,
           toolCallId: var_toolCallId,
           agent: var_agent,
           model: var_model,
@@ -7414,10 +7437,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           title: var_title,
         );
       case 12:
-        var var_subThreadId = sse_decode_String(deserializer);
+        var var_subSessionId = sse_decode_String(deserializer);
         var var_status = sse_decode_subagent_status(deserializer);
         return UiEventMessage_SubagentStatusUpdated(
-          subThreadId: var_subThreadId,
+          subSessionId: var_subSessionId,
           status: var_status,
         );
       case 13:
@@ -7505,39 +7528,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
-  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
-    ThreadState self,
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState(
+    SessionState self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
-      (self as ThreadStateImpl).frbInternalSseEncode(move: true),
+      (self as SessionStateImpl).frbInternalSseEncode(move: true),
       serializer,
     );
   }
 
   @protected
   void
-  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
-    ThreadSummary self,
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
+    SessionSummary self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
-      (self as ThreadSummaryImpl).frbInternalSseEncode(move: true),
+      (self as SessionSummaryImpl).frbInternalSseEncode(move: true),
       serializer,
     );
   }
 
   @protected
   void
-  sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
-    ThreadSummary self,
+  sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
+    SessionSummary self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
-      (self as ThreadSummaryImpl).frbInternalSseEncode(move: false),
+      (self as SessionSummaryImpl).frbInternalSseEncode(move: false),
       serializer,
     );
   }
@@ -7557,13 +7580,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
-  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
-    ThreadSummary self,
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
+    SessionSummary self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
-      (self as ThreadSummaryImpl).frbInternalSseEncode(move: false),
+      (self as SessionSummaryImpl).frbInternalSseEncode(move: false),
       serializer,
     );
   }
@@ -7583,26 +7606,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
-  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
-    ThreadState self,
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState(
+    SessionState self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
-      (self as ThreadStateImpl).frbInternalSseEncode(move: null),
+      (self as SessionStateImpl).frbInternalSseEncode(move: null),
       serializer,
     );
   }
 
   @protected
   void
-  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
-    ThreadSummary self,
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
+    SessionSummary self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_usize(
-      (self as ThreadSummaryImpl).frbInternalSseEncode(move: null),
+      (self as SessionSummaryImpl).frbInternalSseEncode(move: null),
       serializer,
     );
   }
@@ -7722,9 +7745,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_agent_name(self.name, serializer);
+    sse_encode_String(self.displayName, serializer);
     sse_encode_opt_String(self.path, serializer);
     sse_encode_opt_String(self.version, serializer);
     sse_encode_agent_status(self.status, serializer);
+    sse_encode_bool(self.supportsModelSelection, serializer);
+    sse_encode_bool(self.supportsReasoningEffort, serializer);
   }
 
   @protected
@@ -7749,7 +7775,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_String(self.title, serializer);
     sse_encode_i_64(self.lastActivityAtMs, serializer);
     sse_encode_u_32(self.messageCount, serializer);
-    sse_encode_opt_box_autoadd_thread_end_reason(self.endReason, serializer);
+    sse_encode_opt_box_autoadd_session_end_reason(self.endReason, serializer);
   }
 
   @protected
@@ -7783,7 +7809,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   void sse_encode_artifact_ref(ArtifactRef self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_String(self.threadId, serializer);
+    sse_encode_String(self.sessionId, serializer);
     sse_encode_String(self.artifactId, serializer);
     sse_encode_u_64(self.sizeBytes, serializer);
     sse_encode_String(self.sha256, serializer);
@@ -7896,21 +7922,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_box_autoadd_list_project_threads_params(
-    ListProjectThreadsParams self,
+  void sse_encode_box_autoadd_list_project_sessions_params(
+    ListProjectSessionsParams self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_list_project_threads_params(self, serializer);
+    sse_encode_list_project_sessions_params(self, serializer);
   }
 
   @protected
-  void sse_encode_box_autoadd_list_threads_params(
-    ListThreadsParams self,
+  void sse_encode_box_autoadd_list_sessions_params(
+    ListSessionsParams self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_list_threads_params(self, serializer);
+    sse_encode_list_sessions_params(self, serializer);
   }
 
   @protected
@@ -7932,21 +7958,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_box_autoadd_read_thread_params(
-    ReadThreadParams self,
+  void sse_encode_box_autoadd_read_session_params(
+    ReadSessionParams self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_read_thread_params(self, serializer);
+    sse_encode_read_session_params(self, serializer);
   }
 
   @protected
-  void sse_encode_box_autoadd_thread_end_reason(
-    ThreadEndReason self,
+  void sse_encode_box_autoadd_session_end_reason(
+    SessionEndReason self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_thread_end_reason(self, serializer);
+    sse_encode_session_end_reason(self, serializer);
   }
 
   @protected
@@ -8306,14 +8332,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void
-  sse_encode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
-    List<ThreadSummary> self,
+  sse_encode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
+    List<SessionSummary> self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
-      sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+      sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
         item,
         serializer,
       );
@@ -8534,20 +8560,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_list_project_summary(
-    List<ProjectSummary> self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_i_32(self.length, serializer);
-    for (final item in self) {
-      sse_encode_project_summary(item, serializer);
-    }
-  }
-
-  @protected
-  void sse_encode_list_project_threads_params(
-    ListProjectThreadsParams self,
+  void sse_encode_list_project_sessions_params(
+    ListProjectSessionsParams self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -8557,15 +8571,27 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_list_project_threads_response(
-    ListProjectThreadsResponse self,
+  void sse_encode_list_project_sessions_response(
+    ListProjectSessionsResponse self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
-      self.threads,
+    sse_encode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
+      self.sessions,
       serializer,
     );
+  }
+
+  @protected
+  void sse_encode_list_project_summary(
+    List<ProjectSummary> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_project_summary(item, serializer);
+    }
   }
 
   @protected
@@ -8590,8 +8616,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_list_threads_params(
-    ListThreadsParams self,
+  void sse_encode_list_sessions_params(
+    ListSessionsParams self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
@@ -8601,13 +8627,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_list_threads_response(
-    ListThreadsResponse self,
+  void sse_encode_list_sessions_response(
+    ListSessionsResponse self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
-      self.threads,
+    sse_encode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
+      self.sessions,
       serializer,
     );
     sse_encode_opt_box_autoadd_i_64(self.nextBeforeTsMs, serializer);
@@ -8763,15 +8789,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       case MinosError_AgentSessionIdMismatch():
         sse_encode_i_32(24, serializer);
       case MinosError_IngestSeqConflict(
-        threadId: final threadId,
+        sessionId: final sessionId,
         seq: final seq,
       ):
         sse_encode_i_32(25, serializer);
-        sse_encode_String(threadId, serializer);
+        sse_encode_String(sessionId, serializer);
         sse_encode_u_64(seq, serializer);
-      case MinosError_ThreadNotFound(threadId: final threadId):
+      case MinosError_SessionNotFound(sessionId: final sessionId):
         sse_encode_i_32(26, serializer);
-        sse_encode_String(threadId, serializer);
+        sse_encode_String(sessionId, serializer);
       case MinosError_TranslationNotImplemented(agent: final agent):
         sse_encode_i_32(27, serializer);
         sse_encode_agent_name(agent, serializer);
@@ -8886,15 +8912,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_opt_box_autoadd_thread_end_reason(
-    ThreadEndReason? self,
+  void sse_encode_opt_box_autoadd_session_end_reason(
+    SessionEndReason? self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     sse_encode_bool(self != null, serializer);
     if (self != null) {
-      sse_encode_box_autoadd_thread_end_reason(self, serializer);
+      sse_encode_box_autoadd_session_end_reason(self, serializer);
     }
   }
 
@@ -8977,26 +9003,26 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_read_thread_params(
-    ReadThreadParams self,
+  void sse_encode_read_session_params(
+    ReadSessionParams self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_String(self.threadId, serializer);
+    sse_encode_String(self.sessionId, serializer);
     sse_encode_opt_box_autoadd_u_64(self.fromSeq, serializer);
     sse_encode_u_32(self.limit, serializer);
   }
 
   @protected
-  void sse_encode_read_thread_response(
-    ReadThreadResponse self,
+  void sse_encode_read_session_response(
+    ReadSessionResponse self,
     SseSerializer serializer,
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_ui_event_message(self.uiEvents, serializer);
     sse_encode_opt_box_autoadd_u_64(self.nextSeq, serializer);
-    sse_encode_opt_box_autoadd_thread_end_reason(
-      self.threadEndReason,
+    sse_encode_opt_box_autoadd_session_end_reason(
+      self.sessionEndReason,
       serializer,
     );
   }
@@ -9011,7 +9037,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_request_trace_transport(self.transport, serializer);
     sse_encode_String(self.method, serializer);
     sse_encode_String(self.target, serializer);
-    sse_encode_opt_String(self.threadId, serializer);
+    sse_encode_opt_String(self.sessionId, serializer);
     sse_encode_opt_String(self.requestSummary, serializer);
     sse_encode_opt_String(self.responseSummary, serializer);
     sse_encode_opt_String(self.errorDetail, serializer);
@@ -9047,6 +9073,27 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_session_end_reason(
+    SessionEndReason self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    switch (self) {
+      case SessionEndReason_UserStopped():
+        sse_encode_i_32(0, serializer);
+      case SessionEndReason_AgentDone():
+        sse_encode_i_32(1, serializer);
+      case SessionEndReason_Crashed(message: final message):
+        sse_encode_i_32(2, serializer);
+        sse_encode_String(message, serializer);
+      case SessionEndReason_Timeout():
+        sse_encode_i_32(3, serializer);
+      case SessionEndReason_HostDisconnected():
+        sse_encode_i_32(4, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_social_event_frame(
     SocialEventFrame self,
     SseSerializer serializer,
@@ -9063,27 +9110,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.index, serializer);
-  }
-
-  @protected
-  void sse_encode_thread_end_reason(
-    ThreadEndReason self,
-    SseSerializer serializer,
-  ) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    switch (self) {
-      case ThreadEndReason_UserStopped():
-        sse_encode_i_32(0, serializer);
-      case ThreadEndReason_AgentDone():
-        sse_encode_i_32(1, serializer);
-      case ThreadEndReason_Crashed(message: final message):
-        sse_encode_i_32(2, serializer);
-        sse_encode_String(message, serializer);
-      case ThreadEndReason_Timeout():
-        sse_encode_i_32(3, serializer);
-      case ThreadEndReason_HostDisconnected():
-        sse_encode_i_32(4, serializer);
-    }
   }
 
   @protected
@@ -9113,7 +9139,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   void sse_encode_ui_event_frame(UiEventFrame self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-    sse_encode_String(self.threadId, serializer);
+    sse_encode_String(self.sessionId, serializer);
     sse_encode_u_64(self.seq, serializer);
     sse_encode_ui_event_message(self.ui, serializer);
     sse_encode_i_64(self.tsMs, serializer);
@@ -9126,32 +9152,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     switch (self) {
-      case UiEventMessage_ThreadOpened(
-        threadId: final threadId,
+      case UiEventMessage_SessionOpened(
+        sessionId: final sessionId,
         agent: final agent,
         title: final title,
         openedAtMs: final openedAtMs,
       ):
         sse_encode_i_32(0, serializer);
-        sse_encode_String(threadId, serializer);
+        sse_encode_String(sessionId, serializer);
         sse_encode_agent_name(agent, serializer);
         sse_encode_opt_String(title, serializer);
         sse_encode_i_64(openedAtMs, serializer);
-      case UiEventMessage_ThreadTitleUpdated(
-        threadId: final threadId,
+      case UiEventMessage_SessionTitleUpdated(
+        sessionId: final sessionId,
         title: final title,
       ):
         sse_encode_i_32(1, serializer);
-        sse_encode_String(threadId, serializer);
+        sse_encode_String(sessionId, serializer);
         sse_encode_String(title, serializer);
-      case UiEventMessage_ThreadClosed(
-        threadId: final threadId,
+      case UiEventMessage_SessionClosed(
+        sessionId: final sessionId,
         reason: final reason,
         closedAtMs: final closedAtMs,
       ):
         sse_encode_i_32(2, serializer);
-        sse_encode_String(threadId, serializer);
-        sse_encode_box_autoadd_thread_end_reason(reason, serializer);
+        sse_encode_String(sessionId, serializer);
+        sse_encode_box_autoadd_session_end_reason(reason, serializer);
         sse_encode_i_64(closedAtMs, serializer);
       case UiEventMessage_MessageStarted(
         messageId: final messageId,
@@ -9218,8 +9244,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         sse_encode_box_autoadd_display_payload(output, serializer);
         sse_encode_bool(isError, serializer);
       case UiEventMessage_SubagentSpawned(
-        parentThreadId: final parentThreadId,
-        subThreadId: final subThreadId,
+        parentSessionId: final parentSessionId,
+        subSessionId: final subSessionId,
         toolCallId: final toolCallId,
         agent: final agent,
         model: final model,
@@ -9227,19 +9253,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         title: final title,
       ):
         sse_encode_i_32(11, serializer);
-        sse_encode_String(parentThreadId, serializer);
-        sse_encode_String(subThreadId, serializer);
+        sse_encode_String(parentSessionId, serializer);
+        sse_encode_String(subSessionId, serializer);
         sse_encode_String(toolCallId, serializer);
         sse_encode_agent_name(agent, serializer);
         sse_encode_opt_String(model, serializer);
         sse_encode_opt_String(prompt, serializer);
         sse_encode_opt_String(title, serializer);
       case UiEventMessage_SubagentStatusUpdated(
-        subThreadId: final subThreadId,
+        subSessionId: final subSessionId,
         status: final status,
       ):
         sse_encode_i_32(12, serializer);
-        sse_encode_String(subThreadId, serializer);
+        sse_encode_String(subSessionId, serializer);
         sse_encode_subagent_status(status, serializer);
       case UiEventMessage_Error(
         code: final code,
@@ -9346,8 +9372,8 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
   );
 
   /// Permanently close the given thread. Idempotent.
-  Future<void> closeThread({required String threadId}) => RustLib.instance.api
-      .crateApiMinosMobileClientCloseThread(that: this, threadId: threadId);
+  Future<void> closeSession({required String sessionId}) => RustLib.instance.api
+      .crateApiMinosMobileClientCloseSession(that: this, sessionId: sessionId);
 
   Future<ConversationMembersResponse> conversationMembers({
     required String conversationId,
@@ -9425,10 +9451,11 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
   /// Pause an in-flight turn on the given thread. Best-effort. The thread
   /// transitions to `Suspended { UserInterrupt }` regardless of whether the
   /// codex side acknowledges in time.
-  Future<void> interruptThread({required String threadId}) => RustLib
-      .instance
-      .api
-      .crateApiMinosMobileClientInterruptThread(that: this, threadId: threadId);
+  Future<void> interruptSession({required String sessionId}) =>
+      RustLib.instance.api.crateApiMinosMobileClientInterruptSession(
+        that: this,
+        sessionId: sessionId,
+      );
 
   Future<List<AgentSessionSummaryDto>> listAgentSessions({
     String? conversationId,
@@ -9489,10 +9516,10 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
   Future<List<HostSummaryDto>> listPairedHosts() =>
       RustLib.instance.api.crateApiMinosMobileClientListPairedHosts(that: this);
 
-  /// List threads within a project.
-  Future<ListProjectThreadsResponse> listProjectThreads({
-    required ListProjectThreadsParams req,
-  }) => RustLib.instance.api.crateApiMinosMobileClientListProjectThreads(
+  /// List sessions within a project.
+  Future<ListProjectSessionsResponse> listProjectSessions({
+    required ListProjectSessionsParams req,
+  }) => RustLib.instance.api.crateApiMinosMobileClientListProjectSessions(
     that: this,
     req: req,
   );
@@ -9502,11 +9529,12 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
       RustLib.instance.api.crateApiMinosMobileClientListProjects(that: this);
 
   /// Request a page of thread summaries.
-  Future<ListThreadsResponse> listThreads({required ListThreadsParams req}) =>
-      RustLib.instance.api.crateApiMinosMobileClientListThreads(
-        that: this,
-        req: req,
-      );
+  Future<ListSessionsResponse> listSessions({
+    required ListSessionsParams req,
+  }) => RustLib.instance.api.crateApiMinosMobileClientListSessions(
+    that: this,
+    req: req,
+  );
 
   /// Log into an existing account on the backend. Same shape as
   /// `register` modulo the create-vs-find behaviour on the server.
@@ -9554,9 +9582,9 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
   Future<PersistedPairingState> persistedPairingState() => RustLib.instance.api
       .crateApiMinosMobileClientPersistedPairingState(that: this);
 
-  /// Read a window of translated UI events for one thread.
-  Future<ReadThreadResponse> readThread({required ReadThreadParams req}) =>
-      RustLib.instance.api.crateApiMinosMobileClientReadThread(
+  /// Read a window of translated UI events for one session.
+  Future<ReadSessionResponse> readSession({required ReadSessionParams req}) =>
+      RustLib.instance.api.crateApiMinosMobileClientReadSession(
         that: this,
         req: req,
       );
@@ -9654,12 +9682,12 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
   /// Submit a user approval decision for a pending host request.
   Future<void> sendApprovalDecision({
     required String requestId,
-    required String threadId,
+    required String sessionId,
     required String decisionJson,
   }) => RustLib.instance.api.crateApiMinosMobileClientSendApprovalDecision(
     that: this,
     requestId: requestId,
-    threadId: threadId,
+    sessionId: sessionId,
     decisionJson: decisionJson,
   );
 
@@ -9761,131 +9789,140 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
 }
 
 @sealed
-class ThreadStateImpl extends RustOpaque implements ThreadState {
+class SessionStateImpl extends RustOpaque implements SessionState {
   // Not to be used by end users
-  ThreadStateImpl.frbInternalDcoDecode(List<dynamic> wire)
+  SessionStateImpl.frbInternalDcoDecode(List<dynamic> wire)
     : super.frbInternalDcoDecode(wire, _kStaticData);
 
   // Not to be used by end users
-  ThreadStateImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
+  SessionStateImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
     : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
 
   static final _kStaticData = RustArcStaticData(
     rustArcIncrementStrongCount:
-        RustLib.instance.api.rust_arc_increment_strong_count_ThreadState,
+        RustLib.instance.api.rust_arc_increment_strong_count_SessionState,
     rustArcDecrementStrongCount:
-        RustLib.instance.api.rust_arc_decrement_strong_count_ThreadState,
+        RustLib.instance.api.rust_arc_decrement_strong_count_SessionState,
     rustArcDecrementStrongCountPtr:
-        RustLib.instance.api.rust_arc_decrement_strong_count_ThreadStatePtr,
+        RustLib.instance.api.rust_arc_decrement_strong_count_SessionStatePtr,
   );
 }
 
 @sealed
-class ThreadSummaryImpl extends RustOpaque implements ThreadSummary {
+class SessionSummaryImpl extends RustOpaque implements SessionSummary {
   // Not to be used by end users
-  ThreadSummaryImpl.frbInternalDcoDecode(List<dynamic> wire)
+  SessionSummaryImpl.frbInternalDcoDecode(List<dynamic> wire)
     : super.frbInternalDcoDecode(wire, _kStaticData);
 
   // Not to be used by end users
-  ThreadSummaryImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
+  SessionSummaryImpl.frbInternalSseDecode(BigInt ptr, int externalSizeOnNative)
     : super.frbInternalSseDecode(ptr, externalSizeOnNative, _kStaticData);
 
   static final _kStaticData = RustArcStaticData(
     rustArcIncrementStrongCount:
-        RustLib.instance.api.rust_arc_increment_strong_count_ThreadSummary,
+        RustLib.instance.api.rust_arc_increment_strong_count_SessionSummary,
     rustArcDecrementStrongCount:
-        RustLib.instance.api.rust_arc_decrement_strong_count_ThreadSummary,
+        RustLib.instance.api.rust_arc_decrement_strong_count_SessionSummary,
     rustArcDecrementStrongCountPtr:
-        RustLib.instance.api.rust_arc_decrement_strong_count_ThreadSummaryPtr,
+        RustLib.instance.api.rust_arc_decrement_strong_count_SessionSummaryPtr,
   );
 
   AgentName get agent => RustLib.instance.api
-      .crateApiMinosThreadSummaryAutoAccessorGetAgent(that: this);
+      .crateApiMinosSessionSummaryAutoAccessorGetAgent(that: this);
 
-  ThreadEndReason? get endReason => RustLib.instance.api
-      .crateApiMinosThreadSummaryAutoAccessorGetEndReason(that: this);
+  SessionEndReason? get endReason => RustLib.instance.api
+      .crateApiMinosSessionSummaryAutoAccessorGetEndReason(that: this);
 
   PlatformInt64? get endedAtMs => RustLib.instance.api
-      .crateApiMinosThreadSummaryAutoAccessorGetEndedAtMs(that: this);
+      .crateApiMinosSessionSummaryAutoAccessorGetEndedAtMs(that: this);
 
   PlatformInt64 get firstTsMs => RustLib.instance.api
-      .crateApiMinosThreadSummaryAutoAccessorGetFirstTsMs(that: this);
+      .crateApiMinosSessionSummaryAutoAccessorGetFirstTsMs(that: this);
 
   PlatformInt64 get lastTsMs => RustLib.instance.api
-      .crateApiMinosThreadSummaryAutoAccessorGetLastTsMs(that: this);
+      .crateApiMinosSessionSummaryAutoAccessorGetLastTsMs(that: this);
 
   int get messageCount => RustLib.instance.api
-      .crateApiMinosThreadSummaryAutoAccessorGetMessageCount(that: this);
+      .crateApiMinosSessionSummaryAutoAccessorGetMessageCount(that: this);
 
   bool get needsContinue => RustLib.instance.api
-      .crateApiMinosThreadSummaryAutoAccessorGetNeedsContinue(that: this);
+      .crateApiMinosSessionSummaryAutoAccessorGetNeedsContinue(that: this);
 
-  String? get parentThreadId => RustLib.instance.api
-      .crateApiMinosThreadSummaryAutoAccessorGetParentThreadId(that: this);
+  String? get parentSessionId => RustLib.instance.api
+      .crateApiMinosSessionSummaryAutoAccessorGetParentSessionId(that: this);
 
-  ThreadState get state => RustLib.instance.api
-      .crateApiMinosThreadSummaryAutoAccessorGetState(that: this);
+  String get sessionId => RustLib.instance.api
+      .crateApiMinosSessionSummaryAutoAccessorGetSessionId(that: this);
 
-  String get threadId => RustLib.instance.api
-      .crateApiMinosThreadSummaryAutoAccessorGetThreadId(that: this);
+  SessionState get state => RustLib.instance.api
+      .crateApiMinosSessionSummaryAutoAccessorGetState(that: this);
 
   String? get title => RustLib.instance.api
-      .crateApiMinosThreadSummaryAutoAccessorGetTitle(that: this);
+      .crateApiMinosSessionSummaryAutoAccessorGetTitle(that: this);
 
-  set agent(AgentName agent) => RustLib.instance.api
-      .crateApiMinosThreadSummaryAutoAccessorSetAgent(that: this, agent: agent);
+  set agent(AgentName agent) =>
+      RustLib.instance.api.crateApiMinosSessionSummaryAutoAccessorSetAgent(
+        that: this,
+        agent: agent,
+      );
 
-  set endReason(ThreadEndReason? endReason) =>
-      RustLib.instance.api.crateApiMinosThreadSummaryAutoAccessorSetEndReason(
+  set endReason(SessionEndReason? endReason) =>
+      RustLib.instance.api.crateApiMinosSessionSummaryAutoAccessorSetEndReason(
         that: this,
         endReason: endReason,
       );
 
   set endedAtMs(PlatformInt64? endedAtMs) =>
-      RustLib.instance.api.crateApiMinosThreadSummaryAutoAccessorSetEndedAtMs(
+      RustLib.instance.api.crateApiMinosSessionSummaryAutoAccessorSetEndedAtMs(
         that: this,
         endedAtMs: endedAtMs,
       );
 
   set firstTsMs(PlatformInt64 firstTsMs) =>
-      RustLib.instance.api.crateApiMinosThreadSummaryAutoAccessorSetFirstTsMs(
+      RustLib.instance.api.crateApiMinosSessionSummaryAutoAccessorSetFirstTsMs(
         that: this,
         firstTsMs: firstTsMs,
       );
 
   set lastTsMs(PlatformInt64 lastTsMs) =>
-      RustLib.instance.api.crateApiMinosThreadSummaryAutoAccessorSetLastTsMs(
+      RustLib.instance.api.crateApiMinosSessionSummaryAutoAccessorSetLastTsMs(
         that: this,
         lastTsMs: lastTsMs,
       );
 
   set messageCount(int messageCount) => RustLib.instance.api
-      .crateApiMinosThreadSummaryAutoAccessorSetMessageCount(
+      .crateApiMinosSessionSummaryAutoAccessorSetMessageCount(
         that: this,
         messageCount: messageCount,
       );
 
   set needsContinue(bool needsContinue) => RustLib.instance.api
-      .crateApiMinosThreadSummaryAutoAccessorSetNeedsContinue(
+      .crateApiMinosSessionSummaryAutoAccessorSetNeedsContinue(
         that: this,
         needsContinue: needsContinue,
       );
 
-  set parentThreadId(String? parentThreadId) => RustLib.instance.api
-      .crateApiMinosThreadSummaryAutoAccessorSetParentThreadId(
+  set parentSessionId(String? parentSessionId) => RustLib.instance.api
+      .crateApiMinosSessionSummaryAutoAccessorSetParentSessionId(
         that: this,
-        parentThreadId: parentThreadId,
+        parentSessionId: parentSessionId,
       );
 
-  set state(ThreadState state) => RustLib.instance.api
-      .crateApiMinosThreadSummaryAutoAccessorSetState(that: this, state: state);
-
-  set threadId(String threadId) =>
-      RustLib.instance.api.crateApiMinosThreadSummaryAutoAccessorSetThreadId(
+  set sessionId(String sessionId) =>
+      RustLib.instance.api.crateApiMinosSessionSummaryAutoAccessorSetSessionId(
         that: this,
-        threadId: threadId,
+        sessionId: sessionId,
       );
 
-  set title(String? title) => RustLib.instance.api
-      .crateApiMinosThreadSummaryAutoAccessorSetTitle(that: this, title: title);
+  set state(SessionState state) =>
+      RustLib.instance.api.crateApiMinosSessionSummaryAutoAccessorSetState(
+        that: this,
+        state: state,
+      );
+
+  set title(String? title) =>
+      RustLib.instance.api.crateApiMinosSessionSummaryAutoAccessorSetTitle(
+        that: this,
+        title: title,
+      );
 }

@@ -16,7 +16,7 @@ import 'package:shadcn_ui/shadcn_ui.dart';
 
 /// Discord-style project detail page.
 /// Shows a sidebar-like thread/channel list on the left with the project name
-/// at the top. Tapping a thread opens the chat view.
+/// at the top. Tapping a session opens the chat view.
 /// Swipe-back (iOS gesture) returns to the project list.
 class ProjectDetailPage extends ConsumerWidget {
   const ProjectDetailPage({
@@ -30,7 +30,7 @@ class ProjectDetailPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final threadsAsync = ref.watch(projectThreadsProvider(projectId));
+    final threadsAsync = ref.watch(projectSessionsProvider(projectId));
     final selectedThreadId = ref.watch(
       selectedProjectThreadProvider(projectId),
     );
@@ -59,7 +59,7 @@ class ProjectDetailPage extends ConsumerWidget {
             const VerticalDivider(width: 1),
             Expanded(
               child: selectedThreadId != null
-                  ? ThreadViewPage(threadId: selectedThreadId)
+                  ? ThreadViewPage(sessionId: selectedThreadId)
                   : const _NoThreadSelected(),
             ),
           ],
@@ -135,8 +135,8 @@ class ProjectDetailPage extends ConsumerWidget {
           .read(threadCommandsProvider)
           .sendUserMessage(sessionId: '', text: result);
 
-      // Refresh the thread list
-      ref.invalidate(projectThreadsProvider(projectId));
+      // Refresh the session list
+      ref.invalidate(projectSessionsProvider(projectId));
 
       logFlutterInfo(
         'project_detail',
@@ -145,7 +145,7 @@ class ProjectDetailPage extends ConsumerWidget {
 
       if (!context.mounted) return;
 
-      // Navigate to the new thread view (thread ID will arrive via events)
+      // Navigate to the new thread view (session ID will arrive via events)
       unawaited(context.push(AppRoutes.newThread));
     } catch (error) {
       if (!context.mounted) return;
@@ -161,19 +161,19 @@ class ProjectDetailPage extends ConsumerWidget {
   Future<void> _deleteThread(
     BuildContext context,
     WidgetRef ref,
-    String threadId,
+    String sessionId,
   ) async {
     try {
-      await ref.read(threadCommandsProvider).deleteThread(threadId: threadId);
-      ref.invalidate(projectThreadsProvider(projectId));
-      if (ref.read(selectedProjectThreadProvider(projectId)) == threadId) {
+      await ref.read(threadCommandsProvider).deleteThread(sessionId: sessionId);
+      ref.invalidate(projectSessionsProvider(projectId));
+      if (ref.read(selectedProjectThreadProvider(projectId)) == sessionId) {
         ref
             .read(selectedProjectThreadProvider(projectId).notifier)
             .select(null);
       }
       logFlutterInfo(
         'project_detail',
-        'project thread deleted projectId=$projectId threadId=$threadId',
+        'project thread deleted projectId=$projectId sessionId=$sessionId',
       );
       if (!context.mounted) return;
       ShadToaster.maybeOf(context)?.show(const ShadToast(title: Text('会话已删除')));
@@ -204,11 +204,11 @@ class _ChannelSidebar extends ConsumerWidget {
 
   final String projectId;
   final String projectName;
-  final AsyncValue<List<ThreadSummary>> threadsAsync;
+  final AsyncValue<List<SessionSummary>> threadsAsync;
   final String? selectedThreadId;
   final ValueChanged<String> onThreadSelected;
   final VoidCallback onNewThread;
-  final Future<void> Function(String threadId) onDeleteThread;
+  final Future<void> Function(String sessionId) onDeleteThread;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -278,24 +278,24 @@ class _ChannelSidebar extends ConsumerWidget {
             ),
           ),
 
-          // Thread list
+          // Session list
           Expanded(
             child: threadsAsync.when(
-              data: (threads) => threads.isEmpty
+              data: (sessions) => sessions.isEmpty
                   ? _EmptyThreads(onNewThread: onNewThread)
                   : RefreshIndicator(
                       onRefresh: () => ref
-                          .read(projectThreadsProvider(projectId).notifier)
+                          .read(projectSessionsProvider(projectId).notifier)
                           .refresh(),
                       child: ListView.builder(
                         padding: const .symmetric(horizontal: 8),
-                        itemCount: threads.length,
+                        itemCount: sessions.length,
                         itemBuilder: (context, index) {
-                          final thread = threads[index];
+                          final thread = sessions[index];
                           final isSelected =
-                              thread.threadId == selectedThreadId;
+                              thread.sessionId == selectedThreadId;
                           return Dismissible(
-                            key: ValueKey(thread.threadId),
+                            key: ValueKey(thread.sessionId),
                             direction: DismissDirection.endToStart,
                             confirmDismiss: (_) async {
                               return showDialog<bool>(
@@ -321,7 +321,7 @@ class _ChannelSidebar extends ConsumerWidget {
                                 ),
                               );
                             },
-                            onDismissed: (_) => onDeleteThread(thread.threadId),
+                            onDismissed: (_) => onDeleteThread(thread.sessionId),
                             background: Container(
                               margin: const .symmetric(vertical: 1),
                               padding: const .only(right: 16),
@@ -341,7 +341,7 @@ class _ChannelSidebar extends ConsumerWidget {
                             child: _ThreadChannelTile(
                               thread: thread,
                               isSelected: isSelected,
-                              onTap: () => onThreadSelected(thread.threadId),
+                              onTap: () => onThreadSelected(thread.sessionId),
                             ),
                           );
                         },
@@ -374,7 +374,7 @@ class _ThreadChannelTile extends StatelessWidget {
     required this.onTap,
   });
 
-  final ThreadSummary thread;
+  final SessionSummary thread;
   final bool isSelected;
   final VoidCallback onTap;
 
@@ -438,11 +438,13 @@ class _ThreadChannelTile extends StatelessWidget {
       AgentName.codex => Colors.green,
       AgentName.claude => Colors.orange,
       AgentName.gemini => Colors.blue,
+      AgentName.opencode => Colors.blueGrey,
+      AgentName.grok => Colors.amber,
     };
   }
 }
 
-String _threadTitle(ThreadSummary thread) {
+String _threadTitle(SessionSummary thread) {
   if (thread.title != null && thread.title!.isNotEmpty) {
     return thread.title!;
   }
@@ -450,6 +452,8 @@ String _threadTitle(ThreadSummary thread) {
     AgentName.codex => 'Codex',
     AgentName.claude => 'Claude',
     AgentName.gemini => 'Gemini',
+    AgentName.opencode => 'OpenCode',
+    AgentName.grok => 'Grok',
   };
   final time = DateTime.fromMillisecondsSinceEpoch(thread.lastTsMs);
   return '$agent · ${time.month}/${time.day} ${time.hour}:${time.minute.toString().padLeft(2, '0')}';

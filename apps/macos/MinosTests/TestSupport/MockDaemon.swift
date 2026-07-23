@@ -22,8 +22,8 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
     // ── Public mutable state ──
     var currentRelayLinkValue: RelayLinkState
     var currentPeerValue: PeerState
-    var currentAgentStateValue: ThreadState
-    var currentAgentThreadValue: AgentThreadSnapshot?
+    var currentAgentStateValue: SessionState
+    var currentAgentThreadValue: AgentSessionSnapshot?
     var currentAgentThreadError: MinosError?
     var currentTrustedDeviceValue: PeerRecord?
     var currentTrustedDeviceError: MinosError?
@@ -62,8 +62,8 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
     init(
         currentRelayLink: RelayLinkState = .disconnected,
         currentPeer: PeerState = .unpaired,
-        currentAgentState: ThreadState = .idle,
-        currentAgentThread: AgentThreadSnapshot? = nil,
+        currentAgentState: SessionState = .idle,
+        currentAgentSession: AgentSessionSnapshot? = nil,
         currentTrustedDevice: PeerRecord? = nil,
         currentPeers: [HostPeerSummary]? = nil,
         pairingQrResult: Result<RelayQrPayload, MinosError> = .success(MockDaemon.makeQrPayload()),
@@ -77,7 +77,7 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         currentRelayLinkValue = currentRelayLink
         currentPeerValue = currentPeer
         currentAgentStateValue = currentAgentState
-        currentAgentThreadValue = currentAgentThread
+        currentAgentThreadValue = currentAgentSession
         currentTrustedDeviceValue = currentTrustedDevice
         currentPeersValue = currentPeers ?? MockDaemon.defaultPeers(
             trustedDevice: currentTrustedDevice,
@@ -94,9 +94,9 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
 
     func currentRelayLink() -> RelayLinkState { currentRelayLinkValue }
     func currentPeer() -> PeerState { currentPeerValue }
-    func currentAgentState() -> ThreadState { currentAgentStateValue }
+    func currentAgentState() -> SessionState { currentAgentStateValue }
 
-    func currentAgentThread() async throws -> AgentThreadSnapshot? {
+    func currentAgentSession() async throws -> AgentSessionSnapshot? {
         currentAgentThreadCallCount += 1
         if let currentAgentThreadError {
             throw currentAgentThreadError
@@ -218,7 +218,7 @@ extension MockDaemon {
         }
     }
 
-    func emitAgentState(_ state: ThreadState) {
+    func emitAgentState(_ state: SessionState) {
         currentAgentStateValue = state
         for observer in agentObservers {
             observer.onState(state: state)
@@ -245,12 +245,12 @@ extension MockDaemon {
         StartAgentResponse(sessionId: sessionId, cwd: cwd)
     }
 
-    static func makeAgentThreadSnapshot(
-        threadId: String = "thread-abc12",
+    static func makeAgentSessionSnapshot(
+        sessionId: String = "thread-abc12",
         workspaceRoot: String = "/Users/fan/.minos/workspaces",
-        state: ThreadState = .idle
-    ) -> AgentThreadSnapshot {
-        AgentThreadSnapshot(threadId: threadId, workspaceRoot: workspaceRoot, state: state)
+        state: SessionState = .idle
+    ) -> AgentSessionSnapshot {
+        AgentSessionSnapshot(sessionId: sessionId, workspaceRoot: workspaceRoot, state: state)
     }
 
     static func makeTrustedDevice(

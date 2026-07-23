@@ -25,12 +25,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerMobileClient;
 
   CrossPlatformFinalizerArg
-  get rust_arc_decrement_strong_count_ThreadStatePtr => wire
-      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState;
+  get rust_arc_decrement_strong_count_SessionStatePtr => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState;
 
   CrossPlatformFinalizerArg
-  get rust_arc_decrement_strong_count_ThreadSummaryPtr => wire
-      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary;
+  get rust_arc_decrement_strong_count_SessionSummaryPtr => wire
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary;
 
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw);
@@ -42,20 +42,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  ThreadState
-  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+  SessionState
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState(
     dynamic raw,
   );
 
   @protected
-  ThreadSummary
-  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  SessionSummary
+  dco_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     dynamic raw,
   );
 
   @protected
-  ThreadSummary
-  dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  SessionSummary
+  dco_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     dynamic raw,
   );
 
@@ -66,8 +66,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  ThreadSummary
-  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  SessionSummary
+  dco_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     dynamic raw,
   );
 
@@ -78,14 +78,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  ThreadState
-  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+  SessionState
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState(
     dynamic raw,
   );
 
   @protected
-  ThreadSummary
-  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  SessionSummary
+  dco_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     dynamic raw,
   );
 
@@ -177,12 +177,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
 
   @protected
-  ListProjectThreadsParams dco_decode_box_autoadd_list_project_threads_params(
+  ListProjectSessionsParams dco_decode_box_autoadd_list_project_sessions_params(
     dynamic raw,
   );
 
   @protected
-  ListThreadsParams dco_decode_box_autoadd_list_threads_params(dynamic raw);
+  ListSessionsParams dco_decode_box_autoadd_list_sessions_params(dynamic raw);
 
   @protected
   MinosError dco_decode_box_autoadd_minos_error(dynamic raw);
@@ -193,10 +193,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  ReadThreadParams dco_decode_box_autoadd_read_thread_params(dynamic raw);
+  ReadSessionParams dco_decode_box_autoadd_read_session_params(dynamic raw);
 
   @protected
-  ThreadEndReason dco_decode_box_autoadd_thread_end_reason(dynamic raw);
+  SessionEndReason dco_decode_box_autoadd_session_end_reason(dynamic raw);
 
   @protected
   int dco_decode_box_autoadd_u_16(dynamic raw);
@@ -303,8 +303,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Lang dco_decode_lang(dynamic raw);
 
   @protected
-  List<ThreadSummary>
-  dco_decode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  List<SessionSummary>
+  dco_decode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     dynamic raw,
   );
 
@@ -374,15 +374,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
-  List<ProjectSummary> dco_decode_list_project_summary(dynamic raw);
-
-  @protected
-  ListProjectThreadsParams dco_decode_list_project_threads_params(dynamic raw);
-
-  @protected
-  ListProjectThreadsResponse dco_decode_list_project_threads_response(
+  ListProjectSessionsParams dco_decode_list_project_sessions_params(
     dynamic raw,
   );
+
+  @protected
+  ListProjectSessionsResponse dco_decode_list_project_sessions_response(
+    dynamic raw,
+  );
+
+  @protected
+  List<ProjectSummary> dco_decode_list_project_summary(dynamic raw);
 
   @protected
   ListProjectsResponse dco_decode_list_projects_response(dynamic raw);
@@ -391,10 +393,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<RequestTraceRecord> dco_decode_list_request_trace_record(dynamic raw);
 
   @protected
-  ListThreadsParams dco_decode_list_threads_params(dynamic raw);
+  ListSessionsParams dco_decode_list_sessions_params(dynamic raw);
 
   @protected
-  ListThreadsResponse dco_decode_list_threads_response(dynamic raw);
+  ListSessionsResponse dco_decode_list_sessions_response(dynamic raw);
 
   @protected
   List<UiEventMessage> dco_decode_list_ui_event_message(dynamic raw);
@@ -434,7 +436,7 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
 
   @protected
-  ThreadEndReason? dco_decode_opt_box_autoadd_thread_end_reason(dynamic raw);
+  SessionEndReason? dco_decode_opt_box_autoadd_session_end_reason(dynamic raw);
 
   @protected
   int? dco_decode_opt_box_autoadd_u_16(dynamic raw);
@@ -458,10 +460,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ProjectSummary dco_decode_project_summary(dynamic raw);
 
   @protected
-  ReadThreadParams dco_decode_read_thread_params(dynamic raw);
+  ReadSessionParams dco_decode_read_session_params(dynamic raw);
 
   @protected
-  ReadThreadResponse dco_decode_read_thread_response(dynamic raw);
+  ReadSessionResponse dco_decode_read_session_response(dynamic raw);
 
   @protected
   RequestTraceRecord dco_decode_request_trace_record(dynamic raw);
@@ -476,13 +478,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SenderType dco_decode_sender_type(dynamic raw);
 
   @protected
+  SessionEndReason dco_decode_session_end_reason(dynamic raw);
+
+  @protected
   SocialEventFrame dco_decode_social_event_frame(dynamic raw);
 
   @protected
   SubagentStatus dco_decode_subagent_status(dynamic raw);
-
-  @protected
-  ThreadEndReason dco_decode_thread_end_reason(dynamic raw);
 
   @protected
   int dco_decode_u_16(dynamic raw);
@@ -529,20 +531,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  ThreadState
-  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+  SessionState
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState(
     SseDeserializer deserializer,
   );
 
   @protected
-  ThreadSummary
-  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  SessionSummary
+  sse_decode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     SseDeserializer deserializer,
   );
 
   @protected
-  ThreadSummary
-  sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  SessionSummary
+  sse_decode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     SseDeserializer deserializer,
   );
 
@@ -553,8 +555,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  ThreadSummary
-  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  SessionSummary
+  sse_decode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     SseDeserializer deserializer,
   );
 
@@ -565,14 +567,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  ThreadState
-  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+  SessionState
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState(
     SseDeserializer deserializer,
   );
 
   @protected
-  ThreadSummary
-  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  SessionSummary
+  sse_decode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     SseDeserializer deserializer,
   );
 
@@ -670,12 +672,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
-  ListProjectThreadsParams sse_decode_box_autoadd_list_project_threads_params(
+  ListProjectSessionsParams sse_decode_box_autoadd_list_project_sessions_params(
     SseDeserializer deserializer,
   );
 
   @protected
-  ListThreadsParams sse_decode_box_autoadd_list_threads_params(
+  ListSessionsParams sse_decode_box_autoadd_list_sessions_params(
     SseDeserializer deserializer,
   );
 
@@ -688,12 +690,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  ReadThreadParams sse_decode_box_autoadd_read_thread_params(
+  ReadSessionParams sse_decode_box_autoadd_read_session_params(
     SseDeserializer deserializer,
   );
 
   @protected
-  ThreadEndReason sse_decode_box_autoadd_thread_end_reason(
+  SessionEndReason sse_decode_box_autoadd_session_end_reason(
     SseDeserializer deserializer,
   );
 
@@ -828,8 +830,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Lang sse_decode_lang(SseDeserializer deserializer);
 
   @protected
-  List<ThreadSummary>
-  sse_decode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  List<SessionSummary>
+  sse_decode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     SseDeserializer deserializer,
   );
 
@@ -923,17 +925,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
+  ListProjectSessionsParams sse_decode_list_project_sessions_params(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  ListProjectSessionsResponse sse_decode_list_project_sessions_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<ProjectSummary> sse_decode_list_project_summary(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  ListProjectThreadsParams sse_decode_list_project_threads_params(
-    SseDeserializer deserializer,
-  );
-
-  @protected
-  ListProjectThreadsResponse sse_decode_list_project_threads_response(
     SseDeserializer deserializer,
   );
 
@@ -948,12 +950,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  ListThreadsParams sse_decode_list_threads_params(
+  ListSessionsParams sse_decode_list_sessions_params(
     SseDeserializer deserializer,
   );
 
   @protected
-  ListThreadsResponse sse_decode_list_threads_response(
+  ListSessionsResponse sse_decode_list_sessions_response(
     SseDeserializer deserializer,
   );
 
@@ -1005,7 +1007,7 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
-  ThreadEndReason? sse_decode_opt_box_autoadd_thread_end_reason(
+  SessionEndReason? sse_decode_opt_box_autoadd_session_end_reason(
     SseDeserializer deserializer,
   );
 
@@ -1035,10 +1037,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ProjectSummary sse_decode_project_summary(SseDeserializer deserializer);
 
   @protected
-  ReadThreadParams sse_decode_read_thread_params(SseDeserializer deserializer);
+  ReadSessionParams sse_decode_read_session_params(
+    SseDeserializer deserializer,
+  );
 
   @protected
-  ReadThreadResponse sse_decode_read_thread_response(
+  ReadSessionResponse sse_decode_read_session_response(
     SseDeserializer deserializer,
   );
 
@@ -1061,13 +1065,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   SenderType sse_decode_sender_type(SseDeserializer deserializer);
 
   @protected
+  SessionEndReason sse_decode_session_end_reason(SseDeserializer deserializer);
+
+  @protected
   SocialEventFrame sse_decode_social_event_frame(SseDeserializer deserializer);
 
   @protected
   SubagentStatus sse_decode_subagent_status(SseDeserializer deserializer);
-
-  @protected
-  ThreadEndReason sse_decode_thread_end_reason(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_16(SseDeserializer deserializer);
@@ -1121,22 +1125,22 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
-  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
-    ThreadState self,
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState(
+    SessionState self,
     SseSerializer serializer,
   );
 
   @protected
   void
-  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
-    ThreadSummary self,
+  sse_encode_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
+    SessionSummary self,
     SseSerializer serializer,
   );
 
   @protected
   void
-  sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
-    ThreadSummary self,
+  sse_encode_Auto_RefMut_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
+    SessionSummary self,
     SseSerializer serializer,
   );
 
@@ -1149,8 +1153,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
-  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
-    ThreadSummary self,
+  sse_encode_Auto_Ref_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
+    SessionSummary self,
     SseSerializer serializer,
   );
 
@@ -1163,15 +1167,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
-  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
-    ThreadState self,
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState(
+    SessionState self,
     SseSerializer serializer,
   );
 
   @protected
   void
-  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
-    ThreadSummary self,
+  sse_encode_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
+    SessionSummary self,
     SseSerializer serializer,
   );
 
@@ -1299,14 +1303,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  void sse_encode_box_autoadd_list_project_threads_params(
-    ListProjectThreadsParams self,
+  void sse_encode_box_autoadd_list_project_sessions_params(
+    ListProjectSessionsParams self,
     SseSerializer serializer,
   );
 
   @protected
-  void sse_encode_box_autoadd_list_threads_params(
-    ListThreadsParams self,
+  void sse_encode_box_autoadd_list_sessions_params(
+    ListSessionsParams self,
     SseSerializer serializer,
   );
 
@@ -1323,14 +1327,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  void sse_encode_box_autoadd_read_thread_params(
-    ReadThreadParams self,
+  void sse_encode_box_autoadd_read_session_params(
+    ReadSessionParams self,
     SseSerializer serializer,
   );
 
   @protected
-  void sse_encode_box_autoadd_thread_end_reason(
-    ThreadEndReason self,
+  void sse_encode_box_autoadd_session_end_reason(
+    SessionEndReason self,
     SseSerializer serializer,
   );
 
@@ -1510,8 +1514,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void
-  sse_encode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
-    List<ThreadSummary> self,
+  sse_encode_list_Auto_Owned_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
+    List<SessionSummary> self,
     SseSerializer serializer,
   );
 
@@ -1627,20 +1631,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_project_sessions_params(
+    ListProjectSessionsParams self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_project_sessions_response(
+    ListProjectSessionsResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_project_summary(
     List<ProjectSummary> self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_list_project_threads_params(
-    ListProjectThreadsParams self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_list_project_threads_response(
-    ListProjectThreadsResponse self,
     SseSerializer serializer,
   );
 
@@ -1657,14 +1661,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  void sse_encode_list_threads_params(
-    ListThreadsParams self,
+  void sse_encode_list_sessions_params(
+    ListSessionsParams self,
     SseSerializer serializer,
   );
 
   @protected
-  void sse_encode_list_threads_response(
-    ListThreadsResponse self,
+  void sse_encode_list_sessions_response(
+    ListSessionsResponse self,
     SseSerializer serializer,
   );
 
@@ -1726,8 +1730,8 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  void sse_encode_opt_box_autoadd_thread_end_reason(
-    ThreadEndReason? self,
+  void sse_encode_opt_box_autoadd_session_end_reason(
+    SessionEndReason? self,
     SseSerializer serializer,
   );
 
@@ -1762,14 +1766,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
-  void sse_encode_read_thread_params(
-    ReadThreadParams self,
+  void sse_encode_read_session_params(
+    ReadSessionParams self,
     SseSerializer serializer,
   );
 
   @protected
-  void sse_encode_read_thread_response(
-    ReadThreadResponse self,
+  void sse_encode_read_session_response(
+    ReadSessionResponse self,
     SseSerializer serializer,
   );
 
@@ -1795,6 +1799,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_sender_type(SenderType self, SseSerializer serializer);
 
   @protected
+  void sse_encode_session_end_reason(
+    SessionEndReason self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_social_event_frame(
     SocialEventFrame self,
     SseSerializer serializer,
@@ -1803,12 +1813,6 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_subagent_status(
     SubagentStatus self,
-    SseSerializer serializer,
-  );
-
-  @protected
-  void sse_encode_thread_end_reason(
-    ThreadEndReason self,
     SseSerializer serializer,
   );
 
@@ -1877,34 +1881,34 @@ class RustLibWire implements BaseWire {
       );
 
   void
-  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState(
     int ptr,
   ) => wasmModule
-      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState(
         ptr,
       );
 
   void
-  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState(
     int ptr,
   ) => wasmModule
-      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState(
         ptr,
       );
 
   void
-  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     int ptr,
   ) => wasmModule
-      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+      .rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
         ptr,
       );
 
   void
-  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     int ptr,
   ) => wasmModule
-      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+      .rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
         ptr,
       );
 }
@@ -1926,22 +1930,22 @@ extension type RustLibWasmModule._(JSObject _) implements JSObject {
   );
 
   external void
-  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState(
     int ptr,
   );
 
   external void
-  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadState(
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionState(
     int ptr,
   );
 
   external void
-  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  rust_arc_increment_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     int ptr,
   );
 
   external void
-  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerThreadSummary(
+  rust_arc_decrement_strong_count_RustOpaque_flutter_rust_bridgefor_generatedRustAutoOpaqueInnerSessionSummary(
     int ptr,
   );
 }

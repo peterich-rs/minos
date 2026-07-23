@@ -22,7 +22,7 @@ abstract final class AppRoutes {
   static const String splash = '/splash';
   static const String login = '/login';
   static const String shell = '/';
-  static const String thread = '/thread/:threadId';
+  static const String thread = '/thread/:sessionId';
   static const String newThread = '/thread/new';
   static const String agentStart = '/agent-start';
   static const String agentProfile = '/agent-profile/:profileId';
@@ -89,10 +89,10 @@ GoRouter createAppRouter(Ref ref) {
       GoRoute(
         path: AppRoutes.thread,
         builder: (context, state) {
-          final threadId = state.pathParameters['threadId']!;
+          final sessionId = state.pathParameters['sessionId']!;
           final extra = state.extra as ThreadRouteExtra?;
           return ThreadViewPage(
-            threadId: threadId,
+            sessionId: sessionId,
             agent: extra?.agent,
             agentProfileId: extra?.agentProfileId,
           );

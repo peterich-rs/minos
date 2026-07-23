@@ -14,10 +14,10 @@ import 'package:minos/src/rust/api/minos.dart' show AgentName, MinosError;
 ///                            │                                 │
 ///                            ├──────────send()────────────────┘
 ///                            │
-///                            └────stop()/ThreadClosed────> Suspended
+///                            └────stop()/SessionClosed────> Suspended
 /// ```
 ///
-/// `threadId` is the daemon-issued `session_id` (per
+/// `sessionId` is the daemon-issued `session_id` (per
 /// `crates/minos-protocol/src/messages.rs:50`).
 @immutable
 sealed class ActiveSession {
@@ -36,7 +36,7 @@ class SessionIdle extends ActiveSession {
 }
 
 /// A message send has been accepted by the transport layer, but the page does
-/// not have a bound `thread_id` yet. We stay here until the first live UI
+/// not have a bound `session_id` yet. We stay here until the first live UI
 /// frame arrives and lets the controller bind the session.
 class SessionSending extends ActiveSession {
   final AgentName agent;
@@ -53,68 +53,68 @@ class SessionSending extends ActiveSession {
 
 /// Agent is actively producing tokens; UI shows the streaming cursor.
 class SessionStreaming extends ActiveSession {
-  final String threadId;
+  final String sessionId;
   final AgentName agent;
-  const SessionStreaming({required this.threadId, required this.agent});
+  const SessionStreaming({required this.sessionId, required this.agent});
 
   @override
   bool operator ==(Object other) =>
       other is SessionStreaming &&
-      other.threadId == threadId &&
+      other.sessionId == sessionId &&
       other.agent == agent;
 
   @override
-  int get hashCode => Object.hash(threadId, agent);
+  int get hashCode => Object.hash(sessionId, agent);
 }
 
 /// Streaming finished cleanly via `MessageCompleted`; the input bar is
 /// re-enabled so the user can send a follow-up.
 class SessionAwaitingInput extends ActiveSession {
-  final String threadId;
+  final String sessionId;
   final AgentName agent;
-  const SessionAwaitingInput({required this.threadId, required this.agent});
+  const SessionAwaitingInput({required this.sessionId, required this.agent});
 
   @override
   bool operator ==(Object other) =>
       other is SessionAwaitingInput &&
-      other.threadId == threadId &&
+      other.sessionId == sessionId &&
       other.agent == agent;
 
   @override
-  int get hashCode => Object.hash(threadId, agent);
+  int get hashCode => Object.hash(sessionId, agent);
 }
 
 /// The thread has been interrupted locally or suspended by the runtime.
 /// Sending another message on the same conversation should resume it rather
 /// than creating a brand-new session.
 class SessionSuspended extends ActiveSession {
-  final String threadId;
+  final String sessionId;
   final AgentName agent;
-  const SessionSuspended({required this.threadId, required this.agent});
+  const SessionSuspended({required this.sessionId, required this.agent});
 
   @override
   bool operator ==(Object other) =>
       other is SessionSuspended &&
-      other.threadId == threadId &&
+      other.sessionId == sessionId &&
       other.agent == agent;
 
   @override
-  int get hashCode => Object.hash(threadId, agent);
+  int get hashCode => Object.hash(sessionId, agent);
 }
 
-/// Terminal failure on the dispatch path. `threadId` is null when the
-/// failure happened before the runtime surfaced a thread id.
+/// Terminal failure on the dispatch path. `sessionId` is null when the
+/// failure happened before the runtime surfaced a session id.
 class SessionError extends ActiveSession {
-  final String? threadId;
+  final String? sessionId;
   final MinosError error;
-  const SessionError({this.threadId, required this.error});
+  const SessionError({this.sessionId, required this.error});
 
   @override
   bool operator ==(Object other) =>
       other is SessionError &&
-      other.threadId == threadId &&
+      other.sessionId == sessionId &&
       other.error == error;
 
   @override
-  int get hashCode => Object.hash(threadId, error);
+  int get hashCode => Object.hash(sessionId, error);
 }
