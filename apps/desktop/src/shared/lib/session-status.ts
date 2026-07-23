@@ -44,6 +44,92 @@ export function transcriptHasPendingApproval(
 }
 
 /**
+ * Kinds that prove the agent (or user) continued past a parked reverse-request.
+ * Historical replay keeps raw `approval/request` frames; user decisions are not
+ * always durable events. Progress after an approval card means it was answered.
+ */
+const APPROVAL_PROGRESS_KINDS = new Set([
+  "assistant",
+  "text",
+  "reasoning",
+  "tool",
+  "tool_result",
+  "tool_error",
+  "subagent",
+  "user",
+]);
+
+export type ApprovalDemoteItem = {
+  kind: string;
+  seq: number;
+  requestId?: string | null;
+  approvalMethod?: string | null;
+  text: string;
+  title?: string | null;
+  options?: unknown;
+};
+
+/**
+ * Demote approval/question cards that are followed by later progress.
+ *
+ * Without this, reopening a session after plan/permission approve re-shows
+ * interactive "Plan approval" cards and re-elevates Attention / needs_approval
+ * even though the turn already continued.
+ */
+export function demoteResolvedApprovalItems<T extends ApprovalDemoteItem>(
+  items: readonly T[],
+): T[] {
+  if (items.length === 0) return items as T[];
+
+  let hasPending = false;
+  for (const it of items) {
+    if (
+      (it.kind === "approval" || it.kind === "question") &&
+      Boolean(it.requestId)
+    ) {
+      hasPending = true;
+      break;
+    }
+  }
+  if (!hasPending) return items as T[];
+
+  let maxProgressSeq = Number.NEGATIVE_INFINITY;
+  for (const it of items) {
+    if (APPROVAL_PROGRESS_KINDS.has(it.kind) && it.seq > maxProgressSeq) {
+      maxProgressSeq = it.seq;
+    }
+  }
+  if (!Number.isFinite(maxProgressSeq)) return items as T[];
+
+  let changed = false;
+  const out = items.map((it) => {
+    if (
+      (it.kind !== "approval" && it.kind !== "question") ||
+      !it.requestId ||
+      it.seq >= maxProgressSeq
+    ) {
+      return it;
+    }
+    changed = true;
+    const isPlan = it.approvalMethod === "x.ai/exit_plan_mode";
+    const isQuestion = it.kind === "question";
+    return {
+      ...it,
+      kind: "status",
+      text: isPlan
+        ? "Plan approved"
+        : isQuestion
+          ? "Question answered"
+          : "Approval resolved",
+      title: it.title ?? (isPlan ? "Plan" : "Resolved"),
+      requestId: null,
+      options: null,
+    };
+  });
+  return changed ? out : (items as T[]);
+}
+
+/**
  * Apply derived status to a freshly mapped daemon session list.
  * `pendingById` may be partial — missing ids keep preserve semantics.
  */

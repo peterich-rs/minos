@@ -1,4 +1,5 @@
-import type { TranscriptItem } from "./daemon";
+import type { TranscriptItem } from "./daemon.ts";
+import { demoteResolvedApprovalItems } from "./session-status.ts";
 
 /** Default raw-event window for first open (tail) and each older page. */
 export const TRANSCRIPT_PAGE_EVENTS = 400;
@@ -127,7 +128,9 @@ export function mergeTranscriptOlder(
     return [...olderUnique.slice(0, -1), merged, ...newer.slice(1)];
   }
 
-  return [...olderUnique, ...newer];
+  // Older pages can contain already-answered plan/permission cards; demote
+  // once the window includes later progress from the newer page.
+  return demoteResolvedApprovalItems([...olderUnique, ...newer]);
 }
 
 /** After a tail/full open: where does history start, and is there more above? */

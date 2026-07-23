@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  demoteResolvedApprovalItems,
   deriveSessionStatus,
   nextSessionStatusAfterTranscript,
   nextStatusFromManagerEvent,
@@ -83,6 +84,90 @@ describe("transcriptHasPendingApproval", () => {
       ]),
       false,
     );
+  });
+});
+
+describe("demoteResolvedApprovalItems", () => {
+  it("demotes plan approval when later assistant progress exists", () => {
+    const items = [
+      {
+        kind: "approval",
+        seq: 10,
+        requestId: "plan-1",
+        approvalMethod: "x.ai/exit_plan_mode",
+        text: "needs approval",
+        title: "Plan approval",
+      },
+      {
+        kind: "assistant",
+        seq: 20,
+        requestId: null,
+        text: "计划已批准，开始实现",
+        title: null,
+      },
+    ];
+    const out = demoteResolvedApprovalItems(items);
+    assert.equal(out[0]!.kind, "status");
+    assert.equal(out[0]!.requestId, null);
+    assert.equal(out[0]!.text, "Plan approved");
+    assert.equal(transcriptHasPendingApproval(out), false);
+  });
+
+  it("keeps terminal pending approval when agent is still parked", () => {
+    const items = [
+      {
+        kind: "tool",
+        seq: 5,
+        requestId: null,
+        text: "read_file",
+        title: null,
+      },
+      {
+        kind: "approval",
+        seq: 10,
+        requestId: "plan-2",
+        approvalMethod: "x.ai/exit_plan_mode",
+        text: "needs approval",
+        title: "Plan approval",
+      },
+    ];
+    const out = demoteResolvedApprovalItems(items);
+    assert.equal(out[1]!.kind, "approval");
+    assert.equal(out[1]!.requestId, "plan-2");
+    assert.equal(transcriptHasPendingApproval(out), true);
+  });
+
+  it("demotes only cards before later progress when a newer request is open", () => {
+    const items = [
+      {
+        kind: "approval",
+        seq: 10,
+        requestId: "old",
+        approvalMethod: "session/request_permission",
+        text: "old perm",
+        title: "Permission",
+      },
+      {
+        kind: "tool",
+        seq: 20,
+        requestId: null,
+        text: "bash",
+        title: null,
+      },
+      {
+        kind: "approval",
+        seq: 30,
+        requestId: "new",
+        approvalMethod: "session/request_permission",
+        text: "new perm",
+        title: "Permission",
+      },
+    ];
+    const out = demoteResolvedApprovalItems(items);
+    assert.equal(out[0]!.requestId, null);
+    assert.equal(out[0]!.kind, "status");
+    assert.equal(out[2]!.requestId, "new");
+    assert.equal(out[2]!.kind, "approval");
   });
 });
 

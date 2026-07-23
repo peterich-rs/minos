@@ -12,6 +12,7 @@ import {
   singleFlightLoad,
 } from "@/shared/lib/desktop-inflight";
 import {
+  demoteResolvedApprovalItems,
   transcriptHasPendingApproval,
   type ApprovalStatusPolicy,
 } from "@/shared/lib/session-status";
@@ -189,24 +190,60 @@ export function createTranscriptActions(
       try {
         const existing = get().transcriptsBySession[sessionId] ?? [];
         const session = findSessionRow(get(), sessionId);
+        const entityMessageCount =
+          get().sessionsById[sessionId]?.messageCount ?? 0;
 
         // Daemon `from_seq` is exclusive: start = from_seq + 1.
         let fromSeq: number | undefined;
         const window = opts?.tailWindow ?? TRANSCRIPT_PAGE_EVENTS;
+        const pageLimit = full ? 1000 : Math.max(window, 500);
         if (append && existing.length > 0) {
           fromSeq = Math.max(...existing.map((i) => i.seq));
         } else if (!full) {
-          const lastSeq = session?.messageCount ?? 0;
+          // Prefer live-elevated Entity last_seq over possibly stale list row.
+          const lastSeq = Math.max(
+            session?.messageCount ?? 0,
+            entityMessageCount,
+          );
           fromSeq = tailFromSeq(lastSeq, window);
         }
 
-        const page = await daemonApi.readTranscript(
+        let page = await daemonApi.readTranscript(
           sessionId,
           fromSeq,
-          full ? 1000 : Math.max(window, 500),
+          pageLimit,
           { full },
         );
         if (isStale()) return;
+
+        // Stale last_seq seek can land mid-history (nextSeq set). Catch up to
+        // the true end so the open transcript includes latest turns — otherwise
+        // the user only sees a middle window and cannot scroll to the real tail.
+        // Daemon nextSeq is the next inclusive start; exclusive from = next - 1.
+        if (!full && page.nextSeq != null) {
+          let guard = 0;
+          const maxCatchUp = 50;
+          while (page.nextSeq != null && guard < maxCatchUp) {
+            guard += 1;
+            const more = await daemonApi.readTranscript(
+              sessionId,
+              page.nextSeq - 1,
+              pageLimit,
+            );
+            if (isStale()) return;
+            page = {
+              sessionId,
+              items: mergeTranscriptItems(page.items, more.items),
+              nextSeq: more.nextSeq,
+            };
+          }
+        }
+
+        // Elevate last_seq from the highest item we actually saw.
+        const observedMaxSeq =
+          page.items.length > 0
+            ? Math.max(...page.items.map((i) => i.seq))
+            : 0;
 
         set((s) => {
           // Re-check inside set: a hard open may have finished between await
@@ -224,14 +261,12 @@ export function createTranscriptActions(
           // tail window cannot drop an already-known pending approval card.
           // Quiet/elevate-only always merges; hard sync replace only when not
           // appending (full open / reopen without cache).
+          // Hard open also merges concurrent ingest frames that arrived while
+          // the RPC was in flight (same race as timeline hard vs quiet).
           const base = append
             ? prevItems
-            : approvalStatusPolicy === "elevate-only" || quiet
-              ? (s.transcriptsBySession[sessionId] ?? [])
-              : [];
-          const merged = append
-            ? mergeTranscriptItems(base, page.items)
-            : [...base, ...page.items];
+            : (s.transcriptsBySession[sessionId] ?? []);
+          const merged = mergeTranscriptItems(base, page.items);
           const seen = new Set<string>();
           let items = merged.filter((it) => {
             if (seen.has(it.id)) return false;
@@ -244,11 +279,18 @@ export function createTranscriptActions(
             items = base;
           }
           const trimmed = trimTranscriptHardMax(items);
-          items = trimmed.items;
+          // mergeTranscriptItems already demotes resolved approvals; re-run after
+          // hard-max trim so a trimmed window still does not re-elevate pending.
+          items = demoteResolvedApprovalItems(trimmed.items);
           const hasPendingApproval = transcriptHasPendingApproval(items);
 
           // Entity is sole status writer; list projection follows.
           const prevEntity = s.sessionsById[sessionId];
+          const elevatedCount = Math.max(
+            session?.messageCount ?? 0,
+            prevEntity?.messageCount ?? 0,
+            observedMaxSeq,
+          );
           const seed = session
             ? {
                 id: sessionId,
@@ -260,7 +302,7 @@ export function createTranscriptActions(
                 model: session.model,
                 parentId: session.parentId,
                 summary: session.summary,
-                messageCount: session.messageCount,
+                messageCount: elevatedCount || session.messageCount,
                 firstTsMs: session.firstTsMs,
                 lastTsMs: session.lastTsMs,
                 needsContinue: session.needsContinue,
@@ -273,7 +315,7 @@ export function createTranscriptActions(
                 status: (prevEntity?.daemonStatus ?? "running") as SessionStatus,
                 model: prevEntity?.model ?? "",
                 summary: prevEntity?.summary ?? "",
-                messageCount: prevEntity?.messageCount,
+                messageCount: elevatedCount || prevEntity?.messageCount,
               };
           const entity = mergeSessionEntity(prevEntity, seed, {
             pendingApproval: hasPendingApproval,
@@ -305,6 +347,8 @@ export function createTranscriptActions(
             const hist = full
               ? {
                   firstLoadedStartSeq: 1,
+                  // After catch-up, nextSeq should be null; trimmed still
+                  // signals more history above the hard max window.
                   hasOlder: page.nextSeq != null || trimmed.trimmed,
                   loadingOlder: false,
                 }

@@ -173,6 +173,21 @@ export type ToolHeaderModel = {
  * - text: bare target (path/cmd) from the bridge
  * - detail: args (running) or output (done)
  */
+/** Markup / XML first lines must never become the tool header target. */
+export function isMarkupishToolLine(line: string): boolean {
+  const t = line.trimStart();
+  return (
+    t.startsWith("<") &&
+    (t.startsWith("<task") ||
+      t.startsWith("<path") ||
+      t.startsWith("<type") ||
+      t.startsWith("<content") ||
+      t.startsWith("<tool") ||
+      t.startsWith("<?xml") ||
+      t.includes("<task id="))
+  );
+}
+
 export function buildToolHeader(opts: {
   toolName: string;
   target: string;
@@ -183,14 +198,23 @@ export function buildToolHeader(opts: {
   const failed = opts.kind === "tool_error";
   const kind = toolKindFromName(opts.toolName || "tool");
   const verb = toolHeaderVerb(kind, running);
+  const toolName = (opts.toolName || "tool").trim();
   let target = (opts.target || "").trim();
   // Legacy bridge text like "Done read_file · …" — fall back to subject.
   if (!target || /^(Running|Done|Failed)\s/i.test(target)) {
-    target = toolSubjectFromName(opts.toolName || "") || "…";
+    target = toolSubjectFromName(toolName) || "";
   }
   // Avoid "Read read: path" when target still carries a kind prefix.
   target = toolSubjectFromName(target) || target;
-  if (!target) target = "…";
+  // Ban "Reading read" and raw XML titles (`<path>…`, `<task id=…>`).
+  if (
+    !target ||
+    isMarkupishToolLine(target) ||
+    target.toLowerCase() === toolName.toLowerCase() ||
+    target.toLowerCase() === toolSubjectFromName(toolName).toLowerCase()
+  ) {
+    target = "…";
+  }
 
   let diffstat: { add: number; del: number } | null = null;
   if (!running && !failed && opts.detail) {

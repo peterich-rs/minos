@@ -121,6 +121,25 @@ describe("mergeMessagesQuietTail", () => {
     const out = mergeMessagesQuietTail(prev, tail);
     assert.equal(out.find((m) => m.id === "2"), mid);
   });
+
+  it("keeps concurrent newer rows when a stale tail page lands later", () => {
+    // Open RPC started at T0; quiet re-list after append already has msg 3.
+    // Hard open must union-merge, not replace with the stale T0 page.
+    const prev = [
+      msg({ id: "1", messageSeq: 1, body: "a" }),
+      msg({ id: "2", messageSeq: 2, body: "b" }),
+      msg({ id: "3", messageSeq: 3, body: "agent done" }),
+    ];
+    const staleTail = [
+      msg({ id: "1", messageSeq: 1, body: "a" }),
+      msg({ id: "2", messageSeq: 2, body: "b" }),
+    ];
+    const out = mergeMessagesQuietTail(prev, staleTail);
+    assert.deepEqual(
+      out.map((m) => m.id),
+      ["1", "2", "3"],
+    );
+  });
 });
 
 describe("trimMessagesHardMax", () => {

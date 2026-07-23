@@ -12,7 +12,10 @@ import {
   applyManagerLifecycleToEntity,
   patchSessionEntity,
 } from "@/shared/lib/session-entity";
-import { transcriptHasPendingApproval } from "@/shared/lib/session-status";
+import {
+  demoteResolvedApprovalItems,
+  transcriptHasPendingApproval,
+} from "@/shared/lib/session-status";
 import {
   EMPTY_TRANSCRIPT_HISTORY,
   hasTranscriptWorkingSet,
@@ -50,19 +53,34 @@ export function createLiveIngressActions(
           ev.items ?? [],
         );
         const trimmed = trimTranscriptHardMax(merged);
-        items = trimmed.items;
+        // Never trust a single-frame hasPendingApproval when the window already
+        // contains later progress past an answered plan/permission card.
+        items = demoteResolvedApprovalItems(trimmed.items);
       }
       const hasPending =
-        Boolean(ev.hasPendingApproval) ||
-        (items != null && transcriptHasPendingApproval(items));
+        items != null
+          ? transcriptHasPendingApproval(items)
+          : Boolean(ev.hasPendingApproval);
 
       const prevEntity = s.sessionsById[ev.sessionId];
       const known = findSessionRow(s, ev.sessionId);
+      // Keep last_seq (messageCount) elevated from live frames so transcript
+      // tail seek does not open a stale mid-window when list hydrate lagged.
+      const nextMessageCount = Math.max(
+        prevEntity?.messageCount ?? 0,
+        known?.messageCount ?? 0,
+        typeof ev.seq === "number" ? ev.seq : 0,
+      );
+      // Working-set window (after demote) is high-confidence — may demote.
+      // Without a window, only elevate from the frame flag; never clear.
+      const nextPending =
+        items != null
+          ? hasPending
+          : hasPending
+            ? true
+            : (prevEntity?.hasPendingApproval ?? false);
       const entity = patchSessionEntity(prevEntity, ev.sessionId, {
-        hasPendingApproval: hasPending
-          ? true
-          : (prevEntity?.hasPendingApproval ?? false),
-        // Ingest elevates only; never clear pending from a partial frame.
+        hasPendingApproval: nextPending,
         daemonStatus: prevEntity?.daemonStatus ?? known?.status ?? "running",
         conversationId:
           known?.conversationId ?? prevEntity?.conversationId ?? "",
@@ -71,14 +89,9 @@ export function createLiveIngressActions(
         model: known?.model ?? prevEntity?.model,
         summary: known?.summary ?? prevEntity?.summary,
         lastTsMs: ev.tsMs || prevEntity?.lastTsMs,
+        messageCount: nextMessageCount,
       });
-      // If frame says pending, force flag true (patch already did when hasPending).
-      const elevated = hasPending
-        ? patchSessionEntity(entity, ev.sessionId, {
-            hasPendingApproval: true,
-          })
-        : entity;
-      const committed = commitSessionEntity(s, elevated);
+      const committed = commitSessionEntity(s, entity);
 
       let transcriptHistoryBySession = s.transcriptHistoryBySession;
       if (items != null) {
@@ -229,6 +242,12 @@ export function createLiveIngressActions(
       setTimeout(() => {
         conversationRefreshTimers.delete(id);
         const st = get();
+        // Always refresh conversation list preview / messageCount for the
+        // owning project so the rail does not stay stale under livePush.
+        const projectId = st.conversations.find((c) => c.id === id)?.projectId;
+        if (projectId) {
+          void get().loadConversations(projectId, { quiet: true });
+        }
         if (
           !hasTimelineWorkingSet(st.messagesByConversation, id, {
             messageHistoryByConversation: st.messageHistoryByConversation,

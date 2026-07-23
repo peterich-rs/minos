@@ -63,6 +63,22 @@ describe("buildToolHeader", () => {
     assert.equal(h.diffstat!.add, 1);
     assert.equal(h.diffstat!.del, 1);
   });
+
+  it("never shows Reading read or XML task titles", () => {
+    const readDup = buildToolHeader({
+      toolName: "read",
+      target: "read",
+      kind: "tool",
+    });
+    assert.equal(readDup.target, "…");
+
+    const xml = buildToolHeader({
+      toolName: "task",
+      target: '<task id="ses_x" state="completed">',
+      kind: "tool_result",
+    });
+    assert.equal(xml.target, "…");
+  });
 });
 
 describe("parseDiffstat", () => {

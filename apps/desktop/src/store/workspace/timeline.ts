@@ -15,7 +15,6 @@ import {
   type MessageHistoryMeta,
   trimMessagesHardMax,
 } from "@/shared/lib/message-history";
-import { reuseStableById, timelineMessageEqual } from "@/shared/lib/list-identity";
 import { useReactionStore } from "@/features/chat/reaction-store";
 
 
@@ -66,15 +65,12 @@ export function createTimelineActions(
             .hydrateFromMessages(messagePage.messages);
           set((s) => {
             const prevMessages = s.messagesByConversation[conversationId];
-            // Quiet re-list must keep already-loaded older pages and reuse row
-            // identity so TimelineRow/MarkdownText do not remount/reparse.
-            let merged = quiet
-              ? mergeMessagesQuietTail(prevMessages, uiMessages)
-              : reuseStableById(
-                  prevMessages,
-                  uiMessages,
-                  timelineMessageEqual,
-                );
+            // Always union-merge by id:
+            // - quiet re-list keeps already-loaded older pages
+            // - hard open must not clobber concurrent quiet tails / optimistic
+            //   rows when an append event lands while the open RPC is in flight
+            //   (reuseStableById replaces with the RPC page and drops newer ids)
+            let merged = mergeMessagesQuietTail(prevMessages, uiMessages);
             const trimmed = trimMessagesHardMax(merged);
             merged = trimmed.messages;
             const prevHist =
