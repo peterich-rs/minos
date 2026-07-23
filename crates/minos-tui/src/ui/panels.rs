@@ -1,11 +1,11 @@
-use crate::backend::{ConversationMessageEntry, ThreadSummaryEntry};
+use crate::backend::{ConversationMessageEntry, SessionSummaryEntry};
 use crate::nav::NavLevel;
 use crate::translation::ChatState;
 use crate::ui::conversation_view::ConversationChatRenderCache;
 use crate::ui::delete_confirm::DeleteConfirmState;
 use crate::ui::input_bar::{InputLayoutMetrics, InputState};
 use crate::ui::list_panel::ListPanel;
-use crate::ui::{ProjectCreateDialogState, SubagentInfo, ThreadEntry};
+use crate::ui::{ProjectCreateDialogState, SubagentInfo, SessionEntry};
 use std::collections::HashMap;
 
 pub struct NavPanel {
@@ -51,7 +51,7 @@ pub struct ConversationPanel {
     pub scroll_offset: u32,
     pub auto_scroll: bool,
     pub max_scroll: u32,
-    pub agent_sessions: ListPanel<ThreadSummaryEntry>,
+    pub agent_sessions: ListPanel<SessionSummaryEntry>,
     pub subagent_info: HashMap<String, SubagentInfo>,
     pub chat_cache: ConversationChatRenderCache,
     /// Mouse drag text selection over the conversation timeline (agent-chat style).
@@ -128,15 +128,15 @@ impl Default for ConversationPanel {
     }
 }
 
-/// Legacy / hydration thread list + per-thread chat projection.
+/// Legacy / hydration session list + per-session chat projection.
 ///
-/// Field name `list` avoids awkward paths like `ui.threads.threads`.
-pub struct ThreadPanel {
-    pub list: ListPanel<ThreadEntry>,
+/// Field name `list` avoids awkward paths like `ui.sessions.sessions`.
+pub struct SessionPanel {
+    pub list: ListPanel<SessionEntry>,
     pub chat_states: HashMap<String, ChatState>,
 }
 
-impl ThreadPanel {
+impl SessionPanel {
     pub fn new() -> Self {
         Self {
             list: ListPanel::new(),
@@ -145,7 +145,7 @@ impl ThreadPanel {
     }
 }
 
-impl Default for ThreadPanel {
+impl Default for SessionPanel {
     fn default() -> Self {
         Self::new()
     }
@@ -198,7 +198,7 @@ mod conversation_message_order_tests {
             message_seq: seq,
             message_id: id.to_owned(),
             conversation_id: "c".into(),
-            thread_id: None,
+            session_id: None,
             created_at_ms: seq * 10,
             sender_role: "user".into(),
             agent: None,

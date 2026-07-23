@@ -43,7 +43,7 @@ const MAX_ESTIMATE_BODY_LINES: usize = 48;
 
 #[derive(Default)]
 pub struct RenderCache {
-    indexed_thread_id: Option<String>,
+    indexed_session_id: Option<String>,
     /// Absolute start row of each item (`virtual_y`).
     item_starts: Vec<usize>,
     segments: Vec<CachedSegment>,
@@ -60,7 +60,7 @@ pub struct RenderCache {
     needs_followup_frame: bool,
     /// Cached `find_runs` result — keyed by thread + structure + item count + expand set.
     cached_runs: Vec<VerbGroupRun>,
-    runs_cache_thread_id: Option<String>,
+    runs_cache_session_id: Option<String>,
     runs_cache_structure_version: u64,
     runs_cache_items_len: usize,
     runs_cache_expanded_hash: u64,
@@ -87,7 +87,7 @@ pub struct VisibleWindow<'a> {
 
 /// Inputs for one layout pass (rebuild + settle + optional warm).
 pub struct LayoutPass<'a> {
-    pub thread_id: &'a str,
+    pub session_id: &'a str,
     pub items: &'a [ChatItem],
     pub version: u64,
     pub structure_version: u64,
@@ -107,7 +107,7 @@ impl RenderCache {
         self.viewport_height = pass.viewport_height;
         self.needs_followup_frame = false;
         self.rebuild_if_stale(
-            pass.thread_id,
+            pass.session_id,
             pass.items,
             pass.version,
             pass.structure_version,
@@ -150,25 +150,25 @@ impl RenderCache {
     /// Rebuild cached segments when content/structure/width/thread changes.
     pub fn rebuild_if_stale(
         &mut self,
-        thread_id: &str,
+        session_id: &str,
         items: &[ChatItem],
         version: u64,
         structure_version: u64,
         width: u16,
         verb_group_expanded: &HashSet<String>,
     ) {
-        if self.is_valid(thread_id, version, width) {
+        if self.is_valid(session_id, version, width) {
             return;
         }
         let same_surface =
-            self.indexed_thread_id.as_deref() == Some(thread_id) && self.indexed_width == width;
+            self.indexed_session_id.as_deref() == Some(session_id) && self.indexed_width == width;
 
         if same_surface
             && self.indexed_structure_version == structure_version
             && self.segments.len() == items.len()
         {
             self.rebuild_dirty_segments(
-                thread_id,
+                session_id,
                 items,
                 width,
                 structure_version,
@@ -180,7 +180,7 @@ impl RenderCache {
             && items.len().saturating_sub(self.segments.len()) <= 4
         {
             self.append_new_segments(
-                thread_id,
+                session_id,
                 items,
                 width,
                 structure_version,
@@ -189,7 +189,7 @@ impl RenderCache {
         } else {
             let can_reuse = same_surface;
             self.rebuild_all(
-                thread_id,
+                session_id,
                 items,
                 width,
                 can_reuse,
@@ -203,7 +203,7 @@ impl RenderCache {
         self.indexed_version = version;
         self.indexed_structure_version = structure_version;
         self.indexed_width = width;
-        self.indexed_thread_id = Some(thread_id.to_owned());
+        self.indexed_session_id = Some(session_id.to_owned());
     }
 
     /// Ensure `cached_runs` matches the current transcript structure / expand set.
@@ -212,14 +212,14 @@ impl RenderCache {
     /// ids so settle / measure / warm share one O(n) scan instead of re-scanning.
     fn ensure_runs_cached(
         &mut self,
-        thread_id: &str,
+        session_id: &str,
         items: &[ChatItem],
         structure_version: u64,
         verb_group_expanded: &HashSet<String>,
     ) {
         let expanded_hash = hash_expanded_ids(verb_group_expanded);
         if self.runs_cache_valid
-            && self.runs_cache_thread_id.as_deref() == Some(thread_id)
+            && self.runs_cache_session_id.as_deref() == Some(session_id)
             && self.runs_cache_structure_version == structure_version
             && self.runs_cache_items_len == items.len()
             && self.runs_cache_expanded_hash == expanded_hash
@@ -227,7 +227,7 @@ impl RenderCache {
             return;
         }
         self.cached_runs = find_runs(items, verb_group_expanded);
-        self.runs_cache_thread_id = Some(thread_id.to_owned());
+        self.runs_cache_session_id = Some(session_id.to_owned());
         self.runs_cache_structure_version = structure_version;
         self.runs_cache_items_len = items.len();
         self.runs_cache_expanded_hash = expanded_hash;
@@ -237,12 +237,12 @@ impl RenderCache {
     /// Snapshot of cached runs (cheap clone of small fold-group metadata).
     fn runs_snapshot(
         &mut self,
-        thread_id: &str,
+        session_id: &str,
         items: &[ChatItem],
         structure_version: u64,
         verb_group_expanded: &HashSet<String>,
     ) -> Vec<VerbGroupRun> {
-        self.ensure_runs_cached(thread_id, items, structure_version, verb_group_expanded);
+        self.ensure_runs_cached(session_id, items, structure_version, verb_group_expanded);
         self.cached_runs.clone()
     }
 
@@ -250,8 +250,8 @@ impl RenderCache {
         self.total_lines
     }
 
-    pub(crate) fn is_valid(&self, thread_id: &str, version: u64, width: u16) -> bool {
-        self.indexed_thread_id.as_deref() == Some(thread_id)
+    pub(crate) fn is_valid(&self, session_id: &str, version: u64, width: u16) -> bool {
+        self.indexed_session_id.as_deref() == Some(session_id)
             && self.indexed_version == version
             && self.indexed_width == width
     }
@@ -324,12 +324,12 @@ impl RenderCache {
             // Only pay find_runs (or cache lookup) when we actually exact-measure.
             if runs.is_none() {
                 let structure_version = self.indexed_structure_version;
-                let thread_id = self
-                    .indexed_thread_id
+                let session_id = self
+                    .indexed_session_id
                     .clone()
-                    .expect("thread_id set by rebuild_if_stale before settle");
+                    .expect("session_id set by rebuild_if_stale before settle");
                 runs = Some(self.runs_snapshot(
-                    &thread_id,
+                    &session_id,
                     items,
                     structure_version,
                     verb_group_expanded,
@@ -538,11 +538,11 @@ impl RenderCache {
         let start = first_visible.saturating_sub(RESUME_WARM_ENTRIES);
         let end = first_visible.saturating_sub(1);
         let structure_version = self.indexed_structure_version;
-        let thread_id = self
-            .indexed_thread_id
+        let session_id = self
+            .indexed_session_id
             .clone()
-            .expect("thread_id set by rebuild_if_stale before warm");
-        let runs = self.runs_snapshot(&thread_id, items, structure_version, verb_group_expanded);
+            .expect("session_id set by rebuild_if_stale before warm");
+        let runs = self.runs_snapshot(&session_id, items, structure_version, verb_group_expanded);
         let _ = self.measure_range_exact(
             items, width, &runs, start, end, budget, /*required=*/ false,
         );
@@ -561,7 +561,7 @@ impl RenderCache {
 
     fn rebuild_all(
         &mut self,
-        thread_id: &str,
+        session_id: &str,
         items: &[ChatItem],
         width: u16,
         can_reuse: bool,
@@ -578,7 +578,7 @@ impl RenderCache {
         } else {
             Vec::new()
         };
-        let runs = self.runs_snapshot(thread_id, items, structure_version, verb_group_expanded);
+        let runs = self.runs_snapshot(session_id, items, structure_version, verb_group_expanded);
         let mut segments = Vec::with_capacity(items.len());
         let mut measured = Vec::with_capacity(items.len());
         let mut saw_visible = false;
@@ -639,14 +639,14 @@ impl RenderCache {
 
     fn rebuild_dirty_segments(
         &mut self,
-        thread_id: &str,
+        session_id: &str,
         items: &[ChatItem],
         width: u16,
         structure_version: u64,
         verb_group_expanded: &HashSet<String>,
     ) {
         debug_assert_eq!(items.len(), self.segments.len());
-        let runs = self.runs_snapshot(thread_id, items, structure_version, verb_group_expanded);
+        let runs = self.runs_snapshot(session_id, items, structure_version, verb_group_expanded);
         let mut saw_visible = false;
 
         for (idx, item) in items.iter().enumerate() {
@@ -687,7 +687,7 @@ impl RenderCache {
 
     fn append_new_segments(
         &mut self,
-        thread_id: &str,
+        session_id: &str,
         items: &[ChatItem],
         width: u16,
         structure_version: u64,
@@ -695,12 +695,12 @@ impl RenderCache {
     ) {
         let start_idx = self.segments.len();
         // Append changes item count → runs must refresh (key includes items.len()).
-        let runs = self.runs_snapshot(thread_id, items, structure_version, verb_group_expanded);
+        let runs = self.runs_snapshot(session_id, items, structure_version, verb_group_expanded);
         for (idx, item) in items.iter().enumerate().take(start_idx) {
             if self.segments[idx].fingerprint != item_fingerprint_with_runs(item, items, idx, &runs)
             {
                 self.rebuild_all(
-                    thread_id,
+                    session_id,
                     items,
                     width,
                     true,

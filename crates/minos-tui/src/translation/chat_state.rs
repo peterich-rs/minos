@@ -16,7 +16,7 @@ use super::tool_summary::{
 use super::verb_group::{run_anchor_id, run_containing};
 
 pub struct ChatState {
-    pub thread_id: String,
+    pub session_id: String,
     pub agent: AgentName,
     pub items: Vec<ChatItem>,
     pub pending_requests: Vec<PendingAgentRequest>,
@@ -38,9 +38,9 @@ pub struct ChatState {
 }
 
 impl ChatState {
-    pub fn new(thread_id: String, agent: AgentName) -> Self {
+    pub fn new(session_id: String, agent: AgentName) -> Self {
         Self {
-            thread_id,
+            session_id,
             agent,
             items: Vec::new(),
             pending_requests: Vec::new(),
@@ -510,7 +510,7 @@ impl ChatState {
                 }
             }
             UiEventMessage::SubagentSpawned {
-                sub_thread_id,
+                sub_session_id,
                 tool_call_id,
                 agent,
                 model,
@@ -523,7 +523,7 @@ impl ChatState {
                     status,
                     is_streaming,
                     ..
-                }) = self.find_subagent_call_mut(&sub_thread_id)
+                }) = self.find_subagent_call_mut(&sub_session_id)
                 {
                     *existing_model = model;
                     *prompt_summary = prompt.as_deref().map(subagent_prompt_summary);
@@ -534,7 +534,7 @@ impl ChatState {
                     self.items.push(ChatItem::SubagentCall {
                         message_id: tool_call_id.clone(),
                         tool_call_id,
-                        sub_thread_id,
+                        sub_session_id,
                         agent,
                         model,
                         prompt_summary: prompt.as_deref().map(subagent_prompt_summary),
@@ -545,14 +545,14 @@ impl ChatState {
                 }
             }
             UiEventMessage::SubagentStatusUpdated {
-                sub_thread_id,
+                sub_session_id,
                 status,
             } => {
                 if let Some(ChatItem::SubagentCall {
                     status: existing_status,
                     is_streaming,
                     ..
-                }) = self.find_subagent_call_mut(&sub_thread_id)
+                }) = self.find_subagent_call_mut(&sub_session_id)
                 {
                     *existing_status = status;
                     *is_streaming = status == SubagentStatus::Running;
@@ -597,8 +597,8 @@ impl ChatState {
                     "raw ui event suppressed from chat"
                 );
             }
-            UiEventMessage::ThreadOpened { .. } | UiEventMessage::ThreadTitleUpdated { .. } => {}
-            UiEventMessage::ThreadClosed { reason, .. } => {
+            UiEventMessage::SessionOpened { .. } | UiEventMessage::SessionTitleUpdated { .. } => {}
+            UiEventMessage::SessionClosed { reason, .. } => {
                 self.finish_all_streaming();
                 self.items.push(ChatItem::SystemMessage {
                     text: format!("Thread closed: {reason:?}"),
@@ -683,9 +683,9 @@ impl ChatState {
         })
     }
 
-    fn find_subagent_call_mut(&mut self, sub_thread_id: &str) -> Option<&mut ChatItem> {
+    fn find_subagent_call_mut(&mut self, sub_session_id: &str) -> Option<&mut ChatItem> {
         self.items.iter_mut().rev().find(|item| {
-            matches!(item, ChatItem::SubagentCall { sub_thread_id: id, .. } if id == sub_thread_id)
+            matches!(item, ChatItem::SubagentCall { sub_session_id: id, .. } if id == sub_session_id)
         })
     }
 

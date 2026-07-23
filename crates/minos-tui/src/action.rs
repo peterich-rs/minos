@@ -138,12 +138,12 @@ pub enum ClickTarget {
 pub enum EffectResult {
     AgentStarted {
         agent: AgentName,
-        thread_id: String,
+        session_id: String,
         cwd: PathBuf,
         text: String,
     },
     SendFailed {
-        thread_id: String,
+        session_id: String,
         error: String,
     },
     ProjectCreated(crate::backend::ProjectEntry),
@@ -155,12 +155,12 @@ pub enum EffectResult {
         project_id: String,
         conversation_id: String,
         messages: Vec<crate::backend::ConversationMessageEntry>,
-        sessions: Vec<crate::backend::ThreadSummaryEntry>,
+        sessions: Vec<crate::backend::SessionSummaryEntry>,
     },
     ConversationAgentStarted {
         conversation_id: String,
         agent: AgentName,
-        thread_id: String,
+        session_id: String,
         cwd: PathBuf,
         text: String,
     },

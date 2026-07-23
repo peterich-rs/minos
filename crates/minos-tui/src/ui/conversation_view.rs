@@ -1,4 +1,4 @@
-use crate::agent_route::short_thread_id;
+use crate::agent_route::short_session_id;
 use crate::backend::ConversationMessageEntry;
 use crate::render::Renderable;
 use crate::translation::ChatSelection;
@@ -348,7 +348,7 @@ fn messages_fingerprint(messages: &[ConversationMessageEntry]) -> u64 {
         message.body.hash(&mut hasher);
         message.reply_to_message_id.hash(&mut hasher);
         message.delegation_id.hash(&mut hasher);
-        message.thread_id.hash(&mut hasher);
+        message.session_id.hash(&mut hasher);
     }
     hasher.finish()
 }
@@ -680,7 +680,7 @@ fn label_for_message(message: &ConversationMessageEntry) -> (String, Style) {
         return ("[You]".into(), USER_LABEL);
     }
     let agent = message.agent.map(agent_display).unwrap_or("Agent");
-    let short_id = message.thread_id.as_deref().map(short_thread_id);
+    let short_id = message.session_id.as_deref().map(short_session_id);
     let label = match short_id {
         Some(short_id) => format!("[{agent}@{short_id}]"),
         None => format!("[{agent}]"),
@@ -730,7 +730,7 @@ mod tests {
             message_seq: seq,
             message_id: format!("u{seq}"),
             conversation_id: "c1".into(),
-            thread_id: None,
+            session_id: None,
             created_at_ms: seq,
             sender_role: "user".into(),
             agent: None,
@@ -745,13 +745,13 @@ mod tests {
         seq: i64,
         body: &str,
         agent: AgentName,
-        thread_id: &str,
+        session_id: &str,
     ) -> ConversationMessageEntry {
         ConversationMessageEntry {
             message_seq: seq,
             message_id: format!("a{seq}"),
             conversation_id: "c1".into(),
-            thread_id: Some(thread_id.into()),
+            session_id: Some(session_id.into()),
             created_at_ms: seq,
             sender_role: "agent".into(),
             agent: Some(agent),

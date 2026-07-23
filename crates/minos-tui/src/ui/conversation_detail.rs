@@ -1,7 +1,7 @@
-use crate::backend::ThreadSummaryEntry;
+use crate::backend::SessionSummaryEntry;
 use crate::render::Renderable;
-use crate::ui::{flat_agent_sessions, theme, ThreadEntry};
-use minos_agent_runtime::ThreadState;
+use crate::ui::{flat_agent_sessions, theme, SessionEntry};
+use minos_agent_runtime::SessionState;
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
@@ -12,8 +12,10 @@ use ratatui::{
 use std::collections::HashMap;
 
 pub struct AgentSessionListRenderable<'a> {
-    sessions: &'a [ThreadSummaryEntry],
-    threads: &'a [ThreadEntry],
+    /// Durable conversation agent-session list (from daemon list RPC).
+    sessions: &'a [SessionSummaryEntry],
+    /// Live runtime rows (status glyphs); key = Minos session_id.
+    live_sessions: &'a [SessionEntry],
     recent_files: &'a HashMap<String, Vec<String>>,
     selected: Option<usize>,
     list_state: &'a mut ListState,
@@ -22,8 +24,8 @@ pub struct AgentSessionListRenderable<'a> {
 
 impl<'a> AgentSessionListRenderable<'a> {
     pub fn new(
-        sessions: &'a [ThreadSummaryEntry],
-        threads: &'a [ThreadEntry],
+        sessions: &'a [SessionSummaryEntry],
+        live_sessions: &'a [SessionEntry],
         recent_files: &'a HashMap<String, Vec<String>>,
         selected: Option<usize>,
         list_state: &'a mut ListState,
@@ -31,7 +33,7 @@ impl<'a> AgentSessionListRenderable<'a> {
     ) -> Self {
         Self {
             sessions,
-            threads,
+            live_sessions,
             recent_files,
             selected,
             list_state,
@@ -56,20 +58,20 @@ impl Renderable for AgentSessionListRenderable<'_> {
             .enumerate()
             .map(|(index, flat_session)| {
                 let session = &self.sessions[flat_session.source_index];
-                let id_short = &session.thread_id[..8.min(session.thread_id.len())];
+                let id_short = &session.session_id[..8.min(session.session_id.len())];
                 let prefix = if self.selected == Some(index) {
                     "> "
                 } else {
                     "  "
                 };
                 let indent = if flat_session.depth == 0 { "" } else { "  " };
-                let subagent_marker = if session.parent_thread_id.is_some() {
+                let subagent_marker = if session.parent_session_id.is_some() {
                     " sub"
                 } else {
                     ""
                 };
-                let (status_char, status_style) = self.status_for_thread(&session.thread_id);
-                let files = self.recent_files_for_thread(&session.thread_id);
+                let (status_char, status_style) = self.status_for_session(&session.session_id);
+                let files = self.recent_files_for_thread(&session.session_id);
                 let message_count = session.message_count;
                 let mut lines = vec![Line::from(vec![
                     Span::styled(prefix, Style::new().fg(Color::Cyan)),
@@ -112,27 +114,27 @@ impl Renderable for AgentSessionListRenderable<'_> {
 }
 
 impl AgentSessionListRenderable<'_> {
-    fn status_for_thread(&self, thread_id: &str) -> (char, Style) {
+    fn status_for_session(&self, session_id: &str) -> (char, Style) {
         let state = self
-            .threads
+            .live_sessions
             .iter()
-            .find(|t| t.thread_id == thread_id)
+            .find(|t| t.session_id == session_id)
             .map(|t| &t.state);
         match state {
-            Some(ThreadState::Starting)
-            | Some(ThreadState::Resuming)
-            | Some(ThreadState::Running { .. }) => ('●', Style::new().fg(Color::Green)),
-            Some(ThreadState::Idle) | Some(ThreadState::Suspended { .. }) => {
+            Some(SessionState::Starting)
+            | Some(SessionState::Resuming)
+            | Some(SessionState::Running { .. }) => ('●', Style::new().fg(Color::Green)),
+            Some(SessionState::Idle) | Some(SessionState::Suspended { .. }) => {
                 ('○', Style::new().fg(Color::DarkGray))
             }
-            Some(ThreadState::Closed { .. }) => ('✕', Style::new().fg(Color::Red)),
+            Some(SessionState::Closed { .. }) => ('✕', Style::new().fg(Color::Red)),
             None => ('?', Style::new().fg(Color::DarkGray)),
         }
     }
 
-    fn recent_files_for_thread(&self, thread_id: &str) -> Vec<String> {
+    fn recent_files_for_thread(&self, session_id: &str) -> Vec<String> {
         self.recent_files
-            .get(thread_id)
+            .get(session_id)
             .cloned()
             .unwrap_or_default()
     }

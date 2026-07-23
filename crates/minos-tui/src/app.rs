@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
-use minos_agent_runtime::{ManagerEvent, ThreadState};
+use minos_agent_runtime::{ManagerEvent, SessionState};
 use minos_chat_store::mcp_socket::{SocketRequest, SocketResponse};
 use minos_domain::{AgentName, AgentStatus};
 use tracing::debug;
@@ -12,7 +12,7 @@ use crate::action::{
     Action, GlobalAction, InputAction, InputTarget, ScrollDirection, ScrollTarget,
 };
 use crate::agent_route::{
-    parse_agent_name, parse_agent_routing, short_thread_id, thread_can_receive_message,
+    parse_agent_name, parse_agent_routing, short_session_id, thread_can_receive_message,
 };
 use crate::backend::AgentBackend;
 use crate::effect::Effect;
@@ -20,7 +20,7 @@ use crate::event::AppEvent;
 use crate::focus::PaneId;
 use crate::state::{self, frame_marks_agent_result_done, rect_contains, thread_is_done, AppState};
 use crate::translation::{ChatState, PendingAgentRequestKind, PendingQuestionSpec};
-use crate::ui::{ThreadEntry, UiState};
+use crate::ui::{SessionEntry, UiState};
 
 use crate::backend::ConversationMessageEntry;
 

@@ -13,8 +13,8 @@ pub mod status_bar;
 pub mod stream_holdback;
 pub mod theme;
 
-use crate::agent_route::short_thread_id;
-use crate::backend::{ConversationEntry, ProjectEntry, ThreadSummaryEntry};
+use crate::agent_route::short_session_id;
+use crate::backend::{ConversationEntry, ProjectEntry, SessionSummaryEntry};
 use crate::focus::{FocusManager, PaneId};
 use crate::nav::NavLevel;
 use crate::render::{Column, Renderable, Row};
@@ -24,9 +24,9 @@ use crate::ui::chat::{AgentChatRenderable, AgentChatTarget};
 pub use crate::ui::delete_confirm::DeleteConfirmState;
 use crate::ui::input_bar::{AgentMentionCandidate, InputState};
 pub use crate::ui::list_panel::ListPanel;
-pub use crate::ui::panels::{ConversationPanel, InputsPanel, NavPanel, OverlaysPanel, ThreadPanel};
+pub use crate::ui::panels::{ConversationPanel, InputsPanel, NavPanel, OverlaysPanel, SessionPanel};
 use crate::ui::status_bar::StatusBarState;
-use minos_agent_runtime::ThreadState;
+use minos_agent_runtime::SessionState;
 use minos_domain::AgentName;
 use minos_ui_protocol::SubagentStatus;
 use ratatui::{
@@ -38,12 +38,12 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Instant;
 
-pub struct ThreadEntry {
-    pub thread_id: String,
+pub struct SessionEntry {
+    pub session_id: String,
     pub agent: AgentName,
     pub workspace: PathBuf,
-    pub state: ThreadState,
-    pub parent_thread_id: Option<String>,
+    pub state: SessionState,
+    pub parent_session_id: Option<String>,
 }
 
 /// Flat sidebar row: indexes into `conversation.agent_sessions.items` without cloning IDs.
@@ -58,7 +58,7 @@ pub struct FlatAgentSession {
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct SubagentInfo {
-    pub parent_thread_id: String,
+    pub parent_session_id: String,
     pub tool_call_id: String,
     pub agent: AgentName,
     pub model: Option<String>,
@@ -72,15 +72,17 @@ pub struct UiState {
     pub projects: ListPanel<ProjectEntry>,
     pub conversations: ListPanel<ConversationEntry>,
     pub conversation: ConversationPanel,
-    pub thread_panel: ThreadPanel,
+    pub session_panel: SessionPanel,
     pub inputs: InputsPanel,
     pub overlays: OverlaysPanel,
     pub focus: FocusManager,
     pub panel_areas: PanelAreas,
     pub status: StatusBarState,
+    /// Host agent profiles cached from `list_agent_profiles` (mention + route).
+    pub agent_profiles: Vec<minos_protocol::AgentProfileSummary>,
     pub error_flash: Option<(String, Instant)>,
     pub flash_copied: Option<Instant>,
-    /// Agent chat render cache — top-level for split borrow with `thread_panel.chat_states`.
+    /// Agent chat render cache — top-level for split borrow with `session_panel.chat_states`.
     pub render_cache: RenderCache,
     /// Set during paint when viewport materialization still has work; main loop
     /// schedules another frame so overscan can continue without blocking input.
@@ -113,18 +115,32 @@ impl UiState {
             projects: ListPanel::new(),
             conversations: ListPanel::new(),
             conversation: ConversationPanel::new(),
-            thread_panel: ThreadPanel::new(),
+            session_panel: SessionPanel::new(),
             inputs: InputsPanel::new(readonly),
             overlays: OverlaysPanel::new(),
             focus: FocusManager::new(false),
             panel_areas: PanelAreas::default(),
             status: StatusBarState::new(),
+            agent_profiles: Vec::new(),
             error_flash: None,
             flash_copied: None,
             render_cache: RenderCache::default(),
             needs_render_followup: false,
             recent_files_cache: None,
         }
+    }
+
+    /// Profiles as routing/mention structs (desktop `MentionProfile` parity).
+    pub fn mention_profiles(&self) -> Vec<crate::agent_route::MentionProfile> {
+        self.agent_profiles
+            .iter()
+            .map(|p| crate::agent_route::MentionProfile {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                runtime_agent: p.runtime_agent,
+                updated_at_ms: p.updated_at_ms,
+            })
+            .collect()
     }
 
     pub fn take_render_followup(&mut self) -> bool {
@@ -136,7 +152,7 @@ impl UiState {
     /// Sidebar recent-files map, rebuilt only when chat versions change.
     pub fn recent_files_cached(&mut self) -> &HashMap<String, Vec<String>> {
         let fingerprint = recent_files_fingerprint(
-            &self.thread_panel.chat_states,
+            &self.session_panel.chat_states,
             &self.conversation.agent_sessions.items,
         );
         let needs = self
@@ -145,7 +161,7 @@ impl UiState {
             .is_none_or(|(fp, _)| *fp != fingerprint);
         if needs {
             let map = compute_recent_files(
-                &self.thread_panel.chat_states,
+                &self.session_panel.chat_states,
                 &self.conversation.agent_sessions.items,
             );
             self.recent_files_cache = Some((fingerprint, map));
@@ -165,20 +181,20 @@ impl UiState {
         self.nav.pop();
     }
 
-    pub fn current_thread_id(&self) -> Option<&str> {
+    pub fn current_session_id(&self) -> Option<&str> {
         if matches!(
             self.nav_level(),
             NavLevel::Conversation { .. } | NavLevel::AgentDetail { .. }
         ) {
-            if let Some(thread_id) = self.selected_flat_agent_session_thread_id() {
-                return Some(thread_id);
+            if let Some(session_id) = self.selected_flat_agent_session_session_id() {
+                return Some(session_id);
             }
         }
-        self.thread_panel
+        self.session_panel
             .list
             .selected
-            .and_then(|i| self.thread_panel.list.items.get(i))
-            .map(|t| t.thread_id.as_str())
+            .and_then(|i| self.session_panel.list.items.get(i))
+            .map(|t| t.session_id.as_str())
     }
 
     pub fn flat_agent_sessions(&self) -> Vec<FlatAgentSession> {
@@ -189,7 +205,7 @@ impl UiState {
         flat_agent_session_count(&self.conversation.agent_sessions.items)
     }
 
-    pub fn selected_flat_agent_session_thread_id(&self) -> Option<&str> {
+    pub fn selected_flat_agent_session_session_id(&self) -> Option<&str> {
         let selected = self.conversation.agent_sessions.selected?;
         let source_index =
             flat_agent_session_source_index(&self.conversation.agent_sessions.items, selected)?;
@@ -197,52 +213,52 @@ impl UiState {
             .agent_sessions
             .items
             .get(source_index)
-            .map(|session| session.thread_id.as_str())
+            .map(|session| session.session_id.as_str())
     }
 
-    pub fn flat_session_index_for_thread(&self, thread_id: &str) -> Option<usize> {
+    pub fn flat_session_index_for_thread(&self, session_id: &str) -> Option<usize> {
         self.flat_agent_sessions().into_iter().position(|flat| {
             self.conversation
                 .agent_sessions
                 .items
                 .get(flat.source_index)
-                .is_some_and(|session| session.thread_id == thread_id)
+                .is_some_and(|session| session.session_id == session_id)
         })
     }
 
-    pub fn flat_session_entry(&self, flat_index: usize) -> Option<&ThreadSummaryEntry> {
+    pub fn flat_session_entry(&self, flat_index: usize) -> Option<&SessionSummaryEntry> {
         let source_index =
             flat_agent_session_source_index(&self.conversation.agent_sessions.items, flat_index)?;
         self.conversation.agent_sessions.items.get(source_index)
     }
 
     pub fn current_thread_is_subagent(&self) -> bool {
-        let Some(thread_id) = self.current_thread_id() else {
+        let Some(session_id) = self.current_session_id() else {
             return false;
         };
-        self.thread_panel
+        self.session_panel
             .list
             .items
             .iter()
-            .find(|thread| thread.thread_id == thread_id)
-            .is_some_and(|thread| thread.parent_thread_id.is_some())
+            .find(|thread| thread.session_id == session_id)
+            .is_some_and(|thread| thread.parent_session_id.is_some())
             || self
                 .conversation
                 .agent_sessions
                 .items
                 .iter()
-                .find(|session| session.thread_id == thread_id)
-                .is_some_and(|session| session.parent_thread_id.is_some())
+                .find(|session| session.session_id == session_id)
+                .is_some_and(|session| session.parent_session_id.is_some())
     }
 
     pub fn current_chat_mut(&mut self) -> Option<&mut ChatState> {
-        let thread_id = self.current_thread_id()?.to_owned();
-        self.thread_panel.chat_states.get_mut(&thread_id)
+        let session_id = self.current_session_id()?.to_owned();
+        self.session_panel.chat_states.get_mut(&session_id)
     }
 
     pub fn current_chat(&self) -> Option<&ChatState> {
-        let thread_id = self.current_thread_id()?;
-        self.thread_panel.chat_states.get(thread_id)
+        let session_id = self.current_session_id()?;
+        self.session_panel.chat_states.get(session_id)
     }
 
     pub fn active_approval_request(&self) -> Option<&crate::translation::PendingAgentRequest> {
@@ -253,8 +269,8 @@ impl UiState {
     /// Returns the active chat alongside the shared render cache, using a split
     /// borrow so callers can mutate both in the same scope.
     pub fn current_chat_and_cache_mut(&mut self) -> Option<(&mut ChatState, &mut RenderCache)> {
-        let thread_id = self.current_thread_id()?.to_owned();
-        let chat = self.thread_panel.chat_states.get_mut(&thread_id)?;
+        let session_id = self.current_session_id()?.to_owned();
+        let chat = self.session_panel.chat_states.get_mut(&session_id)?;
         Some((chat, &mut self.render_cache))
     }
 
@@ -277,25 +293,38 @@ impl UiState {
     pub const COPIED_FLASH_TTL: std::time::Duration = std::time::Duration::from_secs(2);
 
     pub fn conversation_agent_mention_candidates(&self) -> Vec<AgentMentionCandidate> {
+        // Order matches desktop: runtimes → profiles → continue sessions.
         let mut candidates: Vec<AgentMentionCandidate> = self
             .status
             .agents
             .iter()
             .map(|agent| AgentMentionCandidate::installed(agent.name, agent.status.clone()))
             .collect();
+
+        let mention_profiles = self.mention_profiles();
+        candidates.extend(mention_profiles.iter().map(|p| {
+            // Insert form is `@Name ` or `@p/<id> `; picker stores token without `@`/space.
+            let insert = crate::agent_route::profile_mention_insert(p, &mention_profiles);
+            let token = insert
+                .trim_start_matches('@')
+                .trim_end()
+                .to_owned();
+            AgentMentionCandidate::profile(token, p.runtime_agent, p.id.clone())
+        }));
+
         if self.nav_level().conversation_id().is_some() {
             candidates.extend(
                 self.conversation
                     .agent_sessions
                     .items
                     .iter()
-                    .filter(|session| session.parent_thread_id.is_none())
-                    .filter(|session| !matches!(session.state, ThreadState::Closed { .. }))
+                    .filter(|session| session.parent_session_id.is_none())
+                    .filter(|session| !matches!(session.state, SessionState::Closed { .. }))
                     .map(|session| {
                         AgentMentionCandidate::existing(
                             session.agent,
-                            session.thread_id.clone(),
-                            short_thread_id(&session.thread_id).to_owned(),
+                            session.session_id.clone(),
+                            short_session_id(&session.session_id).to_owned(),
                         )
                     }),
             );
@@ -304,16 +333,16 @@ impl UiState {
     }
 }
 
-pub(crate) fn flat_agent_sessions(sessions: &[ThreadSummaryEntry]) -> Vec<FlatAgentSession> {
+pub(crate) fn flat_agent_sessions(sessions: &[SessionSummaryEntry]) -> Vec<FlatAgentSession> {
     let mut out = Vec::with_capacity(sessions.len());
     let mut seen = HashSet::new();
     for (index, session) in sessions.iter().enumerate() {
-        if session.parent_thread_id.is_some() {
+        if session.parent_session_id.is_some() {
             continue;
         }
         push_flat_session(&mut out, &mut seen, index, 0);
         for (child_index, child) in sessions.iter().enumerate() {
-            if child.parent_thread_id.as_deref() == Some(session.thread_id.as_str()) {
+            if child.parent_session_id.as_deref() == Some(session.session_id.as_str()) {
                 push_flat_session(&mut out, &mut seen, child_index, 1);
             }
         }
@@ -326,12 +355,12 @@ pub(crate) fn flat_agent_sessions(sessions: &[ThreadSummaryEntry]) -> Vec<FlatAg
     out
 }
 
-pub(crate) fn flat_agent_session_count(sessions: &[ThreadSummaryEntry]) -> usize {
+pub(crate) fn flat_agent_session_count(sessions: &[SessionSummaryEntry]) -> usize {
     flat_agent_sessions(sessions).len()
 }
 
 pub(crate) fn flat_agent_session_source_index(
-    sessions: &[ThreadSummaryEntry],
+    sessions: &[SessionSummaryEntry],
     flat_index: usize,
 ) -> Option<usize> {
     flat_agent_sessions(sessions)
@@ -554,8 +583,8 @@ fn render_conversation_level(f: &mut Frame, state: &mut UiState) {
         &mut state.conversation.max_scroll,
         &mut state.conversation.chat_cache,
     );
-    let (threads, agent_sessions, agent_list_state) = (
-        &state.thread_panel.list.items,
+    let (sessions, agent_sessions, agent_list_state) = (
+        &state.session_panel.list.items,
         &state.conversation.agent_sessions.items,
         &mut state.conversation.agent_sessions.list_state,
     );
@@ -574,7 +603,7 @@ fn render_conversation_level(f: &mut Frame, state: &mut UiState) {
             )),
             Box::new(conversation_detail::AgentSessionListRenderable::new(
                 agent_sessions,
-                threads,
+                sessions,
                 &recent_files,
                 selected_agent_session,
                 agent_list_state,
@@ -615,7 +644,7 @@ fn render_agent_detail_level(f: &mut Frame, state: &mut UiState) {
         .and_then(ChatState::active_pending_request)
         .is_some();
     let is_subagent = state.current_thread_is_subagent();
-    let selected_thread_id = state.current_thread_id().map(str::to_owned);
+    let selected_session_id = state.current_session_id().map(str::to_owned);
     let approval_request = state.active_approval_request().cloned();
     let approval_request_count = state
         .current_chat()
@@ -669,8 +698,8 @@ fn render_agent_detail_level(f: &mut Frame, state: &mut UiState) {
     let recent_files = state.recent_files_cached().clone();
     let selected_agent_session = state.conversation.agent_sessions.selected;
 
-    let agent_chat_target = if let Some(thread_id) = selected_thread_id.as_deref() {
-        if let Some(chat) = state.thread_panel.chat_states.get_mut(thread_id) {
+    let agent_chat_target = if let Some(session_id) = selected_session_id.as_deref() {
+        if let Some(chat) = state.session_panel.chat_states.get_mut(session_id) {
             AgentChatTarget::Chat {
                 chat,
                 cache: &mut state.render_cache,
@@ -704,7 +733,7 @@ fn render_agent_detail_level(f: &mut Frame, state: &mut UiState) {
             Box::new(left_column),
             Box::new(conversation_detail::AgentSessionListRenderable::new(
                 &state.conversation.agent_sessions.items,
-                &state.thread_panel.list.items,
+                &state.session_panel.list.items,
                 &recent_files,
                 selected_agent_session,
                 &mut state.conversation.agent_sessions.list_state,
@@ -755,15 +784,15 @@ fn current_conversation_title(state: &UiState) -> String {
 
 fn recent_files_fingerprint(
     chat_states: &HashMap<String, ChatState>,
-    sessions: &[ThreadSummaryEntry],
+    sessions: &[SessionSummaryEntry],
 ) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut h = DefaultHasher::new();
     sessions.len().hash(&mut h);
     for session in sessions {
-        session.thread_id.hash(&mut h);
-        if let Some(chat) = chat_states.get(&session.thread_id) {
+        session.session_id.hash(&mut h);
+        if let Some(chat) = chat_states.get(&session.session_id) {
             chat.version.hash(&mut h);
             chat.structure_version.hash(&mut h);
             chat.items.len().hash(&mut h);
@@ -774,11 +803,11 @@ fn recent_files_fingerprint(
 
 fn compute_recent_files(
     chat_states: &HashMap<String, ChatState>,
-    sessions: &[ThreadSummaryEntry],
+    sessions: &[SessionSummaryEntry],
 ) -> HashMap<String, Vec<String>> {
     let mut out = HashMap::new();
     for session in sessions {
-        let Some(chat) = chat_states.get(&session.thread_id) else {
+        let Some(chat) = chat_states.get(&session.session_id) else {
             continue;
         };
         let mut files = Vec::new();
@@ -798,7 +827,7 @@ fn compute_recent_files(
             }
         }
         if !files.is_empty() {
-            out.insert(session.thread_id.clone(), files);
+            out.insert(session.session_id.clone(), files);
         }
     }
     out
@@ -840,28 +869,29 @@ mod subagent_tests {
     use super::*;
     use crate::ui::input_bar::AgentMentionCandidateKind;
 
-    fn session(thread_id: &str, parent_thread_id: Option<&str>) -> ThreadSummaryEntry {
-        ThreadSummaryEntry {
-            thread_id: thread_id.into(),
+    fn session(session_id: &str, parent_session_id: Option<&str>) -> SessionSummaryEntry {
+        SessionSummaryEntry {
+            session_id: session_id.into(),
             agent: AgentName::Codex,
             title: None,
             first_ts_ms: 0,
             last_ts_ms: 0,
             message_count: 0,
             ended_at_ms: None,
-            parent_thread_id: parent_thread_id.map(str::to_string),
-            state: ThreadState::Idle,
+            parent_session_id: parent_session_id.map(str::to_string),
+            state: SessionState::Idle,
             needs_continue: false,
         }
     }
 
-    fn existing_thread_ids(state: &UiState) -> Vec<String> {
+    fn existing_session_ids(state: &UiState) -> Vec<String> {
         state
             .conversation_agent_mention_candidates()
             .into_iter()
             .filter_map(|candidate| match candidate.kind {
-                AgentMentionCandidateKind::Existing { thread_id } => Some(thread_id),
-                AgentMentionCandidateKind::Installed { .. } => None,
+                AgentMentionCandidateKind::Existing { session_id } => Some(session_id),
+                AgentMentionCandidateKind::Installed { .. }
+                | AgentMentionCandidateKind::Profile { .. } => None,
             })
             .collect()
     }
@@ -878,7 +908,7 @@ mod subagent_tests {
 
         assert_eq!(
             flat.iter()
-                .map(|entry| { (sessions[entry.source_index].thread_id.as_str(), entry.depth,) })
+                .map(|entry| { (sessions[entry.source_index].session_id.as_str(), entry.depth,) })
                 .collect::<Vec<_>>(),
             vec![
                 ("parent-a", 0),
@@ -892,50 +922,50 @@ mod subagent_tests {
     #[test]
     fn conversation_mentions_in_conversation_use_conversation_sessions_only() {
         let mut state = UiState::new(false);
-        state.thread_panel.list.items.push(ThreadEntry {
-            thread_id: "global-opencode-1234".into(),
+        state.session_panel.list.items.push(SessionEntry {
+            session_id: "global-opencode-1234".into(),
             agent: AgentName::Opencode,
             workspace: PathBuf::from("/tmp"),
-            state: ThreadState::Idle,
-            parent_thread_id: None,
+            state: SessionState::Idle,
+            parent_session_id: None,
         });
         state.conversation.agent_sessions.items = vec![
-            ThreadSummaryEntry {
-                thread_id: "conv-opencode-5678".into(),
+            SessionSummaryEntry {
+                session_id: "conv-opencode-5678".into(),
                 agent: AgentName::Opencode,
                 title: None,
                 first_ts_ms: 0,
                 last_ts_ms: 0,
                 message_count: 0,
                 ended_at_ms: None,
-                parent_thread_id: None,
-                state: ThreadState::Idle,
+                parent_session_id: None,
+                state: SessionState::Idle,
                 needs_continue: false,
             },
-            ThreadSummaryEntry {
-                thread_id: "conv-closed-9999".into(),
+            SessionSummaryEntry {
+                session_id: "conv-closed-9999".into(),
                 agent: AgentName::Codex,
                 title: None,
                 first_ts_ms: 0,
                 last_ts_ms: 0,
                 message_count: 0,
                 ended_at_ms: None,
-                parent_thread_id: None,
-                state: ThreadState::Closed {
+                parent_session_id: None,
+                state: SessionState::Closed {
                     reason: minos_agent_runtime::CloseReason::UserClose,
                 },
                 needs_continue: false,
             },
-            ThreadSummaryEntry {
-                thread_id: "conv-child-0000".into(),
+            SessionSummaryEntry {
+                session_id: "conv-child-0000".into(),
                 agent: AgentName::Gemini,
                 title: None,
                 first_ts_ms: 0,
                 last_ts_ms: 0,
                 message_count: 0,
                 ended_at_ms: None,
-                parent_thread_id: Some("conv-opencode-5678".into()),
-                state: ThreadState::Idle,
+                parent_session_id: Some("conv-opencode-5678".into()),
+                state: SessionState::Idle,
                 needs_continue: false,
             },
         ];
@@ -951,7 +981,7 @@ mod subagent_tests {
         ];
 
         assert_eq!(
-            existing_thread_ids(&state),
+            existing_session_ids(&state),
             vec!["conv-opencode-5678".to_owned()]
         );
     }
@@ -959,23 +989,23 @@ mod subagent_tests {
     #[test]
     fn conversation_mentions_outside_conversation_hide_existing_threads() {
         let mut state = UiState::new(false);
-        state.thread_panel.list.items.push(ThreadEntry {
-            thread_id: "global-codex-1234".into(),
+        state.session_panel.list.items.push(SessionEntry {
+            session_id: "global-codex-1234".into(),
             agent: AgentName::Codex,
             workspace: PathBuf::from("/tmp"),
-            state: ThreadState::Idle,
-            parent_thread_id: None,
+            state: SessionState::Idle,
+            parent_session_id: None,
         });
-        state.conversation.agent_sessions.items = vec![ThreadSummaryEntry {
-            thread_id: "conv-codex-5678".into(),
+        state.conversation.agent_sessions.items = vec![SessionSummaryEntry {
+            session_id: "conv-codex-5678".into(),
             agent: AgentName::Codex,
             title: None,
             first_ts_ms: 0,
             last_ts_ms: 0,
             message_count: 0,
             ended_at_ms: None,
-            parent_thread_id: None,
-            state: ThreadState::Idle,
+            parent_session_id: None,
+            state: SessionState::Idle,
             needs_continue: false,
         }];
         state.nav.stack = vec![
@@ -985,6 +1015,6 @@ mod subagent_tests {
             },
         ];
 
-        assert_eq!(existing_thread_ids(&state), Vec::<String>::new());
+        assert_eq!(existing_session_ids(&state), Vec::<String>::new());
     }
 }

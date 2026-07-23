@@ -6,7 +6,7 @@ mod global;
 mod nav;
 
 use crate::action::{Action, EffectResult, InputAction, InputTarget};
-use crate::agent_route::short_thread_id;
+use crate::agent_route::short_session_id;
 use crate::effect::{Effect, StateChange};
 use crate::focus::PaneId;
 use crate::state::AppState;
@@ -74,22 +74,22 @@ fn handle_effect_result(
     match result {
         EffectResult::AgentStarted {
             agent,
-            thread_id,
+            session_id,
             cwd,
             text,
         } => (
             StateChange::none(),
             vec![Effect::AgentStartedForPrompt {
                 agent,
-                thread_id,
+                session_id,
                 cwd,
                 text,
             }],
         ),
-        EffectResult::SendFailed { thread_id, error } => {
+        EffectResult::SendFailed { session_id, error } => {
             ui.set_error(format!(
                 "Failed to send message to {}: {error}",
-                short_thread_id(&thread_id)
+                short_session_id(&session_id)
             ));
             (StateChange::redraw(), vec![])
         }
@@ -131,8 +131,8 @@ fn handle_effect_result(
         } => {
             for session in &sessions {
                 state
-                    .thread_conversations
-                    .insert(session.thread_id.clone(), conversation_id.clone());
+                    .session_conversations
+                    .insert(session.session_id.clone(), conversation_id.clone());
             }
             ui.conversations.select(
                 ui.conversations
@@ -165,19 +165,19 @@ fn handle_effect_result(
         EffectResult::ConversationAgentStarted {
             conversation_id,
             agent,
-            thread_id,
+            session_id,
             cwd,
             text,
         } => {
             state
-                .thread_conversations
-                .insert(thread_id.clone(), conversation_id.clone());
+                .session_conversations
+                .insert(session_id.clone(), conversation_id.clone());
             let inserted_session = if ui
                 .conversation
                 .agent_sessions
                 .items
                 .iter()
-                .any(|s| s.thread_id == thread_id)
+                .any(|s| s.session_id == session_id)
             {
                 false
             } else {
@@ -190,23 +190,23 @@ fn handle_effect_result(
                 ui.conversation
                     .agent_sessions
                     .items
-                    .push(crate::backend::ThreadSummaryEntry {
-                        thread_id: thread_id.clone(),
+                    .push(crate::backend::SessionSummaryEntry {
+                        session_id: session_id.clone(),
                         agent,
                         title,
                         first_ts_ms: 0,
                         last_ts_ms: 0,
                         message_count: 0,
                         ended_at_ms: None,
-                        parent_thread_id: None,
-                        state: minos_agent_runtime::ThreadState::Starting,
+                        parent_session_id: None,
+                        state: minos_agent_runtime::SessionState::Starting,
                         needs_continue: false,
                     });
                 true
             };
             ui.conversation
                 .agent_sessions
-                .select(ui.flat_session_index_for_thread(&thread_id));
+                .select(ui.flat_session_index_for_thread(&session_id));
             if inserted_session {
                 if let Some(conversation) = ui
                     .conversations
@@ -226,7 +226,7 @@ fn handle_effect_result(
             } else {
                 vec![Effect::AgentStartedForPrompt {
                     agent,
-                    thread_id,
+                    session_id,
                     cwd,
                     text,
                 }]
@@ -241,10 +241,10 @@ fn handle_effect_result(
 }
 
 pub(super) fn select_thread(ui: &mut UiState, index: usize) -> StateChange {
-    if index >= ui.thread_panel.list.items.len() {
+    if index >= ui.session_panel.list.items.len() {
         return StateChange::none();
     }
-    ui.thread_panel.list.select(Some(index));
+    ui.session_panel.list.select(Some(index));
     StateChange::redraw()
 }
 
@@ -257,7 +257,7 @@ pub(super) fn sync_conversation_agent_picker(ui: &mut UiState) {
 
 pub(super) fn group_user_text_for_thread(
     ui: &UiState,
-    thread_id: &str,
+    session_id: &str,
     text: &str,
 ) -> Option<String> {
     let agent = ui
@@ -265,14 +265,14 @@ pub(super) fn group_user_text_for_thread(
         .agent_sessions
         .items
         .iter()
-        .find(|session| session.thread_id == thread_id)
+        .find(|session| session.session_id == session_id)
         .map(|session| session.agent)
         .or_else(|| {
-            ui.thread_panel
+            ui.session_panel
                 .list
                 .items
                 .iter()
-                .find(|thread| thread.thread_id == thread_id)
+                .find(|thread| thread.session_id == session_id)
                 .map(|thread| thread.agent)
         })?;
     let trimmed = text.trim();
@@ -282,26 +282,26 @@ pub(super) fn group_user_text_for_thread(
     Some(format!(
         "@{}#{} {trimmed}",
         agent.bin_name(),
-        short_thread_id(thread_id)
+        short_session_id(session_id)
     ))
 }
 
-pub(super) fn thread_runtime_state<'a>(
+pub(super) fn session_runtime_state<'a>(
     ui: &'a UiState,
-    thread_id: &str,
-) -> Option<&'a minos_agent_runtime::ThreadState> {
+    session_id: &str,
+) -> Option<&'a minos_agent_runtime::SessionState> {
     ui.conversation
         .agent_sessions
         .items
         .iter()
-        .find(|session| session.thread_id == thread_id)
+        .find(|session| session.session_id == session_id)
         .map(|session| &session.state)
         .or_else(|| {
-            ui.thread_panel
+            ui.session_panel
                 .list
                 .items
                 .iter()
-                .find(|thread| thread.thread_id == thread_id)
+                .find(|thread| thread.session_id == session_id)
                 .map(|thread| &thread.state)
         })
 }
@@ -323,7 +323,7 @@ pub(super) fn push_pending_conversation_user_message(
             message_seq,
             message_id: format!("pending-{conversation_id}-{message_seq}"),
             conversation_id: conversation_id.to_owned(),
-            thread_id: None,
+            session_id: None,
             created_at_ms: 0,
             sender_role: "user".to_owned(),
             agent: None,
@@ -400,24 +400,24 @@ pub(super) fn request_delete_current_thread(ui: &mut UiState) -> StateChange {
         ui.set_error("Subagent transcripts are read-only.".into());
         return StateChange::redraw();
     }
-    let Some(thread_id) = ui.current_thread_id().map(str::to_owned) else {
+    let Some(session_id) = ui.current_session_id().map(str::to_owned) else {
         return StateChange::none();
     };
     let Some(selected) = ui
-        .thread_panel
+        .session_panel
         .list
         .items
         .iter()
-        .position(|thread| thread.thread_id == thread_id)
+        .position(|thread| thread.session_id == session_id)
     else {
         return StateChange::none();
     };
-    let Some(thread) = ui.thread_panel.list.items.get(selected) else {
+    let Some(thread) = ui.session_panel.list.items.get(selected) else {
         return StateChange::none();
     };
 
     ui.overlays.delete_confirm = Some(DeleteConfirmState {
-        thread_id: thread.thread_id.clone(),
+        session_id: thread.session_id.clone(),
         agent: thread.agent,
         workspace: thread.workspace.clone(),
         selected_index: selected,

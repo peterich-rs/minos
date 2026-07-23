@@ -210,18 +210,18 @@ fn agent_list_key_to_mapping(ui: &UiState, key: KeyEvent) -> KeyMapping {
     }
     match key.code {
         KeyCode::Up => ui
-            .thread_panel
+            .session_panel
             .list
             .selected
             .map(|selected| Action::Agent(AgentAction::Select(selected.saturating_sub(1))))
             .map(KeyMapping::action)
             .unwrap_or_else(|| KeyMapping::action(Action::Global(GlobalAction::RequestRedraw))),
         KeyCode::Down => ui
-            .thread_panel
+            .session_panel
             .list
             .selected
             .map(|selected| {
-                let last = ui.thread_panel.list.items.len().saturating_sub(1);
+                let last = ui.session_panel.list.items.len().saturating_sub(1);
                 Action::Agent(AgentAction::Select((selected + 1).min(last)))
             })
             .map(KeyMapping::action)

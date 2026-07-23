@@ -132,7 +132,7 @@ pub fn render_chat(
     let title = format!(
         "Chat: {} #{}{}",
         chat.agent.bin_name(),
-        crate::agent_route::short_thread_id(&chat.thread_id),
+        crate::agent_route::short_session_id(&chat.session_id),
         if chat.auto_scroll {
             ""
         } else {
@@ -164,7 +164,7 @@ pub fn render_chat(
     // Grok-style prepare: estimate full transcript, exact-measure only the
     // viewport window (+ below margin). No above-margin so the top stays anchored.
     let scroll = cache.prepare_layout(cache::LayoutPass {
-        thread_id: chat.thread_id.as_str(),
+        session_id: chat.session_id.as_str(),
         items: &chat.items,
         version: chat.version,
         structure_version: chat.structure_version,
@@ -580,7 +580,7 @@ fn build_item_lines<S: LineSink>(sink: &mut S, item: &ChatItem) {
             }
         }
         ChatItem::SubagentCall {
-            sub_thread_id,
+            sub_session_id,
             agent,
             model,
             prompt_summary,
@@ -597,7 +597,7 @@ fn build_item_lines<S: LineSink>(sink: &mut S, item: &ChatItem) {
                 | minos_ui_protocol::SubagentStatus::Interrupted => TOOL_ERROR,
                 minos_ui_protocol::SubagentStatus::Running => TOOL_RUNNING,
             };
-            let id_short = crate::agent_route::short_thread_id(sub_thread_id);
+            let id_short = crate::agent_route::short_session_id(sub_session_id);
             let mut spans = vec![
                 Span::styled(format!("{verb} "), TOOL_VERB_MUTED),
                 Span::styled(

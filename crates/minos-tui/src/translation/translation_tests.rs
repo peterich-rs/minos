@@ -337,26 +337,26 @@ fn codex_projected_events_render_final_text_and_tool_as_separate_items() {
     for raw in [
         serde_json::json!({"method":"item/started","params":{
             "item":{"type":"agentMessage","id":"a1","text":""},
-            "threadId":"thr","turnId":"t1"
+            "sessionId":"thr","turnId":"t1"
         }}),
         serde_json::json!({"method":"item/agentMessage/delta","params":{
             "itemId":"a1","delta":"partial"
         }}),
         serde_json::json!({"method":"item/started","params":{
             "item":{"type":"commandExecution","id":"cmd1","command":"ls","commandActions":[],"cwd":"/tmp","status":"inProgress"},
-            "threadId":"thr","turnId":"t1"
+            "sessionId":"thr","turnId":"t1"
         }}),
         serde_json::json!({"method":"item/started","params":{
             "item":{"type":"agentMessage","id":"a2","text":""},
-            "threadId":"thr","turnId":"t1"
+            "sessionId":"thr","turnId":"t1"
         }}),
         serde_json::json!({"method":"item/completed","params":{
             "item":{"type":"agentMessage","id":"a1","text":"partial final answer"},
-            "threadId":"thr","turnId":"t1","completedAtMs":2
+            "sessionId":"thr","turnId":"t1","completedAtMs":2
         }}),
         serde_json::json!({"method":"item/completed","params":{
             "item":{"type":"commandExecution","id":"cmd1","command":"ls","commandActions":[],"cwd":"/tmp","status":"completed","aggregatedOutput":"ok","exitCode":0},
-            "threadId":"thr","turnId":"t1","completedAtMs":3
+            "sessionId":"thr","turnId":"t1","completedAtMs":3
         }}),
     ] {
         let events = minos_ui_protocol::translate_codex(&mut translator, &raw).unwrap_or_default();
@@ -663,7 +663,7 @@ fn grok_ask_user_question_creates_pending_request() {
         kind: "approval/request".into(),
         payload_json: serde_json::json!({
             "request_id": "ask-1",
-            "thread_id": "t1",
+            "session_id": "t1",
             "turn_id": "",
             "method": "x.ai/ask_user_question",
             "params": {
@@ -844,9 +844,9 @@ fn thread_closed_pushes_system_message_and_finishes_streaming() {
             message_id: "m1".into(),
             text: "partial".into(),
         },
-        UiEventMessage::ThreadClosed {
-            thread_id: "t1".into(),
-            reason: minos_ui_protocol::ThreadEndReason::UserStopped,
+        UiEventMessage::SessionClosed {
+            session_id: "t1".into(),
+            reason: minos_ui_protocol::SessionEndReason::UserStopped,
             closed_at_ms: 1,
         },
     ]);
@@ -1038,8 +1038,8 @@ fn toggle_tool_expansion_only_updates_last_tool_call() {
 fn subagent_spawn_and_status_update_render_parent_card() {
     let mut cs = ChatState::new("parent".into(), AgentName::Codex);
     cs.apply_ui_events(vec![UiEventMessage::SubagentSpawned {
-        parent_thread_id: "parent".into(),
-        sub_thread_id: "sub".into(),
+        parent_session_id: "parent".into(),
+        sub_session_id: "sub".into(),
         tool_call_id: "collab-1".into(),
         agent: AgentName::Codex,
         model: Some("gpt-5".into()),
@@ -1049,12 +1049,12 @@ fn subagent_spawn_and_status_update_render_parent_card() {
 
     match &cs.items[0] {
         ChatItem::SubagentCall {
-            sub_thread_id,
+            sub_session_id,
             status,
             is_streaming,
             ..
         } => {
-            assert_eq!(sub_thread_id, "sub");
+            assert_eq!(sub_session_id, "sub");
             assert_eq!(*status, SubagentStatus::Running);
             assert!(*is_streaming);
         }
@@ -1062,7 +1062,7 @@ fn subagent_spawn_and_status_update_render_parent_card() {
     }
 
     cs.apply_ui_events(vec![UiEventMessage::SubagentStatusUpdated {
-        sub_thread_id: "sub".into(),
+        sub_session_id: "sub".into(),
         status: SubagentStatus::Completed,
     }]);
     match &cs.items[0] {
@@ -1091,8 +1091,8 @@ fn tool_call_completed_closes_matching_subagent_card() {
             args_json: r#"{"prompt":"audit"}"#.into(),
         },
         UiEventMessage::SubagentSpawned {
-            parent_thread_id: "parent".into(),
-            sub_thread_id: "ses_sub".into(),
+            parent_session_id: "parent".into(),
+            sub_session_id: "ses_sub".into(),
             tool_call_id: "call_task".into(),
             agent: AgentName::Opencode,
             model: None,

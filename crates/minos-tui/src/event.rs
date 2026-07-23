@@ -5,25 +5,25 @@ use minos_protocol::LocalIngestFrame;
 use std::path::PathBuf;
 
 use crate::action::InputTarget;
-use crate::backend::BackendThreadSnapshot;
+use crate::backend::BackendSessionSnapshot;
 use crate::path_complete::PathCandidate;
 
 pub enum AppEvent {
     Ingest(LocalIngestFrame),
     ManagerEvent(ManagerEvent),
-    /// Background tick listed daemon threads; apply on the main loop without
+    /// Background tick listed daemon sessions; apply on the main loop without
     /// blocking input/draw on the network round-trip.
     DaemonThreadsListed {
-        threads: Vec<BackendThreadSnapshot>,
+        sessions: Vec<BackendSessionSnapshot>,
     },
     AgentStartedForPrompt {
         agent: AgentName,
-        thread_id: String,
+        session_id: String,
         cwd: PathBuf,
         text: String,
     },
     SendMessageFailed {
-        thread_id: String,
+        session_id: String,
         error: String,
     },
     ProjectCreated(crate::backend::ProjectEntry),
@@ -40,12 +40,12 @@ pub enum AppEvent {
         project_id: String,
         conversation_id: String,
         messages: Vec<crate::backend::ConversationMessageEntry>,
-        sessions: Vec<crate::backend::ThreadSummaryEntry>,
+        sessions: Vec<crate::backend::SessionSummaryEntry>,
     },
     ConversationAgentStarted {
         conversation_id: String,
         agent: AgentName,
-        thread_id: String,
+        session_id: String,
         cwd: PathBuf,
         text: String,
     },

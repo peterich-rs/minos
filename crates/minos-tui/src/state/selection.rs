@@ -20,11 +20,11 @@ pub(crate) fn current_chat_selection_active(ui: &UiState) -> bool {
 }
 
 pub(crate) fn agent_chat_selection_active(ui: &UiState) -> bool {
-    ui.thread_panel
+    ui.session_panel
         .list
         .selected
-        .and_then(|index| ui.thread_panel.list.items.get(index))
-        .and_then(|thread| ui.thread_panel.chat_states.get(&thread.thread_id))
+        .and_then(|index| ui.session_panel.list.items.get(index))
+        .and_then(|thread| ui.session_panel.chat_states.get(&thread.session_id))
         .is_some_and(|chat| chat.selection.is_some())
 }
 
@@ -82,7 +82,7 @@ pub(crate) fn try_toggle_fold_at_click(ui: &mut UiState, column: u16, row: u16) 
         return false;
     };
     let scroll = cache.prepare_layout(crate::ui::chat::LayoutPass {
-        thread_id: chat.thread_id.as_str(),
+        session_id: chat.session_id.as_str(),
         items: &chat.items,
         version: chat.version,
         structure_version: chat.structure_version,

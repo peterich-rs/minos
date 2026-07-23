@@ -734,7 +734,7 @@ fn render_cache_settles_viewport_and_leaves_far_history_estimated() {
         .collect();
     // Bottom-pinned prepare: bottom window (+ warm band) is exact; far history not.
     let _scroll = cache.prepare_layout(super::LayoutPass {
-        thread_id: "t1",
+        session_id: "t1",
         items: &items,
         version: 1,
         structure_version: 1,
@@ -758,7 +758,7 @@ fn render_cache_settles_viewport_and_leaves_far_history_estimated() {
     // Manual scroll to top: settle amortizes exact measure across frames.
     for _ in 0..16 {
         let _ = cache.prepare_layout(super::LayoutPass {
-            thread_id: "t1",
+            session_id: "t1",
             items: &items,
             version: 1,
             structure_version: 1,
@@ -807,7 +807,7 @@ fn render_cache_rebuilds_on_width_change() {
 }
 
 #[test]
-fn render_cache_rebuilds_on_thread_id_change() {
+fn render_cache_rebuilds_on_session_id_change() {
     let mut cache = RenderCache::default();
     let items = vec![ChatItem::AssistantText {
         message_id: "m1".into(),
@@ -892,7 +892,7 @@ fn render_cache_separator_offset_matches_full_build() {
     let mut cache = RenderCache::default();
     // Tall viewport settles every entry exactly so total_lines matches full build.
     let _ = cache.prepare_layout(super::LayoutPass {
-        thread_id: "t1",
+        session_id: "t1",
         items: &items,
         version: 1,
         structure_version: 1,
@@ -932,7 +932,7 @@ fn render_cache_visible_lines_match_full_build_slice() {
     let width = 16;
     let mut cache = RenderCache::default();
     let _ = cache.prepare_layout(super::LayoutPass {
-        thread_id: "t1",
+        session_id: "t1",
         items: &items,
         version: 1,
         structure_version: 1,
@@ -1121,7 +1121,7 @@ fn render_cache_reuses_runs_across_settle_frames_into_history() {
 
     // Bottom-pinned: far history stays estimated.
     let _ = cache.prepare_layout(super::LayoutPass {
-        thread_id: "t1",
+        session_id: "t1",
         items: &items,
         version: 1,
         structure_version: 1,
@@ -1141,7 +1141,7 @@ fn render_cache_reuses_runs_across_settle_frames_into_history() {
     for _ in 0..32 {
         frames += 1;
         let _ = cache.prepare_layout(super::LayoutPass {
-            thread_id: "t1",
+            session_id: "t1",
             items: &items,
             version: 1,
             structure_version: 1,
@@ -1162,7 +1162,7 @@ fn render_cache_reuses_runs_across_settle_frames_into_history() {
     // Content-only version bump must keep structure runs cache usable.
     let lines = cache.total_lines();
     let _ = cache.prepare_layout(super::LayoutPass {
-        thread_id: "t1",
+        session_id: "t1",
         items: &items,
         version: 2,
         structure_version: 1,

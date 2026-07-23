@@ -14,7 +14,7 @@ pub enum Effect {
     HandleTick,
     AgentStartedForPrompt {
         agent: AgentName,
-        thread_id: String,
+        session_id: String,
         cwd: PathBuf,
         text: String,
     },
@@ -24,12 +24,12 @@ pub enum Effect {
         message_body: String,
     },
     SendTextToThread {
-        thread_id: String,
+        session_id: String,
         text: String,
         message_body: Option<String>,
     },
     SubmitPendingAgentRequest {
-        thread_id: String,
+        session_id: String,
         pending: PendingAgentRequestKind,
         text: String,
     },
@@ -54,6 +54,8 @@ pub enum Effect {
         workspace: PathBuf,
         message_body: String,
         prompt: String,
+        /// Host profile id (explicit profile mention or bare-agent newest convenience).
+        profile_id: Option<String>,
     },
     StartAgentInConversation {
         project_id: String,
@@ -62,12 +64,14 @@ pub enum Effect {
         workspace: PathBuf,
         message_body: String,
         prompt: String,
+        /// Host profile id (explicit profile mention or bare-agent newest convenience).
+        profile_id: Option<String>,
     },
     OpenConversation {
         conversation_id: String,
     },
     OpenAgentSession {
-        thread_id: String,
+        session_id: String,
     },
 }
 

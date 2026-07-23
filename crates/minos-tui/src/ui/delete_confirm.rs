@@ -12,7 +12,7 @@ use ratatui::{
 use super::theme;
 
 pub struct DeleteConfirmState {
-    pub thread_id: String,
+    pub session_id: String,
     pub agent: AgentName,
     pub workspace: PathBuf,
     pub selected_index: usize,
@@ -42,14 +42,14 @@ fn render_delete_confirm_in_area(f: &mut Frame, root: Rect, state: &DeleteConfir
     let area = centered_rect(root, 64, 8);
     f.render_widget(Clear, area);
 
-    let tid_short = &state.thread_id[..8.min(state.thread_id.len())];
+    let tid_short = &state.session_id[..8.min(state.session_id.len())];
     let workspace = state
         .workspace
         .file_name()
         .unwrap_or_default()
         .to_string_lossy();
     let lines = vec![
-        Line::from("Delete this local thread?"),
+        Line::from("Delete this local session?"),
         Line::from(""),
         Line::from(vec![
             Span::raw("Thread "),

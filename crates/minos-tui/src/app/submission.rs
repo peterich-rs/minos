@@ -3,7 +3,7 @@ use super::*;
 impl App {
     pub(super) async fn submit_pending_agent_request(
         &mut self,
-        thread_id: String,
+        session_id: String,
         pending: PendingAgentRequestKind,
         text: String,
     ) -> bool {
@@ -30,19 +30,19 @@ impl App {
                 };
                 let decision = codex_user_input_decision(ids.as_slice(), text.as_str());
                 self.backend
-                    .send_approval_decision(&request_id, &thread_id, decision)
+                    .send_approval_decision(&request_id, &session_id, decision)
                     .await
             }
             PendingAgentRequestKind::CodexApproval { request_id, method } => {
                 let decision = codex_approval_decision(&method, text.as_str());
                 self.backend
-                    .send_approval_decision(&request_id, &thread_id, decision)
+                    .send_approval_decision(&request_id, &session_id, decision)
                     .await
             }
             PendingAgentRequestKind::GrokPlanApproval { request_id } => {
                 let decision = grok_plan_approval_decision(text.as_str());
                 self.backend
-                    .send_approval_decision(&request_id, &thread_id, decision)
+                    .send_approval_decision(&request_id, &session_id, decision)
                     .await
             }
             PendingAgentRequestKind::GrokUserQuestion {
@@ -51,7 +51,7 @@ impl App {
             } => {
                 let decision = grok_user_question_decision(questions.as_slice(), text.as_str());
                 self.backend
-                    .send_approval_decision(&request_id, &thread_id, decision)
+                    .send_approval_decision(&request_id, &session_id, decision)
                     .await
             }
             PendingAgentRequestKind::OpencodePermission {
@@ -65,7 +65,7 @@ impl App {
                     &decline_response,
                 );
                 self.backend
-                    .respond_opencode_permission(&thread_id, &permission_id, &response)
+                    .respond_opencode_permission(&session_id, &permission_id, &response)
                     .await
             }
             PendingAgentRequestKind::OpencodeQuestion {
@@ -74,14 +74,14 @@ impl App {
             } => {
                 let answers = opencode_question_answers(questions.as_slice(), text.as_str());
                 self.backend
-                    .respond_opencode_question(&thread_id, &question_id, answers)
+                    .respond_opencode_question(&session_id, &question_id, answers)
                     .await
             }
         };
 
         match result {
             Ok(()) => {
-                if let Some(chat) = self.ui.thread_panel.chat_states.get_mut(&thread_id) {
+                if let Some(chat) = self.ui.session_panel.chat_states.get_mut(&session_id) {
                     chat.resolve_pending_request(&request_id);
                 }
             }
@@ -111,7 +111,7 @@ impl App {
                     Ok(outcome) => {
                         let _ = tx.send(AppEvent::AgentStartedForPrompt {
                             agent,
-                            thread_id: outcome.thread_id,
+                            session_id: outcome.session_id,
                             cwd: outcome.cwd,
                             text,
                         });
@@ -129,7 +129,7 @@ impl App {
                             "background start_agent failed"
                         );
                         let _ = tx.send(AppEvent::SendMessageFailed {
-                            thread_id: agent.bin_name().to_owned(),
+                            session_id: agent.bin_name().to_owned(),
                             error,
                         });
                     }
@@ -139,8 +139,8 @@ impl App {
         }
 
         match self.start_new_thread(agent).await {
-            Ok(thread_id) => {
-                self.send_text_to_thread(thread_id, text, Some(message_body))
+            Ok(session_id) => {
+                self.send_text_to_thread(session_id, text, Some(message_body))
                     .await
             }
             Err(error) => {
@@ -152,17 +152,17 @@ impl App {
 
     pub(super) async fn send_text_to_thread(
         &mut self,
-        thread_id: String,
+        session_id: String,
         text: String,
         message_body: Option<String>,
     ) -> bool {
         if let Some(index) = self
             .ui
-            .thread_panel
+            .session_panel
             .list
             .items
             .iter()
-            .position(|thread| thread.thread_id == thread_id)
+            .position(|thread| thread.session_id == session_id)
         {
             self.select_thread(index);
         }
@@ -170,7 +170,7 @@ impl App {
             chat.scroll_to_bottom();
         }
 
-        self.hydrate_thread_if_needed(&thread_id).await;
+        self.hydrate_thread_if_needed(&session_id).await;
 
         let conversation_message = message_body.as_ref().and_then(|body| {
             self.ui
@@ -199,33 +199,33 @@ impl App {
                             target: "minos_tui::app",
                             error = %error,
                             conversation_id = %conversation_id,
-                            thread_id = %thread_id,
+                            session_id = %session_id,
                             "append_conversation_message failed before send"
                         );
                         let _ = tx.send(AppEvent::SendMessageFailed {
-                            thread_id: thread_id.clone(),
+                            session_id: session_id.clone(),
                             error,
                         });
                         return;
                     }
                 }
-                if let Err(e) = backend.resume_thread(&thread_id, false).await {
+                if let Err(e) = backend.resume_session(&session_id, false).await {
                     tracing::debug!(
                         target: "minos_tui::app",
                         error = %e,
-                        thread_id = %thread_id,
-                        "resume_thread failed or not needed"
+                        session_id = %session_id,
+                        "resume_session failed or not needed"
                     );
                 }
-                if let Err(error) = backend.send_message(&thread_id, &text).await {
+                if let Err(error) = backend.send_message(&session_id, &text).await {
                     let error = format_error_chain(&error);
                     tracing::warn!(
                         target: "minos_tui::app",
                         error = %error,
-                        thread_id = %thread_id,
+                        session_id = %session_id,
                         "background send_message failed"
                     );
-                    let _ = tx.send(AppEvent::SendMessageFailed { thread_id, error });
+                    let _ = tx.send(AppEvent::SendMessageFailed { session_id, error });
                 }
             });
             return true;
@@ -241,22 +241,22 @@ impl App {
                     target: "minos_tui::app",
                     error = %error,
                     conversation_id = %conversation_id,
-                    thread_id = %thread_id,
+                    session_id = %session_id,
                     "append_conversation_message failed before send"
                 );
                 self.ui
                     .set_error(format!("Failed to record conversation message: {error}"));
             }
         }
-        if let Err(e) = self.backend.resume_thread(&thread_id, false).await {
+        if let Err(e) = self.backend.resume_session(&session_id, false).await {
             tracing::debug!(
                 target: "minos_tui::app",
                 error = %e,
-                thread_id = %thread_id,
-                "resume_thread failed or not needed"
+                session_id = %session_id,
+                "resume_session failed or not needed"
             );
         }
-        if let Err(error) = self.backend.send_message(&thread_id, &text).await {
+        if let Err(error) = self.backend.send_message(&session_id, &text).await {
             self.ui.set_error(format!(
                 "Failed to send message: {}",
                 format_error_chain(&error)
@@ -287,9 +287,9 @@ impl App {
                 .await
             {
                 Ok(outcome) => {
-                    let thread_id = outcome.thread_id.clone();
-                    self.ensure_thread_visible(thread_id.clone(), agent, outcome.cwd);
-                    Ok(thread_id)
+                    let session_id = outcome.session_id.clone();
+                    self.ensure_thread_visible(session_id.clone(), agent, outcome.cwd);
+                    Ok(session_id)
                 }
                 Err(error) => Err(format!(
                     "Failed to start {}: {}",
@@ -332,45 +332,45 @@ impl App {
 
     pub(super) fn ensure_thread_visible(
         &mut self,
-        thread_id: String,
+        session_id: String,
         agent: AgentName,
         workspace: PathBuf,
     ) {
         if let Some(index) = self
             .ui
-            .thread_panel
+            .session_panel
             .list
             .items
             .iter()
-            .position(|thread| thread.thread_id == thread_id)
+            .position(|thread| thread.session_id == session_id)
         {
-            if let Some(entry) = self.ui.thread_panel.list.items.get_mut(index) {
+            if let Some(entry) = self.ui.session_panel.list.items.get_mut(index) {
                 entry.agent = agent;
                 entry.workspace = workspace;
             }
-            self.ensure_chat_state_agent(&thread_id, agent);
+            self.ensure_chat_state_agent(&session_id, agent);
             self.select_thread(index);
             self.ui.focus.focus(PaneId::Input);
             self.sync_input_agent_picker();
             return;
         }
 
-        self.ui.thread_panel.list.items.push(ThreadEntry {
-            thread_id: thread_id.clone(),
+        self.ui.session_panel.list.items.push(SessionEntry {
+            session_id: session_id.clone(),
             agent,
             workspace,
-            state: ThreadState::Starting,
-            parent_thread_id: None,
+            state: SessionState::Starting,
+            parent_session_id: None,
         });
-        self.ensure_chat_state_agent(&thread_id, agent);
-        self.select_thread(self.ui.thread_panel.list.items.len().saturating_sub(1));
+        self.ensure_chat_state_agent(&session_id, agent);
+        self.select_thread(self.ui.session_panel.list.items.len().saturating_sub(1));
         self.ui.focus.focus(PaneId::Input);
         self.sync_input_agent_picker();
     }
 
     // Used by unit tests and the test-only in-process MCP handlers.
     #[allow(dead_code)]
-    pub(super) fn thread_id_for_agent_short_id(
+    pub(super) fn session_id_for_agent_short_id(
         &self,
         agent: AgentName,
         short_id: &str,
@@ -382,17 +382,17 @@ impl App {
             .agent_sessions
             .items
             .iter()
-            .filter(|session| session.parent_thread_id.is_none())
+            .filter(|session| session.parent_session_id.is_none())
             .filter(|session| thread_can_receive_message(&session.state))
             .find(|session| {
                 session.agent == agent
-                    && (short_thread_id(&session.thread_id).to_ascii_lowercase() == short_id
+                    && (short_session_id(&session.session_id).to_ascii_lowercase() == short_id
                         || session
-                            .thread_id
+                            .session_id
                             .to_ascii_lowercase()
                             .starts_with(&short_id))
             })
-            .map(|session| session.thread_id.clone())
+            .map(|session| session.session_id.clone())
     }
 
     pub(super) fn sync_input_agent_picker(&mut self) {

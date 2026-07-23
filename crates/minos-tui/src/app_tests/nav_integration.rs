@@ -280,12 +280,12 @@ async fn start_new_session_via_input_transitions_to_conversation_level() {
     app.set_event_sender(tx);
     set_test_conversations_nav(&mut app, "p1");
     app.ui.projects.items = vec![project];
-    app.ui.status.update_agents(vec![AgentDescriptor {
-        name: AgentName::Codex,
-        path: None,
-        version: None,
-        status: AgentStatus::Ok,
-    }]);
+    app.ui.status.update_agents(vec![AgentDescriptor::new(
+        AgentName::Codex,
+        None,
+        None,
+        AgentStatus::Ok,
+    )]);
     app.ui.focus.focus(PaneId::Input);
     app.ui.inputs.conversation.content = "hello world".to_owned();
 
@@ -370,20 +370,20 @@ async fn session_input_accepts_agent_completion_before_submit() {
 
 #[tokio::test]
 async fn open_existing_session_bridges_into_thread_list() {
-    use crate::backend::ThreadSummaryEntry;
+    use crate::backend::SessionSummaryEntry;
 
     let project = sample_project("p1", "P1", "/tmp/p1");
     let conversation = sample_conversation("p1", "c1", "conversation");
-    let session = ThreadSummaryEntry {
-        thread_id: "existing-session-1".into(),
+    let session = SessionSummaryEntry {
+        session_id: "existing-session-1".into(),
         agent: minos_domain::AgentName::Codex,
         title: Some("an existing session".into()),
         first_ts_ms: 0,
         last_ts_ms: 0,
         message_count: 0,
         ended_at_ms: None,
-        parent_thread_id: None,
-        state: minos_agent_runtime::ThreadState::Idle,
+        parent_session_id: None,
+        state: minos_agent_runtime::SessionState::Idle,
         needs_continue: false,
     };
     let backend = Arc::new(
@@ -416,23 +416,23 @@ async fn open_existing_session_bridges_into_thread_list() {
     app.handle_key(press(KeyCode::Enter)).await;
     assert!(
         app.ui
-            .thread_panel.list.items
+            .session_panel.list.items
             .iter()
-            .any(|t| t.thread_id == "existing-session-1"),
-        "ensure_conversation_agent_session_visible must bridge the session into ui.thread_panel.list.items"
+            .any(|t| t.session_id == "existing-session-1"),
+        "ensure_conversation_agent_session_visible must bridge the session into ui.session_panel.list.items"
     );
     let bridged = app
         .ui
-        .thread_panel
+        .session_panel
         .list
         .items
         .iter()
-        .find(|t| t.thread_id == "existing-session-1")
+        .find(|t| t.session_id == "existing-session-1")
         .expect("bridged thread exists");
     assert_eq!(bridged.workspace, project.workspace_path);
     assert!(
         app.ui
-            .thread_panel
+            .session_panel
             .chat_states
             .contains_key("existing-session-1"),
         "bridged conversation session must create chat state before hydration"
