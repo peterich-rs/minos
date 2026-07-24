@@ -140,7 +140,7 @@ apps/desktop/
     main.tsx · App.tsx · index.css · vite-env.d.ts
     app/                         # App shell composition
       AppShell.tsx · Sidebar.tsx · BootScreen.tsx
-      CommandPalette.tsx · ConnectionToasts.tsx
+      CommandPalette.tsx · ConnectionToasts.tsx · SidebarConnectionCard.tsx
       useWebviewZoomShortcuts.ts # Cmd±/0 → root rem scale; webview zoom pinned to 1
     features/
       work/                      # Project → Conversations / Sessions / Board
@@ -182,10 +182,17 @@ apps/desktop/
       ui/                        # Avatar · StatusPill · Tag · ErrorBoundary
                                  # MarkdownText · DiffView · ReadView · IncrementalText
                                  # button · dialog · dropdown-menu · popover · toaster · tooltip
+                                 # modalMotion · popoverSurface · deferredModalOpen
+                                 # sidebar-action-card (connection / nudge cards)
       hooks/
         useStableReference.ts    # useStableMap/Array/Set — keep derived identity for memo
+        useMediaQuery.ts         # narrow viewport → inspector overlay
+      layout/
+        chromeLayout.ts          # sidebar / aux panel CSS vars + breakpoints
+        AuxiliaryPanel.tsx       # split | rail | overlay right panel shell
       lib/
         platform.ts              # hasPrimaryShortcutModifier (⌘/Ctrl)
+        connection-card-policy.ts # when to show sidebar daemon offline card
         host-status.ts           # Ready · Local only / Linked / This Mac
         mock-data.ts
         toast.ts                 # sonner wrappers
@@ -235,7 +242,9 @@ apps/desktop/
 | Work 三栏可拖拽 | `react-resizable-panels`；列表折叠时退回 rail + flex |
 | 全局跳转 | ⌘/Ctrl+K → `CommandPalette` |
 | 文本缩放 | `useWebviewZoomShortcuts` 挂在 **`App`**（boot + shell 始终生效）：⌘/Ctrl ±/0 调 `documentElement` rem（`minos:text-scale`）；Tauri webview zoom 固定为 1 |
-| Daemon 连接反馈 | `ConnectionToasts` 监听 `connection.connected` 边沿；**disconnect 防抖 2s**（`connection-toast-policy`），避免 daemon 短闪断 toast 抖动 |
+| Daemon 连接反馈 | `ConnectionToasts` 监听 `connection.connected` 边沿；**disconnect 防抖 2s**（`connection-toast-policy`）。持久侧栏卡 `SidebarConnectionCard`（同防抖 + dismiss 至本 episode；Retry → bootstrap / Host） |
+| Inspector 辅面板 | `AuxiliaryPanel`：`split`（resizable）/ `rail` / `overlay`（&lt;1100px 浮层+backdrop）；`SessionInspector` 统一壳 |
+| Motion tokens | `modalMotion` / `popoverSurface` 统一 Dialog / Popover / Dropdown enter-exit |
 | Transcript 滚动 | stick-to-bottom（rAF 合并 pin + wheel-up suppress re-follow/pin）+ tail/load-older；identity 锚点；top sentinel；`overscroll-y-none` |
 | Timeline 分页 | 打开只拉 tail（`MESSAGE_PAGE_SIZE`）；`loadOlderMessages(beforeSeq)`；**hard + quiet** 均 `mergeMessagesQuietTail`（保留 older + 并发更新）；identity restore / following 不 restore |
 | Transcript 打开 | 用 Entity/list `messageCount`（= last_seq）seek tail；ingest 抬升 `messageCount`；若 page `nextSeq` 仍指向更新事件则 catch-up 追到末尾，避免 stale last_seq 只看到中间窗 |

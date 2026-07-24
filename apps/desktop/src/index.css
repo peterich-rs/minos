@@ -61,6 +61,11 @@
   --duration-normal: 200ms;
   --ease-out: cubic-bezier(0, 0, 0.2, 1);
 
+  /* ── Shell chrome geometry (see shared/layout/chromeLayout.ts) ── */
+  --minos-sidebar-width: 240px;
+  --minos-top-chrome-height: 0px;
+  --minos-auxiliary-panel-width: 280px;
+
   /* ── Markdown tone defaults (light / agent bubbles) ── */
   --md-link: #92400e;
   --md-link-underline: rgb(146 64 14 / 0.3);
@@ -287,4 +292,26 @@ textarea {
 }
 .markdown-body li::marker {
   color: var(--md-marker);
+}
+
+/* Right auxiliary panel enter (rail / overlay) */
+@keyframes minos-side-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.minos-side-panel-enter {
+  animation: minos-side-panel-in var(--duration-normal) var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .minos-side-panel-enter {
+    animation: none;
+  }
 }

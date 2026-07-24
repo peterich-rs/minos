@@ -1,5 +1,9 @@
 import { useEffect, type ReactNode } from "react";
 import { ChevronRight, FolderOpen, X } from "lucide-react";
+import {
+  AuxiliaryPanel,
+  type AuxiliaryPanelLayout,
+} from "@/shared/layout/AuxiliaryPanel";
 import { agentMeta, type AgentSession } from "@/shared/lib/mock-data";
 import { Avatar } from "@/shared/ui/Avatar";
 import { StatusPill } from "@/shared/ui/StatusPill";
@@ -15,12 +19,22 @@ const EMPTY_INSPECTOR_SESSIONS: ProjectSession[] = [];
 
 export function SessionInspector({
   conversationId,
-  /** Fill a resizable panel; otherwise use a fixed inspector rail width. */
+  /**
+   * Panel geometry:
+   * - `split` (default when `fill`) — fill resizable host
+   * - `rail` — fixed-width in-flow column
+   * - `overlay` — floating right drawer + backdrop
+   */
+  layout,
+  /** @deprecated prefer `layout="split"` */
   fill = false,
 }: {
   conversationId: string;
+  layout?: AuxiliaryPanelLayout;
   fill?: boolean;
 }) {
+  const resolvedLayout: AuxiliaryPanelLayout =
+    layout ?? (fill ? "split" : "rail");
   const toggleDetails = useUiStore((s) => s.toggleDetails);
   const detailsOpen = useUiStore((s) => s.detailsOpen);
   const projectId = useUiStore((s) => s.projectId);
@@ -74,27 +88,26 @@ export function SessionInspector({
       : undefined);
 
   return (
-    <aside
-      className={cn(
-        "flex h-full min-h-0 flex-col overflow-hidden border-l border-ink/5 bg-surface",
-        fill
-          ? "w-full min-w-0"
-          : "w-[min(280px,30vw)] min-w-[220px] max-w-[340px] shrink-0",
-      )}
+    <AuxiliaryPanel
+      layout={resolvedLayout}
+      onClose={toggleDetails}
+      testId="session-inspector"
+      header={
+        <header className="flex shrink-0 items-center justify-between border-b border-ink/5 px-4 py-3">
+          <div className="min-w-0 truncate text-sm font-semibold text-ink">
+            {selected ? "Agent session" : "Conversation"}
+          </div>
+          <button
+            type="button"
+            onClick={toggleDetails}
+            className="rounded-md p-1 text-ink-muted hover:bg-surface-hover"
+            aria-label="Close inspector"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+      }
     >
-      <header className="flex shrink-0 items-center justify-between border-b border-ink/5 px-4 py-3">
-        <div className="min-w-0 truncate text-sm font-semibold text-ink">
-          {selected ? "Agent session" : "Conversation"}
-        </div>
-        <button
-          type="button"
-          onClick={toggleDetails}
-          className="rounded-md p-1 text-ink-muted hover:bg-surface-hover"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </header>
-
       <div className="scrollbar-thin min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-4 text-xs">
         {selected ? (
           <SessionDetail
@@ -178,7 +191,7 @@ export function SessionInspector({
           </>
         )}
       </div>
-    </aside>
+    </AuxiliaryPanel>
   );
 }
 
