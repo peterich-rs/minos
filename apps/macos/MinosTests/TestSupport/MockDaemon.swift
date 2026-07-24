@@ -242,6 +242,7 @@ extension MockDaemon {
         agent: AgentName = .codex,
         workspace: String = "",
         mode: AgentLaunchMode? = .jsonl,
+        profileId: String? = nil,
         model: String? = nil,
         reasoningEffort: String? = nil,
         instructions: String? = nil
@@ -250,6 +251,7 @@ extension MockDaemon {
             agent: agent,
             workspace: workspace,
             mode: mode,
+            profileId: profileId,
             model: model,
             reasoningEffort: reasoningEffort,
             instructions: instructions

@@ -66,6 +66,7 @@ extension AppState {
                     agent: .codex,
                     workspace: "",
                     mode: mode,
+                    profileId: nil,
                     model: nil,
                     reasoningEffort: nil,
                     instructions: nil
