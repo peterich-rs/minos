@@ -17,6 +17,14 @@ export const conversationRefreshTimers = new Map<
   ReturnType<typeof setTimeout>
 >();
 
+/** Cancel pending quiet re-list timers (workspace boundary / bootstrap wipe). */
+export function clearConversationRefreshTimers(): void {
+  for (const handle of conversationRefreshTimers.values()) {
+    clearTimeout(handle);
+  }
+  conversationRefreshTimers.clear();
+}
+
 /** In-flight bootstrap so React StrictMode double-mount cannot wipe loads. */
 let bootstrapInFlight: Promise<void> | null = null;
 

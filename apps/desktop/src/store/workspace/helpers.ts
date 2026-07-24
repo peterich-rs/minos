@@ -9,11 +9,17 @@
  */
 export {
   conversationRefreshTimers,
+  clearConversationRefreshTimers,
   getBootstrapInFlight,
   setBootstrapInFlight,
   idleStatus,
   emptyWorkspace,
 } from "./empty-workspace";
+export {
+  resetWorkspaceModuleState,
+  type ResetWorkspaceModuleStateOptions,
+  type WorkspaceResetReactions,
+} from "./reset-workspace-state";
 export {
   KNOWN_AGENTS_FALLBACK,
   mockBundle,

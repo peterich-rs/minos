@@ -30,7 +30,17 @@ export function singleFlightLoad(
   return p;
 }
 
-/** Test helper: drop all load single-flight entries. */
-export function clearLoadInflightForTests(): void {
+/** Drop all load single-flight entries (workspace boundary / tests). */
+export function clearLoadInflight(): void {
   loadInflight.clear();
+}
+
+/** @deprecated use clearLoadInflight */
+export const clearLoadInflightForTests = clearLoadInflight;
+
+/** Clear resume bookkeeping + load single-flight (daemon bootstrap wipe). */
+export function clearDesktopInflightState(): void {
+  resumedInterruptedSessions.clear();
+  resumeInFlightSessions.clear();
+  clearLoadInflight();
 }

@@ -6,6 +6,7 @@
  * - workspace/types.ts              shared WorkspaceState types
  * - workspace/helpers.ts            barrel → dto-map / transcript-merge /
  *                                   empty-workspace / mock-bundle
+ * - workspace/reset-workspace-state.ts  module singleton teardown on boundary
  * - workspace/projection.ts         SessionEntity commit + list projection
  * - workspace/shared.ts             cross-slice use-case helpers
  * - workspace/connection.ts         L1 bootstrap / livePush / projects

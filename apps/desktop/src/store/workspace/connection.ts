@@ -13,11 +13,7 @@ import {
 import { quietHydrateAllConversationLists } from "./projection";
 import { daemonApi, isTauriRuntime } from "@/shared/lib/daemon";
 import { startDaemonEventBridge } from "@/shared/lib/daemon-events";
-import {
-  resumeInFlightSessions,
-  resumedInterruptedSessions,
-} from "@/shared/lib/desktop-inflight";
-import { useReactionStore } from "@/features/chat/reaction-store";
+import { resetWorkspaceModuleState } from "./reset-workspace-state";
 
 
 export function createConnectionActions(
@@ -49,6 +45,11 @@ export function createConnectionActions(
     setBootstrapInFlight((async () => {
       // Browser-only Vite: mock is intentional for UI work.
       if (!isTauriRuntime()) {
+        resetWorkspaceModuleState({
+          stopEventBridge: true,
+          reactions: "mock-seed",
+          clearUiEphemeral: true,
+        });
         set({
           ...mockBundle(),
           booting: false,
@@ -66,8 +67,12 @@ export function createConnectionActions(
         return;
       }
 
-      // Durable local reactions: drop mock seed so daemon list wins.
-      useReactionStore.getState().enterDurableMode();
+      // Hard workspace boundary: drop module singletons before empty caches.
+      resetWorkspaceModuleState({
+        stopEventBridge: true,
+        reactions: "durable-empty",
+        clearUiEphemeral: true,
+      });
       set({
         booting: true,
         bootPhase: "Connecting to daemon…",
@@ -86,6 +91,12 @@ export function createConnectionActions(
         const connection = await daemonApi.connect();
 
         if (!connection.connected) {
+          // Caches already wiped at boot start; keep module slate clean.
+          resetWorkspaceModuleState({
+            stopEventBridge: true,
+            reactions: "durable-empty",
+            clearUiEphemeral: false,
+          });
           set({
             booting: false,
             bootProgress: 100,
@@ -126,8 +137,13 @@ export function createConnectionActions(
         }
 
         // Conversations load lazily when a project view mounts (not all projects).
-        resumedInterruptedSessions.clear();
-        resumeInFlightSessions.clear();
+        // Inflight already cleared at boundary; clear again so ready commit is fresh.
+        resetWorkspaceModuleState({
+          // Bridge not started yet — no-op stop; re-arm below.
+          stopEventBridge: true,
+          reactions: "skip",
+          clearUiEphemeral: false,
+        });
         set({
           booting: false,
           bootPhase: "Ready",
@@ -166,6 +182,11 @@ export function createConnectionActions(
         void quietHydrateAllConversationLists(get);
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
+        resetWorkspaceModuleState({
+          stopEventBridge: true,
+          reactions: "durable-empty",
+          clearUiEphemeral: false,
+        });
         set({
           booting: false,
           bootPhase: "Failed",
