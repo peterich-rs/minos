@@ -1,10 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useLayoutEffect } from "react";
 import { AppShell } from "@/app/AppShell";
 import { BootScreen } from "@/app/BootScreen";
 import { ErrorBoundary } from "@/shared/ui/ErrorBoundary";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { useUiStore } from "@/store/ui-store";
 import { sortByAttentionThenTime } from "@/shared/lib/list-sort";
+import { emitInitialRenderReady } from "@/shared/lib/initial-render-ready";
 
 export default function App() {
   const bootstrap = useWorkspaceStore((s) => s.bootstrap);
@@ -14,6 +15,12 @@ export default function App() {
   const projects = useWorkspaceStore((s) => s.projects);
   const projectId = useUiStore((s) => s.projectId);
   const selectProject = useUiStore((s) => s.selectProject);
+
+  // First layout commit → host may show the window (BootScreen is fine).
+  // Do not wait for bootstrap; that would delay reveal unnecessarily.
+  useLayoutEffect(() => {
+    emitInitialRenderReady();
+  }, []);
 
   useEffect(() => {
     void bootstrap();

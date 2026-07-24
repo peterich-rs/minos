@@ -6,6 +6,8 @@ Host-side desktop shell that will replace the TUI as the primary local control s
 
 **Status:** UI + daemon local-RPC bridge (same discovery as TUI). Falls back to mock when daemon is offline or when running plain Vite in a browser.
 
+**Host plugins:** single-instance (focus existing window), window-state (geometry; VISIBLE excluded), initial-window-reveal (`visible: false` until React first layout emits `initial-render-ready`).
+
 ## Layout
 
 ```
@@ -71,6 +73,7 @@ pnpm check:all
 | `pnpm test` | Unit tests (`src/shared/lib/*.test.ts`, `src/features/chat/lib/*.test.ts`) |
 | `pnpm check:biome` | Biome **lint errors only** (format opt-in; warnings may remain) |
 | `pnpm check:file-sizes` | Soft file-size gate on `src/**/*.{ts,tsx}` |
+| `pnpm check:px-text` | No new `text-[Npx]` / `font-size: Npx` (existing debt frozen in allowlist) |
 | `pnpm check:all` | All of the above in order |
 
 **Biome** (`biome.json`): double quotes + semicolons to match existing style. The gate fails only on lint **errors** — format is **not** required on every PR (`pnpm format` when you want Biome’s layout); remaining **warnings** are non-blocking. Excludes `dist/`, `src-tauri/`, `node_modules/`.
