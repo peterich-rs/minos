@@ -321,7 +321,8 @@ class _ChannelSidebar extends ConsumerWidget {
                                 ),
                               );
                             },
-                            onDismissed: (_) => onDeleteThread(thread.sessionId),
+                            onDismissed: (_) =>
+                                onDeleteThread(thread.sessionId),
                             background: Container(
                               margin: const .symmetric(vertical: 1),
                               padding: const .only(right: 16),

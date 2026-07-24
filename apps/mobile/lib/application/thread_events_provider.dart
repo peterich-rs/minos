@@ -20,7 +20,10 @@ class ThreadEvents extends _$ThreadEvents {
   @override
   Future<List<UiEventMessage>> build(String sessionId) async {
     final repository = ref.read(threadRepositoryProvider);
-    logFlutterDebug('thread_events', 'load session events sessionId=$sessionId');
+    logFlutterDebug(
+      'thread_events',
+      'load session events sessionId=$sessionId',
+    );
 
     final resp = await _readInitialPage(repository, sessionId);
     logFlutterDebug(

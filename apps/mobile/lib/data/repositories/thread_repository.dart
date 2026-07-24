@@ -24,7 +24,9 @@ class ThreadRepository {
     required String sessionId,
     int limit = 500,
   }) {
-    return _core.readThread(ReadSessionParams(sessionId: sessionId, limit: limit));
+    return _core.readThread(
+      ReadSessionParams(sessionId: sessionId, limit: limit),
+    );
   }
 
   Future<void> interruptThread({required String sessionId}) {
