@@ -25,8 +25,15 @@ fn reveal_initial_window<R: Runtime>(window: &tauri::Window<R>) {
 
 /// macOS (and others) may apply window-state restore asynchronously. Wait for
 /// consecutive identical outer bounds so we don't flash mid-resize.
+///
+/// `outer_position`/`outer_size` are sync OS queries (fine inside async sleep
+/// loops). Early frames may report `(0,0)` before restore finishes; the
+/// consecutive-stable check filters that. Secondary-display / maximized restore
+/// can exceed ~2s, so we poll longer (~4s) and still reveal after the render
+/// event or its 5s timeout even if geometry never fully settles.
 async fn wait_for_stable_initial_window_geometry<R: Runtime>(window: &tauri::Window<R>) {
-    const MAX_POLLS: usize = 120;
+    // ~4s at 16ms; secondary-display restore can be slower than primary.
+    const MAX_POLLS: usize = 250;
     const REQUIRED_STABLE_POLLS: usize = 4;
 
     let mut previous_bounds = None;

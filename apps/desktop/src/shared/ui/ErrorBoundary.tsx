@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { emitInitialRenderReady } from "@/shared/lib/initial-render-ready";
 
 type Props = {
   children: ReactNode;
@@ -15,6 +16,9 @@ type State = {
  * Surfaces render crashes instead of a blank cream body background.
  * React has no root error boundary by default — one bad Sessions row
  * previously unmounted the whole app.
+ *
+ * Also re-emits `initial-render-ready` so a boot-time render crash still
+ * reveals the Tauri window (error UI is a valid first surface).
  */
 export class ErrorBoundary extends Component<Props, State> {
   state: State = { error: null, info: null };
@@ -29,6 +33,9 @@ export class ErrorBoundary extends Component<Props, State> {
       error,
       info: info.componentStack ?? null,
     });
+    // Insurance for host reveal: App's useLayoutEffect may never run if
+    // the tree throws before commit.
+    emitInitialRenderReady();
     console.error(
       `[ErrorBoundary${this.props.label ? `:${this.props.label}` : ""}]`,
       error,

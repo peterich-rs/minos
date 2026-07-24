@@ -248,12 +248,12 @@ apps/desktop/
 | `tauri-plugin-window-state` | 持久化位置/尺寸/最大化；**排除 `VISIBLE` flag**，可见性由 reveal 插件控制 |
 | `window_reveal`（inline plugin） | 窗口 `visible: false` 启动；geometry 连续 4 次一致 + 前端 `initial-render-ready`（或 5s 超时）后再 `show`/`set_focus`，消除 React 首帧前白闪 |
 | `tracing` + `tracing-subscriber` | Host 入口 `init_tracing`（`RUST_LOG` / 默认 info filter）；reveal / single-instance / shutdown 关键路径打点 |
-| `shutdown` + `ctrlc`（Unix） | `ExitRequested` / `Exit` / SIGINT·SIGTERM 幂等 `shutdown_managed`，避免 orphan provider children |
+| `shutdown` + `ctrlc`（Unix） | `ExitRequested` / `Exit` / SIGINT·SIGTERM 幂等 `shutdown_managed`（**10s 超时**，避免 Cmd+Q 卡死）；信号在专用线程 `block_on` 后 `exit(130)`，不依赖 RunEvent |
 | `commands/*` | 按 domain 拆分：`app` / `connection` / `projects` / `conversations` / `agents` / `sessions` / `approvals`；`lib.rs` 只负责 builder + lifecycle |
 
-前端：`App` 的 `useLayoutEffect` 调用 `emitInitialRenderReady()`（`isTauriRuntime` 门控）。不与 bootstrap 完成绑定——BootScreen 作为首帧表面即可展示。
+前端：`App` 的 `useLayoutEffect` + 根/`app` `ErrorBoundary.componentDidCatch` 幂等 `emitInitialRenderReady()`（`isTauriRuntime` 门控）。不与 bootstrap 完成绑定——BootScreen 或 crash UI 都可作为首帧表面。
 
-关闭：`AtomicBool` 幂等 `shutdown_managed`，覆盖 `ExitRequested`、`Exit`、Unix 信号。
+关闭：`AtomicBool` 幂等 `shutdown_managed`（10s `timeout`），覆盖 `ExitRequested`、`Exit`、Unix 信号。Host 进程内 tracing 以 desktop `init_tracing` / `RUST_LOG` 为 SSOT；托管 daemon **不**走 `minos_daemon::logging::init`（mars-xlog 仅独立 daemon 二进制）。
 
 ### 启动策略（对齐 TUI）
 

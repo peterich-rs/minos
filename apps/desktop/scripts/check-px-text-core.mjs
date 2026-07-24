@@ -16,7 +16,8 @@ import path from "node:path";
  */
 
 const TEXT_ARBITRARY_RE = /\btext-\[\d+(?:\.\d+)?(?:px|rem|em)\]/g;
-const FONT_SIZE_PX_RE = /(?<!-)\bfont-size:\s*\d+(?:\.\d+)?px/g;
+// `\bfont-size:` is specific enough; no lookbehind needed.
+const FONT_SIZE_PX_RE = /\bfont-size:\s*\d+(?:\.\d+)?px/g;
 
 async function walkFiles(directory) {
   const entries = await fs.readdir(directory, { withFileTypes: true });

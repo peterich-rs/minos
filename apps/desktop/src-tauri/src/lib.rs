@@ -17,6 +17,10 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 fn init_tracing() {
+    // Host is the tracing SSOT for this process. Managed in-process daemon does
+    // **not** call `minos_daemon::logging::init` (that path is only for the
+    // standalone `minos-daemon` binary / mars-xlog). RUST_LOG, when set, wins
+    // for desktop + embedded daemon crates together — intentional.
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new(
             "minos_desktop_lib=info,minos_daemon=info,minos_agent_runtime=info,minos_chat_store=info",
