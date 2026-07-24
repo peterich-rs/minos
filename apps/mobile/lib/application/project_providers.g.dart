@@ -65,41 +65,41 @@ abstract class _$ProjectList extends $AsyncNotifier<List<ProjectSummary>> {
 
 /// Loads sessions for a specific project.
 
-@ProviderFor(ProjectThreads)
-final projectThreadsProvider = ProjectThreadsFamily._();
+@ProviderFor(ProjectSessions)
+final projectSessionsProvider = ProjectSessionsFamily._();
 
 /// Loads sessions for a specific project.
-final class ProjectThreadsProvider
-    extends $AsyncNotifierProvider<ProjectThreads, List<SessionSummary>> {
+final class ProjectSessionsProvider
+    extends $AsyncNotifierProvider<ProjectSessions, List<SessionSummary>> {
   /// Loads sessions for a specific project.
-  ProjectThreadsProvider._({
-    required ProjectThreadsFamily super.from,
+  ProjectSessionsProvider._({
+    required ProjectSessionsFamily super.from,
     required String super.argument,
   }) : super(
          retry: null,
-         name: r'projectThreadsProvider',
+         name: r'projectSessionsProvider',
          isAutoDispose: true,
          dependencies: null,
          $allTransitiveDependencies: null,
        );
 
   @override
-  String debugGetCreateSourceHash() => _$projectThreadsHash();
+  String debugGetCreateSourceHash() => _$projectSessionsHash();
 
   @override
   String toString() {
-    return r'projectThreadsProvider'
+    return r'projectSessionsProvider'
         ''
         '($argument)';
   }
 
   @$internal
   @override
-  ProjectThreads create() => ProjectThreads();
+  ProjectSessions create() => ProjectSessions();
 
   @override
   bool operator ==(Object other) {
-    return other is ProjectThreadsProvider && other.argument == argument;
+    return other is ProjectSessionsProvider && other.argument == argument;
   }
 
   @override
@@ -108,23 +108,23 @@ final class ProjectThreadsProvider
   }
 }
 
-String _$projectThreadsHash() => r'db836391b18d388c019b229ba6130d5caf82fa55';
+String _$projectSessionsHash() => r'76903f9cca7df6089089b63852bd6cbcfe4ea370';
 
 /// Loads sessions for a specific project.
 
-final class ProjectThreadsFamily extends $Family
+final class ProjectSessionsFamily extends $Family
     with
         $ClassFamilyOverride<
-          ProjectThreads,
+          ProjectSessions,
           AsyncValue<List<SessionSummary>>,
           List<SessionSummary>,
           FutureOr<List<SessionSummary>>,
           String
         > {
-  ProjectThreadsFamily._()
+  ProjectSessionsFamily._()
     : super(
         retry: null,
-        name: r'projectThreadsProvider',
+        name: r'projectSessionsProvider',
         dependencies: null,
         $allTransitiveDependencies: null,
         isAutoDispose: true,
@@ -132,16 +132,16 @@ final class ProjectThreadsFamily extends $Family
 
   /// Loads sessions for a specific project.
 
-  ProjectThreadsProvider call(String projectId) =>
-      ProjectThreadsProvider._(argument: projectId, from: this);
+  ProjectSessionsProvider call(String projectId) =>
+      ProjectSessionsProvider._(argument: projectId, from: this);
 
   @override
-  String toString() => r'projectThreadsProvider';
+  String toString() => r'projectSessionsProvider';
 }
 
 /// Loads sessions for a specific project.
 
-abstract class _$ProjectThreads extends $AsyncNotifier<List<SessionSummary>> {
+abstract class _$ProjectSessions extends $AsyncNotifier<List<SessionSummary>> {
   late final _$args = ref.$arg as String;
   String get projectId => _$args;
 

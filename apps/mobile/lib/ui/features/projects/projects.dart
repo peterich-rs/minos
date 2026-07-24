@@ -5,7 +5,7 @@
 ///
 /// View Models:
 ///   - [ProjectList] (application/project_providers.dart)
-///   - [ProjectThreads] (application/project_providers.dart)
+///   - [ProjectSessions] (application/project_providers.dart)
 ///   - [SelectedProject] (application/project_providers.dart)
 ///
 /// Views:

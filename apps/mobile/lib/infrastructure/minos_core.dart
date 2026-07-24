@@ -312,7 +312,7 @@ class MinosCore implements MinosCoreProtocol {
 
   @override
   Future<ListSessionsResponse> listThreads(ListSessionsParams params) =>
-      _client.listThreads(req: params);
+      _client.listSessions(req: params);
 
   @override
   Future<List<AgentSessionSummaryDto>> listAgentSessions({
@@ -326,7 +326,7 @@ class MinosCore implements MinosCoreProtocol {
 
   @override
   Future<ReadSessionResponse> readThread(ReadSessionParams params) =>
-      _client.readThread(req: params);
+      _client.readSession(req: params);
 
   // ---- Project forwarders ----
 
@@ -363,7 +363,7 @@ class MinosCore implements MinosCoreProtocol {
     required String projectId,
     int limit = 50,
     int? beforeTsMs,
-  }) => _client.listProjectThreads(
+  }) => _client.listProjectSessions(
     req: ListProjectSessionsParams(
       projectId: projectId,
       limit: limit,
@@ -502,15 +502,15 @@ class MinosCore implements MinosCoreProtocol {
 
   @override
   Future<void> interruptThread({required String sessionId}) =>
-      _client.interruptThread(sessionId: sessionId);
+      _client.interruptSession(sessionId: sessionId);
 
   @override
   Future<void> closeThread({required String sessionId}) =>
-      _client.closeThread(sessionId: sessionId);
+      _client.closeSession(sessionId: sessionId);
 
   @override
   Future<void> deleteThread({required String sessionId}) =>
-      _client.closeThread(sessionId: sessionId);
+      _client.closeSession(sessionId: sessionId);
 
   // ---- Lifecycle forwarders ----
 
