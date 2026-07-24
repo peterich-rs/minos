@@ -93,12 +93,12 @@ export function IncrementalText({
       {renderBody ? (
         renderBody(visible)
       ) : (
-        <pre className="whitespace-pre-wrap font-mono text-[12.5px] leading-relaxed text-ink-secondary">
+        <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink-secondary">
           {visible}
         </pre>
       )}
       {hasMore ? (
-        <div className="py-2 text-center text-[11px] text-ink-muted">
+        <div className="py-2 text-center text-2xs text-ink-muted">
           Scroll for more…
         </div>
       ) : null}

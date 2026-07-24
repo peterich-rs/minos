@@ -71,13 +71,13 @@ export function Timeline({ conversationId }: { conversationId: string }) {
 
   if (!conversation) {
     return (
-      <div className="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-3 bg-surface px-6 text-center text-[13px] text-ink-muted">
+      <div className="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-3 bg-surface px-6 text-center text-sm text-ink-muted">
         <p>Conversation not found in the current project list.</p>
         {source === "daemon" ? (
           <button
             type="button"
             onClick={() => void loadTimeline(conversationId)}
-            className="rounded-lg bg-ink px-3 py-1.5 text-[12px] font-semibold text-white"
+            className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-white"
           >
             Retry load
           </button>

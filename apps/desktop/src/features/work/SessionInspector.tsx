@@ -83,7 +83,7 @@ export function SessionInspector({
       )}
     >
       <header className="flex shrink-0 items-center justify-between border-b border-ink/5 px-4 py-3">
-        <div className="min-w-0 truncate text-[13px] font-semibold text-ink">
+        <div className="min-w-0 truncate text-sm font-semibold text-ink">
           {selected ? "Agent session" : "Conversation"}
         </div>
         <button
@@ -95,7 +95,7 @@ export function SessionInspector({
         </button>
       </header>
 
-      <div className="scrollbar-thin min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-4 text-[12.5px]">
+      <div className="scrollbar-thin min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-4 text-xs">
         {selected ? (
           <SessionDetail
             session={selected}
@@ -115,7 +115,7 @@ export function SessionInspector({
 
             <section>
               <Label>Workspace</Label>
-              <div className="mt-1 flex min-w-0 items-start gap-2 rounded-lg bg-surface-muted px-2.5 py-2 font-mono text-[11px] text-ink-secondary">
+              <div className="mt-1 flex min-w-0 items-start gap-2 rounded-lg bg-surface-muted px-2.5 py-2 font-mono text-2xs text-ink-secondary">
                 <FolderOpen className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 <span
                   className="min-w-0 break-all"
@@ -129,7 +129,7 @@ export function SessionInspector({
             <section>
               <div className="mb-2 flex items-center justify-between">
                 <Label>Agent sessions</Label>
-                <span className="text-[11px] text-ink-muted">
+                <span className="text-2xs text-ink-muted">
                   {sessions.length}
                 </span>
               </div>
@@ -157,7 +157,7 @@ export function SessionInspector({
 
             <section>
               <Label>Quick start</Label>
-              <p className="mt-1 text-[11px] text-ink-muted">
+              <p className="mt-1 text-2xs text-ink-muted">
                 Type in the composer, e.g.{" "}
                 <span className="font-mono">@grok hello</span>
               </p>
@@ -166,7 +166,7 @@ export function SessionInspector({
                   <span
                     key={a}
                     className={cn(
-                      "rounded-md px-2 py-1 text-[11px] font-medium",
+                      "rounded-md px-2 py-1 text-2xs font-medium",
                       agentMeta[a].color,
                     )}
                   >
@@ -215,14 +215,14 @@ function SessionTree({
         <Avatar name={label} tone={tone} size="sm" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <span className="truncate text-[12px] font-semibold text-ink">
+            <span className="truncate text-xs font-semibold text-ink">
               {label}
             </span>
-            <span className="font-mono text-[10px] text-ink-muted">
+            <span className="font-mono text-3xs text-ink-muted">
               #{session.shortId}
             </span>
           </div>
-          <div className="truncate text-[11px] text-ink-muted">
+          <div className="truncate text-2xs text-ink-muted">
             {session.summary}
           </div>
         </div>
@@ -258,16 +258,16 @@ function SessionDetail({
       <button
         type="button"
         onClick={onBack}
-        className="text-[12px] font-medium text-ink-muted hover:text-ink"
+        className="text-xs font-medium text-ink-muted hover:text-ink"
       >
         ← Back to conversation
       </button>
       <div className="flex items-center gap-3">
         <Avatar name={label} tone={tone} size="lg" />
         <div>
-          <div className="text-[14px] font-semibold text-ink">
+          <div className="text-sm font-semibold text-ink">
             {label}{" "}
-            <span className="font-mono text-[12px] font-normal text-ink-muted">
+            <span className="font-mono text-xs font-normal text-ink-muted">
               #{session.shortId}
             </span>
           </div>
@@ -285,13 +285,13 @@ function SessionDetail({
       {session.lastTool ? (
         <section>
           <Label>Last tool</Label>
-          <div className="mt-1 rounded-lg bg-surface-muted px-2.5 py-2 font-mono text-[11px] text-ink-secondary">
+          <div className="mt-1 rounded-lg bg-surface-muted px-2.5 py-2 font-mono text-2xs text-ink-secondary">
             {session.lastTool}
           </div>
         </section>
       ) : null}
       {session.parentId ? (
-        <p className="text-[11px] text-ink-muted">
+        <p className="text-2xs text-ink-muted">
           Subagent — open parent session for the main run.
         </p>
       ) : null}
@@ -300,7 +300,7 @@ function SessionDetail({
         onClick={() =>
           openSessionTranscript(session.id, session.conversationId)
         }
-        className="flex w-full items-center justify-between rounded-xl border border-ink/10 bg-white px-3 py-2.5 text-left text-[12px] font-medium text-ink hover:bg-surface-muted"
+        className="flex w-full items-center justify-between rounded-xl border border-ink/10 bg-white px-3 py-2.5 text-left text-xs font-medium text-ink hover:bg-surface-muted"
       >
         Open full transcript
         <ChevronRight className="h-4 w-4 text-ink-muted" />
@@ -311,7 +311,7 @@ function SessionDetail({
 
 function Label({ children }: { children: ReactNode }) {
   return (
-    <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+    <div className="text-2xs font-semibold uppercase tracking-[0.06em] text-ink-muted">
       {children}
     </div>
   );

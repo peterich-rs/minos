@@ -13,6 +13,7 @@
 | 产品 spec | [2026-07-18-desktop-product-experience.md](superpowers/specs/2026-07-18-desktop-product-experience.md) |
 | 状态拆分 spec | [2026-07-21-desktop-state-by-consumption.md](superpowers/specs/2026-07-21-desktop-state-by-consumption.md)（**P0–P4 done**；P5 cleanup reviewed；编码入口 §18） |
 | 状态 review | [2026-07-22-desktop-state-p0-p4-review.md](superpowers/reviews/2026-07-22-desktop-state-p0-p4-review.md) |
+| Buzz 借鉴清单 | [desktop-buzz-reference.md](./desktop-buzz-reference.md)（UI / 架构 / 组件 / 逻辑可复刻项与 P0–P2 路线图） |
 
 ## 标识命名（全栈约定）
 
@@ -93,15 +94,15 @@ Feature-slice 布局（Wave 1 Phase 1–2）：按 **app 壳 / features / shared
 | 命令 | 作用 |
 |------|------|
 | `pnpm check` | `tsc --noEmit` |
-| `pnpm test` | `src/shared/lib/*.test.ts` + `src/features/chat/lib/*.test.ts` + `src/features/agents/lib/*.test.ts` |
+| `pnpm test` | `src/shared/lib/*.test.ts` + `src/shared/api/*.test.ts` + `src/features/{chat,agents,work}/lib/*.test.ts` |
 | `pnpm check:biome` | Biome **lint errors only**（format 不进 gate；warnings 可残留） |
-| `pnpm check:file-sizes` | `src/**/*.{ts,tsx}` 行数：warn `>400` / hard `>800` |
-| `pnpm check:px-text` | 禁止新增 `text-[Npx]` / `font-size: Npx`（现有债务 frozen 在 allowlist，只降不升） |
+| `pnpm check:file-sizes` | `src/**/*.{ts,tsx}` 行数：warn `>400` / hard `>800`（ALLOWLIST 当前为空） |
+| `pnpm check:px-text` | 禁止 `text-[Npx]` / `font-size: Npx`；**allowlist 已清空**，新增即失败 |
 | `pnpm check:all` | 以上串联（= `just check-desktop`） |
 
 - Biome 作用域：`src/**`、`scripts/**`、根配置；排除 `dist/`、`src-tauri/`、`node_modules/`。
 - Formatter **opt-in**：`pnpm format`；gate 只拦 lint **errors**，不强制全树 reformat，不因 warnings 失败。
-- 超大文件：`features/work/SessionsView.tsx` 在 `scripts/check-file-sizes.mjs` ALLOWLIST（cap **~1850**，freeze 当前体积；禁止无计划抬 cap）；后续 wave 再拆。
+- 文件体积：`SessionsView` 已拆为 thin shell（~265 行）+ `features/work/ui/*` / `lib/*`；file-size ALLOWLIST **无** SessionsView 条目。`TranscriptPane`（~561）仅 soft warn（`>400`），未抬 hard cap。
 - 包管理：`pnpm` + `pnpm-lock.yaml` 为唯一 lockfile（勿再生成 `package-lock.json`）。
 
 ### Design tokens + markdown（Wave 1 Phase 4）
@@ -129,9 +130,9 @@ Markdown 呈现（`shared/ui/MarkdownText.tsx` + `index.css`）：
 ```
 apps/desktop/
   scripts/
-    check-file-sizes.mjs         # soft/hard line-count gate
-    check-px-text.mjs            # rem zoom-safe text sizes (allowlist freeze)
-    check-px-text.allowlist.txt  # frozen path:literal debt (shrink only)
+    check-file-sizes.mjs         # soft/hard line-count gate (empty ALLOWLIST)
+    check-px-text.mjs            # rem zoom-safe text sizes
+    check-px-text.allowlist.txt  # empty; any text-[Npx] fails
     dev-for-tauri.mjs
   biome.json                     # lint + optional format
   src/
@@ -139,11 +140,19 @@ apps/desktop/
     app/                         # App shell composition
       AppShell.tsx · Sidebar.tsx · BootScreen.tsx
       CommandPalette.tsx · ConnectionToasts.tsx
+      useWebviewZoomShortcuts.ts # Cmd±/0 → root rem scale; webview zoom pinned to 1
     features/
       work/                      # Project → Conversations / Sessions / Board
         WorkView.tsx · ProjectHeader.tsx · ConversationList.tsx
         SessionInspector.tsx · SessionsView.tsx · SessionListPane.tsx
         ProjectBoard.tsx · CreateProjectEmpty.tsx
+        # SessionsView is a thin shell (~265); transcript/modals live under ui/
+        ui/
+          TranscriptPane.tsx · TranscriptItemView.tsx · ApprovalModal.tsx
+          SessionSummaryPanel.tsx · FileChangeRow.tsx
+        lib/
+          session-view-resolve.ts  # project-scoped deep-link session resolve
+          user-action.ts           # approval/question decision routing
         # imports Timeline from features/chat (no local copy)
       attention/                 # AttentionView.tsx
       agents/                    # AgentsView.tsx · AGENTS.md (capability SSOT rule)
@@ -166,6 +175,9 @@ apps/desktop/
         lib/reactions.ts         # ReactionGroup types · pure toggle + daemon map/hydrate
         lib/reaction-seed.ts     # mock-only fixtures (browser Vite; gated when daemon)
     shared/
+      api/
+        invoke.ts                # invokeDaemon — single Tauri invoke entry + DaemonInvokeError
+        daemon-invoke-error.ts · hooks.ts · queryClient.ts · queryKeys.ts
       ui/                        # Avatar · StatusPill · Tag · ErrorBoundary
                                  # MarkdownText · DiffView · ReadView · IncrementalText
                                  # button · dialog · dropdown-menu · popover · toaster · tooltip
@@ -211,9 +223,10 @@ apps/desktop/
 
 | 能力 | 实现 |
 |------|------|
-| Approval / Question modal | Radix Dialog（Esc、focus trap、`aria-modal`） |
+| Approval / Question modal | Radix Dialog（Esc、focus trap、`aria-modal`）；决策路由 `features/work/lib/user-action.ts` |
 | Work 三栏可拖拽 | `react-resizable-panels`；列表折叠时退回 rail + flex |
 | 全局跳转 | ⌘/Ctrl+K → `CommandPalette` |
+| 文本缩放 | `useWebviewZoomShortcuts` 挂在 **`App`**（boot + shell 始终生效）：⌘/Ctrl ±/0 调 `documentElement` rem（`minos:text-scale`）；Tauri webview zoom 固定为 1 |
 | Daemon 连接反馈 | `ConnectionToasts` 监听 `connection.connected` 边沿；**disconnect 防抖 2s**（`connection-toast-policy`），避免 daemon 短闪断 toast 抖动 |
 | Transcript 滚动 | stick-to-bottom（rAF 合并 pin + wheel-up suppress re-follow/pin）+ tail/load-older；identity 锚点；top sentinel；`overscroll-y-none` |
 | Timeline 分页 | 打开只拉 tail（`MESSAGE_PAGE_SIZE`）；`loadOlderMessages(beforeSeq)`；**hard + quiet** 均 `mergeMessagesQuietTail`（保留 older + 并发更新）；identity restore / following 不 restore |
@@ -251,7 +264,9 @@ apps/desktop/
 | `shutdown` + `ctrlc`（Unix） | `ExitRequested` / `Exit` / SIGINT·SIGTERM 幂等 `shutdown_managed`（**10s 超时**，避免 Cmd+Q 卡死）；信号在专用线程 `block_on` 后 `exit(130)`，不依赖 RunEvent |
 | `commands/*` | 按 domain 拆分：`app` / `connection` / `projects` / `conversations` / `agents` / `sessions` / `approvals`；`lib.rs` 只负责 builder + lifecycle |
 
-前端：`App` 的 `useLayoutEffect` + 根/`app` `ErrorBoundary.componentDidCatch` 幂等 `emitInitialRenderReady()`（`isTauriRuntime` 门控）。不与 bootstrap 完成绑定——BootScreen 或 crash UI 都可作为首帧表面。
+前端：`App` 的 `useLayoutEffect` + 根/`app` `ErrorBoundary.componentDidCatch` 幂等 `emitInitialRenderReady()`（`isTauriRuntime` 门控）。不与 bootstrap 完成绑定——BootScreen 或 crash UI 都可作为首帧表面。文本缩放 hook 同样挂在 `App`（见上表），避免 boot 阶段未挂载导致 `minos:text-scale` 晚应用。
+
+Daemon RPC 前端入口：`shared/api/invoke.ts` 的 `invokeDaemon(command, args?)` 统一包一层 `DaemonInvokeError`（附 command 名）；非 Tauri runtime 直接抛错，由 store / RQ hooks 消化。
 
 关闭：`AtomicBool` 幂等 `shutdown_managed`（10s `timeout`），覆盖 `ExitRequested`、`Exit`、Unix 信号。Host 进程内 tracing 以 desktop `init_tracing` / `RUST_LOG` 为 SSOT；托管 daemon **不**走 `minos_daemon::logging::init`（mars-xlog 仅独立 daemon 二进制）。
 
@@ -286,7 +301,7 @@ Session transcript 组装（`TranscriptAssembler`）消费 daemon 投影后的 `
 | `opencode/permission.updated` | `approval`（method `opencode/permission`） | `minos_local_respond_opencode_permission` |
 | `opencode/question.asked` | `question`（method `opencode/question`） | `minos_local_respond_opencode_question` |
 
-UI：`SessionsView` 审批 modal / 选项 chips。Claude 未接。
+UI：`SessionsView` thin shell + `ui/ApprovalModal` / transcript chips；决策经 `lib/user-action.ts`。Claude 未接。
 
 | Command | 作用 |
 |---------|------|
@@ -355,7 +370,7 @@ minos_local_read_session_raw_history / subscribe_ingest
   → LocalIngestFrame { ui_events: Vec<UiEventMessage> }
   → TranscriptAssembler (src-tauri/daemon.rs)   // 对齐 ChatState 语义
   → TranscriptItemDto { kind, text, title, detail, … }
-  → SessionsView TranscriptItemView (React)
+  → features/work/ui/TranscriptItemView (React; SessionsView shell)
 ```
 
 | UiEventMessage | TranscriptItem.kind | UI |

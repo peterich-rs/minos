@@ -89,12 +89,12 @@ export function TimelineHeader({
                 cancelTitle();
               }
             }}
-            className="w-full min-w-0 rounded-md border border-ink/10 bg-surface-muted px-2 py-0.5 text-[15px] font-semibold tracking-tight text-ink outline-none ring-accent/30 focus:ring-2"
+            className="w-full min-w-0 rounded-md border border-ink/10 bg-surface-muted px-2 py-0.5 text-sm font-semibold tracking-tight text-ink outline-none ring-accent/30 focus:ring-2"
             aria-label="Conversation title"
           />
         ) : (
           <h2
-            className="cursor-text truncate rounded-md text-[15px] font-semibold tracking-tight text-ink hover:bg-surface-muted/80"
+            className="cursor-text truncate rounded-md text-sm font-semibold tracking-tight text-ink hover:bg-surface-muted/80"
             title={`${conversation.title} — double-click to rename`}
             onDoubleClick={beginEditTitle}
           >
@@ -117,7 +117,7 @@ export function TimelineHeader({
             </MetaChip>
           ) : null}
           {sessionCount > 0 ? (
-            <span className="text-[11px] text-ink-muted">
+            <span className="text-2xs text-ink-muted">
               {sessionCount} agent session
               {sessionCount === 1 ? "" : "s"}
             </span>

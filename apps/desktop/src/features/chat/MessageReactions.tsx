@@ -56,7 +56,7 @@ function ReactionPill({
           aria-label={`${group.emoji} ${group.count}. ${label}. Toggle reaction`}
           title={label}
           className={cn(
-            "inline-flex h-7 items-center gap-1 rounded-full border px-2 text-[12px] transition-colors",
+            "inline-flex h-7 items-center gap-1 rounded-full border px-2 text-xs transition-colors",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
             group.reactedByMe
               ? "border-accent/40 bg-accent-soft text-ink"
@@ -66,7 +66,7 @@ function ReactionPill({
           <span className="leading-none" aria-hidden>
             {group.emoji}
           </span>
-          <span className="min-w-[0.75rem] text-[11px] font-medium tabular-nums">
+          <span className="min-w-[0.75rem] text-2xs font-medium tabular-nums">
             {group.count}
           </span>
         </button>

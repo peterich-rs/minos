@@ -29,35 +29,35 @@ export function AttentionView() {
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-surface">
       <header className="border-b border-ink/5 px-6 py-5">
-        <h1 className="text-[20px] font-semibold tracking-tight text-ink">
+        <h1 className="text-xl font-semibold tracking-tight text-ink">
           Attention
         </h1>
-        <p className="mt-1 text-[13px] text-ink-muted">
+        <p className="mt-1 text-sm text-ink-muted">
           Approvals, failures, and suspended agent sessions that need follow-up.
         </p>
       </header>
       <div className="scrollbar-thin flex-1 space-y-2 overflow-y-auto p-4">
         {phase === "loading" && items.length === 0 ? (
-          <p className="py-12 text-center text-[13px] text-ink-muted">
+          <p className="py-12 text-center text-sm text-ink-muted">
             Scanning sessions…
           </p>
         ) : null}
         {phase === "error" && items.length === 0 ? (
           <div className="flex flex-col items-center gap-3 py-12 text-center">
-            <p className="text-[13px] text-rose-600">
+            <p className="text-sm text-rose-600">
               {status.error ?? "Failed to load attention queue"}
             </p>
             <button
               type="button"
               onClick={() => void loadAttentionSessions()}
-              className="rounded-lg bg-ink px-3 py-1.5 text-[12px] font-semibold text-white"
+              className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-white"
             >
               Retry
             </button>
           </div>
         ) : null}
         {phase === "ready" && items.length === 0 ? (
-          <p className="py-12 text-center text-[13px] text-ink-muted">
+          <p className="py-12 text-center text-sm text-ink-muted">
             Nothing needs attention right now.
           </p>
         ) : null}
@@ -93,7 +93,7 @@ export function AttentionView() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[14px] font-semibold text-ink">
+                    <span className="text-sm font-semibold text-ink">
                       {isApproval
                         ? "Approval required"
                         : isFailed
@@ -102,17 +102,17 @@ export function AttentionView() {
                     </span>
                     <span
                       className={cn(
-                        "rounded-md px-1.5 py-0.5 text-[11px] font-medium",
+                        "rounded-md px-1.5 py-0.5 text-2xs font-medium",
                         meta?.color ?? "bg-stone-100 text-stone-700",
                       )}
                     >
                       {meta?.label ?? session.agent} #{session.shortId}
                     </span>
                   </div>
-                  <p className="mt-1 text-[13px] text-ink-secondary">
+                  <p className="mt-1 text-sm text-ink-secondary">
                     {session.summary}
                   </p>
-                  <p className="mt-1 text-[12px] text-ink-muted">
+                  <p className="mt-1 text-xs text-ink-muted">
                     {project?.name ?? "—"} / {conv?.title ?? session.conversationTitle ?? "—"}
                   </p>
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -123,7 +123,7 @@ export function AttentionView() {
                           selectProject(project.id);
                           selectConversation(conv.id);
                         }}
-                        className="rounded-lg border border-ink/10 bg-white px-3 py-1.5 text-[12px] font-medium text-ink hover:bg-surface-muted"
+                        className="rounded-lg border border-ink/10 bg-white px-3 py-1.5 text-xs font-medium text-ink hover:bg-surface-muted"
                       >
                         Open conversation
                       </button>
@@ -138,7 +138,7 @@ export function AttentionView() {
                           session.conversationId,
                         );
                       }}
-                      className="rounded-lg bg-ink px-3 py-1.5 text-[12px] font-semibold text-white hover:opacity-90"
+                      className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
                     >
                       {isApproval ? "Review / approve" : "Open transcript"}
                     </button>

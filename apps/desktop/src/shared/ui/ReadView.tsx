@@ -36,7 +36,7 @@ export function ReadView({
   return (
     <div
       className={cn(
-        "mt-1 max-h-72 overflow-auto rounded-lg border border-ink/5 bg-surface-muted/50 font-mono text-[11px] leading-[1.5]",
+        "mt-1 max-h-72 overflow-auto rounded-lg border border-ink/5 bg-surface-muted/50 font-mono text-2xs leading-[1.5]",
         className,
       )}
     >

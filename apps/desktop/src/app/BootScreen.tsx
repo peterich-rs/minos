@@ -15,10 +15,10 @@ export function BootScreen({ phase, progress }: Props) {
       <div className="mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-ink text-white shadow-md">
         <Sparkles className="h-7 w-7" strokeWidth={2} />
       </div>
-      <div className="text-[16px] font-semibold tracking-tight text-ink">
+      <div className="text-base font-semibold tracking-tight text-ink">
         Minos
       </div>
-      <p className="mt-1.5 text-[13px] text-ink-muted">{phase}</p>
+      <p className="mt-1.5 text-sm text-ink-muted">{phase}</p>
 
       <div className="mt-8 w-full max-w-xs">
         <div className="h-1.5 overflow-hidden rounded-full bg-surface-muted ring-1 ring-ink/5">
@@ -29,7 +29,7 @@ export function BootScreen({ phase, progress }: Props) {
             style={{ width: `${pct}%` }}
           />
         </div>
-        <div className="mt-2 text-center text-[11px] tabular-nums text-ink-muted">
+        <div className="mt-2 text-center text-2xs tabular-nums text-ink-muted">
           {Math.round(pct)}%
         </div>
       </div>

@@ -80,7 +80,7 @@ export function DiffView({
     return (
       <pre
         className={cn(
-          "mt-1 max-h-72 overflow-auto rounded-lg border border-ink/5 bg-surface-muted/50 px-3 py-2 font-mono text-[11px] leading-relaxed text-ink-secondary whitespace-pre-wrap",
+          "mt-1 max-h-72 overflow-auto rounded-lg border border-ink/5 bg-surface-muted/50 px-3 py-2 font-mono text-2xs leading-relaxed text-ink-secondary whitespace-pre-wrap",
           className,
         )}
       >
@@ -97,14 +97,14 @@ export function DiffView({
       )}
     >
       {stats && (stats.add > 0 || stats.del > 0) ? (
-        <div className="sticky top-0 z-[1] flex items-center gap-2 border-b border-ink/6 bg-[#f0ebe3]/95 px-2.5 py-1 text-[11px] tabular-nums backdrop-blur-sm">
+        <div className="sticky top-0 z-[1] flex items-center gap-2 border-b border-ink/6 bg-[#f0ebe3]/95 px-2.5 py-1 text-2xs tabular-nums backdrop-blur-sm">
           <span className="font-medium text-ink-muted">Diff</span>
           <span className="text-emerald-700">+{stats.add}</span>
           <span className="text-ink-muted/50">/</span>
           <span className="text-rose-600">-{stats.del}</span>
         </div>
       ) : null}
-      <table className="w-full border-collapse font-mono text-[11px] leading-[1.5]">
+      <table className="w-full border-collapse font-mono text-2xs leading-[1.5]">
         <tbody>
           {lines.map((line, i) => {
             const style = KIND_ROW[line.kind];

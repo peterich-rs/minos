@@ -107,8 +107,8 @@ export const CodeBlock = memo(function CodeBlock({
 
   if (tokenLines) {
     return (
-      <pre className="md-pre scrollbar-thin mb-2.5 overflow-x-auto font-mono text-[12px] last:mb-0">
-        <code className={cn("font-mono text-[12px] leading-relaxed", className)}>
+      <pre className="md-pre scrollbar-thin mb-2.5 overflow-x-auto font-mono text-xs last:mb-0">
+        <code className={cn("font-mono text-xs leading-relaxed", className)}>
           {tokensToNodes(tokenLines)}
         </code>
       </pre>
@@ -116,8 +116,8 @@ export const CodeBlock = memo(function CodeBlock({
   }
 
   return (
-    <pre className="md-pre scrollbar-thin mb-2.5 font-mono text-[12px] last:mb-0">
-      <code className={cn("font-mono text-[12px] leading-relaxed", className)}>
+    <pre className="md-pre scrollbar-thin mb-2.5 font-mono text-xs last:mb-0">
+      <code className={cn("font-mono text-xs leading-relaxed", className)}>
         {code}
       </code>
     </pre>

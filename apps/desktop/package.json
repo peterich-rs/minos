@@ -9,7 +9,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "check": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test src/shared/lib/*.test.ts src/features/chat/lib/*.test.ts src/features/agents/lib/*.test.ts",
+    "test": "node --experimental-strip-types --test src/shared/lib/*.test.ts src/shared/api/*.test.ts src/features/chat/lib/*.test.ts src/features/agents/lib/*.test.ts src/features/work/lib/*.test.ts",
     "lint": "biome lint .",
     "format": "biome format --write .",
     "check:biome": "biome lint .",

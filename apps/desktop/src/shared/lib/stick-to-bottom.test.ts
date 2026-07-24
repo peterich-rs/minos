@@ -195,7 +195,69 @@ describe("followContentKey", () => {
     assert.notEqual(followContentKey(a), followContentKey(b));
   });
 
+  it("changes when older items are prepended (length grows, last stays)", () => {
+    const tail = [
+      { id: "2", seq: 2, kind: "user", text: "mid" },
+      { id: "3", seq: 3, kind: "assistant", text: "latest" },
+    ];
+    const prepended = [
+      { id: "1", seq: 1, kind: "user", text: "old" },
+      ...tail,
+    ];
+    // Key must change so layout effects can run, but follow state is independent
+    // (hook only pins when followingRef is true — pure content key never forces stick).
+    assert.notEqual(followContentKey(tail), followContentKey(prepended));
+    assert.equal(followContentKey(tail).split(":")[1], "3");
+    assert.equal(followContentKey(prepended).split(":")[1], "3");
+  });
+
   it("empty list is a fixed key", () => {
     assert.equal(followContentKey([]), "0");
+  });
+});
+
+/**
+ * Pure follow-state contract for append/prepend while reading history.
+ * Programmatic pin lives in the hook and is gated on followingRef; these
+ * helpers only decide whether a scroll sample re-arms follow.
+ */
+describe("follow state vs content growth (reading history)", () => {
+  it("stays unfollowed when reading history even as content key would grow", () => {
+    // User scrolled well above the bottom band (reading older messages).
+    const readingDistance = FOLLOW_THRESHOLD_PX + 200;
+    assert.equal(followAfterUserScroll(readingDistance, false), false);
+    // Append / stream growth does not change user-scroll distance math:
+    // without a new near-bottom sample, follow must remain off.
+    assert.equal(
+      followAfterUserScroll(readingDistance, false, {
+        unfollow: FOLLOW_THRESHOLD_PX,
+        refollow: FOLLOW_THRESHOLD_PX,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldShowJumpToLatest(false, readingDistance),
+      true,
+    );
+  });
+
+  it("stays following when already at bottom (append may re-pin)", () => {
+    assert.equal(followAfterUserScroll(0, true), true);
+    assert.equal(followAfterUserScroll(0, false), true);
+    assert.equal(shouldShowJumpToLatest(true, 0), false);
+  });
+
+  it("prepend while not at bottom does not re-arm follow", () => {
+    // Load-older restore keeps viewport on the same row; user is still not
+    // near bottom, so follow must stay false (no flip-on from prepend alone).
+    const stillReading = FOLLOW_THRESHOLD_PX + 120;
+    assert.equal(followAfterUserScroll(stillReading, false), false);
+    assert.equal(
+      followAfterUserScroll(stillReading, false, {
+        unfollow: FOLLOW_THRESHOLD_PX,
+        refollow: REFOLLOW_THRESHOLD_PX,
+      }),
+      false,
+    );
   });
 });

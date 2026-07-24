@@ -49,20 +49,20 @@ export class ErrorBoundary extends Component<Props, State> {
 
     return (
       <div className="flex h-full min-h-0 w-full flex-col gap-3 overflow-auto bg-rose-50 p-6 text-rose-950">
-        <div className="text-[15px] font-semibold">
+        <div className="text-base font-semibold">
           UI crashed{this.props.label ? ` (${this.props.label})` : ""}
         </div>
-        <pre className="whitespace-pre-wrap break-words rounded-lg border border-rose-200 bg-white p-3 font-mono text-[12px] leading-relaxed text-rose-900">
+        <pre className="whitespace-pre-wrap break-words rounded-lg border border-rose-200 bg-white p-3 font-mono text-xs leading-relaxed text-rose-900">
           {error.name}: {error.message}
         </pre>
         {info ? (
-          <pre className="whitespace-pre-wrap break-words rounded-lg border border-rose-100 bg-white/80 p-3 font-mono text-[11px] leading-relaxed text-rose-800/90">
+          <pre className="whitespace-pre-wrap break-words rounded-lg border border-rose-100 bg-white/80 p-3 font-mono text-2xs leading-relaxed text-rose-800/90">
             {info}
           </pre>
         ) : null}
         <button
           type="button"
-          className="self-start rounded-lg bg-ink px-3 py-1.5 text-[12px] font-semibold text-white"
+          className="self-start rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-white"
           onClick={() => this.setState({ error: null, info: null })}
         >
           Try render again

@@ -1,12 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeDaemon } from "@/shared/api/invoke";
 
-/** True when running inside the Tauri WebView (not plain Vite browser). */
-export function isTauriRuntime(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    ("__TAURI_INTERNALS__" in window || "__TAURI__" in window)
-  );
-}
+/** Re-export for existing callers; definition lives in `runtime.ts`. */
+export { isTauriRuntime } from "./runtime";
 
 /**
  * Raw Tauri bridge connection (implementation detail).
@@ -205,10 +200,7 @@ export const DAEMON_EVENT = {
 } as const;
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (!isTauriRuntime()) {
-    throw new Error("not running in Tauri");
-  }
-  return invoke<T>(cmd, args);
+  return invokeDaemon<T>(cmd, args);
 }
 
 export const daemonApi = {

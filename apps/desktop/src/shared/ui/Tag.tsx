@@ -62,7 +62,7 @@ export function PriorityTag({
   const meta = priorityStyles[priority];
   const className = cn(
     "inline-flex items-center gap-1 rounded-md font-medium ring-1 ring-inset",
-    size === "sm" ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-[11px]",
+    size === "sm" ? "px-1.5 py-0.5 text-3xs" : "px-2 py-0.5 text-2xs",
     meta.className,
     onClick && "cursor-pointer transition-opacity hover:opacity-80",
   );
@@ -96,7 +96,7 @@ export function PriorityPlaceholder({
 }) {
   const className = cn(
     "inline-flex items-center gap-1 rounded-md font-medium text-ink-muted ring-1 ring-inset ring-ink/10",
-    size === "sm" ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-[11px]",
+    size === "sm" ? "px-1.5 py-0.5 text-3xs" : "px-2 py-0.5 text-2xs",
     onClick && "cursor-pointer transition-colors hover:bg-surface-muted hover:text-ink",
   );
   if (onClick) {
@@ -128,7 +128,7 @@ export function ProgressTag({
   const meta = progressStyles[progress];
   const className = cn(
     "inline-flex items-center rounded-md font-medium ring-1 ring-inset",
-    size === "sm" ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-[11px]",
+    size === "sm" ? "px-1.5 py-0.5 text-3xs" : "px-2 py-0.5 text-2xs",
     meta.className,
     onClick && "cursor-pointer transition-opacity hover:opacity-80",
   );
@@ -156,7 +156,7 @@ export function MetaChip({
   return (
     <span
       className={cn(
-        "inline-flex max-w-full items-center gap-1 truncate rounded-md bg-surface-muted px-2 py-0.5 font-mono text-[11px] text-ink-secondary ring-1 ring-inset ring-ink/5",
+        "inline-flex max-w-full items-center gap-1 truncate rounded-md bg-surface-muted px-2 py-0.5 font-mono text-2xs text-ink-secondary ring-1 ring-inset ring-ink/5",
         className,
       )}
     >

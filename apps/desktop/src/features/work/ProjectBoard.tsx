@@ -41,13 +41,13 @@ export function ProjectBoard({ projectId }: { projectId: string }) {
                 )}
               >
                 <div
-                  className={cn("text-[13px] font-semibold", col.headerText)}
+                  className={cn("text-sm font-semibold", col.headerText)}
                 >
                   {col.label}
                 </div>
                 <span
                   className={cn(
-                    "rounded-md bg-white/70 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums",
+                    "rounded-md bg-white/70 px-1.5 py-0.5 text-2xs font-semibold tabular-nums",
                     col.headerText,
                   )}
                 >
@@ -67,7 +67,7 @@ export function ProjectBoard({ projectId }: { projectId: string }) {
                 />
               ))}
               {cards.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-ink/10 bg-surface/60 px-3 py-6 text-center text-[12px] text-ink-muted">
+                <div className="rounded-xl border border-dashed border-ink/10 bg-surface/60 px-3 py-6 text-center text-xs text-ink-muted">
                   No conversations
                 </div>
               ) : null}
@@ -94,8 +94,8 @@ function BoardCard({
         <div className="flex items-start gap-2">
           <MessageSquare className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-muted" />
           <div className="min-w-0 flex-1">
-            <div className="text-[13px] font-semibold text-ink">{card.title}</div>
-            <p className="mt-1 line-clamp-2 text-[11.5px] leading-snug text-ink-muted">
+            <div className="text-sm font-semibold text-ink">{card.title}</div>
+            <p className="mt-1 line-clamp-2 text-2xs leading-snug text-ink-muted">
               {card.preview}
             </p>
           </div>
@@ -107,7 +107,7 @@ function BoardCard({
           {card.progress ? (
             <ProgressTag progress={card.progress} size="sm" />
           ) : null}
-          <span className="ml-auto text-[10px] text-ink-muted">
+          <span className="ml-auto text-3xs text-ink-muted">
             {card.updatedAt}
           </span>
         </div>
@@ -120,7 +120,7 @@ function BoardCard({
               key={c.id}
               type="button"
               onClick={() => onMove(c.id)}
-              className="rounded-md px-1.5 py-0.5 text-[10px] font-medium text-ink-muted hover:bg-surface-muted hover:text-ink"
+              className="rounded-md px-1.5 py-0.5 text-3xs font-medium text-ink-muted hover:bg-surface-muted hover:text-ink"
             >
               → {c.label}
             </button>
