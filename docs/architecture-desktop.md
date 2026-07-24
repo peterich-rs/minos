@@ -94,7 +94,7 @@ Feature-slice 布局（Wave 1 Phase 1–2）：按 **app 壳 / features / shared
 | 命令 | 作用 |
 |------|------|
 | `pnpm check` | `tsc --noEmit` |
-| `pnpm test` | `src/shared/lib/*.test.ts` + `src/shared/api/*.test.ts` + `src/features/{chat,agents,work}/lib/*.test.ts` |
+| `pnpm test` | `src/shared/{lib,api,hooks}/*.test.ts` + `src/features/{chat,agents,work}/lib/*.test.ts` |
 | `pnpm check:biome` | Biome **lint errors only**（format 不进 gate；warnings 可残留） |
 | `pnpm check:file-sizes` | `src/**/*.{ts,tsx}` 行数：warn `>400` / hard `>800`（ALLOWLIST 当前为空） |
 | `pnpm check:px-text` | 禁止 `text-[Npx]` / `font-size: Npx`；**allowlist 已清空**，新增即失败 |
@@ -102,7 +102,8 @@ Feature-slice 布局（Wave 1 Phase 1–2）：按 **app 壳 / features / shared
 
 - Biome 作用域：`src/**`、`scripts/**`、根配置；排除 `dist/`、`src-tauri/`、`node_modules/`。
 - Formatter **opt-in**：`pnpm format`；gate 只拦 lint **errors**，不强制全树 reformat，不因 warnings 失败。
-- 文件体积：`SessionsView` 已拆为 thin shell（~265 行）+ `features/work/ui/*` / `lib/*`；file-size ALLOWLIST **无** SessionsView 条目。`TranscriptPane`（~561）仅 soft warn（`>400`），未抬 hard cap。
+- 文件体积：`SessionsView` 已拆为 thin shell（~265 行）+ `features/work/ui/*` / `lib/*`；file-size ALLOWLIST **无** SessionsView 条目。`helpers.ts` 已拆为 `dto-map` / `transcript-merge` / `empty-workspace` / `mock-bundle`（barrel 保留）。`TranscriptPane`（~561）仅 soft warn（`>400`），未抬 hard cap。
+- 列表 memo 合同：派生 `Map`/`[]`/`Set` 经 `useStable*` 保 identity；行组件 `React.memo`；回调传稳定 `(id) => void`，禁止 per-row inline closure。
 - 包管理：`pnpm` + `pnpm-lock.yaml` 为唯一 lockfile（勿再生成 `package-lock.json`）。
 
 ### Design tokens + markdown（Wave 1 Phase 4）
@@ -181,7 +182,10 @@ apps/desktop/
       ui/                        # Avatar · StatusPill · Tag · ErrorBoundary
                                  # MarkdownText · DiffView · ReadView · IncrementalText
                                  # button · dialog · dropdown-menu · popover · toaster · tooltip
+      hooks/
+        useStableReference.ts    # useStableMap/Array/Set — keep derived identity for memo
       lib/
+        platform.ts              # hasPrimaryShortcutModifier (⌘/Ctrl)
         host-status.ts           # Ready · Local only / Linked / This Mac
         mock-data.ts
         toast.ts                 # sonner wrappers
@@ -202,7 +206,11 @@ apps/desktop/
       workspace-store.ts         # thin create() + re-export useWorkspaceStore
       workspace/
         types.ts                 # WorkspaceState / ResourceFetchStatus / ProjectSession
-        helpers.ts               # DTO mapping, emptyWorkspace, mockBundle
+        helpers.ts               # barrel re-export (stable import path)
+        dto-map.ts               # Daemon DTO → UI + list patches
+        transcript-merge.ts      # mergeTranscriptItems / tool lifecycle dedupe
+        empty-workspace.ts       # empty caches, bootstrap flight, refresh timers
+        mock-bundle.ts           # browser mock seed + KNOWN_AGENTS_FALLBACK
         projection.ts            # commitSessionEntity + hydrate sibling projection
         shared.ts                # quietRefresh / startNewAgentSession helpers
         create-actions.ts        # compose L1–L6 action factories

@@ -12,6 +12,7 @@ import {
   type MentionProfile,
 } from "@/shared/lib/agent-route";
 import type { TimelineMessage } from "@/shared/lib/mock-data";
+import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
 import { cn } from "@/shared/lib/utils";
 import { toast } from "@/shared/lib/toast";
 import { daemonApi, isTauriRuntime } from "@/shared/lib/daemon";
@@ -289,7 +290,7 @@ export function Composer({ conversationId }: { conversationId: string }) {
               clearReplyTo(conversationId);
               return;
             }
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            if (e.key === "Enter" && hasPrimaryShortcutModifier(e)) {
               e.preventDefault();
               void onSend();
             }

@@ -6,6 +6,7 @@ import {
   MessageSquare,
   PanelLeftClose,
 } from "lucide-react";
+import { useStableArrayShallow } from "@/shared/hooks/useStableReference";
 import { agentMeta, statusMeta } from "@/shared/lib/mock-data";
 import { Avatar } from "@/shared/ui/Avatar";
 import { VirtualizedList } from "@/shared/ui/VirtualizedList";
@@ -45,9 +46,11 @@ export function SessionListPane({
   onRetry: () => void;
   onCollapseList: () => void;
 }) {
-  const rows = useMemo(
-    () => flattenSessionListRows(groups, collapsedConvIds),
-    [groups, collapsedConvIds],
+  const rows = useStableArrayShallow(
+    useMemo(
+      () => flattenSessionListRows(groups, collapsedConvIds),
+      [groups, collapsedConvIds],
+    ),
   );
   const conversationCount = groups.length;
   const liveTotal = groups.reduce((n, g) => n + g.runningCount, 0);
@@ -141,7 +144,7 @@ const SessionListRow = memo(function SessionListRow({
         group={row.group}
         collapsed={row.collapsed}
         selectedSessionId={selectedSessionId}
-        onToggle={() => onToggleConversation(row.group.conversationId)}
+        onToggleConversation={onToggleConversation}
       />
     );
   }
@@ -160,23 +163,25 @@ const SessionListRow = memo(function SessionListRow({
   );
 });
 
-function ConversationSessionFolderHeader({
-  group,
-  collapsed,
-  selectedSessionId,
-  onToggle,
-}: {
-  group: ConversationSessionGroup;
-  collapsed: boolean;
-  selectedSessionId: string | null;
-  onToggle: () => void;
-}) {
+const ConversationSessionFolderHeader = memo(
+  function ConversationSessionFolderHeader({
+    group,
+    collapsed,
+    selectedSessionId,
+    onToggleConversation,
+  }: {
+    group: ConversationSessionGroup;
+    collapsed: boolean;
+    selectedSessionId: string | null;
+    /** Stable parent callback — row calls with conversationId (no per-row closure). */
+    onToggleConversation: (conversationId: string) => void;
+  }) {
   const hasSelected = group.sessions.some((s) => s.id === selectedSessionId);
 
   return (
     <button
       type="button"
-      onClick={onToggle}
+      onClick={() => onToggleConversation(group.conversationId)}
       className={cn(
         "flex w-full items-center gap-1.5 rounded-xl px-2 py-2 text-left transition-colors",
         "hover:bg-surface-hover",
@@ -213,7 +218,8 @@ function ConversationSessionFolderHeader({
       </span>
     </button>
   );
-}
+},
+);
 
 const SessionTreeRow = memo(function SessionTreeRow({
   session,

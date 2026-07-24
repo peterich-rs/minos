@@ -224,10 +224,12 @@ Minos 现状：壳子在、chat 基础在、zustand 偏重、UI primitive 偏少
 ### P0 — 立刻可做，收益大
 
 1. **Motion / surface token**（modal/popover 统一）
-2. **`useStable*` + memo 合同**（timeline/session list）
+2. **`useStable*` + memo 合同**（timeline/session list） — **done**（`shared/hooks/useStableReference` + MessageList / ConversationList / SessionList / Transcript）
 3. **Workspace/host 切换 reset 注册表**（对标 `resetCommunityState`）
 4. **Chrome layout CSS 变量** + macOS top inset
 5. **连接状态 → 侧栏卡片 / toast 策略**（逻辑与 UI 分离，Minos 已有 toast policy 雏形）
+
+工程配套（Wave B）：`store/workspace/helpers.ts` 已拆为 `dto-map` / `transcript-merge` / `empty-workspace` / `mock-bundle`；`shared/lib/platform.ts` 统一 ⌘/Ctrl。
 
 ### P1 — 产品形态对齐
 
@@ -315,3 +317,4 @@ Minos 已经走在同一条路上；下一步最有杠杆的是：
 | 日期 | 说明 |
 |------|------|
 | 2026-07-24 | 初版：对照 buzz `desktop/` 与 minos `apps/desktop/` 整理 |
+| 2026-07-24 | Wave B：helpers 拆分 + useStable* + 列表 memo 合同落地 |

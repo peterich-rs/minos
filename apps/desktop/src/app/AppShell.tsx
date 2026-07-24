@@ -6,6 +6,7 @@ import { AgentsView } from "@/features/agents/AgentsView";
 import { HostView } from "@/features/host/HostView";
 import { CommandPalette } from "./CommandPalette";
 import { ConnectionToasts } from "./ConnectionToasts";
+import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
 import { Toaster } from "@/shared/ui/toaster";
 import { TooltipProvider } from "@/shared/ui/tooltip";
 import { useUiStore } from "@/store/ui-store";
@@ -17,7 +18,7 @@ export function AppShell() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      if (hasPrimaryShortcutModifier(e) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setCmdOpen(!useUiStore.getState().commandPaletteOpen);
       }

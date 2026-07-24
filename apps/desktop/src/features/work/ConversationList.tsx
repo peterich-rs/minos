@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, ListFilter, MessageSquare, PanelLeftClose } from "lucide-react";
 import type { Conversation } from "@/shared/lib/mock-data";
 import {
@@ -7,6 +7,7 @@ import {
   PROGRESS_FILTER_OPTIONS,
   type ConversationProgressFilter,
 } from "@/shared/lib/conversation-meta";
+import { useStableArrayShallow } from "@/shared/hooks/useStableReference";
 import { sortByAttentionThenTime } from "@/shared/lib/list-sort";
 import { PriorityTag, ProgressTag } from "@/shared/ui/Tag";
 import {
@@ -54,7 +55,7 @@ export function ConversationList({
     void loadConversations(projectId);
   }, [projectId, source, loadConversations, bootEpoch]);
 
-  const { items, projectCount } = useMemo(() => {
+  const { items: itemsRaw, projectCount } = useMemo(() => {
     const inProject = conversations.filter((c) => c.projectId === projectId);
     const filtered = inProject.filter((c) =>
       matchesProgressFilter(c.progress, progressFilter),
@@ -71,6 +72,15 @@ export function ConversationList({
     });
     return { items: filtered, projectCount: inProject.length };
   }, [conversations, projectId, progressFilter]);
+  // Preserve row list identity when filter/sort yields the same Conversation refs.
+  const items = useStableArrayShallow(itemsRaw);
+
+  const handleSelectConversation = useCallback(
+    (id: string) => {
+      selectConversation(id);
+    },
+    [selectConversation],
+  );
 
   const phase = listStatus?.phase ?? "idle";
   const filterLabel = progressFilterLabel(progressFilter);
@@ -197,7 +207,7 @@ export function ConversationList({
                 <ConversationRow
                   item={item}
                   selected={item.id === conversationId}
-                  onSelect={() => selectConversation(item.id)}
+                  onSelect={handleSelectConversation}
                 />
               </div>
             )}
@@ -225,14 +235,19 @@ export function ConversationListRail() {
   );
 }
 
-function ConversationRow({
+/**
+ * Memoized row: `item` must keep reference identity when content is unchanged
+ * (workspace list patches should reuse Conversation objects). `onSelect` is the
+ * stable `(id) => void` from the parent — never an inline per-row closure.
+ */
+const ConversationRow = memo(function ConversationRow({
   item,
   selected,
   onSelect,
 }: {
   item: Conversation;
   selected: boolean;
-  onSelect: () => void;
+  onSelect: (id: string) => void;
 }) {
   const hasTags = Boolean(item.priority || item.progress);
   // Attention badge = unread messages + pending approvals/suspended (not total message count).
@@ -243,7 +258,7 @@ function ConversationRow({
   return (
     <button
       type="button"
-      onClick={onSelect}
+      onClick={() => onSelect(item.id)}
       className={cn(
         "flex w-full gap-2.5 rounded-xl px-3 py-2.5 text-left transition-colors",
         selected
@@ -290,4 +305,4 @@ function ConversationRow({
       </div>
     </button>
   );
-}
+});

@@ -4,7 +4,8 @@
  *
  * Module map (consumption layers L0–L6):
  * - workspace/types.ts              shared WorkspaceState types
- * - workspace/helpers.ts            DTO mapping / empty caches / mock
+ * - workspace/helpers.ts            barrel → dto-map / transcript-merge /
+ *                                   empty-workspace / mock-bundle
  * - workspace/projection.ts         SessionEntity commit + list projection
  * - workspace/shared.ts             cross-slice use-case helpers
  * - workspace/connection.ts         L1 bootstrap / livePush / projects
