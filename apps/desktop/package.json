@@ -14,7 +14,8 @@
     "format": "biome format --write .",
     "check:biome": "biome lint .",
     "check:file-sizes": "node ./scripts/check-file-sizes.mjs",
-    "check:all": "pnpm check && pnpm test && pnpm check:biome && pnpm check:file-sizes",
+    "check:px-text": "node ./scripts/check-px-text.mjs",
+    "check:all": "pnpm check && pnpm test && pnpm check:biome && pnpm check:file-sizes && pnpm check:px-text",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"

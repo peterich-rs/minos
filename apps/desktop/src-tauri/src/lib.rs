@@ -1,359 +1,77 @@
 //! Minos desktop shell — Tauri host + local daemon JSON-RPC bridge.
 
+mod app_state;
+mod commands;
 mod daemon;
+mod shutdown;
+mod window_reveal;
 
-use daemon::{
-    CliDto, ConnectionDto, ConversationDto, DaemonBridge, MessagePageDto, ProjectDto, SessionDto,
-    StartAgentResultDto, ToggleReactionResultDto, TranscriptPageDto,
-};
+use app_state::AppState;
+use commands::*;
+use daemon::DaemonBridge;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{Manager, RunEvent};
+use tauri_plugin_window_state::StateFlags;
+use tracing::{info, warn};
+use tracing_subscriber::EnvFilter;
 
-struct AppState {
-    daemon: Arc<DaemonBridge>,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AppInfo {
-    name: String,
-    version: String,
-    shell: String,
-}
-
-#[tauri::command]
-fn app_info() -> AppInfo {
-    AppInfo {
-        name: "Minos".into(),
-        version: env!("CARGO_PKG_VERSION").into(),
-        shell: "tauri".into(),
-    }
-}
-
-#[tauri::command]
-async fn daemon_connect(
-    state: State<'_, AppState>,
-    url: Option<String>,
-) -> Result<ConnectionDto, String> {
-    Ok(state.daemon.connect(url).await)
-}
-
-#[tauri::command]
-async fn daemon_status(state: State<'_, AppState>) -> Result<ConnectionDto, String> {
-    Ok(state.daemon.status().await)
-}
-
-#[tauri::command]
-async fn daemon_list_projects(state: State<'_, AppState>) -> Result<Vec<ProjectDto>, String> {
-    state
-        .daemon
-        .list_projects()
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_create_project(
-    state: State<'_, AppState>,
-    workspace_path: String,
-) -> Result<ProjectDto, String> {
-    state
-        .daemon
-        .create_project(workspace_path)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_list_conversations(
-    state: State<'_, AppState>,
-    project_id: String,
-) -> Result<Vec<ConversationDto>, String> {
-    state
-        .daemon
-        .list_conversations(project_id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_list_messages(
-    state: State<'_, AppState>,
-    conversation_id: String,
-    before_seq: Option<i64>,
-    limit: Option<u32>,
-) -> Result<MessagePageDto, String> {
-    state
-        .daemon
-        .list_messages(conversation_id, before_seq, limit)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_toggle_message_reaction(
-    state: State<'_, AppState>,
-    message_id: String,
-    emoji: String,
-) -> Result<ToggleReactionResultDto, String> {
-    state
-        .daemon
-        .toggle_message_reaction(message_id, emoji)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_list_sessions(
-    state: State<'_, AppState>,
-    conversation_id: String,
-) -> Result<Vec<SessionDto>, String> {
-    state
-        .daemon
-        .list_sessions(conversation_id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_create_conversation(
-    state: State<'_, AppState>,
-    project_id: String,
-    title: String,
-) -> Result<ConversationDto, String> {
-    state
-        .daemon
-        .create_conversation(project_id, title)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_update_conversation(
-    state: State<'_, AppState>,
-    conversation_id: String,
-    title: Option<String>,
-    priority: Option<String>,
-    progress: Option<String>,
-) -> Result<ConversationDto, String> {
-    state
-        .daemon
-        .update_conversation(conversation_id, title, priority, progress)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_append_user_message(
-    state: State<'_, AppState>,
-    conversation_id: String,
-    message_id: String,
-    body: String,
-) -> Result<i64, String> {
-    state
-        .daemon
-        .append_user_message(conversation_id, message_id, body)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_list_clis(state: State<'_, AppState>) -> Result<Vec<CliDto>, String> {
-    state.daemon.list_clis().await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_start_agent_in_conversation(
-    state: State<'_, AppState>,
-    conversation_id: String,
-    agent: String,
-    workspace: String,
-    profile_id: Option<String>,
-    model: Option<String>,
-    reasoning_effort: Option<String>,
-    instructions: Option<String>,
-) -> Result<StartAgentResultDto, String> {
-    state
-        .daemon
-        .start_agent_in_conversation(
-            conversation_id,
-            agent,
-            workspace,
-            profile_id,
-            model,
-            reasoning_effort,
-            instructions,
+fn init_tracing() {
+    // Host is the tracing SSOT for this process. Managed in-process daemon does
+    // **not** call `minos_daemon::logging::init` (that path is only for the
+    // standalone `minos-daemon` binary / mars-xlog). RUST_LOG, when set, wins
+    // for desktop + embedded daemon crates together — intentional.
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(
+            "minos_desktop_lib=info,minos_daemon=info,minos_agent_runtime=info,minos_chat_store=info",
         )
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_list_models(
-    state: State<'_, AppState>,
-    runtime: String,
-) -> Result<minos_protocol::ListModelsResponse, String> {
-    state
-        .daemon
-        .list_models(runtime)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_list_agent_profiles(
-    state: State<'_, AppState>,
-) -> Result<minos_protocol::ListAgentProfilesResponse, String> {
-    state
-        .daemon
-        .list_agent_profiles()
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_create_agent_profile(
-    state: State<'_, AppState>,
-    name: String,
-    description: String,
-    runtime_agent: String,
-    model: String,
-    reasoning_effort: String,
-    instructions: Option<String>,
-) -> Result<minos_protocol::AgentProfileSummary, String> {
-    use minos_domain::AgentName;
-    let runtime = match runtime_agent.as_str() {
-        "codex" => AgentName::Codex,
-        "claude" => AgentName::Claude,
-        "gemini" => AgentName::Gemini,
-        "opencode" => AgentName::Opencode,
-        "grok" => AgentName::Grok,
-        other => return Err(format!("unknown runtime: {other}")),
-    };
-    let req = minos_protocol::CreateAgentProfileRequest {
-        name,
-        description,
-        runtime_agent: runtime,
-        model,
-        reasoning_effort,
-        instructions: instructions.unwrap_or_default(),
-    };
-    state
-        .daemon
-        .create_agent_profile(req)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_delete_agent_profile(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    state
-        .daemon
-        .delete_agent_profile(id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_send_user_message(
-    state: State<'_, AppState>,
-    session_id: String,
-    text: String,
-) -> Result<(), String> {
-    state
-        .daemon
-        .send_user_message(session_id, text)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_resume_session(
-    state: State<'_, AppState>,
-    session_id: String,
-    auto_continue: Option<bool>,
-) -> Result<(), String> {
-    state
-        .daemon
-        .resume_session(session_id, auto_continue.unwrap_or(false))
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_resolve_approval(
-    state: State<'_, AppState>,
-    request_id: String,
-    session_id: String,
-    decision: serde_json::Value,
-) -> Result<(), String> {
-    state
-        .daemon
-        .resolve_approval(request_id, session_id, decision)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_respond_opencode_permission(
-    state: State<'_, AppState>,
-    session_id: String,
-    permission_id: String,
-    response: String,
-) -> Result<(), String> {
-    state
-        .daemon
-        .respond_opencode_permission(session_id, permission_id, response)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_respond_opencode_question(
-    state: State<'_, AppState>,
-    session_id: String,
-    question_id: String,
-    answers: Vec<Vec<String>>,
-) -> Result<(), String> {
-    state
-        .daemon
-        .respond_opencode_question(session_id, question_id, answers)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_list_project_sessions(
-    state: State<'_, AppState>,
-    project_id: String,
-) -> Result<Vec<SessionDto>, String> {
-    state
-        .daemon
-        .list_project_sessions(project_id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn daemon_read_transcript(
-    state: State<'_, AppState>,
-    session_id: String,
-    from_seq: Option<u64>,
-    limit: Option<u32>,
-    full: Option<bool>,
-) -> Result<TranscriptPageDto, String> {
-    state
-        .daemon
-        .read_transcript(session_id, from_seq, limit, full.unwrap_or(false))
-        .await
-        .map_err(|e| e.to_string())
+    });
+    // try_init: ignore if a test harness (or re-entrant path) already set a subscriber.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .try_init();
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    init_tracing();
+    info!("starting Minos desktop host");
+
     let daemon = Arc::new(DaemonBridge::new());
     let daemon_for_exit = Arc::clone(&daemon);
+    let shutdown_done = Arc::new(AtomicBool::new(false));
+
+    #[cfg(unix)]
+    shutdown::install_signal_handler(Arc::clone(&daemon), Arc::clone(&shutdown_done));
+
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // Focus the existing window when a duplicate instance launches so
+            // we never start a second managed daemon from a second process.
+            info!("second instance launch; focusing existing main window");
+            if let Some(w) = app.get_webview_window("main") {
+                if let Err(error) = w.unminimize() {
+                    warn!(%error, "failed to unminimize main window for single-instance focus");
+                }
+                if let Err(error) = w.show() {
+                    warn!(%error, "failed to show main window for single-instance focus");
+                }
+                if let Err(error) = w.set_focus() {
+                    warn!(%error, "failed to focus main window for single-instance");
+                }
+            } else {
+                warn!("single-instance callback: main window missing");
+            }
+        }))
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                // Visibility is excluded: the initial-window-reveal plugin
+                // shows the window after saved geometry has been restored.
+                .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
+                .build(),
+        )
+        .plugin(window_reveal::plugin())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
@@ -401,13 +119,14 @@ pub fn run() {
             // Kill provider children (OpenCode serve, Codex, …) on exit.
             // Without this, `opencode serve` is reparented to launchd and
             // exhausts ports 4096..=4106 across Desktop restarts.
-            if let tauri::RunEvent::Exit = event {
-                let daemon = Arc::clone(&daemon_for_exit);
-                // Block until stop finishes — Exit is the last chance before
-                // process teardown drops the runtime without group signals.
-                tauri::async_runtime::block_on(async move {
-                    daemon.shutdown_managed().await;
-                });
+            match event {
+                RunEvent::ExitRequested { .. } => {
+                    shutdown::shutdown_managed_once(&daemon_for_exit, &shutdown_done);
+                }
+                RunEvent::Exit => {
+                    shutdown::shutdown_managed_once(&daemon_for_exit, &shutdown_done);
+                }
+                _ => {}
             }
         });
 }

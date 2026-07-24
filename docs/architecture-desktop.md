@@ -30,7 +30,7 @@
 
 | 层 | 技术 | 用途 |
 |----|------|------|
-| 桌面壳 | Tauri 2 | WebView 窗口 + Rust 宿主 |
+| 桌面壳 | Tauri 2 | WebView 窗口 + Rust 宿主（single-instance、window-state、initial-window-reveal） |
 | UI | React 19 + TypeScript | 多栏产品界面 |
 | 构建 | Vite 7 | dev/build |
 | 样式 | Tailwind CSS 3.4 + `tailwindcss-animate` | 设计 token（`index.css` CSS vars → Tailwind theme）+ enter/exit utilities |
@@ -96,6 +96,7 @@ Feature-slice 布局（Wave 1 Phase 1–2）：按 **app 壳 / features / shared
 | `pnpm test` | `src/shared/lib/*.test.ts` + `src/features/chat/lib/*.test.ts` + `src/features/agents/lib/*.test.ts` |
 | `pnpm check:biome` | Biome **lint errors only**（format 不进 gate；warnings 可残留） |
 | `pnpm check:file-sizes` | `src/**/*.{ts,tsx}` 行数：warn `>400` / hard `>800` |
+| `pnpm check:px-text` | 禁止新增 `text-[Npx]` / `font-size: Npx`（现有债务 frozen 在 allowlist，只降不升） |
 | `pnpm check:all` | 以上串联（= `just check-desktop`） |
 
 - Biome 作用域：`src/**`、`scripts/**`、根配置；排除 `dist/`、`src-tauri/`、`node_modules/`。
@@ -129,6 +130,8 @@ Markdown 呈现（`shared/ui/MarkdownText.tsx` + `index.css`）：
 apps/desktop/
   scripts/
     check-file-sizes.mjs         # soft/hard line-count gate
+    check-px-text.mjs            # rem zoom-safe text sizes (allowlist freeze)
+    check-px-text.allowlist.txt  # frozen path:literal debt (shrink only)
     dev-for-tauri.mjs
   biome.json                     # lint + optional format
   src/
@@ -180,6 +183,7 @@ apps/desktop/
         session-list-projection.ts  # Entity → list membership projection (pure)
         desktop-inflight.ts      # single-flight loads + resume Sets (no window.__minos*)
         daemon-events.ts         # listen daemon://ingest|manager|conversation|push-status
+        initial-render-ready.ts  # emit first-layout event so host can show window
         daemon.ts · agent-route.ts · …
     store/                       # L0–L6 工作区契约不变；chat reactions 不进 workspace
       ui-store.ts                # nav + drafts + replyTo + commandPaletteOpen
@@ -210,7 +214,7 @@ apps/desktop/
 | Approval / Question modal | Radix Dialog（Esc、focus trap、`aria-modal`） |
 | Work 三栏可拖拽 | `react-resizable-panels`；列表折叠时退回 rail + flex |
 | 全局跳转 | ⌘/Ctrl+K → `CommandPalette` |
-| Daemon 连接反馈 | `ConnectionToasts` 监听 `connection.connected` 边沿 |
+| Daemon 连接反馈 | `ConnectionToasts` 监听 `connection.connected` 边沿；**disconnect 防抖 2s**（`connection-toast-policy`），避免 daemon 短闪断 toast 抖动 |
 | Transcript 滚动 | stick-to-bottom（rAF 合并 pin + wheel-up suppress re-follow/pin）+ tail/load-older；identity 锚点；top sentinel；`overscroll-y-none` |
 | Timeline 分页 | 打开只拉 tail（`MESSAGE_PAGE_SIZE`）；`loadOlderMessages(beforeSeq)`；**hard + quiet** 均 `mergeMessagesQuietTail`（保留 older + 并发更新）；identity restore / following 不 restore |
 | Transcript 打开 | 用 Entity/list `messageCount`（= last_seq）seek tail；ingest 抬升 `messageCount`；若 page `nextSeq` 仍指向更新事件则 catch-up 追到末尾，避免 stale last_seq 只看到中间窗 |
@@ -230,11 +234,26 @@ apps/desktop/
 | Timeline agent 身份 | Agent 气泡标题显示 `OpenCode #b15d06d4`（`sessionId` → short id，对齐 TUI `[OpenCode@short]`）；点击跳转 Sessions transcript |
 | OpenCode 双气泡 | OpenCode 在同 `message_id` 上 `text_delta*` → `tool_call` → 再 `text_replace` 全量快照。Assembler 若只认 timeline **tail**，会在 tool 后再插一条相同正文。修复：`text_replace` 按 `message_id` 回写已有 assistant 气泡（Desktop `TranscriptAssembler` + TUI `ChatState`） |
 | 重启后 Paused | Daemon 对 mid-turn 线程写 `suspended` + `needs_continue=1`。非 quiet **`loadInspector`** 会对最多一个 top-level `needsContinue` 调 `resume(autoContinue)`；打开 transcript 时 `resumeInterruptedSession` 同样路径 |
-| OpenCode 僵尸 serve | **Bug**：`shutdown_instances` 原先只杀 Codex；OpenCode `serve`（`setpgid` 独立进程组）在 Desktop 退出时未 SIGTERM/SIGKILL，reparent 到 launchd（PPID=1），占满 `4096..=4106`。修复：shutdown 同时杀 opencode/gemini/grok 子进程；Desktop `RunEvent::Exit` 调 `DaemonBridge::shutdown_managed` → `DaemonHandle::stop` |
+| OpenCode 僵尸 serve | **Bug**：`shutdown_instances` 原先只杀 Codex；OpenCode `serve`（`setpgid` 独立进程组）在 Desktop 退出时未 SIGTERM/SIGKILL，reparent 到 launchd（PPID=1），占满 `4096..=4106`。修复：shutdown 同时杀 opencode/gemini/grok 子进程；Desktop `RunEvent::ExitRequested` / `Exit` 幂等调用 `DaemonBridge::shutdown_managed` → `DaemonHandle::stop` |
 
 ## Rust 宿主 / Daemon 桥
 
 `src-tauri` 是 root Cargo workspace 成员（`minos-desktop`），依赖 `minos-daemon`。
+
+### 宿主插件与窗口生命周期
+
+| 插件 / 模块 | 作用 |
+|-------------|------|
+| `tauri-plugin-single-instance` | 第二次启动 focus 已有 `main` 窗口（unminimize + show + focus），避免多进程各起一个 managed daemon |
+| `tauri-plugin-window-state` | 持久化位置/尺寸/最大化；**排除 `VISIBLE` flag**，可见性由 reveal 插件控制 |
+| `window_reveal`（inline plugin） | 窗口 `visible: false` 启动；geometry 连续 4 次一致 + 前端 `initial-render-ready`（或 5s 超时）后再 `show`/`set_focus`，消除 React 首帧前白闪 |
+| `tracing` + `tracing-subscriber` | Host 入口 `init_tracing`（`RUST_LOG` / 默认 info filter）；reveal / single-instance / shutdown 关键路径打点 |
+| `shutdown` + `ctrlc`（Unix） | `ExitRequested` / `Exit` / SIGINT·SIGTERM 幂等 `shutdown_managed`（**10s 超时**，避免 Cmd+Q 卡死）；信号在专用线程 `block_on` 后 `exit(130)`，不依赖 RunEvent |
+| `commands/*` | 按 domain 拆分：`app` / `connection` / `projects` / `conversations` / `agents` / `sessions` / `approvals`；`lib.rs` 只负责 builder + lifecycle |
+
+前端：`App` 的 `useLayoutEffect` + 根/`app` `ErrorBoundary.componentDidCatch` 幂等 `emitInitialRenderReady()`（`isTauriRuntime` 门控）。不与 bootstrap 完成绑定——BootScreen 或 crash UI 都可作为首帧表面。
+
+关闭：`AtomicBool` 幂等 `shutdown_managed`（10s `timeout`），覆盖 `ExitRequested`、`Exit`、Unix 信号。Host 进程内 tracing 以 desktop `init_tracing` / `RUST_LOG` 为 SSOT；托管 daemon **不**走 `minos_daemon::logging::init`（mars-xlog 仅独立 daemon 二进制）。
 
 ### 启动策略（对齐 TUI）
 
