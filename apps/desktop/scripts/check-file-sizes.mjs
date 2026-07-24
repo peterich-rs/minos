@@ -20,9 +20,7 @@ const HARD_LINES = 800;
 
 /** @type {Record<string, number>} path relative to src/ → temporary hard cap */
 const ALLOWLIST = {
-  // Freeze at ~current size (1807 at Phase 3). Cap 1850: small edit headroom only —
-  // do not raise; split SessionsView in a later wave instead of growing the allowlist.
-  "features/work/SessionsView.tsx": 1850,
+  // SessionsView split into ui/lib (PR A); shell is well under HARD_LINES.
 };
 
 /**
