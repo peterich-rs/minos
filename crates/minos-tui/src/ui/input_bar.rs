@@ -153,10 +153,16 @@ pub struct AgentMentionCandidate {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AgentMentionCandidateKind {
-    Installed { status: AgentStatus },
+    Installed {
+        status: AgentStatus,
+    },
     /// Host agent profile (`@Name` or `@p/<id>`).
-    Profile { profile_id: String },
-    Existing { session_id: String },
+    Profile {
+        profile_id: String,
+    },
+    Existing {
+        session_id: String,
+    },
 }
 
 impl AgentMentionCandidate {

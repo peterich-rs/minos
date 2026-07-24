@@ -86,8 +86,10 @@ pub trait MinosRpc {
     /// app-server may have already finished the turn — that is fine, the
     /// thread transitions to `Suspended { UserInterrupt }` either way.
     #[method(name = "interrupt_session")]
-    async fn interrupt_session(&self, req: InterruptSessionRequest)
-        -> jsonrpsee::core::RpcResult<()>;
+    async fn interrupt_session(
+        &self,
+        req: InterruptSessionRequest,
+    ) -> jsonrpsee::core::RpcResult<()>;
 
     /// Permanently close the named thread. Idempotent — re-closing a closed
     /// thread is a no-op.

@@ -309,17 +309,13 @@ impl App {
         let workspace = self.workspace_for_conversation(conversation_id);
         // Bare @agent / profile mentions: pass profile_id when route has one;
         // bare agent uses newest profile convenience (same as conversation submit).
-        let profile_id = target.profile_id.clone().or_else(|| {
-            self.newest_profile_id_for_agent(target.agent)
-        });
+        let profile_id = target
+            .profile_id
+            .clone()
+            .or_else(|| self.newest_profile_id_for_agent(target.agent));
         let outcome = self
             .backend
-            .start_agent_in_conversation(
-                conversation_id,
-                target.agent,
-                workspace,
-                profile_id,
-            )
+            .start_agent_in_conversation(conversation_id, target.agent, workspace, profile_id)
             .await?;
         self.ensure_thread_visible(outcome.session_id.clone(), target.agent, outcome.cwd);
         self.refresh_current_conversation_sessions(conversation_id)

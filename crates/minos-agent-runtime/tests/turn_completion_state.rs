@@ -50,10 +50,12 @@ async fn turn_completed_notification_returns_thread_to_idle() {
                 }
             }),
         },
+        // Codex app-server still wires turn lifecycle on `threadId` (provider
+        // session key). The event pump keys notifications by that field only.
         Step::EmitNotification {
             method: "turn/completed".into(),
             params: json!({
-                "sessionId": session_id,
+                "threadId": session_id,
                 "finishedAtMs": 123
             }),
         },
@@ -78,7 +80,10 @@ async fn turn_completed_notification_returns_thread_to_idle() {
 
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if matches!(mgr.session_state(session_id).await, Some(SessionState::Idle)) {
+            if matches!(
+                mgr.session_state(session_id).await,
+                Some(SessionState::Idle)
+            ) {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;

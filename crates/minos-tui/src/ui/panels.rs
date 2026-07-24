@@ -5,7 +5,7 @@ use crate::ui::conversation_view::ConversationChatRenderCache;
 use crate::ui::delete_confirm::DeleteConfirmState;
 use crate::ui::input_bar::{InputLayoutMetrics, InputState};
 use crate::ui::list_panel::ListPanel;
-use crate::ui::{ProjectCreateDialogState, SubagentInfo, SessionEntry};
+use crate::ui::{ProjectCreateDialogState, SessionEntry, SubagentInfo};
 use std::collections::HashMap;
 
 pub struct NavPanel {

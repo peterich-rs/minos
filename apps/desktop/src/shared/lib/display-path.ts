@@ -66,16 +66,13 @@ export function collapseHomePrefix(path: string): string {
  * - `/Users/me/code/repo/src/a.ts` → `~/code/repo/src/a.ts`
  * - very deep → `~/…/apps/desktop/src/a.ts`
  */
-export function formatDisplayPath(
-  path: string,
-  opts: FormatDisplayPathOptions = {},
-): string {
+export function formatDisplayPath(path: string, opts: FormatDisplayPathOptions = {}): string {
   const maxSegments = opts.maxSegments ?? 6;
   const maxChars = opts.maxChars ?? 72;
   const raw = path.trim();
   if (!raw) return path;
 
-  let p = collapseHomePrefix(raw.replace(/\\/g, "/"));
+  const p = collapseHomePrefix(raw.replace(/\\/g, "/"));
 
   let prefix = "";
   let body = p;
@@ -93,19 +90,13 @@ export function formatDisplayPath(
 
   let keep = Math.max(1, maxSegments);
   let tail = parts.slice(-keep);
-  let out =
-    parts.length <= keep
-      ? `${prefix}${parts.join("/")}`
-      : `${prefix}…/${tail.join("/")}`;
+  let out = parts.length <= keep ? `${prefix}${parts.join("/")}` : `${prefix}…/${tail.join("/")}`;
 
   // Tighten further if still too long for a single-line tool header.
   while (out.length > maxChars && keep > 2) {
     keep -= 1;
     tail = parts.slice(-keep);
-    out =
-      parts.length <= keep
-        ? `${prefix}${parts.join("/")}`
-        : `${prefix}…/${tail.join("/")}`;
+    out = parts.length <= keep ? `${prefix}${parts.join("/")}` : `${prefix}…/${tail.join("/")}`;
   }
 
   if (out.length > maxChars && tail.length > 0) {
@@ -117,10 +108,7 @@ export function formatDisplayPath(
       const end = Math.floor(budget / 2) - 1;
       const shortLast = `${last.slice(0, head)}…${last.slice(-end)}`;
       tail = [...tail.slice(0, -1), shortLast];
-      out =
-        parts.length <= keep
-          ? `${prefix}${tail.join("/")}`
-          : `${prefix}…/${tail.join("/")}`;
+      out = parts.length <= keep ? `${prefix}${tail.join("/")}` : `${prefix}…/${tail.join("/")}`;
     }
   }
 
@@ -131,10 +119,7 @@ export function formatDisplayPath(
  * Format a tool header target: path-like → short path; otherwise collapse any
  * embedded home prefixes (e.g. commands that include absolute paths).
  */
-export function formatToolTarget(
-  target: string,
-  opts?: FormatDisplayPathOptions,
-): string {
+export function formatToolTarget(target: string, opts?: FormatDisplayPathOptions): string {
   const t = target.trim();
   if (!t) return target;
   if (looksLikeFilePath(t) || t.startsWith("~/") || t.startsWith("/")) {

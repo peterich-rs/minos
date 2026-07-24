@@ -26,7 +26,7 @@ mod opencode;
 pub use ansi::strip_ansi_escapes;
 pub use error::TranslationError;
 pub use message::{
-    ArtifactRef, DisplayPayload, MessageRole, SubagentStatus, SessionEndReason, UiEventMessage,
+    ArtifactRef, DisplayPayload, MessageRole, SessionEndReason, SubagentStatus, UiEventMessage,
 };
 pub use minos_domain::AgentName as AgentKind;
 

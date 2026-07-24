@@ -24,7 +24,9 @@ use crate::ui::chat::{AgentChatRenderable, AgentChatTarget};
 pub use crate::ui::delete_confirm::DeleteConfirmState;
 use crate::ui::input_bar::{AgentMentionCandidate, InputState};
 pub use crate::ui::list_panel::ListPanel;
-pub use crate::ui::panels::{ConversationPanel, InputsPanel, NavPanel, OverlaysPanel, SessionPanel};
+pub use crate::ui::panels::{
+    ConversationPanel, InputsPanel, NavPanel, OverlaysPanel, SessionPanel,
+};
 use crate::ui::status_bar::StatusBarState;
 use minos_agent_runtime::SessionState;
 use minos_domain::AgentName;
@@ -305,10 +307,7 @@ impl UiState {
         candidates.extend(mention_profiles.iter().map(|p| {
             // Insert form is `@Name ` or `@p/<id> `; picker stores token without `@`/space.
             let insert = crate::agent_route::profile_mention_insert(p, &mention_profiles);
-            let token = insert
-                .trim_start_matches('@')
-                .trim_end()
-                .to_owned();
+            let token = insert.trim_start_matches('@').trim_end().to_owned();
             AgentMentionCandidate::profile(token, p.runtime_agent, p.id.clone())
         }));
 
@@ -908,7 +907,12 @@ mod subagent_tests {
 
         assert_eq!(
             flat.iter()
-                .map(|entry| { (sessions[entry.source_index].session_id.as_str(), entry.depth,) })
+                .map(|entry| {
+                    (
+                        sessions[entry.source_index].session_id.as_str(),
+                        entry.depth,
+                    )
+                })
                 .collect::<Vec<_>>(),
             vec![
                 ("parent-a", 0),

@@ -316,9 +316,8 @@ fn submit_conversation_input(state: &mut AppState, ui: &mut UiState) -> (StateCh
         }
     }
 
-    let profile_id = route_profile_id.or_else(|| {
-        crate::agent_route::newest_profile_id_for_agent(&profiles, agent)
-    });
+    let profile_id = route_profile_id
+        .or_else(|| crate::agent_route::newest_profile_id_for_agent(&profiles, agent));
 
     match ui.nav_level() {
         NavLevel::Conversations { project_id } => {
@@ -400,10 +399,7 @@ fn find_conversation_thread(
 }
 
 /// Desktop parity: bare `@agent` reuses the most recent open top-level session.
-fn find_reusable_agent_session(
-    ui: &UiState,
-    agent: minos_domain::AgentName,
-) -> Option<String> {
+fn find_reusable_agent_session(ui: &UiState, agent: minos_domain::AgentName) -> Option<String> {
     ui.nav_level().conversation_id()?;
     let candidates: Vec<_> = ui
         .conversation

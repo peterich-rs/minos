@@ -38,7 +38,10 @@ pub struct IllegalTransition {
 }
 
 #[allow(clippy::unnested_or_patterns, clippy::enum_glob_use)]
-pub fn validate_transition(from: &SessionState, to: &SessionState) -> Result<(), IllegalTransition> {
+pub fn validate_transition(
+    from: &SessionState,
+    to: &SessionState,
+) -> Result<(), IllegalTransition> {
     use SessionState::*;
     let ok = matches!(
         (from, to),

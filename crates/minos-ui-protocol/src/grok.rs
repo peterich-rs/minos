@@ -23,7 +23,7 @@
 
 use crate::error::TranslationError;
 use crate::message::{
-    DisplayPayload, MessageRole, SubagentStatus, SessionEndReason, UiEventMessage,
+    DisplayPayload, MessageRole, SessionEndReason, SubagentStatus, UiEventMessage,
 };
 use minos_domain::AgentName;
 use serde_json::Value;
@@ -372,27 +372,12 @@ fn tool_path_hint(update: &Value) -> Option<String> {
 fn normalize_tool_kind(kind: &str) -> String {
     match kind.to_ascii_lowercase().as_str() {
         "read" | "read_file" | "readfile" | "codex_read_file" | "codexreadfile" => "read".into(),
-        "edit"
-        | "write"
-        | "diff"
-        | "search_replace"
-        | "searchreplace"
-        | "str_replace"
-        | "string_replace"
-        | "apply_patch"
-        | "applypatch"
-        | "hashline_edit"
-        | "hashlineedit"
-        | "create_file"
-        | "delete_file"
-        | "delete" => "edit".into(),
-        "execute"
-        | "terminal"
-        | "bash"
-        | "shell"
-        | "run"
-        | "run_terminal_command"
-        | "command" => "execute".into(),
+        "edit" | "write" | "diff" | "search_replace" | "searchreplace" | "str_replace"
+        | "string_replace" | "apply_patch" | "applypatch" | "hashline_edit" | "hashlineedit"
+        | "create_file" | "delete_file" | "delete" => "edit".into(),
+        "execute" | "terminal" | "bash" | "shell" | "run" | "run_terminal_command" | "command" => {
+            "execute".into()
+        }
         "search" | "grep" | "glob" | "codex_grep_files" | "codexgrepfiles" => "search".into(),
         "fetch" | "web_fetch" | "webfetch" => "web_fetch".into(),
         "web_search" | "websearch" => "web_search".into(),
@@ -457,7 +442,11 @@ fn resolve_tool_kind(update: &Value) -> String {
     if let Some(raw) = tool_raw_input(update) {
         let has_path = ["path", "file_path", "filePath", "target_file", "targetFile"]
             .iter()
-            .any(|k| raw.get(k).and_then(Value::as_str).is_some_and(|s| !s.is_empty()));
+            .any(|k| {
+                raw.get(k)
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| !s.is_empty())
+            });
         let has_old_new = raw.get("old_string").is_some()
             || raw.get("oldString").is_some()
             || raw.get("new_string").is_some()
@@ -1511,10 +1500,7 @@ fn compact_tool_args_json(update: &Value) -> String {
                     // Truncate long scalar strings (e.g. huge commands).
                     if let Some(s) = v.as_str() {
                         if s.len() > 240 {
-                            compact.insert(
-                                k.clone(),
-                                Value::String(truncate_str_boundary(s, 240)),
-                            );
+                            compact.insert(k.clone(), Value::String(truncate_str_boundary(s, 240)));
                             continue;
                         }
                     }
@@ -1527,10 +1513,7 @@ fn compact_tool_args_json(update: &Value) -> String {
         }
     }
     if let Some(st) = update.get("status").and_then(Value::as_str) {
-        obj.insert(
-            "status".into(),
-            Value::String(normalize_tool_status(st)),
-        );
+        obj.insert("status".into(), Value::String(normalize_tool_status(st)));
     }
     serde_json::to_string(&Value::Object(obj)).unwrap_or_else(|_| "{}".into())
 }
@@ -1717,8 +1700,7 @@ fn translate_acp_notification(
         .and_then(Value::as_str)
         .unwrap_or("");
     // Pass sessionUpdate so streamStartMs only segments agent *text*, not thought.
-    let (meta, mut prefix_events) =
-        apply_notification_meta(state, &params, session_update);
+    let (meta, mut prefix_events) = apply_notification_meta(state, &params, session_update);
 
     let body_events = match session_update {
         "agent_message_chunk" | "agent_thought_chunk" => {
@@ -2109,7 +2091,9 @@ fn translate_tool_call_update(
         if known {
             if let Some(open) = state.tool_calls.get_mut(&tool_call_id) {
                 let refined = tool_display_name(update);
-                if !refined.is_empty() && refined != open.name && resolve_tool_kind(update) != "other"
+                if !refined.is_empty()
+                    && refined != open.name
+                    && resolve_tool_kind(update) != "other"
                 {
                     open.name = refined.clone();
                     return vec![UiEventMessage::ToolCallPlaced {
@@ -2161,7 +2145,10 @@ fn looks_like_progressive_tool_body(update: &Value, projected: &str) -> bool {
         return true;
     }
     // Typed rawOutput present on non-terminal (uncommon but valuable).
-    if update.get("rawOutput").or_else(|| update.get("raw_output")).is_some()
+    if update
+        .get("rawOutput")
+        .or_else(|| update.get("raw_output"))
+        .is_some()
         && resolve_tool_kind(update) == "edit"
     {
         return true;
@@ -2582,7 +2569,9 @@ mod tests {
         )
         .unwrap();
         assert!(
-            !cont.iter().any(|e| matches!(e, UiEventMessage::MessageCompleted { .. })),
+            !cont
+                .iter()
+                .any(|e| matches!(e, UiEventMessage::MessageCompleted { .. })),
             "same text stream must not re-open: {cont:?}"
         );
         assert!(cont.iter().any(|e| matches!(
@@ -2613,10 +2602,12 @@ mod tests {
                 "interleave must not resegment mid={mid}: su={su} out={out:?}"
             );
             let ok = out.iter().any(|e| match e {
-                UiEventMessage::TextDelta { message_id, text, .. }
-                | UiEventMessage::ReasoningDelta { message_id, text, .. } => {
-                    message_id == &mid && text == chunk
+                UiEventMessage::TextDelta {
+                    message_id, text, ..
                 }
+                | UiEventMessage::ReasoningDelta {
+                    message_id, text, ..
+                } => message_id == &mid && text == chunk,
                 _ => false,
             });
             assert!(ok, "expected delta on {mid} for {chunk:?}: {out:?}");
@@ -3538,8 +3529,7 @@ mod tests {
         let mut s = GrokTranslatorState::new("thr".into());
         let out = translate(
             &mut s,
-            &val(
-                r#"{
+            &val(r#"{
                   "kind":"acp_notification",
                   "params":{
                     "update":{
@@ -3564,8 +3554,7 @@ mod tests {
                       }
                     }
                   }
-                }"#,
-            ),
+                }"#),
         )
         .unwrap();
 
@@ -3605,8 +3594,7 @@ mod tests {
         let mut s = GrokTranslatorState::new("thr".into());
         let _ = translate(
             &mut s,
-            &val(
-                r#"{
+            &val(r#"{
                   "kind":"acp_notification",
                   "params":{
                     "update":{
@@ -3621,15 +3609,13 @@ mod tests {
                       }
                     }
                   }
-                }"#,
-            ),
+                }"#),
         )
         .unwrap();
 
         let mid = translate(
             &mut s,
-            &val(
-                r#"{
+            &val(r#"{
                   "kind":"acp_notification",
                   "params":{
                     "update":{
@@ -3653,8 +3639,7 @@ mod tests {
                       }
                     }
                   }
-                }"#,
-            ),
+                }"#),
         )
         .unwrap();
 
@@ -3665,8 +3650,14 @@ mod tests {
         );
         assert!(!text.contains("a//"), "no double-slash path: {text}");
         assert!(text.contains("AppPlugin.java"), "got: {text}");
-        assert!(text.contains("-  void a() {}") || text.contains("-  void a()"), "got: {text}");
-        assert!(text.contains("+  void b() {}") || text.contains("+  void b()"), "got: {text}");
+        assert!(
+            text.contains("-  void a() {}") || text.contains("-  void a()"),
+            "got: {text}"
+        );
+        assert!(
+            text.contains("+  void b() {}") || text.contains("+  void b()"),
+            "got: {text}"
+        );
         // Still tracked so a later terminal update can refine.
         assert!(
             s.tool_calls.contains_key("tc_sr2"),
@@ -3676,8 +3667,7 @@ mod tests {
         // Later terminal completed with EditsApplied still projects.
         let done = translate(
             &mut s,
-            &val(
-                r#"{
+            &val(r#"{
                   "kind":"acp_notification",
                   "params":{
                     "update":{
@@ -3712,8 +3702,7 @@ mod tests {
                       }
                     }
                   }
-                }"#,
-            ),
+                }"#),
         )
         .unwrap();
         let final_text = tool_completed_output(&done);
@@ -3726,13 +3715,7 @@ mod tests {
 
     #[test]
     fn display_diff_path_avoids_double_slash_for_absolute() {
-        let patch = unified_diff_from_strings(
-            "/Users/me/repo/file.kt",
-            "a\n",
-            "b\n",
-            1,
-            1,
-        );
+        let patch = unified_diff_from_strings("/Users/me/repo/file.kt", "a\n", "b\n", 1, 1);
         assert!(
             patch.contains("--- a/Users/me/repo/file.kt"),
             "got: {patch}"

@@ -42,9 +42,9 @@ pub mod manager_event;
 pub mod opencode_driver;
 pub(crate) mod process;
 pub mod pty_agent;
+pub mod session_handle;
 pub mod state_machine;
 pub mod store_facing;
-pub mod session_handle;
 
 #[cfg(feature = "test-support")]
 pub mod test_support;
@@ -66,5 +66,5 @@ pub use manager_event::ManagerEvent;
 pub use minos_domain::AgentName as AgentKind;
 pub use opencode_driver::OpencodeServerInstance;
 pub use pty_agent::PtyAgent;
-pub use state_machine::{CloseReason, PauseReason, SessionState};
 pub use session_handle::SessionHandle;
+pub use state_machine::{CloseReason, PauseReason, SessionState};

@@ -5,7 +5,7 @@ use minos_backend::http::{router, test_support::backend_state, test_support::TES
 use minos_backend::session::SessionHandle;
 use minos_backend::store::{
     account_host_pairings, agent_sessions, devices, durable_event_log, host_commands, raw_events,
-    social, sessions,
+    sessions, social,
 };
 use minos_domain::{AgentName, DeviceId, DeviceRole};
 use minos_protocol::Envelope;

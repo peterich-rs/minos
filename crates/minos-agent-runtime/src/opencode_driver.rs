@@ -20,8 +20,8 @@ use tracing::{info, warn};
 use crate::config::RawIngest;
 use crate::manager::IngestSink;
 use crate::manager_event::ManagerEvent;
-use crate::state_machine::SessionState;
 use crate::session_handle::SessionHandle;
+use crate::state_machine::SessionState;
 
 const KILL_ESCALATION: Duration = Duration::from_secs(3);
 
@@ -361,30 +361,30 @@ async fn try_sse_connect(
                 };
                 let (session_id, _provider_session_id) =
                     match resolve_session_id(&payload, session_map).await {
-                    Some(resolved) => resolved,
-                    None => {
-                        let Some(session_id) = register_opencode_subagent_from_pending_task(
-                            &payload,
-                            session_map,
-                            sessions,
-                            manager_tx,
-                            events_tx,
-                            pending_tasks,
-                        )
-                        .await
-                        else {
-                            tracing::debug!(
-                                target: "minos_agent_runtime::opencode_driver",
-                                payload = %payload,
-                                "dropping opencode event without a resolved Minos thread"
-                            );
-                            continue;
-                        };
-                        let provider_session_id =
-                            extract_session_id(&payload).unwrap_or("").to_string();
-                        (session_id, provider_session_id)
-                    }
-                };
+                        Some(resolved) => resolved,
+                        None => {
+                            let Some(session_id) = register_opencode_subagent_from_pending_task(
+                                &payload,
+                                session_map,
+                                sessions,
+                                manager_tx,
+                                events_tx,
+                                pending_tasks,
+                            )
+                            .await
+                            else {
+                                tracing::debug!(
+                                    target: "minos_agent_runtime::opencode_driver",
+                                    payload = %payload,
+                                    "dropping opencode event without a resolved Minos thread"
+                                );
+                                continue;
+                            };
+                            let provider_session_id =
+                                extract_session_id(&payload).unwrap_or("").to_string();
+                            (session_id, provider_session_id)
+                        }
+                    };
                 if let Err(error) = events_tx
                     .emit(RawIngest::from_json(
                         AgentName::Opencode,
@@ -424,10 +424,11 @@ async fn resolve_session_id(
 ) -> Option<(String, String)> {
     let provider_session_id = extract_session_id(payload)?.to_string();
     let map = session_map.lock().await;
-    map.iter().find_map(|(minos_session_id, mapped_provider_id)| {
-        (mapped_provider_id == &provider_session_id)
-            .then(|| (minos_session_id.clone(), provider_session_id.clone()))
-    })
+    map.iter()
+        .find_map(|(minos_session_id, mapped_provider_id)| {
+            (mapped_provider_id == &provider_session_id)
+                .then(|| (minos_session_id.clone(), provider_session_id.clone()))
+        })
 }
 
 async fn register_opencode_subagent_from_pending_task(

@@ -7,7 +7,7 @@
     "opened_at_ms":1714000010000
   },
   {
-    "kind":"thread_closed",
+    "kind":"session_closed",
     "session_id":"thr_fixture",
     "reason":{"kind":"agent_done"},
     "closed_at_ms":1714000011000

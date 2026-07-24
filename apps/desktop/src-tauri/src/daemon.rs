@@ -21,8 +21,8 @@ use minos_protocol::{
     CreateProjectRequest, ListClisResponse, ListConversationAgentSessionsParams,
     ListConversationMessagesParams, ListConversationsParams, ListProjectsResponse,
     LocalConversationMessage, LocalConversationSummary, LocalReactionGroup, ProjectSummary,
-    ReadSessionParams, SendUserMessageRequest, StartAgentInConversationRequest, StartAgentResponse,
-    SessionState, SessionSummary, ToggleConversationMessageReactionParams,
+    ReadSessionParams, SendUserMessageRequest, SessionState, SessionSummary,
+    StartAgentInConversationRequest, StartAgentResponse, ToggleConversationMessageReactionParams,
     ToggleConversationMessageReactionResponse, UpdateConversationParams,
 };
 use minos_ui_protocol::UiEventMessage;
@@ -719,10 +719,7 @@ impl DaemonBridge {
         emoji: String,
     ) -> Result<ToggleReactionResultDto> {
         let client = self.client().await?;
-        let params = ToggleConversationMessageReactionParams {
-            message_id,
-            emoji,
-        };
+        let params = ToggleConversationMessageReactionParams { message_id, emoji };
         let response: ToggleConversationMessageReactionResponse = client
             .request("minos_local_toggle_conversation_message_reaction", [params])
             .await
@@ -1498,11 +1495,10 @@ impl TranscriptAssembler {
         //    Same body (OpenCode finished-part snapshot) → drop.
         //    Different body → append new row at end (new part_id / post-tool text).
         if replace {
-            if let Some(item) = self
-                .items
-                .iter()
-                .rev()
-                .find(|i| i.kind == kind && i.message_id.as_deref() == Some(message_id.as_str()))
+            if let Some(item) =
+                self.items.iter().rev().find(|i| {
+                    i.kind == kind && i.message_id.as_deref() == Some(message_id.as_str())
+                })
             {
                 if item.text == chunk {
                     return;
@@ -1677,8 +1673,7 @@ impl TranscriptAssembler {
                 // progressive ToolCallCompleted may already have flipped the row to
                 // tool_result. Never push a second card or demote completed → open.
                 if let Some(item) = self.items.iter_mut().rev().find(|i| {
-                    i.id == tool_id
-                        || i.request_id.as_deref() == Some(tool_call_id.as_str())
+                    i.id == tool_id || i.request_id.as_deref() == Some(tool_call_id.as_str())
                 }) {
                     if !name.is_empty() {
                         item.title = Some(name);
@@ -1724,13 +1719,7 @@ impl TranscriptAssembler {
             } => {
                 let out = output.render_preview();
                 // task tool completion → update subagent card only (no XML tool_result row).
-                if self.complete_subagent_for_tool(
-                    seq,
-                    ts_ms,
-                    &tool_call_id,
-                    &out,
-                    is_error,
-                ) {
+                if self.complete_subagent_for_tool(seq, ts_ms, &tool_call_id, &out, is_error) {
                     return;
                 }
                 // Keep bare target in `text`; put output into `detail` for expand.
@@ -1739,10 +1728,8 @@ impl TranscriptAssembler {
                 let mut updated = false;
                 let tool_id = stable_tool_id(&tool_call_id);
                 for item in self.items.iter_mut().rev() {
-                    let is_tool_row = matches!(
-                        item.kind.as_str(),
-                        "tool" | "tool_result" | "tool_error"
-                    );
+                    let is_tool_row =
+                        matches!(item.kind.as_str(), "tool" | "tool_result" | "tool_error");
                     if is_tool_row
                         && (item.id == tool_id
                             || item.request_id.as_deref() == Some(tool_call_id.as_str())
@@ -1755,9 +1742,10 @@ impl TranscriptAssembler {
                         };
                         // Refresh target from detail/args if it was a useless fallback.
                         if tool_target_is_useless(&item.text, item.title.as_deref()) {
-                            if let Some(better) =
-                                summarize_tool_args_from_detail(item.title.as_deref(), item.detail.as_deref())
-                            {
+                            if let Some(better) = summarize_tool_args_from_detail(
+                                item.title.as_deref(),
+                                item.detail.as_deref(),
+                            ) {
                                 item.text = better;
                             }
                         }
@@ -2080,8 +2068,7 @@ impl TranscriptAssembler {
         } else {
             agent_name
         };
-        let header =
-            format_subagent_header(running, agent, &id_short, model, status_label);
+        let header = format_subagent_header(running, agent, &id_short, model, status_label);
         let card_id = stable_subagent_id(tc, sid);
 
         if let Some(idx) = self.find_subagent_index(tc, sid).or_else(|| {
@@ -2162,9 +2149,7 @@ impl TranscriptAssembler {
         let agent_name = subagent_type
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "opencode".into());
-        let desc = description
-            .filter(|s| !s.is_empty())
-            .or(prompt_summary);
+        let desc = description.filter(|s| !s.is_empty()).or(prompt_summary);
         self.upsert_subagent_card(
             seq,
             ts_ms,
@@ -2296,9 +2281,7 @@ fn format_subagent_header(
     s
 }
 
-fn parse_task_tool_fields(
-    args_json: &str,
-) -> (Option<String>, Option<String>, Option<String>) {
+fn parse_task_tool_fields(args_json: &str) -> (Option<String>, Option<String>, Option<String>) {
     let Some(value) = parse_tool_args_json(args_json) else {
         return (None, None, None);
     };
@@ -2795,10 +2778,8 @@ fn summarize_tool_args(tool_name: &str, args_json: &str) -> String {
     }
 
     // OpenCode / translator may inject display title (state.title).
-    if let Some(title) = find_tool_stringish(
-        &value,
-        &["_display_title", "display_title", "title"],
-    ) {
+    if let Some(title) = find_tool_stringish(&value, &["_display_title", "display_title", "title"])
+    {
         let t = one_line(&title);
         if !t.is_empty()
             && !is_markupish_tool_line(&t)
@@ -2811,9 +2792,10 @@ fn summarize_tool_args(tool_name: &str, args_json: &str) -> String {
     let kind = ToolKind::from_tool_name(tool_name);
     let candidate = match kind {
         ToolKind::Read | ToolKind::Edit | ToolKind::List => find_tool_path(&value),
-        ToolKind::Execute => {
-            find_tool_stringish(&value, &["cmd", "command", "script", "shell", "description"])
-        }
+        ToolKind::Execute => find_tool_stringish(
+            &value,
+            &["cmd", "command", "script", "shell", "description"],
+        ),
         ToolKind::Search => {
             let pattern = find_tool_stringish(
                 &value,
@@ -2859,9 +2841,10 @@ fn summarize_tool_args(tool_name: &str, args_json: &str) -> String {
         || tool_name.eq_ignore_ascii_case("todowrite")
         || tool_name.eq_ignore_ascii_case("todo_write")
     {
-        if let Some(task) =
-            find_tool_stringish(&value, &["description", "title", "subagent_type", "subagentType"])
-        {
+        if let Some(task) = find_tool_stringish(
+            &value,
+            &["description", "title", "subagent_type", "subagentType"],
+        ) {
             return truncate_str(&one_line(&task), 110);
         }
     }
@@ -3793,7 +3776,9 @@ mod transcript_assembler_tests {
                 .collect::<Vec<_>>()
         );
         assert!(
-            !items.iter().any(|i| i.kind == "tool" || i.kind == "tool_result"),
+            !items
+                .iter()
+                .any(|i| i.kind == "tool" || i.kind == "tool_result"),
             "task must not leave raw tool rows"
         );
         assert!(
@@ -3860,7 +3845,8 @@ mod transcript_assembler_tests {
                 message_id: "m1".into(),
                 tool_call_id: "c_read".into(),
                 name: "read".into(),
-                args_json: r#"{"filePath":"/Users/x/code/foo.ts","_display_title":"foo.ts"}"#.into(),
+                args_json: r#"{"filePath":"/Users/x/code/foo.ts","_display_title":"foo.ts"}"#
+                    .into(),
             }],
         );
         let items = a.finish();

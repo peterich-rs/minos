@@ -474,11 +474,12 @@ mod tests {
             .await
             .unwrap();
 
-        let (first, last): (i64, i64) =
-            sqlx::query_as("SELECT first_ts_ms, last_ts_ms FROM sessions WHERE session_id = 'thr1'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let (first, last): (i64, i64) = sqlx::query_as(
+            "SELECT first_ts_ms, last_ts_ms FROM sessions WHERE session_id = 'thr1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         // first_ts_ms is frozen at insert; last_ts_ms tracks the most recent update.
         assert_eq!(first, 1000);
         assert_eq!(last, 2000);
@@ -496,11 +497,12 @@ mod tests {
             .await
             .unwrap();
 
-        let (ended_at, reason): (Option<i64>, Option<String>) =
-            sqlx::query_as("SELECT ended_at_ms, end_reason FROM sessions WHERE session_id = 'thr1'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let (ended_at, reason): (Option<i64>, Option<String>) = sqlx::query_as(
+            "SELECT ended_at_ms, end_reason FROM sessions WHERE session_id = 'thr1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(ended_at, Some(2000));
         let reason_s = reason.unwrap();
         assert!(

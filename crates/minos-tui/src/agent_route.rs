@@ -132,7 +132,8 @@ pub(crate) fn is_profile_name_clean_token(name: &str) -> bool {
     if n.is_empty() {
         return false;
     }
-    !n.chars().any(|ch| ch.is_whitespace() || ch == '#' || ch == '@')
+    !n.chars()
+        .any(|ch| ch.is_whitespace() || ch == '#' || ch == '@')
 }
 
 /// Unique among profiles + runtime agent names (case-insensitive).
@@ -155,7 +156,10 @@ pub(crate) fn is_profile_name_unique(name: &str, profiles: &[MentionProfile]) ->
 }
 
 /// Insert token for a profile: `@Name ` when unique **and** a clean token, else `@p/<id> `.
-pub(crate) fn profile_mention_insert(profile: &MentionProfile, profiles: &[MentionProfile]) -> String {
+pub(crate) fn profile_mention_insert(
+    profile: &MentionProfile,
+    profiles: &[MentionProfile],
+) -> String {
     if is_profile_name_clean_token(&profile.name) && is_profile_name_unique(&profile.name, profiles)
     {
         format!("@{} ", profile.name.trim())
@@ -280,7 +284,12 @@ mod tests {
 
     #[test]
     fn parses_profile_by_id_token() {
-        let profiles = vec![profile("profile-research", "ResearchGrok", AgentName::Grok, 1)];
+        let profiles = vec![profile(
+            "profile-research",
+            "ResearchGrok",
+            AgentName::Grok,
+            1,
+        )];
         let (target, _) = parse_agent_routing("@p/profile-research go", &profiles).unwrap();
         assert_eq!(target.profile_id.as_deref(), Some("profile-research"));
         assert_eq!(target.agent, AgentName::Grok);

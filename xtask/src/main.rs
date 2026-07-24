@@ -519,9 +519,7 @@ fn bootstrap() -> Result<()> {
         }
     }
 
-    eprintln!(
-        "==> installing flutter_rust_bridge_codegen {FRB_CODEGEN_VERSION}"
-    );
+    eprintln!("==> installing flutter_rust_bridge_codegen {FRB_CODEGEN_VERSION}");
     // Must stay lockstep with `flutter_rust_bridge = "=2.12.0"` (Cargo) and
     // `flutter_rust_bridge: 2.12.0` (apps/mobile pubspec). `--force` replaces
     // a newer/older binary already on PATH (e.g. a beta) so bootstrap is the

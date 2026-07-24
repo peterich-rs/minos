@@ -30,10 +30,10 @@ use minos_protocol::{
     EnsureDirectConversationRequest, FriendRequestSummary, FriendRequestsResponse, FriendsResponse,
     GetSessionLastSeqParams, GetSessionLastSeqResponse, HostSummary, ListAgentsResponse,
     ListChatMessagesResponse, ListClisResponse, ListHostSkillsResponse, ListSessionsParams,
-    ListSessionsResponse, MyProfileResponse, PairingQrPayload, ReadSessionParams, ReadSessionResponse,
-    RefreshResponse, RegisterAgentRequest, RemoveAgentFromGroupRequest, RemoveGroupMemberRequest,
-    SendChatMessageRequest, SetMinosIdRequest, UpdateAgentRequest, UserSummary,
-    WriteHostSkillConfigResponse,
+    ListSessionsResponse, MyProfileResponse, PairingQrPayload, ReadSessionParams,
+    ReadSessionResponse, RefreshResponse, RegisterAgentRequest, RemoveAgentFromGroupRequest,
+    RemoveGroupMemberRequest, SendChatMessageRequest, SetMinosIdRequest, UpdateAgentRequest,
+    UserSummary, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::UiEventMessage;
 use openwire::websocket::WebSocket;

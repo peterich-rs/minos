@@ -468,7 +468,10 @@ fn text_replace_same_body_after_tools_freezes_mid_timeline() {
         .iter()
         .filter(|item| matches!(item, ChatItem::AssistantText { .. }))
         .count();
-    assert_eq!(assistant_count, 1, "same-body replace after tools must not twin");
+    assert_eq!(
+        assistant_count, 1,
+        "same-body replace after tools must not twin"
+    );
     match &cs.items[0] {
         ChatItem::AssistantText { text_parts, .. } => {
             assert_eq!(*text_parts, plain_parts(body));

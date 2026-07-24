@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use minos_agent_runtime::{
     CloseReason as RuntimeCloseReason, ManagerEvent, PauseReason as RuntimePauseReason,
-    StartAgentOutcome, SessionState as RuntimeSessionState,
+    SessionState as RuntimeSessionState, StartAgentOutcome,
 };
 use minos_domain::AgentDescriptor;
 use minos_domain::AgentName;

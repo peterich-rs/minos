@@ -36,8 +36,8 @@ impl TeamworkMcpTool for DelegateToAgentTool {
                 "type": "string",
                 "enum": agent_name_values(),
                 "description": "Runtime agent that should receive the work (codex/claude/…). \
-Optional when profile_id or target_profile is set; when only this is set, the newest \
-host profile for the runtime is applied if one exists."
+            Optional when profile_id or target_profile is set; when only this is set, the newest \
+            host profile for the runtime is applied if one exists."
             }),
         );
         properties.insert(
@@ -45,7 +45,7 @@ host profile for the runtime is applied if one exists."
             json!({
                 "type": "string",
                 "description": "Host agent profile id to bind at session create (stable). \
-When set, target_agent must match the profile runtime if both are provided."
+            When set, target_agent must match the profile runtime if both are provided."
             }),
         );
         properties.insert(
@@ -53,7 +53,7 @@ When set, target_agent must match the profile runtime if both are provided."
             json!({
                 "type": "string",
                 "description": "Host agent profile display name (case-insensitive unique match). \
-Prefer profile_id when known. Ignored when profile_id is set."
+            Prefer profile_id when known. Ignored when profile_id is set."
             }),
         );
         properties.insert(

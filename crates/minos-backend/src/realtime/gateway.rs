@@ -25,7 +25,7 @@ use crate::realtime::subscription::ConnectionState;
 use crate::session::{ServerFrame as LegacySessionFrame, SessionHandle, SessionRevocation};
 use crate::store::{
     agent_sessions, agent_turn_events, agent_turns, durable_event_log, host_commands,
-    outbox_events, raw_events, thread_sync_state, sessions,
+    outbox_events, raw_events, sessions, thread_sync_state,
 };
 use minos_protocol::realtime::{
     ClientFrame, ConnectionPrincipal, HostGapManifest, HostIngestChunk, HostIngestLiveBatch,

@@ -753,7 +753,10 @@ mod tests {
         assert_eq!(delegation.delegation_id, "delegation-1");
         assert_eq!(delegation.conversation_id, "conversation-main");
         assert_eq!(delegation.status, TeamworkDelegationStatus::Running);
-        assert_eq!(delegation.source_session_id.as_deref(), Some("thread-codex"));
+        assert_eq!(
+            delegation.source_session_id.as_deref(),
+            Some("thread-codex")
+        );
         assert_eq!(
             store
                 .get_delegation("conversation-main", &delegation.delegation_id)

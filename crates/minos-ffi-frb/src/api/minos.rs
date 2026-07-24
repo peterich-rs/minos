@@ -47,13 +47,14 @@ pub use minos_protocol::{
     FriendRequestSummary, FriendRequestsResponse, FriendSummary, FriendsResponse, HostSkillError,
     HostSkillSummary, HostSkillsEntry, HostSummary, HostWorkspaceSummary, ListAgentsResponse,
     ListChatMessagesResponse, ListHostSkillsResponse, ListHostWorkspacesResponse,
-    ListProjectSessionsParams, ListProjectSessionsResponse, ListProjectsResponse, ListSessionsParams,
-    ListSessionsResponse, MyProfileResponse, PauseReason, ProjectSummary, ReadSessionParams,
-    ReadSessionResponse, SearchUsersResponse, SenderType, StartAgentResponse, SessionState,
-    SessionSummary, UpdateProjectRequest, UserSummary, WriteHostSkillConfigResponse,
+    ListProjectSessionsParams, ListProjectSessionsResponse, ListProjectsResponse,
+    ListSessionsParams, ListSessionsResponse, MyProfileResponse, PauseReason, ProjectSummary,
+    ReadSessionParams, ReadSessionResponse, SearchUsersResponse, SenderType, SessionState,
+    SessionSummary, StartAgentResponse, UpdateProjectRequest, UserSummary,
+    WriteHostSkillConfigResponse,
 };
 pub use minos_ui_protocol::{
-    ArtifactRef, DisplayPayload, MessageRole, SubagentStatus, SessionEndReason, UiEventMessage,
+    ArtifactRef, DisplayPayload, MessageRole, SessionEndReason, SubagentStatus, UiEventMessage,
 };
 
 // ───────────────────────────── opaque client ─────────────────────────────

@@ -173,7 +173,10 @@ async fn recv_ui_event(ws: &mut WsClient) -> anyhow::Result<(String, u64, UiEven
             Envelope::Event {
                 event:
                     EventKind::UiEventMessage {
-                        session_id, seq, ui, ..
+                        session_id,
+                        seq,
+                        ui,
+                        ..
                     },
                 ..
             } => return Ok((session_id, seq, ui)),

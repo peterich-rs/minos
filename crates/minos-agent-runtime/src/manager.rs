@@ -9,8 +9,8 @@ use crate::config::McpConfig;
 use crate::instance::AppServerInstance;
 use crate::manager_event::ManagerEvent;
 use crate::process::CodexProcess;
-use crate::state_machine::{PauseReason, SessionState};
 use crate::session_handle::SessionHandle;
+use crate::state_machine::{PauseReason, SessionState};
 use crate::{AgentKind, AgentRuntimeConfig, RawIngest};
 use dashmap::DashMap;
 use minos_codex_protocol::{
@@ -610,11 +610,16 @@ impl AgentManager {
         conversation_id: Option<&str>,
     ) -> anyhow::Result<StartAgentOutcome> {
         let canon = std::fs::canonicalize(&workspace).unwrap_or_else(|_| workspace.clone());
-        let preallocated_session_id =
-            logical_session_id.or_else(|| conversation_id.map(|_| uuid::Uuid::new_v4().to_string()));
+        let preallocated_session_id = logical_session_id
+            .or_else(|| conversation_id.map(|_| uuid::Uuid::new_v4().to_string()));
         let source_session_id = conversation_id.and(preallocated_session_id.as_deref());
         let instance = self
-            .ensure_instance(&canon, policies.as_ref(), conversation_id, source_session_id)
+            .ensure_instance(
+                &canon,
+                policies.as_ref(),
+                conversation_id,
+                source_session_id,
+            )
             .await?;
 
         // Allocate a fresh thread on the codex app-server. The
@@ -656,7 +661,10 @@ impl AgentManager {
         handle.mcp_conversation_id = conversation_id.map(str::to_owned);
         handle.codex_session_id = Some(resp.codex_session_id.clone());
         let _ = handle.transition(SessionState::Idle);
-        self.sessions.lock().await.insert(session_id.clone(), handle);
+        self.sessions
+            .lock()
+            .await
+            .insert(session_id.clone(), handle);
         let _ = self.manager_tx.send(ManagerEvent::SessionAdded {
             session_id: session_id.clone(),
             workspace: canon.clone(),
@@ -703,7 +711,10 @@ impl AgentManager {
         );
         handle.codex_session_id = Some(provider_session_id.clone());
         handle.mcp_conversation_id = conversation_id;
-        self.sessions.lock().await.insert(session_id.clone(), handle);
+        self.sessions
+            .lock()
+            .await
+            .insert(session_id.clone(), handle);
         let _ = self.manager_tx.send(ManagerEvent::SessionAdded {
             session_id: session_id.clone(),
             workspace: canon.clone(),
@@ -764,7 +775,10 @@ impl AgentManager {
         );
         handle.codex_session_id = Some(oc_session_id.clone());
         handle.mcp_conversation_id = conversation_id.map(str::to_owned);
-        self.sessions.lock().await.insert(session_id.clone(), handle);
+        self.sessions
+            .lock()
+            .await
+            .insert(session_id.clone(), handle);
         let _ = self.manager_tx.send(ManagerEvent::SessionAdded {
             session_id: session_id.clone(),
             workspace: canon.clone(),
@@ -812,7 +826,10 @@ impl AgentManager {
         );
         handle.codex_session_id = Some(provider_session_id.clone());
         handle.mcp_conversation_id = conversation_id.map(str::to_owned);
-        self.sessions.lock().await.insert(session_id.clone(), handle);
+        self.sessions
+            .lock()
+            .await
+            .insert(session_id.clone(), handle);
         let _ = self.manager_tx.send(ManagerEvent::SessionAdded {
             session_id: session_id.clone(),
             workspace: canon.clone(),
@@ -959,7 +976,10 @@ impl AgentManager {
         .with_full_launch_options(model, effort, instructions);
         handle.codex_session_id = Some(provider_session_id.clone());
         handle.mcp_conversation_id = conversation_id.map(str::to_owned);
-        self.sessions.lock().await.insert(session_id.clone(), handle);
+        self.sessions
+            .lock()
+            .await
+            .insert(session_id.clone(), handle);
         let _ = self.manager_tx.send(ManagerEvent::SessionAdded {
             session_id: session_id.clone(),
             workspace: canon.clone(),
@@ -1712,7 +1732,8 @@ impl AgentManager {
                 }
             }
             AgentName::Gemini => {
-                if let Some(instance) = self.gemini_instances.lock().await.get(session_id).cloned() {
+                if let Some(instance) = self.gemini_instances.lock().await.get(session_id).cloned()
+                {
                     let _ = instance.cancel().await;
                 }
             }
@@ -2164,7 +2185,8 @@ impl AgentManager {
                 }
             }),
         };
-        let ingest = RawIngest::from_json(agent, session_id.to_string(), payload, current_unix_ms());
+        let ingest =
+            RawIngest::from_json(agent, session_id.to_string(), payload, current_unix_ms());
         self.events_tx.emit(ingest).await?;
         Ok(())
     }
@@ -2215,7 +2237,8 @@ impl AgentManager {
                 }
             }
             AgentName::Gemini => {
-                if let Some(instance) = self.gemini_instances.lock().await.get(session_id).cloned() {
+                if let Some(instance) = self.gemini_instances.lock().await.get(session_id).cloned()
+                {
                     let _ = instance.cancel().await;
                 }
             }
@@ -3142,7 +3165,10 @@ async fn logical_session_id_for_provider_known(
 
 fn rewrite_payload_session_id(params: &mut Value, session_id: &str) {
     if let Some(object) = params.as_object_mut() {
-        object.insert("threadId".to_string(), Value::String(session_id.to_string()));
+        object.insert(
+            "threadId".to_string(),
+            Value::String(session_id.to_string()),
+        );
         object.insert(
             "session_id".to_string(),
             Value::String(session_id.to_string()),
@@ -3360,9 +3386,15 @@ async fn event_pump_loop(
                 let subagent_registrations =
                     codex_collab_subagent_registrations(&method, &session_id, &params);
                 for registration in &subagent_registrations {
-                    register_codex_subagent_thread(&sessions, &manager_tx, &workspace, registration)
-                        .await;
-                    if let Some(orphaned) = orphan_notifications.remove(&registration.sub_session_id)
+                    register_codex_subagent_thread(
+                        &sessions,
+                        &manager_tx,
+                        &workspace,
+                        registration,
+                    )
+                    .await;
+                    if let Some(orphaned) =
+                        orphan_notifications.remove(&registration.sub_session_id)
                     {
                         for (_, orphan_method, mut orphan_params) in orphaned {
                             rewrite_payload_session_id(
@@ -3414,7 +3446,8 @@ async fn event_pump_loop(
                         tg.get(&session_id).and_then(|handle| {
                             handle.set_active_turn_id(None);
                             let old = handle.current_state();
-                            if matches!(old, SessionState::Running { .. } | SessionState::Resuming) {
+                            if matches!(old, SessionState::Running { .. } | SessionState::Resuming)
+                            {
                                 handle.transition(SessionState::Idle).ok()?;
                                 Some((old, SessionState::Idle))
                             } else {
@@ -4185,7 +4218,10 @@ done
         );
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                if matches!(mgr.session_state(&session_id).await, Some(SessionState::Idle)) {
+                if matches!(
+                    mgr.session_state(&session_id).await,
+                    Some(SessionState::Idle)
+                ) {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -4306,7 +4342,10 @@ done
         );
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                if matches!(mgr.session_state(&session_id).await, Some(SessionState::Idle)) {
+                if matches!(
+                    mgr.session_state(&session_id).await,
+                    Some(SessionState::Idle)
+                ) {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -4584,7 +4623,10 @@ done
         );
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                if matches!(mgr.session_state(&session_id).await, Some(SessionState::Idle)) {
+                if matches!(
+                    mgr.session_state(&session_id).await,
+                    Some(SessionState::Idle)
+                ) {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;

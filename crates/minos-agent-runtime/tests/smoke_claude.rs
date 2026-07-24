@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use minos_agent_runtime::{
-    manager_event::ManagerEvent, state_machine::SessionState, session_handle::SessionHandle,
+    manager_event::ManagerEvent, session_handle::SessionHandle, state_machine::SessionState,
     IngestSink,
 };
 

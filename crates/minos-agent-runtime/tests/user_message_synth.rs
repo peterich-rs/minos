@@ -81,8 +81,11 @@ async fn send_user_message_emits_synth_user_item_started() {
         Some("hello world")
     );
 
+    // Codex wire shape still keys items by provider `threadId` (see
+    // ItemStartedNotification). Logical Minos session id lives on the
+    // ingest envelope (`ingest.session_id`), already asserted above.
     assert_eq!(
-        params.get("sessionId").and_then(Value::as_str),
+        params.get("threadId").and_then(Value::as_str),
         Some(session.session_id.as_str())
     );
 

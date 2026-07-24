@@ -878,12 +878,11 @@ impl LocalStore {
         &self,
         message_id: &str,
     ) -> anyhow::Result<Option<String>> {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT conversation_id FROM chat_messages WHERE message_id = ?",
-        )
-        .bind(message_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT conversation_id FROM chat_messages WHERE message_id = ?")
+                .bind(message_id)
+                .fetch_optional(&self.pool)
+                .await?;
         Ok(row.map(|r| r.0))
     }
 
@@ -909,8 +908,8 @@ impl LocalStore {
         .bind(message_id)
         .fetch_optional(&mut *tx)
         .await?;
-        let conversation_id = conversation_id
-            .ok_or_else(|| anyhow::anyhow!("message not found: {message_id}"))?;
+        let conversation_id =
+            conversation_id.ok_or_else(|| anyhow::anyhow!("message not found: {message_id}"))?;
 
         let existing: Option<String> = sqlx::query_scalar(
             "SELECT reaction_id FROM chat_message_reactions \
@@ -1847,7 +1846,16 @@ mod tests {
         seed_conversation(&store).await;
         store
             .upsert_conversation_message(
-                "c", "msg-react", None, "user", None, "hello", 10, None, None, "[]",
+                "c",
+                "msg-react",
+                None,
+                "user",
+                None,
+                "hello",
+                10,
+                None,
+                None,
+                "[]",
             )
             .await
             .unwrap();
@@ -1919,4 +1927,3 @@ mod tests {
         assert!(rows.len() <= 1);
     }
 }
-

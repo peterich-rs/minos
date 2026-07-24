@@ -17,8 +17,8 @@ use tracing::{info, warn};
 use crate::config::RawIngest;
 use crate::manager::IngestSink;
 use crate::manager_event::ManagerEvent;
-use crate::state_machine::SessionState;
 use crate::session_handle::SessionHandle;
+use crate::state_machine::SessionState;
 
 const KILL_ESCALATION: Duration = Duration::from_secs(3);
 
@@ -324,8 +324,8 @@ async fn sync_session_from_payload(
 mod tests {
     use super::*;
     use crate::manager_event::ManagerEvent;
-    use crate::state_machine::SessionState;
     use crate::session_handle::SessionHandle;
+    use crate::state_machine::SessionState;
 
     fn val(s: &str) -> Value {
         serde_json::from_str(s).expect("json fixture should parse")

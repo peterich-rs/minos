@@ -25,13 +25,13 @@ use minos_protocol::{
     GetSessionLastSeqResponse, HostSummary, ListAgentsResponse, ListChatMessagesRequest,
     ListChatMessagesResponse, ListHostClisRequest, ListHostSkillsCommandRequest,
     ListHostSkillsResponse, ListHostWorkspacesCommandRequest, ListHostWorkspacesResponse,
-    ListProjectSessionsParams, ListProjectSessionsResponse, ListProjectsResponse, ListSessionsParams,
-    ListSessionsResponse, LogoutRequest, MeHostsResponse, MyProfileResponse, ReadSessionParams,
-    ReadSessionResponse, RealtimeWsTicketRequest, RealtimeWsTicketResponse, RefreshRequest,
-    RefreshResponse, RegisterAgentRequest, RemoveAgentFromGroupRequest, RemoveGroupMemberRequest,
-    SearchUsersRequest, SearchUsersResponse, SendChatMessageRequest, SetMinosIdRequest,
-    UpdateAgentRequest, UpdateProjectRequest, WriteHostSkillConfigCommandRequest,
-    WriteHostSkillConfigResponse,
+    ListProjectSessionsParams, ListProjectSessionsResponse, ListProjectsResponse,
+    ListSessionsParams, ListSessionsResponse, LogoutRequest, MeHostsResponse, MyProfileResponse,
+    ReadSessionParams, ReadSessionResponse, RealtimeWsTicketRequest, RealtimeWsTicketResponse,
+    RefreshRequest, RefreshResponse, RegisterAgentRequest, RemoveAgentFromGroupRequest,
+    RemoveGroupMemberRequest, SearchUsersRequest, SearchUsersResponse, SendChatMessageRequest,
+    SetMinosIdRequest, UpdateAgentRequest, UpdateProjectRequest,
+    WriteHostSkillConfigCommandRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::{DisplayPayload, MessageRole, SessionEndReason, UiEventMessage};
 use openwire::{Client, RequestBody, ResponseBody, WireError};
@@ -288,7 +288,7 @@ impl FormalAgentSessionSummary {
             minos_protocol::SessionState::Idle
         };
         Ok(minos_protocol::SessionSummary {
-            session_id: session_id,
+            session_id,
             agent,
             title: self.title,
             first_ts_ms: self.started_at_ms,

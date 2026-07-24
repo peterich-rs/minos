@@ -149,11 +149,16 @@ pub trait LocalDaemonRpc {
     ) -> jsonrpsee::core::RpcResult<()>;
 
     #[method(name = "close_session")]
-    async fn close_session(&self, req: crate::CloseSessionRequest) -> jsonrpsee::core::RpcResult<()>;
+    async fn close_session(
+        &self,
+        req: crate::CloseSessionRequest,
+    ) -> jsonrpsee::core::RpcResult<()>;
 
     #[method(name = "delete_session")]
-    async fn delete_session(&self, req: crate::CloseSessionRequest)
-        -> jsonrpsee::core::RpcResult<()>;
+    async fn delete_session(
+        &self,
+        req: crate::CloseSessionRequest,
+    ) -> jsonrpsee::core::RpcResult<()>;
 
     #[method(name = "resume_session")]
     async fn resume_session(

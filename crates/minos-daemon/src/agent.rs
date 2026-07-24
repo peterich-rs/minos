@@ -11,13 +11,14 @@ use minos_codex_protocol::SkillsListResponse as CodexSkillsListResponse;
 use minos_domain::{AgentName, MinosError};
 use minos_protocol::{
     AgentDispatchRequest, AgentDispatchResponse, AgentLaunchMode as ProtoAgentLaunchMode,
-    ApprovalDecisionRequest, CloseReason as ProtoCloseReason, CloseSessionRequest, GetSessionParams,
-    GetSessionResponse, HostSkillError, HostSkillSummary, HostSkillsEntry, InterruptSessionRequest,
-    ListHostSkillsRequest, ListHostSkillsResponse, ListHostWorkspacesRequest,
-    ListHostWorkspacesResponse, ListSessionsParams, ListSessionsResponse, LocalConversationEvent,
-    LocalIngestFrame, LocalManagerEvent, PauseReason as ProtoPauseReason, SendUserMessageRequest,
-    StartAgentRequest, StartAgentResponse, SessionState as ProtoSessionState, SessionSummary,
-    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
+    ApprovalDecisionRequest, CloseReason as ProtoCloseReason, CloseSessionRequest,
+    GetSessionParams, GetSessionResponse, HostSkillError, HostSkillSummary, HostSkillsEntry,
+    InterruptSessionRequest, ListHostSkillsRequest, ListHostSkillsResponse,
+    ListHostWorkspacesRequest, ListHostWorkspacesResponse, ListSessionsParams,
+    ListSessionsResponse, LocalConversationEvent, LocalIngestFrame, LocalManagerEvent,
+    PauseReason as ProtoPauseReason, SendUserMessageRequest, SessionState as ProtoSessionState,
+    SessionSummary, StartAgentRequest, StartAgentResponse, WriteHostSkillConfigRequest,
+    WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::SessionEndReason;
 use tokio::sync::{broadcast, watch};
@@ -264,7 +265,9 @@ impl AgentGlue {
                                     )
                                     .await;
                                 }
-                                completion_for_state.on_session_state(&session_id, &new).await;
+                                completion_for_state
+                                    .on_session_state(&session_id, &new)
+                                    .await;
                                 let _ = state_tx_clone.send(new);
                             }
                             ManagerEvent::SessionClosed { session_id, reason } => {
@@ -980,7 +983,10 @@ impl AgentGlue {
         })
     }
 
-    pub async fn get_session(&self, req: GetSessionParams) -> Result<GetSessionResponse, MinosError> {
+    pub async fn get_session(
+        &self,
+        req: GetSessionParams,
+    ) -> Result<GetSessionResponse, MinosError> {
         let row = self
             .store
             .get_session(&req.session_id)
@@ -1485,7 +1491,8 @@ impl AgentGlue {
             .await
             .map_err(|e| map_store_error("list_conversation_messages", e))?;
         let has_more = rows.len() > requested_limit as usize;
-        let page_rows: Vec<ChatMessageRow> = rows.into_iter().take(requested_limit as usize).collect();
+        let page_rows: Vec<ChatMessageRow> =
+            rows.into_iter().take(requested_limit as usize).collect();
         let message_ids: Vec<String> = page_rows.iter().map(|r| r.message_id.clone()).collect();
         let reaction_rows = self
             .store
@@ -1810,10 +1817,7 @@ impl AgentGlue {
 
 /// Profile display names double as `@Name` mention tokens.
 /// Reject characters that break single-token `@` routing: whitespace, `#` (session form), `@`.
-fn validate_agent_profile_name<'a>(
-    name: &'a str,
-    method: &str,
-) -> Result<&'a str, MinosError> {
+fn validate_agent_profile_name<'a>(name: &'a str, method: &str) -> Result<&'a str, MinosError> {
     let name = name.trim();
     if name.is_empty() {
         return Err(MinosError::CodexProtocolError {
@@ -2095,11 +2099,7 @@ fn aggregate_reactions_by_message(
             })
             .collect();
         // Stable display order: higher count first, then emoji.
-        groups.sort_by(|a, b| {
-            b.count
-                .cmp(&a.count)
-                .then_with(|| a.emoji.cmp(&b.emoji))
-        });
+        groups.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.emoji.cmp(&b.emoji)));
         out.insert(message_id, groups);
     }
     out
@@ -2964,30 +2964,29 @@ async fn resolve_launch_options(
     reasoning_effort: Option<String>,
     instructions: Option<String>,
 ) -> Result<Option<minos_agent_runtime::AgentLaunchOptions>, String> {
-    let (base_model, base_effort, base_instructions) = if let Some(pid) =
-        profile_id.map(str::trim).filter(|s| !s.is_empty())
-    {
-        let row = store
-            .get_agent_profile(pid)
-            .await
-            .map_err(|e| format!("resolve_launch_options.get_agent_profile: {e}"))?
-            .ok_or_else(|| format!("agent profile not found: {pid}"))?;
-        let profile_agent = parse_agent_label(&row.runtime_agent).map_err(|e| e.to_string())?;
-        if profile_agent != agent {
-            return Err(format!(
-                "agent mismatch for profile {pid}: request agent is {}, profile runtime is {}",
-                agent_label(agent),
-                agent_label(profile_agent),
-            ));
-        }
-        (
-            nonempty_opt(Some(row.model)),
-            nonempty_opt(Some(row.reasoning_effort)),
-            nonempty_opt(Some(row.instructions)),
-        )
-    } else {
-        (None, None, None)
-    };
+    let (base_model, base_effort, base_instructions) =
+        if let Some(pid) = profile_id.map(str::trim).filter(|s| !s.is_empty()) {
+            let row = store
+                .get_agent_profile(pid)
+                .await
+                .map_err(|e| format!("resolve_launch_options.get_agent_profile: {e}"))?
+                .ok_or_else(|| format!("agent profile not found: {pid}"))?;
+            let profile_agent = parse_agent_label(&row.runtime_agent).map_err(|e| e.to_string())?;
+            if profile_agent != agent {
+                return Err(format!(
+                    "agent mismatch for profile {pid}: request agent is {}, profile runtime is {}",
+                    agent_label(agent),
+                    agent_label(profile_agent),
+                ));
+            }
+            (
+                nonempty_opt(Some(row.model)),
+                nonempty_opt(Some(row.reasoning_effort)),
+                nonempty_opt(Some(row.instructions)),
+            )
+        } else {
+            (None, None, None)
+        };
 
     // Explicit request fields win over profile (and over empty profile fields).
     let model = nonempty_opt(model).or(base_model);
@@ -3643,10 +3642,7 @@ mod tests {
             })
             .await
             .expect_err("whitespace update name");
-        assert!(
-            err.to_string().contains("whitespace"),
-            "unexpected: {err}"
-        );
+        assert!(err.to_string().contains("whitespace"), "unexpected: {err}");
     }
 
     #[tokio::test]
@@ -3817,10 +3813,7 @@ mod tests {
                 .unwrap();
         assert_eq!(agent, AgentName::Grok);
         assert_eq!(profile_id.as_deref(), Some("profile-research"));
-        assert_eq!(
-            launch.and_then(|l| l.model).as_deref(),
-            Some("grok-4")
-        );
+        assert_eq!(launch.and_then(|l| l.model).as_deref(), Some("grok-4"));
     }
 
     #[tokio::test]

@@ -522,7 +522,7 @@ async fn start_send_stream_stop_against_fake_codex_server() -> anyhow::Result<()
         Step::EmitNotification {
             method: "turn/completed".into(),
             params: json!({
-                "sessionId": THREAD_ID,
+                "threadId": THREAD_ID,
                 "finishedAtMs": 123
             }),
         },
@@ -662,7 +662,7 @@ async fn dispatch_message_creates_new_session() -> anyhow::Result<()> {
         Step::EmitNotification {
             method: "turn/completed".into(),
             params: json!({
-                "sessionId": session_id,
+                "threadId": session_id,
                 "finishedAtMs": 100
             }),
         },
@@ -727,7 +727,7 @@ async fn dispatch_message_steers_running_session() -> anyhow::Result<()> {
         Step::EmitNotification {
             method: "turn/completed".into(),
             params: json!({
-                "sessionId": session_id,
+                "threadId": session_id,
                 "finishedAtMs": 200
             }),
         },
@@ -830,7 +830,7 @@ async fn interrupt_then_resume_session() -> anyhow::Result<()> {
         Step::EmitNotification {
             method: "turn/completed".into(),
             params: json!({
-                "sessionId": session_id,
+                "threadId": session_id,
                 "finishedAtMs": 300
             }),
         },

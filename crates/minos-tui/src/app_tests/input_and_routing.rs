@@ -438,7 +438,10 @@ async fn conversation_input_on_closed_selected_thread_starts_new_same_agent() {
     );
     assert_eq!(app.ui.inputs.conversation.content, "");
     assert_eq!(app.ui.session_panel.list.selected, Some(1));
-    assert_eq!(app.ui.session_panel.list.items[1].agent, AgentName::Opencode);
+    assert_eq!(
+        app.ui.session_panel.list.items[1].agent,
+        AgentName::Opencode
+    );
 }
 
 #[tokio::test]
@@ -487,7 +490,10 @@ async fn agent_input_on_closed_selected_thread_starts_new_same_agent() {
     );
     assert_eq!(app.ui.inputs.agent.content, "");
     assert_eq!(app.ui.session_panel.list.selected, Some(1));
-    assert_eq!(app.ui.session_panel.list.items[1].agent, AgentName::Opencode);
+    assert_eq!(
+        app.ui.session_panel.list.items[1].agent,
+        AgentName::Opencode
+    );
 }
 
 #[tokio::test]

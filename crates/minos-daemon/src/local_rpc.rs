@@ -9,9 +9,9 @@ use minos_cli_detect::{detect_all, CommandRunner};
 use minos_domain::MinosError;
 use minos_protocol::{
     AppendConversationMessageParams, AppendConversationMessageResponse, ApprovalDecisionRequest,
-    CloseSessionRequest, CreateConversationParams, CreateConversationResponse, CreateProjectRequest,
-    CreateProjectResponse, HealthResponse, InterruptSessionRequest, ListClisResponse,
-    ListConversationAgentSessionsParams, ListConversationAgentSessionsResponse,
+    CloseSessionRequest, CreateConversationParams, CreateConversationResponse,
+    CreateProjectRequest, CreateProjectResponse, HealthResponse, InterruptSessionRequest,
+    ListClisResponse, ListConversationAgentSessionsParams, ListConversationAgentSessionsResponse,
     ListConversationMessagesParams, ListConversationMessagesResponse, ListConversationsParams,
     ListConversationsResponse, ListProjectsResponse, LocalConversationEvent, LocalDaemonRpcServer,
     LocalIngestFrame, LocalManagerEvent, LocalSessionSnapshot, ReadArtifactRangeRequest,

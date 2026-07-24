@@ -618,7 +618,8 @@ impl App {
         if self.state.hydrated_threads.contains(session_id) {
             return false;
         }
-        self.replay_thread_history_from(session_id, None, true).await
+        self.replay_thread_history_from(session_id, None, true)
+            .await
     }
 
     pub(super) async fn ensure_conversation_agent_session_visible(&mut self, session_id: &str) {
@@ -671,7 +672,12 @@ impl App {
     }
 
     pub(super) fn ensure_chat_state_agent(&mut self, session_id: &str, agent: AgentName) {
-        match self.ui.session_panel.chat_states.entry(session_id.to_owned()) {
+        match self
+            .ui
+            .session_panel
+            .chat_states
+            .entry(session_id.to_owned())
+        {
             std::collections::hash_map::Entry::Occupied(mut entry) => {
                 if entry.get().agent != agent {
                     entry.insert(ChatState::new(session_id.to_owned(), agent));
@@ -764,10 +770,10 @@ impl App {
                     parent_session_id: parent_session_id.clone(),
                 };
                 self.ui.session_panel.list.items.push(entry);
-                self.ui
-                    .session_panel
-                    .chat_states
-                    .insert(session_id.clone(), ChatState::new(session_id.clone(), agent));
+                self.ui.session_panel.chat_states.insert(
+                    session_id.clone(),
+                    ChatState::new(session_id.clone(), agent),
+                );
                 if let Some(parent_session_id) = parent_session_id.as_deref() {
                     upsert_subagent_session(
                         &mut self.ui,
@@ -783,7 +789,9 @@ impl App {
                 self.sync_input_agent_picker();
                 true
             }
-            ManagerEvent::SessionStateChanged { session_id, new, .. } => {
+            ManagerEvent::SessionStateChanged {
+                session_id, new, ..
+            } => {
                 let known_thread = self
                     .ui
                     .session_panel
@@ -958,7 +966,8 @@ fn sync_subagent_sessions(
             ..
         } = event
         {
-            if let Some(conversation_id) = conversation_id_for_parent(state, ui, parent_session_id) {
+            if let Some(conversation_id) = conversation_id_for_parent(state, ui, parent_session_id)
+            {
                 state
                     .session_conversations
                     .insert(sub_session_id.clone(), conversation_id);

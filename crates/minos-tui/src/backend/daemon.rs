@@ -10,7 +10,7 @@ use jsonrpsee::core::params::ArrayParams;
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
 use minos_agent_runtime::{
     CloseReason as RuntimeCloseReason, ManagerEvent, PauseReason as RuntimePauseReason,
-    StartAgentOutcome, SessionState as RuntimeSessionState,
+    SessionState as RuntimeSessionState, StartAgentOutcome,
 };
 use minos_domain::{AgentDescriptor, AgentName};
 use minos_protocol::{
@@ -20,8 +20,8 @@ use minos_protocol::{
     LocalConversationEvent, LocalIngestFrame, LocalManagerEvent, LocalSessionSnapshot,
     PauseReason as ProtoPauseReason, ReadSessionParams, ReadSessionRawHistoryResponse,
     RespondOpencodePermissionRequest, RespondOpencodeQuestionRequest, SendUserMessageRequest,
-    StartAgentInConversationRequest, StartAgentRequest, StartAgentResponse,
-    SessionState as ProtoSessionState,
+    SessionState as ProtoSessionState, StartAgentInConversationRequest, StartAgentRequest,
+    StartAgentResponse,
 };
 use serde_json::Value;
 use std::path::{Path, PathBuf};

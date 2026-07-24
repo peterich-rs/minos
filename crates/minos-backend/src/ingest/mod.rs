@@ -93,7 +93,14 @@ pub async fn dispatch(
     owner_device_id: minos_domain::DeviceId,
 ) -> Result<(), BackendError> {
     // 1. Upsert the session row (creates on first ingest, bumps last_ts_ms otherwise).
-    sessions::upsert(store, session_id, agent, &owner_device_id.to_string(), ts_ms).await?;
+    sessions::upsert(
+        store,
+        session_id,
+        agent,
+        &owner_device_id.to_string(),
+        ts_ms,
+    )
+    .await?;
 
     // 2. Persist raw. The backend may assign a fresh seq when the daemon
     // resumes an existing thread with a process-local counter reset.

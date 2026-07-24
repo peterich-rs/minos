@@ -201,10 +201,7 @@ mod tests {
     fn every_agent_has_capability_metadata() {
         for &agent in AgentName::all() {
             assert!(!agent.bin_name().is_empty(), "{agent:?} bin_name");
-            assert!(
-                !agent.display_name().is_empty(),
-                "{agent:?} display_name"
-            );
+            assert!(!agent.display_name().is_empty(), "{agent:?} display_name");
             // Exhaustive capability reads — panics if a match arm is missing.
             let _ = agent.supports_model_selection();
             let _ = agent.supports_reasoning_effort();
@@ -223,7 +220,10 @@ mod tests {
 
     #[test]
     fn model_discovery_matches_runtime_strategy() {
-        assert_eq!(AgentName::Codex.model_discovery(), ModelDiscovery::AppServer);
+        assert_eq!(
+            AgentName::Codex.model_discovery(),
+            ModelDiscovery::AppServer
+        );
         assert_eq!(AgentName::Claude.model_discovery(), ModelDiscovery::Static);
         assert_eq!(AgentName::Gemini.model_discovery(), ModelDiscovery::Static);
         assert_eq!(AgentName::Opencode.model_discovery(), ModelDiscovery::Cli);

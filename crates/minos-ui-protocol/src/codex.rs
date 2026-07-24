@@ -8,7 +8,7 @@
 
 use crate::error::TranslationError;
 use crate::message::{
-    DisplayPayload, MessageRole, SubagentStatus, SessionEndReason, UiEventMessage,
+    DisplayPayload, MessageRole, SessionEndReason, SubagentStatus, UiEventMessage,
 };
 use minos_domain::AgentName;
 use serde_json::Value;

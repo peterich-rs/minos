@@ -93,7 +93,11 @@ impl TestBackend {
         self
     }
 
-    fn with_history_pages(self, session_id: &str, pages: Vec<ReadSessionRawHistoryResponse>) -> Self {
+    fn with_history_pages(
+        self,
+        session_id: &str,
+        pages: Vec<ReadSessionRawHistoryResponse>,
+    ) -> Self {
         self.history_pages
             .lock()
             .expect("history pages lock")

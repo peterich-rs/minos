@@ -26,7 +26,11 @@ impl App {
             .await;
     }
 
-    async fn record_agent_conversation_result(&mut self, session_id: &str, allow_ingest_done: bool) {
+    async fn record_agent_conversation_result(
+        &mut self,
+        session_id: &str,
+        allow_ingest_done: bool,
+    ) {
         // Daemon owns agent-result writeback and delegation completion so TUI
         // offline still closes the loop. Keep this path as a no-op to avoid
         // double-writing conversation messages.

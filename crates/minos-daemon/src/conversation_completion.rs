@@ -567,7 +567,12 @@ impl ConversationCompletion {
 
         if delegation.is_some() {
             match teamwork
-                .complete_delegation_for_thread(conversation_id, session_id, Some(&message_id), text)
+                .complete_delegation_for_thread(
+                    conversation_id,
+                    session_id,
+                    Some(&message_id),
+                    text,
+                )
                 .await
             {
                 Ok(Some(completed)) => {
