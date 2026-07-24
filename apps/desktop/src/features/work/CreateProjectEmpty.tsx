@@ -89,21 +89,21 @@ export function CreateProjectEmpty({ variant = "full", className }: Props) {
           )}
         </span>
         <div className="space-y-2">
-          <h2 className="text-[18px] font-semibold tracking-tight text-ink">
+          <h2 className="text-lg font-semibold tracking-tight text-ink">
             Create your first project
           </h2>
-          <p className="text-[13px] leading-relaxed text-ink-muted">
+          <p className="text-sm leading-relaxed text-ink-muted">
             Choose a local folder as the workspace. Minos will create a project
             on the daemon and open it here.
           </p>
         </div>
-        <span className="inline-flex items-center gap-2 rounded-full bg-surface px-3 py-1.5 text-[12px] font-medium text-ink-secondary ring-1 ring-ink/10">
+        <span className="inline-flex items-center gap-2 rounded-full bg-surface px-3 py-1.5 text-xs font-medium text-ink-secondary ring-1 ring-ink/10">
           <FolderOpen className="h-3.5 w-3.5" />
           Select folder
         </span>
       </button>
       {message ? (
-        <p className="mt-4 max-w-md text-center text-[12px] text-rose-600">
+        <p className="mt-4 max-w-md text-center text-xs text-rose-600">
           {message}
         </p>
       ) : null}

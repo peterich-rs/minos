@@ -56,8 +56,8 @@ export function SessionListPane({
     <aside className="flex w-[min(300px,36vw)] min-w-[240px] max-w-[360px] shrink-0 flex-col overflow-hidden border-r border-ink/5 bg-surface">
       <div className="flex shrink-0 items-center justify-between border-b border-ink/5 px-3 py-2.5">
         <div className="min-w-0 pl-1">
-          <div className="text-[13px] font-semibold text-ink">Sessions</div>
-          <div className="text-[11px] text-ink-muted">
+          <div className="text-sm font-semibold text-ink">Sessions</div>
+          <div className="text-2xs text-ink-muted">
             {phase === "loading" && projectSessionCount === 0
               ? "Loading…"
               : conversationCount === 0
@@ -78,25 +78,25 @@ export function SessionListPane({
       <div className="flex min-h-0 flex-1 flex-col">
         {phase === "error" && projectSessionCount === 0 ? (
           <div className="flex flex-col items-center gap-2 px-2 py-8 text-center">
-            <p className="text-[12px] text-rose-600">
+            <p className="text-xs text-rose-600">
               {error ?? "Failed to load sessions"}
             </p>
             <button
               type="button"
               onClick={onRetry}
-              className="rounded-lg bg-ink px-3 py-1.5 text-[11px] font-semibold text-white"
+              className="rounded-lg bg-ink px-3 py-1.5 text-2xs font-semibold text-white"
             >
               Retry
             </button>
           </div>
         ) : null}
         {phase === "loading" && projectSessionCount === 0 ? (
-          <p className="px-2 py-8 text-center text-[12px] text-ink-muted">
+          <p className="px-2 py-8 text-center text-xs text-ink-muted">
             Loading sessions…
           </p>
         ) : null}
         {phase === "ready" && projectSessionCount === 0 ? (
-          <p className="px-2 py-8 text-center text-[12px] text-ink-muted">
+          <p className="px-2 py-8 text-center text-xs text-ink-muted">
             No agent sessions yet. Use @agent in a conversation.
           </p>
         ) : null}
@@ -147,7 +147,7 @@ const SessionListRow = memo(function SessionListRow({
   }
   if (row.type === "empty-roots") {
     return (
-      <p className="px-3 py-2 text-[11px] text-ink-muted">No top-level sessions</p>
+      <p className="px-3 py-2 text-2xs text-ink-muted">No top-level sessions</p>
     );
   }
   return (
@@ -192,23 +192,23 @@ function ConversationSessionFolderHeader({
       )}
       <MessageSquare className="h-3.5 w-3.5 shrink-0 text-ink-muted" />
       <span
-        className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-ink"
+        className="min-w-0 flex-1 truncate text-xs font-semibold text-ink"
         title={group.title}
       >
         {group.title}
       </span>
       {group.runningCount > 0 ? (
-        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
+        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-3xs font-medium text-amber-800">
           <Loader2 className="h-3 w-3 animate-spin" />
           {group.runningCount}
         </span>
       ) : null}
       {group.attentionCount > 0 && group.runningCount === 0 ? (
-        <span className="shrink-0 rounded-full bg-rose-100 px-1.5 py-0.5 text-[10px] font-medium text-rose-800">
+        <span className="shrink-0 rounded-full bg-rose-100 px-1.5 py-0.5 text-3xs font-medium text-rose-800">
           {group.attentionCount}
         </span>
       ) : null}
-      <span className="shrink-0 text-[10px] tabular-nums text-ink-muted">
+      <span className="shrink-0 text-3xs tabular-nums text-ink-muted">
         {group.sessions.length}
       </span>
     </button>
@@ -260,9 +260,9 @@ const SessionTreeRow = memo(function SessionTreeRow({
       </div>
       <div className="min-w-0 flex-1">
         <div className="min-w-0">
-          <span className="truncate text-[12.5px] font-semibold text-ink">
+          <span className="truncate text-xs font-semibold text-ink">
             {meta?.label ?? session.agent}{" "}
-            <span className="font-mono text-[10.5px] font-normal text-ink-muted">
+            <span className="font-mono text-3xs font-normal text-ink-muted">
               #{session.shortId}
             </span>
           </span>
@@ -270,7 +270,7 @@ const SessionTreeRow = memo(function SessionTreeRow({
         <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
           <span
             className={cn(
-              "inline-flex max-w-full items-center gap-1 truncate rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+              "inline-flex max-w-full items-center gap-1 truncate rounded-full px-1.5 py-0.5 text-3xs font-medium",
               status.pill,
             )}
           >
@@ -284,12 +284,12 @@ const SessionTreeRow = memo(function SessionTreeRow({
             {status.label}
           </span>
           {session.parentId ? (
-            <span className="truncate text-[10px] text-ink-muted">subagent</span>
+            <span className="truncate text-3xs text-ink-muted">subagent</span>
           ) : null}
         </div>
         {session.summary ? (
           <p
-            className="mt-0.5 line-clamp-1 text-[11px] leading-snug text-ink-muted"
+            className="mt-0.5 line-clamp-1 text-2xs leading-snug text-ink-muted"
             title={session.summary}
           >
             {session.summary}

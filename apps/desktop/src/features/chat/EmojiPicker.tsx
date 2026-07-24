@@ -78,7 +78,7 @@ export function EmojiPicker({
                   setOpen(false);
                 }}
                 className={cn(
-                  "inline-flex h-8 w-8 items-center justify-center rounded-lg text-[16px]",
+                  "inline-flex h-8 w-8 items-center justify-center rounded-lg text-base",
                   "hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
                 )}
               >

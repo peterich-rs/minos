@@ -191,7 +191,7 @@ export function Composer({ conversationId }: { conversationId: string }) {
     <div className="relative shrink-0 border-t border-ink/5 bg-surface px-5 py-4">
       {mention && mentionOptions.length > 0 ? (
         <div className="absolute bottom-full left-5 right-5 mb-2 max-h-52 overflow-y-auto rounded-xl border border-ink/10 bg-surface py-1 shadow-lg">
-          <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-muted">
+          <div className="px-3 py-1.5 text-2xs font-semibold uppercase tracking-wide text-ink-muted">
             Agents & profiles
           </div>
           {mentionOptions.map((opt, i) => (
@@ -204,7 +204,7 @@ export function Composer({ conversationId }: { conversationId: string }) {
                 if (!opt.disabled) applyMention(opt.insert);
               }}
               className={cn(
-                "flex w-full items-center justify-between px-3 py-2 text-left text-[13px]",
+                "flex w-full items-center justify-between px-3 py-2 text-left text-sm",
                 i === mentionIndex
                   ? "bg-surface-muted"
                   : "hover:bg-surface-hover",
@@ -212,7 +212,7 @@ export function Composer({ conversationId }: { conversationId: string }) {
               )}
             >
               <span className="font-medium text-ink">{opt.label}</span>
-              <span className="text-[11px] text-ink-muted">{opt.hint}</span>
+              <span className="text-2xs text-ink-muted">{opt.hint}</span>
             </button>
           ))}
         </div>
@@ -221,11 +221,11 @@ export function Composer({ conversationId }: { conversationId: string }) {
       {replyToMessageId ? (
         <div className="mb-2 flex items-start gap-2 rounded-xl border border-ink/10 bg-surface-muted/50 px-3 py-2">
           <div className="min-w-0 flex-1">
-            <div className="text-[11px] font-semibold text-ink">
+            <div className="text-2xs font-semibold text-ink">
               Replying to{" "}
               {replyParent ? replyAuthorLabel(replyParent) : "message"}
             </div>
-            <div className="mt-0.5 line-clamp-2 text-[12px] text-ink-secondary">
+            <div className="mt-0.5 line-clamp-2 text-xs text-ink-secondary">
               {replyParent
                 ? replyPreviewBody(replyParent.body)
                 : `(message ${replyToMessageId})`}
@@ -296,7 +296,7 @@ export function Composer({ conversationId }: { conversationId: string }) {
           }}
           rows={3}
           placeholder="Message… type @ to mention an agent (e.g. @grok hello)"
-          className="w-full resize-none rounded-t-2xl bg-transparent px-4 pt-3 text-[13.5px] text-ink outline-none placeholder:text-ink-muted"
+          className="w-full resize-none rounded-t-2xl bg-transparent px-4 pt-3 text-sm text-ink outline-none placeholder:text-ink-muted"
         />
         <div className="flex items-center justify-between px-3 pb-3">
           <div className="flex items-center gap-0.5 text-ink-muted">
@@ -325,21 +325,21 @@ export function Composer({ conversationId }: { conversationId: string }) {
             type="button"
             disabled={sending || !draft.trim()}
             onClick={() => void onSend()}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-ink px-3.5 py-2 text-[12.5px] font-semibold text-white hover:opacity-90 disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-ink px-3.5 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
           >
             {sending ? "Sending…" : "Send"}
             <Send className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
-      <p className="mt-2 px-1 text-[11px] text-ink-muted">
+      <p className="mt-2 px-1 text-2xs text-ink-muted">
         {source === "daemon"
           ? "Connected · @agent new session · @agent#id continue · ⌘/Ctrl+Enter send"
           : "Mock mode"}
         {phase === "loading" && hasCachedMessages ? " · refreshing…" : ""}
       </p>
       {sendError || (phase === "error" && detailError) ? (
-        <p className="mt-1 px-1 text-[12px] text-rose-600">
+        <p className="mt-1 px-1 text-xs text-rose-600">
           {sendError || detailError}
         </p>
       ) : null}

@@ -68,7 +68,7 @@ export const MessageRow = memo(function MessageRow({
     return (
       <div
         className={cn(
-          "mx-auto max-w-md rounded-xl bg-surface-muted px-3 py-2 text-center text-[12px] text-ink-muted",
+          "mx-auto max-w-md rounded-xl bg-surface-muted px-3 py-2 text-center text-xs text-ink-muted",
           enterClass,
         )}
       >
@@ -91,7 +91,7 @@ export const MessageRow = memo(function MessageRow({
     return (
       <div
         className={cn(
-          "flex w-full items-center gap-2 rounded-xl border border-ink/5 bg-surface-muted/80 px-3 py-2 text-left text-[12px] text-ink-secondary",
+          "flex w-full items-center gap-2 rounded-xl border border-ink/5 bg-surface-muted/80 px-3 py-2 text-left text-xs text-ink-secondary",
           enterClass,
         )}
       >
@@ -142,7 +142,7 @@ export const MessageRow = memo(function MessageRow({
             {authorLabel}
           </MessageAuthorText>
           {sessionShort ? (
-            <span className="font-mono text-[11px] font-normal text-ink-muted">
+            <span className="font-mono text-2xs font-normal text-ink-muted">
               #{sessionShort}
             </span>
           ) : null}
@@ -152,12 +152,12 @@ export const MessageRow = memo(function MessageRow({
       )}
       <MessageTimestamp time={message.time} title={fullTitle} />
       {isSending ? (
-        <span className="text-[11px] font-medium uppercase tracking-wide text-ink-muted/80">
+        <span className="text-2xs font-medium uppercase tracking-wide text-ink-muted/80">
           Sending
         </span>
       ) : null}
       {isFailed ? (
-        <span className="text-[11px] font-medium text-rose-600">Failed</span>
+        <span className="text-2xs font-medium text-rose-600">Failed</span>
       ) : null}
     </MessageHeaderRow>
   );
@@ -188,7 +188,7 @@ export const MessageRow = memo(function MessageRow({
 
         <div
           className={cn(
-            "relative max-w-full text-[13.5px] leading-relaxed text-ink",
+            "relative max-w-full text-sm leading-relaxed text-ink",
             isContinuation ? "mt-0" : "-mt-0.5",
             isSending && "opacity-70",
           )}
@@ -199,7 +199,7 @@ export const MessageRow = memo(function MessageRow({
                 type="button"
                 onClick={handleRetry}
                 title="Message failed to send — click to retry"
-                className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-rose-600 text-[12px] font-bold leading-none text-white shadow-sm hover:bg-rose-700"
+                className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-rose-600 text-xs font-bold leading-none text-white shadow-sm hover:bg-rose-700"
                 aria-label="Retry failed message"
               >
                 !
@@ -209,7 +209,7 @@ export const MessageRow = memo(function MessageRow({
               <MarkdownText
                 text={message.body}
                 tone="default"
-                className="text-[13.5px]"
+                className="text-sm"
               />
             </div>
           </div>

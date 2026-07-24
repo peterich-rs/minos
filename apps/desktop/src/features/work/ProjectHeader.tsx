@@ -44,7 +44,7 @@ export function ProjectHeader({ projectId }: { projectId?: string }) {
 
   if (!project) {
     return (
-      <header className="shrink-0 border-b border-ink/5 bg-surface px-5 py-4 text-[13px] text-ink-muted">
+      <header className="shrink-0 border-b border-ink/5 bg-surface px-5 py-4 text-sm text-ink-muted">
         Select or create a project to get started.
       </header>
     );
@@ -55,14 +55,14 @@ export function ProjectHeader({ projectId }: { projectId?: string }) {
       <div className="flex min-w-0 items-center gap-2 sm:gap-3">
         <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
           <h1
-            className="max-w-[40%] shrink truncate text-[16px] font-semibold tracking-tight text-ink sm:max-w-[30%] sm:text-[17px]"
+            className="max-w-[40%] shrink truncate text-base font-semibold tracking-tight text-ink sm:max-w-[30%] sm:text-base"
             title={project.name}
           >
             {project.name}
           </h1>
           <span className="hidden h-4 w-px shrink-0 bg-ink/10 sm:block" />
           <p
-            className="min-w-0 flex-1 truncate font-mono text-[11px] text-ink-muted sm:text-[12px]"
+            className="min-w-0 flex-1 truncate font-mono text-2xs text-ink-muted sm:text-xs"
             title={project.workspacePath}
           >
             {project.workspacePath}
@@ -71,7 +71,7 @@ export function ProjectHeader({ projectId }: { projectId?: string }) {
         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
           <button
             type="button"
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-ink/10 bg-surface-muted/80 px-2.5 text-[12px] font-medium text-ink-secondary transition-colors hover:bg-surface-hover sm:px-3"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-ink/10 bg-surface-muted/80 px-2.5 text-xs font-medium text-ink-secondary transition-colors hover:bg-surface-hover sm:px-3"
           >
             <Search className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Search</span>
@@ -88,7 +88,7 @@ export function ProjectHeader({ projectId }: { projectId?: string }) {
                 if (id) selectConversation(id);
               })();
             }}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-ink px-2.5 text-[12px] font-semibold text-white transition-opacity hover:opacity-90 sm:px-3"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-ink px-2.5 text-xs font-semibold text-white transition-opacity hover:opacity-90 sm:px-3"
           >
             <Plus className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">New conversation</span>
@@ -107,7 +107,7 @@ export function ProjectHeader({ projectId }: { projectId?: string }) {
               type="button"
               onClick={() => setProjectView(view.id)}
               className={cn(
-                "relative inline-flex h-9 shrink-0 items-center gap-1.5 px-2.5 text-[13px] font-medium transition-colors sm:px-3",
+                "relative inline-flex h-9 shrink-0 items-center gap-1.5 px-2.5 text-sm font-medium transition-colors sm:px-3",
                 active ? "text-ink" : "text-ink-muted hover:text-ink-secondary",
               )}
             >
@@ -119,7 +119,7 @@ export function ProjectHeader({ projectId }: { projectId?: string }) {
             </button>
           );
         })}
-        <div className="ml-auto flex min-w-0 items-center gap-2 pb-0.5 text-[11px] text-ink-muted sm:gap-3 sm:text-[12px]">
+        <div className="ml-auto flex min-w-0 items-center gap-2 pb-0.5 text-2xs text-ink-muted sm:gap-3 sm:text-xs">
           <span className="hidden truncate tabular-nums sm:inline">
             <strong className="font-semibold text-ink-secondary">
               {convCount}
@@ -136,7 +136,7 @@ export function ProjectHeader({ projectId }: { projectId?: string }) {
           ) : null}
           <span
             className={cn(
-              "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide",
+              "shrink-0 rounded-full px-2 py-0.5 text-3xs font-semibold tracking-wide",
               projectHostPillClass(hostLabel),
             )}
             title="Host that owns this project"

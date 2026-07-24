@@ -9,7 +9,7 @@ export function ReplyPreview({
   replyParent?: TimelineMessage;
 }) {
   return (
-    <div className="mb-1 rounded-lg border-l-2 border-ink/20 bg-surface-muted/80 px-2.5 py-1.5 text-[11.5px] leading-snug text-ink-secondary">
+    <div className="mb-1 rounded-lg border-l-2 border-ink/20 bg-surface-muted/80 px-2.5 py-1.5 text-2xs leading-snug text-ink-secondary">
       <div className="font-medium text-ink">
         ↳ {replyParent ? replyAuthorLabel(replyParent) : "Reply"}
       </div>

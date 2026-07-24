@@ -234,30 +234,30 @@ export function MessageList({ conversationId }: { conversationId: string }) {
 
   const emptyOrStatus =
     phase === "loading" && !hasCachedMessages ? (
-      <div className="py-12 text-center text-[13px] text-ink-muted">
+      <div className="py-12 text-center text-sm text-ink-muted">
         Loading messages…
       </div>
     ) : phase === "error" && !hasCachedMessages ? (
       <div className="flex flex-col items-center gap-3 py-12 text-center">
-        <p className="text-[13px] text-rose-600">
+        <p className="text-sm text-rose-600">
           {detailError || "Failed to load messages"}
         </p>
         <button
           type="button"
           onClick={() => void loadTimeline(conversationId)}
-          className="rounded-lg bg-ink px-3 py-1.5 text-[12px] font-semibold text-white hover:opacity-90"
+          className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
         >
           Retry
         </button>
       </div>
     ) : messages.length === 0 ? (
-      <div className="py-12 text-center text-[13px] text-ink-muted">
+      <div className="py-12 text-center text-sm text-ink-muted">
         No messages yet. Type{" "}
-        <kbd className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[12px]">
+        <kbd className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-xs">
           @grok
         </kbd>{" "}
         or{" "}
-        <kbd className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[12px]">
+        <kbd className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-xs">
           @codex
         </kbd>{" "}
         to start an agent.
@@ -295,7 +295,7 @@ export function MessageList({ conversationId }: { conversationId: string }) {
           <button
             type="button"
             onClick={jumpToLatest}
-            className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-ink/10 bg-surface px-3.5 py-1.5 text-[12px] font-medium text-ink shadow-lg hover:bg-surface-muted"
+            className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-ink/10 bg-surface px-3.5 py-1.5 text-xs font-medium text-ink shadow-lg hover:bg-surface-muted"
           >
             <ArrowDown className="h-3.5 w-3.5" />
             Jump to latest
@@ -313,7 +313,7 @@ function DayDivider({ ms }: { ms: number }) {
       <div className="h-px flex-1 bg-ink/8" aria-hidden />
       <time
         dateTime={new Date(ms).toISOString().slice(0, 10)}
-        className="shrink-0 text-[11px] font-medium text-ink-muted"
+        className="shrink-0 text-2xs font-medium text-ink-muted"
       >
         {label}
       </time>

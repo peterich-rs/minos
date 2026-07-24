@@ -87,7 +87,7 @@ export function WorkView() {
 
   if (!resolvedProjectId) {
     return (
-      <div className="flex flex-1 items-center justify-center bg-surface text-[13px] text-ink-muted">
+      <div className="flex flex-1 items-center justify-center bg-surface text-sm text-ink-muted">
         Select a project to get started.
       </div>
     );
