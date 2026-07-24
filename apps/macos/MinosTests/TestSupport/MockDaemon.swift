@@ -15,9 +15,9 @@ final class MockSubscription: SubscriptionHandle, @unchecked Sendable {
 /// now exposed independently and observers can be fired from either
 /// channel without affecting the other.
 ///
-/// Plan 05 Phase K.1; updated for the post-Phase-C multi-thread agent
-/// surface (`stop_agent` retired; per-thread `interrupt_thread` /
-/// `close_thread` instead).
+/// Plan 05 Phase K.1; updated for the multi-session agent surface
+/// (`stop_agent` retired; per-session `interrupt_session` /
+/// `close_session` instead).
 final class MockDaemon: DaemonDriving, @unchecked Sendable {
     // ── Public mutable state ──
     var currentRelayLinkValue: RelayLinkState
@@ -34,8 +34,8 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
     var forgetPeerDeviceError: MinosError?
     var startAgentResult: Result<StartAgentResponse, MinosError>
     var sendUserMessageError: MinosError?
-    var interruptThreadError: MinosError?
-    var closeThreadError: MinosError?
+    var interruptSessionError: MinosError?
+    var closeSessionError: MinosError?
     var stopError: MinosError?
     var stopHook: (@Sendable () async -> Void)?
 
@@ -49,8 +49,8 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
     private(set) var currentAgentThreadCallCount = 0
     private(set) var startAgentCalls: [StartAgentRequest] = []
     private(set) var sendUserMessageCalls: [SendUserMessageRequest] = []
-    private(set) var interruptThreadCalls: [InterruptThreadRequest] = []
-    private(set) var closeThreadCalls: [CloseThreadRequest] = []
+    private(set) var interruptSessionCalls: [InterruptSessionRequest] = []
+    private(set) var closeSessionCalls: [CloseSessionRequest] = []
     private(set) var stopCallCount = 0
     private(set) var subscribeRelayLinkCallCount = 0
     private(set) var subscribePeerCallCount = 0
@@ -163,17 +163,17 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         }
     }
 
-    func interruptThread(_ req: InterruptThreadRequest) async throws {
-        interruptThreadCalls.append(req)
-        if let interruptThreadError {
-            throw interruptThreadError
+    func interruptSession(_ req: InterruptSessionRequest) async throws {
+        interruptSessionCalls.append(req)
+        if let interruptSessionError {
+            throw interruptSessionError
         }
     }
 
-    func closeThread(_ req: CloseThreadRequest) async throws {
-        closeThreadCalls.append(req)
-        if let closeThreadError {
-            throw closeThreadError
+    func closeSession(_ req: CloseSessionRequest) async throws {
+        closeSessionCalls.append(req)
+        if let closeSessionError {
+            throw closeSessionError
         }
     }
 
@@ -235,6 +235,24 @@ extension MockDaemon {
             hostDisplayName: hostDisplayName,
             pairingToken: pairingToken,
             expiresAtMs: expiresAtMs
+        )
+    }
+
+    static func makeStartAgentRequest(
+        agent: AgentName = .codex,
+        workspace: String = "",
+        mode: AgentLaunchMode? = .jsonl,
+        model: String? = nil,
+        reasoningEffort: String? = nil,
+        instructions: String? = nil
+    ) -> StartAgentRequest {
+        StartAgentRequest(
+            agent: agent,
+            workspace: workspace,
+            mode: mode,
+            model: model,
+            reasoningEffort: reasoningEffort,
+            instructions: instructions
         )
     }
 

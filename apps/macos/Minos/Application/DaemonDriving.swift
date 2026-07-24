@@ -10,10 +10,10 @@ protocol SubscriptionHandle: AnyObject, Sendable {
 
 /// The daemon surface AppState binds against. Mirrors the post-Phase-F
 /// `DaemonHandle` UniFFI shape: dual-axis state (relay link + peer),
-/// async pairing/forget round-trips, plus the multi-thread agent-runtime
+/// async pairing/forget round-trips, plus the multi-session agent-runtime
 /// methods that replaced the pre-Phase-C single-session surface
-/// (`stop_agent` retired in favour of per-thread `interrupt_thread` /
-/// `close_thread`). Tests use `MockDaemon` (Phase K.1) to satisfy this
+/// (`stop_agent` retired in favour of per-session `interrupt_session` /
+/// `close_session`). Tests use `MockDaemon` (Phase K.1) to satisfy this
 /// protocol.
 protocol DaemonDriving: AnyObject, Sendable {
     // ── Dual-axis state ──
@@ -30,13 +30,13 @@ protocol DaemonDriving: AnyObject, Sendable {
     // ── Lifecycle ──
     func stop() async throws
 
-    // ── Agent runtime (post-Phase-C multi-thread surface) ──
+    // ── Agent runtime (multi-session surface) ──
     func currentAgentState() -> SessionState
     func currentAgentSession() async throws -> AgentSessionSnapshot?
     func startAgent(_ req: StartAgentRequest) async throws -> StartAgentResponse
     func sendUserMessage(_ req: SendUserMessageRequest) async throws
-    func interruptThread(_ req: InterruptThreadRequest) async throws
-    func closeThread(_ req: CloseThreadRequest) async throws
+    func interruptSession(_ req: InterruptSessionRequest) async throws
+    func closeSession(_ req: CloseSessionRequest) async throws
 
     // ── Push-model observers ──
     func subscribeRelayLink(_ observer: RelayLinkStateObserver) -> any SubscriptionHandle

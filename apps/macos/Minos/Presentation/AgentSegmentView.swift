@@ -45,7 +45,7 @@ struct AgentSegmentView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 6) {
-                Text("Thread")
+                Text("Session")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Text(session.sessionId)

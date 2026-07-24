@@ -8,10 +8,10 @@ extension AppState {
         agentState = state
 
         // Post-Phase-C the daemon's legacy single-channel state mirror always
-        // pushes `.idle` after a successful `start_agent` / `close_thread`
-        // ("the multi-thread manager keeps per-thread state internally; the
+        // pushes `.idle` after a successful `start_agent` / `close_session`
+        // ("the multi-session manager keeps per-session state internally; the
         // single-channel mirror just signals 'something is alive'", agent.rs).
-        // So `.idle` no longer means "no session" — it means "thread alive,
+        // So `.idle` no longer means "no session" — it means "session alive,
         // not in a turn". The session lifecycle is now driven explicitly by
         // `startAgent` / `stopAgent` below, which set / clear `currentSession`
         // around the round-trip. Only `.closed` warrants clearing here, and
@@ -62,7 +62,14 @@ extension AppState {
 
         do {
             let session = try await daemon.startAgent(
-                .init(agent: .codex, workspace: "", mode: mode)
+                .init(
+                    agent: .codex,
+                    workspace: "",
+                    mode: mode,
+                    model: nil,
+                    reasoningEffort: nil,
+                    instructions: nil
+                )
             )
             currentSession = session
             AppLog.info("appState.agent", "startAgent ok · mode=\(modeLabel) · sessionId=\(session.sessionId)")
@@ -96,20 +103,20 @@ extension AppState {
         }
     }
 
-    /// Per-thread "stop" — translates the legacy single-session "Stop"
-    /// affordance to the new `close_thread` RPC keyed by the live
-    /// `currentSession.sessionId`. With no live session there is no thread
+    /// Per-session "stop" — translates the legacy single-session "Stop"
+    /// affordance to the `close_session` RPC keyed by the live
+    /// `currentSession.sessionId`. With no live session there is nothing
     /// to close, so the call is a no-op.
     @MainActor
     func stopAgent() async {
         guard phase == .running, let daemon, let session = currentSession else { return }
 
         clearAgentError()
-        let threadId = session.sessionId
-        AppLog.info("appState.agent", "stopAgent requested · threadId=\(threadId)")
+        let sessionId = session.sessionId
+        AppLog.info("appState.agent", "stopAgent requested · sessionId=\(sessionId)")
 
         do {
-            try await daemon.closeThread(.init(threadId: threadId))
+            try await daemon.closeSession(.init(sessionId: sessionId))
             currentSession = nil
             AppLog.info("appState.agent", "stopAgent ok")
         } catch let error as MinosError {
