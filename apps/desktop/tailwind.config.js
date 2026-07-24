@@ -52,6 +52,12 @@ export default {
           "sans-serif",
         ],
       },
+      // Zoom-safe meta-text tokens (timestamps, badges, kbd hints).
+      // Scale with root font-size so Cmd± text zoom keeps hierarchy.
+      fontSize: {
+        "2xs": ["0.6875rem", { lineHeight: "1rem" }], // 11px @ 16
+        "3xs": ["0.625rem", { lineHeight: "0.875rem" }], // 10px @ 16
+      },
       boxShadow: {
         shell: "var(--shadow-shell)",
         panel: "var(--shadow-panel)",

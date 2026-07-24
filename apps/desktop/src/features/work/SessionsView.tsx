@@ -256,7 +256,7 @@ export function SessionsView({ projectId }: { projectId: string }) {
           }
         />
       ) : (
-        <div className="flex min-h-0 flex-1 items-center justify-center bg-surface text-[13px] text-ink-muted">
+        <div className="flex min-h-0 flex-1 items-center justify-center bg-surface text-sm text-ink-muted">
           Select an agent session to view its full transcript.
         </div>
       )}

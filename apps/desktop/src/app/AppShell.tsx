@@ -6,6 +6,7 @@ import { AgentsView } from "@/features/agents/AgentsView";
 import { HostView } from "@/features/host/HostView";
 import { CommandPalette } from "./CommandPalette";
 import { ConnectionToasts } from "./ConnectionToasts";
+import { useWebviewZoomShortcuts } from "./useWebviewZoomShortcuts";
 import { Toaster } from "@/shared/ui/toaster";
 import { TooltipProvider } from "@/shared/ui/tooltip";
 import { useUiStore } from "@/store/ui-store";
@@ -14,6 +15,8 @@ export function AppShell() {
   const primaryNav = useUiStore((s) => s.primaryNav);
   const cmdOpen = useUiStore((s) => s.commandPaletteOpen);
   const setCmdOpen = useUiStore((s) => s.setCommandPaletteOpen);
+
+  useWebviewZoomShortcuts();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

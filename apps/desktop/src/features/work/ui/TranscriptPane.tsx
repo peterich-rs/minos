@@ -414,7 +414,7 @@ export function TranscriptPane({
             <button
               type="button"
               onClick={onBackToConversation}
-              className="mb-1.5 inline-flex items-center gap-1 text-[12px] font-medium text-ink-muted hover:text-ink"
+              className="mb-1.5 inline-flex items-center gap-1 text-xs font-medium text-ink-muted hover:text-ink"
             >
               <ArrowLeft className="h-3.5 w-3.5" />
               Back to conversation
@@ -426,19 +426,19 @@ export function TranscriptPane({
               tone={meta?.tone ?? "slate"}
             />
             <div className="min-w-0">
-              <h2 className="truncate text-[15px] font-semibold tracking-tight text-ink">
+              <h2 className="truncate text-base font-semibold tracking-tight text-ink">
                 {meta?.label ?? session.agent}{" "}
-                <span className="font-mono text-[12px] font-normal text-ink-muted">
+                <span className="font-mono text-xs font-normal text-ink-muted">
                   #{session.shortId}
                 </span>
                 {!following ? (
-                  <span className="ml-2 text-[11px] font-normal text-ink-muted">
+                  <span className="ml-2 text-2xs font-normal text-ink-muted">
                     [manual scroll]
                   </span>
                 ) : null}
               </h2>
               {session.conversationTitle ? (
-                <div className="mt-1 flex min-w-0 max-w-[280px] items-center gap-1 truncate text-[12px] text-ink-muted">
+                <div className="mt-1 flex min-w-0 max-w-[280px] items-center gap-1 truncate text-xs text-ink-muted">
                   <MessageSquare className="h-3 w-3 shrink-0" />
                   <span className="truncate" title={session.conversationTitle}>
                     {session.conversationTitle}
@@ -490,12 +490,12 @@ export function TranscriptPane({
                 </div>
               ) : null}
               {phase === "loading" && !hasCache ? (
-                <p className="py-12 text-center text-[13px] text-ink-muted">
+                <p className="py-12 text-center text-sm text-ink-muted">
                   Loading transcript…
                 </p>
               ) : phase === "error" && !hasCache ? (
                 <div className="flex flex-col items-center gap-3 py-12 text-center">
-                  <p className="text-[13px] text-rose-600">
+                  <p className="text-sm text-rose-600">
                     {status?.error ?? "Failed to load transcript"}
                   </p>
                   <button
@@ -506,13 +506,13 @@ export function TranscriptPane({
                         approvalStatusPolicy: "sync",
                       })
                     }
-                    className="rounded-lg bg-ink px-3 py-1.5 text-[12px] font-semibold text-white"
+                    className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-white"
                   >
                     Retry
                   </button>
                 </div>
               ) : items.length === 0 ? (
-                <p className="py-12 text-center text-[13px] text-ink-muted">
+                <p className="py-12 text-center text-sm text-ink-muted">
                   No transcript events yet. They appear as the agent runs.
                 </p>
               ) : (
@@ -543,7 +543,7 @@ export function TranscriptPane({
               <button
                 type="button"
                 onClick={jumpToLatest}
-                className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-ink/10 bg-surface px-3.5 py-1.5 text-[12px] font-medium text-ink shadow-lg hover:bg-surface-muted"
+                className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-ink/10 bg-surface px-3.5 py-1.5 text-xs font-medium text-ink shadow-lg hover:bg-surface-muted"
               >
                 <ArrowDown className="h-3.5 w-3.5" />
                 Jump to latest

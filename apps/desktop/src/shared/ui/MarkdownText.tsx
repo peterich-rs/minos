@@ -33,7 +33,7 @@ export const MarkdownText = memo(function MarkdownText({
     typeof text === "string" ? text : text == null ? "" : String(text);
 
   const shell = cn(
-    "markdown-body text-[13.5px] leading-relaxed",
+    "markdown-body text-sm leading-relaxed",
     onDark ? "text-white markdown-tone-dark" : "text-ink markdown-tone-light",
     className,
   );
@@ -73,22 +73,22 @@ export const MarkdownText = memo(function MarkdownText({
  */
 const components: Components = {
   h1: ({ children }) => (
-    <h1 className="mb-2 mt-3.5 text-[15px] font-semibold leading-snug first:mt-0">
+    <h1 className="mb-2 mt-3.5 text-base font-semibold leading-snug first:mt-0">
       {children}
     </h1>
   ),
   h2: ({ children }) => (
-    <h2 className="mb-1.5 mt-3 text-[14px] font-semibold leading-snug first:mt-0">
+    <h2 className="mb-1.5 mt-3 text-sm font-semibold leading-snug first:mt-0">
       {children}
     </h2>
   ),
   h3: ({ children }) => (
-    <h3 className="mb-1 mt-2.5 text-[13.5px] font-semibold leading-snug first:mt-0">
+    <h3 className="mb-1 mt-2.5 text-sm font-semibold leading-snug first:mt-0">
       {children}
     </h3>
   ),
   h4: ({ children }) => (
-    <h4 className="mb-1 mt-2 text-[13px] font-semibold leading-snug first:mt-0">
+    <h4 className="mb-1 mt-2 text-sm font-semibold leading-snug first:mt-0">
       {children}
     </h4>
   ),
@@ -124,13 +124,13 @@ const components: Components = {
     // Inline only — fenced blocks go through `pre` → CodeBlock (Shiki).
     if (hasLang || multiline) {
       return (
-        <code className={cn("font-mono text-[12px] leading-relaxed", className)}>
+        <code className={cn("font-mono text-xs leading-relaxed", className)}>
           {children}
         </code>
       );
     }
     return (
-      <code className="md-code-inline font-mono text-[12px]">{children}</code>
+      <code className="md-code-inline font-mono text-xs">{children}</code>
     );
   },
   pre: ({ children }) => {
@@ -152,7 +152,7 @@ const components: Components = {
       );
     }
     return (
-      <pre className="md-pre scrollbar-thin mb-2.5 font-mono text-[12px] last:mb-0">
+      <pre className="md-pre scrollbar-thin mb-2.5 font-mono text-xs last:mb-0">
         {children}
       </pre>
     );
@@ -175,7 +175,7 @@ const components: Components = {
   hr: () => <hr className="md-hr" />,
   table: ({ children }) => (
     <div className="md-table-wrap scrollbar-thin mb-2.5 max-w-full overflow-x-auto last:mb-0">
-      <table className="w-full text-left text-[12px] leading-snug">
+      <table className="w-full text-left text-xs leading-snug">
         {children}
       </table>
     </div>

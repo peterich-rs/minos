@@ -80,7 +80,7 @@ export const TranscriptItemView = memo(function TranscriptItemView({
     // re-show interactive plan/permission chrome for a finished reverse-request.
     if (!item.requestId) {
       return (
-        <div className="text-[12px] text-ink-muted">
+        <div className="text-xs text-ink-muted">
           {item.title ? `${item.title} · ` : null}
           {item.text}
         </div>
@@ -92,11 +92,11 @@ export const TranscriptItemView = memo(function TranscriptItemView({
           <div className="flex items-start gap-2.5">
             <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
             <div className="min-w-0 flex-1">
-              <div className="text-[13px] font-semibold text-rose-900">
+              <div className="text-sm font-semibold text-rose-900">
                 {item.title ??
                   (isQuestion ? "Question" : "Approval required")}
               </div>
-              <p className="mt-1 whitespace-pre-wrap text-[12.5px] leading-snug text-rose-900/80">
+              <p className="mt-1 whitespace-pre-wrap text-xs leading-snug text-rose-900/80">
                 {item.text}
               </p>
               {isQuestion && item.options && item.options.length > 0 ? (
@@ -112,7 +112,7 @@ export const TranscriptItemView = memo(function TranscriptItemView({
                           decision: opt.label,
                         });
                       }}
-                      className="rounded-lg border border-rose-300/80 bg-white px-2.5 py-1 text-[12px] font-medium text-rose-900 hover:bg-rose-50 disabled:opacity-50"
+                      className="rounded-lg border border-rose-300/80 bg-white px-2.5 py-1 text-xs font-medium text-rose-900 hover:bg-rose-50 disabled:opacity-50"
                     >
                       {opt.label}
                     </button>
@@ -123,7 +123,7 @@ export const TranscriptItemView = memo(function TranscriptItemView({
                     onClick={() => {
                       void runAction({ type: "cancel" });
                     }}
-                    className="rounded-lg px-2.5 py-1 text-[12px] font-medium text-rose-700/80 hover:bg-rose-100/60 disabled:opacity-50"
+                    className="rounded-lg px-2.5 py-1 text-xs font-medium text-rose-700/80 hover:bg-rose-100/60 disabled:opacity-50"
                   >
                     Cancel
                   </button>
@@ -133,7 +133,7 @@ export const TranscriptItemView = memo(function TranscriptItemView({
                   <button
                     type="button"
                     onClick={() => setPlanOpen(true)}
-                    className="rounded-lg bg-ink px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-ink/90"
+                    className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-white hover:bg-ink/90"
                   >
                     {isPlan ? "View plan" : "View details"}
                   </button>
@@ -156,7 +156,7 @@ export const TranscriptItemView = memo(function TranscriptItemView({
 
   if (item.kind === "user") {
     return (
-      <div className="text-[13.5px] leading-relaxed text-ink">
+      <div className="text-sm leading-relaxed text-ink">
         <span className="select-none text-ink-muted">❯ </span>
         <span className="whitespace-pre-wrap break-words">{item.text}</span>
         {streaming ? (
@@ -176,7 +176,7 @@ export const TranscriptItemView = memo(function TranscriptItemView({
     const header = streaming ? "Thinking…" : "Thought";
     const preview = collapsedThinkingSummary(item.text, 100);
     return (
-      <div className="text-[12.5px] leading-relaxed">
+      <div className="text-xs leading-relaxed">
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
@@ -220,7 +220,7 @@ export const TranscriptItemView = memo(function TranscriptItemView({
     const failed = /\bfailed\b/i.test(item.text) || /\binterrupted\b/i.test(item.text);
     const desc = (item.detail ?? "").trim();
     return (
-      <div className="text-[12.5px] leading-snug">
+      <div className="text-xs leading-snug">
         <div className="flex w-full max-w-full items-center gap-1.5">
           <span className="inline-block w-3 shrink-0" />
           <Bot
@@ -241,7 +241,7 @@ export const TranscriptItemView = memo(function TranscriptItemView({
           </span>
           <span
             className={cn(
-              "min-w-0 truncate font-mono text-[12px]",
+              "min-w-0 truncate font-mono text-xs",
               failed ? "text-rose-800/90" : "text-ink",
             )}
             title={item.text}
@@ -253,7 +253,7 @@ export const TranscriptItemView = memo(function TranscriptItemView({
           ) : null}
         </div>
         {desc ? (
-          <p className="mt-0.5 pl-8 text-[12px] text-ink-muted line-clamp-2">
+          <p className="mt-0.5 pl-8 text-xs text-ink-muted line-clamp-2">
             {desc}
           </p>
         ) : null}
@@ -285,7 +285,7 @@ export const TranscriptItemView = memo(function TranscriptItemView({
     });
     const KindIcon = TOOL_KIND_ICON[header.toolKind];
     return (
-      <div className="text-[12.5px] leading-snug">
+      <div className="text-xs leading-snug">
         <button
           type="button"
           disabled={!expandable}
@@ -322,7 +322,7 @@ export const TranscriptItemView = memo(function TranscriptItemView({
           </span>
           <span
             className={cn(
-              "min-w-0 truncate font-mono text-[12px]",
+              "min-w-0 truncate font-mono text-xs",
               header.failed ? "text-rose-800/90" : "text-ink",
             )}
             title={header.targetFull}
@@ -349,7 +349,7 @@ export const TranscriptItemView = memo(function TranscriptItemView({
           ) : showRead ? (
             <ReadView text={detail} />
           ) : (
-            <pre className="mt-1 max-h-72 overflow-auto rounded-lg border border-ink/5 bg-surface-muted/50 px-3 py-2 font-mono text-[11px] leading-relaxed text-ink-secondary whitespace-pre-wrap">
+            <pre className="mt-1 max-h-72 overflow-auto rounded-lg border border-ink/5 bg-surface-muted/50 px-3 py-2 font-mono text-2xs leading-relaxed text-ink-secondary whitespace-pre-wrap">
               {detail}
             </pre>
           )
@@ -360,18 +360,18 @@ export const TranscriptItemView = memo(function TranscriptItemView({
 
   if (item.kind === "error") {
     return (
-      <div className="rounded-lg border border-rose-200/80 bg-rose-50/70 px-3 py-2 text-[13px] text-rose-900">
+      <div className="rounded-lg border border-rose-200/80 bg-rose-50/70 px-3 py-2 text-sm text-rose-900">
         {item.text}
       </div>
     );
   }
 
   if (item.kind === "status" || item.kind === "system") {
-    return <div className="text-[12px] text-ink-muted">{item.text}</div>;
+    return <div className="text-xs text-ink-muted">{item.text}</div>;
   }
 
   return (
-    <div className="text-[11px] text-ink-muted">
+    <div className="text-2xs text-ink-muted">
       {item.title ?? item.kind}
       {item.text ? ` · ${item.text.slice(0, 120)}` : ""}
     </div>

@@ -60,14 +60,14 @@ export function Sidebar() {
           <Sparkles className="h-4 w-4" strokeWidth={2.2} />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-semibold tracking-tight text-ink">
+          <div className="text-sm font-semibold tracking-tight text-ink">
             Minos
           </div>
           <button
             type="button"
             onClick={() => setPrimaryNav("host")}
             title="Open Host status"
-            className="mt-0.5 flex max-w-full items-center gap-1 rounded-md text-left text-[11px] text-ink-muted transition-colors duration-150 hover:text-ink-secondary"
+            className="mt-0.5 flex max-w-full items-center gap-1 rounded-md text-left text-2xs text-ink-muted transition-colors duration-150 hover:text-ink-secondary"
           >
             <Circle
               className={cn(
@@ -91,7 +91,7 @@ export function Sidebar() {
               type="button"
               onClick={() => setPrimaryNav(item.id)}
               className={cn(
-                "relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors duration-150",
+                "relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors duration-150",
                 active
                   ? "font-medium text-ink"
                   : "text-ink-secondary hover:bg-surface-hover",
@@ -114,7 +114,7 @@ export function Sidebar() {
               />
               <span className="relative z-[1] flex-1">{item.label}</span>
               {badge > 0 ? (
-                <span className="relative z-[1] rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                <span className="relative z-[1] rounded-full bg-rose-500 px-1.5 py-0.5 text-3xs font-semibold text-white">
                   {badge}
                 </span>
               ) : null}
@@ -124,7 +124,7 @@ export function Sidebar() {
       </nav>
 
       <div className="mt-1 flex items-center justify-between px-4 pb-1.5 pt-2">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-muted">
+        <span className="text-2xs font-semibold uppercase tracking-[0.06em] text-ink-muted">
           Projects
         </span>
         <CreateProjectEmpty variant="inline" />
@@ -155,7 +155,7 @@ export function Sidebar() {
               <div className="min-w-0 flex-1">
                 <div className="flex min-w-0 items-center gap-1.5">
                   <span
-                    className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink"
+                    className="min-w-0 flex-1 truncate text-sm font-medium text-ink"
                     title={project.name}
                   >
                     {project.name}
@@ -164,19 +164,19 @@ export function Sidebar() {
                     <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
                   ) : null}
                   {project.needsAttention > 0 ? (
-                    <span className="ml-auto shrink-0 rounded-full bg-rose-500/90 px-1.5 text-[10px] font-semibold text-white">
+                    <span className="ml-auto shrink-0 rounded-full bg-rose-500/90 px-1.5 text-3xs font-semibold text-white">
                       {project.needsAttention}
                     </span>
                   ) : null}
                 </div>
                 <div
-                  className="truncate text-[11px] text-ink-muted"
+                  className="truncate text-2xs text-ink-muted"
                   title={project.workspacePath}
                 >
                   {project.workspacePath.replace(/^~\//, "")}
                 </div>
                 {project.hostName ? (
-                  <div className="mt-0.5 truncate text-[10px] text-ink-muted/90">
+                  <div className="mt-0.5 truncate text-3xs text-ink-muted/90">
                     {projectHostLabel(project.hostName)}
                   </div>
                 ) : null}
@@ -185,7 +185,7 @@ export function Sidebar() {
           );
         })}
         {projects.length === 0 ? (
-          <p className="px-2 py-3 text-[12px] text-ink-muted">
+          <p className="px-2 py-3 text-xs text-ink-muted">
             No projects yet — use the big + on the right.
           </p>
         ) : null}
@@ -197,10 +197,10 @@ export function Sidebar() {
             <button
               type="button"
               onClick={() => setCommandPaletteOpen(true)}
-              className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-[11px] text-ink-muted transition-colors duration-150 hover:bg-surface-hover hover:text-ink-secondary"
+              className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-2xs text-ink-muted transition-colors duration-150 hover:bg-surface-hover hover:text-ink-secondary"
             >
               <span>Command palette</span>
-              <kbd className="rounded border border-ink/10 bg-surface-muted px-1.5 py-0.5 font-mono text-[10px]">
+              <kbd className="rounded border border-ink/10 bg-surface-muted px-1.5 py-0.5 font-mono text-3xs">
                 ⌘K
               </kbd>
             </button>

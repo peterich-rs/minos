@@ -9,8 +9,8 @@ type AvatarProps = {
 };
 
 const sizes = {
-  sm: "h-6 w-6 text-[10px]",
-  md: "h-8 w-8 text-[11px]",
+  sm: "h-6 w-6 text-3xs",
+  md: "h-8 w-8 text-2xs",
   lg: "h-9 w-9 text-xs",
 } as const;
 

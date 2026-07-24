@@ -101,21 +101,21 @@ export function CommandPalette({ open, onOpenChange }: Props) {
               value={query}
               onValueChange={setQuery}
               placeholder="Jump to project, conversation, session…"
-              className="h-11 w-full bg-transparent text-[13.5px] text-ink outline-none placeholder:text-ink-muted"
+              className="h-11 w-full bg-transparent text-sm text-ink outline-none placeholder:text-ink-muted"
               autoFocus
             />
-            <kbd className="hidden shrink-0 rounded border border-ink/10 bg-surface-muted px-1.5 py-0.5 text-[10px] font-medium text-ink-muted sm:inline">
+            <kbd className="hidden shrink-0 rounded border border-ink/10 bg-surface-muted px-1.5 py-0.5 text-3xs font-medium text-ink-muted sm:inline">
               esc
             </kbd>
           </div>
           <Command.List className="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-2">
-            <Command.Empty className="px-3 py-8 text-center text-[13px] text-ink-muted">
+            <Command.Empty className="px-3 py-8 text-center text-sm text-ink-muted">
               No matches.
             </Command.Empty>
 
             <Command.Group
               heading="Navigate"
-              className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wide [&_[cmdk-group-heading]]:text-ink-muted"
+              className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-2xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wide [&_[cmdk-group-heading]]:text-ink-muted"
             >
               {navItems.map((item) => {
                 const Icon = item.icon;
@@ -136,7 +136,7 @@ export function CommandPalette({ open, onOpenChange }: Props) {
             {sortedProjects.length > 0 ? (
               <Command.Group
                 heading="Projects"
-                className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wide [&_[cmdk-group-heading]]:text-ink-muted"
+                className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-2xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wide [&_[cmdk-group-heading]]:text-ink-muted"
               >
                 {sortedProjects.map((p) => (
                   <Command.Item
@@ -148,7 +148,7 @@ export function CommandPalette({ open, onOpenChange }: Props) {
                     <FolderGit2 className="h-4 w-4 shrink-0 text-ink-muted" />
                     <span className="min-w-0 flex-1 truncate">{p.name}</span>
                     {p.workspacePath ? (
-                      <span className="max-w-[40%] truncate text-[11px] text-ink-muted">
+                      <span className="max-w-[40%] truncate text-2xs text-ink-muted">
                         {p.workspacePath}
                       </span>
                     ) : null}
@@ -160,7 +160,7 @@ export function CommandPalette({ open, onOpenChange }: Props) {
             {conversations.length > 0 ? (
               <Command.Group
                 heading="Conversations"
-                className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wide [&_[cmdk-group-heading]]:text-ink-muted"
+                className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-2xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wide [&_[cmdk-group-heading]]:text-ink-muted"
               >
                 {conversations.slice(0, 40).map((c) => {
                   const projectName =
@@ -180,7 +180,7 @@ export function CommandPalette({ open, onOpenChange }: Props) {
                       <MessageSquare className="h-4 w-4 shrink-0 text-ink-muted" />
                       <span className="min-w-0 flex-1 truncate">{c.title}</span>
                       {projectName ? (
-                        <span className="max-w-[30%] truncate text-[11px] text-ink-muted">
+                        <span className="max-w-[30%] truncate text-2xs text-ink-muted">
                           {projectName}
                         </span>
                       ) : null}
@@ -193,7 +193,7 @@ export function CommandPalette({ open, onOpenChange }: Props) {
             {projectSessions.length > 0 ? (
               <Command.Group
                 heading="Sessions"
-                className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wide [&_[cmdk-group-heading]]:text-ink-muted"
+                className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-2xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wide [&_[cmdk-group-heading]]:text-ink-muted"
               >
                 {projectSessions.slice(0, 40).map((s) => {
                   const projectId =
@@ -212,11 +212,11 @@ export function CommandPalette({ open, onOpenChange }: Props) {
                       className={itemClass}
                     >
                       <Bot className="h-4 w-4 shrink-0 text-ink-muted" />
-                      <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">
+                      <span className="min-w-0 flex-1 truncate font-mono text-xs">
                         {s.agent}#{s.shortId}
                       </span>
                       {s.conversationTitle ? (
-                        <span className="max-w-[40%] truncate text-[11px] text-ink-muted">
+                        <span className="max-w-[40%] truncate text-2xs text-ink-muted">
                           {s.conversationTitle}
                         </span>
                       ) : null}
@@ -226,7 +226,7 @@ export function CommandPalette({ open, onOpenChange }: Props) {
               </Command.Group>
             ) : null}
           </Command.List>
-          <div className="flex items-center justify-between border-t border-ink/5 px-3 py-2 text-[11px] text-ink-muted">
+          <div className="flex items-center justify-between border-t border-ink/5 px-3 py-2 text-2xs text-ink-muted">
             <span>↑↓ navigate · ↵ open</span>
             <span>⌘K</span>
           </div>
@@ -237,7 +237,7 @@ export function CommandPalette({ open, onOpenChange }: Props) {
 }
 
 const itemClass = cn(
-  "flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] text-ink outline-none",
+  "flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-ink outline-none",
   "data-[selected=true]:bg-accent-soft data-[selected=true]:text-ink",
   "aria-selected:bg-accent-soft",
 );

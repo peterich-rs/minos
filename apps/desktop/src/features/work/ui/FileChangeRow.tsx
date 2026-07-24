@@ -6,7 +6,7 @@ export function FileChangeRow({ file }: { file: FileChangeEntry }) {
   return (
     <li
       className={cn(
-        "rounded-lg px-2 py-1.5 font-mono text-[11px] leading-snug",
+        "rounded-lg px-2 py-1.5 font-mono text-2xs leading-snug",
         file.failed
           ? "bg-rose-50/80 text-rose-900"
           : "bg-surface-muted/50 text-ink-secondary",

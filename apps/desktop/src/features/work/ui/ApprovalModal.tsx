@@ -68,7 +68,7 @@ export function ApprovalModal({
           <button
             type="button"
             onClick={onClose}
-            className="absolute right-4 top-4 rounded-lg px-2 py-1 text-[12px] font-medium text-ink-muted transition-colors duration-150 hover:bg-surface-muted hover:text-ink"
+            className="absolute right-4 top-4 rounded-lg px-2 py-1 text-xs font-medium text-ink-muted transition-colors duration-150 hover:bg-surface-muted hover:text-ink"
           >
             Close
           </button>
@@ -78,7 +78,7 @@ export function ApprovalModal({
             <IncrementalText text={detail} className="min-h-0 px-5 py-4" />
           ) : (
             <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-5 py-4">
-              <pre className="whitespace-pre-wrap font-mono text-[12.5px] leading-relaxed text-ink-secondary">
+              <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-ink-secondary">
                 {detail}
               </pre>
             </div>
@@ -95,11 +95,11 @@ export function ApprovalModal({
                 }}
                 className="flex w-full flex-col rounded-xl border border-ink/10 bg-white px-3.5 py-2.5 text-left transition-colors duration-150 hover:border-ink/25 hover:bg-surface-muted/60 disabled:opacity-50"
               >
-                <span className="text-[13px] font-semibold text-ink">
+                <span className="text-sm font-semibold text-ink">
                   {opt.label}
                 </span>
                 {opt.description ? (
-                  <span className="mt-0.5 text-[12px] text-ink-muted">
+                  <span className="mt-0.5 text-xs text-ink-muted">
                     {opt.description}
                   </span>
                 ) : null}
@@ -108,7 +108,7 @@ export function ApprovalModal({
           </div>
         ) : (
           <div className="min-h-0 flex-1 px-5 py-4">
-            <p className="text-[13px] text-ink-muted">
+            <p className="text-sm text-ink-muted">
               {isQuestion
                 ? "Pick an option above or cancel."
                 : "No additional detail."}
