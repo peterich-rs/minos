@@ -4,7 +4,7 @@
 
 The TUI has two categories of issues blocking daily usability:
 
-1. **Render bottleneck**: `render_chat` calls `build_lines(all_items, width)` + `visual_lines(all_lines, width)` for the currently-visible agent chat on every redraw (whenever `handle_event` returns `true`). The same pattern exists in `group_chat.rs:34`. While redraws don't happen every tick, during active streaming (200ms ingest events) the active thread rebuilds its entire line set each frame. For a thread with thousands of lines, this means tens of thousands of `Line` allocations per frame. **Before implementing, add a `tracing` span or timing log in `render_chat` and `render_group_chat` to confirm which path is the dominant cost and whether `group_chat.rs` needs the same treatment.**
+1. **Render bottleneck**: `render_chat` calls `build_lines(all_items, width)` + `visual_lines(all_lines, width)` for the currently-visible agent chat on every redraw (whenever `handle_event` returns `true`). The same pattern exists in `group_chat.rs:34`. While redraws don't happen every tick, during active streaming (200ms ingest events) the active session rebuilds its entire line set each frame. For a session with thousands of lines, this means tens of thousands of `Line` allocations per frame. **Before implementing, add a `tracing` span or timing log in `render_chat` and `render_group_chat` to confirm which path is the dominant cost and whether `group_chat.rs` needs the same treatment.**
 
 2. **Input bar is too basic**: The `InputState` (834 lines) supports cursor movement, word/line deletion, and `@agent` mention completion — but lacks prompt history, clipboard paste/copy, file path completion, mouse cursor positioning, a proper visual cursor, and newline insertion.
 
@@ -28,8 +28,8 @@ Instead, the index is built by running the **same** `build_item_lines` logic and
 ```rust
 // In ui/chat.rs (or ui/render_cache.rs)
 pub struct RenderCache {
-    /// thread id this cache was built for; prevents reusing a single active-chat cache across threads
-    indexed_thread_id: Option<String>,
+    /// session id this cache was built for; prevents reusing a single active-chat cache across sessions
+    indexed_session_id: Option<String>,
     /// item index -> starting absolute visual line number (after wrapping + separators)
     item_starts: Vec<usize>,
     /// total visual lines across all items (including separators)
@@ -45,7 +45,7 @@ pub struct RenderCache {
 
 The `RenderCache` itself is stored alongside the render function (passed in/out of `render_chat`), or on a wrapper struct. It is **not** stored on `ChatState` — keeping it in the render layer prevents the data layer from depending on rendering concerns.
 
-If `UiState` stores only a single cache for the currently visible chat, the cache must compare `indexed_thread_id` as well as `indexed_version` and `indexed_width`. Otherwise switching from one thread to another with the same version/width can reuse the wrong `item_starts`. A `HashMap<String, RenderCache>` keyed by `thread_id` is also acceptable; the simpler single-cache option is fine as long as it includes thread identity.
+If `UiState` stores only a single cache for the currently visible chat, the cache must compare `indexed_session_id` as well as `indexed_version` and `indexed_width`. Otherwise switching from one session to another with the same version/width can reuse the wrong `item_starts`. A `HashMap<String, RenderCache>` keyed by `session_id` is also acceptable; the simpler single-cache option is fine as long as it includes session identity.
 
 ### Counting Without Retaining Lines
 
@@ -82,7 +82,7 @@ The separator is handled by the cache builder: for each item at index > 0, add 1
 pub fn render_chat(f: &mut Frame, area: Rect, chat: &mut ChatState, focused: bool, cache: &mut RenderCache) {
     // ... border/title setup ...
 
-    cache.rebuild_if_stale(chat.thread_id.as_str(), &chat.items, chat.version, inner.width);
+    cache.rebuild_if_stale(chat.session_id.as_str(), &chat.items, chat.version, inner.width);
 
     let base_row = usize::from(chat.active_scroll());
     let height = usize::from(inner.height);
@@ -674,7 +674,7 @@ No `arboard` — clipboard handled via existing `pbcopy`/`xclip`/`wl-copy` comma
 | `minos-tui/Cargo.toml` | B3 | Add `dirs` crate |
 | `minos-tui/src/translation.rs` | A | Add `version: u64` field to `ChatState`, bump in `apply_ui_event` + all item-mutating methods. Make `items` externally read-only. Add `toggle_tool_expansion` method. |
 | `minos-tui/src/ui/chat.rs` | A | Add `RenderCache`, `LineSink` trait, refactor line-building functions to use `LineSink`, `count_item_visual_lines`, viewport-aware `render_chat` (gains `&mut RenderCache` param), `apply_selection_with_offset`, adapt `selected_text`. |
-| `minos-tui/src/ui/mod.rs` | A, B4, B6 | Store `RenderCache` with thread identity (or per-thread caches), add `input_metrics: [InputLayoutMetrics; 2]`, `[multi]` title, `flash_copied` state. |
+| `minos-tui/src/ui/mod.rs` | A, B4, B6 | Store `RenderCache` with session identity (or per-session caches), add `input_metrics: [InputLayoutMetrics; 2]`, `[multi]` title, `flash_copied` state. |
 | `minos-tui/src/ui/input_bar.rs` | B1-B6 | `PromptHistory`, `InputPicker` enum, `InputPathPickerState`, `PathCandidate`, `InputLayoutMetrics`, `byte_offset_for_visual_position`, `visual_cursor_position`/`visual_row_count`, `CursorStyle`, `multiline`, rewrite `build_editor_lines` for style cursor. Write `InputLayoutMetrics` in `render_input_bar`. |
 | `minos-tui/src/ui/status_bar.rs` | B2, B6 | "copied" flash indicator, `Ctrl+J` hint |
 | `minos-tui/src/app.rs` | A, B1-B6 | Add `paste_from_clipboard` (production + test stub), modify Ctrl+C to check selection first, add Ctrl+V handler, history-aware ↑/↓ (using visual row calc), Tab priority chain, mouse click via `InputLayoutMetrics`, Ctrl+Alt+B cursor toggle, Ctrl+J / Alt+Enter newline, replace direct `chat.items` mutation with `chat.toggle_tool_expansion()` |
@@ -699,7 +699,7 @@ No `arboard` — clipboard handled via existing `pbcopy`/`xclip`/`wl-copy` comma
 - `render_cache_item_starts_match_count_output`
 - `render_cache_rebuilds_on_version_change`
 - `render_cache_rebuilds_on_width_change`
-- `render_cache_rebuilds_on_thread_id_change`
+- `render_cache_rebuilds_on_session_id_change`
 - `visible_window_returns_items_covering_scroll_range`
 - `visible_window_handles_scroll_at_boundary`
 - `visible_window_line_offset_skips_correctly`

@@ -20,14 +20,14 @@ use tracing::{info, warn};
 use crate::config::RawIngest;
 use crate::manager::IngestSink;
 use crate::manager_event::ManagerEvent;
-use crate::state_machine::ThreadState;
-use crate::thread_handle::ThreadHandle;
+use crate::session_handle::SessionHandle;
+use crate::state_machine::SessionState;
 
 const KILL_ESCALATION: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Debug)]
 struct PendingTaskTool {
-    parent_thread_id: String,
+    parent_session_id: String,
     tool_call_id: String,
     prompt: Option<String>,
 }
@@ -145,12 +145,23 @@ impl OpencodeServerInstance {
     }
 
     pub async fn create_session(&mut self) -> anyhow::Result<String> {
+        self.create_session_with_model(None).await
+    }
+
+    pub async fn create_session_with_model(
+        &mut self,
+        model: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let body = match model.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(m) => serde_json::json!({ "model": m }).to_string(),
+            None => "{}".to_string(),
+        };
         let resp = self
             .http_client
             .post(format!("{}/session", self.base_url))
             .header("Authorization", &self.auth_header)
             .header("Content-Type", "application/json")
-            .body("{}")
+            .body(body)
             .send()
             .await?
             .error_for_status()?;
@@ -274,7 +285,7 @@ pub fn spawn_sse_pump(
     sse_url: String,
     auth_header: String,
     session_map: Arc<Mutex<HashMap<String, String>>>,
-    threads: Arc<Mutex<HashMap<String, ThreadHandle>>>,
+    sessions: Arc<Mutex<HashMap<String, SessionHandle>>>,
     manager_tx: broadcast::Sender<ManagerEvent>,
     events_tx: IngestSink,
 ) -> JoinHandle<()> {
@@ -285,7 +296,7 @@ pub fn spawn_sse_pump(
                 &sse_url,
                 &auth_header,
                 &session_map,
-                &threads,
+                &sessions,
                 &manager_tx,
                 &events_tx,
                 &pending_tasks,
@@ -315,7 +326,7 @@ async fn try_sse_connect(
     sse_url: &str,
     auth_header: &str,
     session_map: &Arc<Mutex<HashMap<String, String>>>,
-    threads: &Arc<Mutex<HashMap<String, ThreadHandle>>>,
+    sessions: &Arc<Mutex<HashMap<String, SessionHandle>>>,
     manager_tx: &broadcast::Sender<ManagerEvent>,
     events_tx: &IngestSink,
     pending_tasks: &Arc<Mutex<HashMap<String, PendingTaskTool>>>,
@@ -348,35 +359,36 @@ async fn try_sse_connect(
                         "data": sse_event.data
                     }),
                 };
-                let (thread_id, _session_id) = match resolve_thread_id(&payload, session_map).await
-                {
-                    Some(resolved) => resolved,
-                    None => {
-                        let Some(thread_id) = register_opencode_subagent_from_pending_task(
-                            &payload,
-                            session_map,
-                            threads,
-                            manager_tx,
-                            events_tx,
-                            pending_tasks,
-                        )
-                        .await
-                        else {
-                            tracing::debug!(
-                                target: "minos_agent_runtime::opencode_driver",
-                                payload = %payload,
-                                "dropping opencode event without a resolved Minos thread"
-                            );
-                            continue;
-                        };
-                        let session_id = extract_session_id(&payload).unwrap_or("").to_string();
-                        (thread_id, session_id)
-                    }
-                };
+                let (session_id, _provider_session_id) =
+                    match resolve_session_id(&payload, session_map).await {
+                        Some(resolved) => resolved,
+                        None => {
+                            let Some(session_id) = register_opencode_subagent_from_pending_task(
+                                &payload,
+                                session_map,
+                                sessions,
+                                manager_tx,
+                                events_tx,
+                                pending_tasks,
+                            )
+                            .await
+                            else {
+                                tracing::debug!(
+                                    target: "minos_agent_runtime::opencode_driver",
+                                    payload = %payload,
+                                    "dropping opencode event without a resolved Minos thread"
+                                );
+                                continue;
+                            };
+                            let provider_session_id =
+                                extract_session_id(&payload).unwrap_or("").to_string();
+                            (session_id, provider_session_id)
+                        }
+                    };
                 if let Err(error) = events_tx
                     .emit(RawIngest::from_json(
                         AgentName::Opencode,
-                        thread_id.clone(),
+                        session_id.clone(),
                         payload.clone(),
                         chrono::Utc::now().timestamp_millis(),
                     ))
@@ -385,13 +397,13 @@ async fn try_sse_connect(
                     warn!(
                         target: "minos_agent_runtime::opencode_driver",
                         error = %error,
-                        thread_id = %thread_id,
+                        session_id = %session_id,
                         "durable ingest sink closed while reading opencode SSE",
                     );
                     break;
                 }
-                sync_thread_state(&payload, &thread_id, threads, manager_tx).await;
-                update_pending_task_tool(&payload, &thread_id, pending_tasks).await;
+                sync_session_state(&payload, &session_id, sessions, manager_tx).await;
+                update_pending_task_tool(&payload, &session_id, pending_tasks).await;
             }
             Err(e) => {
                 warn!(
@@ -406,26 +418,53 @@ async fn try_sse_connect(
     Ok(())
 }
 
-async fn resolve_thread_id(
+async fn resolve_session_id(
     payload: &Value,
     session_map: &Arc<Mutex<HashMap<String, String>>>,
 ) -> Option<(String, String)> {
-    let session_id = extract_session_id(payload)?.to_string();
+    let provider_session_id = extract_session_id(payload)?.to_string();
     let map = session_map.lock().await;
-    map.iter().find_map(|(thread_id, mapped_session_id)| {
-        (mapped_session_id == &session_id).then(|| (thread_id.clone(), session_id.clone()))
-    })
+    map.iter()
+        .find_map(|(minos_session_id, mapped_provider_id)| {
+            (mapped_provider_id == &provider_session_id)
+                .then(|| (minos_session_id.clone(), provider_session_id.clone()))
+        })
 }
 
 async fn register_opencode_subagent_from_pending_task(
     payload: &Value,
     session_map: &Arc<Mutex<HashMap<String, String>>>,
-    threads: &Arc<Mutex<HashMap<String, ThreadHandle>>>,
+    sessions: &Arc<Mutex<HashMap<String, SessionHandle>>>,
     manager_tx: &broadcast::Sender<ManagerEvent>,
     events_tx: &IngestSink,
     pending_tasks: &Arc<Mutex<HashMap<String, PendingTaskTool>>>,
 ) -> Option<String> {
     let session_id = extract_session_id(payload)?.to_string();
+
+    // Already registered (same provider id) — never emit a second SessionAdded.
+    {
+        let map = session_map.lock().await;
+        if let Some((minos_id, _)) = map
+            .iter()
+            .find(|(_, provider_id)| *provider_id == &session_id)
+        {
+            return Some(minos_id.clone());
+        }
+        if map.contains_key(&session_id) {
+            return Some(session_id.clone());
+        }
+    }
+    {
+        let guard = sessions.lock().await;
+        if guard.contains_key(&session_id) {
+            session_map
+                .lock()
+                .await
+                .insert(session_id.clone(), session_id.clone());
+            return Some(session_id);
+        }
+    }
+
     let pending = {
         let guard = pending_tasks.lock().await;
         (guard.len() == 1)
@@ -434,20 +473,25 @@ async fn register_opencode_subagent_from_pending_task(
     }?;
 
     let workspace = {
-        let mut guard = threads.lock().await;
+        let mut guard = sessions.lock().await;
         if guard.contains_key(&session_id) {
+            drop(guard);
+            session_map
+                .lock()
+                .await
+                .insert(session_id.clone(), session_id.clone());
             return Some(session_id);
         }
-        let workspace = guard.get(&pending.parent_thread_id)?.workspace.clone();
+        let workspace = guard.get(&pending.parent_session_id)?.workspace.clone();
         guard.insert(
             session_id.clone(),
-            ThreadHandle::new_subagent(
+            SessionHandle::new_subagent(
                 session_id.clone(),
                 workspace.clone(),
                 AgentName::Opencode,
-                pending.parent_thread_id.clone(),
+                pending.parent_session_id.clone(),
                 Some(session_id.clone()),
-                ThreadState::Idle,
+                SessionState::Idle,
                 0,
             ),
         );
@@ -457,20 +501,20 @@ async fn register_opencode_subagent_from_pending_task(
         .lock()
         .await
         .insert(session_id.clone(), session_id.clone());
-    let parent_thread_id = pending.parent_thread_id.clone();
+    let parent_session_id = pending.parent_session_id.clone();
     let tool_call_id = pending.tool_call_id.clone();
     let prompt = pending.prompt.clone();
-    let _ = manager_tx.send(ManagerEvent::ThreadAdded {
-        thread_id: session_id.clone(),
+    let _ = manager_tx.send(ManagerEvent::SessionAdded {
+        session_id: session_id.clone(),
         workspace: workspace.clone(),
         agent: AgentName::Opencode,
-        parent_thread_id: Some(parent_thread_id.clone()),
+        parent_session_id: Some(parent_session_id.clone()),
     });
     let synthetic = serde_json::json!({
         "type": "minos.subagent.spawned",
         "properties": {
-            "parent_thread_id": parent_thread_id.clone(),
-            "sub_thread_id": session_id.clone(),
+            "parent_session_id": parent_session_id.clone(),
+            "sub_session_id": session_id.clone(),
             "tool_call_id": tool_call_id.clone(),
             "prompt": prompt.clone(),
         }
@@ -478,7 +522,7 @@ async fn register_opencode_subagent_from_pending_task(
     if let Err(error) = events_tx
         .emit(RawIngest::from_json(
             AgentName::Opencode,
-            synthetic["properties"]["parent_thread_id"]
+            synthetic["properties"]["parent_session_id"]
                 .as_str()
                 .unwrap_or("")
                 .to_string(),
@@ -495,22 +539,22 @@ async fn register_opencode_subagent_from_pending_task(
     }
     info!(
         target: "minos_agent_runtime::opencode_driver",
-        parent_thread_id = %pending.parent_thread_id,
+        parent_session_id = %pending.parent_session_id,
         provider_session_id = %session_id,
         tool_call_id = %pending.tool_call_id,
         workspace = %workspace.display(),
         reason = "single_active_task_tool",
-        "registered opencode subagent thread",
+        "registered opencode subagent session",
     );
     Some(session_id)
 }
 
 async fn update_pending_task_tool(
     payload: &Value,
-    parent_thread_id: &str,
+    parent_session_id: &str,
     pending_tasks: &Arc<Mutex<HashMap<String, PendingTaskTool>>>,
 ) {
-    let Some(update) = task_tool_update(payload, parent_thread_id) else {
+    let Some(update) = task_tool_update(payload, parent_session_id) else {
         return;
     };
     let mut guard = pending_tasks.lock().await;
@@ -526,7 +570,7 @@ struct TaskToolUpdate {
     active: bool,
 }
 
-fn task_tool_update(payload: &Value, parent_thread_id: &str) -> Option<TaskToolUpdate> {
+fn task_tool_update(payload: &Value, parent_session_id: &str) -> Option<TaskToolUpdate> {
     let part = payload
         .get("properties")
         .and_then(|properties| properties.get("part"))
@@ -564,7 +608,7 @@ fn task_tool_update(payload: &Value, parent_thread_id: &str) -> Option<TaskToolU
         .map(str::to_string);
     Some(TaskToolUpdate {
         task: PendingTaskTool {
-            parent_thread_id: parent_thread_id.to_string(),
+            parent_session_id: parent_session_id.to_string(),
             tool_call_id,
             prompt,
         },
@@ -611,10 +655,10 @@ fn extract_session_id(payload: &Value) -> Option<&str> {
         .or_else(|| payload.get("sessionID").and_then(Value::as_str))
 }
 
-async fn sync_thread_state(
+async fn sync_session_state(
     payload: &Value,
-    thread_id: &str,
-    threads: &Arc<Mutex<HashMap<String, ThreadHandle>>>,
+    session_id: &str,
+    sessions: &Arc<Mutex<HashMap<String, SessionHandle>>>,
     manager_tx: &broadcast::Sender<ManagerEvent>,
 ) {
     let event_type = payload.get("type").and_then(Value::as_str).unwrap_or("");
@@ -636,13 +680,13 @@ async fn sync_thread_state(
     }
 
     let maybe_transition = {
-        let guard = threads.lock().await;
-        guard.get(thread_id).and_then(|handle| {
+        let guard = sessions.lock().await;
+        guard.get(session_id).and_then(|handle| {
             handle.set_active_turn_id(None);
             let old = handle.current_state();
-            if matches!(old, ThreadState::Running { .. } | ThreadState::Resuming) {
-                handle.transition(ThreadState::Idle).ok()?;
-                Some((old, ThreadState::Idle))
+            if matches!(old, SessionState::Running { .. } | SessionState::Resuming) {
+                handle.transition(SessionState::Idle).ok()?;
+                Some((old, SessionState::Idle))
             } else {
                 None
             }
@@ -650,8 +694,8 @@ async fn sync_thread_state(
     };
 
     if let Some((old, new)) = maybe_transition {
-        let _ = manager_tx.send(ManagerEvent::ThreadStateChanged {
-            thread_id: thread_id.to_string(),
+        let _ = manager_tx.send(ManagerEvent::SessionStateChanged {
+            session_id: session_id.to_string(),
             old,
             new,
             at_ms: chrono::Utc::now().timestamp_millis(),

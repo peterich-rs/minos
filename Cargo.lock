@@ -3926,8 +3926,10 @@ name = "minos-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "futures",
  "jsonrpsee",
+ "minos-chat-store",
  "minos-daemon",
  "minos-domain",
  "minos-protocol",
@@ -3940,7 +3942,6 @@ dependencies = [
  "tauri-plugin-opener",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]

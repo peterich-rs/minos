@@ -6,7 +6,7 @@ use minos_ui_protocol::{ArtifactRef, UiEventMessage};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::store::{EventRow, ThreadRow};
+use crate::store::{EventRow, SessionRow};
 
 #[derive(Debug, Clone)]
 pub struct IngestChunk {
@@ -32,8 +32,8 @@ impl IngestChunk {
     }
 
     #[must_use]
-    pub fn thread_id(&self) -> &str {
-        &self.ingest.thread_id
+    pub fn session_id(&self) -> &str {
+        &self.ingest.session_id
     }
 
     #[must_use]
@@ -44,8 +44,8 @@ impl IngestChunk {
     #[must_use]
     pub fn to_wire(&self, host_id: DeviceId) -> HostIngestChunk {
         HostIngestChunk {
-            event_id: event_id(host_id, &self.ingest.thread_id, self.seq),
-            thread_id: self.ingest.thread_id.clone(),
+            event_id: event_id(host_id, &self.ingest.session_id, self.seq),
+            session_id: self.ingest.session_id.clone(),
             seq: self.seq,
             agent: self.ingest.agent,
             kind: self
@@ -65,7 +65,7 @@ impl IngestChunk {
 
 pub fn wire_chunk_from_event_row(
     host_id: DeviceId,
-    thread: &ThreadRow,
+    thread: &SessionRow,
     row: &EventRow,
 ) -> anyhow::Result<HostIngestChunk> {
     let seq = row.seq.max(0) as u64;
@@ -85,8 +85,8 @@ pub fn wire_chunk_from_event_row(
         hex_sha256(&payload_bytes)
     };
     Ok(HostIngestChunk {
-        event_id: event_id(host_id, &row.thread_id, seq),
-        thread_id: row.thread_id.clone(),
+        event_id: event_id(host_id, &row.session_id, seq),
+        session_id: row.session_id.clone(),
         seq,
         agent: agent_from_thread(thread),
         kind: "agent_event".to_string(),
@@ -99,7 +99,7 @@ pub fn wire_chunk_from_event_row(
     })
 }
 
-fn agent_from_thread(thread: &ThreadRow) -> AgentName {
+fn agent_from_thread(thread: &SessionRow) -> AgentName {
     match thread.agent.as_str() {
         "claude" => AgentName::Claude,
         "gemini" => AgentName::Gemini,
@@ -109,8 +109,8 @@ fn agent_from_thread(thread: &ThreadRow) -> AgentName {
     }
 }
 
-fn event_id(host_id: DeviceId, thread_id: &str, seq: u64) -> String {
-    format!("{}:{thread_id}:{seq}", host_id.0)
+fn event_id(host_id: DeviceId, session_id: &str, seq: u64) -> String {
+    format!("{}:{session_id}:{seq}", host_id.0)
 }
 
 fn checksum_raw_body(body: &RawBody) -> String {

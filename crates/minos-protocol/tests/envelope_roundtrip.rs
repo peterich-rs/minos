@@ -55,7 +55,7 @@ fn all_envelope_variants_round_trip() {
         Envelope::Ingest {
             version: 1,
             agent: AgentName::Codex,
-            thread_id: "thr-abc".into(),
+            session_id: "thr-abc".into(),
             seq: 99,
             payload: serde_json::json!({"method": "item/agentMessage/delta", "params": {"delta": "hello"}}),
             ts_ms: 1_714_000_000_000,
@@ -63,7 +63,7 @@ fn all_envelope_variants_round_trip() {
         Envelope::Ingest {
             version: 1,
             agent: AgentName::Claude,
-            thread_id: "thr-claude-1".into(),
+            session_id: "thr-claude-1".into(),
             seq: 1,
             payload: serde_json::json!({"kind": "raw", "raw_kind": "stdout", "payload_json": "\"line1\""}),
             ts_ms: 1_714_000_000_001,
@@ -71,7 +71,7 @@ fn all_envelope_variants_round_trip() {
         Envelope::Ingest {
             version: 1,
             agent: AgentName::Gemini,
-            thread_id: "thr-gemini-1".into(),
+            session_id: "thr-gemini-1".into(),
             seq: 0,
             payload: serde_json::json!({}),
             ts_ms: 0,
@@ -107,7 +107,7 @@ fn all_event_kind_variants_round_trip() {
         EventKind::Unpaired,
         EventKind::ServerShutdown,
         EventKind::UiEventMessage {
-            thread_id: "thr-1".into(),
+            session_id: "thr-1".into(),
             seq: 5,
             ui: UiEventMessage::TextDelta {
                 message_id: "msg-1".into(),
@@ -116,7 +116,7 @@ fn all_event_kind_variants_round_trip() {
             ts_ms: 1_714_000_000_000,
         },
         EventKind::UiEventMessage {
-            thread_id: "thr-2".into(),
+            session_id: "thr-2".into(),
             seq: 1,
             ui: UiEventMessage::Raw {
                 kind: "custom_event".into(),
@@ -125,7 +125,7 @@ fn all_event_kind_variants_round_trip() {
             ts_ms: 1_714_000_000_001,
         },
         EventKind::ApprovalRequest {
-            thread_id: "thr-approval".into(),
+            session_id: "thr-approval".into(),
             turn_id: "turn-123".into(),
             request_id: "req-123".into(),
             method: "exec_command".into(),
@@ -136,7 +136,7 @@ fn all_event_kind_variants_round_trip() {
             timeout_ms: 120_000,
         },
         EventKind::ApprovalTimeout {
-            thread_id: "thr-approval".into(),
+            session_id: "thr-approval".into(),
             request_id: "req-123".into(),
             reason: "timeout".into(),
         },

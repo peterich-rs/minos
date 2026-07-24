@@ -4,9 +4,9 @@ import {
   type AgentDescriptor,
   type HostSummary,
   type StoredSession,
-  type ThreadSummary,
+  type SessionSummary,
   type SocialMessageFrame,
-  type ReadThreadResponse,
+  type ReadSessionResponse,
   ensureBrowserDeviceId,
   loadStoredSession,
   saveStoredSession,
@@ -48,14 +48,14 @@ export interface AppState {
   setRelaySocket: (socket: RelaySocket | null) => void
 
   // Threads & Chat
-  threads: ThreadSummary[]
+  sessions: SessionSummary[]
   selectedThreadId: string | null
-  threadRecords: Record<string, ReadThreadResponse>
+  threadRecords: Record<string, ReadSessionResponse>
   latestSocialEvent: SocialMessageFrame | null
-  setThreads: (threads: ThreadSummary[]) => void
+  setThreads: (sessions: SessionSummary[]) => void
   setSelectedThreadId: (id: string | null) => void
-  setThreadRecords: (records: Record<string, ReadThreadResponse>) => void
-  updateThreadRecord: (id: string, updateFn: (prev: ReadThreadResponse) => ReadThreadResponse) => void
+  setThreadRecords: (records: Record<string, ReadSessionResponse>) => void
+  updateThreadRecord: (id: string, updateFn: (prev: ReadSessionResponse) => ReadSessionResponse) => void
   setLatestSocialEvent: (event: SocialMessageFrame | null) => void
 
   // Composer
@@ -97,11 +97,11 @@ export const useAppStore = create<AppState>()(
       setRuntimeAgents: (runtimeAgents) => set({ runtimeAgents }),
       setRelaySocket: (relaySocket) => set({ relaySocket }),
 
-      threads: [],
+      sessions: [],
       selectedThreadId: null,
       threadRecords: {},
       latestSocialEvent: null,
-      setThreads: (threads) => set({ threads }),
+      setThreads: (sessions) => set({ sessions }),
       setSelectedThreadId: (selectedThreadId) => set({ selectedThreadId }),
       setThreadRecords: (threadRecords) => set({ threadRecords }),
       updateThreadRecord: (id, updateFn) =>
@@ -112,7 +112,7 @@ export const useAppStore = create<AppState>()(
               state.threadRecords[id] || {
                 ui_events: [],
                 next_seq: null,
-                thread_end_reason: null,
+                session_end_reason: null,
               },
             ),
           },

@@ -1145,7 +1145,7 @@ async fn dispatch_event(
                 "approval_requested" | "approval_resolved" => {
                     // Convert to UiEventFrame
                     let _ = ui_events_tx.send(UiEventFrame {
-                        thread_id: payload.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        session_id: payload.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                         seq: 0,
                         ui: minos_ui_protocol::UiEventMessage::Raw {
                             kind: kind.clone(),
@@ -1163,7 +1163,7 @@ async fn dispatch_event(
             match kind.as_str() {
                 "agent_text_delta" | "agent_tool_call" | "agent_error" => {
                     let _ = ui_events_tx.send(UiEventFrame {
-                        thread_id: topic.strip_prefix("agent_session:").unwrap_or(topic).to_string(),
+                        session_id: topic.strip_prefix("agent_session:").unwrap_or(topic).to_string(),
                         seq: 0,
                         ui: minos_ui_protocol::UiEventMessage::Raw {
                             kind: kind.clone(),
@@ -1252,7 +1252,7 @@ git commit -m "feat(mobile): replace Envelope WS with ClientFrame/ServerFrame re
 ## Task 5: Mobile — migrate forward_rpc to REST API calls
 
 **Files:**
-- Modify: `crates/minos-mobile/src/http.rs` — add `start_agent_session`, `send_user_message_http`, `interrupt_thread_http`, `close_thread_http`, `list_host_skills_http`, `write_host_skill_config_http`
+- Modify: `crates/minos-mobile/src/http.rs` — add `start_agent_session`, `send_user_message_http`, `interrupt_session_http`, `close_session_http`, `list_host_skills_http`, `write_host_skill_config_http`
 - Modify: `crates/minos-mobile/src/client.rs` — replace `forward_rpc` calls with HTTP calls
 - Delete: `crates/minos-mobile/src/rpc.rs` — no longer needed
 
@@ -1291,7 +1291,7 @@ pub async fn send_user_message_http(
     self.post_bearer("/v1/agent-sessions/send-message", access_token, &body).await
 }
 
-pub async fn interrupt_thread_http(
+pub async fn interrupt_session_http(
     &self,
     access_token: &str,
     session_id: &str,
@@ -1300,7 +1300,7 @@ pub async fn interrupt_thread_http(
     self.post_bearer("/v1/agent-sessions/interrupt", access_token, &body).await
 }
 
-pub async fn close_thread_http(
+pub async fn close_session_http(
     &self,
     access_token: &str,
     session_id: &str,
@@ -1322,7 +1322,7 @@ pub async fn send_user_message(&self, session_id: String, text: String) -> Resul
 }
 ```
 
-- [ ] **Step 3: Replace `interrupt_thread`, `close_thread`, `delete_thread` similarly**
+- [ ] **Step 3: Replace `interrupt_session`, `close_session`, `delete_session` similarly**
 
 - [x] **Step 4: Replace `list_clis`, `list_host_skills`, `write_host_skill_config`**
 

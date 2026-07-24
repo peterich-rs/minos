@@ -4,7 +4,7 @@ import { Toaster } from 'sonner'
 import { useAppStore } from './lib/store'
 import {
   type AgentDescriptor,
-  type ThreadSummary,
+  type SessionSummary,
   backendWsBase,
   createWsTicket,
   listHosts,
@@ -25,7 +25,7 @@ async function fetchConsoleSnapshot(deviceId: string, accessToken: string) {
   ])
   return {
     hosts: hostResponse.hosts,
-    threads: threadResponse.threads,
+    sessions: threadResponse.sessions,
   }
 }
 
@@ -61,22 +61,22 @@ function RelayManager() {
     const socket = new RelaySocket({
       wsBaseUrl: backendWsBase(),
       onUiEvent: (frame) => {
-        useAppStore.getState().updateThreadRecord(frame.thread_id, (current) => ({
+        useAppStore.getState().updateThreadRecord(frame.session_id, (current) => ({
           ...current,
           ui_events: [...current.ui_events, frame.ui],
         }))
 
-        const currentThreads = useAppStore.getState().threads
+        const currentThreads = useAppStore.getState().sessions
         const existingIndex = currentThreads.findIndex(
-          (thread) => thread.thread_id === frame.thread_id,
+          (thread) => thread.session_id === frame.session_id,
         )
 
         let nextThreads = [...currentThreads]
 
-        if (frame.ui.kind === 'thread_opened') {
+        if (frame.ui.kind === 'session_opened') {
           const openedEvent = frame.ui
-          const openedThread: ThreadSummary = {
-            thread_id: openedEvent.thread_id,
+          const openedThread: SessionSummary = {
+            session_id: openedEvent.session_id,
             agent: openedEvent.agent,
             title: openedEvent.title,
             first_ts_ms: frame.ts_ms,
@@ -163,11 +163,11 @@ function RelayManager() {
         if (cancelled) return
 
         setHosts(snapshot.hosts)
-        setThreads(snapshot.threads)
+        setThreads(snapshot.sessions)
 
         const currentSelected = useAppStore.getState().selectedThreadId
-        if (!currentSelected || !snapshot.threads.some((t) => t.thread_id === currentSelected)) {
-          setSelectedThreadId(snapshot.threads[0]?.thread_id ?? null)
+        if (!currentSelected || !snapshot.sessions.some((t) => t.session_id === currentSelected)) {
+          setSelectedThreadId(snapshot.sessions[0]?.session_id ?? null)
         }
 
         const currentHost = useAppStore.getState().activeHost
@@ -190,7 +190,7 @@ function RelayManager() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceId, session])
 
-  // 2. Selected thread history
+  // 2. Selected session history
   useEffect(() => {
     if (!selectedThreadId || !session) return
 

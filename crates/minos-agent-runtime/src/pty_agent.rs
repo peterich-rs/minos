@@ -40,7 +40,7 @@ const KILL_ESCALATION: Duration = Duration::from_secs(3);
 /// A running PTY-style agent process.
 pub struct PtyAgent {
     agent: AgentName,
-    thread_id: String,
+    session_id: String,
     child: Option<Child>,
     stdin_handle: Option<tokio::process::ChildStdin>,
     stdout_task: Option<JoinHandle<()>>,
@@ -56,7 +56,7 @@ impl PtyAgent {
         cli_path: &Path,
         workspace: &Path,
         agent: AgentName,
-        thread_id: String,
+        session_id: String,
         events_tx: IngestSink,
     ) -> Result<Self, anyhow::Error> {
         let mut cmd = Command::new(cli_path);
@@ -86,7 +86,7 @@ impl PtyAgent {
 
         let stdout_task = stdout.map(|out| {
             let tx = events_tx.clone();
-            let tid = thread_id.clone();
+            let tid = session_id.clone();
             let ag = agent;
             tokio::spawn(async move {
                 let reader = BufReader::new(out);
@@ -110,7 +110,7 @@ impl PtyAgent {
                         warn!(
                             target: "minos_agent_runtime::pty_agent",
                             error = %error,
-                            thread_id = %tid,
+                            session_id = %tid,
                             "durable ingest sink closed while reading stdout",
                         );
                         break;
@@ -122,7 +122,7 @@ impl PtyAgent {
 
         let stderr_task = stderr.map(|err_stream| {
             let tx = events_tx.clone();
-            let tid = thread_id.clone();
+            let tid = session_id.clone();
             let ag = agent;
             tokio::spawn(async move {
                 let reader = BufReader::new(err_stream);
@@ -144,7 +144,7 @@ impl PtyAgent {
                         warn!(
                             target: "minos_agent_runtime::pty_agent",
                             error = %error,
-                            thread_id = %tid,
+                            session_id = %tid,
                             "durable ingest sink closed while reading stderr",
                         );
                         break;
@@ -155,7 +155,7 @@ impl PtyAgent {
 
         info!(
             agent = ?agent,
-            thread_id = %thread_id,
+            session_id = %session_id,
             cli = %cli_path.display(),
             workspace = %workspace.display(),
             "pty agent spawned"
@@ -163,7 +163,7 @@ impl PtyAgent {
 
         Ok(Self {
             agent,
-            thread_id,
+            session_id,
             child: Some(child),
             stdin_handle: stdin,
             stdout_task,
@@ -202,7 +202,7 @@ impl PtyAgent {
 
             let exited = tokio::time::timeout(KILL_ESCALATION, child.wait()).await;
             if exited.is_err() {
-                warn!(thread_id = %self.thread_id, "pty agent did not exit after SIGTERM, sending SIGKILL");
+                warn!(session_id = %self.session_id, "pty agent did not exit after SIGTERM, sending SIGKILL");
                 let _ = child.kill().await;
             }
         }
@@ -219,10 +219,10 @@ impl PtyAgent {
         if let Err(error) = events_tx
             .emit(RawIngest::from_json(
                 self.agent,
-                self.thread_id.clone(),
+                self.session_id.clone(),
                 json!({
                     "kind": "thread_closed",
-                    "thread_id": self.thread_id,
+                    "session_id": self.session_id,
                     "reason": { "kind": "user_stopped" },
                     "closed_at_ms": chrono::Utc::now().timestamp_millis()
                 }),
@@ -233,18 +233,18 @@ impl PtyAgent {
             warn!(
                 target: "minos_agent_runtime::pty_agent",
                 error = %error,
-                thread_id = %self.thread_id,
+                session_id = %self.session_id,
                 "failed to emit thread_closed ingest",
             );
         }
 
-        info!(thread_id = %self.thread_id, "pty agent closed");
+        info!(session_id = %self.session_id, "pty agent closed");
     }
 
-    /// Returns the thread ID this agent is bound to.
+    /// Returns the session ID this agent is bound to.
     #[must_use]
-    pub fn thread_id(&self) -> &str {
-        &self.thread_id
+    pub fn session_id(&self) -> &str {
+        &self.session_id
     }
 
     /// Returns the agent kind.

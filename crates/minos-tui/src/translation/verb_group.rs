@@ -306,13 +306,13 @@ pub fn header_label(items: &[ChatItem], start: usize, end: usize) -> HeaderLabel
                 push_bucket(&mut buckets, bucket);
             }
             ChatItem::SubagentCall {
-                sub_thread_id,
+                sub_session_id,
                 status,
                 is_streaming,
                 ..
             } => {
                 // Distinct subagents (started + terminal of same id count once).
-                if subagent_ids.insert(sub_thread_id.as_str()) {
+                if subagent_ids.insert(sub_session_id.as_str()) {
                     push_bucket(&mut buckets, VerbBucket::Subagent);
                 }
                 if matches!(status, minos_ui_protocol::SubagentStatus::Failed) {
@@ -529,7 +529,7 @@ mod tests {
             ChatItem::SubagentCall {
                 message_id: "m".into(),
                 tool_call_id: "4".into(),
-                sub_thread_id: "sub-1".into(),
+                sub_session_id: "sub-1".into(),
                 agent: AgentName::Codex,
                 model: None,
                 prompt_summary: None,

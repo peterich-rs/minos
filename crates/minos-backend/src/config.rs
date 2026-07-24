@@ -390,7 +390,7 @@ mod tests {
     // env vars at parse time (via `env = "..."` attrs), and Rust runs tests
     // concurrently by default — so every test here must hold `ENV_LOCK`
     // and begin with `clear_env()`. Without that, a sibling test's
-    // `set_var` leaks across threads and flakes the defaults assertions.
+    // `set_var` leaks across sessions and flakes the defaults assertions.
     //
     // The first element of `try_parse_from`'s iterator is the binary name;
     // subsequent elements are flags.

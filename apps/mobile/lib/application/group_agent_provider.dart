@@ -76,6 +76,8 @@ AgentName _runtimeAgentFromString(String value) {
     'codex' => AgentName.codex,
     'claude' => AgentName.claude,
     'gemini' => AgentName.gemini,
+    'opencode' => AgentName.opencode,
+    'grok' => AgentName.grok,
     _ => AgentName.codex,
   };
 }

@@ -17,9 +17,9 @@ use minos_daemon::store::LocalStore;
 use minos_domain::AgentName;
 use minos_protocol::{
     AgentLaunchMode, AppendConversationMessageParams, AppendConversationMessageResponse,
-    ApprovalDecisionRequest, CloseThreadRequest, CreateProjectRequest, HealthResponse,
+    ApprovalDecisionRequest, CloseSessionRequest, CreateProjectRequest, HealthResponse,
     ListConversationMessagesParams, ListConversationMessagesResponse, ListConversationsParams,
-    ListConversationsResponse, ListProjectsResponse, LocalConversationEvent, ReadThreadParams,
+    ListConversationsResponse, ListProjectsResponse, LocalConversationEvent, ReadSessionParams,
     StartAgentRequest, StartAgentResponse,
 };
 
@@ -105,17 +105,17 @@ async fn health_returns_version_and_uptime() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn list_local_threads_returns_empty_initially() {
+async fn list_local_sessions_returns_empty_initially() {
     let (_glue, _handle, tmp, _fake) = setup().await;
     let url = discovery_addr(&tmp);
     let client = WsClientBuilder::default().build(&url).await.unwrap();
 
-    let threads: Vec<minos_protocol::LocalThreadSnapshot> = client
-        .request("minos_local_list_local_threads", ArrayParams::new())
+    let sessions: Vec<minos_protocol::LocalSessionSnapshot> = client
+        .request("minos_local_list_local_sessions", ArrayParams::new())
         .await
         .unwrap();
 
-    assert!(threads.is_empty());
+    assert!(sessions.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -158,7 +158,7 @@ async fn project_methods_are_registered_on_local_rpc() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn start_agent_then_list_local_threads_returns_one() {
+async fn start_agent_then_list_local_sessions_returns_one() {
     let (_glue, _handle, tmp, _fake) = setup().await;
     let url = discovery_addr(&tmp);
     let client = WsClientBuilder::default().build(&url).await.unwrap();
@@ -170,6 +170,10 @@ async fn start_agent_then_list_local_threads_returns_one() {
                 agent: AgentName::Codex,
                 workspace: String::new(),
                 mode: Some(AgentLaunchMode::Server),
+                profile_id: None,
+                model: None,
+                reasoning_effort: None,
+                instructions: None,
             }],
         )
         .await
@@ -179,17 +183,17 @@ async fn start_agent_then_list_local_threads_returns_one() {
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let threads: Vec<minos_protocol::LocalThreadSnapshot> = client
-        .request("minos_local_list_local_threads", ArrayParams::new())
+    let sessions: Vec<minos_protocol::LocalSessionSnapshot> = client
+        .request("minos_local_list_local_sessions", ArrayParams::new())
         .await
         .unwrap();
 
-    assert_eq!(threads.len(), 1);
-    assert_eq!(threads[0].thread_id, start_resp.session_id);
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].session_id, start_resp.session_id);
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn delete_thread_removes_local_thread_and_history() {
+async fn delete_session_removes_local_thread_and_history() {
     let (glue, _handle, tmp, _fake) = setup().await;
     let url = discovery_addr(&tmp);
     let client = WsClientBuilder::default().build(&url).await.unwrap();
@@ -201,6 +205,10 @@ async fn delete_thread_removes_local_thread_and_history() {
                 agent: AgentName::Codex,
                 workspace: String::new(),
                 mode: Some(AgentLaunchMode::Server),
+                profile_id: None,
+                model: None,
+                reasoning_effort: None,
+                instructions: None,
             }],
         )
         .await
@@ -210,21 +218,21 @@ async fn delete_thread_removes_local_thread_and_history() {
 
     client
         .request::<(), _>(
-            "minos_local_delete_thread",
-            [CloseThreadRequest {
-                thread_id: start_resp.session_id.clone(),
+            "minos_local_delete_session",
+            [CloseSessionRequest {
+                session_id: start_resp.session_id.clone(),
             }],
         )
         .await
         .unwrap();
 
-    let threads: Vec<minos_protocol::LocalThreadSnapshot> = client
-        .request("minos_local_list_local_threads", ArrayParams::new())
+    let sessions: Vec<minos_protocol::LocalSessionSnapshot> = client
+        .request("minos_local_list_local_sessions", ArrayParams::new())
         .await
         .unwrap();
-    assert!(threads.is_empty());
+    assert!(sessions.is_empty());
 
-    let event_count: (i64,) = sqlx::query_as("SELECT count(*) FROM events WHERE thread_id = ?")
+    let event_count: (i64,) = sqlx::query_as("SELECT count(*) FROM events WHERE session_id = ?")
         .bind(&start_resp.session_id)
         .fetch_one(glue.store().pool())
         .await
@@ -232,7 +240,7 @@ async fn delete_thread_removes_local_thread_and_history() {
     assert_eq!(event_count.0, 0);
     assert!(glue
         .store()
-        .get_thread(&start_resp.session_id)
+        .get_session(&start_resp.session_id)
         .await
         .unwrap()
         .is_none());
@@ -251,6 +259,10 @@ async fn send_user_message_round_trips() {
                 agent: AgentName::Codex,
                 workspace: String::new(),
                 mode: Some(AgentLaunchMode::Server),
+                profile_id: None,
+                model: None,
+                reasoning_effort: None,
+                instructions: None,
             }],
         )
         .await
@@ -278,7 +290,7 @@ async fn approval_decision_rpc_is_registered() {
         .request::<(), _>(
             "minos_local_approval_decision",
             [ApprovalDecisionRequest {
-                thread_id: "thread-missing".into(),
+                session_id: "thread-missing".into(),
                 request_id: "request-missing".into(),
                 decision: serde_json::json!({ "decision": "deny" }),
             }],
@@ -288,7 +300,7 @@ async fn approval_decision_rpc_is_registered() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn read_thread_raw_history_returns_events_after_start() {
+async fn read_session_raw_history_returns_events_after_start() {
     let (glue, _handle, tmp, fake) = setup().await;
     let url = discovery_addr(&tmp);
     let client = WsClientBuilder::default().build(&url).await.unwrap();
@@ -300,6 +312,10 @@ async fn read_thread_raw_history_returns_events_after_start() {
                 agent: AgentName::Codex,
                 workspace: String::new(),
                 mode: Some(AgentLaunchMode::Server),
+                profile_id: None,
+                model: None,
+                reasoning_effort: None,
+                instructions: None,
             }],
         )
         .await
@@ -307,18 +323,18 @@ async fn read_thread_raw_history_returns_events_after_start() {
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let event_count: (i64,) = sqlx::query_as("SELECT count(*) FROM events WHERE thread_id = ?")
+    let event_count: (i64,) = sqlx::query_as("SELECT count(*) FROM events WHERE session_id = ?")
         .bind(&start_resp.session_id)
         .fetch_one(glue.store().pool())
         .await
         .unwrap();
 
     if event_count.0 > 0 {
-        let response: minos_protocol::ReadThreadRawHistoryResponse = client
+        let response: minos_protocol::ReadSessionRawHistoryResponse = client
             .request(
-                "minos_local_read_thread_raw_history",
-                [ReadThreadParams {
-                    thread_id: start_resp.session_id.clone(),
+                "minos_local_read_session_raw_history",
+                [ReadSessionParams {
+                    session_id: start_resp.session_id.clone(),
                     from_seq: None,
                     limit: 100,
                 }],
@@ -328,7 +344,7 @@ async fn read_thread_raw_history_returns_events_after_start() {
 
         assert!(!response.events.is_empty());
         for event in &response.events {
-            assert_eq!(event.thread_id, start_resp.session_id);
+            assert_eq!(event.session_id, start_resp.session_id);
         }
     }
 
@@ -351,7 +367,7 @@ async fn list_conversation_messages_returns_messages_from_local_db_newest_first(
         .unwrap();
     store.upsert_workspace("/tmp/ws", 3).await.unwrap();
     store
-        .insert_thread_in_conversation(
+        .insert_session_in_conversation(
             "thread-1",
             "conversation-main",
             "/tmp/ws",
@@ -411,7 +427,118 @@ async fn list_conversation_messages_returns_messages_from_local_db_newest_first(
     assert_eq!(response.messages[0].message_seq, 2);
     assert_eq!(response.messages[0].sender_role, "agent");
     assert_eq!(response.messages[0].body, "auth summary");
+    assert!(response.messages[0].reactions.is_empty());
     assert!(response.has_more);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn toggle_conversation_message_reaction_add_remove_and_list_embed() {
+    use minos_protocol::{
+        ToggleConversationMessageReactionParams, ToggleConversationMessageReactionResponse,
+        LOCAL_REACTION_ACTOR_ID,
+    };
+
+    let (glue, _handle, tmp, _fake) = setup().await;
+    let url = discovery_addr(&tmp);
+    let client = WsClientBuilder::default().build(&url).await.unwrap();
+    let store = glue.store();
+    store
+        .create_project("project-main", "main", "main", Some("/tmp/ws"), 1)
+        .await
+        .unwrap();
+    store
+        .create_conversation("conversation-main", "project-main", "main", 2)
+        .await
+        .unwrap();
+    store
+        .upsert_conversation_message(
+            "conversation-main",
+            "msg-react",
+            None,
+            "user",
+            None,
+            "react me",
+            10,
+            None,
+            None,
+            "[]",
+        )
+        .await
+        .unwrap();
+
+    let mut events = client
+        .subscribe::<LocalConversationEvent, ArrayParams>(
+            "minos_local_subscribe_conversation_events",
+            ArrayParams::new(),
+            "minos_local_unsubscribe_conversation_events",
+        )
+        .await
+        .unwrap()
+        .into_stream();
+
+    let added: ToggleConversationMessageReactionResponse = client
+        .request(
+            "minos_local_toggle_conversation_message_reaction",
+            [ToggleConversationMessageReactionParams {
+                message_id: "msg-react".into(),
+                emoji: "👍".into(),
+            }],
+        )
+        .await
+        .unwrap();
+    assert_eq!(added.conversation_id, "conversation-main");
+    assert_eq!(added.reactions.len(), 1);
+    assert_eq!(added.reactions[0].emoji, "👍");
+    assert!(added.reactions[0].reacted_by_me);
+    assert_eq!(
+        added.reactions[0].actors[0].actor_id,
+        LOCAL_REACTION_ACTOR_ID
+    );
+
+    let event = tokio::time::timeout(Duration::from_secs(1), events.next())
+        .await
+        .expect("reaction event should arrive")
+        .expect("subscription should stay open")
+        .expect("event should decode");
+    match event {
+        LocalConversationEvent::ConversationReactionToggled {
+            conversation_id,
+            message_id,
+            reactions,
+        } => {
+            assert_eq!(conversation_id, "conversation-main");
+            assert_eq!(message_id, "msg-react");
+            assert_eq!(reactions.len(), 1);
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+
+    let listed: ListConversationMessagesResponse = client
+        .request(
+            "minos_local_list_conversation_messages",
+            [ListConversationMessagesParams {
+                conversation_id: "conversation-main".into(),
+                before_seq: None,
+                limit: Some(10),
+            }],
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed.messages.len(), 1);
+    assert_eq!(listed.messages[0].reactions.len(), 1);
+    assert_eq!(listed.messages[0].reactions[0].emoji, "👍");
+
+    let removed: ToggleConversationMessageReactionResponse = client
+        .request(
+            "minos_local_toggle_conversation_message_reaction",
+            [ToggleConversationMessageReactionParams {
+                message_id: "msg-react".into(),
+                emoji: "👍".into(),
+            }],
+        )
+        .await
+        .unwrap();
+    assert!(removed.reactions.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -445,7 +572,7 @@ async fn append_conversation_message_publishes_conversation_event() {
             [AppendConversationMessageParams {
                 conversation_id: "conversation-main".into(),
                 message_id: "msg-rpc".into(),
-                thread_id: None,
+                session_id: None,
                 sender_role: "user".into(),
                 agent: None,
                 body: "visible update".into(),
@@ -472,7 +599,7 @@ async fn append_conversation_message_publishes_conversation_event() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn resume_thread_returns_thread_info() {
+async fn resume_session_returns_thread_info() {
     let (glue, _handle, tmp, fake) = setup().await;
     let url = discovery_addr(&tmp);
     let client = WsClientBuilder::default().build(&url).await.unwrap();
@@ -484,43 +611,47 @@ async fn resume_thread_returns_thread_info() {
                 agent: AgentName::Codex,
                 workspace: String::new(),
                 mode: Some(AgentLaunchMode::Server),
+                profile_id: None,
+                model: None,
+                reasoning_effort: None,
+                instructions: None,
             }],
         )
         .await
         .unwrap();
 
-    let thread_id = start_resp.session_id.clone();
+    let session_id = start_resp.session_id.clone();
 
     // Stop-path suspend (not close) so the session stays resumable.
     let needs = glue
         .manager
-        .suspend_for_daemon_stop(&thread_id)
+        .suspend_for_daemon_stop(&session_id)
         .await
         .unwrap();
     assert!(!needs);
     glue.store()
-        .suspend_thread_for_daemon_restart(&thread_id, false, 1)
+        .suspend_thread_for_daemon_restart(&session_id, false, 1)
         .await
         .unwrap();
 
     let resume_resp: StartAgentResponse = client
         .request(
-            "minos_local_resume_thread",
-            [minos_protocol::ResumeThreadRequest {
-                thread_id: thread_id.clone(),
+            "minos_local_resume_session",
+            [minos_protocol::ResumeSessionRequest {
+                session_id: session_id.clone(),
                 auto_continue: false,
             }],
         )
         .await
         .unwrap();
 
-    assert_eq!(resume_resp.session_id, thread_id);
+    assert_eq!(resume_resp.session_id, session_id);
 
     fake.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn list_local_threads_includes_persisted_suspended_threads() {
+async fn list_local_sessions_includes_persisted_suspended_threads() {
     let (glue, _handle, tmp, _fake) = setup().await;
     let url = discovery_addr(&tmp);
     let client = WsClientBuilder::default().build(&url).await.unwrap();
@@ -544,7 +675,7 @@ async fn list_local_threads_includes_persisted_suspended_threads() {
         .await
         .unwrap();
     glue.store()
-        .insert_thread(
+        .insert_session(
             "thr-persisted",
             "c-persisted",
             "/tmp/persisted",
@@ -557,27 +688,27 @@ async fn list_local_threads_includes_persisted_suspended_threads() {
         .await
         .unwrap();
     sqlx::query(
-        "UPDATE threads SET status = 'suspended', last_pause_reason = 'daemon_restart' WHERE thread_id = ?",
+        "UPDATE sessions SET status = 'suspended', last_pause_reason = 'daemon_restart' WHERE session_id = ?",
     )
     .bind("thr-persisted")
     .execute(glue.store().pool())
     .await
     .unwrap();
 
-    let threads: Vec<minos_protocol::LocalThreadSnapshot> = client
-        .request("minos_local_list_local_threads", ArrayParams::new())
+    let sessions: Vec<minos_protocol::LocalSessionSnapshot> = client
+        .request("minos_local_list_local_sessions", ArrayParams::new())
         .await
         .unwrap();
 
-    let persisted = threads
+    let persisted = sessions
         .iter()
-        .find(|thread| thread.thread_id == "thr-persisted")
-        .expect("persisted thread missing");
+        .find(|thread| thread.session_id == "thr-persisted")
+        .expect("persisted session missing");
     assert_eq!(persisted.agent, AgentName::Claude);
     assert_eq!(persisted.workspace, "/tmp/persisted");
     assert_eq!(
         persisted.state,
-        minos_protocol::ThreadState::Suspended {
+        minos_protocol::SessionState::Suspended {
             reason: minos_protocol::PauseReason::DaemonRestart,
         }
     );

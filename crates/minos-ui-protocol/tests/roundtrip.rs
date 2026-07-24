@@ -5,7 +5,7 @@
 //! Plan P7.2.
 
 use minos_domain::AgentName;
-use minos_ui_protocol::{MessageRole, ThreadEndReason, UiEventMessage};
+use minos_ui_protocol::{MessageRole, SessionEndReason, UiEventMessage};
 use pretty_assertions::assert_eq;
 
 fn assert_round_trip(msg: &UiEventMessage) {
@@ -16,53 +16,53 @@ fn assert_round_trip(msg: &UiEventMessage) {
 
 fn thread_variants() -> Vec<UiEventMessage> {
     vec![
-        UiEventMessage::ThreadOpened {
-            thread_id: "thr-1".into(),
+        UiEventMessage::SessionOpened {
+            session_id: "thr-1".into(),
             agent: AgentName::Codex,
             title: Some("Fix the bug".into()),
             opened_at_ms: 1_714_000_000_000,
         },
-        UiEventMessage::ThreadOpened {
-            thread_id: "thr-2".into(),
+        UiEventMessage::SessionOpened {
+            session_id: "thr-2".into(),
             agent: AgentName::Claude,
             title: None,
             opened_at_ms: 1_714_000_000_001,
         },
-        UiEventMessage::ThreadOpened {
-            thread_id: "thr-3".into(),
+        UiEventMessage::SessionOpened {
+            session_id: "thr-3".into(),
             agent: AgentName::Gemini,
             title: Some(String::new()),
             opened_at_ms: 0,
         },
-        UiEventMessage::ThreadTitleUpdated {
-            thread_id: "thr-1".into(),
+        UiEventMessage::SessionTitleUpdated {
+            session_id: "thr-1".into(),
             title: "Updated title".into(),
         },
-        UiEventMessage::ThreadClosed {
-            thread_id: "thr-1".into(),
-            reason: ThreadEndReason::UserStopped,
+        UiEventMessage::SessionClosed {
+            session_id: "thr-1".into(),
+            reason: SessionEndReason::UserStopped,
             closed_at_ms: 1_714_000_001_000,
         },
-        UiEventMessage::ThreadClosed {
-            thread_id: "thr-1".into(),
-            reason: ThreadEndReason::AgentDone,
+        UiEventMessage::SessionClosed {
+            session_id: "thr-1".into(),
+            reason: SessionEndReason::AgentDone,
             closed_at_ms: 1_714_000_001_000,
         },
-        UiEventMessage::ThreadClosed {
-            thread_id: "thr-1".into(),
-            reason: ThreadEndReason::Crashed {
+        UiEventMessage::SessionClosed {
+            session_id: "thr-1".into(),
+            reason: SessionEndReason::Crashed {
                 message: "out of memory".into(),
             },
             closed_at_ms: 1_714_000_001_000,
         },
-        UiEventMessage::ThreadClosed {
-            thread_id: "thr-1".into(),
-            reason: ThreadEndReason::Timeout,
+        UiEventMessage::SessionClosed {
+            session_id: "thr-1".into(),
+            reason: SessionEndReason::Timeout,
             closed_at_ms: 1_714_000_001_000,
         },
-        UiEventMessage::ThreadClosed {
-            thread_id: "thr-1".into(),
-            reason: ThreadEndReason::HostDisconnected,
+        UiEventMessage::SessionClosed {
+            session_id: "thr-1".into(),
+            reason: SessionEndReason::HostDisconnected,
             closed_at_ms: 1_714_000_001_000,
         },
     ]

@@ -153,8 +153,16 @@ pub struct AgentMentionCandidate {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AgentMentionCandidateKind {
-    Installed { status: AgentStatus },
-    Existing { thread_id: String },
+    Installed {
+        status: AgentStatus,
+    },
+    /// Host agent profile (`@Name` or `@p/<id>`).
+    Profile {
+        profile_id: String,
+    },
+    Existing {
+        session_id: String,
+    },
 }
 
 impl AgentMentionCandidate {
@@ -166,11 +174,19 @@ impl AgentMentionCandidate {
         }
     }
 
-    pub fn existing(agent: AgentName, thread_id: String, short_id: String) -> Self {
+    pub fn profile(token: String, agent: AgentName, profile_id: String) -> Self {
+        Self {
+            token,
+            agent,
+            kind: AgentMentionCandidateKind::Profile { profile_id },
+        }
+    }
+
+    pub fn existing(agent: AgentName, session_id: String, short_id: String) -> Self {
         Self {
             token: format!("{}#{short_id}", agent.bin_name()),
             agent,
-            kind: AgentMentionCandidateKind::Existing { thread_id },
+            kind: AgentMentionCandidateKind::Existing { session_id },
         }
     }
 }

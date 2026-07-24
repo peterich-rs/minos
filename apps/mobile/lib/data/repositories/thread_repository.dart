@@ -15,20 +15,22 @@ class ThreadRepository {
 
   Stream<UiEventFrame> get uiEvents => _core.uiEvents;
 
-  Future<List<ThreadSummary>> listThreads({int limit = 50}) async {
-    final response = await _core.listThreads(ListThreadsParams(limit: limit));
-    return response.threads;
+  Future<List<SessionSummary>> listThreads({int limit = 50}) async {
+    final response = await _core.listThreads(ListSessionsParams(limit: limit));
+    return response.sessions;
   }
 
-  Future<ReadThreadResponse> readThread({
-    required String threadId,
+  Future<ReadSessionResponse> readThread({
+    required String sessionId,
     int limit = 500,
   }) {
-    return _core.readThread(ReadThreadParams(threadId: threadId, limit: limit));
+    return _core.readThread(
+      ReadSessionParams(sessionId: sessionId, limit: limit),
+    );
   }
 
-  Future<void> interruptThread({required String threadId}) {
-    return _core.interruptThread(threadId: threadId);
+  Future<void> interruptThread({required String sessionId}) {
+    return _core.interruptThread(sessionId: sessionId);
   }
 
   Future<void> sendUserMessage({
@@ -40,12 +42,12 @@ class ThreadRepository {
 
   Future<void> sendApprovalDecision({
     required String requestId,
-    required String threadId,
+    required String sessionId,
     required Map<String, dynamic> decision,
   }) {
     return _core.sendApprovalDecision(
       requestId: requestId,
-      threadId: threadId,
+      sessionId: sessionId,
       decision: decision,
     );
   }
@@ -62,7 +64,7 @@ class ThreadRepository {
     );
   }
 
-  Future<void> deleteThread({required String threadId}) {
-    return _core.deleteThread(threadId: threadId);
+  Future<void> deleteThread({required String sessionId}) {
+    return _core.deleteThread(sessionId: sessionId);
   }
 }

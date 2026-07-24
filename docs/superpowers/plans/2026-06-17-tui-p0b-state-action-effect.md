@@ -145,8 +145,8 @@ pub enum ClickTarget { RoomList, GroupChat, AgentList, AgentChat, RoomInput, Age
 
 /// Effect 执行完成后的回流结果。
 pub enum EffectResult {
-    AgentStarted { agent: AgentName, thread_id: String, cwd: PathBuf, text: String },
-    SendFailed { thread_id: String, error: String },
+    AgentStarted { agent: AgentName, session_id: String, cwd: PathBuf, text: String },
+    SendFailed { session_id: String, error: String },
     IngestArrived(LocalIngestFrame),
     ManagerEvent(minos_agent_runtime::ManagerEvent),
 }
@@ -194,12 +194,12 @@ use minos_protocol::LocalGroupChatMessage;
 #[derive(Debug)]
 pub enum Effect {
     StartAgent { agent: AgentName, workspace: PathBuf },
-    SendMessage { thread_id: String, text: String },
-    SendApproval { thread_id: String, decision: ApprovalDecision },
+    SendMessage { session_id: String, text: String },
+    SendApproval { session_id: String, decision: ApprovalDecision },
     InterruptThread(String),
     CloseThread(String),
     DeleteThread(String),
-    ResumeThread(String),
+    ResumeSession(String),
     HydrateThreadHistory(String),
     SyncDaemonThreads,
     WriteGroupChat { message: LocalGroupChatMessage },
@@ -282,7 +282,7 @@ use crate::group_chat::GroupChatStore;
 pub struct AppState {
     pub workspace: PathBuf,
     pub hydrated_threads: HashSet<String>,
-    pub thread_watermarks: HashMap<String, u64>,
+    pub session_watermarks: HashMap<String, u64>,
     pub applied_ingest_fingerprints: HashSet<String>,
     pub group_chat_store: GroupChatStore,
     pub recorded_agent_results: HashMap<String, String>,
@@ -295,7 +295,7 @@ impl AppState {
         Self {
             workspace,
             hydrated_threads: HashSet::new(),
-            thread_watermarks: HashMap::new(),
+            session_watermarks: HashMap::new(),
             applied_ingest_fingerprints: HashSet::new(),
             group_chat_store,
             recorded_agent_results: HashMap::new(),
@@ -377,7 +377,7 @@ Expected: 约 5–10 处。逐一替换为 `self.state.workspace`。
 
 同理替换:
 - `self.hydrated_threads` → `self.state.hydrated_threads`
-- `self.thread_watermarks` → `self.state.thread_watermarks`
+- `self.session_watermarks` → `self.state.session_watermarks`
 - `self.applied_ingest_fingerprints` → `self.state.applied_ingest_fingerprints`
 - `self.group_chat_store` → `self.state.group_chat_store`
 - `self.recorded_agent_results` → `self.state.recorded_agent_results`
@@ -582,7 +582,7 @@ ingest_dedup::mark_ingest_applied(&mut self.state, frame)
 - `format_error_chain` — 留在 app.rs 或搬到 `src/state/mod.rs`
 - `default_group_chat_store` — 留在 app.rs (构造时使用)
 - `thread_is_done`, `frame_marks_agent_result_done` — 已搬入 ingest_dedup.rs
-- `group_agent_result_message_id`, `short_thread_id` — 搬到 `src/state/mod.rs`
+- `group_agent_result_message_id`, `short_session_id` — 搬到 `src/state/mod.rs`
 - `AgentRouteTarget` + routing parser — 搬到 `src/state/mod.rs` 或新的 `src/routing.rs`
 - `codex_user_input_decision` 等 decision builders — 搬到 `src/effect.rs` 或 `src/state/mod.rs`
 - clipboard 函数 — 搬到 `src/clipboard.rs` (新建)

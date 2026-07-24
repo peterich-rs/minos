@@ -1436,7 +1436,7 @@ extension MinosErrorPatterns on MinosError {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( MinosError_BindFailed value)?  bindFailed,TResult Function( MinosError_ConnectFailed value)?  connectFailed,TResult Function( MinosError_Disconnected value)?  disconnected,TResult Function( MinosError_PairingTokenInvalid value)?  pairingTokenInvalid,TResult Function( MinosError_PairingStateMismatch value)?  pairingStateMismatch,TResult Function( MinosError_DeviceNotTrusted value)?  deviceNotTrusted,TResult Function( MinosError_StoreIo value)?  storeIo,TResult Function( MinosError_StoreCorrupt value)?  storeCorrupt,TResult Function( MinosError_CliProbeTimeout value)?  cliProbeTimeout,TResult Function( MinosError_CliProbeFailed value)?  cliProbeFailed,TResult Function( MinosError_RpcCallFailed value)?  rpcCallFailed,TResult Function( MinosError_Unauthorized value)?  unauthorized,TResult Function( MinosError_ConnectionStateMismatch value)?  connectionStateMismatch,TResult Function( MinosError_EnvelopeVersionUnsupported value)?  envelopeVersionUnsupported,TResult Function( MinosError_PeerOffline value)?  peerOffline,TResult Function( MinosError_BackendInternal value)?  backendInternal,TResult Function( MinosError_CodexSpawnFailed value)?  codexSpawnFailed,TResult Function( MinosError_CodexConnectFailed value)?  codexConnectFailed,TResult Function( MinosError_CodexProtocolError value)?  codexProtocolError,TResult Function( MinosError_GeminiSpawnFailed value)?  geminiSpawnFailed,TResult Function( MinosError_AcpProtocolError value)?  acpProtocolError,TResult Function( MinosError_AgentAlreadyRunning value)?  agentAlreadyRunning,TResult Function( MinosError_AgentNotRunning value)?  agentNotRunning,TResult Function( MinosError_AgentNotSupported value)?  agentNotSupported,TResult Function( MinosError_AgentSessionIdMismatch value)?  agentSessionIdMismatch,TResult Function( MinosError_IngestSeqConflict value)?  ingestSeqConflict,TResult Function( MinosError_ThreadNotFound value)?  threadNotFound,TResult Function( MinosError_TranslationNotImplemented value)?  translationNotImplemented,TResult Function( MinosError_TranslationFailed value)?  translationFailed,TResult Function( MinosError_PairingQrVersionUnsupported value)?  pairingQrVersionUnsupported,TResult Function( MinosError_Timeout value)?  timeout,TResult Function( MinosError_NotConnected value)?  notConnected,TResult Function( MinosError_RequestDropped value)?  requestDropped,TResult Function( MinosError_AuthRefreshFailed value)?  authRefreshFailed,TResult Function( MinosError_EmailTaken value)?  emailTaken,TResult Function( MinosError_WeakPassword value)?  weakPassword,TResult Function( MinosError_RateLimited value)?  rateLimited,TResult Function( MinosError_InvalidCredentials value)?  invalidCredentials,TResult Function( MinosError_AgentStartFailed value)?  agentStartFailed,TResult Function( MinosError_PairingTokenExpired value)?  pairingTokenExpired,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( MinosError_BindFailed value)?  bindFailed,TResult Function( MinosError_ConnectFailed value)?  connectFailed,TResult Function( MinosError_Disconnected value)?  disconnected,TResult Function( MinosError_PairingTokenInvalid value)?  pairingTokenInvalid,TResult Function( MinosError_PairingStateMismatch value)?  pairingStateMismatch,TResult Function( MinosError_DeviceNotTrusted value)?  deviceNotTrusted,TResult Function( MinosError_StoreIo value)?  storeIo,TResult Function( MinosError_StoreCorrupt value)?  storeCorrupt,TResult Function( MinosError_CliProbeTimeout value)?  cliProbeTimeout,TResult Function( MinosError_CliProbeFailed value)?  cliProbeFailed,TResult Function( MinosError_RpcCallFailed value)?  rpcCallFailed,TResult Function( MinosError_Unauthorized value)?  unauthorized,TResult Function( MinosError_ConnectionStateMismatch value)?  connectionStateMismatch,TResult Function( MinosError_EnvelopeVersionUnsupported value)?  envelopeVersionUnsupported,TResult Function( MinosError_PeerOffline value)?  peerOffline,TResult Function( MinosError_BackendInternal value)?  backendInternal,TResult Function( MinosError_CodexSpawnFailed value)?  codexSpawnFailed,TResult Function( MinosError_CodexConnectFailed value)?  codexConnectFailed,TResult Function( MinosError_CodexProtocolError value)?  codexProtocolError,TResult Function( MinosError_GeminiSpawnFailed value)?  geminiSpawnFailed,TResult Function( MinosError_AcpProtocolError value)?  acpProtocolError,TResult Function( MinosError_AgentAlreadyRunning value)?  agentAlreadyRunning,TResult Function( MinosError_AgentNotRunning value)?  agentNotRunning,TResult Function( MinosError_AgentNotSupported value)?  agentNotSupported,TResult Function( MinosError_AgentSessionIdMismatch value)?  agentSessionIdMismatch,TResult Function( MinosError_IngestSeqConflict value)?  ingestSeqConflict,TResult Function( MinosError_SessionNotFound value)?  sessionNotFound,TResult Function( MinosError_TranslationNotImplemented value)?  translationNotImplemented,TResult Function( MinosError_TranslationFailed value)?  translationFailed,TResult Function( MinosError_PairingQrVersionUnsupported value)?  pairingQrVersionUnsupported,TResult Function( MinosError_Timeout value)?  timeout,TResult Function( MinosError_NotConnected value)?  notConnected,TResult Function( MinosError_RequestDropped value)?  requestDropped,TResult Function( MinosError_AuthRefreshFailed value)?  authRefreshFailed,TResult Function( MinosError_EmailTaken value)?  emailTaken,TResult Function( MinosError_WeakPassword value)?  weakPassword,TResult Function( MinosError_RateLimited value)?  rateLimited,TResult Function( MinosError_InvalidCredentials value)?  invalidCredentials,TResult Function( MinosError_AgentStartFailed value)?  agentStartFailed,TResult Function( MinosError_PairingTokenExpired value)?  pairingTokenExpired,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
 case MinosError_BindFailed() when bindFailed != null:
@@ -1465,8 +1465,8 @@ return agentAlreadyRunning(_that);case MinosError_AgentNotRunning() when agentNo
 return agentNotRunning(_that);case MinosError_AgentNotSupported() when agentNotSupported != null:
 return agentNotSupported(_that);case MinosError_AgentSessionIdMismatch() when agentSessionIdMismatch != null:
 return agentSessionIdMismatch(_that);case MinosError_IngestSeqConflict() when ingestSeqConflict != null:
-return ingestSeqConflict(_that);case MinosError_ThreadNotFound() when threadNotFound != null:
-return threadNotFound(_that);case MinosError_TranslationNotImplemented() when translationNotImplemented != null:
+return ingestSeqConflict(_that);case MinosError_SessionNotFound() when sessionNotFound != null:
+return sessionNotFound(_that);case MinosError_TranslationNotImplemented() when translationNotImplemented != null:
 return translationNotImplemented(_that);case MinosError_TranslationFailed() when translationFailed != null:
 return translationFailed(_that);case MinosError_PairingQrVersionUnsupported() when pairingQrVersionUnsupported != null:
 return pairingQrVersionUnsupported(_that);case MinosError_Timeout() when timeout != null:
@@ -1497,7 +1497,7 @@ return pairingTokenExpired(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( MinosError_BindFailed value)  bindFailed,required TResult Function( MinosError_ConnectFailed value)  connectFailed,required TResult Function( MinosError_Disconnected value)  disconnected,required TResult Function( MinosError_PairingTokenInvalid value)  pairingTokenInvalid,required TResult Function( MinosError_PairingStateMismatch value)  pairingStateMismatch,required TResult Function( MinosError_DeviceNotTrusted value)  deviceNotTrusted,required TResult Function( MinosError_StoreIo value)  storeIo,required TResult Function( MinosError_StoreCorrupt value)  storeCorrupt,required TResult Function( MinosError_CliProbeTimeout value)  cliProbeTimeout,required TResult Function( MinosError_CliProbeFailed value)  cliProbeFailed,required TResult Function( MinosError_RpcCallFailed value)  rpcCallFailed,required TResult Function( MinosError_Unauthorized value)  unauthorized,required TResult Function( MinosError_ConnectionStateMismatch value)  connectionStateMismatch,required TResult Function( MinosError_EnvelopeVersionUnsupported value)  envelopeVersionUnsupported,required TResult Function( MinosError_PeerOffline value)  peerOffline,required TResult Function( MinosError_BackendInternal value)  backendInternal,required TResult Function( MinosError_CodexSpawnFailed value)  codexSpawnFailed,required TResult Function( MinosError_CodexConnectFailed value)  codexConnectFailed,required TResult Function( MinosError_CodexProtocolError value)  codexProtocolError,required TResult Function( MinosError_GeminiSpawnFailed value)  geminiSpawnFailed,required TResult Function( MinosError_AcpProtocolError value)  acpProtocolError,required TResult Function( MinosError_AgentAlreadyRunning value)  agentAlreadyRunning,required TResult Function( MinosError_AgentNotRunning value)  agentNotRunning,required TResult Function( MinosError_AgentNotSupported value)  agentNotSupported,required TResult Function( MinosError_AgentSessionIdMismatch value)  agentSessionIdMismatch,required TResult Function( MinosError_IngestSeqConflict value)  ingestSeqConflict,required TResult Function( MinosError_ThreadNotFound value)  threadNotFound,required TResult Function( MinosError_TranslationNotImplemented value)  translationNotImplemented,required TResult Function( MinosError_TranslationFailed value)  translationFailed,required TResult Function( MinosError_PairingQrVersionUnsupported value)  pairingQrVersionUnsupported,required TResult Function( MinosError_Timeout value)  timeout,required TResult Function( MinosError_NotConnected value)  notConnected,required TResult Function( MinosError_RequestDropped value)  requestDropped,required TResult Function( MinosError_AuthRefreshFailed value)  authRefreshFailed,required TResult Function( MinosError_EmailTaken value)  emailTaken,required TResult Function( MinosError_WeakPassword value)  weakPassword,required TResult Function( MinosError_RateLimited value)  rateLimited,required TResult Function( MinosError_InvalidCredentials value)  invalidCredentials,required TResult Function( MinosError_AgentStartFailed value)  agentStartFailed,required TResult Function( MinosError_PairingTokenExpired value)  pairingTokenExpired,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( MinosError_BindFailed value)  bindFailed,required TResult Function( MinosError_ConnectFailed value)  connectFailed,required TResult Function( MinosError_Disconnected value)  disconnected,required TResult Function( MinosError_PairingTokenInvalid value)  pairingTokenInvalid,required TResult Function( MinosError_PairingStateMismatch value)  pairingStateMismatch,required TResult Function( MinosError_DeviceNotTrusted value)  deviceNotTrusted,required TResult Function( MinosError_StoreIo value)  storeIo,required TResult Function( MinosError_StoreCorrupt value)  storeCorrupt,required TResult Function( MinosError_CliProbeTimeout value)  cliProbeTimeout,required TResult Function( MinosError_CliProbeFailed value)  cliProbeFailed,required TResult Function( MinosError_RpcCallFailed value)  rpcCallFailed,required TResult Function( MinosError_Unauthorized value)  unauthorized,required TResult Function( MinosError_ConnectionStateMismatch value)  connectionStateMismatch,required TResult Function( MinosError_EnvelopeVersionUnsupported value)  envelopeVersionUnsupported,required TResult Function( MinosError_PeerOffline value)  peerOffline,required TResult Function( MinosError_BackendInternal value)  backendInternal,required TResult Function( MinosError_CodexSpawnFailed value)  codexSpawnFailed,required TResult Function( MinosError_CodexConnectFailed value)  codexConnectFailed,required TResult Function( MinosError_CodexProtocolError value)  codexProtocolError,required TResult Function( MinosError_GeminiSpawnFailed value)  geminiSpawnFailed,required TResult Function( MinosError_AcpProtocolError value)  acpProtocolError,required TResult Function( MinosError_AgentAlreadyRunning value)  agentAlreadyRunning,required TResult Function( MinosError_AgentNotRunning value)  agentNotRunning,required TResult Function( MinosError_AgentNotSupported value)  agentNotSupported,required TResult Function( MinosError_AgentSessionIdMismatch value)  agentSessionIdMismatch,required TResult Function( MinosError_IngestSeqConflict value)  ingestSeqConflict,required TResult Function( MinosError_SessionNotFound value)  sessionNotFound,required TResult Function( MinosError_TranslationNotImplemented value)  translationNotImplemented,required TResult Function( MinosError_TranslationFailed value)  translationFailed,required TResult Function( MinosError_PairingQrVersionUnsupported value)  pairingQrVersionUnsupported,required TResult Function( MinosError_Timeout value)  timeout,required TResult Function( MinosError_NotConnected value)  notConnected,required TResult Function( MinosError_RequestDropped value)  requestDropped,required TResult Function( MinosError_AuthRefreshFailed value)  authRefreshFailed,required TResult Function( MinosError_EmailTaken value)  emailTaken,required TResult Function( MinosError_WeakPassword value)  weakPassword,required TResult Function( MinosError_RateLimited value)  rateLimited,required TResult Function( MinosError_InvalidCredentials value)  invalidCredentials,required TResult Function( MinosError_AgentStartFailed value)  agentStartFailed,required TResult Function( MinosError_PairingTokenExpired value)  pairingTokenExpired,}){
 final _that = this;
 switch (_that) {
 case MinosError_BindFailed():
@@ -1526,8 +1526,8 @@ return agentAlreadyRunning(_that);case MinosError_AgentNotRunning():
 return agentNotRunning(_that);case MinosError_AgentNotSupported():
 return agentNotSupported(_that);case MinosError_AgentSessionIdMismatch():
 return agentSessionIdMismatch(_that);case MinosError_IngestSeqConflict():
-return ingestSeqConflict(_that);case MinosError_ThreadNotFound():
-return threadNotFound(_that);case MinosError_TranslationNotImplemented():
+return ingestSeqConflict(_that);case MinosError_SessionNotFound():
+return sessionNotFound(_that);case MinosError_TranslationNotImplemented():
 return translationNotImplemented(_that);case MinosError_TranslationFailed():
 return translationFailed(_that);case MinosError_PairingQrVersionUnsupported():
 return pairingQrVersionUnsupported(_that);case MinosError_Timeout():
@@ -1554,7 +1554,7 @@ return pairingTokenExpired(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( MinosError_BindFailed value)?  bindFailed,TResult? Function( MinosError_ConnectFailed value)?  connectFailed,TResult? Function( MinosError_Disconnected value)?  disconnected,TResult? Function( MinosError_PairingTokenInvalid value)?  pairingTokenInvalid,TResult? Function( MinosError_PairingStateMismatch value)?  pairingStateMismatch,TResult? Function( MinosError_DeviceNotTrusted value)?  deviceNotTrusted,TResult? Function( MinosError_StoreIo value)?  storeIo,TResult? Function( MinosError_StoreCorrupt value)?  storeCorrupt,TResult? Function( MinosError_CliProbeTimeout value)?  cliProbeTimeout,TResult? Function( MinosError_CliProbeFailed value)?  cliProbeFailed,TResult? Function( MinosError_RpcCallFailed value)?  rpcCallFailed,TResult? Function( MinosError_Unauthorized value)?  unauthorized,TResult? Function( MinosError_ConnectionStateMismatch value)?  connectionStateMismatch,TResult? Function( MinosError_EnvelopeVersionUnsupported value)?  envelopeVersionUnsupported,TResult? Function( MinosError_PeerOffline value)?  peerOffline,TResult? Function( MinosError_BackendInternal value)?  backendInternal,TResult? Function( MinosError_CodexSpawnFailed value)?  codexSpawnFailed,TResult? Function( MinosError_CodexConnectFailed value)?  codexConnectFailed,TResult? Function( MinosError_CodexProtocolError value)?  codexProtocolError,TResult? Function( MinosError_GeminiSpawnFailed value)?  geminiSpawnFailed,TResult? Function( MinosError_AcpProtocolError value)?  acpProtocolError,TResult? Function( MinosError_AgentAlreadyRunning value)?  agentAlreadyRunning,TResult? Function( MinosError_AgentNotRunning value)?  agentNotRunning,TResult? Function( MinosError_AgentNotSupported value)?  agentNotSupported,TResult? Function( MinosError_AgentSessionIdMismatch value)?  agentSessionIdMismatch,TResult? Function( MinosError_IngestSeqConflict value)?  ingestSeqConflict,TResult? Function( MinosError_ThreadNotFound value)?  threadNotFound,TResult? Function( MinosError_TranslationNotImplemented value)?  translationNotImplemented,TResult? Function( MinosError_TranslationFailed value)?  translationFailed,TResult? Function( MinosError_PairingQrVersionUnsupported value)?  pairingQrVersionUnsupported,TResult? Function( MinosError_Timeout value)?  timeout,TResult? Function( MinosError_NotConnected value)?  notConnected,TResult? Function( MinosError_RequestDropped value)?  requestDropped,TResult? Function( MinosError_AuthRefreshFailed value)?  authRefreshFailed,TResult? Function( MinosError_EmailTaken value)?  emailTaken,TResult? Function( MinosError_WeakPassword value)?  weakPassword,TResult? Function( MinosError_RateLimited value)?  rateLimited,TResult? Function( MinosError_InvalidCredentials value)?  invalidCredentials,TResult? Function( MinosError_AgentStartFailed value)?  agentStartFailed,TResult? Function( MinosError_PairingTokenExpired value)?  pairingTokenExpired,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( MinosError_BindFailed value)?  bindFailed,TResult? Function( MinosError_ConnectFailed value)?  connectFailed,TResult? Function( MinosError_Disconnected value)?  disconnected,TResult? Function( MinosError_PairingTokenInvalid value)?  pairingTokenInvalid,TResult? Function( MinosError_PairingStateMismatch value)?  pairingStateMismatch,TResult? Function( MinosError_DeviceNotTrusted value)?  deviceNotTrusted,TResult? Function( MinosError_StoreIo value)?  storeIo,TResult? Function( MinosError_StoreCorrupt value)?  storeCorrupt,TResult? Function( MinosError_CliProbeTimeout value)?  cliProbeTimeout,TResult? Function( MinosError_CliProbeFailed value)?  cliProbeFailed,TResult? Function( MinosError_RpcCallFailed value)?  rpcCallFailed,TResult? Function( MinosError_Unauthorized value)?  unauthorized,TResult? Function( MinosError_ConnectionStateMismatch value)?  connectionStateMismatch,TResult? Function( MinosError_EnvelopeVersionUnsupported value)?  envelopeVersionUnsupported,TResult? Function( MinosError_PeerOffline value)?  peerOffline,TResult? Function( MinosError_BackendInternal value)?  backendInternal,TResult? Function( MinosError_CodexSpawnFailed value)?  codexSpawnFailed,TResult? Function( MinosError_CodexConnectFailed value)?  codexConnectFailed,TResult? Function( MinosError_CodexProtocolError value)?  codexProtocolError,TResult? Function( MinosError_GeminiSpawnFailed value)?  geminiSpawnFailed,TResult? Function( MinosError_AcpProtocolError value)?  acpProtocolError,TResult? Function( MinosError_AgentAlreadyRunning value)?  agentAlreadyRunning,TResult? Function( MinosError_AgentNotRunning value)?  agentNotRunning,TResult? Function( MinosError_AgentNotSupported value)?  agentNotSupported,TResult? Function( MinosError_AgentSessionIdMismatch value)?  agentSessionIdMismatch,TResult? Function( MinosError_IngestSeqConflict value)?  ingestSeqConflict,TResult? Function( MinosError_SessionNotFound value)?  sessionNotFound,TResult? Function( MinosError_TranslationNotImplemented value)?  translationNotImplemented,TResult? Function( MinosError_TranslationFailed value)?  translationFailed,TResult? Function( MinosError_PairingQrVersionUnsupported value)?  pairingQrVersionUnsupported,TResult? Function( MinosError_Timeout value)?  timeout,TResult? Function( MinosError_NotConnected value)?  notConnected,TResult? Function( MinosError_RequestDropped value)?  requestDropped,TResult? Function( MinosError_AuthRefreshFailed value)?  authRefreshFailed,TResult? Function( MinosError_EmailTaken value)?  emailTaken,TResult? Function( MinosError_WeakPassword value)?  weakPassword,TResult? Function( MinosError_RateLimited value)?  rateLimited,TResult? Function( MinosError_InvalidCredentials value)?  invalidCredentials,TResult? Function( MinosError_AgentStartFailed value)?  agentStartFailed,TResult? Function( MinosError_PairingTokenExpired value)?  pairingTokenExpired,}){
 final _that = this;
 switch (_that) {
 case MinosError_BindFailed() when bindFailed != null:
@@ -1583,8 +1583,8 @@ return agentAlreadyRunning(_that);case MinosError_AgentNotRunning() when agentNo
 return agentNotRunning(_that);case MinosError_AgentNotSupported() when agentNotSupported != null:
 return agentNotSupported(_that);case MinosError_AgentSessionIdMismatch() when agentSessionIdMismatch != null:
 return agentSessionIdMismatch(_that);case MinosError_IngestSeqConflict() when ingestSeqConflict != null:
-return ingestSeqConflict(_that);case MinosError_ThreadNotFound() when threadNotFound != null:
-return threadNotFound(_that);case MinosError_TranslationNotImplemented() when translationNotImplemented != null:
+return ingestSeqConflict(_that);case MinosError_SessionNotFound() when sessionNotFound != null:
+return sessionNotFound(_that);case MinosError_TranslationNotImplemented() when translationNotImplemented != null:
 return translationNotImplemented(_that);case MinosError_TranslationFailed() when translationFailed != null:
 return translationFailed(_that);case MinosError_PairingQrVersionUnsupported() when pairingQrVersionUnsupported != null:
 return pairingQrVersionUnsupported(_that);case MinosError_Timeout() when timeout != null:
@@ -1614,7 +1614,7 @@ return pairingTokenExpired(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String addr,  String message)?  bindFailed,TResult Function( String url,  String message)?  connectFailed,TResult Function( String reason)?  disconnected,TResult Function()?  pairingTokenInvalid,TResult Function( PairingState actual)?  pairingStateMismatch,TResult Function( String deviceId)?  deviceNotTrusted,TResult Function( String path,  String message)?  storeIo,TResult Function( String path,  String message)?  storeCorrupt,TResult Function( String bin,  BigInt timeoutMs)?  cliProbeTimeout,TResult Function( String bin,  String message)?  cliProbeFailed,TResult Function( String method,  String message)?  rpcCallFailed,TResult Function( String reason)?  unauthorized,TResult Function( String expected,  String actual)?  connectionStateMismatch,TResult Function( int version)?  envelopeVersionUnsupported,TResult Function( String peerDeviceId)?  peerOffline,TResult Function( String message)?  backendInternal,TResult Function( String message)?  codexSpawnFailed,TResult Function( String url,  String message)?  codexConnectFailed,TResult Function( String method,  String message)?  codexProtocolError,TResult Function( String message)?  geminiSpawnFailed,TResult Function( String method,  String message)?  acpProtocolError,TResult Function()?  agentAlreadyRunning,TResult Function()?  agentNotRunning,TResult Function( AgentName agent)?  agentNotSupported,TResult Function()?  agentSessionIdMismatch,TResult Function( String threadId,  BigInt seq)?  ingestSeqConflict,TResult Function( String threadId)?  threadNotFound,TResult Function( AgentName agent)?  translationNotImplemented,TResult Function( AgentName agent,  String message)?  translationFailed,TResult Function( int version)?  pairingQrVersionUnsupported,TResult Function()?  timeout,TResult Function()?  notConnected,TResult Function()?  requestDropped,TResult Function( String message)?  authRefreshFailed,TResult Function()?  emailTaken,TResult Function()?  weakPassword,TResult Function( int retryAfterS)?  rateLimited,TResult Function()?  invalidCredentials,TResult Function( String reason)?  agentStartFailed,TResult Function()?  pairingTokenExpired,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String addr,  String message)?  bindFailed,TResult Function( String url,  String message)?  connectFailed,TResult Function( String reason)?  disconnected,TResult Function()?  pairingTokenInvalid,TResult Function( PairingState actual)?  pairingStateMismatch,TResult Function( String deviceId)?  deviceNotTrusted,TResult Function( String path,  String message)?  storeIo,TResult Function( String path,  String message)?  storeCorrupt,TResult Function( String bin,  BigInt timeoutMs)?  cliProbeTimeout,TResult Function( String bin,  String message)?  cliProbeFailed,TResult Function( String method,  String message)?  rpcCallFailed,TResult Function( String reason)?  unauthorized,TResult Function( String expected,  String actual)?  connectionStateMismatch,TResult Function( int version)?  envelopeVersionUnsupported,TResult Function( String peerDeviceId)?  peerOffline,TResult Function( String message)?  backendInternal,TResult Function( String message)?  codexSpawnFailed,TResult Function( String url,  String message)?  codexConnectFailed,TResult Function( String method,  String message)?  codexProtocolError,TResult Function( String message)?  geminiSpawnFailed,TResult Function( String method,  String message)?  acpProtocolError,TResult Function()?  agentAlreadyRunning,TResult Function()?  agentNotRunning,TResult Function( AgentName agent)?  agentNotSupported,TResult Function()?  agentSessionIdMismatch,TResult Function( String sessionId,  BigInt seq)?  ingestSeqConflict,TResult Function( String sessionId)?  sessionNotFound,TResult Function( AgentName agent)?  translationNotImplemented,TResult Function( AgentName agent,  String message)?  translationFailed,TResult Function( int version)?  pairingQrVersionUnsupported,TResult Function()?  timeout,TResult Function()?  notConnected,TResult Function()?  requestDropped,TResult Function( String message)?  authRefreshFailed,TResult Function()?  emailTaken,TResult Function()?  weakPassword,TResult Function( int retryAfterS)?  rateLimited,TResult Function()?  invalidCredentials,TResult Function( String reason)?  agentStartFailed,TResult Function()?  pairingTokenExpired,required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case MinosError_BindFailed() when bindFailed != null:
 return bindFailed(_that.addr,_that.message);case MinosError_ConnectFailed() when connectFailed != null:
@@ -1642,8 +1642,8 @@ return agentAlreadyRunning();case MinosError_AgentNotRunning() when agentNotRunn
 return agentNotRunning();case MinosError_AgentNotSupported() when agentNotSupported != null:
 return agentNotSupported(_that.agent);case MinosError_AgentSessionIdMismatch() when agentSessionIdMismatch != null:
 return agentSessionIdMismatch();case MinosError_IngestSeqConflict() when ingestSeqConflict != null:
-return ingestSeqConflict(_that.threadId,_that.seq);case MinosError_ThreadNotFound() when threadNotFound != null:
-return threadNotFound(_that.threadId);case MinosError_TranslationNotImplemented() when translationNotImplemented != null:
+return ingestSeqConflict(_that.sessionId,_that.seq);case MinosError_SessionNotFound() when sessionNotFound != null:
+return sessionNotFound(_that.sessionId);case MinosError_TranslationNotImplemented() when translationNotImplemented != null:
 return translationNotImplemented(_that.agent);case MinosError_TranslationFailed() when translationFailed != null:
 return translationFailed(_that.agent,_that.message);case MinosError_PairingQrVersionUnsupported() when pairingQrVersionUnsupported != null:
 return pairingQrVersionUnsupported(_that.version);case MinosError_Timeout() when timeout != null:
@@ -1674,7 +1674,7 @@ return pairingTokenExpired();case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String addr,  String message)  bindFailed,required TResult Function( String url,  String message)  connectFailed,required TResult Function( String reason)  disconnected,required TResult Function()  pairingTokenInvalid,required TResult Function( PairingState actual)  pairingStateMismatch,required TResult Function( String deviceId)  deviceNotTrusted,required TResult Function( String path,  String message)  storeIo,required TResult Function( String path,  String message)  storeCorrupt,required TResult Function( String bin,  BigInt timeoutMs)  cliProbeTimeout,required TResult Function( String bin,  String message)  cliProbeFailed,required TResult Function( String method,  String message)  rpcCallFailed,required TResult Function( String reason)  unauthorized,required TResult Function( String expected,  String actual)  connectionStateMismatch,required TResult Function( int version)  envelopeVersionUnsupported,required TResult Function( String peerDeviceId)  peerOffline,required TResult Function( String message)  backendInternal,required TResult Function( String message)  codexSpawnFailed,required TResult Function( String url,  String message)  codexConnectFailed,required TResult Function( String method,  String message)  codexProtocolError,required TResult Function( String message)  geminiSpawnFailed,required TResult Function( String method,  String message)  acpProtocolError,required TResult Function()  agentAlreadyRunning,required TResult Function()  agentNotRunning,required TResult Function( AgentName agent)  agentNotSupported,required TResult Function()  agentSessionIdMismatch,required TResult Function( String threadId,  BigInt seq)  ingestSeqConflict,required TResult Function( String threadId)  threadNotFound,required TResult Function( AgentName agent)  translationNotImplemented,required TResult Function( AgentName agent,  String message)  translationFailed,required TResult Function( int version)  pairingQrVersionUnsupported,required TResult Function()  timeout,required TResult Function()  notConnected,required TResult Function()  requestDropped,required TResult Function( String message)  authRefreshFailed,required TResult Function()  emailTaken,required TResult Function()  weakPassword,required TResult Function( int retryAfterS)  rateLimited,required TResult Function()  invalidCredentials,required TResult Function( String reason)  agentStartFailed,required TResult Function()  pairingTokenExpired,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String addr,  String message)  bindFailed,required TResult Function( String url,  String message)  connectFailed,required TResult Function( String reason)  disconnected,required TResult Function()  pairingTokenInvalid,required TResult Function( PairingState actual)  pairingStateMismatch,required TResult Function( String deviceId)  deviceNotTrusted,required TResult Function( String path,  String message)  storeIo,required TResult Function( String path,  String message)  storeCorrupt,required TResult Function( String bin,  BigInt timeoutMs)  cliProbeTimeout,required TResult Function( String bin,  String message)  cliProbeFailed,required TResult Function( String method,  String message)  rpcCallFailed,required TResult Function( String reason)  unauthorized,required TResult Function( String expected,  String actual)  connectionStateMismatch,required TResult Function( int version)  envelopeVersionUnsupported,required TResult Function( String peerDeviceId)  peerOffline,required TResult Function( String message)  backendInternal,required TResult Function( String message)  codexSpawnFailed,required TResult Function( String url,  String message)  codexConnectFailed,required TResult Function( String method,  String message)  codexProtocolError,required TResult Function( String message)  geminiSpawnFailed,required TResult Function( String method,  String message)  acpProtocolError,required TResult Function()  agentAlreadyRunning,required TResult Function()  agentNotRunning,required TResult Function( AgentName agent)  agentNotSupported,required TResult Function()  agentSessionIdMismatch,required TResult Function( String sessionId,  BigInt seq)  ingestSeqConflict,required TResult Function( String sessionId)  sessionNotFound,required TResult Function( AgentName agent)  translationNotImplemented,required TResult Function( AgentName agent,  String message)  translationFailed,required TResult Function( int version)  pairingQrVersionUnsupported,required TResult Function()  timeout,required TResult Function()  notConnected,required TResult Function()  requestDropped,required TResult Function( String message)  authRefreshFailed,required TResult Function()  emailTaken,required TResult Function()  weakPassword,required TResult Function( int retryAfterS)  rateLimited,required TResult Function()  invalidCredentials,required TResult Function( String reason)  agentStartFailed,required TResult Function()  pairingTokenExpired,}) {final _that = this;
 switch (_that) {
 case MinosError_BindFailed():
 return bindFailed(_that.addr,_that.message);case MinosError_ConnectFailed():
@@ -1702,8 +1702,8 @@ return agentAlreadyRunning();case MinosError_AgentNotRunning():
 return agentNotRunning();case MinosError_AgentNotSupported():
 return agentNotSupported(_that.agent);case MinosError_AgentSessionIdMismatch():
 return agentSessionIdMismatch();case MinosError_IngestSeqConflict():
-return ingestSeqConflict(_that.threadId,_that.seq);case MinosError_ThreadNotFound():
-return threadNotFound(_that.threadId);case MinosError_TranslationNotImplemented():
+return ingestSeqConflict(_that.sessionId,_that.seq);case MinosError_SessionNotFound():
+return sessionNotFound(_that.sessionId);case MinosError_TranslationNotImplemented():
 return translationNotImplemented(_that.agent);case MinosError_TranslationFailed():
 return translationFailed(_that.agent,_that.message);case MinosError_PairingQrVersionUnsupported():
 return pairingQrVersionUnsupported(_that.version);case MinosError_Timeout():
@@ -1730,7 +1730,7 @@ return pairingTokenExpired();}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String addr,  String message)?  bindFailed,TResult? Function( String url,  String message)?  connectFailed,TResult? Function( String reason)?  disconnected,TResult? Function()?  pairingTokenInvalid,TResult? Function( PairingState actual)?  pairingStateMismatch,TResult? Function( String deviceId)?  deviceNotTrusted,TResult? Function( String path,  String message)?  storeIo,TResult? Function( String path,  String message)?  storeCorrupt,TResult? Function( String bin,  BigInt timeoutMs)?  cliProbeTimeout,TResult? Function( String bin,  String message)?  cliProbeFailed,TResult? Function( String method,  String message)?  rpcCallFailed,TResult? Function( String reason)?  unauthorized,TResult? Function( String expected,  String actual)?  connectionStateMismatch,TResult? Function( int version)?  envelopeVersionUnsupported,TResult? Function( String peerDeviceId)?  peerOffline,TResult? Function( String message)?  backendInternal,TResult? Function( String message)?  codexSpawnFailed,TResult? Function( String url,  String message)?  codexConnectFailed,TResult? Function( String method,  String message)?  codexProtocolError,TResult? Function( String message)?  geminiSpawnFailed,TResult? Function( String method,  String message)?  acpProtocolError,TResult? Function()?  agentAlreadyRunning,TResult? Function()?  agentNotRunning,TResult? Function( AgentName agent)?  agentNotSupported,TResult? Function()?  agentSessionIdMismatch,TResult? Function( String threadId,  BigInt seq)?  ingestSeqConflict,TResult? Function( String threadId)?  threadNotFound,TResult? Function( AgentName agent)?  translationNotImplemented,TResult? Function( AgentName agent,  String message)?  translationFailed,TResult? Function( int version)?  pairingQrVersionUnsupported,TResult? Function()?  timeout,TResult? Function()?  notConnected,TResult? Function()?  requestDropped,TResult? Function( String message)?  authRefreshFailed,TResult? Function()?  emailTaken,TResult? Function()?  weakPassword,TResult? Function( int retryAfterS)?  rateLimited,TResult? Function()?  invalidCredentials,TResult? Function( String reason)?  agentStartFailed,TResult? Function()?  pairingTokenExpired,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String addr,  String message)?  bindFailed,TResult? Function( String url,  String message)?  connectFailed,TResult? Function( String reason)?  disconnected,TResult? Function()?  pairingTokenInvalid,TResult? Function( PairingState actual)?  pairingStateMismatch,TResult? Function( String deviceId)?  deviceNotTrusted,TResult? Function( String path,  String message)?  storeIo,TResult? Function( String path,  String message)?  storeCorrupt,TResult? Function( String bin,  BigInt timeoutMs)?  cliProbeTimeout,TResult? Function( String bin,  String message)?  cliProbeFailed,TResult? Function( String method,  String message)?  rpcCallFailed,TResult? Function( String reason)?  unauthorized,TResult? Function( String expected,  String actual)?  connectionStateMismatch,TResult? Function( int version)?  envelopeVersionUnsupported,TResult? Function( String peerDeviceId)?  peerOffline,TResult? Function( String message)?  backendInternal,TResult? Function( String message)?  codexSpawnFailed,TResult? Function( String url,  String message)?  codexConnectFailed,TResult? Function( String method,  String message)?  codexProtocolError,TResult? Function( String message)?  geminiSpawnFailed,TResult? Function( String method,  String message)?  acpProtocolError,TResult? Function()?  agentAlreadyRunning,TResult? Function()?  agentNotRunning,TResult? Function( AgentName agent)?  agentNotSupported,TResult? Function()?  agentSessionIdMismatch,TResult? Function( String sessionId,  BigInt seq)?  ingestSeqConflict,TResult? Function( String sessionId)?  sessionNotFound,TResult? Function( AgentName agent)?  translationNotImplemented,TResult? Function( AgentName agent,  String message)?  translationFailed,TResult? Function( int version)?  pairingQrVersionUnsupported,TResult? Function()?  timeout,TResult? Function()?  notConnected,TResult? Function()?  requestDropped,TResult? Function( String message)?  authRefreshFailed,TResult? Function()?  emailTaken,TResult? Function()?  weakPassword,TResult? Function( int retryAfterS)?  rateLimited,TResult? Function()?  invalidCredentials,TResult? Function( String reason)?  agentStartFailed,TResult? Function()?  pairingTokenExpired,}) {final _that = this;
 switch (_that) {
 case MinosError_BindFailed() when bindFailed != null:
 return bindFailed(_that.addr,_that.message);case MinosError_ConnectFailed() when connectFailed != null:
@@ -1758,8 +1758,8 @@ return agentAlreadyRunning();case MinosError_AgentNotRunning() when agentNotRunn
 return agentNotRunning();case MinosError_AgentNotSupported() when agentNotSupported != null:
 return agentNotSupported(_that.agent);case MinosError_AgentSessionIdMismatch() when agentSessionIdMismatch != null:
 return agentSessionIdMismatch();case MinosError_IngestSeqConflict() when ingestSeqConflict != null:
-return ingestSeqConflict(_that.threadId,_that.seq);case MinosError_ThreadNotFound() when threadNotFound != null:
-return threadNotFound(_that.threadId);case MinosError_TranslationNotImplemented() when translationNotImplemented != null:
+return ingestSeqConflict(_that.sessionId,_that.seq);case MinosError_SessionNotFound() when sessionNotFound != null:
+return sessionNotFound(_that.sessionId);case MinosError_TranslationNotImplemented() when translationNotImplemented != null:
 return translationNotImplemented(_that.agent);case MinosError_TranslationFailed() when translationFailed != null:
 return translationFailed(_that.agent,_that.message);case MinosError_PairingQrVersionUnsupported() when pairingQrVersionUnsupported != null:
 return pairingQrVersionUnsupported(_that.version);case MinosError_Timeout() when timeout != null:
@@ -3320,10 +3320,10 @@ String toString() {
 
 
 class MinosError_IngestSeqConflict extends MinosError {
-  const MinosError_IngestSeqConflict({required this.threadId, required this.seq}): super._();
+  const MinosError_IngestSeqConflict({required this.sessionId, required this.seq}): super._();
   
 
- final  String threadId;
+ final  String sessionId;
  final  BigInt seq;
 
 /// Create a copy of MinosError
@@ -3336,16 +3336,16 @@ $MinosError_IngestSeqConflictCopyWith<MinosError_IngestSeqConflict> get copyWith
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_IngestSeqConflict&&(identical(other.threadId, threadId) || other.threadId == threadId)&&(identical(other.seq, seq) || other.seq == seq));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_IngestSeqConflict&&(identical(other.sessionId, sessionId) || other.sessionId == sessionId)&&(identical(other.seq, seq) || other.seq == seq));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,threadId,seq);
+int get hashCode => Object.hash(runtimeType,sessionId,seq);
 
 @override
 String toString() {
-  return 'MinosError.ingestSeqConflict(threadId: $threadId, seq: $seq)';
+  return 'MinosError.ingestSeqConflict(sessionId: $sessionId, seq: $seq)';
 }
 
 
@@ -3356,7 +3356,7 @@ abstract mixin class $MinosError_IngestSeqConflictCopyWith<$Res> implements $Min
   factory $MinosError_IngestSeqConflictCopyWith(MinosError_IngestSeqConflict value, $Res Function(MinosError_IngestSeqConflict) _then) = _$MinosError_IngestSeqConflictCopyWithImpl;
 @useResult
 $Res call({
- String threadId, BigInt seq
+ String sessionId, BigInt seq
 });
 
 
@@ -3373,9 +3373,9 @@ class _$MinosError_IngestSeqConflictCopyWithImpl<$Res>
 
 /// Create a copy of MinosError
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? threadId = null,Object? seq = null,}) {
+@pragma('vm:prefer-inline') $Res call({Object? sessionId = null,Object? seq = null,}) {
   return _then(MinosError_IngestSeqConflict(
-threadId: null == threadId ? _self.threadId : threadId // ignore: cast_nullable_to_non_nullable
+sessionId: null == sessionId ? _self.sessionId : sessionId // ignore: cast_nullable_to_non_nullable
 as String,seq: null == seq ? _self.seq : seq // ignore: cast_nullable_to_non_nullable
 as BigInt,
   ));
@@ -3387,43 +3387,43 @@ as BigInt,
 /// @nodoc
 
 
-class MinosError_ThreadNotFound extends MinosError {
-  const MinosError_ThreadNotFound({required this.threadId}): super._();
+class MinosError_SessionNotFound extends MinosError {
+  const MinosError_SessionNotFound({required this.sessionId}): super._();
   
 
- final  String threadId;
+ final  String sessionId;
 
 /// Create a copy of MinosError
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
 @pragma('vm:prefer-inline')
-$MinosError_ThreadNotFoundCopyWith<MinosError_ThreadNotFound> get copyWith => _$MinosError_ThreadNotFoundCopyWithImpl<MinosError_ThreadNotFound>(this, _$identity);
+$MinosError_SessionNotFoundCopyWith<MinosError_SessionNotFound> get copyWith => _$MinosError_SessionNotFoundCopyWithImpl<MinosError_SessionNotFound>(this, _$identity);
 
 
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_ThreadNotFound&&(identical(other.threadId, threadId) || other.threadId == threadId));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MinosError_SessionNotFound&&(identical(other.sessionId, sessionId) || other.sessionId == sessionId));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,threadId);
+int get hashCode => Object.hash(runtimeType,sessionId);
 
 @override
 String toString() {
-  return 'MinosError.threadNotFound(threadId: $threadId)';
+  return 'MinosError.sessionNotFound(sessionId: $sessionId)';
 }
 
 
 }
 
 /// @nodoc
-abstract mixin class $MinosError_ThreadNotFoundCopyWith<$Res> implements $MinosErrorCopyWith<$Res> {
-  factory $MinosError_ThreadNotFoundCopyWith(MinosError_ThreadNotFound value, $Res Function(MinosError_ThreadNotFound) _then) = _$MinosError_ThreadNotFoundCopyWithImpl;
+abstract mixin class $MinosError_SessionNotFoundCopyWith<$Res> implements $MinosErrorCopyWith<$Res> {
+  factory $MinosError_SessionNotFoundCopyWith(MinosError_SessionNotFound value, $Res Function(MinosError_SessionNotFound) _then) = _$MinosError_SessionNotFoundCopyWithImpl;
 @useResult
 $Res call({
- String threadId
+ String sessionId
 });
 
 
@@ -3431,18 +3431,18 @@ $Res call({
 
 }
 /// @nodoc
-class _$MinosError_ThreadNotFoundCopyWithImpl<$Res>
-    implements $MinosError_ThreadNotFoundCopyWith<$Res> {
-  _$MinosError_ThreadNotFoundCopyWithImpl(this._self, this._then);
+class _$MinosError_SessionNotFoundCopyWithImpl<$Res>
+    implements $MinosError_SessionNotFoundCopyWith<$Res> {
+  _$MinosError_SessionNotFoundCopyWithImpl(this._self, this._then);
 
-  final MinosError_ThreadNotFound _self;
-  final $Res Function(MinosError_ThreadNotFound) _then;
+  final MinosError_SessionNotFound _self;
+  final $Res Function(MinosError_SessionNotFound) _then;
 
 /// Create a copy of MinosError
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? threadId = null,}) {
-  return _then(MinosError_ThreadNotFound(
-threadId: null == threadId ? _self.threadId : threadId // ignore: cast_nullable_to_non_nullable
+@pragma('vm:prefer-inline') $Res call({Object? sessionId = null,}) {
+  return _then(MinosError_SessionNotFound(
+sessionId: null == sessionId ? _self.sessionId : sessionId // ignore: cast_nullable_to_non_nullable
 as String,
   ));
 }
@@ -4073,7 +4073,7 @@ String toString() {
 
 
 /// @nodoc
-mixin _$ThreadEndReason {
+mixin _$SessionEndReason {
 
 
 
@@ -4081,7 +4081,7 @@ mixin _$ThreadEndReason {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is ThreadEndReason);
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SessionEndReason);
 }
 
 
@@ -4090,20 +4090,20 @@ int get hashCode => runtimeType.hashCode;
 
 @override
 String toString() {
-  return 'ThreadEndReason()';
+  return 'SessionEndReason()';
 }
 
 
 }
 
 /// @nodoc
-class $ThreadEndReasonCopyWith<$Res>  {
-$ThreadEndReasonCopyWith(ThreadEndReason _, $Res Function(ThreadEndReason) __);
+class $SessionEndReasonCopyWith<$Res>  {
+$SessionEndReasonCopyWith(SessionEndReason _, $Res Function(SessionEndReason) __);
 }
 
 
-/// Adds pattern-matching-related methods to [ThreadEndReason].
-extension ThreadEndReasonPatterns on ThreadEndReason {
+/// Adds pattern-matching-related methods to [SessionEndReason].
+extension SessionEndReasonPatterns on SessionEndReason {
 /// A variant of `map` that fallback to returning `orElse`.
 ///
 /// It is equivalent to doing:
@@ -4116,14 +4116,14 @@ extension ThreadEndReasonPatterns on ThreadEndReason {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( ThreadEndReason_UserStopped value)?  userStopped,TResult Function( ThreadEndReason_AgentDone value)?  agentDone,TResult Function( ThreadEndReason_Crashed value)?  crashed,TResult Function( ThreadEndReason_Timeout value)?  timeout,TResult Function( ThreadEndReason_HostDisconnected value)?  hostDisconnected,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( SessionEndReason_UserStopped value)?  userStopped,TResult Function( SessionEndReason_AgentDone value)?  agentDone,TResult Function( SessionEndReason_Crashed value)?  crashed,TResult Function( SessionEndReason_Timeout value)?  timeout,TResult Function( SessionEndReason_HostDisconnected value)?  hostDisconnected,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
-case ThreadEndReason_UserStopped() when userStopped != null:
-return userStopped(_that);case ThreadEndReason_AgentDone() when agentDone != null:
-return agentDone(_that);case ThreadEndReason_Crashed() when crashed != null:
-return crashed(_that);case ThreadEndReason_Timeout() when timeout != null:
-return timeout(_that);case ThreadEndReason_HostDisconnected() when hostDisconnected != null:
+case SessionEndReason_UserStopped() when userStopped != null:
+return userStopped(_that);case SessionEndReason_AgentDone() when agentDone != null:
+return agentDone(_that);case SessionEndReason_Crashed() when crashed != null:
+return crashed(_that);case SessionEndReason_Timeout() when timeout != null:
+return timeout(_that);case SessionEndReason_HostDisconnected() when hostDisconnected != null:
 return hostDisconnected(_that);case _:
   return orElse();
 
@@ -4142,14 +4142,14 @@ return hostDisconnected(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( ThreadEndReason_UserStopped value)  userStopped,required TResult Function( ThreadEndReason_AgentDone value)  agentDone,required TResult Function( ThreadEndReason_Crashed value)  crashed,required TResult Function( ThreadEndReason_Timeout value)  timeout,required TResult Function( ThreadEndReason_HostDisconnected value)  hostDisconnected,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( SessionEndReason_UserStopped value)  userStopped,required TResult Function( SessionEndReason_AgentDone value)  agentDone,required TResult Function( SessionEndReason_Crashed value)  crashed,required TResult Function( SessionEndReason_Timeout value)  timeout,required TResult Function( SessionEndReason_HostDisconnected value)  hostDisconnected,}){
 final _that = this;
 switch (_that) {
-case ThreadEndReason_UserStopped():
-return userStopped(_that);case ThreadEndReason_AgentDone():
-return agentDone(_that);case ThreadEndReason_Crashed():
-return crashed(_that);case ThreadEndReason_Timeout():
-return timeout(_that);case ThreadEndReason_HostDisconnected():
+case SessionEndReason_UserStopped():
+return userStopped(_that);case SessionEndReason_AgentDone():
+return agentDone(_that);case SessionEndReason_Crashed():
+return crashed(_that);case SessionEndReason_Timeout():
+return timeout(_that);case SessionEndReason_HostDisconnected():
 return hostDisconnected(_that);}
 }
 /// A variant of `map` that fallback to returning `null`.
@@ -4164,14 +4164,14 @@ return hostDisconnected(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( ThreadEndReason_UserStopped value)?  userStopped,TResult? Function( ThreadEndReason_AgentDone value)?  agentDone,TResult? Function( ThreadEndReason_Crashed value)?  crashed,TResult? Function( ThreadEndReason_Timeout value)?  timeout,TResult? Function( ThreadEndReason_HostDisconnected value)?  hostDisconnected,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( SessionEndReason_UserStopped value)?  userStopped,TResult? Function( SessionEndReason_AgentDone value)?  agentDone,TResult? Function( SessionEndReason_Crashed value)?  crashed,TResult? Function( SessionEndReason_Timeout value)?  timeout,TResult? Function( SessionEndReason_HostDisconnected value)?  hostDisconnected,}){
 final _that = this;
 switch (_that) {
-case ThreadEndReason_UserStopped() when userStopped != null:
-return userStopped(_that);case ThreadEndReason_AgentDone() when agentDone != null:
-return agentDone(_that);case ThreadEndReason_Crashed() when crashed != null:
-return crashed(_that);case ThreadEndReason_Timeout() when timeout != null:
-return timeout(_that);case ThreadEndReason_HostDisconnected() when hostDisconnected != null:
+case SessionEndReason_UserStopped() when userStopped != null:
+return userStopped(_that);case SessionEndReason_AgentDone() when agentDone != null:
+return agentDone(_that);case SessionEndReason_Crashed() when crashed != null:
+return crashed(_that);case SessionEndReason_Timeout() when timeout != null:
+return timeout(_that);case SessionEndReason_HostDisconnected() when hostDisconnected != null:
 return hostDisconnected(_that);case _:
   return null;
 
@@ -4191,11 +4191,11 @@ return hostDisconnected(_that);case _:
 
 @optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function()?  userStopped,TResult Function()?  agentDone,TResult Function( String message)?  crashed,TResult Function()?  timeout,TResult Function()?  hostDisconnected,required TResult orElse(),}) {final _that = this;
 switch (_that) {
-case ThreadEndReason_UserStopped() when userStopped != null:
-return userStopped();case ThreadEndReason_AgentDone() when agentDone != null:
-return agentDone();case ThreadEndReason_Crashed() when crashed != null:
-return crashed(_that.message);case ThreadEndReason_Timeout() when timeout != null:
-return timeout();case ThreadEndReason_HostDisconnected() when hostDisconnected != null:
+case SessionEndReason_UserStopped() when userStopped != null:
+return userStopped();case SessionEndReason_AgentDone() when agentDone != null:
+return agentDone();case SessionEndReason_Crashed() when crashed != null:
+return crashed(_that.message);case SessionEndReason_Timeout() when timeout != null:
+return timeout();case SessionEndReason_HostDisconnected() when hostDisconnected != null:
 return hostDisconnected();case _:
   return orElse();
 
@@ -4216,11 +4216,11 @@ return hostDisconnected();case _:
 
 @optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function()  userStopped,required TResult Function()  agentDone,required TResult Function( String message)  crashed,required TResult Function()  timeout,required TResult Function()  hostDisconnected,}) {final _that = this;
 switch (_that) {
-case ThreadEndReason_UserStopped():
-return userStopped();case ThreadEndReason_AgentDone():
-return agentDone();case ThreadEndReason_Crashed():
-return crashed(_that.message);case ThreadEndReason_Timeout():
-return timeout();case ThreadEndReason_HostDisconnected():
+case SessionEndReason_UserStopped():
+return userStopped();case SessionEndReason_AgentDone():
+return agentDone();case SessionEndReason_Crashed():
+return crashed(_that.message);case SessionEndReason_Timeout():
+return timeout();case SessionEndReason_HostDisconnected():
 return hostDisconnected();}
 }
 /// A variant of `when` that fallback to returning `null`
@@ -4237,11 +4237,11 @@ return hostDisconnected();}
 
 @optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function()?  userStopped,TResult? Function()?  agentDone,TResult? Function( String message)?  crashed,TResult? Function()?  timeout,TResult? Function()?  hostDisconnected,}) {final _that = this;
 switch (_that) {
-case ThreadEndReason_UserStopped() when userStopped != null:
-return userStopped();case ThreadEndReason_AgentDone() when agentDone != null:
-return agentDone();case ThreadEndReason_Crashed() when crashed != null:
-return crashed(_that.message);case ThreadEndReason_Timeout() when timeout != null:
-return timeout();case ThreadEndReason_HostDisconnected() when hostDisconnected != null:
+case SessionEndReason_UserStopped() when userStopped != null:
+return userStopped();case SessionEndReason_AgentDone() when agentDone != null:
+return agentDone();case SessionEndReason_Crashed() when crashed != null:
+return crashed(_that.message);case SessionEndReason_Timeout() when timeout != null:
+return timeout();case SessionEndReason_HostDisconnected() when hostDisconnected != null:
 return hostDisconnected();case _:
   return null;
 
@@ -4253,8 +4253,8 @@ return hostDisconnected();case _:
 /// @nodoc
 
 
-class ThreadEndReason_UserStopped extends ThreadEndReason {
-  const ThreadEndReason_UserStopped(): super._();
+class SessionEndReason_UserStopped extends SessionEndReason {
+  const SessionEndReason_UserStopped(): super._();
   
 
 
@@ -4264,7 +4264,7 @@ class ThreadEndReason_UserStopped extends ThreadEndReason {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is ThreadEndReason_UserStopped);
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SessionEndReason_UserStopped);
 }
 
 
@@ -4273,7 +4273,7 @@ int get hashCode => runtimeType.hashCode;
 
 @override
 String toString() {
-  return 'ThreadEndReason.userStopped()';
+  return 'SessionEndReason.userStopped()';
 }
 
 
@@ -4285,8 +4285,8 @@ String toString() {
 /// @nodoc
 
 
-class ThreadEndReason_AgentDone extends ThreadEndReason {
-  const ThreadEndReason_AgentDone(): super._();
+class SessionEndReason_AgentDone extends SessionEndReason {
+  const SessionEndReason_AgentDone(): super._();
   
 
 
@@ -4296,7 +4296,7 @@ class ThreadEndReason_AgentDone extends ThreadEndReason {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is ThreadEndReason_AgentDone);
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SessionEndReason_AgentDone);
 }
 
 
@@ -4305,7 +4305,7 @@ int get hashCode => runtimeType.hashCode;
 
 @override
 String toString() {
-  return 'ThreadEndReason.agentDone()';
+  return 'SessionEndReason.agentDone()';
 }
 
 
@@ -4317,23 +4317,23 @@ String toString() {
 /// @nodoc
 
 
-class ThreadEndReason_Crashed extends ThreadEndReason {
-  const ThreadEndReason_Crashed({required this.message}): super._();
+class SessionEndReason_Crashed extends SessionEndReason {
+  const SessionEndReason_Crashed({required this.message}): super._();
   
 
  final  String message;
 
-/// Create a copy of ThreadEndReason
+/// Create a copy of SessionEndReason
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
 @pragma('vm:prefer-inline')
-$ThreadEndReason_CrashedCopyWith<ThreadEndReason_Crashed> get copyWith => _$ThreadEndReason_CrashedCopyWithImpl<ThreadEndReason_Crashed>(this, _$identity);
+$SessionEndReason_CrashedCopyWith<SessionEndReason_Crashed> get copyWith => _$SessionEndReason_CrashedCopyWithImpl<SessionEndReason_Crashed>(this, _$identity);
 
 
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is ThreadEndReason_Crashed&&(identical(other.message, message) || other.message == message));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SessionEndReason_Crashed&&(identical(other.message, message) || other.message == message));
 }
 
 
@@ -4342,15 +4342,15 @@ int get hashCode => Object.hash(runtimeType,message);
 
 @override
 String toString() {
-  return 'ThreadEndReason.crashed(message: $message)';
+  return 'SessionEndReason.crashed(message: $message)';
 }
 
 
 }
 
 /// @nodoc
-abstract mixin class $ThreadEndReason_CrashedCopyWith<$Res> implements $ThreadEndReasonCopyWith<$Res> {
-  factory $ThreadEndReason_CrashedCopyWith(ThreadEndReason_Crashed value, $Res Function(ThreadEndReason_Crashed) _then) = _$ThreadEndReason_CrashedCopyWithImpl;
+abstract mixin class $SessionEndReason_CrashedCopyWith<$Res> implements $SessionEndReasonCopyWith<$Res> {
+  factory $SessionEndReason_CrashedCopyWith(SessionEndReason_Crashed value, $Res Function(SessionEndReason_Crashed) _then) = _$SessionEndReason_CrashedCopyWithImpl;
 @useResult
 $Res call({
  String message
@@ -4361,17 +4361,17 @@ $Res call({
 
 }
 /// @nodoc
-class _$ThreadEndReason_CrashedCopyWithImpl<$Res>
-    implements $ThreadEndReason_CrashedCopyWith<$Res> {
-  _$ThreadEndReason_CrashedCopyWithImpl(this._self, this._then);
+class _$SessionEndReason_CrashedCopyWithImpl<$Res>
+    implements $SessionEndReason_CrashedCopyWith<$Res> {
+  _$SessionEndReason_CrashedCopyWithImpl(this._self, this._then);
 
-  final ThreadEndReason_Crashed _self;
-  final $Res Function(ThreadEndReason_Crashed) _then;
+  final SessionEndReason_Crashed _self;
+  final $Res Function(SessionEndReason_Crashed) _then;
 
-/// Create a copy of ThreadEndReason
+/// Create a copy of SessionEndReason
 /// with the given fields replaced by the non-null parameter values.
 @pragma('vm:prefer-inline') $Res call({Object? message = null,}) {
-  return _then(ThreadEndReason_Crashed(
+  return _then(SessionEndReason_Crashed(
 message: null == message ? _self.message : message // ignore: cast_nullable_to_non_nullable
 as String,
   ));
@@ -4383,8 +4383,8 @@ as String,
 /// @nodoc
 
 
-class ThreadEndReason_Timeout extends ThreadEndReason {
-  const ThreadEndReason_Timeout(): super._();
+class SessionEndReason_Timeout extends SessionEndReason {
+  const SessionEndReason_Timeout(): super._();
   
 
 
@@ -4394,7 +4394,7 @@ class ThreadEndReason_Timeout extends ThreadEndReason {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is ThreadEndReason_Timeout);
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SessionEndReason_Timeout);
 }
 
 
@@ -4403,7 +4403,7 @@ int get hashCode => runtimeType.hashCode;
 
 @override
 String toString() {
-  return 'ThreadEndReason.timeout()';
+  return 'SessionEndReason.timeout()';
 }
 
 
@@ -4415,8 +4415,8 @@ String toString() {
 /// @nodoc
 
 
-class ThreadEndReason_HostDisconnected extends ThreadEndReason {
-  const ThreadEndReason_HostDisconnected(): super._();
+class SessionEndReason_HostDisconnected extends SessionEndReason {
+  const SessionEndReason_HostDisconnected(): super._();
   
 
 
@@ -4426,7 +4426,7 @@ class ThreadEndReason_HostDisconnected extends ThreadEndReason {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is ThreadEndReason_HostDisconnected);
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is SessionEndReason_HostDisconnected);
 }
 
 
@@ -4435,7 +4435,7 @@ int get hashCode => runtimeType.hashCode;
 
 @override
 String toString() {
-  return 'ThreadEndReason.hostDisconnected()';
+  return 'SessionEndReason.hostDisconnected()';
 }
 
 
@@ -4488,13 +4488,13 @@ extension UiEventMessagePatterns on UiEventMessage {
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( UiEventMessage_ThreadOpened value)?  threadOpened,TResult Function( UiEventMessage_ThreadTitleUpdated value)?  threadTitleUpdated,TResult Function( UiEventMessage_ThreadClosed value)?  threadClosed,TResult Function( UiEventMessage_MessageStarted value)?  messageStarted,TResult Function( UiEventMessage_MessageCompleted value)?  messageCompleted,TResult Function( UiEventMessage_TextDelta value)?  textDelta,TResult Function( UiEventMessage_TextReplace value)?  textReplace,TResult Function( UiEventMessage_ReasoningDelta value)?  reasoningDelta,TResult Function( UiEventMessage_ReasoningReplace value)?  reasoningReplace,TResult Function( UiEventMessage_ToolCallPlaced value)?  toolCallPlaced,TResult Function( UiEventMessage_ToolCallCompleted value)?  toolCallCompleted,TResult Function( UiEventMessage_SubagentSpawned value)?  subagentSpawned,TResult Function( UiEventMessage_SubagentStatusUpdated value)?  subagentStatusUpdated,TResult Function( UiEventMessage_Error value)?  error,TResult Function( UiEventMessage_Raw value)?  raw,required TResult orElse(),}){
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( UiEventMessage_SessionOpened value)?  sessionOpened,TResult Function( UiEventMessage_SessionTitleUpdated value)?  sessionTitleUpdated,TResult Function( UiEventMessage_SessionClosed value)?  sessionClosed,TResult Function( UiEventMessage_MessageStarted value)?  messageStarted,TResult Function( UiEventMessage_MessageCompleted value)?  messageCompleted,TResult Function( UiEventMessage_TextDelta value)?  textDelta,TResult Function( UiEventMessage_TextReplace value)?  textReplace,TResult Function( UiEventMessage_ReasoningDelta value)?  reasoningDelta,TResult Function( UiEventMessage_ReasoningReplace value)?  reasoningReplace,TResult Function( UiEventMessage_ToolCallPlaced value)?  toolCallPlaced,TResult Function( UiEventMessage_ToolCallCompleted value)?  toolCallCompleted,TResult Function( UiEventMessage_SubagentSpawned value)?  subagentSpawned,TResult Function( UiEventMessage_SubagentStatusUpdated value)?  subagentStatusUpdated,TResult Function( UiEventMessage_Error value)?  error,TResult Function( UiEventMessage_Raw value)?  raw,required TResult orElse(),}){
 final _that = this;
 switch (_that) {
-case UiEventMessage_ThreadOpened() when threadOpened != null:
-return threadOpened(_that);case UiEventMessage_ThreadTitleUpdated() when threadTitleUpdated != null:
-return threadTitleUpdated(_that);case UiEventMessage_ThreadClosed() when threadClosed != null:
-return threadClosed(_that);case UiEventMessage_MessageStarted() when messageStarted != null:
+case UiEventMessage_SessionOpened() when sessionOpened != null:
+return sessionOpened(_that);case UiEventMessage_SessionTitleUpdated() when sessionTitleUpdated != null:
+return sessionTitleUpdated(_that);case UiEventMessage_SessionClosed() when sessionClosed != null:
+return sessionClosed(_that);case UiEventMessage_MessageStarted() when messageStarted != null:
 return messageStarted(_that);case UiEventMessage_MessageCompleted() when messageCompleted != null:
 return messageCompleted(_that);case UiEventMessage_TextDelta() when textDelta != null:
 return textDelta(_that);case UiEventMessage_TextReplace() when textReplace != null:
@@ -4524,13 +4524,13 @@ return raw(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( UiEventMessage_ThreadOpened value)  threadOpened,required TResult Function( UiEventMessage_ThreadTitleUpdated value)  threadTitleUpdated,required TResult Function( UiEventMessage_ThreadClosed value)  threadClosed,required TResult Function( UiEventMessage_MessageStarted value)  messageStarted,required TResult Function( UiEventMessage_MessageCompleted value)  messageCompleted,required TResult Function( UiEventMessage_TextDelta value)  textDelta,required TResult Function( UiEventMessage_TextReplace value)  textReplace,required TResult Function( UiEventMessage_ReasoningDelta value)  reasoningDelta,required TResult Function( UiEventMessage_ReasoningReplace value)  reasoningReplace,required TResult Function( UiEventMessage_ToolCallPlaced value)  toolCallPlaced,required TResult Function( UiEventMessage_ToolCallCompleted value)  toolCallCompleted,required TResult Function( UiEventMessage_SubagentSpawned value)  subagentSpawned,required TResult Function( UiEventMessage_SubagentStatusUpdated value)  subagentStatusUpdated,required TResult Function( UiEventMessage_Error value)  error,required TResult Function( UiEventMessage_Raw value)  raw,}){
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( UiEventMessage_SessionOpened value)  sessionOpened,required TResult Function( UiEventMessage_SessionTitleUpdated value)  sessionTitleUpdated,required TResult Function( UiEventMessage_SessionClosed value)  sessionClosed,required TResult Function( UiEventMessage_MessageStarted value)  messageStarted,required TResult Function( UiEventMessage_MessageCompleted value)  messageCompleted,required TResult Function( UiEventMessage_TextDelta value)  textDelta,required TResult Function( UiEventMessage_TextReplace value)  textReplace,required TResult Function( UiEventMessage_ReasoningDelta value)  reasoningDelta,required TResult Function( UiEventMessage_ReasoningReplace value)  reasoningReplace,required TResult Function( UiEventMessage_ToolCallPlaced value)  toolCallPlaced,required TResult Function( UiEventMessage_ToolCallCompleted value)  toolCallCompleted,required TResult Function( UiEventMessage_SubagentSpawned value)  subagentSpawned,required TResult Function( UiEventMessage_SubagentStatusUpdated value)  subagentStatusUpdated,required TResult Function( UiEventMessage_Error value)  error,required TResult Function( UiEventMessage_Raw value)  raw,}){
 final _that = this;
 switch (_that) {
-case UiEventMessage_ThreadOpened():
-return threadOpened(_that);case UiEventMessage_ThreadTitleUpdated():
-return threadTitleUpdated(_that);case UiEventMessage_ThreadClosed():
-return threadClosed(_that);case UiEventMessage_MessageStarted():
+case UiEventMessage_SessionOpened():
+return sessionOpened(_that);case UiEventMessage_SessionTitleUpdated():
+return sessionTitleUpdated(_that);case UiEventMessage_SessionClosed():
+return sessionClosed(_that);case UiEventMessage_MessageStarted():
 return messageStarted(_that);case UiEventMessage_MessageCompleted():
 return messageCompleted(_that);case UiEventMessage_TextDelta():
 return textDelta(_that);case UiEventMessage_TextReplace():
@@ -4556,13 +4556,13 @@ return raw(_that);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( UiEventMessage_ThreadOpened value)?  threadOpened,TResult? Function( UiEventMessage_ThreadTitleUpdated value)?  threadTitleUpdated,TResult? Function( UiEventMessage_ThreadClosed value)?  threadClosed,TResult? Function( UiEventMessage_MessageStarted value)?  messageStarted,TResult? Function( UiEventMessage_MessageCompleted value)?  messageCompleted,TResult? Function( UiEventMessage_TextDelta value)?  textDelta,TResult? Function( UiEventMessage_TextReplace value)?  textReplace,TResult? Function( UiEventMessage_ReasoningDelta value)?  reasoningDelta,TResult? Function( UiEventMessage_ReasoningReplace value)?  reasoningReplace,TResult? Function( UiEventMessage_ToolCallPlaced value)?  toolCallPlaced,TResult? Function( UiEventMessage_ToolCallCompleted value)?  toolCallCompleted,TResult? Function( UiEventMessage_SubagentSpawned value)?  subagentSpawned,TResult? Function( UiEventMessage_SubagentStatusUpdated value)?  subagentStatusUpdated,TResult? Function( UiEventMessage_Error value)?  error,TResult? Function( UiEventMessage_Raw value)?  raw,}){
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( UiEventMessage_SessionOpened value)?  sessionOpened,TResult? Function( UiEventMessage_SessionTitleUpdated value)?  sessionTitleUpdated,TResult? Function( UiEventMessage_SessionClosed value)?  sessionClosed,TResult? Function( UiEventMessage_MessageStarted value)?  messageStarted,TResult? Function( UiEventMessage_MessageCompleted value)?  messageCompleted,TResult? Function( UiEventMessage_TextDelta value)?  textDelta,TResult? Function( UiEventMessage_TextReplace value)?  textReplace,TResult? Function( UiEventMessage_ReasoningDelta value)?  reasoningDelta,TResult? Function( UiEventMessage_ReasoningReplace value)?  reasoningReplace,TResult? Function( UiEventMessage_ToolCallPlaced value)?  toolCallPlaced,TResult? Function( UiEventMessage_ToolCallCompleted value)?  toolCallCompleted,TResult? Function( UiEventMessage_SubagentSpawned value)?  subagentSpawned,TResult? Function( UiEventMessage_SubagentStatusUpdated value)?  subagentStatusUpdated,TResult? Function( UiEventMessage_Error value)?  error,TResult? Function( UiEventMessage_Raw value)?  raw,}){
 final _that = this;
 switch (_that) {
-case UiEventMessage_ThreadOpened() when threadOpened != null:
-return threadOpened(_that);case UiEventMessage_ThreadTitleUpdated() when threadTitleUpdated != null:
-return threadTitleUpdated(_that);case UiEventMessage_ThreadClosed() when threadClosed != null:
-return threadClosed(_that);case UiEventMessage_MessageStarted() when messageStarted != null:
+case UiEventMessage_SessionOpened() when sessionOpened != null:
+return sessionOpened(_that);case UiEventMessage_SessionTitleUpdated() when sessionTitleUpdated != null:
+return sessionTitleUpdated(_that);case UiEventMessage_SessionClosed() when sessionClosed != null:
+return sessionClosed(_that);case UiEventMessage_MessageStarted() when messageStarted != null:
 return messageStarted(_that);case UiEventMessage_MessageCompleted() when messageCompleted != null:
 return messageCompleted(_that);case UiEventMessage_TextDelta() when textDelta != null:
 return textDelta(_that);case UiEventMessage_TextReplace() when textReplace != null:
@@ -4591,12 +4591,12 @@ return raw(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)?  threadOpened,TResult Function( String threadId,  String title)?  threadTitleUpdated,TResult Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)?  threadClosed,TResult Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)?  messageStarted,TResult Function( String messageId,  PlatformInt64 finishedAtMs)?  messageCompleted,TResult Function( String messageId,  DisplayPayload text)?  textDelta,TResult Function( String messageId,  DisplayPayload text)?  textReplace,TResult Function( String messageId,  DisplayPayload text)?  reasoningDelta,TResult Function( String messageId,  DisplayPayload text)?  reasoningReplace,TResult Function( String messageId,  String toolCallId,  String name,  DisplayPayload argsJson)?  toolCallPlaced,TResult Function( String toolCallId,  DisplayPayload output,  bool isError)?  toolCallCompleted,TResult Function( String parentThreadId,  String subThreadId,  String toolCallId,  AgentName agent,  String? model,  String? prompt,  String? title)?  subagentSpawned,TResult Function( String subThreadId,  SubagentStatus status)?  subagentStatusUpdated,TResult Function( String code,  String message,  String? messageId)?  error,TResult Function( String kind,  String payloadJson)?  raw,required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String sessionId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)?  sessionOpened,TResult Function( String sessionId,  String title)?  sessionTitleUpdated,TResult Function( String sessionId,  SessionEndReason reason,  PlatformInt64 closedAtMs)?  sessionClosed,TResult Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)?  messageStarted,TResult Function( String messageId,  PlatformInt64 finishedAtMs)?  messageCompleted,TResult Function( String messageId,  DisplayPayload text)?  textDelta,TResult Function( String messageId,  DisplayPayload text)?  textReplace,TResult Function( String messageId,  DisplayPayload text)?  reasoningDelta,TResult Function( String messageId,  DisplayPayload text)?  reasoningReplace,TResult Function( String messageId,  String toolCallId,  String name,  DisplayPayload argsJson)?  toolCallPlaced,TResult Function( String toolCallId,  DisplayPayload output,  bool isError)?  toolCallCompleted,TResult Function( String parentSessionId,  String subSessionId,  String toolCallId,  AgentName agent,  String? model,  String? prompt,  String? title)?  subagentSpawned,TResult Function( String subSessionId,  SubagentStatus status)?  subagentStatusUpdated,TResult Function( String code,  String message,  String? messageId)?  error,TResult Function( String kind,  String payloadJson)?  raw,required TResult orElse(),}) {final _that = this;
 switch (_that) {
-case UiEventMessage_ThreadOpened() when threadOpened != null:
-return threadOpened(_that.threadId,_that.agent,_that.title,_that.openedAtMs);case UiEventMessage_ThreadTitleUpdated() when threadTitleUpdated != null:
-return threadTitleUpdated(_that.threadId,_that.title);case UiEventMessage_ThreadClosed() when threadClosed != null:
-return threadClosed(_that.threadId,_that.reason,_that.closedAtMs);case UiEventMessage_MessageStarted() when messageStarted != null:
+case UiEventMessage_SessionOpened() when sessionOpened != null:
+return sessionOpened(_that.sessionId,_that.agent,_that.title,_that.openedAtMs);case UiEventMessage_SessionTitleUpdated() when sessionTitleUpdated != null:
+return sessionTitleUpdated(_that.sessionId,_that.title);case UiEventMessage_SessionClosed() when sessionClosed != null:
+return sessionClosed(_that.sessionId,_that.reason,_that.closedAtMs);case UiEventMessage_MessageStarted() when messageStarted != null:
 return messageStarted(_that.messageId,_that.role,_that.startedAtMs);case UiEventMessage_MessageCompleted() when messageCompleted != null:
 return messageCompleted(_that.messageId,_that.finishedAtMs);case UiEventMessage_TextDelta() when textDelta != null:
 return textDelta(_that.messageId,_that.text);case UiEventMessage_TextReplace() when textReplace != null:
@@ -4605,8 +4605,8 @@ return reasoningDelta(_that.messageId,_that.text);case UiEventMessage_ReasoningR
 return reasoningReplace(_that.messageId,_that.text);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
 return toolCallPlaced(_that.messageId,_that.toolCallId,_that.name,_that.argsJson);case UiEventMessage_ToolCallCompleted() when toolCallCompleted != null:
 return toolCallCompleted(_that.toolCallId,_that.output,_that.isError);case UiEventMessage_SubagentSpawned() when subagentSpawned != null:
-return subagentSpawned(_that.parentThreadId,_that.subThreadId,_that.toolCallId,_that.agent,_that.model,_that.prompt,_that.title);case UiEventMessage_SubagentStatusUpdated() when subagentStatusUpdated != null:
-return subagentStatusUpdated(_that.subThreadId,_that.status);case UiEventMessage_Error() when error != null:
+return subagentSpawned(_that.parentSessionId,_that.subSessionId,_that.toolCallId,_that.agent,_that.model,_that.prompt,_that.title);case UiEventMessage_SubagentStatusUpdated() when subagentStatusUpdated != null:
+return subagentStatusUpdated(_that.subSessionId,_that.status);case UiEventMessage_Error() when error != null:
 return error(_that.code,_that.message,_that.messageId);case UiEventMessage_Raw() when raw != null:
 return raw(_that.kind,_that.payloadJson);case _:
   return orElse();
@@ -4626,12 +4626,12 @@ return raw(_that.kind,_that.payloadJson);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)  threadOpened,required TResult Function( String threadId,  String title)  threadTitleUpdated,required TResult Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)  threadClosed,required TResult Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)  messageStarted,required TResult Function( String messageId,  PlatformInt64 finishedAtMs)  messageCompleted,required TResult Function( String messageId,  DisplayPayload text)  textDelta,required TResult Function( String messageId,  DisplayPayload text)  textReplace,required TResult Function( String messageId,  DisplayPayload text)  reasoningDelta,required TResult Function( String messageId,  DisplayPayload text)  reasoningReplace,required TResult Function( String messageId,  String toolCallId,  String name,  DisplayPayload argsJson)  toolCallPlaced,required TResult Function( String toolCallId,  DisplayPayload output,  bool isError)  toolCallCompleted,required TResult Function( String parentThreadId,  String subThreadId,  String toolCallId,  AgentName agent,  String? model,  String? prompt,  String? title)  subagentSpawned,required TResult Function( String subThreadId,  SubagentStatus status)  subagentStatusUpdated,required TResult Function( String code,  String message,  String? messageId)  error,required TResult Function( String kind,  String payloadJson)  raw,}) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String sessionId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)  sessionOpened,required TResult Function( String sessionId,  String title)  sessionTitleUpdated,required TResult Function( String sessionId,  SessionEndReason reason,  PlatformInt64 closedAtMs)  sessionClosed,required TResult Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)  messageStarted,required TResult Function( String messageId,  PlatformInt64 finishedAtMs)  messageCompleted,required TResult Function( String messageId,  DisplayPayload text)  textDelta,required TResult Function( String messageId,  DisplayPayload text)  textReplace,required TResult Function( String messageId,  DisplayPayload text)  reasoningDelta,required TResult Function( String messageId,  DisplayPayload text)  reasoningReplace,required TResult Function( String messageId,  String toolCallId,  String name,  DisplayPayload argsJson)  toolCallPlaced,required TResult Function( String toolCallId,  DisplayPayload output,  bool isError)  toolCallCompleted,required TResult Function( String parentSessionId,  String subSessionId,  String toolCallId,  AgentName agent,  String? model,  String? prompt,  String? title)  subagentSpawned,required TResult Function( String subSessionId,  SubagentStatus status)  subagentStatusUpdated,required TResult Function( String code,  String message,  String? messageId)  error,required TResult Function( String kind,  String payloadJson)  raw,}) {final _that = this;
 switch (_that) {
-case UiEventMessage_ThreadOpened():
-return threadOpened(_that.threadId,_that.agent,_that.title,_that.openedAtMs);case UiEventMessage_ThreadTitleUpdated():
-return threadTitleUpdated(_that.threadId,_that.title);case UiEventMessage_ThreadClosed():
-return threadClosed(_that.threadId,_that.reason,_that.closedAtMs);case UiEventMessage_MessageStarted():
+case UiEventMessage_SessionOpened():
+return sessionOpened(_that.sessionId,_that.agent,_that.title,_that.openedAtMs);case UiEventMessage_SessionTitleUpdated():
+return sessionTitleUpdated(_that.sessionId,_that.title);case UiEventMessage_SessionClosed():
+return sessionClosed(_that.sessionId,_that.reason,_that.closedAtMs);case UiEventMessage_MessageStarted():
 return messageStarted(_that.messageId,_that.role,_that.startedAtMs);case UiEventMessage_MessageCompleted():
 return messageCompleted(_that.messageId,_that.finishedAtMs);case UiEventMessage_TextDelta():
 return textDelta(_that.messageId,_that.text);case UiEventMessage_TextReplace():
@@ -4640,8 +4640,8 @@ return reasoningDelta(_that.messageId,_that.text);case UiEventMessage_ReasoningR
 return reasoningReplace(_that.messageId,_that.text);case UiEventMessage_ToolCallPlaced():
 return toolCallPlaced(_that.messageId,_that.toolCallId,_that.name,_that.argsJson);case UiEventMessage_ToolCallCompleted():
 return toolCallCompleted(_that.toolCallId,_that.output,_that.isError);case UiEventMessage_SubagentSpawned():
-return subagentSpawned(_that.parentThreadId,_that.subThreadId,_that.toolCallId,_that.agent,_that.model,_that.prompt,_that.title);case UiEventMessage_SubagentStatusUpdated():
-return subagentStatusUpdated(_that.subThreadId,_that.status);case UiEventMessage_Error():
+return subagentSpawned(_that.parentSessionId,_that.subSessionId,_that.toolCallId,_that.agent,_that.model,_that.prompt,_that.title);case UiEventMessage_SubagentStatusUpdated():
+return subagentStatusUpdated(_that.subSessionId,_that.status);case UiEventMessage_Error():
 return error(_that.code,_that.message,_that.messageId);case UiEventMessage_Raw():
 return raw(_that.kind,_that.payloadJson);}
 }
@@ -4657,12 +4657,12 @@ return raw(_that.kind,_that.payloadJson);}
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String threadId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)?  threadOpened,TResult? Function( String threadId,  String title)?  threadTitleUpdated,TResult? Function( String threadId,  ThreadEndReason reason,  PlatformInt64 closedAtMs)?  threadClosed,TResult? Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)?  messageStarted,TResult? Function( String messageId,  PlatformInt64 finishedAtMs)?  messageCompleted,TResult? Function( String messageId,  DisplayPayload text)?  textDelta,TResult? Function( String messageId,  DisplayPayload text)?  textReplace,TResult? Function( String messageId,  DisplayPayload text)?  reasoningDelta,TResult? Function( String messageId,  DisplayPayload text)?  reasoningReplace,TResult? Function( String messageId,  String toolCallId,  String name,  DisplayPayload argsJson)?  toolCallPlaced,TResult? Function( String toolCallId,  DisplayPayload output,  bool isError)?  toolCallCompleted,TResult? Function( String parentThreadId,  String subThreadId,  String toolCallId,  AgentName agent,  String? model,  String? prompt,  String? title)?  subagentSpawned,TResult? Function( String subThreadId,  SubagentStatus status)?  subagentStatusUpdated,TResult? Function( String code,  String message,  String? messageId)?  error,TResult? Function( String kind,  String payloadJson)?  raw,}) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String sessionId,  AgentName agent,  String? title,  PlatformInt64 openedAtMs)?  sessionOpened,TResult? Function( String sessionId,  String title)?  sessionTitleUpdated,TResult? Function( String sessionId,  SessionEndReason reason,  PlatformInt64 closedAtMs)?  sessionClosed,TResult? Function( String messageId,  MessageRole role,  PlatformInt64 startedAtMs)?  messageStarted,TResult? Function( String messageId,  PlatformInt64 finishedAtMs)?  messageCompleted,TResult? Function( String messageId,  DisplayPayload text)?  textDelta,TResult? Function( String messageId,  DisplayPayload text)?  textReplace,TResult? Function( String messageId,  DisplayPayload text)?  reasoningDelta,TResult? Function( String messageId,  DisplayPayload text)?  reasoningReplace,TResult? Function( String messageId,  String toolCallId,  String name,  DisplayPayload argsJson)?  toolCallPlaced,TResult? Function( String toolCallId,  DisplayPayload output,  bool isError)?  toolCallCompleted,TResult? Function( String parentSessionId,  String subSessionId,  String toolCallId,  AgentName agent,  String? model,  String? prompt,  String? title)?  subagentSpawned,TResult? Function( String subSessionId,  SubagentStatus status)?  subagentStatusUpdated,TResult? Function( String code,  String message,  String? messageId)?  error,TResult? Function( String kind,  String payloadJson)?  raw,}) {final _that = this;
 switch (_that) {
-case UiEventMessage_ThreadOpened() when threadOpened != null:
-return threadOpened(_that.threadId,_that.agent,_that.title,_that.openedAtMs);case UiEventMessage_ThreadTitleUpdated() when threadTitleUpdated != null:
-return threadTitleUpdated(_that.threadId,_that.title);case UiEventMessage_ThreadClosed() when threadClosed != null:
-return threadClosed(_that.threadId,_that.reason,_that.closedAtMs);case UiEventMessage_MessageStarted() when messageStarted != null:
+case UiEventMessage_SessionOpened() when sessionOpened != null:
+return sessionOpened(_that.sessionId,_that.agent,_that.title,_that.openedAtMs);case UiEventMessage_SessionTitleUpdated() when sessionTitleUpdated != null:
+return sessionTitleUpdated(_that.sessionId,_that.title);case UiEventMessage_SessionClosed() when sessionClosed != null:
+return sessionClosed(_that.sessionId,_that.reason,_that.closedAtMs);case UiEventMessage_MessageStarted() when messageStarted != null:
 return messageStarted(_that.messageId,_that.role,_that.startedAtMs);case UiEventMessage_MessageCompleted() when messageCompleted != null:
 return messageCompleted(_that.messageId,_that.finishedAtMs);case UiEventMessage_TextDelta() when textDelta != null:
 return textDelta(_that.messageId,_that.text);case UiEventMessage_TextReplace() when textReplace != null:
@@ -4671,8 +4671,8 @@ return reasoningDelta(_that.messageId,_that.text);case UiEventMessage_ReasoningR
 return reasoningReplace(_that.messageId,_that.text);case UiEventMessage_ToolCallPlaced() when toolCallPlaced != null:
 return toolCallPlaced(_that.messageId,_that.toolCallId,_that.name,_that.argsJson);case UiEventMessage_ToolCallCompleted() when toolCallCompleted != null:
 return toolCallCompleted(_that.toolCallId,_that.output,_that.isError);case UiEventMessage_SubagentSpawned() when subagentSpawned != null:
-return subagentSpawned(_that.parentThreadId,_that.subThreadId,_that.toolCallId,_that.agent,_that.model,_that.prompt,_that.title);case UiEventMessage_SubagentStatusUpdated() when subagentStatusUpdated != null:
-return subagentStatusUpdated(_that.subThreadId,_that.status);case UiEventMessage_Error() when error != null:
+return subagentSpawned(_that.parentSessionId,_that.subSessionId,_that.toolCallId,_that.agent,_that.model,_that.prompt,_that.title);case UiEventMessage_SubagentStatusUpdated() when subagentStatusUpdated != null:
+return subagentStatusUpdated(_that.subSessionId,_that.status);case UiEventMessage_Error() when error != null:
 return error(_that.code,_that.message,_that.messageId);case UiEventMessage_Raw() when raw != null:
 return raw(_that.kind,_that.payloadJson);case _:
   return null;
@@ -4685,11 +4685,11 @@ return raw(_that.kind,_that.payloadJson);case _:
 /// @nodoc
 
 
-class UiEventMessage_ThreadOpened extends UiEventMessage {
-  const UiEventMessage_ThreadOpened({required this.threadId, required this.agent, this.title, required this.openedAtMs}): super._();
+class UiEventMessage_SessionOpened extends UiEventMessage {
+  const UiEventMessage_SessionOpened({required this.sessionId, required this.agent, this.title, required this.openedAtMs}): super._();
   
 
- final  String threadId;
+ final  String sessionId;
  final  AgentName agent;
  final  String? title;
  final  PlatformInt64 openedAtMs;
@@ -4698,33 +4698,33 @@ class UiEventMessage_ThreadOpened extends UiEventMessage {
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
 @pragma('vm:prefer-inline')
-$UiEventMessage_ThreadOpenedCopyWith<UiEventMessage_ThreadOpened> get copyWith => _$UiEventMessage_ThreadOpenedCopyWithImpl<UiEventMessage_ThreadOpened>(this, _$identity);
+$UiEventMessage_SessionOpenedCopyWith<UiEventMessage_SessionOpened> get copyWith => _$UiEventMessage_SessionOpenedCopyWithImpl<UiEventMessage_SessionOpened>(this, _$identity);
 
 
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEventMessage_ThreadOpened&&(identical(other.threadId, threadId) || other.threadId == threadId)&&(identical(other.agent, agent) || other.agent == agent)&&(identical(other.title, title) || other.title == title)&&(identical(other.openedAtMs, openedAtMs) || other.openedAtMs == openedAtMs));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEventMessage_SessionOpened&&(identical(other.sessionId, sessionId) || other.sessionId == sessionId)&&(identical(other.agent, agent) || other.agent == agent)&&(identical(other.title, title) || other.title == title)&&(identical(other.openedAtMs, openedAtMs) || other.openedAtMs == openedAtMs));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,threadId,agent,title,openedAtMs);
+int get hashCode => Object.hash(runtimeType,sessionId,agent,title,openedAtMs);
 
 @override
 String toString() {
-  return 'UiEventMessage.threadOpened(threadId: $threadId, agent: $agent, title: $title, openedAtMs: $openedAtMs)';
+  return 'UiEventMessage.sessionOpened(sessionId: $sessionId, agent: $agent, title: $title, openedAtMs: $openedAtMs)';
 }
 
 
 }
 
 /// @nodoc
-abstract mixin class $UiEventMessage_ThreadOpenedCopyWith<$Res> implements $UiEventMessageCopyWith<$Res> {
-  factory $UiEventMessage_ThreadOpenedCopyWith(UiEventMessage_ThreadOpened value, $Res Function(UiEventMessage_ThreadOpened) _then) = _$UiEventMessage_ThreadOpenedCopyWithImpl;
+abstract mixin class $UiEventMessage_SessionOpenedCopyWith<$Res> implements $UiEventMessageCopyWith<$Res> {
+  factory $UiEventMessage_SessionOpenedCopyWith(UiEventMessage_SessionOpened value, $Res Function(UiEventMessage_SessionOpened) _then) = _$UiEventMessage_SessionOpenedCopyWithImpl;
 @useResult
 $Res call({
- String threadId, AgentName agent, String? title, PlatformInt64 openedAtMs
+ String sessionId, AgentName agent, String? title, PlatformInt64 openedAtMs
 });
 
 
@@ -4732,18 +4732,18 @@ $Res call({
 
 }
 /// @nodoc
-class _$UiEventMessage_ThreadOpenedCopyWithImpl<$Res>
-    implements $UiEventMessage_ThreadOpenedCopyWith<$Res> {
-  _$UiEventMessage_ThreadOpenedCopyWithImpl(this._self, this._then);
+class _$UiEventMessage_SessionOpenedCopyWithImpl<$Res>
+    implements $UiEventMessage_SessionOpenedCopyWith<$Res> {
+  _$UiEventMessage_SessionOpenedCopyWithImpl(this._self, this._then);
 
-  final UiEventMessage_ThreadOpened _self;
-  final $Res Function(UiEventMessage_ThreadOpened) _then;
+  final UiEventMessage_SessionOpened _self;
+  final $Res Function(UiEventMessage_SessionOpened) _then;
 
 /// Create a copy of UiEventMessage
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? threadId = null,Object? agent = null,Object? title = freezed,Object? openedAtMs = null,}) {
-  return _then(UiEventMessage_ThreadOpened(
-threadId: null == threadId ? _self.threadId : threadId // ignore: cast_nullable_to_non_nullable
+@pragma('vm:prefer-inline') $Res call({Object? sessionId = null,Object? agent = null,Object? title = freezed,Object? openedAtMs = null,}) {
+  return _then(UiEventMessage_SessionOpened(
+sessionId: null == sessionId ? _self.sessionId : sessionId // ignore: cast_nullable_to_non_nullable
 as String,agent: null == agent ? _self.agent : agent // ignore: cast_nullable_to_non_nullable
 as AgentName,title: freezed == title ? _self.title : title // ignore: cast_nullable_to_non_nullable
 as String?,openedAtMs: null == openedAtMs ? _self.openedAtMs : openedAtMs // ignore: cast_nullable_to_non_nullable
@@ -4757,44 +4757,44 @@ as PlatformInt64,
 /// @nodoc
 
 
-class UiEventMessage_ThreadTitleUpdated extends UiEventMessage {
-  const UiEventMessage_ThreadTitleUpdated({required this.threadId, required this.title}): super._();
+class UiEventMessage_SessionTitleUpdated extends UiEventMessage {
+  const UiEventMessage_SessionTitleUpdated({required this.sessionId, required this.title}): super._();
   
 
- final  String threadId;
+ final  String sessionId;
  final  String title;
 
 /// Create a copy of UiEventMessage
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
 @pragma('vm:prefer-inline')
-$UiEventMessage_ThreadTitleUpdatedCopyWith<UiEventMessage_ThreadTitleUpdated> get copyWith => _$UiEventMessage_ThreadTitleUpdatedCopyWithImpl<UiEventMessage_ThreadTitleUpdated>(this, _$identity);
+$UiEventMessage_SessionTitleUpdatedCopyWith<UiEventMessage_SessionTitleUpdated> get copyWith => _$UiEventMessage_SessionTitleUpdatedCopyWithImpl<UiEventMessage_SessionTitleUpdated>(this, _$identity);
 
 
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEventMessage_ThreadTitleUpdated&&(identical(other.threadId, threadId) || other.threadId == threadId)&&(identical(other.title, title) || other.title == title));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEventMessage_SessionTitleUpdated&&(identical(other.sessionId, sessionId) || other.sessionId == sessionId)&&(identical(other.title, title) || other.title == title));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,threadId,title);
+int get hashCode => Object.hash(runtimeType,sessionId,title);
 
 @override
 String toString() {
-  return 'UiEventMessage.threadTitleUpdated(threadId: $threadId, title: $title)';
+  return 'UiEventMessage.sessionTitleUpdated(sessionId: $sessionId, title: $title)';
 }
 
 
 }
 
 /// @nodoc
-abstract mixin class $UiEventMessage_ThreadTitleUpdatedCopyWith<$Res> implements $UiEventMessageCopyWith<$Res> {
-  factory $UiEventMessage_ThreadTitleUpdatedCopyWith(UiEventMessage_ThreadTitleUpdated value, $Res Function(UiEventMessage_ThreadTitleUpdated) _then) = _$UiEventMessage_ThreadTitleUpdatedCopyWithImpl;
+abstract mixin class $UiEventMessage_SessionTitleUpdatedCopyWith<$Res> implements $UiEventMessageCopyWith<$Res> {
+  factory $UiEventMessage_SessionTitleUpdatedCopyWith(UiEventMessage_SessionTitleUpdated value, $Res Function(UiEventMessage_SessionTitleUpdated) _then) = _$UiEventMessage_SessionTitleUpdatedCopyWithImpl;
 @useResult
 $Res call({
- String threadId, String title
+ String sessionId, String title
 });
 
 
@@ -4802,18 +4802,18 @@ $Res call({
 
 }
 /// @nodoc
-class _$UiEventMessage_ThreadTitleUpdatedCopyWithImpl<$Res>
-    implements $UiEventMessage_ThreadTitleUpdatedCopyWith<$Res> {
-  _$UiEventMessage_ThreadTitleUpdatedCopyWithImpl(this._self, this._then);
+class _$UiEventMessage_SessionTitleUpdatedCopyWithImpl<$Res>
+    implements $UiEventMessage_SessionTitleUpdatedCopyWith<$Res> {
+  _$UiEventMessage_SessionTitleUpdatedCopyWithImpl(this._self, this._then);
 
-  final UiEventMessage_ThreadTitleUpdated _self;
-  final $Res Function(UiEventMessage_ThreadTitleUpdated) _then;
+  final UiEventMessage_SessionTitleUpdated _self;
+  final $Res Function(UiEventMessage_SessionTitleUpdated) _then;
 
 /// Create a copy of UiEventMessage
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? threadId = null,Object? title = null,}) {
-  return _then(UiEventMessage_ThreadTitleUpdated(
-threadId: null == threadId ? _self.threadId : threadId // ignore: cast_nullable_to_non_nullable
+@pragma('vm:prefer-inline') $Res call({Object? sessionId = null,Object? title = null,}) {
+  return _then(UiEventMessage_SessionTitleUpdated(
+sessionId: null == sessionId ? _self.sessionId : sessionId // ignore: cast_nullable_to_non_nullable
 as String,title: null == title ? _self.title : title // ignore: cast_nullable_to_non_nullable
 as String,
   ));
@@ -4825,66 +4825,66 @@ as String,
 /// @nodoc
 
 
-class UiEventMessage_ThreadClosed extends UiEventMessage {
-  const UiEventMessage_ThreadClosed({required this.threadId, required this.reason, required this.closedAtMs}): super._();
+class UiEventMessage_SessionClosed extends UiEventMessage {
+  const UiEventMessage_SessionClosed({required this.sessionId, required this.reason, required this.closedAtMs}): super._();
   
 
- final  String threadId;
- final  ThreadEndReason reason;
+ final  String sessionId;
+ final  SessionEndReason reason;
  final  PlatformInt64 closedAtMs;
 
 /// Create a copy of UiEventMessage
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
 @pragma('vm:prefer-inline')
-$UiEventMessage_ThreadClosedCopyWith<UiEventMessage_ThreadClosed> get copyWith => _$UiEventMessage_ThreadClosedCopyWithImpl<UiEventMessage_ThreadClosed>(this, _$identity);
+$UiEventMessage_SessionClosedCopyWith<UiEventMessage_SessionClosed> get copyWith => _$UiEventMessage_SessionClosedCopyWithImpl<UiEventMessage_SessionClosed>(this, _$identity);
 
 
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEventMessage_ThreadClosed&&(identical(other.threadId, threadId) || other.threadId == threadId)&&(identical(other.reason, reason) || other.reason == reason)&&(identical(other.closedAtMs, closedAtMs) || other.closedAtMs == closedAtMs));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEventMessage_SessionClosed&&(identical(other.sessionId, sessionId) || other.sessionId == sessionId)&&(identical(other.reason, reason) || other.reason == reason)&&(identical(other.closedAtMs, closedAtMs) || other.closedAtMs == closedAtMs));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,threadId,reason,closedAtMs);
+int get hashCode => Object.hash(runtimeType,sessionId,reason,closedAtMs);
 
 @override
 String toString() {
-  return 'UiEventMessage.threadClosed(threadId: $threadId, reason: $reason, closedAtMs: $closedAtMs)';
+  return 'UiEventMessage.sessionClosed(sessionId: $sessionId, reason: $reason, closedAtMs: $closedAtMs)';
 }
 
 
 }
 
 /// @nodoc
-abstract mixin class $UiEventMessage_ThreadClosedCopyWith<$Res> implements $UiEventMessageCopyWith<$Res> {
-  factory $UiEventMessage_ThreadClosedCopyWith(UiEventMessage_ThreadClosed value, $Res Function(UiEventMessage_ThreadClosed) _then) = _$UiEventMessage_ThreadClosedCopyWithImpl;
+abstract mixin class $UiEventMessage_SessionClosedCopyWith<$Res> implements $UiEventMessageCopyWith<$Res> {
+  factory $UiEventMessage_SessionClosedCopyWith(UiEventMessage_SessionClosed value, $Res Function(UiEventMessage_SessionClosed) _then) = _$UiEventMessage_SessionClosedCopyWithImpl;
 @useResult
 $Res call({
- String threadId, ThreadEndReason reason, PlatformInt64 closedAtMs
+ String sessionId, SessionEndReason reason, PlatformInt64 closedAtMs
 });
 
 
-$ThreadEndReasonCopyWith<$Res> get reason;
+$SessionEndReasonCopyWith<$Res> get reason;
 
 }
 /// @nodoc
-class _$UiEventMessage_ThreadClosedCopyWithImpl<$Res>
-    implements $UiEventMessage_ThreadClosedCopyWith<$Res> {
-  _$UiEventMessage_ThreadClosedCopyWithImpl(this._self, this._then);
+class _$UiEventMessage_SessionClosedCopyWithImpl<$Res>
+    implements $UiEventMessage_SessionClosedCopyWith<$Res> {
+  _$UiEventMessage_SessionClosedCopyWithImpl(this._self, this._then);
 
-  final UiEventMessage_ThreadClosed _self;
-  final $Res Function(UiEventMessage_ThreadClosed) _then;
+  final UiEventMessage_SessionClosed _self;
+  final $Res Function(UiEventMessage_SessionClosed) _then;
 
 /// Create a copy of UiEventMessage
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? threadId = null,Object? reason = null,Object? closedAtMs = null,}) {
-  return _then(UiEventMessage_ThreadClosed(
-threadId: null == threadId ? _self.threadId : threadId // ignore: cast_nullable_to_non_nullable
+@pragma('vm:prefer-inline') $Res call({Object? sessionId = null,Object? reason = null,Object? closedAtMs = null,}) {
+  return _then(UiEventMessage_SessionClosed(
+sessionId: null == sessionId ? _self.sessionId : sessionId // ignore: cast_nullable_to_non_nullable
 as String,reason: null == reason ? _self.reason : reason // ignore: cast_nullable_to_non_nullable
-as ThreadEndReason,closedAtMs: null == closedAtMs ? _self.closedAtMs : closedAtMs // ignore: cast_nullable_to_non_nullable
+as SessionEndReason,closedAtMs: null == closedAtMs ? _self.closedAtMs : closedAtMs // ignore: cast_nullable_to_non_nullable
 as PlatformInt64,
   ));
 }
@@ -4893,9 +4893,9 @@ as PlatformInt64,
 /// with the given fields replaced by the non-null parameter values.
 @override
 @pragma('vm:prefer-inline')
-$ThreadEndReasonCopyWith<$Res> get reason {
+$SessionEndReasonCopyWith<$Res> get reason {
   
-  return $ThreadEndReasonCopyWith<$Res>(_self.reason, (value) {
+  return $SessionEndReasonCopyWith<$Res>(_self.reason, (value) {
     return _then(_self.copyWith(reason: value));
   });
 }
@@ -5511,11 +5511,11 @@ $DisplayPayloadCopyWith<$Res> get output {
 
 
 class UiEventMessage_SubagentSpawned extends UiEventMessage {
-  const UiEventMessage_SubagentSpawned({required this.parentThreadId, required this.subThreadId, required this.toolCallId, required this.agent, this.model, this.prompt, this.title}): super._();
+  const UiEventMessage_SubagentSpawned({required this.parentSessionId, required this.subSessionId, required this.toolCallId, required this.agent, this.model, this.prompt, this.title}): super._();
   
 
- final  String parentThreadId;
- final  String subThreadId;
+ final  String parentSessionId;
+ final  String subSessionId;
  final  String toolCallId;
  final  AgentName agent;
  final  String? model;
@@ -5532,16 +5532,16 @@ $UiEventMessage_SubagentSpawnedCopyWith<UiEventMessage_SubagentSpawned> get copy
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEventMessage_SubagentSpawned&&(identical(other.parentThreadId, parentThreadId) || other.parentThreadId == parentThreadId)&&(identical(other.subThreadId, subThreadId) || other.subThreadId == subThreadId)&&(identical(other.toolCallId, toolCallId) || other.toolCallId == toolCallId)&&(identical(other.agent, agent) || other.agent == agent)&&(identical(other.model, model) || other.model == model)&&(identical(other.prompt, prompt) || other.prompt == prompt)&&(identical(other.title, title) || other.title == title));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEventMessage_SubagentSpawned&&(identical(other.parentSessionId, parentSessionId) || other.parentSessionId == parentSessionId)&&(identical(other.subSessionId, subSessionId) || other.subSessionId == subSessionId)&&(identical(other.toolCallId, toolCallId) || other.toolCallId == toolCallId)&&(identical(other.agent, agent) || other.agent == agent)&&(identical(other.model, model) || other.model == model)&&(identical(other.prompt, prompt) || other.prompt == prompt)&&(identical(other.title, title) || other.title == title));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,parentThreadId,subThreadId,toolCallId,agent,model,prompt,title);
+int get hashCode => Object.hash(runtimeType,parentSessionId,subSessionId,toolCallId,agent,model,prompt,title);
 
 @override
 String toString() {
-  return 'UiEventMessage.subagentSpawned(parentThreadId: $parentThreadId, subThreadId: $subThreadId, toolCallId: $toolCallId, agent: $agent, model: $model, prompt: $prompt, title: $title)';
+  return 'UiEventMessage.subagentSpawned(parentSessionId: $parentSessionId, subSessionId: $subSessionId, toolCallId: $toolCallId, agent: $agent, model: $model, prompt: $prompt, title: $title)';
 }
 
 
@@ -5552,7 +5552,7 @@ abstract mixin class $UiEventMessage_SubagentSpawnedCopyWith<$Res> implements $U
   factory $UiEventMessage_SubagentSpawnedCopyWith(UiEventMessage_SubagentSpawned value, $Res Function(UiEventMessage_SubagentSpawned) _then) = _$UiEventMessage_SubagentSpawnedCopyWithImpl;
 @useResult
 $Res call({
- String parentThreadId, String subThreadId, String toolCallId, AgentName agent, String? model, String? prompt, String? title
+ String parentSessionId, String subSessionId, String toolCallId, AgentName agent, String? model, String? prompt, String? title
 });
 
 
@@ -5569,10 +5569,10 @@ class _$UiEventMessage_SubagentSpawnedCopyWithImpl<$Res>
 
 /// Create a copy of UiEventMessage
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? parentThreadId = null,Object? subThreadId = null,Object? toolCallId = null,Object? agent = null,Object? model = freezed,Object? prompt = freezed,Object? title = freezed,}) {
+@pragma('vm:prefer-inline') $Res call({Object? parentSessionId = null,Object? subSessionId = null,Object? toolCallId = null,Object? agent = null,Object? model = freezed,Object? prompt = freezed,Object? title = freezed,}) {
   return _then(UiEventMessage_SubagentSpawned(
-parentThreadId: null == parentThreadId ? _self.parentThreadId : parentThreadId // ignore: cast_nullable_to_non_nullable
-as String,subThreadId: null == subThreadId ? _self.subThreadId : subThreadId // ignore: cast_nullable_to_non_nullable
+parentSessionId: null == parentSessionId ? _self.parentSessionId : parentSessionId // ignore: cast_nullable_to_non_nullable
+as String,subSessionId: null == subSessionId ? _self.subSessionId : subSessionId // ignore: cast_nullable_to_non_nullable
 as String,toolCallId: null == toolCallId ? _self.toolCallId : toolCallId // ignore: cast_nullable_to_non_nullable
 as String,agent: null == agent ? _self.agent : agent // ignore: cast_nullable_to_non_nullable
 as AgentName,model: freezed == model ? _self.model : model // ignore: cast_nullable_to_non_nullable
@@ -5589,10 +5589,10 @@ as String?,
 
 
 class UiEventMessage_SubagentStatusUpdated extends UiEventMessage {
-  const UiEventMessage_SubagentStatusUpdated({required this.subThreadId, required this.status}): super._();
+  const UiEventMessage_SubagentStatusUpdated({required this.subSessionId, required this.status}): super._();
   
 
- final  String subThreadId;
+ final  String subSessionId;
  final  SubagentStatus status;
 
 /// Create a copy of UiEventMessage
@@ -5605,16 +5605,16 @@ $UiEventMessage_SubagentStatusUpdatedCopyWith<UiEventMessage_SubagentStatusUpdat
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEventMessage_SubagentStatusUpdated&&(identical(other.subThreadId, subThreadId) || other.subThreadId == subThreadId)&&(identical(other.status, status) || other.status == status));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is UiEventMessage_SubagentStatusUpdated&&(identical(other.subSessionId, subSessionId) || other.subSessionId == subSessionId)&&(identical(other.status, status) || other.status == status));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,subThreadId,status);
+int get hashCode => Object.hash(runtimeType,subSessionId,status);
 
 @override
 String toString() {
-  return 'UiEventMessage.subagentStatusUpdated(subThreadId: $subThreadId, status: $status)';
+  return 'UiEventMessage.subagentStatusUpdated(subSessionId: $subSessionId, status: $status)';
 }
 
 
@@ -5625,7 +5625,7 @@ abstract mixin class $UiEventMessage_SubagentStatusUpdatedCopyWith<$Res> impleme
   factory $UiEventMessage_SubagentStatusUpdatedCopyWith(UiEventMessage_SubagentStatusUpdated value, $Res Function(UiEventMessage_SubagentStatusUpdated) _then) = _$UiEventMessage_SubagentStatusUpdatedCopyWithImpl;
 @useResult
 $Res call({
- String subThreadId, SubagentStatus status
+ String subSessionId, SubagentStatus status
 });
 
 
@@ -5642,9 +5642,9 @@ class _$UiEventMessage_SubagentStatusUpdatedCopyWithImpl<$Res>
 
 /// Create a copy of UiEventMessage
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') $Res call({Object? subThreadId = null,Object? status = null,}) {
+@pragma('vm:prefer-inline') $Res call({Object? subSessionId = null,Object? status = null,}) {
   return _then(UiEventMessage_SubagentStatusUpdated(
-subThreadId: null == subThreadId ? _self.subThreadId : subThreadId // ignore: cast_nullable_to_non_nullable
+subSessionId: null == subSessionId ? _self.subSessionId : subSessionId // ignore: cast_nullable_to_non_nullable
 as String,status: null == status ? _self.status : status // ignore: cast_nullable_to_non_nullable
 as SubagentStatus,
   ));

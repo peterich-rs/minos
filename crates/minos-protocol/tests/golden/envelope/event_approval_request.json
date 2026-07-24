@@ -2,7 +2,7 @@
   "kind": "event",
   "v": 1,
   "type": "approval_request",
-  "thread_id": "thr_approval",
+  "session_id": "thr_approval",
   "turn_id": "turn_123",
   "request_id": "req_123",
   "method": "exec_command",

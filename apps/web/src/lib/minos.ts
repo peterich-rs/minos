@@ -1,5 +1,5 @@
 export type DeviceRole = 'browser-admin'
-export type AgentName = 'codex' | 'claude' | 'gemini'
+export type AgentName = 'codex' | 'claude' | 'gemini' | 'opencode' | 'grok'
 export type MessageRole = 'user' | 'assistant' | 'system'
 
 export type AgentStatus =
@@ -9,9 +9,12 @@ export type AgentStatus =
 
 export interface AgentDescriptor {
   name: AgentName
+  display_name: string
   path: string | null
   version: string | null
   status: AgentStatus
+  supports_model_selection: boolean
+  supports_reasoning_effort: boolean
 }
 
 export interface AuthSummary {
@@ -212,44 +215,44 @@ export interface WriteHostSkillConfigResponse {
   effective_enabled: boolean
 }
 
-export interface ThreadEndReason {
+export interface SessionEndReason {
   kind: 'user_stopped' | 'agent_done' | 'timeout' | 'host_disconnected' | 'crashed'
   message?: string
 }
 
-export interface ThreadSummary {
-  thread_id: string
+export interface SessionSummary {
+  session_id: string
   agent: AgentName
   title: string | null
   first_ts_ms: number
   last_ts_ms: number
   message_count: number
   ended_at_ms: number | null
-  end_reason: ThreadEndReason | null
+  end_reason: SessionEndReason | null
 }
 
-export interface ListThreadsResponse {
-  threads: ThreadSummary[]
+export interface ListSessionsResponse {
+  sessions: SessionSummary[]
   next_before_ts_ms?: number | null
 }
 
 export type UiEventMessage =
   | {
-      kind: 'thread_opened'
-      thread_id: string
+      kind: 'session_opened'
+      session_id: string
       agent: AgentName
       title: string | null
       opened_at_ms: number
     }
   | {
       kind: 'thread_title_updated'
-      thread_id: string
+      session_id: string
       title: string
     }
   | {
       kind: 'thread_closed'
-      thread_id: string
-      reason: ThreadEndReason
+      session_id: string
+      reason: SessionEndReason
       closed_at_ms: number
     }
   | {
@@ -308,10 +311,10 @@ export type UiEventMessage =
       payload_json: string
     }
 
-export interface ReadThreadResponse {
+export interface ReadSessionResponse {
   ui_events: UiEventMessage[]
   next_seq?: number | null
-  thread_end_reason?: ThreadEndReason | null
+  session_end_reason?: SessionEndReason | null
 }
 
 interface FormalAgentSessionSummary {
@@ -326,7 +329,7 @@ interface FormalAgentSessionSummary {
   title?: string | null
   last_activity_at_ms: number
   message_count: number
-  end_reason?: ThreadEndReason | null
+  end_reason?: SessionEndReason | null
 }
 
 interface AgentSessionsResponse {
@@ -362,7 +365,7 @@ export interface StartAgentResponse {
 }
 
 export interface UiEventFrame {
-  thread_id: string
+  session_id: string
   seq: number
   ui: UiEventMessage
   ts_ms: number
@@ -914,7 +917,7 @@ export async function listThreads(
   deviceId: string,
   accessToken: string,
   options: { limit?: number; beforeTsMs?: number | null; agent?: AgentName | null } = {},
-): Promise<ListThreadsResponse> {
+): Promise<ListSessionsResponse> {
   const body = await requestAuthedQuery<AgentSessionsResponse>(
     '/v1/agent-sessions/list',
     deviceId,
@@ -924,9 +927,9 @@ export async function listThreads(
       before_started_at_ms: options.beforeTsMs ?? undefined,
     },
   )
-  const threads = body.sessions.map(threadSummaryFromFormalSession)
+  const sessions = body.sessions.map(threadSummaryFromFormalSession)
   return {
-    threads: options.agent ? threads.filter((thread) => thread.agent === options.agent) : threads,
+    sessions: options.agent ? sessions.filter((thread) => thread.agent === options.agent) : sessions,
     next_before_ts_ms: body.next_before_started_at_ms,
   }
 }
@@ -934,14 +937,14 @@ export async function listThreads(
 export async function readThread(
   deviceId: string,
   accessToken: string,
-  threadId: string,
-): Promise<ReadThreadResponse> {
+  sessionId: string,
+): Promise<ReadSessionResponse> {
   const turnsPage = await requestAuthedQuery<ReadAgentSessionTurnsResponse>(
     '/v1/agent-sessions/read-turns',
     deviceId,
     accessToken,
     {
-      session_id: threadId,
+      session_id: sessionId,
       limit: 200,
     },
   )
@@ -963,13 +966,13 @@ export async function readThread(
     next_seq: turnsPage.turns.length >= 200
       ? turnsPage.turns[turnsPage.turns.length - 1]?.turn_seq
       : null,
-    thread_end_reason: null,
+    session_end_reason: null,
   }
 }
 
-function threadSummaryFromFormalSession(session: FormalAgentSessionSummary): ThreadSummary {
+function threadSummaryFromFormalSession(session: FormalAgentSessionSummary): SessionSummary {
   return {
-    thread_id: session.session_id,
+    session_id: session.session_id,
     agent: session.agent ?? agentNameFromSessionAgentId(session.agent_id) ?? 'codex',
     title: session.title ?? null,
     first_ts_ms: session.started_at_ms,

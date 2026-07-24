@@ -237,7 +237,7 @@ class _DiscordProjectsPaneState extends ConsumerState<_DiscordProjectsPane> {
     await Future.wait(<Future<void>>[
       for (final project in projects)
         ref
-            .read(projectThreadsProvider(project.projectId).notifier)
+            .read(projectSessionsProvider(project.projectId).notifier)
             .refresh()
             .catchError((_) {}),
     ]);
@@ -288,7 +288,7 @@ class _DiscordProjectsPaneState extends ConsumerState<_DiscordProjectsPane> {
           .sendUserMessage(sessionId: '', text: prompt);
       ref.read(selectedProjectProvider.notifier).select(project.projectId);
       ref.invalidate(projectListProvider);
-      ref.invalidate(projectThreadsProvider(project.projectId));
+      ref.invalidate(projectSessionsProvider(project.projectId));
       if (!context.mounted) return;
       unawaited(
         context.push(
@@ -323,7 +323,7 @@ class _ProjectThreadGroup extends ConsumerWidget {
     final theme = Theme.of(context);
     final threadsAsync = collapsed
         ? null
-        : ref.watch(projectThreadsProvider(project.projectId));
+        : ref.watch(projectSessionsProvider(project.projectId));
 
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -354,15 +354,15 @@ class _ProjectThreadGroup extends ConsumerWidget {
                     error: error,
                     onRetry: () => ref
                         .read(
-                          projectThreadsProvider(project.projectId).notifier,
+                          projectSessionsProvider(project.projectId).notifier,
                         )
                         .refresh(),
                   ),
-                  data: (threads) => threads.isEmpty
+                  data: (sessions) => sessions.isEmpty
                       ? _EmptyProjectThreads(onNewThread: onNewThread)
                       : _ProjectThreadList(
                           projectId: project.projectId,
-                          threads: threads,
+                          sessions: sessions,
                         ),
                 ),
             ],
@@ -479,19 +479,19 @@ class _ProjectAvatar extends StatelessWidget {
 }
 
 class _ProjectThreadList extends StatelessWidget {
-  const _ProjectThreadList({required this.projectId, required this.threads});
+  const _ProjectThreadList({required this.projectId, required this.sessions});
 
   final String projectId;
-  final List<ThreadSummary> threads;
+  final List<SessionSummary> sessions;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: <Widget>[
         const _ThreadCategoryHeader(),
-        for (var index = 0; index < threads.length; index++) ...<Widget>[
-          _ProjectThreadTile(projectId: projectId, thread: threads[index]),
-          if (index < threads.length - 1) const _RowDivider(indent: 64),
+        for (var index = 0; index < sessions.length; index++) ...<Widget>[
+          _ProjectThreadTile(projectId: projectId, thread: sessions[index]),
+          if (index < sessions.length - 1) const _RowDivider(indent: 64),
         ],
       ],
     );
@@ -532,7 +532,7 @@ class _ProjectThreadTile extends ConsumerWidget {
   const _ProjectThreadTile({required this.projectId, required this.thread});
 
   final String projectId;
-  final ThreadSummary thread;
+  final SessionSummary thread;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -545,7 +545,7 @@ class _ProjectThreadTile extends ConsumerWidget {
           ref.read(selectedProjectProvider.notifier).select(projectId);
           unawaited(
             context.push(
-              '/thread/${thread.threadId}',
+              '/thread/${thread.sessionId}',
               extra: ThreadRouteExtra(agent: thread.agent),
             ),
           );
@@ -765,7 +765,7 @@ class _ProjectThreadSkeletonList extends StatelessWidget {
   }
 }
 
-String _threadTitle(ThreadSummary thread) {
+String _threadTitle(SessionSummary thread) {
   final title = thread.title?.trim();
   if (title != null && title.isNotEmpty) return title;
   final ts = DateTime.fromMillisecondsSinceEpoch(thread.lastTsMs.toInt());
@@ -2108,6 +2108,16 @@ class _AgentAvatar extends StatelessWidget {
         isDark ? const Color(0xFF164E63) : const Color(0xFFCFFAFE),
         isDark ? const Color(0xFF22D3EE) : const Color(0xFF0891B2),
       ),
+      AgentName.opencode => (
+        'O',
+        isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+        isDark ? const Color(0xFF94A3B8) : const Color(0xFF475569),
+      ),
+      AgentName.grok => (
+        'X',
+        isDark ? const Color(0xFF78350F) : const Color(0xFFFEF3C7),
+        isDark ? const Color(0xFFFBBF24) : const Color(0xFFB45309),
+      ),
     };
     return Container(
       width: size,
@@ -2249,6 +2259,8 @@ String _agentLabel(AgentName agent) {
     AgentName.codex => 'Codex',
     AgentName.claude => 'Claude',
     AgentName.gemini => 'Gemini',
+    AgentName.opencode => 'OpenCode',
+    AgentName.grok => 'Grok',
   };
 }
 

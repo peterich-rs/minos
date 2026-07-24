@@ -32,7 +32,7 @@ pub const MINOS_TEAMWORK_SKILL: SkillRef = SkillRef {
 pub struct ToolCallContext {
     pub conversation_id: String,
     pub source_agent: Option<AgentName>,
-    pub source_thread_id: Option<String>,
+    pub source_session_id: Option<String>,
 }
 
 pub struct TeamworkMcpToolCatalog {
@@ -149,7 +149,7 @@ mod tests {
                 ToolCallContext {
                     conversation_id: "conversation-main".into(),
                     source_agent: None,
-                    source_thread_id: None,
+                    source_session_id: None,
                 },
                 "delegate_to_agent",
                 json!({"target_agent": "codex", "prompt": "help"}),

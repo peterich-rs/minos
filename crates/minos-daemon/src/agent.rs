@@ -4,35 +4,36 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use minos_agent_runtime::{
     AgentLaunchMode, AgentManager, AgentRuntimeConfig, InstanceCaps, ManagerEvent, RawIngest,
-    SessionPolicies, ThreadState,
+    SessionPolicies, SessionState,
 };
 use minos_chat_store::mcp_socket::{SocketRequest, SocketResponse};
 use minos_codex_protocol::SkillsListResponse as CodexSkillsListResponse;
 use minos_domain::{AgentName, MinosError};
 use minos_protocol::{
     AgentDispatchRequest, AgentDispatchResponse, AgentLaunchMode as ProtoAgentLaunchMode,
-    ApprovalDecisionRequest, CloseReason as ProtoCloseReason, CloseThreadRequest, GetThreadParams,
-    GetThreadResponse, HostSkillError, HostSkillSummary, HostSkillsEntry, InterruptThreadRequest,
-    ListHostSkillsRequest, ListHostSkillsResponse, ListHostWorkspacesRequest,
-    ListHostWorkspacesResponse, ListThreadsParams, ListThreadsResponse, LocalConversationEvent,
-    LocalIngestFrame, LocalManagerEvent, PauseReason as ProtoPauseReason, SendUserMessageRequest,
-    StartAgentRequest, StartAgentResponse, ThreadState as ProtoThreadState, ThreadSummary,
-    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
+    ApprovalDecisionRequest, CloseReason as ProtoCloseReason, CloseSessionRequest,
+    GetSessionParams, GetSessionResponse, HostSkillError, HostSkillSummary, HostSkillsEntry,
+    InterruptSessionRequest, ListHostSkillsRequest, ListHostSkillsResponse,
+    ListHostWorkspacesRequest, ListHostWorkspacesResponse, ListSessionsParams,
+    ListSessionsResponse, LocalConversationEvent, LocalIngestFrame, LocalManagerEvent,
+    PauseReason as ProtoPauseReason, SendUserMessageRequest, SessionState as ProtoSessionState,
+    SessionSummary, StartAgentRequest, StartAgentResponse, WriteHostSkillConfigRequest,
+    WriteHostSkillConfigResponse,
 };
-use minos_ui_protocol::ThreadEndReason;
+use minos_ui_protocol::SessionEndReason;
 use tokio::sync::{broadcast, watch};
 
 use crate::store::event_writer::{provider_session_id_from_ingest, EventWriter};
-use crate::store::{ChatMessageRow, ConversationRow, EventRow, LocalStore, ThreadRow};
+use crate::store::{ChatMessageRow, ConversationRow, EventRow, LocalStore, SessionRow};
 use crate::subscription::{AgentStateObserver, Subscription};
 use crate::{ingest_coalescer::IngestCoalescer, ingest_sync::IngestSyncHandle};
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AgentThreadSnapshot {
-    pub thread_id: String,
+pub struct AgentSessionSnapshot {
+    pub session_id: String,
     pub workspace_root: String,
-    pub state: ThreadState,
+    pub state: SessionState,
 }
 
 /// `AgentGlue` is the daemon-side wrapper that:
@@ -48,16 +49,16 @@ pub struct AgentThreadSnapshot {
 pub struct AgentGlue {
     pub manager: Arc<AgentManager>,
     pub writer: Arc<EventWriter>,
-    /// Local SQLite store. Owned so `start_agent` / `close_thread` can keep
-    /// the parent `threads` / `workspaces` rows in sync with the in-memory
+    /// Local SQLite store. Owned so `start_agent` / `close_session` can keep
+    /// the parent `sessions` / `workspaces` rows in sync with the in-memory
     /// `AgentManager`. Without these the events FK in §8.2 fails the
     /// moment codex emits its first ingest frame.
     store: Arc<LocalStore>,
-    /// Watch channel mirroring the most recently observed thread state. The
+    /// Watch channel mirroring the most recently observed session state. The
     /// legacy FFI surface exposes a single `state_stream()` shaped like the
     /// pre-Phase-C `AgentRuntime`. Multi-thread fan-out lands in C17.
-    state_tx: Arc<watch::Sender<ThreadState>>,
-    state_rx: watch::Receiver<ThreadState>,
+    state_tx: Arc<watch::Sender<SessionState>>,
+    state_rx: watch::Receiver<SessionState>,
     persisted_ingest_tx: broadcast::Sender<LocalIngestFrame>,
     local_manager_event_tx: broadcast::Sender<LocalManagerEvent>,
     local_conversation_event_tx: broadcast::Sender<LocalConversationEvent>,
@@ -141,7 +142,7 @@ impl AgentGlue {
         let completion_for_ingest = completion.clone();
         tokio::spawn(async move {
             while let Some(ingest) = rx.recv().await {
-                let thread_id = ingest.thread_id.clone();
+                let session_id = ingest.session_id.clone();
                 let agent = ingest.agent;
                 let ts_ms = ingest.ts_ms;
                 let payload_bytes = ingest.body_len();
@@ -151,7 +152,7 @@ impl AgentGlue {
                         tracing::error!(
                             target: "minos_daemon::agent",
                             error = %error,
-                            thread_id = %thread_id,
+                            session_id = %session_id,
                             "failed to coalesce ingest event; event dropped",
                         );
                         continue;
@@ -169,10 +170,10 @@ impl AgentGlue {
                         let seq = committed.seq;
                         let ui_events = committed.projection;
                         completion_for_ingest
-                            .on_ingest_frame(&thread_id, agent, &ui_events)
+                            .on_ingest_frame(&session_id, agent, &ui_events)
                             .await;
                         let _ = persisted_ingest_tx_clone.send(LocalIngestFrame {
-                            thread_id: thread_id.clone(),
+                            session_id: session_id.clone(),
                             seq,
                             agent,
                             ui_events,
@@ -180,7 +181,7 @@ impl AgentGlue {
                         });
                         tracing::info!(
                             target: "minos_daemon::agent",
-                            thread_id = %thread_id,
+                            session_id = %session_id,
                             seq,
                             bytes = payload_bytes,
                             "ingest event committed",
@@ -189,14 +190,14 @@ impl AgentGlue {
                     Err(e) => tracing::error!(
                         target: "minos_daemon::agent",
                         error = %e,
-                        thread_id = %thread_id,
+                        session_id = %session_id,
                         "EventWriter.write_chunk failed; event not persisted locally",
                     ),
                 }
             }
         });
 
-        let (state_tx, state_rx) = watch::channel(ThreadState::Idle);
+        let (state_tx, state_rx) = watch::channel(SessionState::Idle);
         let state_tx = Arc::new(state_tx);
         let mut manager_events = manager.manager_event_stream();
         let store_clone = store.clone();
@@ -209,11 +210,11 @@ impl AgentGlue {
                     Ok(event) => {
                         let _ = local_manager_event_tx_clone.send(local_event_from_manager(&event));
                         match event {
-                            ManagerEvent::ThreadAdded {
-                                thread_id,
+                            ManagerEvent::SessionAdded {
+                                session_id,
                                 workspace,
                                 agent,
-                                parent_thread_id,
+                                parent_session_id,
                             } => {
                                 let cwd = workspace.display().to_string();
                                 let now_ms = current_unix_ms();
@@ -221,17 +222,17 @@ impl AgentGlue {
                                     tracing::warn!(
                                         target: "minos_daemon::agent",
                                         error = %e,
-                                        thread_id = %thread_id,
+                                        session_id = %session_id,
                                         agent = %agent_label(agent),
                                         workspace = %cwd,
-                                        "store.upsert_workspace failed for ThreadAdded",
+                                        "store.upsert_workspace failed for SessionAdded",
                                     );
                                 }
-                                if let Some(parent_thread_id) = parent_thread_id {
+                                if let Some(parent_session_id) = parent_session_id {
                                     persist_subagent_thread_parent_row(
                                         &store_clone,
-                                        &thread_id,
-                                        &parent_thread_id,
+                                        &session_id,
+                                        &parent_session_id,
                                         &cwd,
                                         agent,
                                         now_ms,
@@ -239,29 +240,48 @@ impl AgentGlue {
                                     .await;
                                 }
                             }
-                            ManagerEvent::ThreadStateChanged {
-                                thread_id,
+                            ManagerEvent::SessionStateChanged {
+                                session_id,
                                 new,
                                 at_ms,
                                 ..
                             } => {
-                                persist_runtime_state_inner(&store_clone, &thread_id, &new, at_ms)
+                                // DaemonRestart is owned by AgentGlue::shutdown's synchronous
+                                // suspend_thread_for_daemon_restart (idle vs suspended +
+                                // needs_continue). Persisting Suspended{DaemonRestart} here races
+                                // that path and rebrands finished turns as Paused.
+                                let skip_persist = matches!(
+                                    &new,
+                                    SessionState::Suspended {
+                                        reason: minos_agent_runtime::PauseReason::DaemonRestart
+                                    }
+                                );
+                                if !skip_persist {
+                                    persist_runtime_state_inner(
+                                        &store_clone,
+                                        &session_id,
+                                        &new,
+                                        at_ms,
+                                    )
                                     .await;
-                                completion_for_state.on_thread_state(&thread_id, &new).await;
+                                }
+                                completion_for_state
+                                    .on_session_state(&session_id, &new)
+                                    .await;
                                 let _ = state_tx_clone.send(new);
                             }
-                            ManagerEvent::ThreadClosed { thread_id, reason } => {
-                                let state = ThreadState::Closed { reason };
+                            ManagerEvent::SessionClosed { session_id, reason } => {
+                                let state = SessionState::Closed { reason };
                                 let at_ms = current_unix_ms();
                                 persist_runtime_state_inner(
                                     &store_clone,
-                                    &thread_id,
+                                    &session_id,
                                     &state,
                                     at_ms,
                                 )
                                 .await;
                                 completion_for_state
-                                    .on_thread_state(&thread_id, &state)
+                                    .on_session_state(&session_id, &state)
                                     .await;
                                 let _ = state_tx_clone.send(state);
                             }
@@ -270,12 +290,12 @@ impl AgentGlue {
                                 reason,
                                 ..
                             } => {
-                                let state = ThreadState::Suspended { reason };
+                                let state = SessionState::Suspended { reason };
                                 let at_ms = current_unix_ms();
-                                for thread_id in affected_threads {
+                                for session_id in affected_threads {
                                     persist_runtime_state_inner(
                                         &store_clone,
-                                        &thread_id,
+                                        &session_id,
                                         &state,
                                         at_ms,
                                     )
@@ -319,17 +339,17 @@ impl AgentGlue {
         &self.store
     }
 
-    pub async fn read_thread_raw_history(
+    pub async fn read_session_raw_history(
         &self,
-        thread_id: &str,
+        session_id: &str,
         from_seq: Option<u64>,
         limit: u32,
     ) -> Result<(Vec<minos_protocol::LocalIngestFrame>, Option<u64>), MinosError> {
         let row = self
             .store
-            .get_thread(thread_id)
+            .get_session(session_id)
             .await
-            .map_err(|e| map_store_error("read_thread_raw_history", e))?
+            .map_err(|e| map_store_error("read_session_raw_history", e))?
             .ok_or(MinosError::AgentSessionIdMismatch)?;
         let max_seq = u64::try_from(row.last_seq.max(0)).unwrap_or(0);
         let start = from_seq.unwrap_or(0).saturating_add(1);
@@ -340,21 +360,21 @@ impl AgentGlue {
             .min(max_seq);
         let rows = self
             .store
-            .read_events(thread_id, start, end)
+            .read_events(session_id, start, end)
             .await
-            .map_err(|e| map_store_error("read_thread_raw_history", e))?;
+            .map_err(|e| map_store_error("read_session_raw_history", e))?;
         let agent = parse_agent_label(&row.agent)?;
         let mut events = Vec::with_capacity(rows.len());
         for event in rows {
             let ui_events: Vec<minos_ui_protocol::UiEventMessage> =
                 serde_json::from_slice(&event.projection_json).map_err(|e| {
                     MinosError::CodexProtocolError {
-                        method: "read_thread_raw_history".into(),
+                        method: "read_session_raw_history".into(),
                         message: e.to_string(),
                     }
                 })?;
             events.push(minos_protocol::LocalIngestFrame {
-                thread_id: thread_id.to_owned(),
+                session_id: session_id.to_owned(),
                 seq: u64::try_from(event.seq.max(0)).unwrap_or(0),
                 agent,
                 ui_events,
@@ -381,14 +401,23 @@ impl AgentGlue {
         // dir for clients (mobile pre-Phase-D) that have not been updated to
         // pick a directory yet.
         let workspace = resolve_workspace(&self.default_workspace, &req.workspace);
+        let launch = self
+            .resolve_launch_options(
+                req.agent,
+                req.profile_id.as_deref(),
+                req.model.clone(),
+                req.reasoning_effort.clone(),
+                req.instructions.clone(),
+            )
+            .await?;
         let outcome = self
             .manager
-            .start_agent(req.agent, workspace)
+            .start_agent_with_policies(req.agent, workspace, None, launch)
             .await
             .map_err(map_anyhow)?;
         let cwd = outcome.cwd.display().to_string();
         self.persist_thread_parent_rows(
-            &outcome.thread_id,
+            &outcome.session_id,
             &cwd,
             req.agent,
             outcome.provider_session_id.as_deref(),
@@ -396,12 +425,19 @@ impl AgentGlue {
         .await;
 
         // Legacy single-state mirror: emit Idle (not Running) because the
-        // multi-thread manager keeps per-thread state internally; the
+        // multi-thread manager keeps per-session state internally; the
         // single-channel mirror just signals "something is alive". The mobile
-        // / Swift surfaces will switch to per-thread state streams in C17/D.
-        let _ = self.state_tx.send(ThreadState::Idle);
+        // / Swift surfaces will switch to per-session state streams in C17/D.
+        let _ = self.state_tx.send(SessionState::Idle);
+        tracing::info!(
+            target: "minos_daemon::agent",
+            profile_id = req.profile_id.as_deref().unwrap_or(""),
+            agent = %agent_label(req.agent),
+            session_id = %outcome.session_id,
+            "agent session started",
+        );
         Ok(StartAgentResponse {
-            session_id: outcome.thread_id,
+            session_id: outcome.session_id,
             cwd,
         })
     }
@@ -414,9 +450,24 @@ impl AgentGlue {
     ) -> Result<StartAgentResponse, MinosError> {
         let _mode = req.mode.map_or(AgentLaunchMode::Server, runtime_mode);
         let workspace = resolve_workspace(&self.default_workspace, &req.workspace);
+        let launch = self
+            .resolve_launch_options(
+                req.agent,
+                req.profile_id.as_deref(),
+                req.model.clone(),
+                req.reasoning_effort.clone(),
+                req.instructions.clone(),
+            )
+            .await?;
         let outcome = self
             .manager
-            .start_agent_with_thread_id(req.agent, workspace, session_id.clone(), None)
+            .start_agent_with_session_id_and_options(
+                req.agent,
+                workspace,
+                session_id.clone(),
+                None,
+                launch,
+            )
             .await
             .map_err(map_anyhow)?;
         let cwd = outcome.cwd.display().to_string();
@@ -439,8 +490,42 @@ impl AgentGlue {
                 .map_err(map_anyhow)?;
         }
 
-        let _ = self.state_tx.send(ThreadState::Idle);
+        let _ = self.state_tx.send(SessionState::Idle);
+        tracing::info!(
+            target: "minos_daemon::agent",
+            profile_id = req.profile_id.as_deref().unwrap_or(""),
+            agent = %agent_label(req.agent),
+            session_id = %session_id,
+            "agent session started with fixed session_id",
+        );
         Ok(StartAgentResponse { session_id, cwd })
+    }
+
+    /// Resolve create-time launch options from optional profile + explicit fields.
+    ///
+    /// Precedence: explicit request fields > profile fields > None.
+    /// When `profile_id` is set, `agent` must equal `profile.runtime_agent`.
+    pub async fn resolve_launch_options(
+        &self,
+        agent: AgentName,
+        profile_id: Option<&str>,
+        model: Option<String>,
+        reasoning_effort: Option<String>,
+        instructions: Option<String>,
+    ) -> Result<Option<minos_agent_runtime::AgentLaunchOptions>, MinosError> {
+        resolve_launch_options(
+            &self.store,
+            agent,
+            profile_id,
+            model,
+            reasoning_effort,
+            instructions,
+        )
+        .await
+        .map_err(|message| MinosError::CodexProtocolError {
+            method: "resolve_launch_options".into(),
+            message,
+        })
     }
 
     pub async fn send_user_message(&self, req: SendUserMessageRequest) -> Result<(), MinosError> {
@@ -450,7 +535,7 @@ impl AgentGlue {
             tracing::warn!(
                 target: "minos_daemon::agent",
                 error = %e,
-                thread_id = %req.session_id,
+                session_id = %req.session_id,
                 "take_needs_continue failed before send_user_message",
             );
         }
@@ -465,7 +550,7 @@ impl AgentGlue {
 
     pub async fn resolve_approval(&self, req: ApprovalDecisionRequest) -> Result<(), MinosError> {
         self.manager
-            .resolve_approval(&req.request_id, &req.thread_id, req.decision)
+            .resolve_approval(&req.request_id, &req.session_id, req.decision)
             .await
             .map_err(map_anyhow)
     }
@@ -475,7 +560,7 @@ impl AgentGlue {
         req: minos_protocol::RespondOpencodePermissionRequest,
     ) -> Result<(), MinosError> {
         self.manager
-            .respond_opencode_permission(&req.thread_id, &req.permission_id, &req.response)
+            .respond_opencode_permission(&req.session_id, &req.permission_id, &req.response)
             .await
             .map_err(map_anyhow)
     }
@@ -485,7 +570,7 @@ impl AgentGlue {
         req: minos_protocol::RespondOpencodeQuestionRequest,
     ) -> Result<(), MinosError> {
         self.manager
-            .respond_opencode_question(&req.thread_id, &req.question_id, req.answers)
+            .respond_opencode_question(&req.session_id, &req.question_id, req.answers)
             .await
             .map_err(map_anyhow)
     }
@@ -503,6 +588,8 @@ impl AgentGlue {
             sandbox_policy,
             conversation_id: _,
             origin_message_id: _,
+            model,
+            reasoning_effort,
         } = req;
 
         if let Some(existing_session_id) = session_id.as_deref() {
@@ -517,15 +604,17 @@ impl AgentGlue {
                 sandbox_policy,
             })
         };
+        let launch = minos_agent_runtime::AgentLaunchOptions::from_parts(model, reasoning_effort);
 
         let outcome = self
             .manager
-            .dispatch_message(
+            .dispatch_message_with_options(
                 agent,
                 resolve_workspace(&self.default_workspace, &workspace),
                 session_id,
                 text,
                 policies,
+                launch,
             )
             .await
             .map_err(map_anyhow)?;
@@ -545,14 +634,14 @@ impl AgentGlue {
 
     async fn persist_thread_parent_rows(
         &self,
-        thread_id: &str,
+        session_id: &str,
         cwd: &str,
         agent: minos_domain::AgentName,
         provider_session_id: Option<&str>,
     ) {
         persist_thread_parent_rows_inner(
             &self.store,
-            thread_id,
+            session_id,
             cwd,
             agent,
             provider_session_id,
@@ -563,7 +652,7 @@ impl AgentGlue {
 
     async fn persist_thread_parent_rows_in_conversation(
         &self,
-        thread_id: &str,
+        session_id: &str,
         conversation_id: &str,
         cwd: &str,
         agent: minos_domain::AgentName,
@@ -571,7 +660,7 @@ impl AgentGlue {
     ) {
         persist_thread_parent_rows_inner(
             &self.store,
-            thread_id,
+            session_id,
             cwd,
             agent,
             provider_session_id,
@@ -580,28 +669,28 @@ impl AgentGlue {
         .await;
     }
 
-    async fn persist_current_provider_session_id(&self, thread_id: &str) {
-        let provider_session_id = self.manager.thread_provider_session_id(thread_id).await;
+    async fn persist_current_provider_session_id(&self, session_id: &str) {
+        let provider_session_id = self.manager.session_provider_session_id(session_id).await;
         if provider_session_id.is_none() {
             return;
         }
         if let Err(e) = self
             .store
-            .update_thread_provider_session_id(thread_id, provider_session_id.as_deref())
+            .update_session_provider_session_id(session_id, provider_session_id.as_deref())
             .await
         {
             tracing::warn!(
                 target: "minos_daemon::agent",
                 error = %e,
-                thread_id,
-                "store.update_thread_provider_session_id failed",
+                session_id,
+                "store.update_session_provider_session_id failed",
             );
         }
     }
 
     async fn resolve_provider_session_id(
         &self,
-        row: &ThreadRow,
+        row: &SessionRow,
         agent: minos_domain::AgentName,
     ) -> Result<Option<String>, MinosError> {
         if agent == minos_domain::AgentName::Codex {
@@ -611,7 +700,7 @@ impl AgentGlue {
         if let Some(session_id) = row
             .provider_session_id
             .as_deref()
-            .filter(|session_id| *session_id != row.thread_id)
+            .filter(|session_id| *session_id != row.session_id)
         {
             return Ok(Some(session_id.to_string()));
         }
@@ -622,7 +711,7 @@ impl AgentGlue {
 
     async fn latest_provider_session_id_from_events(
         &self,
-        row: &ThreadRow,
+        row: &SessionRow,
         agent: minos_domain::AgentName,
     ) -> Result<Option<String>, MinosError> {
         let max_seq = u64::try_from(row.last_seq.max(0)).unwrap_or(0);
@@ -632,22 +721,22 @@ impl AgentGlue {
 
         let rows = self
             .store
-            .read_events(&row.thread_id, 1, max_seq)
+            .read_events(&row.session_id, 1, max_seq)
             .await
             .map_err(|e| map_store_error("latest_provider_session_id_from_events", e))?;
         Ok(rows
             .iter()
             .rev()
-            .find_map(|event| provider_session_id_from_event(&row.thread_id, agent, event)))
+            .find_map(|event| provider_session_id_from_event(&row.session_id, agent, event)))
     }
 
-    pub async fn ensure_thread_registered(&self, thread_id: &str) -> Result<(), MinosError> {
-        if self.manager.has_thread(thread_id).await {
+    pub async fn ensure_thread_registered(&self, session_id: &str) -> Result<(), MinosError> {
+        if self.manager.has_thread(session_id).await {
             return Ok(());
         }
         let row = self
             .store
-            .get_thread(thread_id)
+            .get_session(session_id)
             .await
             .map_err(|e| map_store_error("ensure_thread_registered", e))?
             .ok_or(MinosError::AgentSessionIdMismatch)?;
@@ -656,11 +745,11 @@ impl AgentGlue {
         let provider_session_id = self.resolve_provider_session_id(&row, agent).await?;
         self.manager
             .register_persisted_thread(
-                row.thread_id.clone(),
+                row.session_id.clone(),
                 PathBuf::from(&row.workspace_root),
                 agent,
                 provider_session_id,
-                row.parent_thread_id.clone(),
+                row.parent_session_id.clone(),
                 Some(row.conversation_id.clone()),
                 state,
                 u64::try_from(row.last_seq.max(0)).unwrap_or(u64::MAX),
@@ -672,20 +761,20 @@ impl AgentGlue {
     /// Register + provider reattach. When `auto_continue` is true and the
     /// store still has `needs_continue`, inject CONTINUE once (open path).
     /// Send paths must pass `auto_continue = false` so user text wins.
-    pub async fn resume_thread(
+    pub async fn resume_session(
         &self,
-        thread_id: &str,
+        session_id: &str,
         auto_continue: bool,
     ) -> Result<StartAgentResponse, MinosError> {
         let row = self
             .store
-            .get_thread(thread_id)
+            .get_session(session_id)
             .await
-            .map_err(|e| map_store_error("resume_thread", e))?
+            .map_err(|e| map_store_error("resume_session", e))?
             .ok_or(MinosError::AgentSessionIdMismatch)?;
         if matches!(
             row_state_to_runtime(&row)?,
-            minos_agent_runtime::ThreadState::Closed { .. }
+            minos_agent_runtime::SessionState::Closed { .. }
         ) {
             return Err(MinosError::AgentSessionIdMismatch);
         }
@@ -694,22 +783,22 @@ impl AgentGlue {
         // Register as Suspended when DB says so so reattach can run; live
         // Idle/Running rows also register with their persisted state.
         let register_state = match row_state_to_runtime(&row)? {
-            minos_agent_runtime::ThreadState::Closed { reason } => {
-                minos_agent_runtime::ThreadState::Closed { reason }
+            minos_agent_runtime::SessionState::Closed { reason } => {
+                minos_agent_runtime::SessionState::Closed { reason }
             }
             // Prefer Suspended for rehydrate so reattach path is used even if
             // status was idle in an older partial write (defensive).
             other
                 if matches!(
                     other,
-                    minos_agent_runtime::ThreadState::Idle
-                        | minos_agent_runtime::ThreadState::Running { .. }
-                        | minos_agent_runtime::ThreadState::Starting
-                        | minos_agent_runtime::ThreadState::Resuming
-                ) && !self.manager.has_thread(thread_id).await =>
+                    minos_agent_runtime::SessionState::Idle
+                        | minos_agent_runtime::SessionState::Running { .. }
+                        | minos_agent_runtime::SessionState::Starting
+                        | minos_agent_runtime::SessionState::Resuming
+                ) && !self.manager.has_thread(session_id).await =>
             {
                 // Not live yet after daemon restart — treat as suspended rehydrate.
-                minos_agent_runtime::ThreadState::Suspended {
+                minos_agent_runtime::SessionState::Suspended {
                     reason: minos_agent_runtime::PauseReason::DaemonRestart,
                 }
             }
@@ -717,11 +806,11 @@ impl AgentGlue {
         };
         self.manager
             .register_persisted_thread(
-                row.thread_id.clone(),
+                row.session_id.clone(),
                 PathBuf::from(&row.workspace_root),
                 agent,
                 provider_session_id,
-                row.parent_thread_id.clone(),
+                row.parent_session_id.clone(),
                 Some(row.conversation_id.clone()),
                 register_state,
                 u64::try_from(row.last_seq.max(0)).unwrap_or(u64::MAX),
@@ -732,11 +821,11 @@ impl AgentGlue {
         // Idle/Running already live → no-op. Suspended → provider reattach → Idle.
         // Provider spawn may fail (missing CLI / no fake server in unit tests);
         // keep the row registered so a later send can re-try reattach.
-        if let Err(e) = self.manager.reattach_suspended_thread(thread_id).await {
+        if let Err(e) = self.manager.reattach_suspended_thread(session_id).await {
             tracing::warn!(
                 target: "minos_daemon::agent",
                 error = %e,
-                thread_id = %thread_id,
+                session_id = %session_id,
                 auto_continue,
                 "reattach_suspended_thread failed; thread registered, reattach deferred",
             );
@@ -747,27 +836,27 @@ impl AgentGlue {
         }
 
         if auto_continue {
-            match self.store.take_needs_continue(thread_id).await {
+            match self.store.take_needs_continue(session_id).await {
                 Ok(true) => {
-                    if let Err(e) = self.manager.inject_continue_prompt(thread_id).await {
+                    if let Err(e) = self.manager.inject_continue_prompt(session_id).await {
                         // Restore flag so a later open/send can retry.
-                        let _ = self.store.set_needs_continue(thread_id, true).await;
+                        let _ = self.store.set_needs_continue(session_id, true).await;
                         tracing::warn!(
                             target: "minos_daemon::agent",
                             error = %e,
-                            thread_id = %thread_id,
+                            session_id = %session_id,
                             "inject_continue_prompt failed; needs_continue restored",
                         );
                         return Err(map_anyhow(e));
                     }
-                    self.persist_current_provider_session_id(thread_id).await;
+                    self.persist_current_provider_session_id(session_id).await;
                 }
                 Ok(false) => {}
                 Err(e) => {
                     tracing::warn!(
                         target: "minos_daemon::agent",
                         error = %e,
-                        thread_id = %thread_id,
+                        session_id = %session_id,
                         "take_needs_continue failed during resume",
                     );
                 }
@@ -775,7 +864,7 @@ impl AgentGlue {
         }
 
         Ok(StartAgentResponse {
-            session_id: row.thread_id,
+            session_id: row.session_id,
             cwd: row.workspace_root,
         })
     }
@@ -815,124 +904,127 @@ impl AgentGlue {
         })
     }
 
-    pub async fn interrupt_thread(&self, req: InterruptThreadRequest) -> Result<(), MinosError> {
+    pub async fn interrupt_session(&self, req: InterruptSessionRequest) -> Result<(), MinosError> {
         self.manager
-            .interrupt_thread(&req.thread_id)
+            .interrupt_session(&req.session_id)
             .await
             .map_err(map_anyhow)
     }
 
-    pub async fn close_thread(&self, req: CloseThreadRequest) -> Result<(), MinosError> {
+    pub async fn close_session(&self, req: CloseSessionRequest) -> Result<(), MinosError> {
         self.manager
-            .close_thread(&req.thread_id)
+            .close_session(&req.session_id)
             .await
             .map_err(map_anyhow)?;
 
         // Mirror the in-memory transition into the local DB so the next
-        // daemon start sees the thread as `closed` instead of flipping it
+        // daemon start sees the session as `closed` instead of flipping it
         // to `suspended { daemon_restart }` via §8.6 startup recovery.
         // Logged on failure but non-fatal — the manager has already
         // released the thread.
         if let Err(e) = self
             .store
-            .close_thread_row(&req.thread_id, "user_close", current_unix_ms())
+            .close_session_row(&req.session_id, "user_close", current_unix_ms())
             .await
         {
             tracing::warn!(
                 target: "minos_daemon::agent",
                 error = %e,
-                thread_id = %req.thread_id,
-                "store.close_thread_row failed; row will look orphan on next restart",
+                session_id = %req.session_id,
+                "store.close_session_row failed; row will look orphan on next restart",
             );
         }
 
-        let _ = self.state_tx.send(ThreadState::Idle);
+        let _ = self.state_tx.send(SessionState::Idle);
         Ok(())
     }
 
-    pub async fn delete_thread(&self, req: CloseThreadRequest) -> Result<(), MinosError> {
-        if let Err(e) = self.manager.close_thread(&req.thread_id).await {
+    pub async fn delete_session(&self, req: CloseSessionRequest) -> Result<(), MinosError> {
+        if let Err(e) = self.manager.close_session(&req.session_id).await {
             tracing::debug!(
                 target: "minos_daemon::agent",
                 error = %e,
-                thread_id = %req.thread_id,
-                "manager.close_thread skipped during local delete",
+                session_id = %req.session_id,
+                "manager.close_session skipped during local delete",
             );
         }
 
         let deleted = self
             .store
-            .delete_thread(&req.thread_id)
+            .delete_session(&req.session_id)
             .await
-            .map_err(|e| map_store_error("delete_thread", e))?;
+            .map_err(|e| map_store_error("delete_session", e))?;
         if deleted == 0 {
-            return Err(MinosError::ThreadNotFound {
-                thread_id: req.thread_id,
+            return Err(MinosError::SessionNotFound {
+                session_id: req.session_id,
             });
         }
 
-        let _ = self.state_tx.send(ThreadState::Idle);
+        let _ = self.state_tx.send(SessionState::Idle);
         Ok(())
     }
 
-    pub async fn list_threads(
+    pub async fn list_sessions(
         &self,
-        req: ListThreadsParams,
-    ) -> Result<ListThreadsResponse, MinosError> {
+        req: ListSessionsParams,
+    ) -> Result<ListSessionsResponse, MinosError> {
         let agent_filter = req.agent.map(agent_label);
-        let threads = self
+        let sessions = self
             .store
-            .list_threads(req.before_ts_ms, Some(req.limit), agent_filter)
+            .list_sessions(req.before_ts_ms, Some(req.limit), agent_filter)
             .await
-            .map_err(|e| map_store_error("list_threads", e))?
+            .map_err(|e| map_store_error("list_sessions", e))?
             .into_iter()
-            .map(thread_summary_from_row)
+            .map(session_summary_from_row)
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(ListThreadsResponse {
-            threads,
+        Ok(ListSessionsResponse {
+            sessions,
             next_before_ts_ms: None,
         })
     }
 
-    pub async fn get_thread(&self, req: GetThreadParams) -> Result<GetThreadResponse, MinosError> {
+    pub async fn get_session(
+        &self,
+        req: GetSessionParams,
+    ) -> Result<GetSessionResponse, MinosError> {
         let row = self
             .store
-            .get_thread(&req.thread_id)
+            .get_session(&req.session_id)
             .await
-            .map_err(|e| map_store_error("get_thread", e))?
+            .map_err(|e| map_store_error("get_session", e))?
             .ok_or(MinosError::AgentSessionIdMismatch)?;
         let live_state = self
             .manager
-            .list_threads()
+            .list_sessions()
             .await
             .into_iter()
-            .find(|snapshot| snapshot.thread_id == req.thread_id)
+            .find(|snapshot| snapshot.session_id == req.session_id)
             .map(|snapshot| state_to_proto(&snapshot.state));
-        let thread = thread_summary_from_row(row.clone())?;
-        Ok(GetThreadResponse {
+        let thread = session_summary_from_row(row.clone())?;
+        Ok(GetSessionResponse {
             thread,
             state: live_state.unwrap_or(row_state_to_proto(&row)?),
         })
     }
 
-    pub async fn current_agent_thread(&self) -> Result<Option<AgentThreadSnapshot>, MinosError> {
-        let live_snapshots = self.manager.list_threads().await;
+    pub async fn current_agent_session(&self) -> Result<Option<AgentSessionSnapshot>, MinosError> {
+        let live_snapshots = self.manager.list_sessions().await;
         let rows = self
             .store
-            .list_threads(None, Some(500), None)
+            .list_sessions(None, Some(500), None)
             .await
-            .map_err(|e| map_store_error("current_agent_thread", e))?;
+            .map_err(|e| map_store_error("current_agent_session", e))?;
         let row_by_thread = rows
             .iter()
-            .map(|row| (row.thread_id.as_str(), row))
+            .map(|row| (row.session_id.as_str(), row))
             .collect::<HashMap<_, _>>();
 
         let mut live_candidates = live_snapshots
             .into_iter()
-            .filter(|snapshot| !matches!(snapshot.state, ThreadState::Closed { .. }))
+            .filter(|snapshot| !matches!(snapshot.state, SessionState::Closed { .. }))
             .map(|snapshot| {
                 let last_activity_at = row_by_thread
-                    .get(snapshot.thread_id.as_str())
+                    .get(snapshot.session_id.as_str())
                     .map_or(0, |row| row.last_activity_at);
                 (state_priority(&snapshot.state), last_activity_at, snapshot)
             })
@@ -941,11 +1033,11 @@ impl AgentGlue {
             left.0
                 .cmp(&right.0)
                 .then_with(|| right.1.cmp(&left.1))
-                .then_with(|| left.2.thread_id.as_str().cmp(right.2.thread_id.as_str()))
+                .then_with(|| left.2.session_id.as_str().cmp(right.2.session_id.as_str()))
         });
         if let Some((_, _, snapshot)) = live_candidates.into_iter().next() {
-            return Ok(Some(AgentThreadSnapshot {
-                thread_id: snapshot.thread_id,
+            return Ok(Some(AgentSessionSnapshot {
+                session_id: snapshot.session_id,
                 workspace_root: snapshot.workspace.display().to_string(),
                 state: snapshot.state,
             }));
@@ -955,13 +1047,13 @@ impl AgentGlue {
             let state = row_state_to_runtime(&row)?;
             if matches!(
                 state,
-                ThreadState::Starting
-                    | ThreadState::Idle
-                    | ThreadState::Running { .. }
-                    | ThreadState::Resuming
+                SessionState::Starting
+                    | SessionState::Idle
+                    | SessionState::Running { .. }
+                    | SessionState::Resuming
             ) {
-                return Ok(Some(AgentThreadSnapshot {
-                    thread_id: row.thread_id,
+                return Ok(Some(AgentSessionSnapshot {
+                    session_id: row.session_id,
                     workspace_root: row.workspace_root,
                     state,
                 }));
@@ -976,12 +1068,12 @@ impl AgentGlue {
     }
 
     #[must_use]
-    pub fn current_state(&self) -> ThreadState {
+    pub fn current_state(&self) -> SessionState {
         self.state_rx.borrow().clone()
     }
 
     #[must_use]
-    pub fn state_stream(&self) -> watch::Receiver<ThreadState> {
+    pub fn state_stream(&self) -> watch::Receiver<SessionState> {
         self.state_rx.clone()
     }
 
@@ -1017,20 +1109,20 @@ impl AgentGlue {
         // Suspend (not close) every live thread so the next daemon start can
         // rehydrate sessions. Persist status synchronously — the manager event
         // bridge is async and races process exit.
-        let snap = self.manager.list_threads().await;
+        let snap = self.manager.list_sessions().await;
         let now_ms = current_unix_ms();
         for s in snap {
-            match self.manager.suspend_for_daemon_stop(&s.thread_id).await {
+            match self.manager.suspend_for_daemon_stop(&s.session_id).await {
                 Ok(needs_continue) => {
                     if let Err(e) = self
                         .store
-                        .suspend_thread_for_daemon_restart(&s.thread_id, needs_continue, now_ms)
+                        .suspend_thread_for_daemon_restart(&s.session_id, needs_continue, now_ms)
                         .await
                     {
                         tracing::warn!(
                             target: "minos_daemon::agent",
                             error = %e,
-                            thread_id = %s.thread_id,
+                            session_id = %s.session_id,
                             "suspend_thread_for_daemon_restart failed during shutdown",
                         );
                     }
@@ -1039,7 +1131,7 @@ impl AgentGlue {
                     tracing::warn!(
                         target: "minos_daemon::agent",
                         error = %e,
-                        thread_id = %s.thread_id,
+                        session_id = %s.session_id,
                         "suspend_for_daemon_stop failed during shutdown",
                     );
                 }
@@ -1089,7 +1181,7 @@ impl AgentGlue {
             .await
             .map_err(|e| map_store_error("create_project", e))?;
 
-        // Also register the workspace in the workspaces table so threads
+        // Also register the workspace in the workspaces table so sessions
         // can reference it.
         let ws_root = workspace_dir.display().to_string();
         if let Err(e) = self.store.upsert_workspace(&ws_root, now_ms).await {
@@ -1399,40 +1491,103 @@ impl AgentGlue {
             .await
             .map_err(|e| map_store_error("list_conversation_messages", e))?;
         let has_more = rows.len() > requested_limit as usize;
-        let messages = rows
+        let page_rows: Vec<ChatMessageRow> =
+            rows.into_iter().take(requested_limit as usize).collect();
+        let message_ids: Vec<String> = page_rows.iter().map(|r| r.message_id.clone()).collect();
+        let reaction_rows = self
+            .store
+            .list_reactions_for_messages(&message_ids)
+            .await
+            .map_err(|e| map_store_error("list_conversation_messages.reactions", e))?;
+        let reactions_by_message = aggregate_reactions_by_message(reaction_rows);
+        let messages = page_rows
             .into_iter()
-            .take(requested_limit as usize)
-            .map(local_conversation_message_from_row)
+            .map(|row| {
+                let reactions = reactions_by_message
+                    .get(&row.message_id)
+                    .cloned()
+                    .unwrap_or_default();
+                local_conversation_message_from_row(row, reactions)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(minos_protocol::ListConversationMessagesResponse { messages, has_more })
+    }
+
+    pub async fn toggle_conversation_message_reaction(
+        &self,
+        req: minos_protocol::ToggleConversationMessageReactionParams,
+    ) -> Result<minos_protocol::ToggleConversationMessageReactionResponse, MinosError> {
+        let emoji = req.emoji.trim();
+        if emoji.is_empty() || emoji.chars().count() > 32 {
+            return Err(MinosError::CodexProtocolError {
+                method: "toggle_conversation_message_reaction".into(),
+                message: "emoji must be 1..=32 characters".into(),
+            });
+        }
+        let reaction_id = format!("rx-{}", uuid::Uuid::new_v4());
+        let now_ms = current_unix_ms();
+        let (conversation_id, added) = self
+            .store
+            .toggle_local_message_reaction(&req.message_id, emoji, &reaction_id, now_ms)
+            .await
+            .map_err(|e| map_store_error("toggle_conversation_message_reaction", e))?;
+        let reaction_rows = self
+            .store
+            .list_reactions_for_messages(&[req.message_id.clone()])
+            .await
+            .map_err(|e| map_store_error("toggle_conversation_message_reaction.list", e))?;
+        let reactions = aggregate_reactions_by_message(reaction_rows)
+            .remove(&req.message_id)
+            .unwrap_or_default();
+        tracing::info!(
+            target: "minos_daemon::agent",
+            conversation_id = %conversation_id,
+            message_id = %req.message_id,
+            emoji = %emoji,
+            added,
+            reaction_count = reactions.len(),
+            "toggled conversation message reaction",
+        );
+        let _ = self.local_conversation_event_tx.send(
+            LocalConversationEvent::ConversationReactionToggled {
+                conversation_id: conversation_id.clone(),
+                message_id: req.message_id.clone(),
+                reactions: reactions.clone(),
+            },
+        );
+        Ok(minos_protocol::ToggleConversationMessageReactionResponse {
+            message_id: req.message_id,
+            conversation_id,
+            reactions,
+        })
     }
 
     pub async fn list_conversation_agent_sessions(
         &self,
         req: minos_protocol::ListConversationAgentSessionsParams,
     ) -> Result<minos_protocol::ListConversationAgentSessionsResponse, MinosError> {
-        let live_states: HashMap<String, ProtoThreadState> = self
+        let live_states: HashMap<String, ProtoSessionState> = self
             .manager
-            .list_threads()
+            .list_sessions()
             .await
             .into_iter()
-            .map(|snapshot| (snapshot.thread_id.clone(), state_to_proto(&snapshot.state)))
+            .map(|snapshot| (snapshot.session_id.clone(), state_to_proto(&snapshot.state)))
             .collect();
-        let threads = self
+        let sessions = self
             .store
-            .list_threads_by_conversation(&req.conversation_id)
+            .list_sessions_by_conversation(&req.conversation_id)
             .await
             .map_err(|e| map_store_error("list_conversation_agent_sessions", e))?
             .into_iter()
             .map(|row| {
-                let mut summary = thread_summary_from_row(row.clone())?;
-                if let Some(state) = live_states.get(&summary.thread_id) {
+                let mut summary = session_summary_from_row(row.clone())?;
+                if let Some(state) = live_states.get(&summary.session_id) {
                     summary.state = state.clone();
                 }
                 Ok(summary)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(minos_protocol::ListConversationAgentSessionsResponse { threads })
+        Ok(minos_protocol::ListConversationAgentSessionsResponse { sessions })
     }
 
     pub async fn append_conversation_message(
@@ -1447,7 +1602,7 @@ impl AgentGlue {
             .upsert_conversation_message(
                 &req.conversation_id,
                 &req.message_id,
-                req.thread_id.as_deref(),
+                req.session_id.as_deref(),
                 &req.sender_role,
                 agent,
                 &req.body,
@@ -1508,14 +1663,28 @@ impl AgentGlue {
                 "failed to create conversation workspace directory",
             );
         }
+        let launch = self
+            .resolve_launch_options(
+                req.agent,
+                req.profile_id.as_deref(),
+                req.model.clone(),
+                req.reasoning_effort.clone(),
+                req.instructions.clone(),
+            )
+            .await?;
         let outcome = self
             .manager
-            .start_agent_in_conversation(req.agent, workspace, req.conversation_id.clone())
+            .start_agent_in_conversation_with_options(
+                req.agent,
+                workspace,
+                req.conversation_id.clone(),
+                launch,
+            )
             .await
             .map_err(map_anyhow)?;
         let cwd = outcome.cwd.display().to_string();
         self.persist_thread_parent_rows_in_conversation(
-            &outcome.thread_id,
+            &outcome.session_id,
             &req.conversation_id,
             &cwd,
             req.agent,
@@ -1535,20 +1704,154 @@ impl AgentGlue {
                 "failed to promote conversation progress to in_progress",
             );
         }
-        let _ = self.state_tx.send(ThreadState::Idle);
+        let _ = self.state_tx.send(SessionState::Idle);
         tracing::info!(
             target: "minos_daemon::agent",
             conversation_id = %req.conversation_id,
-            thread_id = %outcome.thread_id,
+            session_id = %outcome.session_id,
+            profile_id = req.profile_id.as_deref().unwrap_or(""),
             agent = %agent_label(req.agent),
             workspace = %cwd,
             "agent session started in conversation",
         );
         Ok(StartAgentResponse {
-            session_id: outcome.thread_id,
+            session_id: outcome.session_id,
             cwd,
         })
     }
+
+    pub async fn list_agent_profiles(
+        &self,
+    ) -> Result<minos_protocol::ListAgentProfilesResponse, MinosError> {
+        let rows = self
+            .store
+            .list_agent_profiles()
+            .await
+            .map_err(|e| map_store_error("list_agent_profiles", e))?;
+        Ok(minos_protocol::ListAgentProfilesResponse {
+            profiles: rows
+                .into_iter()
+                .filter_map(profile_row_to_summary)
+                .collect(),
+        })
+    }
+
+    pub async fn create_agent_profile(
+        &self,
+        req: minos_protocol::CreateAgentProfileRequest,
+    ) -> Result<minos_protocol::AgentProfileSummary, MinosError> {
+        let name = validate_agent_profile_name(&req.name, "create_agent_profile")?;
+        let model = req.model.trim();
+        if model.is_empty() {
+            return Err(MinosError::CodexProtocolError {
+                method: "create_agent_profile".into(),
+                message: "model is required".into(),
+            });
+        }
+        let id = format!("profile-{}", uuid::Uuid::new_v4());
+        let now = current_unix_ms();
+        let row = self
+            .store
+            .create_agent_profile(
+                &id,
+                name,
+                req.description.trim(),
+                req.runtime_agent.bin_name(),
+                model,
+                req.reasoning_effort.trim(),
+                req.instructions.trim(),
+                now,
+            )
+            .await
+            .map_err(|e| map_store_error("create_agent_profile", e))?;
+        profile_row_to_summary(row).ok_or_else(|| MinosError::CodexProtocolError {
+            method: "create_agent_profile".into(),
+            message: "invalid runtime_agent after insert".into(),
+        })
+    }
+
+    pub async fn update_agent_profile(
+        &self,
+        req: minos_protocol::UpdateAgentProfileRequest,
+    ) -> Result<minos_protocol::AgentProfileSummary, MinosError> {
+        let name = validate_agent_profile_name(&req.name, "update_agent_profile")?;
+        let row = self
+            .store
+            .update_agent_profile(
+                &req.id,
+                name,
+                req.description.trim(),
+                req.instructions.trim(),
+                current_unix_ms(),
+            )
+            .await
+            .map_err(|e| map_store_error("update_agent_profile", e))?
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "update_agent_profile".into(),
+                message: format!("profile not found: {}", req.id),
+            })?;
+        profile_row_to_summary(row).ok_or_else(|| MinosError::CodexProtocolError {
+            method: "update_agent_profile".into(),
+            message: "invalid runtime_agent".into(),
+        })
+    }
+
+    pub async fn delete_agent_profile(
+        &self,
+        req: minos_protocol::DeleteAgentProfileRequest,
+    ) -> Result<(), MinosError> {
+        let ok = self
+            .store
+            .delete_agent_profile(&req.id)
+            .await
+            .map_err(|e| map_store_error("delete_agent_profile", e))?;
+        if !ok {
+            return Err(MinosError::CodexProtocolError {
+                method: "delete_agent_profile".into(),
+                message: format!("profile not found: {}", req.id),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Profile display names double as `@Name` mention tokens.
+/// Reject characters that break single-token `@` routing: whitespace, `#` (session form), `@`.
+fn validate_agent_profile_name<'a>(name: &'a str, method: &str) -> Result<&'a str, MinosError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(MinosError::CodexProtocolError {
+            method: method.into(),
+            message: "name is required".into(),
+        });
+    }
+    if name
+        .chars()
+        .any(|c| c.is_whitespace() || c == '#' || c == '@')
+    {
+        return Err(MinosError::CodexProtocolError {
+            method: method.into(),
+            message: "name cannot contain whitespace, #, or @".into(),
+        });
+    }
+    Ok(name)
+}
+
+fn profile_row_to_summary(
+    row: crate::store::AgentProfileRow,
+) -> Option<minos_protocol::AgentProfileSummary> {
+    let runtime_agent = parse_agent_label(&row.runtime_agent).ok()?;
+    Some(minos_protocol::AgentProfileSummary {
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        runtime_agent,
+        model: row.model,
+        reasoning_effort: row.reasoning_effort,
+        instructions: row.instructions,
+        created_at_ms: row.created_at_ms,
+        updated_at_ms: row.updated_at_ms,
+    })
 }
 
 #[cfg(feature = "test-support")]
@@ -1683,11 +1986,11 @@ fn project_workspace_dir(default_workspace: &std::path::Path, workspace_slug: &s
         .to_string()
 }
 
-fn thread_summary_from_row(row: crate::store::ThreadRow) -> Result<ThreadSummary, MinosError> {
+fn session_summary_from_row(row: crate::store::SessionRow) -> Result<SessionSummary, MinosError> {
     let end_reason = row_end_reason(&row);
     let state = row_state_to_proto(&row)?;
-    Ok(ThreadSummary {
-        thread_id: row.thread_id,
+    Ok(SessionSummary {
+        session_id: row.session_id,
         agent: parse_agent_label(&row.agent)?,
         title: None,
         first_ts_ms: row.started_at,
@@ -1695,7 +1998,7 @@ fn thread_summary_from_row(row: crate::store::ThreadRow) -> Result<ThreadSummary
         message_count: u32::try_from(row.last_seq.max(0)).unwrap_or(u32::MAX),
         ended_at_ms: row.ended_at,
         end_reason,
-        parent_thread_id: row.parent_thread_id,
+        parent_session_id: row.parent_session_id,
         state,
         needs_continue: row.needs_continue,
     })
@@ -1730,6 +2033,7 @@ fn conversation_summary_from_row(
 
 fn local_conversation_message_from_row(
     row: ChatMessageRow,
+    reactions: Vec<minos_protocol::LocalReactionGroup>,
 ) -> Result<minos_protocol::LocalConversationMessage, MinosError> {
     let mentions = if row.mentions_json.trim().is_empty() {
         Vec::new()
@@ -1745,7 +2049,7 @@ fn local_conversation_message_from_row(
         message_seq: row.message_seq,
         message_id: row.message_id,
         conversation_id: row.conversation_id,
-        thread_id: row.thread_id,
+        session_id: row.session_id,
         created_at_ms: row.created_at_ms,
         sender_role: row.sender_role,
         agent: row.agent.as_deref().map(parse_agent_label).transpose()?,
@@ -1753,16 +2057,61 @@ fn local_conversation_message_from_row(
         reply_to_message_id: row.reply_to_message_id,
         delegation_id: row.delegation_id,
         mentions,
+        reactions,
     })
 }
 
-fn row_end_reason(row: &crate::store::ThreadRow) -> Option<ThreadEndReason> {
+/// Group raw reaction rows into per-message emoji aggregates.
+fn aggregate_reactions_by_message(
+    rows: Vec<crate::store::ChatMessageReactionRow>,
+) -> HashMap<String, Vec<minos_protocol::LocalReactionGroup>> {
+    use std::collections::BTreeMap;
+    // message_id -> emoji -> actors (ordered by first seen)
+    let mut by_message: HashMap<String, BTreeMap<String, Vec<minos_protocol::LocalReactionActor>>> =
+        HashMap::new();
+    for row in rows {
+        let actors = by_message
+            .entry(row.message_id)
+            .or_default()
+            .entry(row.emoji)
+            .or_default();
+        actors.push(minos_protocol::LocalReactionActor {
+            actor_id: row.actor_id,
+            actor_kind: row.actor_kind,
+            display_name: row.display_name,
+        });
+    }
+    let mut out = HashMap::with_capacity(by_message.len());
+    for (message_id, emoji_map) in by_message {
+        let mut groups: Vec<minos_protocol::LocalReactionGroup> = emoji_map
+            .into_iter()
+            .map(|(emoji, actors)| {
+                let reacted_by_me = actors
+                    .iter()
+                    .any(|a| a.actor_id == minos_protocol::LOCAL_REACTION_ACTOR_ID);
+                let count = u32::try_from(actors.len()).unwrap_or(u32::MAX);
+                minos_protocol::LocalReactionGroup {
+                    emoji,
+                    count,
+                    reacted_by_me,
+                    actors,
+                }
+            })
+            .collect();
+        // Stable display order: higher count first, then emoji.
+        groups.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.emoji.cmp(&b.emoji)));
+        out.insert(message_id, groups);
+    }
+    out
+}
+
+fn row_end_reason(row: &crate::store::SessionRow) -> Option<SessionEndReason> {
     match row.last_close_reason.as_deref() {
-        Some("user_close") => Some(ThreadEndReason::UserStopped),
-        Some("terminal_error") => Some(ThreadEndReason::Crashed {
+        Some("user_close") => Some(SessionEndReason::UserStopped),
+        Some("terminal_error") => Some(SessionEndReason::Crashed {
             message: "terminal_error".into(),
         }),
-        Some(other) => Some(ThreadEndReason::Crashed {
+        Some(other) => Some(SessionEndReason::Crashed {
             message: other.to_string(),
         }),
         None => None,
@@ -1770,47 +2119,47 @@ fn row_end_reason(row: &crate::store::ThreadRow) -> Option<ThreadEndReason> {
 }
 
 pub(crate) fn row_state_to_proto(
-    row: &crate::store::ThreadRow,
-) -> Result<ProtoThreadState, MinosError> {
+    row: &crate::store::SessionRow,
+) -> Result<ProtoSessionState, MinosError> {
     match row.status.as_str() {
-        "starting" => Ok(ProtoThreadState::Starting),
-        "idle" => Ok(ProtoThreadState::Idle),
-        "running" => Ok(ProtoThreadState::Running {
+        "starting" => Ok(ProtoSessionState::Starting),
+        "idle" => Ok(ProtoSessionState::Idle),
+        "running" => Ok(ProtoSessionState::Running {
             turn_started_at_ms: row.last_activity_at,
         }),
-        "resuming" => Ok(ProtoThreadState::Resuming),
-        "suspended" => Ok(ProtoThreadState::Suspended {
+        "resuming" => Ok(ProtoSessionState::Resuming),
+        "suspended" => Ok(ProtoSessionState::Suspended {
             reason: parse_pause_reason(row.last_pause_reason.as_deref())?,
         }),
-        "closed" => Ok(ProtoThreadState::Closed {
+        "closed" => Ok(ProtoSessionState::Closed {
             reason: parse_close_reason(row.last_close_reason.as_deref())?,
         }),
         other => Err(MinosError::CodexProtocolError {
             method: "local_store.thread_status".into(),
-            message: format!("unknown persisted thread status: {other}"),
+            message: format!("unknown persisted session status: {other}"),
         }),
     }
 }
 
 fn row_state_to_runtime(
-    row: &crate::store::ThreadRow,
-) -> Result<minos_agent_runtime::ThreadState, MinosError> {
+    row: &crate::store::SessionRow,
+) -> Result<minos_agent_runtime::SessionState, MinosError> {
     match row.status.as_str() {
-        "starting" => Ok(minos_agent_runtime::ThreadState::Starting),
-        "idle" => Ok(minos_agent_runtime::ThreadState::Idle),
-        "running" => Ok(minos_agent_runtime::ThreadState::Running {
+        "starting" => Ok(minos_agent_runtime::SessionState::Starting),
+        "idle" => Ok(minos_agent_runtime::SessionState::Idle),
+        "running" => Ok(minos_agent_runtime::SessionState::Running {
             turn_started_at_ms: row.last_activity_at,
         }),
-        "resuming" => Ok(minos_agent_runtime::ThreadState::Resuming),
-        "suspended" => Ok(minos_agent_runtime::ThreadState::Suspended {
+        "resuming" => Ok(minos_agent_runtime::SessionState::Resuming),
+        "suspended" => Ok(minos_agent_runtime::SessionState::Suspended {
             reason: parse_pause_reason_runtime(row.last_pause_reason.as_deref())?,
         }),
-        "closed" => Ok(minos_agent_runtime::ThreadState::Closed {
+        "closed" => Ok(minos_agent_runtime::SessionState::Closed {
             reason: parse_close_reason_runtime(row.last_close_reason.as_deref())?,
         }),
         other => Err(MinosError::CodexProtocolError {
             method: "local_store.thread_status".into(),
-            message: format!("unknown persisted thread status: {other}"),
+            message: format!("unknown persisted session status: {other}"),
         }),
     }
 }
@@ -1837,6 +2186,18 @@ fn agent_label(agent: minos_domain::AgentName) -> &'static str {
         minos_domain::AgentName::Opencode => "opencode",
         minos_domain::AgentName::Grok => "grok",
     }
+}
+
+/// Treat missing / blank strings as unset for launch-option merge.
+fn nonempty_opt(value: Option<String>) -> Option<String> {
+    value.and_then(|s| {
+        let t = s.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(t.to_owned())
+        }
+    })
 }
 
 fn parse_pause_reason(reason: Option<&str>) -> Result<ProtoPauseReason, MinosError> {
@@ -1891,26 +2252,26 @@ fn parse_close_reason_runtime(
     }
 }
 
-fn state_priority(state: &ThreadState) -> u8 {
+fn state_priority(state: &SessionState) -> u8 {
     match state {
-        ThreadState::Running { .. } => 0,
-        ThreadState::Starting | ThreadState::Resuming => 1,
-        ThreadState::Idle => 2,
-        ThreadState::Suspended { .. } => 3,
-        ThreadState::Closed { .. } => 4,
+        SessionState::Running { .. } => 0,
+        SessionState::Starting | SessionState::Resuming => 1,
+        SessionState::Idle => 2,
+        SessionState::Suspended { .. } => 3,
+        SessionState::Closed { .. } => 4,
     }
 }
 
 async fn persist_runtime_state_inner(
     store: &LocalStore,
-    thread_id: &str,
-    state: &ThreadState,
+    session_id: &str,
+    state: &SessionState,
     at_ms: i64,
 ) {
     let (status, pause_reason, close_reason, ended_at) = runtime_state_columns(state, at_ms);
     match store
-        .update_thread_status(
-            thread_id,
+        .update_session_status(
+            session_id,
             status,
             pause_reason,
             close_reason,
@@ -1921,23 +2282,23 @@ async fn persist_runtime_state_inner(
     {
         Ok(0) => tracing::warn!(
             target: "minos_daemon::agent",
-            thread_id,
+            session_id,
             status,
-            "store.update_thread_status affected no rows",
+            "store.update_session_status affected no rows",
         ),
         Ok(_) => {}
         Err(error) => tracing::warn!(
             target: "minos_daemon::agent",
             error = %error,
-            thread_id,
+            session_id,
             status,
-            "store.update_thread_status failed",
+            "store.update_session_status failed",
         ),
     }
 }
 
 fn runtime_state_columns(
-    state: &ThreadState,
+    state: &SessionState,
     at_ms: i64,
 ) -> (
     &'static str,
@@ -1946,17 +2307,17 @@ fn runtime_state_columns(
     Option<i64>,
 ) {
     match state {
-        ThreadState::Starting => ("starting", None, None, None),
-        ThreadState::Idle => ("idle", None, None, None),
-        ThreadState::Running { .. } => ("running", None, None, None),
-        ThreadState::Suspended { reason } => (
+        SessionState::Starting => ("starting", None, None, None),
+        SessionState::Idle => ("idle", None, None, None),
+        SessionState::Running { .. } => ("running", None, None, None),
+        SessionState::Suspended { reason } => (
             "suspended",
             Some(runtime_pause_reason_label(reason)),
             None,
             None,
         ),
-        ThreadState::Resuming => ("resuming", None, None, None),
-        ThreadState::Closed { reason } => (
+        SessionState::Resuming => ("resuming", None, None, None),
+        SessionState::Closed { reason } => (
             "closed",
             None,
             Some(runtime_close_reason_label(reason)),
@@ -2081,15 +2442,25 @@ async fn handle_daemon_mcp_request(
             before_seq,
             limit,
         } => {
-            let messages = store
+            let rows = store
                 .list_conversation_messages(
                     &conversation_id,
                     before_seq.map(|seq| i64::try_from(seq).unwrap_or(i64::MAX)),
                     limit,
                 )
-                .await?
+                .await?;
+            let message_ids: Vec<String> = rows.iter().map(|r| r.message_id.clone()).collect();
+            let reaction_rows = store.list_reactions_for_messages(&message_ids).await?;
+            let reactions_by_message = aggregate_reactions_by_message(reaction_rows);
+            let messages = rows
                 .into_iter()
-                .map(local_conversation_message_from_row)
+                .map(|row| {
+                    let reactions = reactions_by_message
+                        .get(&row.message_id)
+                        .cloned()
+                        .unwrap_or_default();
+                    local_conversation_message_from_row(row, reactions)
+                })
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|error| anyhow::anyhow!("{error}"))?;
             let limit = limit.unwrap_or(100).clamp(1, 500) as usize;
@@ -2111,22 +2482,30 @@ async fn handle_daemon_mcp_request(
         SocketRequest::DelegateToAgent {
             conversation_id,
             source_agent,
-            source_thread_id,
+            source_session_id,
             target_agent,
+            profile_id,
+            target_profile,
             prompt,
         } => {
-            let target_agent = parse_socket_agent(&target_agent)?;
             let source_agent = source_agent
                 .as_deref()
                 .map(parse_socket_agent)
                 .transpose()?;
             let prompt = prompt.trim().to_owned();
             anyhow::ensure!(!prompt.is_empty(), "delegate_to_agent prompt is empty");
-            validate_mcp_source_thread(
+            let (target_agent, resolved_profile_id, launch) = resolve_delegate_launch_target(
+                &store,
+                target_agent.as_deref(),
+                profile_id.as_deref(),
+                target_profile.as_deref(),
+            )
+            .await?;
+            validate_mcp_source_session(
                 &store,
                 &conversation_id,
                 source_agent,
-                source_thread_id.as_deref(),
+                source_session_id.as_deref(),
             )
             .await?;
             let teamwork_store = open_teamwork_store_for_conversation(
@@ -2138,23 +2517,26 @@ async fn handle_daemon_mcp_request(
             teamwork_store
                 .ensure_delegate_target_allowed(
                     &conversation_id,
-                    source_thread_id.as_deref(),
+                    source_session_id.as_deref(),
                     target_agent,
                 )
                 .await?;
             let workspace =
                 workspace_for_mcp_conversation(&store, &conversation_id, &default_workspace)
                     .await?;
+            // Same launch path as start_agent_in_conversation RPC: profile fields via
+            // AgentLaunchOptions (explicit request fields are not on the MCP tool).
             let outcome = manager
-                .start_agent_in_conversation(
+                .start_agent_in_conversation_with_options(
                     target_agent,
                     workspace.clone(),
                     conversation_id.clone(),
+                    launch,
                 )
                 .await?;
             persist_thread_parent_rows_inner(
                 &store,
-                &outcome.thread_id,
+                &outcome.session_id,
                 &outcome.cwd.display().to_string(),
                 target_agent,
                 outcome.provider_session_id.as_deref(),
@@ -2162,19 +2544,19 @@ async fn handle_daemon_mcp_request(
             )
             .await;
             manager
-                .send_user_message(&outcome.thread_id, prompt.clone())
+                .send_user_message(&outcome.session_id, prompt.clone())
                 .await?;
             let delegation = teamwork_store
                 .create_delegation(
                     &conversation_id,
                     source_agent,
-                    source_thread_id.clone(),
+                    source_session_id.clone(),
                     target_agent,
                     prompt,
-                    Some(outcome.thread_id.clone()),
+                    Some(outcome.session_id.clone()),
                 )
                 .await?;
-            let short_target = short_mcp_thread_id(&outcome.thread_id);
+            let short_target = short_mcp_session_id(&outcome.session_id);
             let visible_prompt = format!(
                 "@{}#{} {}",
                 target_agent.bin_name(),
@@ -2193,8 +2575,8 @@ async fn handle_daemon_mcp_request(
             };
             let mentions = vec![minos_protocol::ConversationMention {
                 agent: target_agent,
-                thread_id: Some(outcome.thread_id.clone()),
-                thread_short_id: Some(short_target),
+                session_id: Some(outcome.session_id.clone()),
+                session_short_id: Some(short_target),
             }];
             let mentions_json = serde_json::to_string(&mentions).unwrap_or_else(|_| "[]".into());
             // Bind request message so completion can set reply_to.
@@ -2209,7 +2591,7 @@ async fn handle_daemon_mcp_request(
                 .upsert_conversation_message(
                     &conversation_id,
                     &visible_message_id,
-                    source_thread_id.as_deref(),
+                    source_session_id.as_deref(),
                     sender_role,
                     source_agent.map(agent_label),
                     &visible_prompt,
@@ -2224,11 +2606,20 @@ async fn handle_daemon_mcp_request(
                 &conversation_id,
                 message_seq,
             );
+            tracing::info!(
+                target: "minos_daemon::agent",
+                conversation_id = %conversation_id,
+                session_id = %outcome.session_id,
+                profile_id = resolved_profile_id.as_deref().unwrap_or(""),
+                agent = %agent_label(target_agent),
+                "MCP delegate_to_agent started session"
+            );
             Ok(SocketResponse::Ok {
                 data: Some(serde_json::json!({
                     "accepted": true,
                     "target_agent": target_agent.bin_name(),
-                    "thread_id": outcome.thread_id,
+                    "profile_id": resolved_profile_id,
+                    "session_id": outcome.session_id,
                     "delegation": delegation,
                 })),
             })
@@ -2301,8 +2692,8 @@ async fn handle_daemon_mcp_request(
             let delegation = teamwork_store
                 .cancel_delegation(&conversation_id, &delegation_id, reason)
                 .await?;
-            if let Some(thread_id) = delegation.thread_id.as_deref() {
-                let _ = manager.interrupt_thread(thread_id).await;
+            if let Some(session_id) = delegation.session_id.as_deref() {
+                let _ = manager.interrupt_session(session_id).await;
             }
             Ok(SocketResponse::Ok {
                 data: Some(serde_json::to_value(delegation)?),
@@ -2311,18 +2702,18 @@ async fn handle_daemon_mcp_request(
         SocketRequest::PostConversationUpdate {
             conversation_id,
             source_agent,
-            source_thread_id,
+            source_session_id,
             message,
         } => {
             let source_agent = source_agent
                 .as_deref()
                 .map(parse_socket_agent)
                 .transpose()?;
-            validate_mcp_source_thread(
+            validate_mcp_source_session(
                 &store,
                 &conversation_id,
                 source_agent,
-                source_thread_id.as_deref(),
+                source_session_id.as_deref(),
             )
             .await?;
             let body = message.trim();
@@ -2350,7 +2741,7 @@ async fn handle_daemon_mcp_request(
                 .upsert_conversation_message(
                     &conversation_id,
                     &message_id,
-                    source_thread_id.as_deref(),
+                    source_session_id.as_deref(),
                     sender_role,
                     source_agent.map(agent_label),
                     &text,
@@ -2403,30 +2794,30 @@ async fn workspace_for_mcp_conversation(
         .unwrap_or_else(|| default_workspace.to_path_buf()))
 }
 
-async fn validate_mcp_source_thread(
+async fn validate_mcp_source_session(
     store: &LocalStore,
     conversation_id: &str,
     source_agent: Option<AgentName>,
-    source_thread_id: Option<&str>,
+    source_session_id: Option<&str>,
 ) -> anyhow::Result<()> {
     anyhow::ensure!(
-        source_agent.is_none() || source_thread_id.is_some(),
-        "MCP source_thread_id is required when source_agent is set"
+        source_agent.is_none() || source_session_id.is_some(),
+        "MCP source_session_id is required when source_agent is set"
     );
-    let Some(source_thread_id) = source_thread_id else {
+    let Some(source_session_id) = source_session_id else {
         return Ok(());
     };
-    let rows = store.list_threads_by_conversation(conversation_id).await?;
-    let Some(row) = rows.iter().find(|row| row.thread_id == source_thread_id) else {
+    let rows = store.list_sessions_by_conversation(conversation_id).await?;
+    let Some(row) = rows.iter().find(|row| row.session_id == source_session_id) else {
         anyhow::bail!(
-            "MCP source thread {source_thread_id} does not belong to conversation {conversation_id}"
+            "MCP source thread {source_session_id} does not belong to conversation {conversation_id}"
         );
     };
     if let Some(source_agent) = source_agent {
         let actual = parse_socket_agent(&row.agent)?;
         anyhow::ensure!(
             actual == source_agent,
-            "MCP source thread {source_thread_id} belongs to {}, not {}",
+            "MCP source thread {source_session_id} belongs to {}, not {}",
             actual.bin_name(),
             source_agent.bin_name()
         );
@@ -2441,23 +2832,23 @@ async fn deliver_daemon_post_update_target(
     default_workspace: &Path,
     body: &str,
 ) -> anyhow::Result<String> {
-    let Some((target_agent, thread_short_id, prompt)) = parse_mcp_agent_routing(body) else {
+    let Some((target_agent, session_short_id, prompt)) = parse_mcp_agent_routing(body) else {
         return Ok(body.to_owned());
     };
     let prompt = prompt.trim().to_owned();
     if prompt.is_empty() {
         return Ok(body.to_owned());
     }
-    if let Some(thread_short_id) = thread_short_id {
-        let thread_id = mcp_thread_id_for_agent_short_id(
+    if let Some(session_short_id) = session_short_id {
+        let session_id = mcp_session_id_for_agent_short_id(
             &manager,
             &store,
             conversation_id,
             target_agent,
-            &thread_short_id,
+            &session_short_id,
         )
         .await?;
-        manager.send_user_message(&thread_id, prompt).await?;
+        manager.send_user_message(&session_id, prompt).await?;
         return Ok(body.to_owned());
     }
 
@@ -2468,7 +2859,7 @@ async fn deliver_daemon_post_update_target(
         .await?;
     persist_thread_parent_rows_inner(
         &store,
-        &outcome.thread_id,
+        &outcome.session_id,
         &outcome.cwd.display().to_string(),
         target_agent,
         outcome.provider_session_id.as_deref(),
@@ -2476,59 +2867,59 @@ async fn deliver_daemon_post_update_target(
     )
     .await;
     manager
-        .send_user_message(&outcome.thread_id, prompt.clone())
+        .send_user_message(&outcome.session_id, prompt.clone())
         .await?;
     Ok(format!(
         "@{}#{} {}",
         target_agent.bin_name(),
-        short_mcp_thread_id(&outcome.thread_id),
+        short_mcp_session_id(&outcome.session_id),
         prompt
     ))
 }
 
-async fn mcp_thread_id_for_agent_short_id(
+async fn mcp_session_id_for_agent_short_id(
     manager: &AgentManager,
     store: &LocalStore,
     conversation_id: &str,
     agent: AgentName,
-    thread_short_id: &str,
+    session_short_id: &str,
 ) -> anyhow::Result<String> {
-    let short_id = thread_short_id.to_ascii_lowercase();
-    let rows = store.list_threads_by_conversation(conversation_id).await?;
+    let short_id = session_short_id.to_ascii_lowercase();
+    let rows = store.list_sessions_by_conversation(conversation_id).await?;
     let Some(row) = rows.into_iter().find(|row| {
-        row.parent_thread_id.is_none()
+        row.parent_session_id.is_none()
             && row.agent == agent.bin_name()
-            && (short_mcp_thread_id(&row.thread_id).to_ascii_lowercase() == short_id
-                || row.thread_id.to_ascii_lowercase().starts_with(&short_id))
+            && (short_mcp_session_id(&row.session_id).to_ascii_lowercase() == short_id
+                || row.session_id.to_ascii_lowercase().starts_with(&short_id))
     }) else {
         anyhow::bail!(
             "No existing {} session matches #{}",
             agent.bin_name(),
-            thread_short_id
+            session_short_id
         );
     };
     let state = row_state_to_runtime(&row)?;
     anyhow::ensure!(
-        !matches!(state, ThreadState::Closed { .. }),
+        !matches!(state, SessionState::Closed { .. }),
         "{} session #{} is closed",
         agent.bin_name(),
-        short_mcp_thread_id(&row.thread_id)
+        short_mcp_session_id(&row.session_id)
     );
-    if !manager.has_thread(&row.thread_id).await {
+    if !manager.has_thread(&row.session_id).await {
         manager
             .register_persisted_thread(
-                row.thread_id.clone(),
+                row.session_id.clone(),
                 PathBuf::from(&row.workspace_root),
                 agent,
                 row.provider_session_id.clone(),
-                row.parent_thread_id.clone(),
+                row.parent_session_id.clone(),
                 Some(row.conversation_id.clone()),
                 state,
                 u64::try_from(row.last_seq.max(0)).unwrap_or(u64::MAX),
             )
             .await?;
     }
-    Ok(row.thread_id)
+    Ok(row.session_id)
 }
 
 fn parse_mcp_agent_routing(text: &str) -> Option<(AgentName, Option<String>, String)> {
@@ -2540,15 +2931,15 @@ fn parse_mcp_agent_routing(text: &str) -> Option<(AgentName, Option<String>, Str
         .unwrap_or(rest.len());
     let target = &rest[..split_at];
     let body = rest[split_at..].trim_start().to_owned();
-    let (agent, thread_short_id) = match target.split_once('#') {
-        Some((agent, thread_short_id)) if !thread_short_id.is_empty() => (
+    let (agent, session_short_id) = match target.split_once('#') {
+        Some((agent, session_short_id)) if !session_short_id.is_empty() => (
             parse_socket_agent(agent).ok()?,
-            Some(thread_short_id.to_owned()),
+            Some(session_short_id.to_owned()),
         ),
         Some(_) => return None,
         None => (parse_socket_agent(target).ok()?, None),
     };
-    Some((agent, thread_short_id, body))
+    Some((agent, session_short_id, body))
 }
 
 fn parse_socket_agent(value: &str) -> anyhow::Result<AgentName> {
@@ -2558,6 +2949,158 @@ fn parse_socket_agent(value: &str) -> anyhow::Result<AgentName> {
         .copied()
         .find(|agent| agent.bin_name() == normalized.as_str())
         .ok_or_else(|| anyhow::anyhow!("unknown agent: {value}"))
+}
+
+/// Shared launch merge used by RPC start and MCP delegate.
+///
+/// Precedence: explicit request fields > profile fields > None.
+/// When `profile_id` is set, `agent` must equal `profile.runtime_agent`.
+/// Returns a plain error message (caller maps to protocol / anyhow).
+async fn resolve_launch_options(
+    store: &crate::store::LocalStore,
+    agent: AgentName,
+    profile_id: Option<&str>,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+    instructions: Option<String>,
+) -> Result<Option<minos_agent_runtime::AgentLaunchOptions>, String> {
+    let (base_model, base_effort, base_instructions) =
+        if let Some(pid) = profile_id.map(str::trim).filter(|s| !s.is_empty()) {
+            let row = store
+                .get_agent_profile(pid)
+                .await
+                .map_err(|e| format!("resolve_launch_options.get_agent_profile: {e}"))?
+                .ok_or_else(|| format!("agent profile not found: {pid}"))?;
+            let profile_agent = parse_agent_label(&row.runtime_agent).map_err(|e| e.to_string())?;
+            if profile_agent != agent {
+                return Err(format!(
+                    "agent mismatch for profile {pid}: request agent is {}, profile runtime is {}",
+                    agent_label(agent),
+                    agent_label(profile_agent),
+                ));
+            }
+            (
+                nonempty_opt(Some(row.model)),
+                nonempty_opt(Some(row.reasoning_effort)),
+                nonempty_opt(Some(row.instructions)),
+            )
+        } else {
+            (None, None, None)
+        };
+
+    // Explicit request fields win over profile (and over empty profile fields).
+    let model = nonempty_opt(model).or(base_model);
+    let reasoning_effort = nonempty_opt(reasoning_effort).or(base_effort);
+    let instructions = nonempty_opt(instructions).or(base_instructions);
+
+    Ok(minos_agent_runtime::AgentLaunchOptions::from_parts_full(
+        model,
+        reasoning_effort,
+        instructions,
+    ))
+}
+
+/// Resolve MCP/TUI delegate target to `(agent, profile_id)`, then launch options
+/// via [`resolve_launch_options`] (same merge as RPC start).
+///
+/// Returns `(agent, resolved_profile_id, launch_options)`.
+async fn resolve_delegate_launch_target(
+    store: &crate::store::LocalStore,
+    target_agent: Option<&str>,
+    profile_id: Option<&str>,
+    target_profile: Option<&str>,
+) -> anyhow::Result<(
+    AgentName,
+    Option<String>,
+    Option<minos_agent_runtime::AgentLaunchOptions>,
+)> {
+    let (agent, resolved_profile_id) =
+        resolve_delegate_agent_and_profile(store, target_agent, profile_id, target_profile).await?;
+    let launch = resolve_launch_options(
+        store,
+        agent,
+        resolved_profile_id.as_deref(),
+        None,
+        None,
+        None,
+    )
+    .await
+    .map_err(anyhow::Error::msg)?;
+    Ok((agent, resolved_profile_id, launch))
+}
+
+/// Bind delegate identity only: explicit `profile_id` / `target_profile` name, or
+/// bare `target_agent` with newest host profile convenience. Does not merge launch fields.
+async fn resolve_delegate_agent_and_profile(
+    store: &crate::store::LocalStore,
+    target_agent: Option<&str>,
+    profile_id: Option<&str>,
+    target_profile: Option<&str>,
+) -> anyhow::Result<(AgentName, Option<String>)> {
+    let requested_agent = target_agent
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(parse_socket_agent)
+        .transpose()?;
+
+    let explicit_profile_id = profile_id.map(str::trim).filter(|s| !s.is_empty());
+    let profile_name = target_profile.map(str::trim).filter(|s| !s.is_empty());
+
+    let profile_row = if let Some(pid) = explicit_profile_id {
+        Some(
+            store
+                .get_agent_profile(pid)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("agent profile not found: {pid}"))?,
+        )
+    } else if let Some(name) = profile_name {
+        let key = name.to_ascii_lowercase();
+        let matches: Vec<_> = store
+            .list_agent_profiles()
+            .await?
+            .into_iter()
+            .filter(|row| row.name.trim().to_ascii_lowercase() == key)
+            .collect();
+        match matches.len() {
+            0 => anyhow::bail!("agent profile not found by name: {name}"),
+            1 => Some(matches.into_iter().next().expect("len == 1")),
+            _ => anyhow::bail!(
+                "agent profile name is ambiguous ({} matches): {name}; use profile_id",
+                matches.len()
+            ),
+        }
+    } else {
+        None
+    };
+
+    if let Some(row) = profile_row {
+        let profile_agent = parse_socket_agent(&row.runtime_agent)?;
+        if let Some(requested) = requested_agent {
+            anyhow::ensure!(
+                requested == profile_agent,
+                "agent mismatch for profile {}: request agent is {}, profile runtime is {}",
+                row.id,
+                agent_label(requested),
+                agent_label(profile_agent),
+            );
+        }
+        return Ok((profile_agent, Some(row.id)));
+    }
+
+    let Some(agent) = requested_agent else {
+        anyhow::bail!("delegate_to_agent requires target_agent, profile_id, or target_profile");
+    };
+
+    // Bare runtime: newest profile convenience (list is updated_at DESC).
+    let newest = store.list_agent_profiles().await?.into_iter().find(|row| {
+        parse_socket_agent(&row.runtime_agent)
+            .map(|a| a == agent)
+            .unwrap_or(false)
+    });
+    if let Some(row) = newest {
+        return Ok((agent, Some(row.id)));
+    }
+    Ok((agent, None))
 }
 
 fn parse_conversation_mentions_from_body(body: &str) -> Vec<minos_protocol::ConversationMention> {
@@ -2583,15 +3126,15 @@ fn parse_conversation_mentions_from_body(body: &str) -> Vec<minos_protocol::Conv
         };
         mentions.push(minos_protocol::ConversationMention {
             agent,
-            thread_id: None,
-            thread_short_id: short_id,
+            session_id: None,
+            session_short_id: short_id,
         });
     }
     mentions
 }
 
-fn short_mcp_thread_id(thread_id: &str) -> String {
-    thread_id[..8.min(thread_id.len())].to_owned()
+fn short_mcp_session_id(session_id: &str) -> String {
+    session_id[..8.min(session_id.len())].to_owned()
 }
 
 pub(crate) fn map_store_error(operation: &str, e: anyhow::Error) -> MinosError {
@@ -2610,7 +3153,7 @@ fn current_unix_ms() -> i64 {
 
 async fn persist_thread_parent_rows_inner(
     store: &LocalStore,
-    thread_id: &str,
+    session_id: &str,
     cwd: &str,
     agent: minos_domain::AgentName,
     provider_session_id: Option<&str>,
@@ -2637,7 +3180,7 @@ async fn persist_thread_parent_rows_inner(
                 tracing::warn!(
                     target: "minos_daemon::agent",
                     error = %e,
-                    thread_id = %thread_id,
+                    session_id = %session_id,
                     workspace = %cwd,
                     "ensure_workspace_conversation failed; events FK may reject ingest",
                 );
@@ -2646,8 +3189,8 @@ async fn persist_thread_parent_rows_inner(
         },
     };
     if let Err(e) = store
-        .insert_thread_in_conversation(
-            thread_id,
+        .insert_session_in_conversation(
+            session_id,
             conversation_id,
             cwd,
             agent_label(agent),
@@ -2662,20 +3205,20 @@ async fn persist_thread_parent_rows_inner(
         tracing::warn!(
             target: "minos_daemon::agent",
             error = %e,
-            thread_id = %thread_id,
-            "store.insert_thread failed; events FK may reject ingest",
+            session_id = %session_id,
+            "store.insert_session failed; events FK may reject ingest",
         );
     }
     if let Some(provider_session_id) = provider_session_id {
         if let Err(e) = store
-            .update_thread_provider_session_id(thread_id, Some(provider_session_id))
+            .update_session_provider_session_id(session_id, Some(provider_session_id))
             .await
         {
             tracing::warn!(
                 target: "minos_daemon::agent",
                 error = %e,
-                thread_id = %thread_id,
-                "store.update_thread_provider_session_id failed",
+                session_id = %session_id,
+                "store.update_session_provider_session_id failed",
             );
         }
     }
@@ -2683,19 +3226,19 @@ async fn persist_thread_parent_rows_inner(
 
 async fn persist_subagent_thread_parent_row(
     store: &LocalStore,
-    thread_id: &str,
-    parent_thread_id: &str,
+    session_id: &str,
+    parent_session_id: &str,
     cwd: &str,
     agent: minos_domain::AgentName,
     now_ms: i64,
 ) {
-    let parent = match store.get_thread(parent_thread_id).await {
+    let parent = match store.get_session(parent_session_id).await {
         Ok(Some(parent)) => parent,
         Ok(None) => {
             tracing::warn!(
                 target: "minos_daemon::agent",
-                thread_id,
-                parent_thread_id,
+                session_id,
+                parent_session_id,
                 workspace = %cwd,
                 "subagent parent thread missing; events FK may reject ingest",
             );
@@ -2705,9 +3248,9 @@ async fn persist_subagent_thread_parent_row(
             tracing::warn!(
                 target: "minos_daemon::agent",
                 error = %error,
-                thread_id,
-                parent_thread_id,
-                "store.get_thread failed for subagent parent",
+                session_id,
+                parent_session_id,
+                "store.get_session failed for subagent parent",
             );
             return;
         }
@@ -2719,13 +3262,13 @@ async fn persist_subagent_thread_parent_row(
         parent.workspace_root.as_str()
     };
     if let Err(error) = store
-        .insert_thread_in_conversation(
-            thread_id,
+        .insert_session_in_conversation(
+            session_id,
             &parent.conversation_id,
             workspace_root,
             agent_label(agent),
             None,
-            Some(parent_thread_id),
+            Some(parent_session_id),
             "idle",
             now_ms,
             false,
@@ -2735,9 +3278,9 @@ async fn persist_subagent_thread_parent_row(
         tracing::warn!(
             target: "minos_daemon::agent",
             error = %error,
-            thread_id,
-            parent_thread_id,
-            "store.insert_thread failed for subagent",
+            session_id,
+            parent_session_id,
+            "store.insert_session failed for subagent",
         );
     }
 }
@@ -2803,14 +3346,14 @@ fn is_unique_constraint(error: &anyhow::Error) -> bool {
 }
 
 fn provider_session_id_from_event(
-    thread_id: &str,
+    session_id: &str,
     agent: minos_domain::AgentName,
     event: &EventRow,
 ) -> Option<String> {
     let payload = serde_json::from_slice(event.body_inline.as_deref()?).ok()?;
     provider_session_id_from_ingest(&RawIngest {
         agent,
-        thread_id: thread_id.to_string(),
+        session_id: session_id.to_string(),
         provider_session_id: provider_session_id_from_payload(agent, &payload),
         provider_event_id: None,
         event_type: None,
@@ -2829,19 +3372,19 @@ fn provider_session_id_from_payload(
     RawIngest::from_json(agent, String::new(), payload.clone(), 0).provider_session_id
 }
 
-fn state_to_proto(state: &minos_agent_runtime::ThreadState) -> ProtoThreadState {
-    use minos_agent_runtime::ThreadState as RtState;
+fn state_to_proto(state: &minos_agent_runtime::SessionState) -> ProtoSessionState {
+    use minos_agent_runtime::SessionState as RtState;
     match state {
-        RtState::Starting => ProtoThreadState::Starting,
-        RtState::Idle => ProtoThreadState::Idle,
-        RtState::Running { turn_started_at_ms } => ProtoThreadState::Running {
+        RtState::Starting => ProtoSessionState::Starting,
+        RtState::Idle => ProtoSessionState::Idle,
+        RtState::Running { turn_started_at_ms } => ProtoSessionState::Running {
             turn_started_at_ms: *turn_started_at_ms,
         },
-        RtState::Suspended { reason } => ProtoThreadState::Suspended {
+        RtState::Suspended { reason } => ProtoSessionState::Suspended {
             reason: pause_to_proto(reason),
         },
-        RtState::Resuming => ProtoThreadState::Resuming,
-        RtState::Closed { reason } => ProtoThreadState::Closed {
+        RtState::Resuming => ProtoSessionState::Resuming,
+        RtState::Closed { reason } => ProtoSessionState::Closed {
             reason: close_to_proto(reason),
         },
     }
@@ -2849,30 +3392,30 @@ fn state_to_proto(state: &minos_agent_runtime::ThreadState) -> ProtoThreadState 
 
 fn local_event_from_manager(event: &ManagerEvent) -> LocalManagerEvent {
     match event {
-        ManagerEvent::ThreadAdded {
-            thread_id,
+        ManagerEvent::SessionAdded {
+            session_id,
             workspace,
             agent,
-            parent_thread_id,
-        } => LocalManagerEvent::ThreadAdded {
-            thread_id: thread_id.clone(),
+            parent_session_id,
+        } => LocalManagerEvent::SessionAdded {
+            session_id: session_id.clone(),
             workspace: workspace.display().to_string(),
             agent: *agent,
-            parent_thread_id: parent_thread_id.clone(),
+            parent_session_id: parent_session_id.clone(),
         },
-        ManagerEvent::ThreadStateChanged {
-            thread_id,
+        ManagerEvent::SessionStateChanged {
+            session_id,
             old,
             new,
             at_ms,
-        } => LocalManagerEvent::ThreadStateChanged {
-            thread_id: thread_id.clone(),
+        } => LocalManagerEvent::SessionStateChanged {
+            session_id: session_id.clone(),
             old: state_to_proto(old),
             new: state_to_proto(new),
             at_ms: *at_ms,
         },
-        ManagerEvent::ThreadClosed { thread_id, reason } => LocalManagerEvent::ThreadClosed {
-            thread_id: thread_id.clone(),
+        ManagerEvent::SessionClosed { session_id, reason } => LocalManagerEvent::SessionClosed {
+            session_id: session_id.clone(),
             reason: close_to_proto(reason),
         },
         ManagerEvent::InstanceCrashed {
@@ -2944,7 +3487,7 @@ mod tests {
 
     async fn seed_thread(
         glue: &AgentGlue,
-        thread_id: &str,
+        session_id: &str,
         agent: &str,
         started_at: i64,
         last_activity_at: i64,
@@ -2961,18 +3504,18 @@ mod tests {
             "INSERT INTO conversations(conversation_id, project_id, title, created_at_ms, updated_at_ms) \
              VALUES (?, 'p-test', 'Test', ?, ?)",
         )
-        .bind(format!("c-{thread_id}"))
+        .bind(format!("c-{session_id}"))
         .bind(started_at)
         .bind(last_activity_at)
         .execute(glue.store.pool())
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
+            "INSERT INTO sessions(session_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
              VALUES (?, ?, '/w', ?, 'idle', 3, ?, ?)",
         )
-        .bind(thread_id)
-        .bind(format!("c-{thread_id}"))
+        .bind(session_id)
+        .bind(format!("c-{session_id}"))
         .bind(agent)
         .bind(started_at)
         .bind(last_activity_at)
@@ -2992,6 +3535,381 @@ mod tests {
             .unwrap();
     }
 
+    #[test]
+    fn validate_agent_profile_name_accepts_clean_tokens() {
+        assert_eq!(
+            validate_agent_profile_name("ResearchGrok", "create_agent_profile").unwrap(),
+            "ResearchGrok"
+        );
+        assert_eq!(
+            validate_agent_profile_name("  Helper  ", "create_agent_profile").unwrap(),
+            "Helper"
+        );
+        assert_eq!(
+            validate_agent_profile_name("my-agent_1", "update_agent_profile").unwrap(),
+            "my-agent_1"
+        );
+    }
+
+    #[test]
+    fn validate_agent_profile_name_rejects_whitespace_hash_at() {
+        for bad in ["has space", "has\ttab", "hash#name", "at@name", "a b#c", ""] {
+            let err = validate_agent_profile_name(bad, "create_agent_profile")
+                .expect_err("should reject");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("required")
+                    || msg.contains("whitespace")
+                    || msg.contains('#')
+                    || msg.contains('@'),
+                "unexpected error for {bad:?}: {msg}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn create_agent_profile_rejects_invalid_name() {
+        let test = test_glue().await;
+        let err = test
+            .glue
+            .create_agent_profile(minos_protocol::CreateAgentProfileRequest {
+                name: "bad name".into(),
+                description: String::new(),
+                runtime_agent: AgentName::Grok,
+                model: "grok-4".into(),
+                reasoning_effort: String::new(),
+                instructions: String::new(),
+            })
+            .await
+            .expect_err("whitespace name");
+        assert!(
+            err.to_string().contains("whitespace") || err.to_string().contains('#'),
+            "unexpected: {err}"
+        );
+
+        let err = test
+            .glue
+            .create_agent_profile(minos_protocol::CreateAgentProfileRequest {
+                name: "hash#x".into(),
+                description: String::new(),
+                runtime_agent: AgentName::Grok,
+                model: "grok-4".into(),
+                reasoning_effort: String::new(),
+                instructions: String::new(),
+            })
+            .await
+            .expect_err("hash name");
+        assert!(err.to_string().contains('#'), "unexpected: {err}");
+
+        let err = test
+            .glue
+            .create_agent_profile(minos_protocol::CreateAgentProfileRequest {
+                name: "at@x".into(),
+                description: String::new(),
+                runtime_agent: AgentName::Grok,
+                model: "grok-4".into(),
+                reasoning_effort: String::new(),
+                instructions: String::new(),
+            })
+            .await
+            .expect_err("at name");
+        assert!(err.to_string().contains('@'), "unexpected: {err}");
+    }
+
+    #[tokio::test]
+    async fn update_agent_profile_rejects_invalid_name() {
+        let test = test_glue().await;
+        let created = test
+            .glue
+            .create_agent_profile(minos_protocol::CreateAgentProfileRequest {
+                name: "ValidName".into(),
+                description: String::new(),
+                runtime_agent: AgentName::Codex,
+                model: "gpt-5".into(),
+                reasoning_effort: String::new(),
+                instructions: String::new(),
+            })
+            .await
+            .expect("create ok");
+
+        let err = test
+            .glue
+            .update_agent_profile(minos_protocol::UpdateAgentProfileRequest {
+                id: created.id.clone(),
+                name: "not valid".into(),
+                description: String::new(),
+                instructions: String::new(),
+            })
+            .await
+            .expect_err("whitespace update name");
+        assert!(err.to_string().contains("whitespace"), "unexpected: {err}");
+    }
+
+    #[tokio::test]
+    async fn resolve_launch_options_applies_profile_fields() {
+        let test = test_glue().await;
+        test.glue
+            .store
+            .create_agent_profile(
+                "profile-research",
+                "Research",
+                "deep",
+                "grok",
+                "grok-4",
+                "high",
+                "You are a researcher.",
+                1,
+            )
+            .await
+            .unwrap();
+
+        let launch = test
+            .glue
+            .resolve_launch_options(AgentName::Grok, Some("profile-research"), None, None, None)
+            .await
+            .unwrap()
+            .expect("profile should yield launch options");
+        assert_eq!(launch.model.as_deref(), Some("grok-4"));
+        assert_eq!(launch.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(
+            launch.instructions.as_deref(),
+            Some("You are a researcher.")
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_launch_options_rejects_agent_mismatch() {
+        let test = test_glue().await;
+        test.glue
+            .store
+            .create_agent_profile(
+                "profile-codex",
+                "Coder",
+                "",
+                "codex",
+                "gpt-5",
+                "medium",
+                "",
+                1,
+            )
+            .await
+            .unwrap();
+
+        let err = test
+            .glue
+            .resolve_launch_options(AgentName::Grok, Some("profile-codex"), None, None, None)
+            .await
+            .expect_err("agent must match profile runtime");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("agent mismatch") || msg.contains("mismatch"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_launch_options_explicit_overrides_profile() {
+        let test = test_glue().await;
+        test.glue
+            .store
+            .create_agent_profile(
+                "profile-base",
+                "Base",
+                "",
+                "claude",
+                "claude-sonnet",
+                "low",
+                "base instructions",
+                1,
+            )
+            .await
+            .unwrap();
+
+        let launch = test
+            .glue
+            .resolve_launch_options(
+                AgentName::Claude,
+                Some("profile-base"),
+                Some("claude-opus".into()),
+                None,
+                Some("override instructions".into()),
+            )
+            .await
+            .unwrap()
+            .expect("launch options");
+        assert_eq!(launch.model.as_deref(), Some("claude-opus"));
+        // effort not overridden → profile value
+        assert_eq!(launch.reasoning_effort.as_deref(), Some("low"));
+        assert_eq!(
+            launch.instructions.as_deref(),
+            Some("override instructions")
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_delegate_launch_target_newest_profile_for_runtime() {
+        let test = test_glue().await;
+        test.glue
+            .store
+            .create_agent_profile(
+                "profile-old",
+                "Old",
+                "",
+                "grok",
+                "grok-old",
+                "low",
+                "old",
+                10,
+            )
+            .await
+            .unwrap();
+        test.glue
+            .store
+            .create_agent_profile(
+                "profile-new",
+                "New",
+                "",
+                "grok",
+                "grok-new",
+                "high",
+                "new",
+                99,
+            )
+            .await
+            .unwrap();
+
+        let (agent, profile_id, launch) =
+            resolve_delegate_launch_target(&test.glue.store, Some("grok"), None, None)
+                .await
+                .unwrap();
+        assert_eq!(agent, AgentName::Grok);
+        assert_eq!(profile_id.as_deref(), Some("profile-new"));
+        let launch = launch.expect("newest profile should yield launch options");
+        assert_eq!(launch.model.as_deref(), Some("grok-new"));
+        assert_eq!(launch.reasoning_effort.as_deref(), Some("high"));
+    }
+
+    #[tokio::test]
+    async fn resolve_delegate_launch_target_by_profile_name() {
+        let test = test_glue().await;
+        test.glue
+            .store
+            .create_agent_profile(
+                "profile-research",
+                "ResearchGrok",
+                "",
+                "grok",
+                "grok-4",
+                "high",
+                "research",
+                1,
+            )
+            .await
+            .unwrap();
+
+        let (agent, profile_id, launch) =
+            resolve_delegate_launch_target(&test.glue.store, None, None, Some("researchgrok"))
+                .await
+                .unwrap();
+        assert_eq!(agent, AgentName::Grok);
+        assert_eq!(profile_id.as_deref(), Some("profile-research"));
+        assert_eq!(launch.and_then(|l| l.model).as_deref(), Some("grok-4"));
+    }
+
+    #[tokio::test]
+    async fn resolve_delegate_launch_target_by_profile_id_only() {
+        let test = test_glue().await;
+        test.glue
+            .store
+            .create_agent_profile(
+                "profile-solo",
+                "Solo",
+                "",
+                "claude",
+                "claude-opus",
+                "medium",
+                "solo instructions",
+                1,
+            )
+            .await
+            .unwrap();
+
+        let (agent, profile_id, launch) =
+            resolve_delegate_launch_target(&test.glue.store, None, Some("profile-solo"), None)
+                .await
+                .unwrap();
+        assert_eq!(agent, AgentName::Claude);
+        assert_eq!(profile_id.as_deref(), Some("profile-solo"));
+        let launch = launch.expect("profile_id should yield launch options");
+        assert_eq!(launch.model.as_deref(), Some("claude-opus"));
+        assert_eq!(launch.reasoning_effort.as_deref(), Some("medium"));
+        assert_eq!(launch.instructions.as_deref(), Some("solo instructions"));
+    }
+
+    #[tokio::test]
+    async fn resolve_delegate_launch_target_rejects_agent_mismatch() {
+        let test = test_glue().await;
+        test.glue
+            .store
+            .create_agent_profile(
+                "profile-codex",
+                "Coder",
+                "",
+                "codex",
+                "gpt-5",
+                "high",
+                "",
+                1,
+            )
+            .await
+            .unwrap();
+
+        let err = resolve_delegate_launch_target(
+            &test.glue.store,
+            Some("grok"),
+            Some("profile-codex"),
+            None,
+        )
+        .await
+        .expect_err("request agent must match profile runtime");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("agent mismatch") || msg.contains("mismatch"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_launch_options_without_profile_uses_explicit_only() {
+        let test = test_glue().await;
+        let launch = test
+            .glue
+            .resolve_launch_options(
+                AgentName::Codex,
+                None,
+                Some("gpt-5".into()),
+                Some("high".into()),
+                None,
+            )
+            .await
+            .unwrap()
+            .expect("explicit fields");
+        assert_eq!(launch.model.as_deref(), Some("gpt-5"));
+        assert_eq!(launch.reasoning_effort.as_deref(), Some("high"));
+        assert!(launch.instructions.is_none());
+    }
+
+    #[tokio::test]
+    async fn resolve_launch_options_missing_profile_errors() {
+        let test = test_glue().await;
+        let err = test
+            .glue
+            .resolve_launch_options(AgentName::Grok, Some("no-such-profile"), None, None, None)
+            .await
+            .expect_err("missing profile");
+        assert!(err.to_string().contains("not found"));
+    }
+
     #[tokio::test]
     async fn daemon_mcp_post_conversation_update_appends_and_emits_local_event() {
         let test = test_glue().await;
@@ -2999,7 +3917,7 @@ mod tests {
         test.glue.store.upsert_workspace("/w", 1).await.unwrap();
         test.glue
             .store
-            .insert_thread_in_conversation(
+            .insert_session_in_conversation(
                 "thread-codex-1234",
                 "conversation-mcp",
                 "/w",
@@ -3023,7 +3941,7 @@ mod tests {
             SocketRequest::PostConversationUpdate {
                 conversation_id: "conversation-mcp".into(),
                 source_agent: Some("codex".into()),
-                source_thread_id: Some("thread-codex-1234".into()),
+                source_session_id: Some("thread-codex-1234".into()),
                 message: "review posted".into(),
             },
         )
@@ -3040,7 +3958,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].sender_role, "agent");
         assert_eq!(rows[0].agent.as_deref(), Some("codex"));
-        assert_eq!(rows[0].thread_id.as_deref(), Some("thread-codex-1234"));
+        assert_eq!(rows[0].session_id.as_deref(), Some("thread-codex-1234"));
         assert_eq!(rows[0].body, "review posted");
 
         let event = tokio::time::timeout(std::time::Duration::from_secs(1), event_rx.recv())
@@ -3063,7 +3981,7 @@ mod tests {
         test.glue.store.upsert_workspace("/w", 1).await.unwrap();
         test.glue
             .store
-            .insert_thread_in_conversation(
+            .insert_session_in_conversation(
                 "thread-opencode-1234",
                 "conversation-mcp",
                 "/w",
@@ -3106,8 +4024,10 @@ mod tests {
             SocketRequest::DelegateToAgent {
                 conversation_id: "conversation-mcp".into(),
                 source_agent: Some("opencode".into()),
-                source_thread_id: Some("thread-opencode-1234".into()),
-                target_agent: "gemini".into(),
+                source_session_id: Some("thread-opencode-1234".into()),
+                target_agent: Some("gemini".into()),
+                profile_id: None,
+                target_profile: None,
                 prompt: "say hi".into(),
             },
         )
@@ -3127,14 +4047,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_threads_reads_persisted_rows_and_filters_agent() {
+    async fn list_sessions_reads_persisted_rows_and_filters_agent() {
         let test = test_glue().await;
         seed_thread(&test.glue, "thr-a", "codex", 10, 20).await;
         seed_thread(&test.glue, "thr-b", "claude", 30, 40).await;
 
         let response = test
             .glue
-            .list_threads(ListThreadsParams {
+            .list_sessions(ListSessionsParams {
                 limit: 50,
                 before_ts_ms: None,
                 agent: Some(minos_domain::AgentName::Claude),
@@ -3142,12 +4062,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.threads.len(), 1);
-        assert_eq!(response.threads[0].thread_id, "thr-b");
-        assert_eq!(response.threads[0].agent, minos_domain::AgentName::Claude);
-        assert_eq!(response.threads[0].message_count, 3);
-        assert_eq!(response.threads[0].first_ts_ms, 30);
-        assert_eq!(response.threads[0].last_ts_ms, 40);
+        assert_eq!(response.sessions.len(), 1);
+        assert_eq!(response.sessions[0].session_id, "thr-b");
+        assert_eq!(response.sessions[0].agent, minos_domain::AgentName::Claude);
+        assert_eq!(response.sessions[0].message_count, 3);
+        assert_eq!(response.sessions[0].first_ts_ms, 30);
+        assert_eq!(response.sessions[0].last_ts_ms, 40);
     }
 
     #[tokio::test]
@@ -3163,7 +4083,7 @@ mod tests {
                 None,
                 None,
                 Some("c-live".into()),
-                ThreadState::Idle,
+                SessionState::Idle,
                 3,
             )
             .await
@@ -3180,7 +4100,7 @@ mod tests {
             .expect("persisted ingest should be emitted")
             .expect("persisted ingest channel should stay open");
 
-        assert_eq!(frame.thread_id, "thr-live");
+        assert_eq!(frame.session_id, "thr-live");
         assert_eq!(frame.seq, 4);
         assert_eq!(frame.agent, AgentName::Codex);
         assert!(frame.ui_events.iter().any(|event| matches!(
@@ -3190,11 +4110,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_thread_uses_persisted_suspended_state() {
+    async fn get_session_uses_persisted_suspended_state() {
         let test = test_glue().await;
         seed_thread(&test.glue, "thr-s", "codex", 10, 20).await;
         sqlx::query(
-            "UPDATE threads SET status = 'suspended', last_pause_reason = 'daemon_restart' WHERE thread_id = 'thr-s'",
+            "UPDATE sessions SET status = 'suspended', last_pause_reason = 'daemon_restart' WHERE session_id = 'thr-s'",
         )
         .execute(test.glue.store.pool())
         .await
@@ -3202,35 +4122,35 @@ mod tests {
 
         let response = test
             .glue
-            .get_thread(GetThreadParams {
-                thread_id: "thr-s".into(),
+            .get_session(GetSessionParams {
+                session_id: "thr-s".into(),
             })
             .await
             .unwrap();
 
-        assert_eq!(response.thread.thread_id, "thr-s");
+        assert_eq!(response.thread.session_id, "thr-s");
         assert_eq!(
             response.state,
-            ProtoThreadState::Suspended {
+            ProtoSessionState::Suspended {
                 reason: ProtoPauseReason::DaemonRestart,
             }
         );
     }
 
     #[tokio::test]
-    async fn get_thread_maps_closed_reason_from_store() {
+    async fn get_session_maps_closed_reason_from_store() {
         let test = test_glue().await;
         seed_thread(&test.glue, "thr-c", "codex", 10, 20).await;
         test.glue
             .store
-            .close_thread_row("thr-c", "user_close", 55)
+            .close_session_row("thr-c", "user_close", 55)
             .await
             .unwrap();
 
         let response = test
             .glue
-            .get_thread(GetThreadParams {
-                thread_id: "thr-c".into(),
+            .get_session(GetSessionParams {
+                session_id: "thr-c".into(),
             })
             .await
             .unwrap();
@@ -3238,11 +4158,11 @@ mod tests {
         assert_eq!(response.thread.ended_at_ms, Some(55));
         assert_eq!(
             response.thread.end_reason,
-            Some(ThreadEndReason::UserStopped)
+            Some(SessionEndReason::UserStopped)
         );
         assert_eq!(
             response.state,
-            ProtoThreadState::Closed {
+            ProtoSessionState::Closed {
                 reason: ProtoCloseReason::UserClose,
             }
         );
@@ -3275,7 +4195,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
+            "INSERT INTO sessions(session_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
              VALUES ('thr-live', 'c-live', ?, 'codex', 'idle', 0, 10, 10)",
         )
         .bind(&workspace_root)
@@ -3291,7 +4211,7 @@ mod tests {
                 Some("thr-live".into()),
                 None,
                 Some("c-live".into()),
-                ThreadState::Idle,
+                SessionState::Idle,
                 0,
             )
             .await
@@ -3308,14 +4228,14 @@ mod tests {
         let row = test
             .glue
             .store
-            .get_thread("thr-live")
+            .get_session("thr-live")
             .await
             .unwrap()
             .unwrap();
         assert_eq!(row.status, "running");
         assert!(matches!(
             test.glue.current_state(),
-            ThreadState::Running { .. }
+            SessionState::Running { .. }
         ));
     }
 
@@ -3349,14 +4269,14 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
+            "INSERT INTO sessions(session_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
              VALUES ('thr-snapshot', 'c-snapshot', ?, 'codex', 'idle', 0, 10, 20)",
         )
         .bind(&workspace_root)
         .execute(test.glue.store.pool())
         .await
         .unwrap();
-        let state = ThreadState::Running {
+        let state = SessionState::Running {
             turn_started_at_ms: 99,
         };
         test.glue
@@ -3376,35 +4296,35 @@ mod tests {
 
         let snapshot = test
             .glue
-            .current_agent_thread()
+            .current_agent_session()
             .await
             .unwrap()
             .expect("live thread snapshot");
 
-        assert_eq!(snapshot.thread_id, "thr-snapshot");
+        assert_eq!(snapshot.session_id, "thr-snapshot");
         assert_eq!(snapshot.workspace_root, workspace_root);
         assert_eq!(snapshot.state, state);
     }
 
     #[tokio::test]
-    async fn resume_thread_registers_persisted_thread_and_returns_workspace() {
+    async fn resume_session_registers_persisted_thread_and_returns_workspace() {
         let test = test_glue().await;
         seed_thread(&test.glue, "thr-r", "codex", 10, 20).await;
         sqlx::query(
-            "UPDATE threads SET status = 'suspended', last_pause_reason = 'daemon_restart', provider_session_id = 'thr-r' WHERE thread_id = 'thr-r'",
+            "UPDATE sessions SET status = 'suspended', last_pause_reason = 'daemon_restart', provider_session_id = 'thr-r' WHERE session_id = 'thr-r'",
         )
         .execute(test.glue.store.pool())
         .await
         .unwrap();
 
-        let response = test.glue.resume_thread("thr-r", false).await.unwrap();
+        let response = test.glue.resume_session("thr-r", false).await.unwrap();
         assert_eq!(response.session_id, "thr-r");
         assert_eq!(response.cwd, "/w");
         assert!(test.glue.manager.has_thread("thr-r").await);
     }
 
     #[tokio::test]
-    async fn shutdown_suspends_threads_instead_of_closing() {
+    async fn shutdown_keeps_idle_threads_resumable_without_paused() {
         let test = test_glue().await;
         seed_thread(&test.glue, "thr-stop", "codex", 10, 20).await;
         test.glue
@@ -3416,7 +4336,7 @@ mod tests {
                 Some("thr-stop".into()),
                 None,
                 Some("c-thr-stop".into()),
-                ThreadState::Idle,
+                SessionState::Idle,
                 0,
             )
             .await
@@ -3427,33 +4347,35 @@ mod tests {
         let row = test
             .glue
             .store
-            .get_thread("thr-stop")
+            .get_session("thr-stop")
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(row.status, "suspended");
-        assert_eq!(row.last_pause_reason.as_deref(), Some("daemon_restart"));
+        // Idle between turns must not become user-visible Paused after stop.
+        assert_eq!(row.status, "idle");
+        assert!(row.last_pause_reason.is_none());
         assert!(!row.needs_continue);
+        // In-process manager still parks as Suspended so children tear down cleanly.
         assert!(matches!(
-            test.glue.manager.list_threads().await[0].state,
-            ThreadState::Suspended {
+            test.glue.manager.list_sessions().await[0].state,
+            SessionState::Suspended {
                 reason: minos_agent_runtime::PauseReason::DaemonRestart
             }
         ));
     }
 
     #[tokio::test]
-    async fn resume_thread_recovers_non_codex_provider_session_id_from_events() {
+    async fn resume_session_recovers_non_codex_provider_session_id_from_events() {
         let test = test_glue().await;
         seed_thread(&test.glue, "thr-g", "gemini", 10, 20).await;
         sqlx::query(
-            "UPDATE threads SET status = 'suspended', last_pause_reason = 'daemon_restart', provider_session_id = 'thr-g', last_seq = 1 WHERE thread_id = 'thr-g'",
+            "UPDATE sessions SET status = 'suspended', last_pause_reason = 'daemon_restart', provider_session_id = 'thr-g', last_seq = 1 WHERE session_id = 'thr-g'",
         )
         .execute(test.glue.store.pool())
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO events(thread_id, seq, body_kind, body_inline, projection_json, ts_ms, source) VALUES (?, 1, 'inline', ?, ?, 25, 'live')",
+            "INSERT INTO events(session_id, seq, body_kind, body_inline, projection_json, ts_ms, source) VALUES (?, 1, 'inline', ?, ?, 25, 'live')",
         )
         .bind("thr-g")
         .bind(
@@ -3468,13 +4390,13 @@ mod tests {
         .await
         .unwrap();
 
-        let response = test.glue.resume_thread("thr-g", false).await.unwrap();
+        let response = test.glue.resume_session("thr-g", false).await.unwrap();
 
         assert_eq!(response.session_id, "thr-g");
         assert_eq!(
             test.glue
                 .manager
-                .thread_provider_session_id("thr-g")
+                .session_provider_session_id("thr-g")
                 .await
                 .as_deref(),
             Some("gemini-provider-session")

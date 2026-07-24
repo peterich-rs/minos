@@ -263,8 +263,8 @@ class AgentWorkspaceState {
     return null;
   }
 
-  AgentProfile? profileForThread(String threadId) {
-    final profileId = threadProfileBindings[threadId];
+  AgentProfile? profileForThread(String sessionId) {
+    final profileId = threadProfileBindings[sessionId];
     if (profileId == null) return null;
     return profileById(profileId);
   }
@@ -364,6 +364,8 @@ AgentName _agentNameFromJson(String? value) {
   return switch (value) {
     'claude' => AgentName.claude,
     'gemini' => AgentName.gemini,
+    'opencode' => AgentName.opencode,
+    'grok' => AgentName.grok,
     _ => AgentName.codex,
   };
 }

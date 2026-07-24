@@ -42,7 +42,7 @@
 | `src/app/*.rs` | 事件循环、effect 执行、生命周期、提交、群聊、MCP、剪贴板和 thread 操作 |
 | `src/app/event_mapping.rs` | key event 到 semantic Action/input target 的纯映射 |
 | `src/effect.rs` | Effect 描述与 StateChange |
-| `src/agent_route.rs` | 共享 `@agent[#thread]` 路由解析和 short thread id 辅助 |
+| `src/agent_route.rs` | 共享 `@agent[#thread]` 路由解析和 short session id 辅助 |
 
 ---
 
@@ -415,18 +415,18 @@ async fn execute_effect(&mut self, effect: Effect) {
             let tx = self.event_tx.clone();
             tokio::spawn(async move {
                 match backend.start_agent(agent, workspace).await {
-                    Ok(thread_id) => { /* 发送 EffectResult::AgentStarted */ }
+                    Ok(session_id) => { /* 发送 EffectResult::AgentStarted */ }
                     Err(e) => { /* 发送 EffectResult::SendFailed */ }
                 }
             });
         }
-        Effect::SendMessage { thread_id, text } => {
+        Effect::SendMessage { session_id, text } => {
             let backend = Arc::clone(&self.backend);
             let tx = self.event_tx.clone();
             tokio::spawn(async move {
-                if let Err(e) = backend.send_message(&thread_id, &text).await {
+                if let Err(e) = backend.send_message(&session_id, &text).await {
                     let _ = tx.send(AppEvent::SendMessageFailed {
-                        thread_id,
+                        session_id,
                         error: e.to_string(),
                     });
                 }
@@ -435,14 +435,14 @@ async fn execute_effect(&mut self, effect: Effect) {
         Effect::WriteGroupChat { message } => {
             self.append_group_chat_message(message).await;
         }
-        Effect::InterruptThread(thread_id) => {
-            let _ = self.backend.interrupt_thread(&thread_id).await;
+        Effect::InterruptThread(session_id) => {
+            let _ = self.backend.interrupt_session(&session_id).await;
         }
-        Effect::CloseThread(thread_id) => {
-            let _ = self.backend.close_thread(&thread_id).await;
+        Effect::CloseThread(session_id) => {
+            let _ = self.backend.close_session(&session_id).await;
         }
-        Effect::DeleteThread(thread_id) => {
-            let _ = self.backend.delete_thread(&thread_id).await;
+        Effect::DeleteThread(session_id) => {
+            let _ = self.backend.delete_session(&session_id).await;
         }
         Effect::CopyToClipboard(text) => {
             let _ = crate::clipboard::copy(&text);

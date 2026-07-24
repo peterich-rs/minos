@@ -95,13 +95,13 @@ impl App {
             match effect {
                 Effect::AgentStartedForPrompt {
                     agent,
-                    thread_id,
+                    session_id,
                     cwd,
                     text,
                 } => {
-                    self.ensure_thread_visible(thread_id.clone(), agent, cwd);
+                    self.ensure_thread_visible(session_id.clone(), agent, cwd);
                     if !text.trim().is_empty() {
-                        redraw |= self.send_text_to_thread(thread_id, text, None).await;
+                        redraw |= self.send_text_to_thread(session_id, text, None).await;
                     }
                 }
                 _ => {
@@ -126,15 +126,15 @@ impl App {
             Effect::HandleTick => self.handle_tick().await,
             Effect::AgentStartedForPrompt {
                 agent,
-                thread_id,
+                session_id,
                 cwd,
                 text,
             } => {
-                self.ensure_thread_visible(thread_id.clone(), agent, cwd);
+                self.ensure_thread_visible(session_id.clone(), agent, cwd);
                 if text.trim().is_empty() {
                     true
                 } else {
-                    self.send_text_to_thread(thread_id, text, None).await
+                    self.send_text_to_thread(session_id, text, None).await
                 }
             }
             Effect::DispatchPromptToAgent {
@@ -146,22 +146,22 @@ impl App {
                     .await
             }
             Effect::SendTextToThread {
-                thread_id,
+                session_id,
                 text,
                 message_body,
             } => {
-                self.send_text_to_thread(thread_id, text, message_body)
+                self.send_text_to_thread(session_id, text, message_body)
                     .await
             }
             Effect::SubmitPendingAgentRequest {
-                thread_id,
+                session_id,
                 pending,
                 text,
             } => {
-                self.submit_pending_agent_request(thread_id, pending, text)
+                self.submit_pending_agent_request(session_id, pending, text)
                     .await
             }
-            Effect::ConfirmDeleteThread => self.confirm_delete_thread().await,
+            Effect::ConfirmDeleteThread => self.confirm_delete_session().await,
             Effect::CopyToClipboard(text) => {
                 if let Err(error) = copy_to_clipboard(&text) {
                     self.ui
@@ -260,6 +260,7 @@ impl App {
                 workspace,
                 message_body,
                 prompt,
+                profile_id,
             } => {
                 self.run_conversation_start_flow(
                     conversation_ops::create_conversation_and_start_agent(
@@ -269,6 +270,7 @@ impl App {
                         workspace,
                         message_body,
                         prompt,
+                        profile_id,
                     ),
                 )
                 .await
@@ -280,6 +282,7 @@ impl App {
                 workspace,
                 message_body,
                 prompt,
+                profile_id,
             } => {
                 self.run_conversation_start_flow(
                     conversation_ops::start_agent_in_existing_conversation(
@@ -290,6 +293,7 @@ impl App {
                         workspace,
                         message_body,
                         prompt,
+                        profile_id,
                     ),
                 )
                 .await
@@ -326,13 +330,13 @@ impl App {
                             conversation_ops::pick_auto_continue_session(&sessions)
                         {
                             if let Err(error) =
-                                backend.resume_thread(&session.thread_id, true).await
+                                backend.resume_session(&session.session_id, true).await
                             {
                                 tracing::warn!(
                                     target: "minos_tui::app",
                                     error = %error,
-                                    thread_id = %session.thread_id,
-                                    "auto-continue resume_thread failed on open"
+                                    session_id = %session.session_id,
+                                    "auto-continue resume_session failed on open"
                                 );
                             }
                         }
@@ -346,8 +350,8 @@ impl App {
                 }
                 false
             }
-            Effect::OpenAgentSession { thread_id } => {
-                self.ensure_conversation_agent_session_visible(&thread_id)
+            Effect::OpenAgentSession { session_id } => {
+                self.ensure_conversation_agent_session_visible(&session_id)
                     .await;
                 true
             }
@@ -390,7 +394,7 @@ impl App {
                         let _ = tx.send(AppEvent::ConversationAgentStarted {
                             conversation_id: started.conversation_id,
                             agent: started.agent,
-                            thread_id: started.thread_id,
+                            session_id: started.session_id,
                             cwd: started.cwd,
                             text: started.text,
                         });
@@ -424,7 +428,7 @@ impl App {
                         crate::action::EffectResult::ConversationAgentStarted {
                             conversation_id: started.conversation_id,
                             agent: started.agent,
-                            thread_id: started.thread_id,
+                            session_id: started.session_id,
                             cwd: started.cwd,
                             text: started.text,
                         },
@@ -522,8 +526,8 @@ impl App {
         }
 
         if self.current_thread_is_interruptible() {
-            if let Some(thread_id) = self.ui.current_thread_id().map(String::from) {
-                if let Err(error) = self.backend.interrupt_thread(&thread_id).await {
+            if let Some(session_id) = self.ui.current_session_id().map(String::from) {
+                if let Err(error) = self.backend.interrupt_session(&session_id).await {
                     self.ui
                         .set_error(format!("Failed to interrupt thread: {error}"));
                 }

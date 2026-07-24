@@ -11,15 +11,15 @@ Use this catalog to decide which method family to implement. Verify exact fields
 ## Threads
 
 - `thread/start`: create a new conversation and subscribe to events.
-- `thread/resume`: reopen an existing thread id.
-- `thread/fork`: branch an existing thread into a new thread id.
+- `thread/resume`: reopen an existing session id.
+- `thread/fork`: branch an existing thread into a new session id.
 - `thread/read`: read stored thread without subscribing; `includeTurns` can return full history.
 - `thread/list`: page stored thread logs with filters.
 - `thread/turns/list`: page a stored thread's turn history.
-- `thread/loaded/list`: list in-memory loaded thread ids.
+- `thread/loaded/list`: list in-memory loaded session ids.
 - `thread/name/set`: set/update user-facing thread name.
 - `thread/archive` / `thread/unarchive`: manage persisted archived state.
-- `thread/unsubscribe`: unsubscribe current connection from thread events.
+- `thread/unsubscribe`: unsubscribe current connection from session events.
 - `thread/compact/start`: trigger history compaction and stream progress.
 - `thread/rollback`: remove recent turns from in-memory context and persist rollback marker.
 - `thread/inject_items`: append Responses API items to model-visible history without starting a user turn.
@@ -79,7 +79,7 @@ Example input:
   "method": "turn/start",
   "id": 101,
   "params": {
-    "threadId": "thread-1",
+    "sessionId": "thread-1",
     "input": [
       { "type": "text", "text": "$skill-creator Add a new skill for triaging flaky CI." },
       { "type": "skill", "name": "skill-creator", "path": "/Users/me/.codex/skills/skill-creator/SKILL.md" }

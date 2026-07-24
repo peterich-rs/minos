@@ -63,43 +63,43 @@ abstract class _$ProjectList extends $AsyncNotifier<List<ProjectSummary>> {
   }
 }
 
-/// Loads threads for a specific project.
+/// Loads sessions for a specific project.
 
-@ProviderFor(ProjectThreads)
-final projectThreadsProvider = ProjectThreadsFamily._();
+@ProviderFor(ProjectSessions)
+final projectSessionsProvider = ProjectSessionsFamily._();
 
-/// Loads threads for a specific project.
-final class ProjectThreadsProvider
-    extends $AsyncNotifierProvider<ProjectThreads, List<ThreadSummary>> {
-  /// Loads threads for a specific project.
-  ProjectThreadsProvider._({
-    required ProjectThreadsFamily super.from,
+/// Loads sessions for a specific project.
+final class ProjectSessionsProvider
+    extends $AsyncNotifierProvider<ProjectSessions, List<SessionSummary>> {
+  /// Loads sessions for a specific project.
+  ProjectSessionsProvider._({
+    required ProjectSessionsFamily super.from,
     required String super.argument,
   }) : super(
          retry: null,
-         name: r'projectThreadsProvider',
+         name: r'projectSessionsProvider',
          isAutoDispose: true,
          dependencies: null,
          $allTransitiveDependencies: null,
        );
 
   @override
-  String debugGetCreateSourceHash() => _$projectThreadsHash();
+  String debugGetCreateSourceHash() => _$projectSessionsHash();
 
   @override
   String toString() {
-    return r'projectThreadsProvider'
+    return r'projectSessionsProvider'
         ''
         '($argument)';
   }
 
   @$internal
   @override
-  ProjectThreads create() => ProjectThreads();
+  ProjectSessions create() => ProjectSessions();
 
   @override
   bool operator ==(Object other) {
-    return other is ProjectThreadsProvider && other.argument == argument;
+    return other is ProjectSessionsProvider && other.argument == argument;
   }
 
   @override
@@ -108,54 +108,58 @@ final class ProjectThreadsProvider
   }
 }
 
-String _$projectThreadsHash() => r'b4f1142e59e96c3bbb8d18827345890168bb7d3e';
+String _$projectSessionsHash() => r'76903f9cca7df6089089b63852bd6cbcfe4ea370';
 
-/// Loads threads for a specific project.
+/// Loads sessions for a specific project.
 
-final class ProjectThreadsFamily extends $Family
+final class ProjectSessionsFamily extends $Family
     with
         $ClassFamilyOverride<
-          ProjectThreads,
-          AsyncValue<List<ThreadSummary>>,
-          List<ThreadSummary>,
-          FutureOr<List<ThreadSummary>>,
+          ProjectSessions,
+          AsyncValue<List<SessionSummary>>,
+          List<SessionSummary>,
+          FutureOr<List<SessionSummary>>,
           String
         > {
-  ProjectThreadsFamily._()
+  ProjectSessionsFamily._()
     : super(
         retry: null,
-        name: r'projectThreadsProvider',
+        name: r'projectSessionsProvider',
         dependencies: null,
         $allTransitiveDependencies: null,
         isAutoDispose: true,
       );
 
-  /// Loads threads for a specific project.
+  /// Loads sessions for a specific project.
 
-  ProjectThreadsProvider call(String projectId) =>
-      ProjectThreadsProvider._(argument: projectId, from: this);
+  ProjectSessionsProvider call(String projectId) =>
+      ProjectSessionsProvider._(argument: projectId, from: this);
 
   @override
-  String toString() => r'projectThreadsProvider';
+  String toString() => r'projectSessionsProvider';
 }
 
-/// Loads threads for a specific project.
+/// Loads sessions for a specific project.
 
-abstract class _$ProjectThreads extends $AsyncNotifier<List<ThreadSummary>> {
+abstract class _$ProjectSessions extends $AsyncNotifier<List<SessionSummary>> {
   late final _$args = ref.$arg as String;
   String get projectId => _$args;
 
-  FutureOr<List<ThreadSummary>> build(String projectId);
+  FutureOr<List<SessionSummary>> build(String projectId);
   @$mustCallSuper
   @override
   void runBuild() {
     final ref =
-        this.ref as $Ref<AsyncValue<List<ThreadSummary>>, List<ThreadSummary>>;
+        this.ref
+            as $Ref<AsyncValue<List<SessionSummary>>, List<SessionSummary>>;
     final element =
         ref.element
             as $ClassProviderElement<
-              AnyNotifier<AsyncValue<List<ThreadSummary>>, List<ThreadSummary>>,
-              AsyncValue<List<ThreadSummary>>,
+              AnyNotifier<
+                AsyncValue<List<SessionSummary>>,
+                List<SessionSummary>
+              >,
+              AsyncValue<List<SessionSummary>>,
               Object?,
               Object?
             >;

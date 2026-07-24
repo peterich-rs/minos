@@ -43,7 +43,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 /// Recovery is best-effort: a partial replay is better than aborting
 /// reconciliation entirely.
 pub async fn recover(
-    thread_id: &str,
+    session_id: &str,
     missing_seqs: &[u64],
     codex_session_id: Option<&str>,
     writer: &Arc<EventWriter>,
@@ -51,18 +51,18 @@ pub async fn recover(
     let Ok(home) = crate::paths::user_home_dir() else {
         tracing::warn!(
             target: "minos_daemon::jsonl_recover",
-            thread_id,
+            session_id,
             "home directory unresolved; skipping recovery"
         );
         return Ok(());
     };
-    recover_with_root(thread_id, missing_seqs, codex_session_id, &home, writer).await
+    recover_with_root(session_id, missing_seqs, codex_session_id, &home, writer).await
 }
 
 /// Test-injectable entrypoint: caller passes the directory that should
 /// stand in for the user's home dir (i.e. the parent of `.codex/sessions/`).
 pub async fn recover_with_root(
-    thread_id: &str,
+    session_id: &str,
     _missing_seqs: &[u64],
     codex_session_id: Option<&str>,
     codex_home_root: &Path,
@@ -71,7 +71,7 @@ pub async fn recover_with_root(
     let Some(sid) = codex_session_id else {
         tracing::warn!(
             target: "minos_daemon::jsonl_recover",
-            thread_id,
+            session_id,
             "no codex_session_id on thread; skipping recovery"
         );
         return Ok(());
@@ -83,7 +83,7 @@ pub async fn recover_with_root(
         Err(e) => {
             tracing::warn!(
                 target: "minos_daemon::jsonl_recover",
-                thread_id,
+                session_id,
                 path = %path.display(),
                 error = %e,
                 "jsonl not readable; skipping recovery"
@@ -105,7 +105,7 @@ pub async fn recover_with_root(
             Err(e) => {
                 tracing::warn!(
                     target: "minos_daemon::jsonl_recover",
-                    thread_id,
+                    session_id,
                     error = %e,
                     "skipping malformed jsonl line"
                 );
@@ -120,11 +120,11 @@ pub async fn recover_with_root(
             .get("ts_ms")
             .and_then(serde_json::Value::as_i64)
             .unwrap_or(0);
-        let ingest = RawIngest::from_json(AgentKind::Codex, thread_id.to_string(), payload, ts_ms);
+        let ingest = RawIngest::from_json(AgentKind::Codex, session_id.to_string(), payload, ts_ms);
         if let Err(e) = writer.write_recovery(ingest).await {
             tracing::warn!(
                 target: "minos_daemon::jsonl_recover",
-                thread_id,
+                session_id,
                 error = %e,
                 "write_recovery failed for one event; continuing"
             );
@@ -134,7 +134,7 @@ pub async fn recover_with_root(
     }
     tracing::info!(
         target: "minos_daemon::jsonl_recover",
-        thread_id,
+        session_id,
         recovered,
         skipped_malformed,
         "jsonl_recover completed"

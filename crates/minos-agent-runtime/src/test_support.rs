@@ -399,7 +399,7 @@ fn assert_json_subset(actual: &serde_json::Value, expected: &serde_json::Value, 
 }
 
 /// Auto-responder that handles every typed JSON-RPC method `AgentManager`
-/// fires. Returns canned successes; thread ids are minted from a Uuid so each
+/// fires. Returns canned successes; session ids are minted from a Uuid so each
 /// `thread/start` returns a fresh value. No script discipline — the test
 /// owns the assertions on observable side-effects, not on the codex protocol
 /// shape.
@@ -435,17 +435,17 @@ async fn auto_respond(ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStre
                 }
             }),
             "thread/start" => {
-                let thread_id = format!("fake-{}", uuid::Uuid::new_v4());
-                fake_thread_response(&thread_id)
+                let session_id = format!("fake-{}", uuid::Uuid::new_v4());
+                fake_thread_response(&session_id)
             }
             "thread/resume" => {
-                let thread_id = parsed
+                let session_id = parsed
                     .get("params")
                     .and_then(|p| p.get("threadId"))
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("fake-resume")
                     .to_string();
-                fake_thread_response(&thread_id)
+                fake_thread_response(&session_id)
             }
             "turn/start" => serde_json::json!({
                 "turn": {
@@ -475,7 +475,7 @@ async fn auto_respond(ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStre
     }
 }
 
-fn fake_thread_response(thread_id: &str) -> serde_json::Value {
+fn fake_thread_response(session_id: &str) -> serde_json::Value {
     serde_json::json!({
         "approvalPolicy": "never",
         "approvalsReviewer": "user",
@@ -485,7 +485,7 @@ fn fake_thread_response(thread_id: &str) -> serde_json::Value {
         "modelProvider": "fake",
         "sandbox": { "type": "dangerFullAccess" },
         "thread": {
-            "id": thread_id,
+            "id": session_id,
             "cliVersion": "0.0.0-fake",
             "createdAt": 0,
             "cwd": "/tmp",

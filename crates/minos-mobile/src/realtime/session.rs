@@ -166,7 +166,7 @@ fn dispatch_event(
                 }
                 "approval_requested" | "approval_resolved" => {
                     let _ = ui_events_tx.send(UiEventFrame {
-                        thread_id: payload
+                        session_id: payload
                             .get("session_id")
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
@@ -201,7 +201,7 @@ fn dispatch_event(
             | "agent_error"
             | "ui_event" => {
                 let _ = ui_events_tx.send(UiEventFrame {
-                    thread_id: topic
+                    session_id: topic
                         .strip_prefix("agent_session:")
                         .unwrap_or(topic)
                         .to_string(),

@@ -2,7 +2,7 @@
 //!
 //! Public `/v1` only exposes the formal account and host rails plus the
 //! retained pairing teardown endpoint. Legacy caller-scoped `/v1/me/*`,
-//! `/v1/threads/*`, `/v1/pairing/tokens`, and `/v1/pairing/consume` routes are
+//! `/v1/sessions/*`, `/v1/pairing/tokens`, and `/v1/pairing/consume` routes are
 //! retired.
 
 use axum::http::{HeaderMap, StatusCode};

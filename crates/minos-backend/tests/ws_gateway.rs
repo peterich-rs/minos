@@ -913,7 +913,7 @@ async fn raw_host_stream_event_updates_formal_turn_cold_replay() -> anyhow::Resu
                 "method": "item/started",
                 "params": {
                     "item": { "type": "agentMessage", "id": "agent-msg-raw" },
-                    "threadId": output.session_id,
+                    "sessionId": output.session_id,
                     "turnId": "turn-raw"
                 }
             }),

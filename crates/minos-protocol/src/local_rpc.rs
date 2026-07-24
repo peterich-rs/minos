@@ -3,23 +3,23 @@ use minos_ui_protocol::UiEventMessage;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LocalThreadSnapshot {
-    pub thread_id: String,
+pub struct LocalSessionSnapshot {
+    pub session_id: String,
     pub agent: minos_domain::AgentName,
     pub workspace: String,
-    pub state: crate::ThreadState,
-    pub parent_thread_id: Option<String>,
+    pub state: crate::SessionState,
+    pub parent_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ReadThreadRawHistoryResponse {
+pub struct ReadSessionRawHistoryResponse {
     pub events: Vec<LocalIngestFrame>,
     pub next_seq: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReadArtifactRangeRequest {
-    pub thread_id: String,
+    pub session_id: String,
     pub artifact_id: String,
     pub offset: u64,
     pub limit: u32,
@@ -35,21 +35,21 @@ pub struct ReadArtifactRangeResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RespondOpencodePermissionRequest {
-    pub thread_id: String,
+    pub session_id: String,
     pub permission_id: String,
     pub response: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RespondOpencodeQuestionRequest {
-    pub thread_id: String,
+    pub session_id: String,
     pub question_id: String,
     pub answers: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LocalIngestFrame {
-    pub thread_id: String,
+    pub session_id: String,
     #[serde(default)]
     pub seq: u64,
     pub agent: minos_domain::AgentName,
@@ -61,20 +61,20 @@ pub struct LocalIngestFrame {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum LocalManagerEvent {
-    ThreadAdded {
-        thread_id: String,
+    SessionAdded {
+        session_id: String,
         workspace: String,
         agent: minos_domain::AgentName,
-        parent_thread_id: Option<String>,
+        parent_session_id: Option<String>,
     },
-    ThreadStateChanged {
-        thread_id: String,
-        old: crate::ThreadState,
-        new: crate::ThreadState,
+    SessionStateChanged {
+        session_id: String,
+        old: crate::SessionState,
+        new: crate::SessionState,
         at_ms: i64,
     },
-    ThreadClosed {
-        thread_id: String,
+    SessionClosed {
+        session_id: String,
         reason: crate::CloseReason,
     },
     InstanceCrashed {
@@ -91,6 +91,12 @@ pub enum LocalConversationEvent {
     ConversationMessageAppended {
         conversation_id: String,
         message_seq: i64,
+    },
+    /// Local user toggled a reaction; `reactions` is the full aggregate for the message.
+    ConversationReactionToggled {
+        conversation_id: String,
+        message_id: String,
+        reactions: Vec<crate::LocalReactionGroup>,
     },
 }
 
@@ -136,27 +142,32 @@ pub trait LocalDaemonRpc {
         req: RespondOpencodeQuestionRequest,
     ) -> jsonrpsee::core::RpcResult<()>;
 
-    #[method(name = "interrupt_thread")]
-    async fn interrupt_thread(
+    #[method(name = "interrupt_session")]
+    async fn interrupt_session(
         &self,
-        req: crate::InterruptThreadRequest,
+        req: crate::InterruptSessionRequest,
     ) -> jsonrpsee::core::RpcResult<()>;
 
-    #[method(name = "close_thread")]
-    async fn close_thread(&self, req: crate::CloseThreadRequest) -> jsonrpsee::core::RpcResult<()>;
-
-    #[method(name = "delete_thread")]
-    async fn delete_thread(&self, req: crate::CloseThreadRequest)
-        -> jsonrpsee::core::RpcResult<()>;
-
-    #[method(name = "resume_thread")]
-    async fn resume_thread(
+    #[method(name = "close_session")]
+    async fn close_session(
         &self,
-        req: crate::ResumeThreadRequest,
+        req: crate::CloseSessionRequest,
+    ) -> jsonrpsee::core::RpcResult<()>;
+
+    #[method(name = "delete_session")]
+    async fn delete_session(
+        &self,
+        req: crate::CloseSessionRequest,
+    ) -> jsonrpsee::core::RpcResult<()>;
+
+    #[method(name = "resume_session")]
+    async fn resume_session(
+        &self,
+        req: crate::ResumeSessionRequest,
     ) -> jsonrpsee::core::RpcResult<crate::StartAgentResponse>;
 
-    #[method(name = "list_local_threads")]
-    async fn list_local_threads(&self) -> jsonrpsee::core::RpcResult<Vec<LocalThreadSnapshot>>;
+    #[method(name = "list_local_sessions")]
+    async fn list_local_sessions(&self) -> jsonrpsee::core::RpcResult<Vec<LocalSessionSnapshot>>;
 
     #[method(name = "list_projects")]
     async fn list_projects(&self) -> jsonrpsee::core::RpcResult<crate::ListProjectsResponse>;
@@ -191,6 +202,12 @@ pub trait LocalDaemonRpc {
         req: crate::ListConversationMessagesParams,
     ) -> jsonrpsee::core::RpcResult<crate::ListConversationMessagesResponse>;
 
+    #[method(name = "toggle_conversation_message_reaction")]
+    async fn toggle_conversation_message_reaction(
+        &self,
+        req: crate::ToggleConversationMessageReactionParams,
+    ) -> jsonrpsee::core::RpcResult<crate::ToggleConversationMessageReactionResponse>;
+
     #[method(name = "list_conversation_agent_sessions")]
     async fn list_conversation_agent_sessions(
         &self,
@@ -203,17 +220,46 @@ pub trait LocalDaemonRpc {
         req: crate::StartAgentInConversationRequest,
     ) -> jsonrpsee::core::RpcResult<crate::StartAgentResponse>;
 
+    #[method(name = "list_models")]
+    async fn list_models(
+        &self,
+        req: crate::ListModelsRequest,
+    ) -> jsonrpsee::core::RpcResult<crate::ListModelsResponse>;
+
+    #[method(name = "list_agent_profiles")]
+    async fn list_agent_profiles(
+        &self,
+    ) -> jsonrpsee::core::RpcResult<crate::ListAgentProfilesResponse>;
+
+    #[method(name = "create_agent_profile")]
+    async fn create_agent_profile(
+        &self,
+        req: crate::CreateAgentProfileRequest,
+    ) -> jsonrpsee::core::RpcResult<crate::AgentProfileSummary>;
+
+    #[method(name = "update_agent_profile")]
+    async fn update_agent_profile(
+        &self,
+        req: crate::UpdateAgentProfileRequest,
+    ) -> jsonrpsee::core::RpcResult<crate::AgentProfileSummary>;
+
+    #[method(name = "delete_agent_profile")]
+    async fn delete_agent_profile(
+        &self,
+        req: crate::DeleteAgentProfileRequest,
+    ) -> jsonrpsee::core::RpcResult<()>;
+
     #[method(name = "append_conversation_message")]
     async fn append_conversation_message(
         &self,
         req: crate::AppendConversationMessageParams,
     ) -> jsonrpsee::core::RpcResult<crate::AppendConversationMessageResponse>;
 
-    #[method(name = "read_thread_raw_history")]
-    async fn read_thread_raw_history(
+    #[method(name = "read_session_raw_history")]
+    async fn read_session_raw_history(
         &self,
-        req: crate::ReadThreadParams,
-    ) -> jsonrpsee::core::RpcResult<ReadThreadRawHistoryResponse>;
+        req: crate::ReadSessionParams,
+    ) -> jsonrpsee::core::RpcResult<ReadSessionRawHistoryResponse>;
 
     #[method(name = "read_artifact_range")]
     async fn read_artifact_range(

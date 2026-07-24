@@ -337,26 +337,26 @@ fn codex_projected_events_render_final_text_and_tool_as_separate_items() {
     for raw in [
         serde_json::json!({"method":"item/started","params":{
             "item":{"type":"agentMessage","id":"a1","text":""},
-            "threadId":"thr","turnId":"t1"
+            "sessionId":"thr","turnId":"t1"
         }}),
         serde_json::json!({"method":"item/agentMessage/delta","params":{
             "itemId":"a1","delta":"partial"
         }}),
         serde_json::json!({"method":"item/started","params":{
             "item":{"type":"commandExecution","id":"cmd1","command":"ls","commandActions":[],"cwd":"/tmp","status":"inProgress"},
-            "threadId":"thr","turnId":"t1"
+            "sessionId":"thr","turnId":"t1"
         }}),
         serde_json::json!({"method":"item/started","params":{
             "item":{"type":"agentMessage","id":"a2","text":""},
-            "threadId":"thr","turnId":"t1"
+            "sessionId":"thr","turnId":"t1"
         }}),
         serde_json::json!({"method":"item/completed","params":{
             "item":{"type":"agentMessage","id":"a1","text":"partial final answer"},
-            "threadId":"thr","turnId":"t1","completedAtMs":2
+            "sessionId":"thr","turnId":"t1","completedAtMs":2
         }}),
         serde_json::json!({"method":"item/completed","params":{
             "item":{"type":"commandExecution","id":"cmd1","command":"ls","commandActions":[],"cwd":"/tmp","status":"completed","aggregatedOutput":"ok","exitCode":0},
-            "threadId":"thr","turnId":"t1","completedAtMs":3
+            "sessionId":"thr","turnId":"t1","completedAtMs":3
         }}),
     ] {
         let events = minos_ui_protocol::translate_codex(&mut translator, &raw).unwrap_or_default();
@@ -433,7 +433,101 @@ fn text_replace_without_delta_creates_streaming_item_for_open_message() {
         }
         other => panic!("expected AssistantText, got {other:?}"),
     }
-    assert!(cs.open_message_ids.contains("m1"));
+}
+
+#[test]
+fn text_replace_same_body_after_tools_freezes_mid_timeline() {
+    // OpenCode finished-part snapshot equal to the frozen row → drop (no twin, no rewrite).
+    let mut cs = ChatState::new("t1".into(), AgentName::Opencode);
+    let mid = "msg_open_1";
+    let body = "现在让我读取 workspace-store";
+    cs.apply_ui_events(vec![
+        UiEventMessage::MessageStarted {
+            message_id: mid.into(),
+            role: MessageRole::Assistant,
+            started_at_ms: 0,
+        },
+        UiEventMessage::TextDelta {
+            message_id: mid.into(),
+            text: body.into(),
+        },
+        UiEventMessage::ToolCallPlaced {
+            message_id: mid.into(),
+            tool_call_id: "call_read_1".into(),
+            name: "read".into(),
+            args_json: "{}".into(),
+        },
+        UiEventMessage::TextReplace {
+            message_id: mid.into(),
+            text: body.into(),
+        },
+    ]);
+
+    let assistant_count = cs
+        .items
+        .iter()
+        .filter(|item| matches!(item, ChatItem::AssistantText { .. }))
+        .count();
+    assert_eq!(
+        assistant_count, 1,
+        "same-body replace after tools must not twin"
+    );
+    match &cs.items[0] {
+        ChatItem::AssistantText { text_parts, .. } => {
+            assert_eq!(*text_parts, plain_parts(body));
+        }
+        other => panic!("expected first item AssistantText, got {other:?}"),
+    }
+    assert!(matches!(cs.items[1], ChatItem::ToolCall { .. }));
+    assert_eq!(cs.items.len(), 2);
+}
+
+#[test]
+fn text_replace_new_body_after_tools_appends_at_end() {
+    // Different body (new part / post-tool narration) → append; freeze early row.
+    let mut cs = ChatState::new("t1".into(), AgentName::Opencode);
+    let mid = "msg_open_1";
+    cs.apply_ui_events(vec![
+        UiEventMessage::MessageStarted {
+            message_id: mid.into(),
+            role: MessageRole::Assistant,
+            started_at_ms: 0,
+        },
+        UiEventMessage::TextDelta {
+            message_id: mid.into(),
+            text: "first segment".into(),
+        },
+        UiEventMessage::ToolCallPlaced {
+            message_id: mid.into(),
+            tool_call_id: "call_read_1".into(),
+            name: "read".into(),
+            args_json: "{}".into(),
+        },
+        UiEventMessage::TextReplace {
+            message_id: format!("{mid}\u{1e}prt_2"),
+            text: "second segment after tools".into(),
+        },
+    ]);
+
+    let assistants: Vec<_> = cs
+        .items
+        .iter()
+        .filter(|item| matches!(item, ChatItem::AssistantText { .. }))
+        .collect();
+    assert_eq!(assistants.len(), 2);
+    match &cs.items[0] {
+        ChatItem::AssistantText { text_parts, .. } => {
+            assert_eq!(*text_parts, plain_parts("first segment"));
+        }
+        other => panic!("expected first AssistantText, got {other:?}"),
+    }
+    assert!(matches!(cs.items[1], ChatItem::ToolCall { .. }));
+    match &cs.items[2] {
+        ChatItem::AssistantText { text_parts, .. } => {
+            assert_eq!(*text_parts, plain_parts("second segment after tools"));
+        }
+        other => panic!("expected trailing AssistantText, got {other:?}"),
+    }
 }
 
 #[test]
@@ -604,6 +698,42 @@ fn opencode_permission_completion_clears_pending_request() {
 }
 
 #[test]
+fn grok_ask_user_question_creates_pending_request() {
+    let mut cs = ChatState::new("t1".into(), AgentName::Grok);
+
+    cs.apply_ui_events(vec![UiEventMessage::Raw {
+        kind: "approval/request".into(),
+        payload_json: serde_json::json!({
+            "request_id": "ask-1",
+            "session_id": "t1",
+            "turn_id": "",
+            "method": "x.ai/ask_user_question",
+            "params": {
+                "sessionId": "s1",
+                "toolCallId": "tc1",
+                "questions": [{
+                    "question": "Pick a color?",
+                    "options": [
+                        {"label": "Red", "description": "warm"},
+                        {"label": "Blue", "description": "cool"}
+                    ],
+                    "multi_select": false
+                }]
+            }
+        })
+        .to_string(),
+    }]);
+
+    assert_eq!(cs.pending_requests.len(), 1);
+    assert_eq!(cs.pending_requests[0].id(), "ask-1");
+    assert!(cs.pending_requests[0].prompt.contains("Pick a color?"));
+    assert!(matches!(
+        cs.pending_requests[0].kind,
+        PendingAgentRequestKind::GrokUserQuestion { .. }
+    ));
+}
+
+#[test]
 fn opencode_question_asked_creates_pending_request_with_options() {
     let mut cs = ChatState::new("t1".into(), AgentName::Opencode);
 
@@ -756,9 +886,9 @@ fn thread_closed_pushes_system_message_and_finishes_streaming() {
             message_id: "m1".into(),
             text: "partial".into(),
         },
-        UiEventMessage::ThreadClosed {
-            thread_id: "t1".into(),
-            reason: minos_ui_protocol::ThreadEndReason::UserStopped,
+        UiEventMessage::SessionClosed {
+            session_id: "t1".into(),
+            reason: minos_ui_protocol::SessionEndReason::UserStopped,
             closed_at_ms: 1,
         },
     ]);
@@ -950,8 +1080,8 @@ fn toggle_tool_expansion_only_updates_last_tool_call() {
 fn subagent_spawn_and_status_update_render_parent_card() {
     let mut cs = ChatState::new("parent".into(), AgentName::Codex);
     cs.apply_ui_events(vec![UiEventMessage::SubagentSpawned {
-        parent_thread_id: "parent".into(),
-        sub_thread_id: "sub".into(),
+        parent_session_id: "parent".into(),
+        sub_session_id: "sub".into(),
         tool_call_id: "collab-1".into(),
         agent: AgentName::Codex,
         model: Some("gpt-5".into()),
@@ -961,12 +1091,12 @@ fn subagent_spawn_and_status_update_render_parent_card() {
 
     match &cs.items[0] {
         ChatItem::SubagentCall {
-            sub_thread_id,
+            sub_session_id,
             status,
             is_streaming,
             ..
         } => {
-            assert_eq!(sub_thread_id, "sub");
+            assert_eq!(sub_session_id, "sub");
             assert_eq!(*status, SubagentStatus::Running);
             assert!(*is_streaming);
         }
@@ -974,7 +1104,7 @@ fn subagent_spawn_and_status_update_render_parent_card() {
     }
 
     cs.apply_ui_events(vec![UiEventMessage::SubagentStatusUpdated {
-        sub_thread_id: "sub".into(),
+        sub_session_id: "sub".into(),
         status: SubagentStatus::Completed,
     }]);
     match &cs.items[0] {
@@ -1003,8 +1133,8 @@ fn tool_call_completed_closes_matching_subagent_card() {
             args_json: r#"{"prompt":"audit"}"#.into(),
         },
         UiEventMessage::SubagentSpawned {
-            parent_thread_id: "parent".into(),
-            sub_thread_id: "ses_sub".into(),
+            parent_session_id: "parent".into(),
+            sub_session_id: "ses_sub".into(),
             tool_call_id: "call_task".into(),
             agent: AgentName::Opencode,
             model: None,

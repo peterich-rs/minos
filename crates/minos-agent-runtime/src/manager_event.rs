@@ -1,23 +1,23 @@
-use crate::state_machine::{CloseReason, PauseReason, ThreadState};
+use crate::state_machine::{CloseReason, PauseReason, SessionState};
 use crate::AgentKind;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
 pub enum ManagerEvent {
-    ThreadAdded {
-        thread_id: String,
+    SessionAdded {
+        session_id: String,
         workspace: PathBuf,
         agent: AgentKind,
-        parent_thread_id: Option<String>,
+        parent_session_id: Option<String>,
     },
-    ThreadStateChanged {
-        thread_id: String,
-        old: ThreadState,
-        new: ThreadState,
+    SessionStateChanged {
+        session_id: String,
+        old: SessionState,
+        new: SessionState,
         at_ms: i64,
     },
-    ThreadClosed {
-        thread_id: String,
+    SessionClosed {
+        session_id: String,
         reason: CloseReason,
     },
     InstanceCrashed {

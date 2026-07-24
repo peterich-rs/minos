@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use minos_agent_runtime::{
-    manager_event::ManagerEvent, state_machine::ThreadState, thread_handle::ThreadHandle,
+    manager_event::ManagerEvent, session_handle::SessionHandle, state_machine::SessionState,
     IngestSink,
 };
 
@@ -23,14 +23,14 @@ async fn claude_real_smoke_start_and_chat() {
     let events_tx = IngestSink::new(256);
     let mut events_rx = events_tx.subscribe();
     let (manager_tx, _) = tokio::sync::broadcast::channel::<ManagerEvent>(32);
-    let threads = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    threads.lock().await.insert(
+    let sessions = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    sessions.lock().await.insert(
         "smoke_test_thread".into(),
-        ThreadHandle::new(
+        SessionHandle::new(
             "smoke_test_thread".into(),
             workspace.clone(),
             minos_domain::AgentName::Claude,
-            ThreadState::Running {
+            SessionState::Running {
                 turn_started_at_ms: 0,
             },
             0,
@@ -45,10 +45,12 @@ async fn claude_real_smoke_start_and_chat() {
         "Say hello in one word",
         Some("b0c2c7f6-841b-4af6-9dc7-05d860b4a9b1"),
         None,
-        threads,
+        sessions,
         manager_tx,
         events_tx,
         &Arc::new(std::collections::HashMap::new()),
+        None,
+        None,
         None,
     )
     .await

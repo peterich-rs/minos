@@ -30,7 +30,7 @@ use minos_backend::store::test_support::memory_pool;
 use minos_domain::{ConnectionState, DeviceId, DeviceRole};
 use minos_mobile::{MobileClient, PersistedPairingState};
 use minos_protocol::realtime::{RealtimeTopic, ServerFrame};
-use minos_protocol::{ListThreadsParams, PairingQrPayload};
+use minos_protocol::{ListSessionsParams, PairingQrPayload};
 use minos_ui_protocol::UiEventMessage;
 use tokio::net::TcpListener;
 
@@ -199,7 +199,7 @@ async fn ui_events_stream_delivers_backend_fanout() {
         );
     };
 
-    assert_eq!(frame.thread_id, "thr_1");
+    assert_eq!(frame.session_id, "thr_1");
     assert_eq!(frame.seq, 7);
     match frame.ui {
         UiEventMessage::TextDelta { message_id, text } => {
@@ -211,7 +211,7 @@ async fn ui_events_stream_delivers_backend_fanout() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_threads_round_trips_over_envelope() {
+async fn list_sessions_round_trips_over_envelope() {
     let backend = spawn_backend_with_paired_mac().await;
 
     let client = authenticated_client(&backend, "list@example.com").await;
@@ -219,7 +219,7 @@ async fn list_threads_round_trips_over_envelope() {
     let backend_url = format!("ws://{}/devices", backend.addr);
     client.pair_with_qr_json_at(qr, &backend_url).await.unwrap();
 
-    // After ADR-0020, MobileClient::list_threads is bearer-only. The
+    // After ADR-0020, MobileClient::list_sessions is bearer-only. The
     // mobile client itself uses build_config::BACKEND_URL; tests drive
     // the round-trip through MobileHttpClient directly with the same
     // bearer the rehydrated client persisted post-pair.
@@ -233,9 +233,9 @@ async fn list_threads_round_trips_over_envelope() {
     let http =
         minos_mobile::http::MobileHttpClient::new(&backend_url, device_id, "iPhone").unwrap();
     let resp = http
-        .list_threads(
+        .list_sessions(
             &access,
-            ListThreadsParams {
+            ListSessionsParams {
                 limit: 50,
                 before_ts_ms: None,
                 agent: None,
@@ -243,7 +243,7 @@ async fn list_threads_round_trips_over_envelope() {
         )
         .await
         .unwrap();
-    assert!(resp.threads.is_empty());
+    assert!(resp.sessions.is_empty());
     assert!(resp.next_before_ts_ms.is_none());
 }
 

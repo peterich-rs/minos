@@ -15,15 +15,15 @@ final class MockSubscription: SubscriptionHandle, @unchecked Sendable {
 /// now exposed independently and observers can be fired from either
 /// channel without affecting the other.
 ///
-/// Plan 05 Phase K.1; updated for the post-Phase-C multi-thread agent
-/// surface (`stop_agent` retired; per-thread `interrupt_thread` /
-/// `close_thread` instead).
+/// Plan 05 Phase K.1; updated for the multi-session agent surface
+/// (`stop_agent` retired; per-session `interrupt_session` /
+/// `close_session` instead).
 final class MockDaemon: DaemonDriving, @unchecked Sendable {
     // ── Public mutable state ──
     var currentRelayLinkValue: RelayLinkState
     var currentPeerValue: PeerState
-    var currentAgentStateValue: ThreadState
-    var currentAgentThreadValue: AgentThreadSnapshot?
+    var currentAgentStateValue: SessionState
+    var currentAgentThreadValue: AgentSessionSnapshot?
     var currentAgentThreadError: MinosError?
     var currentTrustedDeviceValue: PeerRecord?
     var currentTrustedDeviceError: MinosError?
@@ -34,8 +34,8 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
     var forgetPeerDeviceError: MinosError?
     var startAgentResult: Result<StartAgentResponse, MinosError>
     var sendUserMessageError: MinosError?
-    var interruptThreadError: MinosError?
-    var closeThreadError: MinosError?
+    var interruptSessionError: MinosError?
+    var closeSessionError: MinosError?
     var stopError: MinosError?
     var stopHook: (@Sendable () async -> Void)?
 
@@ -49,8 +49,8 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
     private(set) var currentAgentThreadCallCount = 0
     private(set) var startAgentCalls: [StartAgentRequest] = []
     private(set) var sendUserMessageCalls: [SendUserMessageRequest] = []
-    private(set) var interruptThreadCalls: [InterruptThreadRequest] = []
-    private(set) var closeThreadCalls: [CloseThreadRequest] = []
+    private(set) var interruptSessionCalls: [InterruptSessionRequest] = []
+    private(set) var closeSessionCalls: [CloseSessionRequest] = []
     private(set) var stopCallCount = 0
     private(set) var subscribeRelayLinkCallCount = 0
     private(set) var subscribePeerCallCount = 0
@@ -62,8 +62,8 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
     init(
         currentRelayLink: RelayLinkState = .disconnected,
         currentPeer: PeerState = .unpaired,
-        currentAgentState: ThreadState = .idle,
-        currentAgentThread: AgentThreadSnapshot? = nil,
+        currentAgentState: SessionState = .idle,
+        currentAgentSession: AgentSessionSnapshot? = nil,
         currentTrustedDevice: PeerRecord? = nil,
         currentPeers: [HostPeerSummary]? = nil,
         pairingQrResult: Result<RelayQrPayload, MinosError> = .success(MockDaemon.makeQrPayload()),
@@ -77,7 +77,7 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         currentRelayLinkValue = currentRelayLink
         currentPeerValue = currentPeer
         currentAgentStateValue = currentAgentState
-        currentAgentThreadValue = currentAgentThread
+        currentAgentThreadValue = currentAgentSession
         currentTrustedDeviceValue = currentTrustedDevice
         currentPeersValue = currentPeers ?? MockDaemon.defaultPeers(
             trustedDevice: currentTrustedDevice,
@@ -94,9 +94,9 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
 
     func currentRelayLink() -> RelayLinkState { currentRelayLinkValue }
     func currentPeer() -> PeerState { currentPeerValue }
-    func currentAgentState() -> ThreadState { currentAgentStateValue }
+    func currentAgentState() -> SessionState { currentAgentStateValue }
 
-    func currentAgentThread() async throws -> AgentThreadSnapshot? {
+    func currentAgentSession() async throws -> AgentSessionSnapshot? {
         currentAgentThreadCallCount += 1
         if let currentAgentThreadError {
             throw currentAgentThreadError
@@ -163,17 +163,17 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         }
     }
 
-    func interruptThread(_ req: InterruptThreadRequest) async throws {
-        interruptThreadCalls.append(req)
-        if let interruptThreadError {
-            throw interruptThreadError
+    func interruptSession(_ req: InterruptSessionRequest) async throws {
+        interruptSessionCalls.append(req)
+        if let interruptSessionError {
+            throw interruptSessionError
         }
     }
 
-    func closeThread(_ req: CloseThreadRequest) async throws {
-        closeThreadCalls.append(req)
-        if let closeThreadError {
-            throw closeThreadError
+    func closeSession(_ req: CloseSessionRequest) async throws {
+        closeSessionCalls.append(req)
+        if let closeSessionError {
+            throw closeSessionError
         }
     }
 
@@ -218,7 +218,7 @@ extension MockDaemon {
         }
     }
 
-    func emitAgentState(_ state: ThreadState) {
+    func emitAgentState(_ state: SessionState) {
         currentAgentStateValue = state
         for observer in agentObservers {
             observer.onState(state: state)
@@ -238,6 +238,26 @@ extension MockDaemon {
         )
     }
 
+    static func makeStartAgentRequest(
+        agent: AgentName = .codex,
+        workspace: String = "",
+        mode: AgentLaunchMode? = .jsonl,
+        profileId: String? = nil,
+        model: String? = nil,
+        reasoningEffort: String? = nil,
+        instructions: String? = nil
+    ) -> StartAgentRequest {
+        StartAgentRequest(
+            agent: agent,
+            workspace: workspace,
+            mode: mode,
+            profileId: profileId,
+            model: model,
+            reasoningEffort: reasoningEffort,
+            instructions: instructions
+        )
+    }
+
     static func makeStartAgentResponse(
         sessionId: String = "thread-abc12",
         cwd: String = "/Users/fan/.minos/workspaces"
@@ -245,12 +265,12 @@ extension MockDaemon {
         StartAgentResponse(sessionId: sessionId, cwd: cwd)
     }
 
-    static func makeAgentThreadSnapshot(
-        threadId: String = "thread-abc12",
+    static func makeAgentSessionSnapshot(
+        sessionId: String = "thread-abc12",
         workspaceRoot: String = "/Users/fan/.minos/workspaces",
-        state: ThreadState = .idle
-    ) -> AgentThreadSnapshot {
-        AgentThreadSnapshot(threadId: threadId, workspaceRoot: workspaceRoot, state: state)
+        state: SessionState = .idle
+    ) -> AgentSessionSnapshot {
+        AgentSessionSnapshot(sessionId: sessionId, workspaceRoot: workspaceRoot, state: state)
     }
 
     static func makeTrustedDevice(

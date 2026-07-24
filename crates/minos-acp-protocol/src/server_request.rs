@@ -1,11 +1,13 @@
-use crate::types::{PermissionOption, RequestPermissionOutcome, SessionId, ToolCallUpdate};
+use crate::types::{PermissionOption, RequestPermissionOutcome, SessionId, ToolCall};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestPermissionParams {
     pub session_id: SessionId,
-    pub tool_call: ToolCallUpdate,
+    /// Full ACP tool call payload (places carry `kind`, `locations`, full
+    /// `raw_input`). Use `ToolCallUpdate` only for session-update notifications.
+    pub tool_call: ToolCall,
     pub options: Vec<PermissionOption>,
 }
 #[derive(Serialize, Deserialize, Debug, Clone)]

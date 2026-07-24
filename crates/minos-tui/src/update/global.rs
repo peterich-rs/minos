@@ -112,12 +112,12 @@ fn handle_mouse_click(ui: &mut UiState, target: ClickTarget, x: u16, y: u16) -> 
         ClickTarget::AgentList => {
             ui.focus.focus(PaneId::Sidebar);
             let len = if ui.conversation.agent_sessions.items.is_empty() {
-                ui.thread_panel.list.items.len()
+                ui.session_panel.list.items.len()
             } else {
                 ui.flat_agent_session_count()
             };
             let list_state = if ui.conversation.agent_sessions.items.is_empty() {
-                &ui.thread_panel.list.list_state
+                &ui.session_panel.list.list_state
             } else {
                 &ui.conversation.agent_sessions.list_state
             };
@@ -196,13 +196,13 @@ fn handle_mouse_scroll(
             if ui.conversation.agent_sessions.items.is_empty() {
                 match direction {
                     ScrollDirection::Up => {
-                        if let Some(selected) = ui.thread_panel.list.selected {
+                        if let Some(selected) = ui.session_panel.list.selected {
                             super::select_thread(ui, selected.saturating_sub(1));
                         }
                     }
                     ScrollDirection::Down => {
-                        if let Some(selected) = ui.thread_panel.list.selected {
-                            let last = ui.thread_panel.list.items.len().saturating_sub(1);
+                        if let Some(selected) = ui.session_panel.list.selected {
+                            let last = ui.session_panel.list.items.len().saturating_sub(1);
                             super::select_thread(ui, (selected + 1).min(last));
                         }
                     }

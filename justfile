@@ -78,6 +78,11 @@ check-backend:
 gen-backend-platform-contract:
     cargo xtask gen-backend-platform-contract
 
+# Regenerate Flutter ↔ Rust FRB bindings (pinned flutter_rust_bridge_codegen 2.12.0).
+# Requires bootstrap once: cargo xtask bootstrap
+gen-frb:
+    cargo xtask gen-frb
+
 # Run the standalone web admin client.
 dev-web:
     cd apps/web && pnpm dev
@@ -107,9 +112,9 @@ dev-desktop-ui:
 build-desktop:
     cd apps/desktop && pnpm tauri:build
 
-# Desktop frontend typecheck.
+# Desktop quality gates (tsc + tests + biome lint + file-sizes).
 check-desktop:
-    cd apps/desktop && pnpm check
+    cd apps/desktop && pnpm check:all
 
 # Run the fake-peer smoke binary with a subcommand (default: register).
 

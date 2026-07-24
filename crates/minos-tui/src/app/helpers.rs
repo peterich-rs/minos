@@ -54,10 +54,10 @@ pub(super) fn default_teamwork_store() -> crate::teamwork::TeamworkStore {
 
 pub(super) fn conversation_agent_result_message_id(
     conversation_id: &str,
-    thread_id: &str,
+    session_id: &str,
     message_id: &str,
 ) -> String {
-    format!("agent-result:{conversation_id}:{thread_id}:{message_id}")
+    format!("agent-result:{conversation_id}:{session_id}:{message_id}")
 }
 
 pub(super) fn codex_user_input_decision(question_ids: &[String], text: &str) -> serde_json::Value {
@@ -108,6 +108,36 @@ pub(super) fn grok_plan_approval_decision(text: &str) -> serde_json::Value {
         _ => "cancelled",
     };
     serde_json::json!({ "outcome": outcome })
+}
+
+/// Map answered labels / free text to Grok `AskUserQuestionExtResponse`.
+pub(super) fn grok_user_question_decision(
+    questions: &[PendingQuestionSpec],
+    text: &str,
+) -> serde_json::Value {
+    let token = text.trim().to_ascii_lowercase();
+    if matches!(
+        token.as_str(),
+        "cancel" | "cancelled" | "no" | "n" | "skip" | ""
+    ) {
+        return serde_json::json!({ "outcome": "cancelled" });
+    }
+    let answers = opencode_question_answers(questions, text);
+    let mut map = serde_json::Map::new();
+    for (index, answer) in answers.into_iter().enumerate() {
+        if answer.is_empty() {
+            continue;
+        }
+        // Wire keys are question indices (Grok may omit ids on model-facing Question).
+        map.insert(
+            index.to_string(),
+            serde_json::Value::Array(answer.into_iter().map(serde_json::Value::String).collect()),
+        );
+    }
+    if map.is_empty() {
+        return serde_json::json!({ "outcome": "cancelled" });
+    }
+    serde_json::json!({ "outcome": "accepted", "answers": map })
 }
 
 pub(super) fn opencode_permission_response(

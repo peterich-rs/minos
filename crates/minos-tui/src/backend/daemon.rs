@@ -1,6 +1,6 @@
 use super::{
-    AgentBackend, BackendConnectionState, BackendThreadSnapshot, ConversationEntry,
-    ConversationMessageEntry, ConversationMessageEvent, ProjectEntry, ThreadSummaryEntry,
+    AgentBackend, BackendConnectionState, BackendSessionSnapshot, ConversationEntry,
+    ConversationMessageEntry, ConversationMessageEvent, ProjectEntry, SessionSummaryEntry,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -10,18 +10,18 @@ use jsonrpsee::core::params::ArrayParams;
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
 use minos_agent_runtime::{
     CloseReason as RuntimeCloseReason, ManagerEvent, PauseReason as RuntimePauseReason,
-    StartAgentOutcome, ThreadState as RuntimeThreadState,
+    SessionState as RuntimeSessionState, StartAgentOutcome,
 };
 use minos_domain::{AgentDescriptor, AgentName};
 use minos_protocol::{
     AppendConversationMessageParams, ApprovalDecisionRequest, CloseReason as ProtoCloseReason,
-    CloseThreadRequest, CreateConversationParams, InterruptThreadRequest, ListClisResponse,
+    CloseSessionRequest, CreateConversationParams, InterruptSessionRequest, ListClisResponse,
     ListConversationAgentSessionsParams, ListConversationMessagesParams, ListConversationsParams,
-    LocalConversationEvent, LocalIngestFrame, LocalManagerEvent, LocalThreadSnapshot,
-    PauseReason as ProtoPauseReason, ReadThreadParams, ReadThreadRawHistoryResponse,
+    LocalConversationEvent, LocalIngestFrame, LocalManagerEvent, LocalSessionSnapshot,
+    PauseReason as ProtoPauseReason, ReadSessionParams, ReadSessionRawHistoryResponse,
     RespondOpencodePermissionRequest, RespondOpencodeQuestionRequest, SendUserMessageRequest,
-    StartAgentInConversationRequest, StartAgentRequest, StartAgentResponse,
-    ThreadState as ProtoThreadState,
+    SessionState as ProtoSessionState, StartAgentInConversationRequest, StartAgentRequest,
+    StartAgentResponse,
 };
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -220,6 +220,8 @@ impl DaemonBackend {
                             message_seq,
                         });
                     }
+                    // Reactions are desktop-only for now; TUI has no reaction UI.
+                    Ok(LocalConversationEvent::ConversationReactionToggled { .. }) => {}
                     Err(e) => {
                         warn!("conversation event subscription error: {e}");
                         Self::mark_disconnected(&state, &endpoint, Some(e.to_string()));
@@ -288,18 +290,25 @@ fn start_agent_in_conversation_request(
     conversation_id: &str,
     agent: AgentName,
     workspace: &Path,
+    profile_id: Option<String>,
 ) -> StartAgentInConversationRequest {
+    // When profile_id is set, leave model/effort/instructions None so the daemon
+    // resolves them from the profile (explicit fields would override).
     StartAgentInConversationRequest {
         conversation_id: conversation_id.to_owned(),
         agent,
         workspace: workspace.to_string_lossy().into_owned(),
+        profile_id,
+        model: None,
+        reasoning_effort: None,
+        instructions: None,
     }
 }
 
 fn append_conversation_message_request(
     conversation_id: &str,
     message_id: Option<&str>,
-    thread_id: Option<&str>,
+    session_id: Option<&str>,
     sender_role: &str,
     agent: Option<AgentName>,
     body: &str,
@@ -309,7 +318,7 @@ fn append_conversation_message_request(
         message_id: message_id
             .map(str::to_owned)
             .unwrap_or_else(|| format!("tui-{}-{}", conversation_id, now_ms())),
-        thread_id: thread_id.map(str::to_owned),
+        session_id: session_id.map(str::to_owned),
         sender_role: sender_role.to_owned(),
         agent,
         body: body.to_owned(),
@@ -342,6 +351,10 @@ impl AgentBackend for DaemonBackend {
             agent,
             workspace: workspace.to_string_lossy().into_owned(),
             mode: None,
+            profile_id: None,
+            model: None,
+            reasoning_effort: None,
+            instructions: None,
         };
         let response: StartAgentResponse = self
             .client
@@ -349,15 +362,15 @@ impl AgentBackend for DaemonBackend {
             .await
             .context("RPC minos_local_start_agent failed")?;
         Ok(StartAgentOutcome {
-            thread_id: response.session_id,
+            session_id: response.session_id,
             cwd: PathBuf::from(response.cwd),
             provider_session_id: None,
         })
     }
 
-    async fn send_message(&self, thread_id: &str, text: &str) -> Result<()> {
+    async fn send_message(&self, session_id: &str, text: &str) -> Result<()> {
         let request = SendUserMessageRequest {
-            session_id: thread_id.to_owned(),
+            session_id: session_id.to_owned(),
             text: text.to_owned(),
         };
         self.client
@@ -370,12 +383,12 @@ impl AgentBackend for DaemonBackend {
     async fn send_approval_decision(
         &self,
         request_id: &str,
-        thread_id: &str,
+        session_id: &str,
         decision: Value,
     ) -> Result<()> {
         let request = ApprovalDecisionRequest {
             request_id: request_id.to_owned(),
-            thread_id: thread_id.to_owned(),
+            session_id: session_id.to_owned(),
             decision,
         };
         self.client
@@ -387,12 +400,12 @@ impl AgentBackend for DaemonBackend {
 
     async fn respond_opencode_permission(
         &self,
-        thread_id: &str,
+        session_id: &str,
         permission_id: &str,
         response: &str,
     ) -> Result<()> {
         let request = RespondOpencodePermissionRequest {
-            thread_id: thread_id.to_owned(),
+            session_id: session_id.to_owned(),
             permission_id: permission_id.to_owned(),
             response: response.to_owned(),
         };
@@ -405,12 +418,12 @@ impl AgentBackend for DaemonBackend {
 
     async fn respond_opencode_question(
         &self,
-        thread_id: &str,
+        session_id: &str,
         question_id: &str,
         answers: Vec<Vec<String>>,
     ) -> Result<()> {
         let request = RespondOpencodeQuestionRequest {
-            thread_id: thread_id.to_owned(),
+            session_id: session_id.to_owned(),
             question_id: question_id.to_owned(),
             answers,
         };
@@ -421,73 +434,73 @@ impl AgentBackend for DaemonBackend {
         Ok(())
     }
 
-    async fn interrupt_thread(&self, thread_id: &str) -> Result<()> {
-        let request = InterruptThreadRequest {
-            thread_id: thread_id.to_owned(),
+    async fn interrupt_session(&self, session_id: &str) -> Result<()> {
+        let request = InterruptSessionRequest {
+            session_id: session_id.to_owned(),
         };
         self.client
-            .request::<(), _>("minos_local_interrupt_thread", [request])
+            .request::<(), _>("minos_local_interrupt_session", [request])
             .await
-            .context("RPC minos_local_interrupt_thread failed")?;
+            .context("RPC minos_local_interrupt_session failed")?;
         Ok(())
     }
 
-    async fn close_thread(&self, thread_id: &str) -> Result<()> {
-        let request = CloseThreadRequest {
-            thread_id: thread_id.to_owned(),
+    async fn close_session(&self, session_id: &str) -> Result<()> {
+        let request = CloseSessionRequest {
+            session_id: session_id.to_owned(),
         };
         self.client
-            .request::<(), _>("minos_local_close_thread", [request])
+            .request::<(), _>("minos_local_close_session", [request])
             .await
-            .context("RPC minos_local_close_thread failed")?;
+            .context("RPC minos_local_close_session failed")?;
         Ok(())
     }
 
-    async fn delete_thread(&self, thread_id: &str) -> Result<()> {
-        let request = CloseThreadRequest {
-            thread_id: thread_id.to_owned(),
+    async fn delete_session(&self, session_id: &str) -> Result<()> {
+        let request = CloseSessionRequest {
+            session_id: session_id.to_owned(),
         };
         self.client
-            .request::<(), _>("minos_local_delete_thread", [request])
+            .request::<(), _>("minos_local_delete_session", [request])
             .await
-            .context("RPC minos_local_delete_thread failed")?;
+            .context("RPC minos_local_delete_session failed")?;
         Ok(())
     }
 
-    async fn list_threads(&self) -> Result<Vec<BackendThreadSnapshot>> {
-        let snapshots: Vec<LocalThreadSnapshot> = self
+    async fn list_sessions(&self) -> Result<Vec<BackendSessionSnapshot>> {
+        let snapshots: Vec<LocalSessionSnapshot> = self
             .client
-            .request("minos_local_list_local_threads", ArrayParams::new())
+            .request("minos_local_list_local_sessions", ArrayParams::new())
             .await
-            .context("RPC minos_local_list_local_threads failed")?;
+            .context("RPC minos_local_list_local_sessions failed")?;
         Ok(snapshots
             .into_iter()
-            .map(|s| BackendThreadSnapshot {
-                thread_id: s.thread_id,
+            .map(|s| BackendSessionSnapshot {
+                session_id: s.session_id,
                 agent: Some(s.agent),
                 workspace: PathBuf::from(s.workspace),
                 state: proto_state_to_runtime(&s.state),
-                parent_thread_id: s.parent_thread_id,
+                parent_session_id: s.parent_session_id,
             })
             .collect())
     }
 
-    async fn resume_thread(
+    async fn resume_session(
         &self,
-        thread_id: &str,
+        session_id: &str,
         auto_continue: bool,
     ) -> Result<StartAgentOutcome> {
-        let request = minos_protocol::ResumeThreadRequest {
-            thread_id: thread_id.to_owned(),
+        let request = minos_protocol::ResumeSessionRequest {
+            session_id: session_id.to_owned(),
             auto_continue,
         };
         let response: StartAgentResponse = self
             .client
-            .request("minos_local_resume_thread", [request])
+            .request("minos_local_resume_session", [request])
             .await
-            .context("RPC minos_local_resume_thread failed")?;
+            .context("RPC minos_local_resume_session failed")?;
         Ok(StartAgentOutcome {
-            thread_id: response.session_id,
+            session_id: response.session_id,
             cwd: PathBuf::from(response.cwd),
             provider_session_id: None,
         })
@@ -576,7 +589,7 @@ impl AgentBackend for DaemonBackend {
     async fn list_conversation_agent_sessions(
         &self,
         conversation_id: &str,
-    ) -> Result<Vec<ThreadSummaryEntry>> {
+    ) -> Result<Vec<SessionSummaryEntry>> {
         let response: minos_protocol::ListConversationAgentSessionsResponse = self
             .client
             .request(
@@ -586,9 +599,9 @@ impl AgentBackend for DaemonBackend {
             .await
             .context("RPC minos_local_list_conversation_agent_sessions failed")?;
         Ok(response
-            .threads
+            .sessions
             .iter()
-            .map(ThreadSummaryEntry::from_summary)
+            .map(SessionSummaryEntry::from_summary)
             .collect())
     }
 
@@ -597,6 +610,7 @@ impl AgentBackend for DaemonBackend {
         conversation_id: &str,
         agent: AgentName,
         workspace: PathBuf,
+        profile_id: Option<String>,
     ) -> Result<StartAgentOutcome> {
         let response: StartAgentResponse = self
             .client
@@ -606,22 +620,32 @@ impl AgentBackend for DaemonBackend {
                     conversation_id,
                     agent,
                     &workspace,
+                    profile_id,
                 )],
             )
             .await
             .context("RPC minos_local_start_agent_in_conversation failed")?;
         Ok(StartAgentOutcome {
-            thread_id: response.session_id,
+            session_id: response.session_id,
             cwd: PathBuf::from(response.cwd),
             provider_session_id: None,
         })
+    }
+
+    async fn list_agent_profiles(&self) -> Result<Vec<minos_protocol::AgentProfileSummary>> {
+        let response: minos_protocol::ListAgentProfilesResponse = self
+            .client
+            .request("minos_local_list_agent_profiles", ArrayParams::new())
+            .await
+            .context("RPC minos_local_list_agent_profiles failed")?;
+        Ok(response.profiles)
     }
 
     async fn append_conversation_message(
         &self,
         conversation_id: &str,
         message_id: Option<&str>,
-        thread_id: Option<&str>,
+        session_id: Option<&str>,
         sender_role: &str,
         agent: Option<AgentName>,
         body: &str,
@@ -629,7 +653,7 @@ impl AgentBackend for DaemonBackend {
         let request = append_conversation_message_request(
             conversation_id,
             message_id,
-            thread_id,
+            session_id,
             sender_role,
             agent,
             body,
@@ -644,21 +668,21 @@ impl AgentBackend for DaemonBackend {
         Ok(())
     }
 
-    async fn read_thread_raw_history(
+    async fn read_session_raw_history(
         &self,
-        thread_id: &str,
+        session_id: &str,
         from_seq: Option<u64>,
         limit: u32,
-    ) -> Result<ReadThreadRawHistoryResponse> {
-        let request = ReadThreadParams {
-            thread_id: thread_id.to_owned(),
+    ) -> Result<ReadSessionRawHistoryResponse> {
+        let request = ReadSessionParams {
+            session_id: session_id.to_owned(),
             from_seq,
             limit,
         };
         self.client
-            .request("minos_local_read_thread_raw_history", [request])
+            .request("minos_local_read_session_raw_history", [request])
             .await
-            .context("RPC minos_local_read_thread_raw_history failed")
+            .context("RPC minos_local_read_session_raw_history failed")
     }
 
     async fn subscribe_ingest(&self) -> broadcast::Receiver<LocalIngestFrame> {
@@ -688,30 +712,30 @@ impl AgentBackend for DaemonBackend {
 
 fn local_manager_to_runtime(event: LocalManagerEvent) -> ManagerEvent {
     match event {
-        LocalManagerEvent::ThreadAdded {
-            thread_id,
+        LocalManagerEvent::SessionAdded {
+            session_id,
             workspace,
             agent,
-            parent_thread_id,
-        } => ManagerEvent::ThreadAdded {
-            thread_id,
+            parent_session_id,
+        } => ManagerEvent::SessionAdded {
+            session_id,
             workspace: PathBuf::from(workspace),
             agent,
-            parent_thread_id,
+            parent_session_id,
         },
-        LocalManagerEvent::ThreadStateChanged {
-            thread_id,
+        LocalManagerEvent::SessionStateChanged {
+            session_id,
             old,
             new,
             at_ms,
-        } => ManagerEvent::ThreadStateChanged {
-            thread_id,
+        } => ManagerEvent::SessionStateChanged {
+            session_id,
             old: proto_state_to_runtime(&old),
             new: proto_state_to_runtime(&new),
             at_ms,
         },
-        LocalManagerEvent::ThreadClosed { thread_id, reason } => ManagerEvent::ThreadClosed {
-            thread_id,
+        LocalManagerEvent::SessionClosed { session_id, reason } => ManagerEvent::SessionClosed {
+            session_id,
             reason: proto_close_reason_to_runtime(&reason),
         },
         LocalManagerEvent::InstanceCrashed {
@@ -726,18 +750,18 @@ fn local_manager_to_runtime(event: LocalManagerEvent) -> ManagerEvent {
     }
 }
 
-fn proto_state_to_runtime(state: &ProtoThreadState) -> RuntimeThreadState {
+fn proto_state_to_runtime(state: &ProtoSessionState) -> RuntimeSessionState {
     match state {
-        ProtoThreadState::Starting => RuntimeThreadState::Starting,
-        ProtoThreadState::Idle => RuntimeThreadState::Idle,
-        ProtoThreadState::Running { turn_started_at_ms } => RuntimeThreadState::Running {
+        ProtoSessionState::Starting => RuntimeSessionState::Starting,
+        ProtoSessionState::Idle => RuntimeSessionState::Idle,
+        ProtoSessionState::Running { turn_started_at_ms } => RuntimeSessionState::Running {
             turn_started_at_ms: *turn_started_at_ms,
         },
-        ProtoThreadState::Suspended { reason } => RuntimeThreadState::Suspended {
+        ProtoSessionState::Suspended { reason } => RuntimeSessionState::Suspended {
             reason: proto_pause_reason_to_runtime(reason),
         },
-        ProtoThreadState::Resuming => RuntimeThreadState::Resuming,
-        ProtoThreadState::Closed { reason } => RuntimeThreadState::Closed {
+        ProtoSessionState::Resuming => RuntimeSessionState::Resuming,
+        ProtoSessionState::Closed { reason } => RuntimeSessionState::Closed {
             reason: proto_close_reason_to_runtime(reason),
         },
     }
@@ -784,13 +808,29 @@ mod tests {
             serde_json::to_value(start_agent_in_conversation_request(
                 "conversation-1",
                 AgentName::Codex,
-                Path::new("/tmp/fire")
+                Path::new("/tmp/fire"),
+                None,
             ))
             .unwrap(),
             serde_json::json!({
                 "conversation_id": "conversation-1",
                 "agent": "codex",
                 "workspace": "/tmp/fire"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(start_agent_in_conversation_request(
+                "conversation-1",
+                AgentName::Grok,
+                Path::new("/tmp/fire"),
+                Some("profile-research".into()),
+            ))
+            .unwrap(),
+            serde_json::json!({
+                "conversation_id": "conversation-1",
+                "agent": "grok",
+                "workspace": "/tmp/fire",
+                "profile_id": "profile-research"
             })
         );
     }

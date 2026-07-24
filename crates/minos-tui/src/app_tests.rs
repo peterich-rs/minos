@@ -1,14 +1,14 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 
-use crate::backend::{BackendConnectionState, BackendThreadSnapshot};
+use crate::backend::{BackendConnectionState, BackendSessionSnapshot};
 use crate::translation::ChatItem;
 use anyhow::Result;
 use async_trait::async_trait;
 use crossterm::event::{KeyEventState, KeyModifiers, MouseEvent, MouseEventKind};
 use minos_agent_runtime::StartAgentOutcome;
 use minos_domain::{AgentDescriptor, AgentName, AgentStatus};
-use minos_protocol::local_rpc::ReadThreadRawHistoryResponse;
+use minos_protocol::local_rpc::ReadSessionRawHistoryResponse;
 use minos_protocol::LocalIngestFrame;
 use minos_ui_protocol::{MessageRole, UiEventMessage};
 use ratatui::layout::Rect;
@@ -28,14 +28,14 @@ struct TestBackend {
     interrupted: Mutex<Vec<String>>,
     closed: Mutex<Vec<String>>,
     deleted: Mutex<Vec<String>>,
-    listed_threads: Mutex<Vec<BackendThreadSnapshot>>,
-    history_pages: Mutex<HashMap<String, VecDeque<ReadThreadRawHistoryResponse>>>,
+    listed_threads: Mutex<Vec<BackendSessionSnapshot>>,
+    history_pages: Mutex<HashMap<String, VecDeque<ReadSessionRawHistoryResponse>>>,
     history_calls: Mutex<Vec<(String, Option<u64>, u32)>>,
     projects: Mutex<Vec<crate::backend::ProjectEntry>>,
     created_projects: Mutex<Vec<(String, std::path::PathBuf)>>,
     conversations: Mutex<Vec<crate::backend::ConversationEntry>>,
     conversation_messages: Mutex<HashMap<String, Vec<crate::backend::ConversationMessageEntry>>>,
-    conversation_sessions: Mutex<HashMap<String, Vec<crate::backend::ThreadSummaryEntry>>>,
+    conversation_sessions: Mutex<HashMap<String, Vec<crate::backend::SessionSummaryEntry>>>,
     connection_state: BackendConnectionState,
     block_starts: bool,
     block_sends: bool,
@@ -88,16 +88,20 @@ impl TestBackend {
         self
     }
 
-    fn with_listed_threads(self, listed_threads: Vec<BackendThreadSnapshot>) -> Self {
-        *self.listed_threads.lock().expect("listed threads lock") = listed_threads;
+    fn with_listed_threads(self, listed_threads: Vec<BackendSessionSnapshot>) -> Self {
+        *self.listed_threads.lock().expect("listed sessions lock") = listed_threads;
         self
     }
 
-    fn with_history_pages(self, thread_id: &str, pages: Vec<ReadThreadRawHistoryResponse>) -> Self {
+    fn with_history_pages(
+        self,
+        session_id: &str,
+        pages: Vec<ReadSessionRawHistoryResponse>,
+    ) -> Self {
         self.history_pages
             .lock()
             .expect("history pages lock")
-            .insert(thread_id.to_owned(), VecDeque::from(pages));
+            .insert(session_id.to_owned(), VecDeque::from(pages));
         self
     }
 
@@ -114,7 +118,7 @@ impl TestBackend {
     fn with_conversation_sessions(
         self,
         conversation_id: &str,
-        sessions: Vec<crate::backend::ThreadSummaryEntry>,
+        sessions: Vec<crate::backend::SessionSummaryEntry>,
     ) -> Self {
         self.conversation_sessions
             .lock()
@@ -147,13 +151,13 @@ impl AgentBackend for TestBackend {
         let mut next_thread = self.next_thread.lock().expect("next_thread lock");
         *next_thread += 1;
         Ok(StartAgentOutcome {
-            thread_id: format!("thread-{}", *next_thread),
+            session_id: format!("thread-{}", *next_thread),
             cwd: workspace,
             provider_session_id: None,
         })
     }
 
-    async fn send_message(&self, thread_id: &str, text: &str) -> Result<()> {
+    async fn send_message(&self, session_id: &str, text: &str) -> Result<()> {
         if self.block_sends {
             std::future::pending::<()>().await;
         }
@@ -163,26 +167,26 @@ impl AgentBackend for TestBackend {
         self.sent_messages
             .lock()
             .expect("sent messages lock")
-            .push((thread_id.to_owned(), text.to_owned()));
+            .push((session_id.to_owned(), text.to_owned()));
         Ok(())
     }
 
     async fn send_approval_decision(
         &self,
         request_id: &str,
-        thread_id: &str,
+        session_id: &str,
         decision: serde_json::Value,
     ) -> Result<()> {
         self.approval_decisions
             .lock()
             .expect("approval decisions lock")
-            .push((request_id.to_owned(), thread_id.to_owned(), decision));
+            .push((request_id.to_owned(), session_id.to_owned(), decision));
         Ok(())
     }
 
     async fn respond_opencode_permission(
         &self,
-        thread_id: &str,
+        session_id: &str,
         permission_id: &str,
         response: &str,
     ) -> Result<()> {
@@ -190,7 +194,7 @@ impl AgentBackend for TestBackend {
             .lock()
             .expect("opencode permission responses lock")
             .push((
-                thread_id.to_owned(),
+                session_id.to_owned(),
                 permission_id.to_owned(),
                 response.to_owned(),
             ));
@@ -199,46 +203,46 @@ impl AgentBackend for TestBackend {
 
     async fn respond_opencode_question(
         &self,
-        thread_id: &str,
+        session_id: &str,
         question_id: &str,
         answers: Vec<Vec<String>>,
     ) -> Result<()> {
         self.opencode_question_responses
             .lock()
             .expect("opencode question responses lock")
-            .push((thread_id.to_owned(), question_id.to_owned(), answers));
+            .push((session_id.to_owned(), question_id.to_owned(), answers));
         Ok(())
     }
 
-    async fn interrupt_thread(&self, thread_id: &str) -> Result<()> {
+    async fn interrupt_session(&self, session_id: &str) -> Result<()> {
         self.interrupted
             .lock()
             .expect("interrupt list lock")
-            .push(thread_id.to_owned());
+            .push(session_id.to_owned());
         Ok(())
     }
 
-    async fn close_thread(&self, thread_id: &str) -> Result<()> {
+    async fn close_session(&self, session_id: &str) -> Result<()> {
         self.closed
             .lock()
             .expect("close list lock")
-            .push(thread_id.to_owned());
+            .push(session_id.to_owned());
         Ok(())
     }
 
-    async fn delete_thread(&self, thread_id: &str) -> Result<()> {
+    async fn delete_session(&self, session_id: &str) -> Result<()> {
         self.deleted
             .lock()
             .expect("delete list lock")
-            .push(thread_id.to_owned());
+            .push(session_id.to_owned());
         Ok(())
     }
 
-    async fn list_threads(&self) -> Result<Vec<BackendThreadSnapshot>> {
+    async fn list_sessions(&self) -> Result<Vec<BackendSessionSnapshot>> {
         Ok(self
             .listed_threads
             .lock()
-            .expect("listed threads lock")
+            .expect("listed sessions lock")
             .clone())
     }
 
@@ -323,7 +327,7 @@ impl AgentBackend for TestBackend {
     async fn list_conversation_agent_sessions(
         &self,
         conversation_id: &str,
-    ) -> Result<Vec<crate::backend::ThreadSummaryEntry>> {
+    ) -> Result<Vec<crate::backend::SessionSummaryEntry>> {
         Ok(self
             .conversation_sessions
             .lock()
@@ -338,6 +342,7 @@ impl AgentBackend for TestBackend {
         conversation_id: &str,
         agent: AgentName,
         workspace: PathBuf,
+        _profile_id: Option<String>,
     ) -> Result<StartAgentOutcome> {
         let outcome = self.start_agent(agent, workspace).await?;
         self.conversation_sessions
@@ -345,16 +350,16 @@ impl AgentBackend for TestBackend {
             .expect("conversation sessions lock")
             .entry(conversation_id.to_owned())
             .or_default()
-            .push(crate::backend::ThreadSummaryEntry {
-                thread_id: outcome.thread_id.clone(),
+            .push(crate::backend::SessionSummaryEntry {
+                session_id: outcome.session_id.clone(),
                 agent,
                 title: None,
                 first_ts_ms: 0,
                 last_ts_ms: 0,
                 message_count: 0,
                 ended_at_ms: None,
-                parent_thread_id: None,
-                state: ThreadState::Idle,
+                parent_session_id: None,
+                state: SessionState::Idle,
                 needs_continue: false,
             });
         Ok(outcome)
@@ -364,7 +369,7 @@ impl AgentBackend for TestBackend {
         &self,
         conversation_id: &str,
         message_id: Option<&str>,
-        thread_id: Option<&str>,
+        session_id: Option<&str>,
         sender_role: &str,
         agent: Option<AgentName>,
         body: &str,
@@ -380,7 +385,7 @@ impl AgentBackend for TestBackend {
                 .map(str::to_owned)
                 .unwrap_or_else(|| format!("test-message-{}", list.len() + 1)),
             conversation_id: conversation_id.to_owned(),
-            thread_id: thread_id.map(str::to_owned),
+            session_id: session_id.map(str::to_owned),
             created_at_ms: 0,
             sender_role: sender_role.to_owned(),
             agent,
@@ -392,33 +397,33 @@ impl AgentBackend for TestBackend {
         Ok(())
     }
 
-    async fn resume_thread(
+    async fn resume_session(
         &self,
-        _thread_id: &str,
+        _session_id: &str,
         _auto_continue: bool,
     ) -> Result<StartAgentOutcome> {
         Ok(StartAgentOutcome {
-            thread_id: String::new(),
+            session_id: String::new(),
             cwd: PathBuf::new(),
             provider_session_id: None,
         })
     }
 
-    async fn read_thread_raw_history(
+    async fn read_session_raw_history(
         &self,
-        thread_id: &str,
+        session_id: &str,
         from_seq: Option<u64>,
         limit: u32,
-    ) -> Result<ReadThreadRawHistoryResponse> {
+    ) -> Result<ReadSessionRawHistoryResponse> {
         self.history_calls
             .lock()
             .expect("history calls lock")
-            .push((thread_id.to_owned(), from_seq, limit));
+            .push((session_id.to_owned(), from_seq, limit));
         let mut pages = self.history_pages.lock().expect("history pages lock");
         Ok(pages
-            .get_mut(thread_id)
+            .get_mut(session_id)
             .and_then(VecDeque::pop_front)
-            .unwrap_or(ReadThreadRawHistoryResponse {
+            .unwrap_or(ReadSessionRawHistoryResponse {
                 events: Vec::new(),
                 next_seq: None,
             }))
@@ -445,12 +450,12 @@ impl AgentBackend for TestBackend {
 }
 
 fn ok_agent(agent: AgentName) -> AgentDescriptor {
-    AgentDescriptor {
-        name: agent,
-        path: Some(format!("/usr/local/bin/{}", agent.bin_name())),
-        version: Some("1.0.0".into()),
-        status: AgentStatus::Ok,
-    }
+    AgentDescriptor::new(
+        agent,
+        Some(format!("/usr/local/bin/{}", agent.bin_name())),
+        Some("1.0.0".into()),
+        AgentStatus::Ok,
+    )
 }
 
 fn set_test_projects_nav(app: &mut App) {
@@ -480,27 +485,27 @@ fn set_test_conversation_nav(app: &mut App, project_id: &str, conversation_id: &
 }
 
 fn set_test_agent_detail_nav(app: &mut App, project_id: &str, conversation_id: &str) {
-    let (thread_id, agent) = app
+    let (session_id, agent) = app
         .ui
-        .thread_panel
+        .session_panel
         .list
         .selected
-        .and_then(|index| app.ui.thread_panel.list.items.get(index))
-        .map(|thread| (thread.thread_id.clone(), thread.agent))
+        .and_then(|index| app.ui.session_panel.list.items.get(index))
+        .map(|thread| (thread.session_id.clone(), thread.agent))
         .or_else(|| {
             app.ui
-                .thread_panel
+                .session_panel
                 .list
                 .items
                 .first()
-                .map(|thread| (thread.thread_id.clone(), thread.agent))
+                .map(|thread| (thread.session_id.clone(), thread.agent))
         })
         .unwrap_or_else(|| ("thread-1".to_owned(), AgentName::Codex));
     set_test_conversation_nav(app, project_id, conversation_id);
     app.ui.nav.stack.push(crate::nav::NavLevel::AgentDetail {
         project_id: project_id.to_owned(),
         conversation_id: conversation_id.to_owned(),
-        thread_id,
+        session_id,
         agent,
     });
 }
@@ -528,13 +533,13 @@ fn scroll(kind: MouseEventKind) -> MouseEvent {
 }
 
 fn projected_frame(
-    thread_id: &str,
+    session_id: &str,
     seq: u64,
     agent: AgentName,
     ui_events: Vec<UiEventMessage>,
 ) -> LocalIngestFrame {
     LocalIngestFrame {
-        thread_id: thread_id.to_string(),
+        session_id: session_id.to_string(),
         seq,
         agent,
         ui_events,

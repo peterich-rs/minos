@@ -1,13 +1,13 @@
 use crate::error::TranslationError;
-use crate::message::{DisplayPayload, MessageRole, ThreadEndReason, UiEventMessage};
+use crate::message::{DisplayPayload, MessageRole, SessionEndReason, UiEventMessage};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 #[allow(dead_code)]
 pub struct GeminiTranslatorState {
-    thread_id: String,
-    session_id: Option<String>,
+    session_id: String,
+    provider_session_id: Option<String>,
     open_assistant_message_id: Option<String>,
     open_user_message_id: Option<String>,
     emitted_message_ids: HashSet<String>,
@@ -22,10 +22,10 @@ struct OpenGeminiToolCall {
 
 impl GeminiTranslatorState {
     #[must_use]
-    pub fn new(thread_id: String) -> Self {
+    pub fn new(session_id: String) -> Self {
         Self {
-            thread_id,
-            session_id: None,
+            session_id,
+            provider_session_id: None,
             open_assistant_message_id: None,
             open_user_message_id: None,
             emitted_message_ids: HashSet::new(),
@@ -77,7 +77,7 @@ pub fn translate(
     // Minos synthetic envelopes shared with Codex (approval overlay path).
     if let Some(method) = raw.get("method").and_then(Value::as_str) {
         match method {
-            "approval/request" | "approval/timeout" => {
+            "approval/request" | "approval/timeout" | "approval/resolved" => {
                 let params = raw.get("params").cloned().unwrap_or(Value::Null);
                 return Ok(vec![UiEventMessage::Raw {
                     kind: method.to_string(),
@@ -120,9 +120,9 @@ pub fn translate(
             let now_ms = chrono::Utc::now().timestamp_millis();
             let mut events = complete_open_assistant_message(state, now_ms);
             state.tool_calls.clear();
-            events.push(UiEventMessage::ThreadClosed {
-                thread_id: state.thread_id.clone(),
-                reason: ThreadEndReason::AgentDone,
+            events.push(UiEventMessage::SessionClosed {
+                session_id: state.session_id.clone(),
+                reason: SessionEndReason::AgentDone,
                 closed_at_ms: now_ms,
             });
             Ok(events)
@@ -186,9 +186,9 @@ fn translate_acp_prompt_response(
             let now_ms = chrono::Utc::now().timestamp_millis();
             let mut events = complete_open_assistant_message(state, now_ms);
             state.tool_calls.clear();
-            events.push(UiEventMessage::ThreadClosed {
-                thread_id: state.thread_id.clone(),
-                reason: ThreadEndReason::UserStopped,
+            events.push(UiEventMessage::SessionClosed {
+                session_id: state.session_id.clone(),
+                reason: SessionEndReason::UserStopped,
                 closed_at_ms: now_ms,
             });
             events
@@ -331,6 +331,7 @@ fn translate_acp_notification(
                         }
                     })
                     .unwrap_or_default();
+                let content = crate::strip_ansi_escapes(&content);
 
                 state.tool_calls.remove(&tool_call_id);
                 Ok(vec![UiEventMessage::ToolCallCompleted {
@@ -480,7 +481,7 @@ mod tests {
         let mut s = GeminiTranslatorState::new("thr_x".into());
         let out = translate(
             &mut s,
-            &val(r#"{"kind":"user_message","messageId":"u1","text":"你好","threadId":"thr_x"}"#),
+            &val(r#"{"kind":"user_message","messageId":"u1","text":"你好","sessionId":"thr_x"}"#),
         )
         .unwrap();
 
@@ -742,8 +743,8 @@ mod tests {
             .any(|e| matches!(e, UiEventMessage::MessageCompleted { .. })));
         assert!(out.iter().any(|e| matches!(
             e,
-            UiEventMessage::ThreadClosed {
-                reason: ThreadEndReason::AgentDone,
+            UiEventMessage::SessionClosed {
+                reason: SessionEndReason::AgentDone,
                 ..
             }
         )));
@@ -806,7 +807,7 @@ mod tests {
     fn approval_request_envelope_becomes_raw_for_overlay() {
         let mut s = GeminiTranslatorState::new("thr_x".into());
         let raw = val(
-            r#"{"method":"approval/request","params":{"request_id":"perm-1","thread_id":"thr_x","turn_id":"","method":"session/request_permission","params":{"toolCall":{"title":"ls","kind":"other"}}}}"#,
+            r#"{"method":"approval/request","params":{"request_id":"perm-1","session_id":"thr_x","turn_id":"","method":"session/request_permission","params":{"toolCall":{"title":"ls","kind":"other"}}}}"#,
         );
         let out = translate(&mut s, &raw).unwrap();
         assert!(matches!(

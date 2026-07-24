@@ -14,6 +14,7 @@ Minos 是一个远程 AI 编码控制系统：Mac 运行 host 端，通过手机
 | [docs/architecture-macos.md](docs/architecture-macos.md) | macOS 应用 (SwiftUI + UniFFI)：状态栏应用、DaemonDriving 协议、bootstrap、QR 渲染 |
 | [docs/architecture-web.md](docs/architecture-web.md) | Web 管理控制台 (React + Vite)：Zustand 状态、WebSocket 实时、工作区页面 |
 | [docs/architecture-desktop.md](docs/architecture-desktop.md) | Host 桌面壳 (Tauri + React)：多栏 Inbox/Agents UI，目标替代 TUI |
+| [docs/architecture-grok-acp-projection.md](docs/architecture-grok-acp-projection.md) | Grok ACP tool content/raw_output 双通道 → Minos UI 投影清单 |
 | [docs/architecture-shared-crates.md](docs/architecture-shared-crates.md) | 12 个共享 crate：domain、protocol、transport、pairing、cli-detect、agent-runtime、chat-store、acp-protocol、codex-protocol、ui-protocol、ffi-uniffi、ffi-frb |
 | [docs/architecture-business-flow.md](docs/architecture-business-flow.md) | 完整业务流程：注册 → 配对 → 实时连接 → Agent 会话 → 流式交互 → 审批 → 重连恢复 |
 
@@ -84,4 +85,4 @@ Minos 当前处于主动开发阶段，没有需要支持的历史发布版本�
 ## 8. Observability and Comments
 - Add concise comments for non-obvious control flow, protocol boundaries, data-shape conversions, and concurrency decisions; avoid comments that restate the code.
 - Add structured logs at key lifecycle and failure points, especially RPC boundaries, background tasks, persistence writes, retries, and user-visible state transitions.
-- Logs must include enough stable fields to locate the failing object or operation, such as project_id, thread_id, workspace path, method name, and error; do not log secrets, tokens, or full sensitive payloads.
+- Logs must include enough stable fields to locate the failing object or operation, such as project_id, session_id, workspace path, method name, and error; do not log secrets, tokens, or full sensitive payloads.

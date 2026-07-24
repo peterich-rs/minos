@@ -33,7 +33,7 @@ pub enum ChatItem {
     SubagentCall {
         message_id: String,
         tool_call_id: String,
-        sub_thread_id: String,
+        sub_session_id: String,
         agent: minos_domain::AgentName,
         model: Option<String>,
         prompt_summary: Option<String>,

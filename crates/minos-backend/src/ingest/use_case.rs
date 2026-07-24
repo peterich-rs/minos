@@ -5,7 +5,7 @@ use minos_domain::{AgentName, DeviceId};
 use serde_json::Value;
 
 use crate::error::BackendError;
-use crate::ingest::{dispatch, translate::ThreadTranslators};
+use crate::ingest::{dispatch, translate::SessionTranslators};
 use crate::realtime::RealtimeFanout;
 use crate::session::SessionRegistry;
 use crate::store::StoreHandle;
@@ -13,7 +13,7 @@ use crate::store::StoreHandle;
 #[derive(Debug, Clone)]
 pub struct IngestCommand {
     pub agent: AgentName,
-    pub thread_id: String,
+    pub session_id: String,
     pub seq: u64,
     pub payload: Value,
     pub ts_ms: i64,
@@ -23,7 +23,7 @@ pub struct IngestCommand {
 pub struct IngestUseCase {
     store: StoreHandle,
     registry: Arc<SessionRegistry>,
-    translators: Arc<ThreadTranslators>,
+    translators: Arc<SessionTranslators>,
     approvals: Arc<dyn ApprovalService>,
     realtime: Arc<RealtimeFanout>,
 }
@@ -33,7 +33,7 @@ impl IngestUseCase {
     pub fn new(
         store: impl Into<StoreHandle>,
         registry: Arc<SessionRegistry>,
-        translators: Arc<ThreadTranslators>,
+        translators: Arc<SessionTranslators>,
         approvals: Arc<dyn ApprovalService>,
         realtime: Arc<RealtimeFanout>,
     ) -> Arc<Self> {
@@ -55,7 +55,7 @@ impl IngestUseCase {
             self.approvals.as_ref(),
             self.realtime.as_ref(),
             command.agent,
-            &command.thread_id,
+            &command.session_id,
             command.seq,
             &command.payload,
             command.ts_ms,

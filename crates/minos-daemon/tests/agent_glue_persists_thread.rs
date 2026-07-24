@@ -1,13 +1,13 @@
 //! Regression test for the FK-constraint bug surfaced post-Phase-D: codex
 //! events were getting dropped with `FOREIGN KEY constraint failed (787)`
 //! the moment the user sent the first message, because `AgentGlue::start_agent`
-//! wasn't persisting the parent `threads` / `workspaces` rows the
-//! `events.thread_id` FK depends on.
+//! wasn't persisting the parent `sessions` / `workspaces` rows the
+//! `events.session_id` FK depends on.
 //!
 //! The test wires a `FakeCodexBackend` so codex doesn't have to be installed
 //! on the host, drives `AgentGlue::start_agent`, and then asserts (a) both
 //! parent rows landed and (b) `EventWriter::write_live` for the new
-//! `thread_id` succeeds. Without the fix the second assertion fails with
+//! `session_id` succeeds. Without the fix the second assertion fails with
 //! the SQLite 787 error.
 
 #![cfg(feature = "test-support")]
@@ -50,22 +50,26 @@ async fn start_agent_persists_thread_so_event_writer_does_not_fk_fail() {
             agent: AgentName::Codex,
             workspace: String::new(),
             mode: Some(AgentLaunchMode::Server),
+            profile_id: None,
+            model: None,
+            reasoning_effort: None,
+            instructions: None,
         })
         .await
         .expect("start_agent should succeed against the fake codex");
 
     // (a) parent rows now exist.
-    let threads = store.list_threads(None, None, None).await.unwrap();
+    let sessions = store.list_sessions(None, None, None).await.unwrap();
     assert_eq!(
-        threads.len(),
+        sessions.len(),
         1,
-        "exactly one thread row should land after start_agent",
+        "exactly one session row should land after start_agent",
     );
-    assert_eq!(threads[0].thread_id, resp.session_id);
-    assert_eq!(threads[0].agent, "codex");
-    assert_eq!(threads[0].status, "idle");
+    assert_eq!(sessions[0].session_id, resp.session_id);
+    assert_eq!(sessions[0].agent, "codex");
+    assert_eq!(sessions[0].status, "idle");
     assert_eq!(
-        threads[0].provider_session_id.as_deref(),
+        sessions[0].provider_session_id.as_deref(),
         Some(resp.session_id.as_str()),
         "provider_session_id must be populated for jsonl recovery",
     );
@@ -76,8 +80,8 @@ async fn start_agent_persists_thread_so_event_writer_does_not_fk_fail() {
         .unwrap();
     assert_eq!(workspace_count, 1, "workspace row must be upserted");
 
-    // (b) writing a synthetic ingest event for the new thread_id no longer
-    //     trips the events.thread_id FK. This is the actual user-visible
+    // (b) writing a synthetic ingest event for the new session_id no longer
+    //     trips the events.session_id FK. This is the actual user-visible
     //     symptom: pre-fix, AgentGlue's bridge spammed
     //     "EventWriter.write_live failed; event dropped {error=... 787}"
     //     the moment codex sent its first frame.
@@ -114,7 +118,7 @@ async fn start_agent_persists_thread_so_event_writer_does_not_fk_fail() {
     }
     let committed = committed.unwrap_or_else(|| {
         panic!(
-            "write_live should not fail with FK 787 once the thread row exists: {}",
+            "write_live should not fail with FK 787 once the session row exists: {}",
             last_err
                 .map(|e| e.to_string())
                 .unwrap_or_else(|| "unknown".into())

@@ -2,7 +2,7 @@
 //!
 //! Path comparisons canonicalize when needed, but never re-canonicalize the same
 //! path repeatedly inside one prune/match pass (that used to stall the main
-//! loop every daemon list_threads tick).
+//! loop every daemon list_sessions tick).
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -19,76 +19,76 @@ pub(crate) fn workspace_path_belongs_to_current_workspace(
 }
 
 pub(crate) fn prune_external_threads(state: &mut AppState, ui: &mut UiState) -> bool {
-    let selected_thread_id = ui.current_thread_id().map(str::to_owned);
-    let mut removed_thread_ids = Vec::new();
+    let selected_session_id = ui.current_session_id().map(str::to_owned);
+    let mut removed_session_ids = Vec::new();
     let mut matcher = WorkspaceMatcher::from_state(state, ui);
 
-    ui.thread_panel.list.items.retain(|thread| {
+    ui.session_panel.list.items.retain(|thread| {
         let keep = matcher.contains(&thread.workspace);
         if !keep {
-            removed_thread_ids.push(thread.thread_id.clone());
+            removed_session_ids.push(thread.session_id.clone());
         }
         keep
     });
 
-    if removed_thread_ids.is_empty() {
+    if removed_session_ids.is_empty() {
         return false;
     }
 
-    for thread_id in &removed_thread_ids {
-        ui.thread_panel.chat_states.remove(thread_id);
-        state.hydrated_threads.remove(thread_id);
-        state.thread_watermarks.remove(thread_id);
-        state.recorded_agent_results.remove(thread_id);
-        state.thread_conversations.remove(thread_id);
+    for session_id in &removed_session_ids {
+        ui.session_panel.chat_states.remove(session_id);
+        state.hydrated_threads.remove(session_id);
+        state.session_watermarks.remove(session_id);
+        state.recorded_agent_results.remove(session_id);
+        state.session_conversations.remove(session_id);
     }
 
-    let next = selected_thread_id
-        .and_then(|thread_id| {
-            ui.thread_panel
+    let next = selected_session_id
+        .and_then(|session_id| {
+            ui.session_panel
                 .list
                 .items
                 .iter()
-                .position(|thread| thread.thread_id == thread_id)
+                .position(|thread| thread.session_id == session_id)
         })
-        .or_else(|| (!ui.thread_panel.list.items.is_empty()).then_some(0));
-    ui.thread_panel.list.select(next);
+        .or_else(|| (!ui.session_panel.list.items.is_empty()).then_some(0));
+    ui.session_panel.list.select(next);
     true
 }
 
 pub(crate) fn remove_thread_local_state(
     state: &mut AppState,
     ui: &mut UiState,
-    thread_id: &str,
+    session_id: &str,
 ) -> bool {
     let Some(index) = ui
-        .thread_panel
+        .session_panel
         .list
         .items
         .iter()
-        .position(|thread| thread.thread_id == thread_id)
+        .position(|thread| thread.session_id == session_id)
     else {
         return false;
     };
 
-    ui.thread_panel.list.items.remove(index);
-    ui.thread_panel.chat_states.remove(thread_id);
-    state.hydrated_threads.remove(thread_id);
-    state.thread_watermarks.remove(thread_id);
-    state.recorded_agent_results.remove(thread_id);
-    state.thread_conversations.remove(thread_id);
+    ui.session_panel.list.items.remove(index);
+    ui.session_panel.chat_states.remove(session_id);
+    state.hydrated_threads.remove(session_id);
+    state.session_watermarks.remove(session_id);
+    state.recorded_agent_results.remove(session_id);
+    state.session_conversations.remove(session_id);
 
     let next = ui
-        .thread_panel
+        .session_panel
         .list
         .selected
         .and_then(|selected| match selected.cmp(&index) {
             std::cmp::Ordering::Less => Some(selected),
-            std::cmp::Ordering::Equal => (!ui.thread_panel.list.items.is_empty())
-                .then_some(index.min(ui.thread_panel.list.items.len() - 1)),
+            std::cmp::Ordering::Equal => (!ui.session_panel.list.items.is_empty())
+                .then_some(index.min(ui.session_panel.list.items.len() - 1)),
             std::cmp::Ordering::Greater => Some(selected - 1),
         });
-    ui.thread_panel.list.select(next);
+    ui.session_panel.list.select(next);
     true
 }
 
@@ -102,8 +102,8 @@ pub(crate) fn workspace_path_belongs_to_known_workspace(
 
 /// Pre-normalized known workspaces + per-call canonicalize cache.
 ///
-/// Built once per prune/apply so matching is O(threads + workspaces) syscalls,
-/// not O(threads × workspaces).
+/// Built once per prune/apply so matching is O(sessions + workspaces) syscalls,
+/// not O(sessions × workspaces).
 pub(crate) struct WorkspaceMatcher {
     known: HashSet<PathBuf>,
     cache: PathNormCache,
@@ -192,7 +192,7 @@ mod tests {
         assert!(!matcher.contains(Path::new("/definitely/not/this/workspace")));
     }
 
-    /// Simulate threads×workspaces comparisons: cache must stay O(unique paths).
+    /// Simulate sessions×workspaces comparisons: cache must stay O(unique paths).
     #[test]
     fn repeated_normalize_of_same_path_is_cached() {
         let dir = tempfile::tempdir().expect("tempdir");

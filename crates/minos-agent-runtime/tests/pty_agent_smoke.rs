@@ -48,7 +48,7 @@ async fn pty_agent_reads_stdout_and_accepts_stdin() {
         .expect("should receive within 5s")
         .expect("channel should not be closed");
 
-    assert_eq!(first.thread_id, "test-thread-1");
+    assert_eq!(first.session_id, "test-thread-1");
     assert_eq!(first.agent, AgentName::Claude);
     let payload = first
         .json_value()
@@ -101,7 +101,7 @@ async fn pty_agent_reads_stdout_and_accepts_stdin() {
     assert_eq!(
         closed
             .json_value()
-            .expect("raw ingest should contain JSON payload")["thread_id"],
+            .expect("raw ingest should contain JSON payload")["session_id"],
         "test-thread-1"
     );
 }

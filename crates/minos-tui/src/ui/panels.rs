@@ -1,11 +1,11 @@
-use crate::backend::{ConversationMessageEntry, ThreadSummaryEntry};
+use crate::backend::{ConversationMessageEntry, SessionSummaryEntry};
 use crate::nav::NavLevel;
 use crate::translation::ChatState;
 use crate::ui::conversation_view::ConversationChatRenderCache;
 use crate::ui::delete_confirm::DeleteConfirmState;
 use crate::ui::input_bar::{InputLayoutMetrics, InputState};
 use crate::ui::list_panel::ListPanel;
-use crate::ui::{ProjectCreateDialogState, SubagentInfo, ThreadEntry};
+use crate::ui::{ProjectCreateDialogState, SessionEntry, SubagentInfo};
 use std::collections::HashMap;
 
 pub struct NavPanel {
@@ -51,7 +51,7 @@ pub struct ConversationPanel {
     pub scroll_offset: u32,
     pub auto_scroll: bool,
     pub max_scroll: u32,
-    pub agent_sessions: ListPanel<ThreadSummaryEntry>,
+    pub agent_sessions: ListPanel<SessionSummaryEntry>,
     pub subagent_info: HashMap<String, SubagentInfo>,
     pub chat_cache: ConversationChatRenderCache,
     /// Mouse drag text selection over the conversation timeline (agent-chat style).
@@ -73,7 +73,12 @@ impl ConversationPanel {
         }
     }
 
+    /// Replace the conversation timeline. Canonical order is `message_seq ASC`
+    /// (durable insert order from daemon). Defensive sort so any backend that
+    /// returns DESC or an unsorted page still renders chronologically.
     pub fn set_messages(&mut self, messages: Vec<ConversationMessageEntry>) {
+        let mut messages = messages;
+        messages.sort_by_key(|message| message.message_seq);
         self.messages = messages;
         self.bump_messages_revision();
         self.clear_selection();
@@ -123,15 +128,15 @@ impl Default for ConversationPanel {
     }
 }
 
-/// Legacy / hydration thread list + per-thread chat projection.
+/// Legacy / hydration session list + per-session chat projection.
 ///
-/// Field name `list` avoids awkward paths like `ui.threads.threads`.
-pub struct ThreadPanel {
-    pub list: ListPanel<ThreadEntry>,
+/// Field name `list` avoids awkward paths like `ui.sessions.sessions`.
+pub struct SessionPanel {
+    pub list: ListPanel<SessionEntry>,
     pub chat_states: HashMap<String, ChatState>,
 }
 
-impl ThreadPanel {
+impl SessionPanel {
     pub fn new() -> Self {
         Self {
             list: ListPanel::new(),
@@ -140,7 +145,7 @@ impl ThreadPanel {
     }
 }
 
-impl Default for ThreadPanel {
+impl Default for SessionPanel {
     fn default() -> Self {
         Self::new()
     }
@@ -181,5 +186,39 @@ impl OverlaysPanel {
 impl Default for OverlaysPanel {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod conversation_message_order_tests {
+    use super::*;
+
+    fn entry(seq: i64, id: &str) -> ConversationMessageEntry {
+        ConversationMessageEntry {
+            message_seq: seq,
+            message_id: id.to_owned(),
+            conversation_id: "c".into(),
+            session_id: None,
+            created_at_ms: seq * 10,
+            sender_role: "user".into(),
+            agent: None,
+            body: id.to_owned(),
+            reply_to_message_id: None,
+            delegation_id: None,
+            mentions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn set_messages_sorts_by_message_seq_asc() {
+        let mut panel = ConversationPanel::new();
+        panel.set_messages(vec![entry(30, "c"), entry(10, "a"), entry(20, "b")]);
+        let ids: Vec<&str> = panel
+            .messages
+            .iter()
+            .map(|m| m.message_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["a", "b", "c"]);
+        assert_eq!(panel.messages_revision, 1);
     }
 }

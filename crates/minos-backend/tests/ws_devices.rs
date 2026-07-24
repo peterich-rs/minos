@@ -409,9 +409,9 @@ async fn ws_host_connects_with_hello_for_agent_host() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
     let (host_id, _host_secret) = register_agent_host(&relay.pool).await;
 
-    // Seed two threads owned by `host_id` and a few raw events on each so
+    // Seed two sessions owned by `host_id` and a few raw events on each so
     // `last_seq_per_owner` returns `{thr_1: 7, thr_2: 3}`.
-    minos_backend::store::threads::upsert(
+    minos_backend::store::sessions::upsert(
         &relay.pool,
         "thr_1",
         AgentName::Codex,
@@ -419,7 +419,7 @@ async fn ws_host_connects_with_hello_for_agent_host() -> anyhow::Result<()> {
         0,
     )
     .await?;
-    minos_backend::store::threads::upsert(
+    minos_backend::store::sessions::upsert(
         &relay.pool,
         "thr_2",
         AgentName::Codex,

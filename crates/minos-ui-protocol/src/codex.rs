@@ -1,14 +1,14 @@
 //! Codex CLI → `UiEventMessage` translator.
 //!
 //! Each codex WebSocket notification flows through `translate`, accumulating
-//! per-thread state (currently-open assistant message id, buffered tool-call
+//! per-session state (currently-open assistant message id, buffered tool-call
 //! arguments) in `CodexTranslatorState`. State is NOT thread-safe by design:
 //! the backend owns one instance per live thread and reconstructs a fresh
 //! state for history reads so translations are deterministic.
 
 use crate::error::TranslationError;
 use crate::message::{
-    DisplayPayload, MessageRole, SubagentStatus, ThreadEndReason, UiEventMessage,
+    DisplayPayload, MessageRole, SessionEndReason, SubagentStatus, UiEventMessage,
 };
 use minos_domain::AgentName;
 use serde_json::Value;
@@ -17,10 +17,10 @@ use uuid::Uuid;
 
 const TOOL_ARGS_DISPLAY_LIMIT: usize = 64 * 1024;
 
-/// Per-thread state the translator accumulates while streaming raw codex
-/// notifications. Not thread-safe; one instance per `thread_id`.
+/// Per-session state the translator accumulates while streaming raw codex
+/// notifications. Not thread-safe; one instance per `session_id`.
 pub struct CodexTranslatorState {
-    thread_id: String,
+    session_id: String,
     /// Currently-open assistant message (only one at a time for codex).
     /// Populated when `item/started` carries `item.type == "agentMessage"`;
     /// reset when the corresponding `turn/completed` lands.
@@ -36,7 +36,7 @@ pub struct CodexTranslatorState {
     /// the same `item.id` if the daemon's synthesised echo races with a
     /// real codex `item/started` carrying the same id. Lookup is bounded
     /// to the current thread's lifetime; entries never get pruned because
-    /// codex item ids are turn-scoped and one thread's `turn` count is
+    /// codex item ids are turn-scoped and one session's `turn` count is
     /// bounded in practice.
     emitted_message_ids: std::collections::HashSet<String>,
     /// Normalized user texts already seen in the current in-flight turn.
@@ -65,9 +65,9 @@ struct OpenToolCall {
 
 impl CodexTranslatorState {
     #[must_use]
-    pub fn new(thread_id: String) -> Self {
+    pub fn new(session_id: String) -> Self {
         Self {
-            thread_id,
+            session_id,
             open_assistant_message_id: None,
             open_user_message_id: None,
             emitted_message_ids: std::collections::HashSet::new(),
@@ -122,17 +122,17 @@ pub fn translate(
 
     match method {
         "thread/started" => {
-            let thread_id = params
+            let session_id = params
                 .get("threadId")
                 .and_then(Value::as_str)
-                .unwrap_or(&state.thread_id)
+                .unwrap_or(&state.session_id)
                 .to_string();
             let opened_at_ms = params
                 .get("createdAtMs")
                 .and_then(Value::as_i64)
                 .unwrap_or(0);
-            Ok(vec![UiEventMessage::ThreadOpened {
-                thread_id,
+            Ok(vec![UiEventMessage::SessionOpened {
+                session_id,
                 agent: AgentName::Codex,
                 title: None,
                 opened_at_ms,
@@ -143,16 +143,16 @@ pub fn translate(
                 .get("archivedAtMs")
                 .and_then(Value::as_i64)
                 .unwrap_or(0);
-            Ok(vec![UiEventMessage::ThreadClosed {
-                thread_id: state.thread_id.clone(),
-                reason: ThreadEndReason::AgentDone,
+            Ok(vec![UiEventMessage::SessionClosed {
+                session_id: state.session_id.clone(),
+                reason: SessionEndReason::AgentDone,
                 closed_at_ms,
             }])
         }
         "item/started" => {
             // Real codex 2026-04 shape (`crates/minos-codex-protocol`
             // `ItemStartedNotification`): `params: {item: ThreadItem (tagged
-            // by "type"), threadId, turnId}`. ThreadItem variants we render
+            // by "type"), sessionId, turnId}`. ThreadItem variants we render
             // in the chat timeline are `userMessage` and `agentMessage`;
             // anything else (plan, reasoning, hookPrompt, …) flows through
             // as a `Raw` event so the system surface can still see it
@@ -529,9 +529,9 @@ fn translate_item_completed(
         "collabAgentToolCall" => {
             let mut events = collab_spawn_events(state, params, item, item_id);
             let status = collab_tool_call_status(item);
-            for sub_thread_id in receiver_thread_ids(item) {
+            for sub_session_id in receiver_session_ids(item) {
                 events.push(UiEventMessage::SubagentStatusUpdated {
-                    sub_thread_id,
+                    sub_session_id,
                     status,
                 });
             }
@@ -547,11 +547,11 @@ fn collab_spawn_events(
     item: &Value,
     item_id: &str,
 ) -> Vec<UiEventMessage> {
-    let parent_thread_id = item
+    let parent_session_id = item
         .get("senderThreadId")
         .and_then(Value::as_str)
         .or_else(|| params.get("threadId").and_then(Value::as_str))
-        .unwrap_or(&state.thread_id)
+        .unwrap_or(&state.session_id)
         .to_string();
     let tool_call_id = if item_id.is_empty() {
         stable_item_tool_call_id("", "collabAgentToolCall")
@@ -566,18 +566,18 @@ fn collab_spawn_events(
         .get("prompt")
         .and_then(Value::as_str)
         .map(str::to_string);
-    receiver_thread_ids(item)
+    receiver_session_ids(item)
         .into_iter()
-        .filter_map(|sub_thread_id| {
+        .filter_map(|sub_session_id| {
             if !state
                 .emitted_subagent_ids
-                .insert((tool_call_id.clone(), sub_thread_id.clone()))
+                .insert((tool_call_id.clone(), sub_session_id.clone()))
             {
                 return None;
             }
             Some(UiEventMessage::SubagentSpawned {
-                parent_thread_id: parent_thread_id.clone(),
-                sub_thread_id,
+                parent_session_id: parent_session_id.clone(),
+                sub_session_id,
                 tool_call_id: tool_call_id.clone(),
                 agent: AgentName::Codex,
                 model: model.clone(),
@@ -588,7 +588,7 @@ fn collab_spawn_events(
         .collect()
 }
 
-fn receiver_thread_ids(item: &Value) -> Vec<String> {
+fn receiver_session_ids(item: &Value) -> Vec<String> {
     item.get("receiverThreadIds")
         .and_then(Value::as_array)
         .into_iter()
@@ -672,7 +672,7 @@ mod state_tests {
     }
 
     #[test]
-    fn thread_started_emits_thread_opened() {
+    fn thread_started_emits_session_opened() {
         let mut state = CodexTranslatorState::new("thr_x".into());
         let raw = val(r#"{
             "method":"thread/started",
@@ -681,13 +681,13 @@ mod state_tests {
         let out = translate(&mut state, &raw).unwrap();
         assert_eq!(out.len(), 1);
         match &out[0] {
-            UiEventMessage::ThreadOpened {
-                thread_id,
+            UiEventMessage::SessionOpened {
+                session_id,
                 agent,
                 opened_at_ms,
                 ..
             } => {
-                assert_eq!(thread_id, "thr_x");
+                assert_eq!(session_id, "thr_x");
                 assert_eq!(*agent, AgentName::Codex);
                 assert_eq!(*opened_at_ms, 1_714_000_000_000);
             }
@@ -1126,14 +1126,14 @@ mod state_tests {
         assert!(matches!(
             out.as_slice(),
             [UiEventMessage::SubagentSpawned {
-                parent_thread_id,
-                sub_thread_id,
+                parent_session_id,
+                sub_session_id,
                 tool_call_id,
                 model,
                 prompt,
                 ..
-            }] if parent_thread_id == "parent"
-                && sub_thread_id == "sub-1"
+            }] if parent_session_id == "parent"
+                && sub_session_id == "sub-1"
                 && tool_call_id == "collab-1"
                 && model.as_deref() == Some("gpt-5")
                 && prompt.as_deref() == Some("inspect this")
@@ -1162,9 +1162,9 @@ mod state_tests {
         assert!(out.iter().any(|event| matches!(
             event,
             UiEventMessage::SubagentStatusUpdated {
-                sub_thread_id,
+                sub_session_id,
                 status: SubagentStatus::Completed,
-            } if sub_thread_id == "sub-1"
+            } if sub_session_id == "sub-1"
         )));
     }
 }

@@ -62,7 +62,7 @@ class _ApprovalCountdownController extends Notifier<int> {
 /// the server relay. Maps to `EventKind::ApprovalRequest` on the wire.
 class ApprovalRequestData {
   const ApprovalRequestData({
-    required this.threadId,
+    required this.sessionId,
     required this.turnId,
     required this.requestId,
     required this.method,
@@ -70,7 +70,7 @@ class ApprovalRequestData {
     required this.timeoutMs,
   });
 
-  final String threadId;
+  final String sessionId;
   final String turnId;
   final String requestId;
   final String method;
@@ -80,7 +80,7 @@ class ApprovalRequestData {
   /// Parse from a raw JSON payload (e.g. from `UiEventMessage.raw`).
   factory ApprovalRequestData.fromJson(Map<String, dynamic> json) {
     return ApprovalRequestData(
-      threadId: json['thread_id'] as String? ?? '',
+      sessionId: json['session_id'] as String? ?? '',
       turnId: json['turn_id'] as String? ?? '',
       requestId: json['request_id'] as String? ?? '',
       method: json['method'] as String? ?? '',

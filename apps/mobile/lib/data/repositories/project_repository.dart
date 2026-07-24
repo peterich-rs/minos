@@ -42,8 +42,8 @@ class ProjectRepository {
     return _core.updateProject(projectId: projectId, name: name);
   }
 
-  Future<List<ThreadSummary>> listProjectThreads(String projectId) async {
+  Future<List<SessionSummary>> listProjectThreads(String projectId) async {
     final response = await _core.listProjectThreads(projectId: projectId);
-    return response.threads;
+    return response.sessions;
   }
 }

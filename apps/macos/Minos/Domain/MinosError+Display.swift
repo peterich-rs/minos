@@ -55,8 +55,8 @@ extension MinosError {
             return .agentSessionIdMismatch
         case .IngestSeqConflict:
             return .ingestSeqConflict
-        case .ThreadNotFound:
-            return .threadNotFound
+        case .SessionNotFound:
+            return .sessionNotFound
         case .TranslationNotImplemented:
             return .translationNotImplemented
         case .TranslationFailed:

@@ -14,7 +14,7 @@ type PendingRequest = {
 }
 
 type EnvelopeEvent =
-  | { kind: 'event'; v: number; type: 'ui_event_message'; thread_id: string; seq: number; ui: UiEventMessage; ts_ms: number }
+  | { kind: 'event'; v: number; type: 'ui_event_message'; session_id: string; seq: number; ui: UiEventMessage; ts_ms: number }
   | { kind: 'event'; v: number; type: 'social_message'; conversation_id: string; message: ChatMessageSummary }
   | { kind: 'event'; v: number; type: 'unpaired' | 'server_shutdown' }
   | { kind: 'event'; v: number; type: 'peer_online' | 'peer_offline'; peer_device_id: string }
@@ -225,7 +225,7 @@ export class RelaySocket {
 
     if (envelope.type === 'ui_event_message') {
       this.options.onUiEvent({
-        thread_id: envelope.thread_id,
+        session_id: envelope.session_id,
         seq: envelope.seq,
         ui: envelope.ui,
         ts_ms: envelope.ts_ms,

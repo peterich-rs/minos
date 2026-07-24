@@ -1772,7 +1772,7 @@ impl GeminiAcpInstance {
 
 pub fn spawn_acp_pump(
     client: Arc<AcpClient>,
-    thread_id: String,
+    session_id: String,
     events_tx: tokio::sync::broadcast::Sender<RawIngest>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
@@ -1781,7 +1781,7 @@ pub fn spawn_acp_pump(
                 Some(crate::acp_client::Inbound::Notification { method, params }) => {
                     let _ = events_tx.send(RawIngest {
                         agent: AgentName::Gemini,
-                        thread_id: thread_id.clone(),
+                        session_id: session_id.clone(),
                         payload: serde_json::json!({
                             "kind": "acp_notification",
                             "method": method,
@@ -1793,7 +1793,7 @@ pub fn spawn_acp_pump(
                 Some(crate::acp_client::Inbound::ServerRequest { id, method, params }) => {
                     let _ = events_tx.send(RawIngest {
                         agent: AgentName::Gemini,
-                        thread_id: thread_id.clone(),
+                        session_id: session_id.clone(),
                         payload: serde_json::json!({
                             "kind": "acp_server_request",
                             "id": id,
@@ -1806,15 +1806,15 @@ pub fn spawn_acp_pump(
                 Some(crate::acp_client::Inbound::Closed) => {
                     info!(
                         target: "minos_agent_runtime::gemini_driver",
-                        thread_id = %thread_id,
+                        session_id = %session_id,
                         "gemini ACP stream closed"
                     );
                     let _ = events_tx.send(RawIngest {
                         agent: AgentName::Gemini,
-                        thread_id: thread_id.clone(),
+                        session_id: session_id.clone(),
                         payload: serde_json::json!({
                             "kind": "acp_closed",
-                            "thread_id": thread_id,
+                            "session_id": session_id,
                         }),
                         ts_ms: chrono::Utc::now().timestamp_millis(),
                     });
@@ -1860,7 +1860,7 @@ use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 pub struct GeminiTranslatorState {
-    thread_id: String,
+    session_id: String,
     session_id: Option<String>,
     open_assistant_message_id: Option<String>,
     open_user_message_id: Option<String>,
@@ -1875,9 +1875,9 @@ struct OpenGeminiToolCall {
 
 impl GeminiTranslatorState {
     #[must_use]
-    pub fn new(thread_id: String) -> Self {
+    pub fn new(session_id: String) -> Self {
         Self {
-            thread_id,
+            session_id,
             session_id: None,
             open_assistant_message_id: None,
             open_user_message_id: None,
@@ -1910,8 +1910,8 @@ pub fn translate(
                     finished_at_ms: chrono::Utc::now().timestamp_millis(),
                 });
             }
-            events.push(UiEventMessage::ThreadClosed {
-                thread_id: state.thread_id.clone(),
+            events.push(UiEventMessage::SessionClosed {
+                session_id: state.session_id.clone(),
                 reason: ThreadEndReason::AgentDone,
                 closed_at_ms: chrono::Utc::now().timestamp_millis(),
             });
@@ -2294,7 +2294,7 @@ mod tests {
         )));
         assert!(out.iter().any(|e| matches!(
             e,
-            UiEventMessage::ThreadClosed { reason: ThreadEndReason::AgentDone, .. }
+            UiEventMessage::SessionClosed { reason: ThreadEndReason::AgentDone, .. }
         )));
     }
 

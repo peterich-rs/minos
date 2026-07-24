@@ -7,16 +7,16 @@ async fn daemon_tick_replays_history_without_tui_result_writeback() {
             .with_connection_state(BackendConnectionState::Connected {
                 endpoint: "ws://127.0.0.1:43123".into(),
             })
-            .with_listed_threads(vec![BackendThreadSnapshot {
-                thread_id: "thread-opencode-1234".into(),
+            .with_listed_threads(vec![BackendSessionSnapshot {
+                session_id: "thread-opencode-1234".into(),
                 agent: Some(AgentName::Opencode),
                 workspace: PathBuf::from("/tmp/ws"),
-                state: ThreadState::Idle,
-                parent_thread_id: None,
+                state: SessionState::Idle,
+                parent_session_id: None,
             }])
             .with_history_pages(
                 "thread-opencode-1234",
-                vec![ReadThreadRawHistoryResponse {
+                vec![ReadSessionRawHistoryResponse {
                     events: vec![
                         projected_frame(
                             "thread-opencode-1234",
@@ -58,16 +58,16 @@ async fn daemon_tick_replays_history_without_tui_result_writeback() {
         crate::teamwork::TeamworkStore::disabled(),
     );
     set_test_conversation_nav(&mut app, "test", "conversation-1");
-    app.ui.conversation.agent_sessions.items = vec![crate::backend::ThreadSummaryEntry {
-        thread_id: "thread-opencode-1234".into(),
+    app.ui.conversation.agent_sessions.items = vec![crate::backend::SessionSummaryEntry {
+        session_id: "thread-opencode-1234".into(),
         agent: AgentName::Opencode,
         title: None,
         first_ts_ms: 0,
         last_ts_ms: 0,
         message_count: 0,
         ended_at_ms: None,
-        parent_thread_id: None,
-        state: ThreadState::Idle,
+        parent_session_id: None,
+        state: SessionState::Idle,
         needs_continue: false,
     }];
 
@@ -78,7 +78,7 @@ async fn daemon_tick_replays_history_without_tui_result_writeback() {
     assert!(app.ui.conversation.messages.is_empty());
     let chat = app
         .ui
-        .thread_panel
+        .session_panel
         .chat_states
         .get("thread-opencode-1234")
         .expect("opencode chat hydrated");
@@ -126,28 +126,28 @@ async fn conversation_append_event_refreshes_current_conversation_messages() {
 #[tokio::test]
 async fn post_conversation_update_uses_source_identity_and_delivers_target_mention() {
     let sessions = vec![
-        crate::backend::ThreadSummaryEntry {
-            thread_id: "thread-codex-1234".into(),
+        crate::backend::SessionSummaryEntry {
+            session_id: "thread-codex-1234".into(),
             agent: AgentName::Codex,
             title: None,
             first_ts_ms: 0,
             last_ts_ms: 0,
             message_count: 0,
             ended_at_ms: None,
-            parent_thread_id: None,
-            state: ThreadState::Idle,
+            parent_session_id: None,
+            state: SessionState::Idle,
             needs_continue: false,
         },
-        crate::backend::ThreadSummaryEntry {
-            thread_id: "thread-opencode-1234".into(),
+        crate::backend::SessionSummaryEntry {
+            session_id: "thread-opencode-1234".into(),
             agent: AgentName::Opencode,
             title: None,
             first_ts_ms: 0,
             last_ts_ms: 0,
             message_count: 0,
             ended_at_ms: None,
-            parent_thread_id: None,
-            state: ThreadState::Idle,
+            parent_session_id: None,
+            state: SessionState::Idle,
             needs_continue: false,
         },
     ];
@@ -167,7 +167,7 @@ async fn post_conversation_update_uses_source_identity_and_delivers_target_menti
             minos_chat_store::mcp_socket::SocketRequest::PostConversationUpdate {
                 conversation_id: "conversation-1".into(),
                 source_agent: Some("codex".into()),
-                source_thread_id: Some("thread-codex-1234".into()),
+                source_session_id: Some("thread-codex-1234".into()),
                 message: "@opencode#thread-o review posted".into(),
             },
         )
@@ -199,12 +199,12 @@ async fn post_conversation_update_uses_source_identity_and_delivers_target_menti
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].sender_role, "agent");
     assert_eq!(messages[0].agent, Some(AgentName::Codex));
-    assert_eq!(messages[0].thread_id.as_deref(), Some("thread-codex-1234"));
+    assert_eq!(messages[0].session_id.as_deref(), Some("thread-codex-1234"));
     assert_eq!(messages[0].body, "@opencode#thread-o review posted");
 }
 
 #[tokio::test]
-async fn post_conversation_update_rejects_source_thread_outside_conversation() {
+async fn post_conversation_update_rejects_source_session_outside_conversation() {
     let backend =
         Arc::new(TestBackend::new().with_conversation_sessions("conversation-1", Vec::new()));
     let mut app = App::with_teamwork_store(
@@ -220,7 +220,7 @@ async fn post_conversation_update_rejects_source_thread_outside_conversation() {
             minos_chat_store::mcp_socket::SocketRequest::PostConversationUpdate {
                 conversation_id: "conversation-1".into(),
                 source_agent: Some("codex".into()),
-                source_thread_id: Some("thread-from-other-room".into()),
+                source_session_id: Some("thread-from-other-room".into()),
                 message: "review posted".into(),
             },
         )
@@ -248,16 +248,16 @@ async fn delegate_to_agent_send_failure_does_not_record_visible_message() {
         .ensure_conversation("conversation-1", "main", "/tmp/ws")
         .await
         .unwrap();
-    let sessions = vec![crate::backend::ThreadSummaryEntry {
-        thread_id: "thread-codex-1234".into(),
+    let sessions = vec![crate::backend::SessionSummaryEntry {
+        session_id: "thread-codex-1234".into(),
         agent: AgentName::Codex,
         title: None,
         first_ts_ms: 0,
         last_ts_ms: 0,
         message_count: 0,
         ended_at_ms: None,
-        parent_thread_id: None,
-        state: ThreadState::Idle,
+        parent_session_id: None,
+        state: SessionState::Idle,
         needs_continue: false,
     }];
     let backend = Arc::new(
@@ -280,8 +280,10 @@ async fn delegate_to_agent_send_failure_does_not_record_visible_message() {
             minos_chat_store::mcp_socket::SocketRequest::DelegateToAgent {
                 conversation_id: "conversation-1".into(),
                 source_agent: Some("codex".into()),
-                source_thread_id: Some("thread-codex-1234".into()),
-                target_agent: "opencode".into(),
+                source_session_id: Some("thread-codex-1234".into()),
+                target_agent: Some("opencode".into()),
+                profile_id: None,
+                target_profile: None,
                 prompt: "say hi".into(),
             },
         )
@@ -319,16 +321,16 @@ async fn delegated_agent_cannot_delegate_to_third_agent() {
         )
         .await
         .unwrap();
-    let sessions = vec![crate::backend::ThreadSummaryEntry {
-        thread_id: "thread-opencode-1234".into(),
+    let sessions = vec![crate::backend::SessionSummaryEntry {
+        session_id: "thread-opencode-1234".into(),
         agent: AgentName::Opencode,
         title: None,
         first_ts_ms: 0,
         last_ts_ms: 0,
         message_count: 0,
         ended_at_ms: None,
-        parent_thread_id: None,
-        state: ThreadState::Idle,
+        parent_session_id: None,
+        state: SessionState::Idle,
         needs_continue: false,
     }];
     let backend =
@@ -348,8 +350,10 @@ async fn delegated_agent_cannot_delegate_to_third_agent() {
             minos_chat_store::mcp_socket::SocketRequest::DelegateToAgent {
                 conversation_id: "conversation-1".into(),
                 source_agent: Some("opencode".into()),
-                source_thread_id: Some("thread-opencode-1234".into()),
-                target_agent: "gemini".into(),
+                source_session_id: Some("thread-opencode-1234".into()),
+                target_agent: Some("gemini".into()),
+                profile_id: None,
+                target_profile: None,
                 prompt: "say hi".into(),
             },
         )
@@ -378,12 +382,12 @@ async fn delegated_agent_result_writeback_is_daemon_owned_not_tui() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp/ws"));
     set_test_conversation_nav(&mut app, "test", "conversation-1");
-    app.ui.thread_panel.list.items.push(ThreadEntry {
-        thread_id: "thread-codex-1234".into(),
+    app.ui.session_panel.list.items.push(SessionEntry {
+        session_id: "thread-codex-1234".into(),
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp/ws"),
-        state: ThreadState::Idle,
-        parent_thread_id: None,
+        state: SessionState::Idle,
+        parent_session_id: None,
     });
     let mut chat = ChatState::new("thread-codex-1234".into(), AgentName::Codex);
     chat.apply_ui_events(vec![
@@ -402,7 +406,7 @@ async fn delegated_agent_result_writeback_is_daemon_owned_not_tui() {
         },
     ]);
     app.ui
-        .thread_panel
+        .session_panel
         .chat_states
         .insert("thread-codex-1234".into(), chat);
 
@@ -455,16 +459,16 @@ async fn hidden_project_agent_ingest_does_not_write_conversation_from_tui() {
             project_id: "p2".into(),
             conversation_id: "c2".into(),
             messages: Vec::new(),
-            sessions: vec![crate::backend::ThreadSummaryEntry {
-                thread_id: "thread-p2".into(),
+            sessions: vec![crate::backend::SessionSummaryEntry {
+                session_id: "thread-p2".into(),
                 agent: AgentName::Codex,
                 title: None,
                 first_ts_ms: 0,
                 last_ts_ms: 0,
                 message_count: 0,
                 ended_at_ms: None,
-                parent_thread_id: None,
-                state: ThreadState::Idle,
+                parent_session_id: None,
+                state: SessionState::Idle,
                 needs_continue: false,
             }],
         },
@@ -479,17 +483,17 @@ async fn hidden_project_agent_ingest_does_not_write_conversation_from_tui() {
     .await;
 
     assert!(
-        app.handle_event(AppEvent::ManagerEvent(ManagerEvent::ThreadAdded {
-            thread_id: "thread-p2".into(),
+        app.handle_event(AppEvent::ManagerEvent(ManagerEvent::SessionAdded {
+            session_id: "thread-p2".into(),
             workspace: PathBuf::from("/tmp/p2"),
             agent: AgentName::Codex,
-            parent_thread_id: None,
+            parent_session_id: None,
         }))
         .await
     );
     assert!(
         app.handle_event(AppEvent::Ingest(LocalIngestFrame {
-            thread_id: "thread-p2".into(),
+            session_id: "thread-p2".into(),
             seq: 1,
             agent: AgentName::Codex,
             ui_events: vec![
@@ -528,28 +532,28 @@ async fn subagent_result_is_not_recorded_to_conversation_timeline() {
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp/ws"));
     set_test_conversation_nav(&mut app, "test", "conversation-1");
     app.ui.conversation.agent_sessions.items = vec![
-        crate::backend::ThreadSummaryEntry {
-            thread_id: "parent-thread".into(),
+        crate::backend::SessionSummaryEntry {
+            session_id: "parent-thread".into(),
             agent: AgentName::Codex,
             title: None,
             first_ts_ms: 0,
             last_ts_ms: 0,
             message_count: 0,
             ended_at_ms: None,
-            parent_thread_id: None,
-            state: ThreadState::Idle,
+            parent_session_id: None,
+            state: SessionState::Idle,
             needs_continue: false,
         },
-        crate::backend::ThreadSummaryEntry {
-            thread_id: "sub-thread".into(),
+        crate::backend::SessionSummaryEntry {
+            session_id: "sub-thread".into(),
             agent: AgentName::Codex,
             title: None,
             first_ts_ms: 0,
             last_ts_ms: 0,
             message_count: 0,
             ended_at_ms: None,
-            parent_thread_id: Some("parent-thread".into()),
-            state: ThreadState::Idle,
+            parent_session_id: Some("parent-thread".into()),
+            state: SessionState::Idle,
             needs_continue: false,
         },
     ];
@@ -562,17 +566,17 @@ async fn subagent_result_is_not_recorded_to_conversation_timeline() {
         },
     ))
     .await;
-    app.ui.thread_panel.list.items.push(ThreadEntry {
-        thread_id: "sub-thread".into(),
+    app.ui.session_panel.list.items.push(SessionEntry {
+        session_id: "sub-thread".into(),
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp/ws"),
-        state: ThreadState::Idle,
-        parent_thread_id: Some("parent-thread".into()),
+        state: SessionState::Idle,
+        parent_session_id: Some("parent-thread".into()),
     });
 
     assert!(
         app.handle_event(AppEvent::Ingest(LocalIngestFrame {
-            thread_id: "sub-thread".into(),
+            session_id: "sub-thread".into(),
             seq: 1,
             agent: AgentName::Codex,
             ui_events: vec![
@@ -608,14 +612,14 @@ async fn subagent_result_is_not_recorded_to_conversation_timeline() {
 async fn idle_thread_state_finishes_streaming_assistant_cursor() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend, false, PathBuf::from("/tmp"));
-    app.ui.thread_panel.list.items.push(ThreadEntry {
-        thread_id: "thread-codex-1234".into(),
+    app.ui.session_panel.list.items.push(SessionEntry {
+        session_id: "thread-codex-1234".into(),
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp/ws"),
-        state: ThreadState::Running {
+        state: SessionState::Running {
             turn_started_at_ms: 0,
         },
-        parent_thread_id: None,
+        parent_session_id: None,
     });
     let mut chat = ChatState::new("thread-codex-1234".into(), AgentName::Codex);
     chat.apply_ui_events(vec![
@@ -630,23 +634,23 @@ async fn idle_thread_state_finishes_streaming_assistant_cursor() {
         },
     ]);
     app.ui
-        .thread_panel
+        .session_panel
         .chat_states
         .insert("thread-codex-1234".into(), chat);
 
     assert!(
-        app.handle_event(AppEvent::ManagerEvent(ManagerEvent::ThreadStateChanged {
-            thread_id: "thread-codex-1234".into(),
-            old: ThreadState::Running {
+        app.handle_event(AppEvent::ManagerEvent(ManagerEvent::SessionStateChanged {
+            session_id: "thread-codex-1234".into(),
+            old: SessionState::Running {
                 turn_started_at_ms: 0,
             },
-            new: ThreadState::Idle,
+            new: SessionState::Idle,
             at_ms: 2,
         }))
         .await
     );
 
-    match &app.ui.thread_panel.chat_states["thread-codex-1234"].items[0] {
+    match &app.ui.session_panel.chat_states["thread-codex-1234"].items[0] {
         ChatItem::AssistantText { is_streaming, .. } => assert!(!*is_streaming),
         other => panic!("expected AssistantText, got {other:?}"),
     }
@@ -669,27 +673,27 @@ async fn enter_on_agent_list_opens_detail_and_esc_uplevels() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend, false, PathBuf::from("/tmp"));
     set_test_conversation_nav(&mut app, "test", "conversation-1");
-    app.ui.thread_panel.list.items.push(ThreadEntry {
-        thread_id: "thread-1".into(),
+    app.ui.session_panel.list.items.push(SessionEntry {
+        session_id: "thread-1".into(),
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp"),
-        state: ThreadState::Idle,
-        parent_thread_id: None,
+        state: SessionState::Idle,
+        parent_session_id: None,
     });
-    app.ui.thread_panel.chat_states.insert(
+    app.ui.session_panel.chat_states.insert(
         "thread-1".into(),
         ChatState::new("thread-1".into(), AgentName::Codex),
     );
-    app.ui.conversation.agent_sessions.items = vec![crate::backend::ThreadSummaryEntry {
-        thread_id: "thread-1".into(),
+    app.ui.conversation.agent_sessions.items = vec![crate::backend::SessionSummaryEntry {
+        session_id: "thread-1".into(),
         agent: AgentName::Codex,
         title: None,
         first_ts_ms: 0,
         last_ts_ms: 0,
         message_count: 0,
         ended_at_ms: None,
-        parent_thread_id: None,
-        state: ThreadState::Idle,
+        parent_session_id: None,
+        state: SessionState::Idle,
         needs_continue: false,
     }];
     app.ui.conversation.agent_sessions.select(Some(0));
@@ -699,7 +703,7 @@ async fn enter_on_agent_list_opens_detail_and_esc_uplevels() {
     assert!(app.handle_key(press(KeyCode::Enter)).await);
     assert!(matches!(
         app.ui.nav_level(),
-        crate::nav::NavLevel::AgentDetail { thread_id, .. } if thread_id == "thread-1"
+        crate::nav::NavLevel::AgentDetail { session_id, .. } if session_id == "thread-1"
     ));
 
     assert!(app.handle_key(press(KeyCode::Esc)).await);
@@ -725,28 +729,28 @@ async fn live_subagent_spawn_appears_in_sidebar_and_opens_readonly_detail() {
         updated_at_ms: 0,
     }];
     set_test_conversation_nav(&mut app, "test", "conversation-1");
-    app.ui.conversation.agent_sessions.items = vec![crate::backend::ThreadSummaryEntry {
-        thread_id: "parent-thread".into(),
+    app.ui.conversation.agent_sessions.items = vec![crate::backend::SessionSummaryEntry {
+        session_id: "parent-thread".into(),
         agent: AgentName::Codex,
         title: None,
         first_ts_ms: 0,
         last_ts_ms: 0,
         message_count: 0,
         ended_at_ms: None,
-        parent_thread_id: None,
-        state: ThreadState::Idle,
+        parent_session_id: None,
+        state: SessionState::Idle,
         needs_continue: false,
     }];
     app.ui.conversation.agent_sessions.select(Some(0));
 
     assert!(
         app.handle_event(AppEvent::Ingest(LocalIngestFrame {
-            thread_id: "parent-thread".into(),
+            session_id: "parent-thread".into(),
             seq: 1,
             agent: AgentName::Codex,
             ui_events: vec![UiEventMessage::SubagentSpawned {
-                parent_thread_id: "parent-thread".into(),
-                sub_thread_id: "sub-thread".into(),
+                parent_session_id: "parent-thread".into(),
+                sub_session_id: "sub-thread".into(),
                 tool_call_id: "sub-call".into(),
                 agent: AgentName::Codex,
                 model: Some("gpt-5".into()),
@@ -765,7 +769,7 @@ async fn live_subagent_spawn_appears_in_sidebar_and_opens_readonly_detail() {
             .map(|flat| {
                 (
                     app.ui.conversation.agent_sessions.items[flat.source_index]
-                        .thread_id
+                        .session_id
                         .as_str(),
                     flat.depth,
                 )
@@ -782,7 +786,7 @@ async fn live_subagent_spawn_appears_in_sidebar_and_opens_readonly_detail() {
 
     assert!(matches!(
         app.ui.nav_level(),
-        crate::nav::NavLevel::AgentDetail { thread_id, .. } if thread_id == "sub-thread"
+        crate::nav::NavLevel::AgentDetail { session_id, .. } if session_id == "sub-thread"
     ));
     assert!(app.ui.current_thread_is_subagent());
 }
@@ -791,14 +795,14 @@ async fn live_subagent_spawn_appears_in_sidebar_and_opens_readonly_detail() {
 async fn mouse_wheel_scrolls_chat_and_focuses_it() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend, false, PathBuf::from("/tmp"));
-    app.ui.thread_panel.list.items.push(ThreadEntry {
-        thread_id: "thread-1".into(),
+    app.ui.session_panel.list.items.push(SessionEntry {
+        session_id: "thread-1".into(),
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp"),
-        state: ThreadState::Idle,
-        parent_thread_id: None,
+        state: SessionState::Idle,
+        parent_session_id: None,
     });
-    app.ui.thread_panel.chat_states.insert(
+    app.ui.session_panel.chat_states.insert(
         "thread-1".into(),
         ChatState::new("thread-1".into(), AgentName::Codex),
     );
@@ -831,19 +835,19 @@ async fn mouse_wheel_scrolls_chat_and_focuses_it() {
 async fn mouse_wheel_over_thread_list_moves_selection() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend, false, PathBuf::from("/tmp"));
-    app.ui.thread_panel.list.items.push(ThreadEntry {
-        thread_id: "thread-1".into(),
+    app.ui.session_panel.list.items.push(SessionEntry {
+        session_id: "thread-1".into(),
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp"),
-        state: ThreadState::Idle,
-        parent_thread_id: None,
+        state: SessionState::Idle,
+        parent_session_id: None,
     });
-    app.ui.thread_panel.list.items.push(ThreadEntry {
-        thread_id: "thread-2".into(),
+    app.ui.session_panel.list.items.push(SessionEntry {
+        session_id: "thread-2".into(),
         agent: AgentName::Claude,
         workspace: PathBuf::from("/tmp"),
-        state: ThreadState::Idle,
-        parent_thread_id: None,
+        state: SessionState::Idle,
+        parent_session_id: None,
     });
     app.select_thread(0);
     app.ui.panel_areas.agent_list = Rect::new(0, 0, 20, 10);
@@ -858,7 +862,7 @@ async fn mouse_wheel_over_thread_list_moves_selection() {
 
     assert!(redraw);
     assert_eq!(app.ui.focus.current(), PaneId::Sidebar);
-    assert_eq!(app.ui.thread_panel.list.selected, Some(1));
+    assert_eq!(app.ui.session_panel.list.selected, Some(1));
 }
 
 #[tokio::test]
@@ -886,12 +890,12 @@ async fn mouse_selection_copies_chat_text_on_release() {
     let _clipboard_guard = super::TEST_CLIPBOARD_LOCK.lock().await;
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend, false, PathBuf::from("/tmp"));
-    app.ui.thread_panel.list.items.push(ThreadEntry {
-        thread_id: "thread-1".into(),
+    app.ui.session_panel.list.items.push(SessionEntry {
+        session_id: "thread-1".into(),
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp"),
-        state: ThreadState::Idle,
-        parent_thread_id: None,
+        state: SessionState::Idle,
+        parent_session_id: None,
     });
     let mut chat = ChatState::new("thread-1".into(), AgentName::Codex);
     chat.apply_ui_events(vec![
@@ -910,7 +914,7 @@ async fn mouse_selection_copies_chat_text_on_release() {
         },
     ]);
     app.ui
-        .thread_panel
+        .session_panel
         .chat_states
         .insert("thread-1".into(), chat);
     app.select_thread(0);
@@ -978,7 +982,7 @@ async fn mouse_selection_copies_conversation_text_on_release() {
             message_seq: 1,
             message_id: "m1".into(),
             conversation_id: "conversation-1".into(),
-            thread_id: None,
+            session_id: None,
             created_at_ms: 1,
             sender_role: "user".into(),
             agent: None,
@@ -1036,21 +1040,21 @@ async fn delete_key_in_thread_list_opens_confirmation() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
     set_test_conversation_nav(&mut app, "test", "conversation-1");
-    app.ui.thread_panel.list.items.push(ThreadEntry {
-        thread_id: "thread-1".into(),
+    app.ui.session_panel.list.items.push(SessionEntry {
+        session_id: "thread-1".into(),
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp"),
-        state: ThreadState::Idle,
-        parent_thread_id: None,
+        state: SessionState::Idle,
+        parent_session_id: None,
     });
-    app.ui.thread_panel.list.items.push(ThreadEntry {
-        thread_id: "thread-2".into(),
+    app.ui.session_panel.list.items.push(SessionEntry {
+        session_id: "thread-2".into(),
         agent: AgentName::Claude,
         workspace: PathBuf::from("/tmp"),
-        state: ThreadState::Idle,
-        parent_thread_id: None,
+        state: SessionState::Idle,
+        parent_session_id: None,
     });
-    app.ui.thread_panel.chat_states.insert(
+    app.ui.session_panel.chat_states.insert(
         "thread-1".into(),
         ChatState::new("thread-1".into(), AgentName::Codex),
     );
@@ -1063,14 +1067,14 @@ async fn delete_key_in_thread_list_opens_confirmation() {
     assert!(redraw);
     assert!(app.ui.overlays.delete_confirm.is_some());
     assert!(backend.deleted.lock().expect("delete list lock").is_empty());
-    assert_eq!(app.ui.thread_panel.list.items.len(), 2);
-    assert!(app.ui.thread_panel.chat_states.contains_key("thread-1"));
+    assert_eq!(app.ui.session_panel.list.items.len(), 2);
+    assert!(app.ui.session_panel.chat_states.contains_key("thread-1"));
 
     let redraw = app.handle_key(press(KeyCode::Esc)).await;
 
     assert!(redraw);
     assert!(app.ui.overlays.delete_confirm.is_none());
-    assert_eq!(app.ui.thread_panel.list.items.len(), 2);
+    assert_eq!(app.ui.session_panel.list.items.len(), 2);
 }
 
 #[tokio::test]
@@ -1078,21 +1082,21 @@ async fn enter_confirms_thread_delete_and_removes_local_state() {
     let backend = Arc::new(TestBackend::new());
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
     set_test_conversation_nav(&mut app, "test", "conversation-1");
-    app.ui.thread_panel.list.items.push(ThreadEntry {
-        thread_id: "thread-1".into(),
+    app.ui.session_panel.list.items.push(SessionEntry {
+        session_id: "thread-1".into(),
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp"),
-        state: ThreadState::Idle,
-        parent_thread_id: None,
+        state: SessionState::Idle,
+        parent_session_id: None,
     });
-    app.ui.thread_panel.list.items.push(ThreadEntry {
-        thread_id: "thread-2".into(),
+    app.ui.session_panel.list.items.push(SessionEntry {
+        session_id: "thread-2".into(),
         agent: AgentName::Claude,
         workspace: PathBuf::from("/tmp"),
-        state: ThreadState::Idle,
-        parent_thread_id: None,
+        state: SessionState::Idle,
+        parent_session_id: None,
     });
-    app.ui.thread_panel.chat_states.insert(
+    app.ui.session_panel.chat_states.insert(
         "thread-1".into(),
         ChatState::new("thread-1".into(), AgentName::Codex),
     );
@@ -1109,10 +1113,10 @@ async fn enter_confirms_thread_delete_and_removes_local_state() {
         backend.deleted.lock().expect("delete list lock").as_slice(),
         &["thread-1".to_owned()]
     );
-    assert_eq!(app.ui.thread_panel.list.items.len(), 1);
-    assert_eq!(app.ui.thread_panel.list.items[0].thread_id, "thread-2");
-    assert_eq!(app.ui.thread_panel.list.selected, Some(0));
-    assert!(!app.ui.thread_panel.chat_states.contains_key("thread-1"));
+    assert_eq!(app.ui.session_panel.list.items.len(), 1);
+    assert_eq!(app.ui.session_panel.list.items[0].session_id, "thread-2");
+    assert_eq!(app.ui.session_panel.list.selected, Some(0));
+    assert!(!app.ui.session_panel.chat_states.contains_key("thread-1"));
     assert!(!app.state.hydrated_threads.contains("thread-1"));
 }
 
@@ -1123,23 +1127,23 @@ async fn init_hydrates_connected_daemon_threads_with_agent_and_paginated_history
             .with_connection_state(BackendConnectionState::Connected {
                 endpoint: "ws://127.0.0.1:43123".into(),
             })
-            .with_listed_threads(vec![BackendThreadSnapshot {
-                thread_id: "thread-1".into(),
+            .with_listed_threads(vec![BackendSessionSnapshot {
+                session_id: "thread-1".into(),
                 agent: Some(AgentName::Claude),
                 workspace: PathBuf::from("/tmp/ws"),
-                state: ThreadState::Suspended {
+                state: SessionState::Suspended {
                     reason: minos_agent_runtime::PauseReason::DaemonRestart,
                 },
-                parent_thread_id: None,
+                parent_session_id: None,
             }])
             .with_history_pages(
                 "thread-1",
                 vec![
-                    ReadThreadRawHistoryResponse {
+                    ReadSessionRawHistoryResponse {
                         events: Vec::new(),
                         next_seq: Some(2),
                     },
-                    ReadThreadRawHistoryResponse {
+                    ReadSessionRawHistoryResponse {
                         events: Vec::new(),
                         next_seq: None,
                     },
@@ -1150,12 +1154,12 @@ async fn init_hydrates_connected_daemon_threads_with_agent_and_paginated_history
 
     app.init().await.unwrap();
 
-    assert_eq!(app.ui.thread_panel.list.items.len(), 1);
-    assert_eq!(app.ui.thread_panel.list.items[0].agent, AgentName::Claude);
-    assert_eq!(app.ui.thread_panel.list.selected, Some(0));
+    assert_eq!(app.ui.session_panel.list.items.len(), 1);
+    assert_eq!(app.ui.session_panel.list.items[0].agent, AgentName::Claude);
+    assert_eq!(app.ui.session_panel.list.selected, Some(0));
     assert_eq!(
         app.ui
-            .thread_panel
+            .session_panel
             .chat_states
             .get("thread-1")
             .expect("chat state")
@@ -1186,83 +1190,83 @@ async fn apply_daemon_thread_metadata_updates_state_without_history_rpc() {
             })
             .with_history_pages(
                 "thread-a",
-                vec![ReadThreadRawHistoryResponse {
+                vec![ReadSessionRawHistoryResponse {
                     events: Vec::new(),
                     next_seq: None,
                 }],
             )
             .with_history_pages(
                 "thread-b",
-                vec![ReadThreadRawHistoryResponse {
+                vec![ReadSessionRawHistoryResponse {
                     events: Vec::new(),
                     next_seq: None,
                 }],
             ),
     );
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp/ws"));
-    app.ui.thread_panel.list.items.push(ThreadEntry {
-        thread_id: "thread-a".into(),
+    app.ui.session_panel.list.items.push(SessionEntry {
+        session_id: "thread-a".into(),
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp/ws"),
-        state: ThreadState::Idle,
-        parent_thread_id: None,
+        state: SessionState::Idle,
+        parent_session_id: None,
     });
-    app.ui.thread_panel.chat_states.insert(
+    app.ui.session_panel.chat_states.insert(
         "thread-a".into(),
         ChatState::new("thread-a".into(), AgentName::Codex),
     );
     app.state.hydrated_threads.insert("thread-a".into());
-    app.ui.thread_panel.list.select(Some(0));
+    app.ui.session_panel.list.select(Some(0));
 
     let redraw = app.apply_daemon_thread_metadata(vec![
-        BackendThreadSnapshot {
-            thread_id: "thread-a".into(),
+        BackendSessionSnapshot {
+            session_id: "thread-a".into(),
             agent: Some(AgentName::Codex),
             workspace: PathBuf::from("/tmp/ws"),
-            state: ThreadState::Running {
+            state: SessionState::Running {
                 turn_started_at_ms: 1,
             },
-            parent_thread_id: None,
+            parent_session_id: None,
         },
-        BackendThreadSnapshot {
-            thread_id: "thread-b".into(),
+        BackendSessionSnapshot {
+            session_id: "thread-b".into(),
             agent: Some(AgentName::Claude),
             workspace: PathBuf::from("/tmp/ws"),
-            state: ThreadState::Idle,
-            parent_thread_id: None,
+            state: SessionState::Idle,
+            parent_session_id: None,
         },
     ]);
 
     assert!(redraw, "state update and new thread should mark changed");
-    assert_eq!(app.ui.thread_panel.list.items.len(), 2);
+    assert_eq!(app.ui.session_panel.list.items.len(), 2);
     let thread_a = app
         .ui
-        .thread_panel
+        .session_panel
         .list
         .items
         .iter()
-        .find(|t| t.thread_id == "thread-a")
+        .find(|t| t.session_id == "thread-a")
         .expect("thread-a");
     assert!(
-        matches!(thread_a.state, ThreadState::Running { .. }),
-        "existing thread state must refresh from snapshot"
+        matches!(thread_a.state, SessionState::Running { .. }),
+        "existing session state must refresh from snapshot"
     );
     assert!(
         app.ui
-            .thread_panel
+            .session_panel
             .list
             .items
             .iter()
-            .any(|t| t.thread_id == "thread-b"),
+            .any(|t| t.session_id == "thread-b"),
         "new thread appears in list"
     );
     assert!(
-        app.ui.thread_panel.chat_states.contains_key("thread-b"),
+        app.ui.session_panel.chat_states.contains_key("thread-b"),
         "new thread gets an empty chat shell"
     );
     assert!(
         !app.state.hydrated_threads.contains("thread-b"),
-        "metadata apply must not hydrate new threads"
+        "metadata apply must not hydrate new sessions"
     );
     assert!(
         backend
@@ -1270,7 +1274,7 @@ async fn apply_daemon_thread_metadata_updates_state_without_history_rpc() {
             .lock()
             .expect("history calls lock")
             .is_empty(),
-        "metadata apply must not call read_thread_raw_history"
+        "metadata apply must not call read_session_raw_history"
     );
 }
 
@@ -1283,21 +1287,21 @@ async fn daemon_threads_listed_event_stays_metadata_only() {
             })
             .with_history_pages(
                 "thread-new",
-                vec![ReadThreadRawHistoryResponse {
+                vec![ReadSessionRawHistoryResponse {
                     events: Vec::new(),
                     next_seq: None,
                 }],
             ),
     );
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp/ws"));
-    app.ui.thread_panel.list.items.push(ThreadEntry {
-        thread_id: "thread-1".into(),
+    app.ui.session_panel.list.items.push(SessionEntry {
+        session_id: "thread-1".into(),
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp/ws"),
-        state: ThreadState::Idle,
-        parent_thread_id: None,
+        state: SessionState::Idle,
+        parent_session_id: None,
     });
-    app.ui.thread_panel.chat_states.insert(
+    app.ui.session_panel.chat_states.insert(
         "thread-1".into(),
         ChatState::new("thread-1".into(), AgentName::Codex),
     );
@@ -1305,23 +1309,23 @@ async fn daemon_threads_listed_event_stays_metadata_only() {
 
     let redraw = app
         .handle_event(crate::event::AppEvent::DaemonThreadsListed {
-            threads: vec![
-                BackendThreadSnapshot {
-                    thread_id: "thread-1".into(),
+            sessions: vec![
+                BackendSessionSnapshot {
+                    session_id: "thread-1".into(),
                     agent: Some(AgentName::Codex),
                     workspace: PathBuf::from("/tmp/ws"),
-                    state: ThreadState::Closed {
+                    state: SessionState::Closed {
                         reason: minos_agent_runtime::CloseReason::UserClose,
                     },
-                    parent_thread_id: None,
+                    parent_session_id: None,
                 },
                 // Unhydrated new thread must not trigger history RPC on this path.
-                BackendThreadSnapshot {
-                    thread_id: "thread-new".into(),
+                BackendSessionSnapshot {
+                    session_id: "thread-new".into(),
                     agent: Some(AgentName::Claude),
                     workspace: PathBuf::from("/tmp/ws"),
-                    state: ThreadState::Idle,
-                    parent_thread_id: None,
+                    state: SessionState::Idle,
+                    parent_session_id: None,
                 },
             ],
         })
@@ -1330,18 +1334,18 @@ async fn daemon_threads_listed_event_stays_metadata_only() {
     assert!(redraw);
     assert!(
         matches!(
-            app.ui.thread_panel.list.items[0].state,
-            ThreadState::Closed { .. }
+            app.ui.session_panel.list.items[0].state,
+            SessionState::Closed { .. }
         ),
         "DaemonThreadsListed must still apply state metadata"
     );
     assert!(app
         .ui
-        .thread_panel
+        .session_panel
         .list
         .items
         .iter()
-        .any(|t| t.thread_id == "thread-new"));
+        .any(|t| t.session_id == "thread-new"));
     assert!(!app.state.hydrated_threads.contains("thread-new"));
     assert!(
         backend
@@ -1354,19 +1358,19 @@ async fn daemon_threads_listed_event_stays_metadata_only() {
 }
 
 #[tokio::test]
-async fn shutdown_does_not_close_threads_for_daemon_backend() {
+async fn shutdown_does_not_close_sessions_for_daemon_backend() {
     let backend = Arc::new(TestBackend::new().with_connection_state(
         BackendConnectionState::Connected {
             endpoint: "ws://127.0.0.1:43123".into(),
         },
     ));
     let mut app = App::new(backend.clone(), false, PathBuf::from("/tmp"));
-    app.ui.thread_panel.list.items.push(ThreadEntry {
-        thread_id: "thread-1".into(),
+    app.ui.session_panel.list.items.push(SessionEntry {
+        session_id: "thread-1".into(),
         agent: AgentName::Codex,
         workspace: PathBuf::from("/tmp"),
-        state: ThreadState::Idle,
-        parent_thread_id: None,
+        state: SessionState::Idle,
+        parent_session_id: None,
     });
 
     app.shutdown().await;

@@ -17,11 +17,11 @@ pub(crate) use workspace_filter::*;
 pub struct AppState {
     pub workspace: PathBuf,
     pub hydrated_threads: HashSet<String>,
-    pub thread_watermarks: HashMap<String, u64>,
+    pub session_watermarks: HashMap<String, u64>,
     pub applied_ingest_fingerprints: HashSet<String>,
     pub teamwork_store: TeamworkStore,
     pub recorded_agent_results: HashMap<String, String>,
-    pub thread_conversations: HashMap<String, String>,
+    pub session_conversations: HashMap<String, String>,
     pub last_daemon_history_sync: Option<Instant>,
 }
 
@@ -30,11 +30,11 @@ impl AppState {
         Self {
             workspace,
             hydrated_threads: HashSet::new(),
-            thread_watermarks: HashMap::new(),
+            session_watermarks: HashMap::new(),
             applied_ingest_fingerprints: HashSet::new(),
             teamwork_store,
             recorded_agent_results: HashMap::new(),
-            thread_conversations: HashMap::new(),
+            session_conversations: HashMap::new(),
             last_daemon_history_sync: None,
         }
     }

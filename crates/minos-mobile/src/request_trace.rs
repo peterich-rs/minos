@@ -35,7 +35,7 @@ pub struct RequestTraceRecord {
     pub transport: RequestTransport,
     pub method: String,
     pub target: String,
-    pub thread_id: Option<String>,
+    pub session_id: Option<String>,
     pub request_summary: Option<String>,
     pub response_summary: Option<String>,
     pub error_detail: Option<String>,
@@ -89,7 +89,7 @@ pub fn start(
     transport: RequestTransport,
     method: impl Into<String>,
     target: impl Into<String>,
-    thread_id: Option<String>,
+    session_id: Option<String>,
     request_summary: Option<String>,
 ) -> u64 {
     let trace = RequestTraceRecord {
@@ -97,7 +97,7 @@ pub fn start(
         transport,
         method: method.into(),
         target: target.into(),
-        thread_id,
+        session_id,
         request_summary: request_summary.map(|s| trim_summary(&s, SUMMARY_LIMIT)),
         response_summary: None,
         error_detail: None,
@@ -116,15 +116,15 @@ pub fn finish_success(
     id: u64,
     status_code: Option<u16>,
     response_summary: Option<String>,
-    thread_id: Option<String>,
+    session_id: Option<String>,
 ) {
     let now = Utc::now().timestamp_millis();
     let _ = update_ring(id, |record| {
         record.status = RequestTraceStatus::Success;
         record.status_code = status_code;
         record.response_summary = response_summary.map(|s| trim_summary(&s, SUMMARY_LIMIT));
-        if record.thread_id.is_none() {
-            record.thread_id = thread_id;
+        if record.session_id.is_none() {
+            record.session_id = session_id;
         }
         record.completed_at_ms = Some(now);
         record.duration_ms = Some(duration_ms(record.started_at_ms, now));
@@ -159,7 +159,7 @@ fn update_ring(
                 transport: RequestTransport::Http,
                 method: String::new(),
                 target: String::new(),
-                thread_id: None,
+                session_id: None,
                 request_summary: None,
                 response_summary: None,
                 error_detail: None,
@@ -217,7 +217,7 @@ mod tests {
             None,
             Some("limit=50".into()),
         );
-        finish_success(id, Some(200), Some("threads=2".into()), None);
+        finish_success(id, Some(200), Some("sessions=2".into()), None);
 
         let recent = recent();
         let record = recent
@@ -226,7 +226,7 @@ mod tests {
             .expect("updated trace record should be present");
         assert_eq!(record.status, RequestTraceStatus::Success);
         assert_eq!(record.status_code, Some(200));
-        assert_eq!(record.response_summary.as_deref(), Some("threads=2"));
+        assert_eq!(record.response_summary.as_deref(), Some("sessions=2"));
     }
 
     #[test]
@@ -247,8 +247,8 @@ mod tests {
         let recent = recent();
         let our_records: Vec<_> = recent
             .iter()
-            .filter_map(|record| record.thread_id.as_deref())
-            .filter(|thread_id| thread_id.starts_with(PREFIX))
+            .filter_map(|record| record.session_id.as_deref())
+            .filter(|session_id| session_id.starts_with(PREFIX))
             .collect();
         assert!(!our_records.is_empty(), "expected bounded test records");
         assert!(our_records.len() <= RING_CAPACITY);

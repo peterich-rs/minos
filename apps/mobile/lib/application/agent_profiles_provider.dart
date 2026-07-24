@@ -21,10 +21,10 @@ final preferredRuntimeAgentProvider = Provider<AgentName?>((ref) {
 
 final threadBoundAgentProfileProvider = Provider.family<AgentProfile?, String>((
   ref,
-  threadId,
+  sessionId,
 ) {
   final state = ref.watch(agentProfilesControllerProvider).asData?.value;
-  return state?.profileForThread(threadId);
+  return state?.profileForThread(sessionId);
 });
 
 class AgentProfilesController extends AsyncNotifier<AgentWorkspaceState> {
@@ -108,12 +108,12 @@ class AgentProfilesController extends AsyncNotifier<AgentWorkspaceState> {
   }
 
   Future<void> bindThreadToProfile({
-    required String threadId,
+    required String sessionId,
     required String profileId,
   }) async {
     final current = await future;
     final nextBindings = Map<String, String>.from(current.threadProfileBindings)
-      ..[threadId] = profileId;
+      ..[sessionId] = profileId;
     final next = current
         .copyWith(threadProfileBindings: nextBindings)
         .normalized();

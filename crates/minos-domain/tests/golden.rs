@@ -9,12 +9,12 @@ fn agent_descriptor_matches_golden() {
     let parsed: AgentDescriptor = serde_json::from_str(golden).unwrap();
     assert_eq!(
         parsed,
-        AgentDescriptor {
-            name: AgentName::Codex,
-            path: Some("/usr/local/bin/codex".into()),
-            version: Some("0.18.2".into()),
-            status: AgentStatus::Ok,
-        }
+        AgentDescriptor::new(
+            AgentName::Codex,
+            Some("/usr/local/bin/codex".into()),
+            Some("0.18.2".into()),
+            AgentStatus::Ok,
+        )
     );
     let reserialized = serde_json::to_value(parsed).unwrap();
     let expected: serde_json::Value = serde_json::from_str(golden).unwrap();

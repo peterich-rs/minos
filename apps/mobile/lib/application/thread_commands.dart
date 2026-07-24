@@ -45,27 +45,27 @@ class ThreadCommands {
 
   Future<void> sendApprovalDecision({
     required String requestId,
-    required String threadId,
+    required String sessionId,
     required Map<String, dynamic> decision,
   }) async {
     logFlutterInfo(
       'thread_commands',
-      'sendApprovalDecision requested threadId=$threadId requestId=$requestId',
+      'sendApprovalDecision requested sessionId=$sessionId requestId=$requestId',
     );
     try {
       await _repository.sendApprovalDecision(
         requestId: requestId,
-        threadId: threadId,
+        sessionId: sessionId,
         decision: decision,
       );
       logFlutterDebug(
         'thread_commands',
-        'sendApprovalDecision accepted threadId=$threadId requestId=$requestId',
+        'sendApprovalDecision accepted sessionId=$sessionId requestId=$requestId',
       );
     } catch (error, stackTrace) {
       logFlutterError(
         'thread_commands',
-        'sendApprovalDecision failed threadId=$threadId requestId=$requestId',
+        'sendApprovalDecision failed sessionId=$sessionId requestId=$requestId',
         error: error,
         stackTrace: stackTrace,
       );
@@ -103,21 +103,21 @@ class ThreadCommands {
     }
   }
 
-  Future<void> deleteThread({required String threadId}) async {
+  Future<void> deleteThread({required String sessionId}) async {
     logFlutterInfo(
       'thread_commands',
-      'deleteThread requested threadId=$threadId',
+      'deleteThread requested sessionId=$sessionId',
     );
     try {
-      await _repository.deleteThread(threadId: threadId);
+      await _repository.deleteThread(sessionId: sessionId);
       logFlutterDebug(
         'thread_commands',
-        'deleteThread succeeded threadId=$threadId',
+        'deleteThread succeeded sessionId=$sessionId',
       );
     } catch (error, stackTrace) {
       logFlutterError(
         'thread_commands',
-        'deleteThread failed threadId=$threadId',
+        'deleteThread failed sessionId=$sessionId',
         error: error,
         stackTrace: stackTrace,
       );

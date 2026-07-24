@@ -74,7 +74,7 @@ abstract class MobileClient implements RustOpaqueInterface {
   });
 
   /// Permanently close the given thread. Idempotent.
-  Future<void> closeThread({required String threadId});
+  Future<void> closeSession({required String sessionId});
 
   Future<ConversationMembersResponse> conversationMembers({
     required String conversationId,
@@ -121,7 +121,7 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// Pause an in-flight turn on the given thread. Best-effort. The thread
   /// transitions to `Suspended { UserInterrupt }` regardless of whether the
   /// codex side acknowledges in time.
-  Future<void> interruptThread({required String threadId});
+  Future<void> interruptSession({required String sessionId});
 
   Future<List<AgentSessionSummaryDto>> listAgentSessions({
     String? conversationId,
@@ -158,16 +158,16 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// List every Mac paired to the caller's account.
   Future<List<HostSummaryDto>> listPairedHosts();
 
-  /// List threads within a project.
-  Future<ListProjectThreadsResponse> listProjectThreads({
-    required ListProjectThreadsParams req,
+  /// List sessions within a project.
+  Future<ListProjectSessionsResponse> listProjectSessions({
+    required ListProjectSessionsParams req,
   });
 
   /// List all projects on the daemon.
   Future<ListProjectsResponse> listProjects();
 
   /// Request a page of thread summaries.
-  Future<ListThreadsResponse> listThreads({required ListThreadsParams req});
+  Future<ListSessionsResponse> listSessions({required ListSessionsParams req});
 
   /// Log into an existing account on the backend. Same shape as
   /// `register` modulo the create-vs-find behaviour on the server.
@@ -214,8 +214,8 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// storage after pairing succeeds.
   Future<PersistedPairingState> persistedPairingState();
 
-  /// Read a window of translated UI events for one thread.
-  Future<ReadThreadResponse> readThread({required ReadThreadParams req});
+  /// Read a window of translated UI events for one session.
+  Future<ReadSessionResponse> readSession({required ReadSessionParams req});
 
   Future<ChatMessageSummary> recallChatMessage({
     required String conversationId,
@@ -271,7 +271,7 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// Submit a user approval decision for a pending host request.
   Future<void> sendApprovalDecision({
     required String requestId,
-    required String threadId,
+    required String sessionId,
     required String decisionJson,
   });
 
@@ -332,14 +332,14 @@ abstract class MobileClient implements RustOpaqueInterface {
   });
 }
 
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<ThreadState>>
-abstract class ThreadState implements RustOpaqueInterface {}
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SessionState>>
+abstract class SessionState implements RustOpaqueInterface {}
 
-// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<ThreadSummary>>
-abstract class ThreadSummary implements RustOpaqueInterface {
+// Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<SessionSummary>>
+abstract class SessionSummary implements RustOpaqueInterface {
   AgentName get agent;
 
-  ThreadEndReason? get endReason;
+  SessionEndReason? get endReason;
 
   PlatformInt64? get endedAtMs;
 
@@ -351,17 +351,17 @@ abstract class ThreadSummary implements RustOpaqueInterface {
 
   bool get needsContinue;
 
-  String? get parentThreadId;
+  String? get parentSessionId;
 
-  ThreadState get state;
+  String get sessionId;
 
-  String get threadId;
+  SessionState get state;
 
   String? get title;
 
   set agent(AgentName agent);
 
-  set endReason(ThreadEndReason? endReason);
+  set endReason(SessionEndReason? endReason);
 
   set endedAtMs(PlatformInt64? endedAtMs);
 
@@ -373,31 +373,43 @@ abstract class ThreadSummary implements RustOpaqueInterface {
 
   set needsContinue(bool needsContinue);
 
-  set parentThreadId(String? parentThreadId);
+  set parentSessionId(String? parentSessionId);
 
-  set state(ThreadState state);
+  set sessionId(String sessionId);
 
-  set threadId(String threadId);
+  set state(SessionState state);
 
   set title(String? title);
 }
 
 class AgentDescriptor {
   final AgentName name;
+  final String displayName;
   final String? path;
   final String? version;
   final AgentStatus status;
+  final bool supportsModelSelection;
+  final bool supportsReasoningEffort;
 
   const AgentDescriptor({
     required this.name,
+    required this.displayName,
     this.path,
     this.version,
     required this.status,
+    required this.supportsModelSelection,
+    required this.supportsReasoningEffort,
   });
 
   @override
   int get hashCode =>
-      name.hashCode ^ path.hashCode ^ version.hashCode ^ status.hashCode;
+      name.hashCode ^
+      displayName.hashCode ^
+      path.hashCode ^
+      version.hashCode ^
+      status.hashCode ^
+      supportsModelSelection.hashCode ^
+      supportsReasoningEffort.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -405,12 +417,15 @@ class AgentDescriptor {
       other is AgentDescriptor &&
           runtimeType == other.runtimeType &&
           name == other.name &&
+          displayName == other.displayName &&
           path == other.path &&
           version == other.version &&
-          status == other.status;
+          status == other.status &&
+          supportsModelSelection == other.supportsModelSelection &&
+          supportsReasoningEffort == other.supportsReasoningEffort;
 }
 
-enum AgentName { codex, claude, gemini }
+enum AgentName { codex, claude, gemini, opencode, grok }
 
 class AgentSessionSummaryDto {
   final String sessionId;
@@ -423,7 +438,7 @@ class AgentSessionSummaryDto {
   final String? title;
   final PlatformInt64 lastActivityAtMs;
   final int messageCount;
-  final ThreadEndReason? endReason;
+  final SessionEndReason? endReason;
 
   const AgentSessionSummaryDto({
     required this.sessionId,
@@ -532,14 +547,14 @@ class AgentSummary {
 }
 
 class ArtifactRef {
-  final String threadId;
+  final String sessionId;
   final String artifactId;
   final BigInt sizeBytes;
   final String sha256;
   final String mediaType;
 
   const ArtifactRef({
-    required this.threadId,
+    required this.sessionId,
     required this.artifactId,
     required this.sizeBytes,
     required this.sha256,
@@ -548,7 +563,7 @@ class ArtifactRef {
 
   @override
   int get hashCode =>
-      threadId.hashCode ^
+      sessionId.hashCode ^
       artifactId.hashCode ^
       sizeBytes.hashCode ^
       sha256.hashCode ^
@@ -559,7 +574,7 @@ class ArtifactRef {
       identical(this, other) ||
       other is ArtifactRef &&
           runtimeType == other.runtimeType &&
-          threadId == other.threadId &&
+          sessionId == other.sessionId &&
           artifactId == other.artifactId &&
           sizeBytes == other.sizeBytes &&
           sha256 == other.sha256 &&
@@ -926,7 +941,7 @@ enum ErrorKind {
   agentNotSupported,
   agentSessionIdMismatch,
   ingestSeqConflict,
-  threadNotFound,
+  sessionNotFound,
   translationNotImplemented,
   translationFailed,
   pairingQrVersionUnsupported,
@@ -1270,12 +1285,12 @@ class ListHostWorkspacesResponse {
           workspaces == other.workspaces;
 }
 
-class ListProjectThreadsParams {
+class ListProjectSessionsParams {
   final String projectId;
   final int limit;
   final PlatformInt64? beforeTsMs;
 
-  const ListProjectThreadsParams({
+  const ListProjectSessionsParams({
     required this.projectId,
     required this.limit,
     this.beforeTsMs,
@@ -1287,27 +1302,27 @@ class ListProjectThreadsParams {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is ListProjectThreadsParams &&
+      other is ListProjectSessionsParams &&
           runtimeType == other.runtimeType &&
           projectId == other.projectId &&
           limit == other.limit &&
           beforeTsMs == other.beforeTsMs;
 }
 
-class ListProjectThreadsResponse {
-  final List<ThreadSummary> threads;
+class ListProjectSessionsResponse {
+  final List<SessionSummary> sessions;
 
-  const ListProjectThreadsResponse({required this.threads});
+  const ListProjectSessionsResponse({required this.sessions});
 
   @override
-  int get hashCode => threads.hashCode;
+  int get hashCode => sessions.hashCode;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is ListProjectThreadsResponse &&
+      other is ListProjectSessionsResponse &&
           runtimeType == other.runtimeType &&
-          threads == other.threads;
+          sessions == other.sessions;
 }
 
 class ListProjectsResponse {
@@ -1326,12 +1341,12 @@ class ListProjectsResponse {
           projects == other.projects;
 }
 
-class ListThreadsParams {
+class ListSessionsParams {
   final int limit;
   final PlatformInt64? beforeTsMs;
   final AgentName? agent;
 
-  const ListThreadsParams({required this.limit, this.beforeTsMs, this.agent});
+  const ListSessionsParams({required this.limit, this.beforeTsMs, this.agent});
 
   @override
   int get hashCode => limit.hashCode ^ beforeTsMs.hashCode ^ agent.hashCode;
@@ -1339,28 +1354,28 @@ class ListThreadsParams {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is ListThreadsParams &&
+      other is ListSessionsParams &&
           runtimeType == other.runtimeType &&
           limit == other.limit &&
           beforeTsMs == other.beforeTsMs &&
           agent == other.agent;
 }
 
-class ListThreadsResponse {
-  final List<ThreadSummary> threads;
+class ListSessionsResponse {
+  final List<SessionSummary> sessions;
   final PlatformInt64? nextBeforeTsMs;
 
-  const ListThreadsResponse({required this.threads, this.nextBeforeTsMs});
+  const ListSessionsResponse({required this.sessions, this.nextBeforeTsMs});
 
   @override
-  int get hashCode => threads.hashCode ^ nextBeforeTsMs.hashCode;
+  int get hashCode => sessions.hashCode ^ nextBeforeTsMs.hashCode;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is ListThreadsResponse &&
+      other is ListSessionsResponse &&
           runtimeType == other.runtimeType &&
-          threads == other.threads &&
+          sessions == other.sessions &&
           nextBeforeTsMs == other.nextBeforeTsMs;
 }
 
@@ -1475,11 +1490,11 @@ sealed class MinosError with _$MinosError implements FrbException {
   const factory MinosError.agentSessionIdMismatch() =
       MinosError_AgentSessionIdMismatch;
   const factory MinosError.ingestSeqConflict({
-    required String threadId,
+    required String sessionId,
     required BigInt seq,
   }) = MinosError_IngestSeqConflict;
-  const factory MinosError.threadNotFound({required String threadId}) =
-      MinosError_ThreadNotFound;
+  const factory MinosError.sessionNotFound({required String sessionId}) =
+      MinosError_SessionNotFound;
   const factory MinosError.translationNotImplemented({
     required AgentName agent,
   }) = MinosError_TranslationNotImplemented;
@@ -1633,53 +1648,53 @@ class ProjectSummary {
           threadCount == other.threadCount;
 }
 
-class ReadThreadParams {
-  final String threadId;
+class ReadSessionParams {
+  final String sessionId;
   final BigInt? fromSeq;
   final int limit;
 
-  const ReadThreadParams({
-    required this.threadId,
+  const ReadSessionParams({
+    required this.sessionId,
     this.fromSeq,
     required this.limit,
   });
 
   @override
-  int get hashCode => threadId.hashCode ^ fromSeq.hashCode ^ limit.hashCode;
+  int get hashCode => sessionId.hashCode ^ fromSeq.hashCode ^ limit.hashCode;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is ReadThreadParams &&
+      other is ReadSessionParams &&
           runtimeType == other.runtimeType &&
-          threadId == other.threadId &&
+          sessionId == other.sessionId &&
           fromSeq == other.fromSeq &&
           limit == other.limit;
 }
 
-class ReadThreadResponse {
+class ReadSessionResponse {
   final List<UiEventMessage> uiEvents;
   final BigInt? nextSeq;
-  final ThreadEndReason? threadEndReason;
+  final SessionEndReason? sessionEndReason;
 
-  const ReadThreadResponse({
+  const ReadSessionResponse({
     required this.uiEvents,
     this.nextSeq,
-    this.threadEndReason,
+    this.sessionEndReason,
   });
 
   @override
   int get hashCode =>
-      uiEvents.hashCode ^ nextSeq.hashCode ^ threadEndReason.hashCode;
+      uiEvents.hashCode ^ nextSeq.hashCode ^ sessionEndReason.hashCode;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is ReadThreadResponse &&
+      other is ReadSessionResponse &&
           runtimeType == other.runtimeType &&
           uiEvents == other.uiEvents &&
           nextSeq == other.nextSeq &&
-          threadEndReason == other.threadEndReason;
+          sessionEndReason == other.sessionEndReason;
 }
 
 class RequestTraceRecord {
@@ -1687,7 +1702,7 @@ class RequestTraceRecord {
   final RequestTraceTransport transport;
   final String method;
   final String target;
-  final String? threadId;
+  final String? sessionId;
   final String? requestSummary;
   final String? responseSummary;
   final String? errorDetail;
@@ -1702,7 +1717,7 @@ class RequestTraceRecord {
     required this.transport,
     required this.method,
     required this.target,
-    this.threadId,
+    this.sessionId,
     this.requestSummary,
     this.responseSummary,
     this.errorDetail,
@@ -1719,7 +1734,7 @@ class RequestTraceRecord {
       transport.hashCode ^
       method.hashCode ^
       target.hashCode ^
-      threadId.hashCode ^
+      sessionId.hashCode ^
       requestSummary.hashCode ^
       responseSummary.hashCode ^
       errorDetail.hashCode ^
@@ -1738,7 +1753,7 @@ class RequestTraceRecord {
           transport == other.transport &&
           method == other.method &&
           target == other.target &&
-          threadId == other.threadId &&
+          sessionId == other.sessionId &&
           requestSummary == other.requestSummary &&
           responseSummary == other.responseSummary &&
           errorDetail == other.errorDetail &&
@@ -1754,6 +1769,19 @@ enum RequestTraceStatus { pending, success, failure }
 enum RequestTraceTransport { http, rpc }
 
 enum SenderType { user, agent }
+
+@freezed
+sealed class SessionEndReason with _$SessionEndReason {
+  const SessionEndReason._();
+
+  const factory SessionEndReason.userStopped() = SessionEndReason_UserStopped;
+  const factory SessionEndReason.agentDone() = SessionEndReason_AgentDone;
+  const factory SessionEndReason.crashed({required String message}) =
+      SessionEndReason_Crashed;
+  const factory SessionEndReason.timeout() = SessionEndReason_Timeout;
+  const factory SessionEndReason.hostDisconnected() =
+      SessionEndReason_HostDisconnected;
+}
 
 /// Dart-visible shape of `minos_mobile::SocialEventFrame`.
 class SocialEventFrame {
@@ -1776,30 +1804,17 @@ class SocialEventFrame {
 
 enum SubagentStatus { running, completed, failed, interrupted }
 
-@freezed
-sealed class ThreadEndReason with _$ThreadEndReason {
-  const ThreadEndReason._();
-
-  const factory ThreadEndReason.userStopped() = ThreadEndReason_UserStopped;
-  const factory ThreadEndReason.agentDone() = ThreadEndReason_AgentDone;
-  const factory ThreadEndReason.crashed({required String message}) =
-      ThreadEndReason_Crashed;
-  const factory ThreadEndReason.timeout() = ThreadEndReason_Timeout;
-  const factory ThreadEndReason.hostDisconnected() =
-      ThreadEndReason_HostDisconnected;
-}
-
 /// Dart-visible shape of `minos_mobile::UiEventFrame`. Held as a separate
 /// type (rather than mirrored) so the `ui` field lands as the mirrored
 /// `UiEventMessage` variant on the Dart side.
 class UiEventFrame {
-  final String threadId;
+  final String sessionId;
   final BigInt seq;
   final UiEventMessage ui;
   final PlatformInt64 tsMs;
 
   const UiEventFrame({
-    required this.threadId,
+    required this.sessionId,
     required this.seq,
     required this.ui,
     required this.tsMs,
@@ -1807,14 +1822,14 @@ class UiEventFrame {
 
   @override
   int get hashCode =>
-      threadId.hashCode ^ seq.hashCode ^ ui.hashCode ^ tsMs.hashCode;
+      sessionId.hashCode ^ seq.hashCode ^ ui.hashCode ^ tsMs.hashCode;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is UiEventFrame &&
           runtimeType == other.runtimeType &&
-          threadId == other.threadId &&
+          sessionId == other.sessionId &&
           seq == other.seq &&
           ui == other.ui &&
           tsMs == other.tsMs;
@@ -1824,21 +1839,21 @@ class UiEventFrame {
 sealed class UiEventMessage with _$UiEventMessage {
   const UiEventMessage._();
 
-  const factory UiEventMessage.threadOpened({
-    required String threadId,
+  const factory UiEventMessage.sessionOpened({
+    required String sessionId,
     required AgentName agent,
     String? title,
     required PlatformInt64 openedAtMs,
-  }) = UiEventMessage_ThreadOpened;
-  const factory UiEventMessage.threadTitleUpdated({
-    required String threadId,
+  }) = UiEventMessage_SessionOpened;
+  const factory UiEventMessage.sessionTitleUpdated({
+    required String sessionId,
     required String title,
-  }) = UiEventMessage_ThreadTitleUpdated;
-  const factory UiEventMessage.threadClosed({
-    required String threadId,
-    required ThreadEndReason reason,
+  }) = UiEventMessage_SessionTitleUpdated;
+  const factory UiEventMessage.sessionClosed({
+    required String sessionId,
+    required SessionEndReason reason,
     required PlatformInt64 closedAtMs,
-  }) = UiEventMessage_ThreadClosed;
+  }) = UiEventMessage_SessionClosed;
   const factory UiEventMessage.messageStarted({
     required String messageId,
     required MessageRole role,
@@ -1876,8 +1891,8 @@ sealed class UiEventMessage with _$UiEventMessage {
     required bool isError,
   }) = UiEventMessage_ToolCallCompleted;
   const factory UiEventMessage.subagentSpawned({
-    required String parentThreadId,
-    required String subThreadId,
+    required String parentSessionId,
+    required String subSessionId,
     required String toolCallId,
     required AgentName agent,
     String? model,
@@ -1885,7 +1900,7 @@ sealed class UiEventMessage with _$UiEventMessage {
     String? title,
   }) = UiEventMessage_SubagentSpawned;
   const factory UiEventMessage.subagentStatusUpdated({
-    required String subThreadId,
+    required String subSessionId,
     required SubagentStatus status,
   }) = UiEventMessage_SubagentStatusUpdated;
   const factory UiEventMessage.error({

@@ -43,7 +43,7 @@ impl TeamworkMcpTool for PostConversationUpdateTool {
         Ok(SocketRequest::PostConversationUpdate {
             conversation_id,
             source_agent: ctx.source_agent.map(|agent| agent.bin_name().to_owned()),
-            source_thread_id: ctx.source_thread_id,
+            source_session_id: ctx.source_session_id,
             message,
         })
     }
@@ -57,13 +57,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn post_update_request_includes_bound_source_thread_id() {
+    fn post_update_request_includes_bound_source_session_id() {
         let request = PostConversationUpdateTool
             .to_socket_request(
                 ToolCallContext {
                     conversation_id: "conversation-main".into(),
                     source_agent: Some(AgentName::Codex),
-                    source_thread_id: Some("thread-codex-1234".into()),
+                    source_session_id: Some("thread-codex-1234".into()),
                 },
                 json!({"message": "done"}),
             )
@@ -73,12 +73,12 @@ mod tests {
             SocketRequest::PostConversationUpdate {
                 conversation_id,
                 source_agent,
-                source_thread_id,
+                source_session_id,
                 message,
             } => {
                 assert_eq!(conversation_id, "conversation-main");
                 assert_eq!(source_agent.as_deref(), Some("codex"));
-                assert_eq!(source_thread_id.as_deref(), Some("thread-codex-1234"));
+                assert_eq!(source_session_id.as_deref(), Some("thread-codex-1234"));
                 assert_eq!(message, "done");
             }
             other => panic!("unexpected request: {other:?}"),

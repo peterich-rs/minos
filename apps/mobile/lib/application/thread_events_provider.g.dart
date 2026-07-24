@@ -8,7 +8,7 @@ part of 'thread_events_provider.dart';
 
 // GENERATED CODE - DO NOT MODIFY BY HAND
 // ignore_for_file: type=lint, type=warning
-/// Loads the translated history for one thread and keeps it live by
+/// Loads the translated history for one session and keeps it live by
 /// listening to the backend's fan-out. Per-thread watermark dedup keeps
 /// the view consistent with the backend's raw_events seq (spec §9.1).
 ///
@@ -20,7 +20,7 @@ part of 'thread_events_provider.dart';
 @ProviderFor(ThreadEvents)
 final threadEventsProvider = ThreadEventsFamily._();
 
-/// Loads the translated history for one thread and keeps it live by
+/// Loads the translated history for one session and keeps it live by
 /// listening to the backend's fan-out. Per-thread watermark dedup keeps
 /// the view consistent with the backend's raw_events seq (spec §9.1).
 ///
@@ -30,7 +30,7 @@ final threadEventsProvider = ThreadEventsFamily._();
 /// from the daemon.
 final class ThreadEventsProvider
     extends $AsyncNotifierProvider<ThreadEvents, List<UiEventMessage>> {
-  /// Loads the translated history for one thread and keeps it live by
+  /// Loads the translated history for one session and keeps it live by
   /// listening to the backend's fan-out. Per-thread watermark dedup keeps
   /// the view consistent with the backend's raw_events seq (spec §9.1).
   ///
@@ -74,9 +74,9 @@ final class ThreadEventsProvider
   }
 }
 
-String _$threadEventsHash() => r'eade856c89fea57654b821695ee86f25d30206f0';
+String _$threadEventsHash() => r'8ef558d7a8a2260d4a785b50bee39efd47e378da';
 
-/// Loads the translated history for one thread and keeps it live by
+/// Loads the translated history for one session and keeps it live by
 /// listening to the backend's fan-out. Per-thread watermark dedup keeps
 /// the view consistent with the backend's raw_events seq (spec §9.1).
 ///
@@ -103,7 +103,7 @@ final class ThreadEventsFamily extends $Family
         isAutoDispose: false,
       );
 
-  /// Loads the translated history for one thread and keeps it live by
+  /// Loads the translated history for one session and keeps it live by
   /// listening to the backend's fan-out. Per-thread watermark dedup keeps
   /// the view consistent with the backend's raw_events seq (spec §9.1).
   ///
@@ -112,14 +112,14 @@ final class ThreadEventsFamily extends $Family
   /// history instantly instead of flashing a center spinner and re-fetching
   /// from the daemon.
 
-  ThreadEventsProvider call(String threadId) =>
-      ThreadEventsProvider._(argument: threadId, from: this);
+  ThreadEventsProvider call(String sessionId) =>
+      ThreadEventsProvider._(argument: sessionId, from: this);
 
   @override
   String toString() => r'threadEventsProvider';
 }
 
-/// Loads the translated history for one thread and keeps it live by
+/// Loads the translated history for one session and keeps it live by
 /// listening to the backend's fan-out. Per-thread watermark dedup keeps
 /// the view consistent with the backend's raw_events seq (spec §9.1).
 ///
@@ -130,9 +130,9 @@ final class ThreadEventsFamily extends $Family
 
 abstract class _$ThreadEvents extends $AsyncNotifier<List<UiEventMessage>> {
   late final _$args = ref.$arg as String;
-  String get threadId => _$args;
+  String get sessionId => _$args;
 
-  FutureOr<List<UiEventMessage>> build(String threadId);
+  FutureOr<List<UiEventMessage>> build(String sessionId);
   @$mustCallSuper
   @override
   void runBuild() {

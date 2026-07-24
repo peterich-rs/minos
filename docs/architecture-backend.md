@@ -155,6 +155,12 @@
 
 `Sqlite(SqlitePool)` 或 `Postgres(PgPool)`，通过 `AsStorePool` trait 抽象。
 
+Migrations 为 latest-only 单一初始 schema（`sqlx::migrate!`）：
+- SQLite：`crates/minos-backend/migrations/sqlite/0001_initial.sql`
+- Postgres：`crates/minos-backend/migrations/postgres/0001_initial.sql`
+
+不保留增量 ALTER 链；schema 变更直接改对应方言的 canonical 文件并 wipe 本地 DB。
+
 ### 核心表
 
 | 表 | 用途 |
@@ -179,12 +185,12 @@
 | `host_commands` | 持久化命令队列 |
 | `durable_event_log` | 按 topic 排序的事件日志 |
 | `outbox_events` | 分发工作队列 |
-| `raw_events` | Host-local `seq` 的 Agent 原始事件，按 `(host_device_id, thread_id, seq)` 幂等 |
+| `raw_events` | Host-local `seq` 的 Agent 原始事件，按 `(host_device_id, session_id, seq)` 幂等 |
 | `thread_sync_state` | Host manifest、backend ack 水位、partial history metadata |
 
 ### 30 个 Store 子模块
 
-涵盖: accounts, devices, tokens, pairing_codes, host_installation_tokens, refresh_tokens, account_host_pairings, agent_sessions, agent_turns, agent_turn_events, approval_requests, host_commands, durable_event_log, outbox_events, threads, raw_events, thread_sync_state, projects, push_tokens, notification_preferences, notification_cooldowns 等。
+涵盖: accounts, devices, tokens, pairing_codes, host_installation_tokens, refresh_tokens, account_host_pairings, agent_sessions, agent_turns, agent_turn_events, approval_requests, host_commands, durable_event_log, outbox_events, sessions, raw_events, thread_sync_state, projects, push_tokens, notification_preferences, notification_cooldowns 等。
 
 ## Agent 会话管理 (`src/agent_sessions/`)
 
@@ -200,7 +206,7 @@
 ### Host Ingest Sync
 
 - `/ws/host` 接收 `HostIngestLiveBatch`、`HostGapManifest`、`HostIngestPullResponse`。
-- live 和 pull chunk 共用严格幂等写入：同 `(host_device_id, thread_id, seq)` 且同 checksum 视为重复；同 key 不同 checksum 报不变量错误，不重新分配 backend seq。
+- live 和 pull chunk 共用严格幂等写入：同 `(host_device_id, session_id, seq)` 且同 checksum 视为重复；同 key 不同 checksum 报不变量错误，不重新分配 backend seq。
 - `HostGapManifest` 落 `thread_sync_state` 后，backend 立即按 manifest range 通过同一条 host WS 发 `PullIngestRange`。
 - host 从本地 SQLite 读取 range 并回 `HostIngestPullResponse`；backend 持久化后只按连续 raw event 前缀发送 `PullAck`。
 - `agent_sessions.host_device_id` 为空时，新 handler 允许当前 host 认领该 session，避免 session 创建与 host 绑定之间的流式事件窗口丢失。

@@ -33,7 +33,7 @@ Before writing code, identify which client pattern the user needs:
 
 - Local embedded client: spawn `codex app-server` over stdio.
 - Desktop/web local companion: connect to loopback WebSocket only when explicitly needed.
-- Product UI integration: render threads, turns, items, deltas, approvals, and file diffs.
+- Product UI integration: render sessions, turns, items, deltas, approvals, and file diffs.
 - Automation/CI: redirect the user toward Codex SDK unless they specifically need app-server UI semantics such as history, approvals, or streamed agent events.
 
 ### 2. Generate and inspect v2 schemas
@@ -68,7 +68,7 @@ When app-server sends server-initiated approval requests, render a user decision
 - `item/tool/requestUserInput`
 - app/MCP tool-call approval prompts that may arrive via `tool/requestUserInput`
 
-Always scope approvals by `threadId` and `turnId`. Treat `item/completed` as the final authoritative state for command and file-change items.
+Always scope approvals by `sessionId` and `turnId`. Treat `item/completed` as the final authoritative state for command and file-change items.
 
 ### 5. Add advanced client features selectively
 

@@ -70,7 +70,7 @@ fn cancel_approval(ui: &mut UiState) -> (StateChange, Vec<Effect>) {
 }
 
 fn submit_approval_at(ui: &mut UiState, selected: usize) -> (StateChange, Vec<Effect>) {
-    let Some(thread_id) = ui.current_thread_id().map(str::to_owned) else {
+    let Some(session_id) = ui.current_session_id().map(str::to_owned) else {
         return (StateChange::none(), vec![]);
     };
     let Some(pending) = ui.active_approval_request().cloned() else {
@@ -83,7 +83,7 @@ fn submit_approval_at(ui: &mut UiState, selected: usize) -> (StateChange, Vec<Ef
     (
         StateChange::redraw(),
         vec![Effect::SubmitPendingAgentRequest {
-            thread_id,
+            session_id,
             pending: pending.kind,
             text,
         }],
@@ -104,12 +104,12 @@ pub fn handle_submit(_state: &mut AppState, ui: &mut UiState) -> (StateChange, V
         return (StateChange::redraw(), vec![]);
     }
 
-    let Some(thread_id) = ui.current_thread_id().map(str::to_owned) else {
+    let Some(session_id) = ui.current_session_id().map(str::to_owned) else {
         ui.set_error("No agent selected for direct chat.".into());
         return (StateChange::redraw(), vec![]);
     };
-    let Some((agent, runtime_state)) = thread_agent_and_state(ui, &thread_id) else {
-        ui.set_error("Selected agent thread is not active.".into());
+    let Some((agent, runtime_state)) = thread_agent_and_state(ui, &session_id) else {
+        ui.set_error("Selected agent session is not active.".into());
         return (StateChange::redraw(), vec![]);
     };
 
@@ -130,9 +130,9 @@ pub fn handle_submit(_state: &mut AppState, ui: &mut UiState) -> (StateChange, V
     }
 
     if let Some(pending) = ui
-        .thread_panel
+        .session_panel
         .chat_states
-        .get(&thread_id)
+        .get(&session_id)
         .and_then(ChatState::active_pending_request)
         .cloned()
     {
@@ -140,14 +140,14 @@ pub fn handle_submit(_state: &mut AppState, ui: &mut UiState) -> (StateChange, V
         return (
             StateChange::redraw(),
             vec![Effect::SubmitPendingAgentRequest {
-                thread_id,
+                session_id,
                 pending: pending.kind,
                 text,
             }],
         );
     }
 
-    let message_body = super::group_user_text_for_thread(ui, &thread_id, text.as_str());
+    let message_body = super::group_user_text_for_thread(ui, &session_id, text.as_str());
     if let (Some(conversation_id), Some(body)) = (
         ui.nav_level().conversation_id().map(str::to_owned),
         message_body.as_deref(),
@@ -158,7 +158,7 @@ pub fn handle_submit(_state: &mut AppState, ui: &mut UiState) -> (StateChange, V
     (
         StateChange::redraw(),
         vec![Effect::SendTextToThread {
-            thread_id,
+            session_id,
             text,
             message_body,
         }],
@@ -167,24 +167,24 @@ pub fn handle_submit(_state: &mut AppState, ui: &mut UiState) -> (StateChange, V
 
 fn thread_agent_and_state<'a>(
     ui: &'a UiState,
-    thread_id: &str,
+    session_id: &str,
 ) -> Option<(
     minos_domain::AgentName,
-    &'a minos_agent_runtime::ThreadState,
+    &'a minos_agent_runtime::SessionState,
 )> {
     if let Some(session) = ui
         .conversation
         .agent_sessions
         .items
         .iter()
-        .find(|session| session.thread_id == thread_id)
+        .find(|session| session.session_id == session_id)
     {
         return Some((session.agent, &session.state));
     }
-    ui.thread_panel
+    ui.session_panel
         .list
         .items
         .iter()
-        .find(|thread| thread.thread_id == thread_id)
+        .find(|thread| thread.session_id == session_id)
         .map(|thread| (thread.agent, &thread.state))
 }

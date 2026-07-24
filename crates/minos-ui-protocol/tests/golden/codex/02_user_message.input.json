@@ -1,6 +1,6 @@
 [
   {"method":"item/started","params":{
     "item":{"type":"userMessage","id":"u1","content":[{"type":"text","text":"hello"}]},
-    "threadId":"thr_fixture","turnId":"t1"
+    "sessionId":"thr_fixture","turnId":"t1"
   }}
 ]

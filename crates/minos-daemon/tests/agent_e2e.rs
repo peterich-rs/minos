@@ -97,7 +97,7 @@ impl Drop for EnvGuard {
     }
 }
 
-fn fake_thread_response(thread_id: &str) -> serde_json::Value {
+fn fake_thread_response(session_id: &str) -> serde_json::Value {
     json!({
         "approvalPolicy": "never",
         "approvalsReviewer": "user",
@@ -107,7 +107,7 @@ fn fake_thread_response(thread_id: &str) -> serde_json::Value {
         "modelProvider": "fake",
         "sandbox": { "type": "dangerFullAccess" },
         "thread": {
-            "id": thread_id,
+            "id": session_id,
             "cliVersion": "0.0.0-fake",
             "createdAt": 0,
             "cwd": "/tmp",
@@ -448,7 +448,7 @@ async fn wait_for_pending_approval(
                 .fetch_one(&relay.pool)
                 .await
                 .unwrap_or(-1);
-            let thread_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM threads")
+            let thread_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions")
                 .fetch_one(&relay.pool)
                 .await
                 .unwrap_or(-1);
@@ -463,7 +463,7 @@ async fn wait_for_pending_approval(
             .await
             .unwrap_or_default();
             Err(anyhow::anyhow!(
-                "timed out waiting for pending approval request (approval_requests={approval_count}, agent_sessions={session_count}, threads={thread_count}, raw_events={raw_count}, raw_methods={raw_methods:?})"
+                "timed out waiting for pending approval request (approval_requests={approval_count}, agent_sessions={session_count}, sessions={thread_count}, raw_events={raw_count}, raw_methods={raw_methods:?})"
             ))
         }
     }
@@ -503,7 +503,7 @@ async fn start_send_stream_stop_against_fake_codex_server() -> anyhow::Result<()
         Step::EmitNotification {
             method: "item/started".into(),
             params: json!({
-                "threadId": THREAD_ID,
+                "sessionId": THREAD_ID,
                 "turnId": TURN_ID,
                 "item": {
                     "type": "agentMessage",
@@ -539,6 +539,10 @@ async fn start_send_stream_stop_against_fake_codex_server() -> anyhow::Result<()
             agent: AgentName::Codex,
             workspace: "/w-agent-e2e".into(),
             mode: Some(AgentLaunchMode::Server),
+            profile_id: None,
+            model: None,
+            reasoning_effort: None,
+            instructions: None,
         })
         .await?;
     assert_eq!(start_reply.session_id, THREAD_ID);
@@ -637,13 +641,13 @@ impl E2eHarness {
 ///
 /// Validates: Requirement 3 (Host Session State Machine) — states 3.1, 3.2
 async fn dispatch_message_creates_new_session() -> anyhow::Result<()> {
-    let thread_id = "thr-dispatch-new";
+    let session_id = "thr-dispatch-new";
     let turn_id = "turn-dispatch-new";
 
     let script = vec![
         Step::ExpectRequest {
             method: "thread/start".into(),
-            reply: fake_thread_response(thread_id),
+            reply: fake_thread_response(session_id),
         },
         Step::ExpectRequest {
             method: "turn/start".into(),
@@ -658,7 +662,7 @@ async fn dispatch_message_creates_new_session() -> anyhow::Result<()> {
         Step::EmitNotification {
             method: "turn/completed".into(),
             params: json!({
-                "threadId": thread_id,
+                "threadId": session_id,
                 "finishedAtMs": 100
             }),
         },
@@ -682,11 +686,11 @@ async fn dispatch_message_creates_new_session() -> anyhow::Result<()> {
         )
         .await?;
 
-    // Verify the response contains a session_id matching the thread_id
+    // Verify the response contains a session_id matching the session_id
     let session_id = reply["result"]["session_id"]
         .as_str()
         .expect("dispatch should return session_id");
-    assert_eq!(session_id, thread_id);
+    assert_eq!(session_id, session_id);
 
     harness.teardown(fake_codex).await
 }
@@ -696,14 +700,14 @@ async fn dispatch_message_creates_new_session() -> anyhow::Result<()> {
 ///
 /// Validates: Requirement 4 (Turn Steer Support) — states 4.1, 4.2
 async fn dispatch_message_steers_running_session() -> anyhow::Result<()> {
-    let thread_id = "thr-dispatch-steer";
+    let session_id = "thr-dispatch-steer";
     let turn_id = "turn-dispatch-steer";
 
     let script = vec![
         // First dispatch: auto-create session
         Step::ExpectRequest {
             method: "thread/start".into(),
-            reply: fake_thread_response(thread_id),
+            reply: fake_thread_response(session_id),
         },
         Step::ExpectRequest {
             method: "turn/start".into(),
@@ -723,7 +727,7 @@ async fn dispatch_message_steers_running_session() -> anyhow::Result<()> {
         Step::EmitNotification {
             method: "turn/completed".into(),
             params: json!({
-                "threadId": thread_id,
+                "threadId": session_id,
                 "finishedAtMs": 200
             }),
         },
@@ -749,7 +753,7 @@ async fn dispatch_message_steers_running_session() -> anyhow::Result<()> {
     let session_id = reply1["result"]["session_id"]
         .as_str()
         .expect("first dispatch should return session_id");
-    assert_eq!(session_id, thread_id);
+    assert_eq!(session_id, session_id);
 
     // Small delay to let the turn/start response propagate and set state to Running
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -761,7 +765,7 @@ async fn dispatch_message_steers_running_session() -> anyhow::Result<()> {
             "minos_agent_dispatch",
             json!({
                 "agent": "codex",
-                "session_id": thread_id,
+                "session_id": session_id,
                 "text": "steer message",
                 "workspace": "/w-dispatch-steer"
             }),
@@ -784,14 +788,14 @@ async fn dispatch_message_steers_running_session() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "resume semantics are covered in minos-agent-runtime; this relay-backed scenario is timing-sensitive"]
 async fn interrupt_then_resume_session() -> anyhow::Result<()> {
-    let thread_id = "thr-interrupt-resume";
+    let session_id = "thr-interrupt-resume";
     let turn_id = "turn-interrupt-resume";
 
     let script = vec![
         // Initial session creation
         Step::ExpectRequest {
             method: "thread/start".into(),
-            reply: fake_thread_response(thread_id),
+            reply: fake_thread_response(session_id),
         },
         Step::ExpectRequest {
             method: "turn/start".into(),
@@ -811,7 +815,7 @@ async fn interrupt_then_resume_session() -> anyhow::Result<()> {
         // Resume: thread/resume + turn/start
         Step::ExpectRequest {
             method: "thread/resume".into(),
-            reply: fake_thread_response(thread_id),
+            reply: fake_thread_response(session_id),
         },
         Step::ExpectRequest {
             method: "turn/start".into(),
@@ -826,7 +830,7 @@ async fn interrupt_then_resume_session() -> anyhow::Result<()> {
         Step::EmitNotification {
             method: "turn/completed".into(),
             params: json!({
-                "threadId": thread_id,
+                "threadId": session_id,
                 "finishedAtMs": 300
             }),
         },
@@ -852,17 +856,17 @@ async fn interrupt_then_resume_session() -> anyhow::Result<()> {
     let session_id = reply["result"]["session_id"]
         .as_str()
         .expect("dispatch should return session_id");
-    assert_eq!(session_id, thread_id);
+    assert_eq!(session_id, session_id);
 
     // Small delay to let the turn start and state become Running
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // Step 2: Interrupt the thread → expect turn/interrupt on fake codex
+    // Step 2: Interrupt the session → expect turn/interrupt on fake codex
     let interrupt_reply = harness
         .forward_rpc(
             31,
-            "minos_interrupt_thread",
-            json!({ "thread_id": thread_id }),
+            "minos_interrupt_session",
+            json!({ "session_id": session_id }),
         )
         .await?;
     assert!(
@@ -880,7 +884,7 @@ async fn interrupt_then_resume_session() -> anyhow::Result<()> {
             "minos_agent_dispatch",
             json!({
                 "agent": "codex",
-                "session_id": thread_id,
+                "session_id": session_id,
                 "text": "resume message",
                 "workspace": "/w-interrupt-resume"
             }),
@@ -892,7 +896,7 @@ async fn interrupt_then_resume_session() -> anyhow::Result<()> {
     );
     assert_eq!(
         resume_reply["result"]["session_id"].as_str().unwrap(),
-        thread_id
+        session_id
     );
 
     harness.teardown(fake_codex).await
@@ -902,14 +906,14 @@ async fn interrupt_then_resume_session() -> anyhow::Result<()> {
 ///
 /// Validates: Requirement 6 (Approval Request Relay) — states 6.1, 6.6, 6.7
 async fn approval_forwarding_and_decision() -> anyhow::Result<()> {
-    let thread_id = "thr-approval-e2e";
+    let session_id = "thr-approval-e2e";
     let turn_id = "turn-approval-e2e";
 
     let script = vec![
         // Session creation
         Step::ExpectRequest {
             method: "thread/start".into(),
-            reply: fake_thread_response(thread_id),
+            reply: fake_thread_response(session_id),
         },
         Step::ExpectRequest {
             method: "turn/start".into(),
@@ -926,7 +930,7 @@ async fn approval_forwarding_and_decision() -> anyhow::Result<()> {
             method: "item/commandExecution/requestApproval".into(),
             params: json!({
                 "itemId": "item-approval-1",
-                "threadId": thread_id,
+                "sessionId": session_id,
                 "turnId": turn_id,
             }),
         },
@@ -956,12 +960,12 @@ async fn approval_forwarding_and_decision() -> anyhow::Result<()> {
     let session_id = reply["result"]["session_id"]
         .as_str()
         .expect("dispatch should return session_id");
-    assert_eq!(session_id, thread_id);
+    assert_eq!(session_id, session_id);
 
     // Step 2: Wait for the approval request ingest to be translated and
     // recorded by the backend approval runtime.
     let approval_event = wait_for_pending_approval(&harness.relay, harness.host_id).await?;
-    assert_eq!(approval_event.agent_session_id, thread_id);
+    assert_eq!(approval_event.agent_session_id, session_id);
     assert_eq!(
         approval_event.method,
         "item/commandExecution/requestApproval"
@@ -975,7 +979,7 @@ async fn approval_forwarding_and_decision() -> anyhow::Result<()> {
             "minos_approval_decision",
             json!({
                 "request_id": approval_event.request_id,
-                "thread_id": thread_id,
+                "session_id": session_id,
                 "decision": { "decision": "accept" }
             }),
         )

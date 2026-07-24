@@ -9,8 +9,8 @@ use minos_daemon::store::event_writer::EventWriter;
 use minos_daemon::store::LocalStore;
 use std::sync::Arc;
 
-/// Insert a thread row so `EventWriter` can write events for it.
-async fn seed_thread(store: &LocalStore, thread_id: &str) {
+/// Insert a session row so `EventWriter` can write events for it.
+async fn seed_thread(store: &LocalStore, session_id: &str) {
     sqlx::query(
         "INSERT OR IGNORE INTO workspaces(root, first_seen_at, last_seen_at) VALUES ('/w', 0, 0)",
     )
@@ -28,16 +28,16 @@ async fn seed_thread(store: &LocalStore, thread_id: &str) {
         "INSERT INTO conversations(conversation_id, project_id, title, created_at_ms, updated_at_ms) \
          VALUES (?, 'p-jsonl', 'Jsonl', 0, 0)",
     )
-    .bind(format!("c-{thread_id}"))
+    .bind(format!("c-{session_id}"))
     .execute(store.pool())
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
+        "INSERT INTO sessions(session_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
          VALUES (?, ?, '/w', 'codex', 'idle', 0, 0, 0)",
     )
-    .bind(thread_id)
-    .bind(format!("c-{thread_id}"))
+    .bind(session_id)
+    .bind(format!("c-{session_id}"))
     .execute(store.pool())
     .await
     .unwrap();
@@ -61,7 +61,7 @@ async fn recover_skips_when_no_codex_session_id() {
     // Allow any (non-existent) writer batches to flush.
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE thread_id = ?")
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE session_id = ?")
         .bind("thr-X")
         .fetch_one(store.pool())
         .await
@@ -93,7 +93,7 @@ async fn recover_skips_when_file_missing() {
     .expect("missing jsonl is a noop, not an error");
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE thread_id = ?")
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE session_id = ?")
         .bind("thr-Y")
         .fetch_one(store.pool())
         .await
@@ -140,7 +140,7 @@ async fn recover_parses_valid_lines_and_writes_with_jsonl_recovery_source() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM events WHERE thread_id = ? AND source = 'jsonl_recovery'",
+        "SELECT COUNT(*) FROM events WHERE session_id = ? AND source = 'jsonl_recovery'",
     )
     .bind("thr-Z")
     .fetch_one(store.pool())
@@ -150,7 +150,7 @@ async fn recover_parses_valid_lines_and_writes_with_jsonl_recovery_source() {
 
     // Sanity: nothing leaked into the 'live' source.
     let live: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE thread_id = ? AND source = 'live'")
+        sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE session_id = ? AND source = 'live'")
             .bind("thr-Z")
             .fetch_one(store.pool())
             .await
@@ -182,7 +182,7 @@ async fn recover_skips_blank_lines() {
         .unwrap();
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE thread_id = ?")
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE session_id = ?")
         .bind("thr-blank")
         .fetch_one(store.pool())
         .await

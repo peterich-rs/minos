@@ -4,7 +4,7 @@
 //! `DaemonInner` owns the outbound [`RelayClient`] plus its two watch
 //! receivers (relay link + peer) and the current in-memory trusted peer.
 //! Sync FFI methods dispatch onto `rt_handle` so Swift's non-runtime
-//! threads can still enter the Tokio reactor — same trick the old
+//! sessions can still enter the Tokio reactor — same trick the old
 //! WS-server façade used.
 
 use std::path::PathBuf;
@@ -51,7 +51,7 @@ struct DaemonInner {
     /// Captured under `DaemonHandle::start` (which always runs inside a
     /// Tokio runtime — either the CLI's `#[tokio::main]` or UniFFI's
     /// tokio runtime) so sync FFI methods can spawn onto it from Swift
-    /// threads that lack a current runtime.
+    /// sessions that lack a current runtime.
     rt_handle: Handle,
     /// Handle for the optional local RPC server (TUI daemon). `None` when
     /// the daemon runs without a local control plane.
@@ -130,7 +130,7 @@ impl DaemonHandle {
             Ok(n) if n > 0 => tracing::info!(
                 target: "minos_daemon::handle",
                 rows = n,
-                "startup recovery flipped {n} orphan threads to suspended",
+                "startup recovery flipped {n} orphan sessions to suspended",
             ),
             Ok(_) => {}
             Err(e) => tracing::warn!(
@@ -394,7 +394,7 @@ impl DaemonHandle {
         observer: Arc<dyn crate::subscription::RelayLinkStateObserver>,
     ) -> Arc<crate::subscription::Subscription> {
         // Match `subscribe_agent_state`: enter the captured runtime so
-        // Swift's "no current reactor" threads still land a `spawn`.
+        // Swift's "no current reactor" sessions still land a `spawn`.
         let _guard = self.inner.rt_handle.enter();
         crate::subscription::spawn_relay_link_observer(self.inner.link_rx.clone(), observer)
     }
@@ -444,19 +444,19 @@ impl DaemonHandle {
     }
 
     #[allow(clippy::missing_errors_doc)]
-    pub async fn interrupt_thread(
+    pub async fn interrupt_session(
         &self,
-        req: minos_protocol::InterruptThreadRequest,
+        req: minos_protocol::InterruptSessionRequest,
     ) -> Result<(), MinosError> {
-        self.inner.agent.interrupt_thread(req).await
+        self.inner.agent.interrupt_session(req).await
     }
 
     #[allow(clippy::missing_errors_doc)]
-    pub async fn close_thread(
+    pub async fn close_session(
         &self,
-        req: minos_protocol::CloseThreadRequest,
+        req: minos_protocol::CloseSessionRequest,
     ) -> Result<(), MinosError> {
-        self.inner.agent.close_thread(req).await
+        self.inner.agent.close_session(req).await
     }
 
     #[must_use]
@@ -469,40 +469,40 @@ impl DaemonHandle {
     }
 
     #[must_use]
-    pub fn current_agent_state(&self) -> crate::ThreadState {
+    pub fn current_agent_state(&self) -> crate::SessionState {
         self.inner.agent.current_state()
     }
 
     #[allow(clippy::missing_errors_doc)]
-    pub async fn current_agent_thread(
+    pub async fn current_agent_session(
         &self,
-    ) -> Result<Option<crate::agent::AgentThreadSnapshot>, MinosError> {
-        self.inner.agent.current_agent_thread().await
+    ) -> Result<Option<crate::agent::AgentSessionSnapshot>, MinosError> {
+        self.inner.agent.current_agent_session().await
     }
 }
 
 // ── Agent-runtime methods served only over JSON-RPC, not UniFFI. ──
 //
-// `list_threads` and `get_thread` traffic in `minos_protocol::ThreadSummary`
-// / `ThreadState` mirrors that intentionally do not derive `uniffi::*` (the
-// canonical FFI-side `ThreadState` is the runtime crate's enum; duplicating
+// `list_sessions` and `get_session` traffic in `minos_protocol::SessionSummary`
+// / `SessionState` mirrors that intentionally do not derive `uniffi::*` (the
+// canonical FFI-side `SessionState` is the runtime crate's enum; duplicating
 // it via UniFFI would collide in the shared Swift module). Mobile (frb)
 // reaches these methods via the JSON-RPC server in `rpc_server.rs`, which
 // is unaffected. Macos Swift does not call them today.
 impl DaemonHandle {
     #[allow(clippy::missing_errors_doc)]
-    pub async fn list_threads(
+    pub async fn list_sessions(
         &self,
-        req: minos_protocol::ListThreadsParams,
-    ) -> Result<minos_protocol::ListThreadsResponse, MinosError> {
-        self.inner.agent.list_threads(req).await
+        req: minos_protocol::ListSessionsParams,
+    ) -> Result<minos_protocol::ListSessionsResponse, MinosError> {
+        self.inner.agent.list_sessions(req).await
     }
 
     #[allow(clippy::missing_errors_doc)]
-    pub async fn get_thread(
+    pub async fn get_session(
         &self,
-        req: minos_protocol::GetThreadParams,
-    ) -> Result<minos_protocol::GetThreadResponse, MinosError> {
-        self.inner.agent.get_thread(req).await
+        req: minos_protocol::GetSessionParams,
+    ) -> Result<minos_protocol::GetSessionResponse, MinosError> {
+        self.inner.agent.get_session(req).await
     }
 }

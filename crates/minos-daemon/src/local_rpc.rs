@@ -9,15 +9,16 @@ use minos_cli_detect::{detect_all, CommandRunner};
 use minos_domain::MinosError;
 use minos_protocol::{
     AppendConversationMessageParams, AppendConversationMessageResponse, ApprovalDecisionRequest,
-    CloseThreadRequest, CreateConversationParams, CreateConversationResponse, CreateProjectRequest,
-    CreateProjectResponse, HealthResponse, InterruptThreadRequest, ListClisResponse,
-    ListConversationAgentSessionsParams, ListConversationAgentSessionsResponse,
+    CloseSessionRequest, CreateConversationParams, CreateConversationResponse,
+    CreateProjectRequest, CreateProjectResponse, HealthResponse, InterruptSessionRequest,
+    ListClisResponse, ListConversationAgentSessionsParams, ListConversationAgentSessionsResponse,
     ListConversationMessagesParams, ListConversationMessagesResponse, ListConversationsParams,
     ListConversationsResponse, ListProjectsResponse, LocalConversationEvent, LocalDaemonRpcServer,
-    LocalIngestFrame, LocalManagerEvent, LocalThreadSnapshot, ReadArtifactRangeRequest,
-    ReadArtifactRangeResponse, ReadThreadParams, ReadThreadRawHistoryResponse,
+    LocalIngestFrame, LocalManagerEvent, LocalSessionSnapshot, ReadArtifactRangeRequest,
+    ReadArtifactRangeResponse, ReadSessionParams, ReadSessionRawHistoryResponse,
     RespondOpencodePermissionRequest, RespondOpencodeQuestionRequest, SendUserMessageRequest,
     StartAgentInConversationRequest, StartAgentRequest, StartAgentResponse,
+    ToggleConversationMessageReactionParams, ToggleConversationMessageReactionResponse,
 };
 use serde_json::json;
 use tokio::sync::broadcast;
@@ -103,49 +104,49 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
             .map_err(rpc_err)
     }
 
-    async fn interrupt_thread(
+    async fn interrupt_session(
         &self,
-        req: InterruptThreadRequest,
+        req: InterruptSessionRequest,
     ) -> jsonrpsee::core::RpcResult<()> {
-        self.agent.interrupt_thread(req).await.map_err(rpc_err)
+        self.agent.interrupt_session(req).await.map_err(rpc_err)
     }
 
-    async fn close_thread(&self, req: CloseThreadRequest) -> jsonrpsee::core::RpcResult<()> {
-        self.agent.close_thread(req).await.map_err(rpc_err)
+    async fn close_session(&self, req: CloseSessionRequest) -> jsonrpsee::core::RpcResult<()> {
+        self.agent.close_session(req).await.map_err(rpc_err)
     }
 
-    async fn delete_thread(&self, req: CloseThreadRequest) -> jsonrpsee::core::RpcResult<()> {
-        self.agent.delete_thread(req).await.map_err(rpc_err)
+    async fn delete_session(&self, req: CloseSessionRequest) -> jsonrpsee::core::RpcResult<()> {
+        self.agent.delete_session(req).await.map_err(rpc_err)
     }
 
-    async fn resume_thread(
+    async fn resume_session(
         &self,
-        req: minos_protocol::ResumeThreadRequest,
+        req: minos_protocol::ResumeSessionRequest,
     ) -> jsonrpsee::core::RpcResult<StartAgentResponse> {
         self.agent
-            .resume_thread(&req.thread_id, req.auto_continue)
+            .resume_session(&req.session_id, req.auto_continue)
             .await
             .map_err(rpc_err)
     }
 
-    async fn list_local_threads(&self) -> jsonrpsee::core::RpcResult<Vec<LocalThreadSnapshot>> {
+    async fn list_local_sessions(&self) -> jsonrpsee::core::RpcResult<Vec<LocalSessionSnapshot>> {
         let rows = self
             .agent
             .store()
-            .list_threads(None, Some(500), None)
+            .list_sessions(None, Some(500), None)
             .await
-            .map_err(|e| rpc_err(map_store_error("list_local_threads", e)))?;
+            .map_err(|e| rpc_err(map_store_error("list_local_sessions", e)))?;
         let mut result = Vec::with_capacity(rows.len());
         for row in rows {
-            let thread_id = row.thread_id.clone();
+            let session_id = row.session_id.clone();
             let workspace = row.workspace_root.clone();
             let state = row_state_to_proto(&row).map_err(rpc_err)?;
-            result.push(LocalThreadSnapshot {
-                thread_id,
+            result.push(LocalSessionSnapshot {
+                session_id,
                 agent: parse_agent_label(&row.agent).map_err(rpc_err)?,
                 workspace,
                 state,
-                parent_thread_id: row.parent_thread_id.clone(),
+                parent_session_id: row.parent_session_id.clone(),
             });
         }
         Ok(result)
@@ -214,6 +215,22 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
             .map_err(rpc_err)
     }
 
+    async fn toggle_conversation_message_reaction(
+        &self,
+        req: ToggleConversationMessageReactionParams,
+    ) -> jsonrpsee::core::RpcResult<ToggleConversationMessageReactionResponse> {
+        tracing::info!(
+            target: "minos_daemon::local_rpc",
+            message_id = %req.message_id,
+            emoji = %req.emoji,
+            "local RPC toggle_conversation_message_reaction",
+        );
+        self.agent
+            .toggle_conversation_message_reaction(req)
+            .await
+            .map_err(rpc_err)
+    }
+
     async fn list_conversation_agent_sessions(
         &self,
         req: ListConversationAgentSessionsParams,
@@ -233,12 +250,47 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
             conversation_id = %req.conversation_id,
             agent = ?req.agent,
             workspace = %req.workspace,
+            model = ?req.model,
             "local RPC start_agent_in_conversation",
         );
         self.agent
             .start_agent_in_conversation(req)
             .await
             .map_err(rpc_err)
+    }
+
+    async fn list_models(
+        &self,
+        req: minos_protocol::ListModelsRequest,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::ListModelsResponse> {
+        Ok(crate::model_catalog::list_models_for_runtime(req.runtime).await)
+    }
+
+    async fn list_agent_profiles(
+        &self,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::ListAgentProfilesResponse> {
+        self.agent.list_agent_profiles().await.map_err(rpc_err)
+    }
+
+    async fn create_agent_profile(
+        &self,
+        req: minos_protocol::CreateAgentProfileRequest,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::AgentProfileSummary> {
+        self.agent.create_agent_profile(req).await.map_err(rpc_err)
+    }
+
+    async fn update_agent_profile(
+        &self,
+        req: minos_protocol::UpdateAgentProfileRequest,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::AgentProfileSummary> {
+        self.agent.update_agent_profile(req).await.map_err(rpc_err)
+    }
+
+    async fn delete_agent_profile(
+        &self,
+        req: minos_protocol::DeleteAgentProfileRequest,
+    ) -> jsonrpsee::core::RpcResult<()> {
+        self.agent.delete_agent_profile(req).await.map_err(rpc_err)
     }
 
     async fn append_conversation_message(
@@ -251,16 +303,16 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
             .map_err(rpc_err)
     }
 
-    async fn read_thread_raw_history(
+    async fn read_session_raw_history(
         &self,
-        req: ReadThreadParams,
-    ) -> jsonrpsee::core::RpcResult<ReadThreadRawHistoryResponse> {
+        req: ReadSessionParams,
+    ) -> jsonrpsee::core::RpcResult<ReadSessionRawHistoryResponse> {
         let (events, next_seq) = self
             .agent
-            .read_thread_raw_history(&req.thread_id, req.from_seq, req.limit)
+            .read_session_raw_history(&req.session_id, req.from_seq, req.limit)
             .await
             .map_err(rpc_err)?;
-        Ok(ReadThreadRawHistoryResponse { events, next_seq })
+        Ok(ReadSessionRawHistoryResponse { events, next_seq })
     }
 
     async fn read_artifact_range(
@@ -270,7 +322,7 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
         let range = self
             .agent
             .store()
-            .read_artifact_range(&req.thread_id, &req.artifact_id, req.offset, req.limit)
+            .read_artifact_range(&req.session_id, &req.artifact_id, req.offset, req.limit)
             .await
             .map_err(|e| rpc_err(map_store_error("read_artifact_range", e)))?;
         Ok(ReadArtifactRangeResponse {

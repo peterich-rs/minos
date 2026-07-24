@@ -26,20 +26,20 @@ impl TeamworkStore {
         &self,
         conversation_id: &str,
         source_agent: Option<AgentName>,
-        source_thread_id: Option<String>,
+        source_session_id: Option<String>,
         target_agent: AgentName,
         prompt: String,
-        thread_id: Option<String>,
+        session_id: Option<String>,
     ) -> anyhow::Result<TeamworkDelegation> {
         self.open_for_conversation(conversation_id)
             .await?
             .create_delegation(
                 conversation_id,
                 source_agent,
-                source_thread_id,
+                source_session_id,
                 target_agent,
                 prompt,
-                thread_id,
+                session_id,
             )
             .await
     }
@@ -47,11 +47,11 @@ impl TeamworkStore {
     pub async fn running_delegation_for_thread(
         &self,
         conversation_id: &str,
-        thread_id: &str,
+        session_id: &str,
     ) -> anyhow::Result<Option<TeamworkDelegation>> {
         self.open_for_conversation(conversation_id)
             .await?
-            .running_delegation_for_thread(conversation_id, thread_id)
+            .running_delegation_for_thread(conversation_id, session_id)
             .await
     }
 
@@ -59,19 +59,19 @@ impl TeamworkStore {
     pub async fn ensure_delegate_target_allowed(
         &self,
         conversation_id: &str,
-        source_thread_id: Option<&str>,
+        source_session_id: Option<&str>,
         target_agent: AgentName,
     ) -> anyhow::Result<()> {
         self.open_for_conversation(conversation_id)
             .await?
-            .ensure_delegate_target_allowed(conversation_id, source_thread_id, target_agent)
+            .ensure_delegate_target_allowed(conversation_id, source_session_id, target_agent)
             .await
     }
 
     pub async fn complete_delegation_for_thread(
         &self,
         conversation_id: &str,
-        thread_id: &str,
+        session_id: &str,
         result_message_id: Option<&str>,
         result_text: &str,
     ) -> anyhow::Result<Option<TeamworkDelegation>> {
@@ -79,7 +79,7 @@ impl TeamworkStore {
             .await?
             .complete_delegation_for_thread(
                 conversation_id,
-                thread_id,
+                session_id,
                 result_message_id,
                 result_text,
             )

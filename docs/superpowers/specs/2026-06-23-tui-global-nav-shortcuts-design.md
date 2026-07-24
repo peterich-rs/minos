@@ -46,7 +46,7 @@ pub enum NavLevel {
     Projects,
     Conversations { project_id: String },
     Conversation { project_id: String, conversation_id: String },
-    AgentDetail { project_id: String, conversation_id: String, thread_id: String, agent: AgentName },
+    AgentDetail { project_id: String, conversation_id: String, session_id: String, agent: AgentName },
 }
 ```
 

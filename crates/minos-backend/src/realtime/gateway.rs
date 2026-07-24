@@ -25,7 +25,7 @@ use crate::realtime::subscription::ConnectionState;
 use crate::session::{ServerFrame as LegacySessionFrame, SessionHandle, SessionRevocation};
 use crate::store::{
     agent_sessions, agent_turn_events, agent_turns, durable_event_log, host_commands,
-    outbox_events, raw_events, thread_sync_state, threads,
+    outbox_events, raw_events, sessions, thread_sync_state,
 };
 use minos_protocol::realtime::{
     ClientFrame, ConnectionPrincipal, HostGapManifest, HostIngestChunk, HostIngestLiveBatch,
@@ -935,19 +935,19 @@ async fn handle_host_ingest_live_batch(
     let mut accepted_threads = HashSet::new();
     let batch_id = batch.batch_id.clone();
     for chunk in batch.chunks {
-        let thread_id = chunk.thread_id.clone();
+        let session_id = chunk.session_id.clone();
         if persist_host_ingest_chunk(state, upgrade, chunk).await? {
-            accepted_threads.insert(thread_id);
+            accepted_threads.insert(session_id);
         }
     }
     let now_ms = chrono::Utc::now().timestamp_millis();
     let host_id = upgrade.device_id.to_string();
-    for thread_id in accepted_threads {
-        let accepted_to_seq = backend_accepted_to_seq(state, &host_id, &thread_id).await?;
+    for session_id in accepted_threads {
+        let accepted_to_seq = backend_accepted_to_seq(state, &host_id, &session_id).await?;
         thread_sync_state::mark_backend_acked(
             &state.store,
             &host_id,
-            &thread_id,
+            &session_id,
             accepted_to_seq,
             now_ms,
         )
@@ -955,7 +955,7 @@ async fn handle_host_ingest_live_batch(
         let _ = send_server_frame(
             ws,
             &ServerFrame::HostIngestAck {
-                thread_id,
+                session_id,
                 accepted_to_seq,
                 batch_id: Some(batch_id.clone()),
             },
@@ -993,16 +993,16 @@ async fn handle_host_ingest_pull_response(
     response: HostIngestPullResponse,
 ) -> Result<(), BackendError> {
     let request_id = response.request_id.clone();
-    let thread_id = response.thread_id.clone();
+    let session_id = response.session_id.clone();
     let host_id = upgrade.device_id.to_string();
     for chunk in response.chunks {
         persist_host_ingest_chunk(state, upgrade, chunk).await?;
     }
-    let accepted_to_seq = backend_accepted_to_seq(state, &host_id, &thread_id).await?;
+    let accepted_to_seq = backend_accepted_to_seq(state, &host_id, &session_id).await?;
     thread_sync_state::mark_backend_acked(
         &state.store,
         &host_id,
-        &thread_id,
+        &session_id,
         accepted_to_seq,
         chrono::Utc::now().timestamp_millis(),
     )
@@ -1011,7 +1011,7 @@ async fn handle_host_ingest_pull_response(
         ws,
         &ServerFrame::PullAck {
             request_id,
-            thread_id,
+            session_id,
             accepted_to_seq,
         },
     )
@@ -1022,10 +1022,10 @@ async fn handle_host_ingest_pull_response(
 async fn backend_accepted_to_seq(
     state: &BackendState,
     host_id: &str,
-    thread_id: &str,
+    session_id: &str,
 ) -> Result<u64, BackendError> {
-    let current = thread_sync_state::backend_acked_seq(&state.store, host_id, thread_id).await?;
-    raw_events::contiguous_host_seq_after(&state.store, host_id, thread_id, current).await
+    let current = thread_sync_state::backend_acked_seq(&state.store, host_id, session_id).await?;
+    raw_events::contiguous_host_seq_after(&state.store, host_id, session_id, current).await
 }
 
 fn pull_requests_for_manifest(manifest: &HostGapManifest) -> Vec<ServerFrame> {
@@ -1047,7 +1047,7 @@ fn pull_requests_for_manifest(manifest: &HostGapManifest) -> Vec<ServerFrame> {
             }
             frames.push(ServerFrame::PullIngestRange {
                 request_id: Uuid::new_v4().to_string(),
-                thread_id: session.thread_id.clone(),
+                session_id: session.session_id.clone(),
                 from_seq,
                 to_seq: range.to,
                 max_bytes: PULL_INGEST_MAX_BYTES,
@@ -1065,10 +1065,10 @@ async fn persist_host_ingest_chunk(
     chunk: HostIngestChunk,
 ) -> Result<bool, BackendError> {
     let expected_host_id = upgrade.device_id.to_string();
-    let Some(session) = agent_sessions::get(&state.store, &chunk.thread_id).await? else {
+    let Some(session) = agent_sessions::get(&state.store, &chunk.session_id).await? else {
         tracing::warn!(
             target: "minos_backend::realtime::gateway",
-            thread_id = %chunk.thread_id,
+            session_id = %chunk.session_id,
             "dropping host ingest chunk for unknown agent session",
         );
         return Ok(false);
@@ -1077,7 +1077,7 @@ async fn persist_host_ingest_chunk(
         Some(host_id) if host_id != expected_host_id => {
             tracing::warn!(
                 target: "minos_backend::realtime::gateway",
-                thread_id = %chunk.thread_id,
+                session_id = %chunk.session_id,
                 host_device_id = %upgrade.device_id,
                 expected_host_id = host_id,
                 "dropping host ingest chunk for mismatched host",
@@ -1086,14 +1086,14 @@ async fn persist_host_ingest_chunk(
         }
         Some(_) => {}
         None => {
-            agent_sessions::claim_host_if_empty(&state.store, &chunk.thread_id, &expected_host_id)
+            agent_sessions::claim_host_if_empty(&state.store, &chunk.session_id, &expected_host_id)
                 .await?;
         }
     }
 
-    threads::upsert(
+    sessions::upsert(
         &state.store,
-        &chunk.thread_id,
+        &chunk.session_id,
         chunk.agent,
         &expected_host_id,
         chunk.last_ts_ms,
@@ -1103,7 +1103,7 @@ async fn persist_host_ingest_chunk(
     let inserted = raw_events::insert_host_ingest_chunk(
         &state.store,
         &expected_host_id,
-        &chunk.thread_id,
+        &chunk.session_id,
         chunk.seq,
         &chunk.event_id,
         &chunk.kind,
@@ -1122,7 +1122,7 @@ async fn persist_host_ingest_chunk(
 }
 
 fn fanout_host_ingest_projection(state: &BackendState, chunk: &HostIngestChunk) {
-    let topic = RealtimeTopic::AgentSession(chunk.thread_id.clone());
+    let topic = RealtimeTopic::AgentSession(chunk.session_id.clone());
     for ui in &chunk.projection {
         let payload = match serde_json::to_value(ui) {
             Ok(payload) => payload,
@@ -1130,7 +1130,7 @@ fn fanout_host_ingest_projection(state: &BackendState, chunk: &HostIngestChunk) 
                 tracing::warn!(
                     target: "minos_backend::realtime::gateway",
                     error = %error,
-                    thread_id = %chunk.thread_id,
+                    session_id = %chunk.session_id,
                     "failed to encode host ingest projection",
                 );
                 continue;
@@ -1215,7 +1215,7 @@ async fn handle_projected_ingest_host_stream_event(
         return Ok(());
     }
 
-    threads::upsert(&state.store, session_id, agent, &expected_host_id, ts_ms).await?;
+    sessions::upsert(&state.store, session_id, agent, &expected_host_id, ts_ms).await?;
     let Some(persisted_seq) =
         raw_events::insert_assigning_seq(&state.store, session_id, seq, agent, &payload, ts_ms)
             .await?
@@ -1367,7 +1367,7 @@ async fn handle_raw_ingest_host_stream_event(
         .ingest
         .execute(IngestCommand {
             agent,
-            thread_id: session_id.to_string(),
+            session_id: session_id.to_string(),
             seq,
             payload,
             ts_ms,
@@ -1513,7 +1513,7 @@ mod tests {
             manifest_id: "manifest-1".into(),
             host_id: DeviceId::new(),
             sessions: vec![SessionGapManifest {
-                thread_id: "thr-sync".into(),
+                session_id: "thr-sync".into(),
                 backend_acked_seq: 10,
                 local_from_seq: 11,
                 local_to_seq: 20,
@@ -1531,7 +1531,7 @@ mod tests {
         assert_eq!(frames.len(), 2);
         let ServerFrame::PullIngestRange {
             request_id,
-            thread_id,
+            session_id,
             from_seq,
             to_seq,
             max_bytes,
@@ -1542,7 +1542,7 @@ mod tests {
             panic!("expected PullIngestRange");
         };
         assert!(!request_id.is_empty());
-        assert_eq!(thread_id, "thr-sync");
+        assert_eq!(session_id, "thr-sync");
         assert_eq!((*from_seq, *to_seq), (11, 12));
         assert_eq!(*max_bytes, PULL_INGEST_MAX_BYTES);
         assert_eq!(*priority, PullPriority::LiveCritical);

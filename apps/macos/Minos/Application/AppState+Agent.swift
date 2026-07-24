@@ -4,14 +4,14 @@ import Foundation
 /// AppState type body stays under the swiftlint type-body-length cap.
 extension AppState {
     @MainActor
-    func applyAgentState(_ state: ThreadState) {
+    func applyAgentState(_ state: SessionState) {
         agentState = state
 
         // Post-Phase-C the daemon's legacy single-channel state mirror always
-        // pushes `.idle` after a successful `start_agent` / `close_thread`
-        // ("the multi-thread manager keeps per-thread state internally; the
+        // pushes `.idle` after a successful `start_agent` / `close_session`
+        // ("the multi-session manager keeps per-session state internally; the
         // single-channel mirror just signals 'something is alive'", agent.rs).
-        // So `.idle` no longer means "no session" — it means "thread alive,
+        // So `.idle` no longer means "no session" — it means "session alive,
         // not in a turn". The session lifecycle is now driven explicitly by
         // `startAgent` / `stopAgent` below, which set / clear `currentSession`
         // around the round-trip. Only `.closed` warrants clearing here, and
@@ -23,31 +23,31 @@ extension AppState {
         }
 
         Task { [weak self] in
-            await self?.refreshAgentThreadSnapshot()
+            await self?.refreshAgentSessionSnapshot()
         }
     }
 
     @MainActor
-    func refreshAgentThreadSnapshot() async {
+    func refreshAgentSessionSnapshot() async {
         guard phase == .running, let daemon else { return }
 
         do {
-            applyAgentThreadSnapshot(try await daemon.currentAgentThread())
+            applyAgentSessionSnapshot(try await daemon.currentAgentSession())
         } catch let error as MinosError {
-            AppLog.error("appState.agent", "currentAgentThread failed · \(error.technicalDetails)")
+            AppLog.error("appState.agent", "currentAgentSession failed · \(error.technicalDetails)")
         } catch {
-            AppLog.error("appState.agent", "Unexpected currentAgentThread failure: \(String(describing: error))")
+            AppLog.error("appState.agent", "Unexpected currentAgentSession failure: \(String(describing: error))")
         }
     }
 
     @MainActor
-    func applyAgentThreadSnapshot(_ snapshot: AgentThreadSnapshot?) {
+    func applyAgentSessionSnapshot(_ snapshot: AgentSessionSnapshot?) {
         guard let snapshot else {
             return
         }
 
         agentState = snapshot.state
-        currentSession = StartAgentResponse(sessionId: snapshot.threadId, cwd: snapshot.workspaceRoot)
+        currentSession = StartAgentResponse(sessionId: snapshot.sessionId, cwd: snapshot.workspaceRoot)
     }
 
     @MainActor
@@ -62,7 +62,15 @@ extension AppState {
 
         do {
             let session = try await daemon.startAgent(
-                .init(agent: .codex, workspace: "", mode: mode)
+                .init(
+                    agent: .codex,
+                    workspace: "",
+                    mode: mode,
+                    profileId: nil,
+                    model: nil,
+                    reasoningEffort: nil,
+                    instructions: nil
+                )
             )
             currentSession = session
             AppLog.info("appState.agent", "startAgent ok · mode=\(modeLabel) · sessionId=\(session.sessionId)")
@@ -96,20 +104,20 @@ extension AppState {
         }
     }
 
-    /// Per-thread "stop" — translates the legacy single-session "Stop"
-    /// affordance to the new `close_thread` RPC keyed by the live
-    /// `currentSession.sessionId`. With no live session there is no thread
+    /// Per-session "stop" — translates the legacy single-session "Stop"
+    /// affordance to the `close_session` RPC keyed by the live
+    /// `currentSession.sessionId`. With no live session there is nothing
     /// to close, so the call is a no-op.
     @MainActor
     func stopAgent() async {
         guard phase == .running, let daemon, let session = currentSession else { return }
 
         clearAgentError()
-        let threadId = session.sessionId
-        AppLog.info("appState.agent", "stopAgent requested · threadId=\(threadId)")
+        let sessionId = session.sessionId
+        AppLog.info("appState.agent", "stopAgent requested · sessionId=\(sessionId)")
 
         do {
-            try await daemon.closeThread(.init(threadId: threadId))
+            try await daemon.closeSession(.init(sessionId: sessionId))
             currentSession = nil
             AppLog.info("appState.agent", "stopAgent ok")
         } catch let error as MinosError {

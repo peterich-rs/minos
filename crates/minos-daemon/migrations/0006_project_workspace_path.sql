@@ -1,2 +1,0 @@
--- No-op in the latest-only schema.
--- projects.workspace_path is part of 0001_initial.

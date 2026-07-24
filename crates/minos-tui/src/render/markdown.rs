@@ -116,6 +116,10 @@ pub(crate) fn render_tool_preformatted(
 }
 
 /// Read-tool body: line-number gutter + optional syntax highlight, first/last truncate.
+///
+/// Grok `read_file` / write emit `LINE→content` markers (first line + every 10th,
+/// or every line for create). Parse those into real file line numbers and never
+/// leave the `→` arrow inline with source.
 pub(crate) fn render_tool_read_body(
     code: &str,
     path_or_lang: &str,
@@ -124,11 +128,21 @@ pub(crate) fn render_tool_read_body(
     last: usize,
 ) -> Vec<Line<'static>> {
     let code = code.trim_end_matches(['\n', '\r']);
+    let numbered = parse_grok_arrow_numbered_lines(code);
+    let (line_nos, plain_lines): (Vec<usize>, Vec<String>) = if let Some(rows) = numbered {
+        rows.into_iter().map(|(n, t)| (n, t)).unzip()
+    } else {
+        let raw: Vec<String> = code.split('\n').map(str::to_owned).collect();
+        let nos: Vec<usize> = (1..=raw.len()).collect();
+        (nos, raw)
+    };
+
+    let plain_joined = plain_lines.join("\n");
     let lang = path_extension_lang(path_or_lang);
-    let highlighted = highlight_to_lines(code, &lang);
-    let raw_lines: Vec<&str> = code.split('\n').collect();
-    let total = raw_lines.len();
-    let gutter_w = digit_count(total.max(1));
+    let highlighted = highlight_to_lines(&plain_joined, &lang);
+    let total = plain_lines.len();
+    let max_no = line_nos.last().copied().unwrap_or(1).max(1);
+    let gutter_w = digit_count(max_no);
 
     let indices: Vec<usize> = if first + last < total {
         let mut idx: Vec<usize> = (0..first).collect();
@@ -148,7 +162,7 @@ pub(crate) fn render_tool_read_body(
                     Span::styled("…".to_owned(), styles.diff_gutter),
                 ]);
             }
-            let line_no = i + 1;
+            let line_no = line_nos.get(i).copied().unwrap_or(i + 1);
             let gutter = format!("  {line_no:>gutter_w$}  ");
             let mut spans = vec![Span::styled(gutter, styles.diff_gutter)];
             if let Some(ref hl) = highlighted {
@@ -156,19 +170,53 @@ pub(crate) fn render_tool_read_body(
                     spans.extend(line_spans.iter().cloned());
                 } else {
                     spans.push(Span::styled(
-                        (*raw_lines.get(i).unwrap_or(&"")).to_string(),
+                        plain_lines.get(i).cloned().unwrap_or_default(),
                         styles.code_block,
                     ));
                 }
             } else {
                 spans.push(Span::styled(
-                    (*raw_lines.get(i).unwrap_or(&"")).to_string(),
+                    plain_lines.get(i).cloned().unwrap_or_default(),
                     styles.code_block,
                 ));
             }
             Line::from(spans)
         })
         .collect()
+}
+
+/// Parse Grok-style `N→content` lines (first + decade sparse, or dense every-line).
+fn parse_grok_arrow_numbered_lines(text: &str) -> Option<Vec<(usize, String)>> {
+    let raw: Vec<&str> = text.split('\n').collect();
+    if raw.is_empty() {
+        return None;
+    }
+    let first = split_arrow_numbered(raw[0])?;
+    let mut out = Vec::with_capacity(raw.len());
+    out.push((first.0, first.1));
+    let mut next = first.0 + 1;
+    for line in &raw[1..] {
+        if let Some((n, content)) = split_arrow_numbered(line) {
+            out.push((n, content));
+            next = n + 1;
+        } else {
+            out.push((next, (*line).to_owned()));
+            next += 1;
+        }
+    }
+    Some(out)
+}
+
+fn split_arrow_numbered(line: &str) -> Option<(usize, String)> {
+    let (num, rest) = line.split_once('→')?;
+    if num.is_empty() || !num.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n: usize = num.parse().ok()?;
+    if n == 0 {
+        return None;
+    }
+    Some((n, rest.to_owned()))
 }
 
 fn path_extension_lang(path_or_lang: &str) -> String {
@@ -825,7 +873,8 @@ mod tests {
     use ratatui::style::{Color, Style};
 
     use super::{
-        looks_like_diff, render_code_block, render_markdown, render_tool_diff, MarkdownStyles,
+        looks_like_diff, render_code_block, render_markdown, render_tool_diff,
+        render_tool_read_body, MarkdownStyles,
     };
 
     fn styles() -> MarkdownStyles {
@@ -974,5 +1023,42 @@ mod tests {
             !added.contains('│'),
             "tool diff should not use fence border: {added:?}"
         );
+    }
+
+    #[test]
+    fn read_body_parses_grok_arrow_line_numbers() {
+        // Grok read_file: first line + every 10th get `N→`; others bare.
+        let body = "880→    }\n  )\n890→  {!following\n";
+        let lines = render_tool_read_body(body, "SessionsView.tsx", styles(), 12, 8);
+        let rendered = lines.iter().map(text).collect::<Vec<_>>();
+        assert!(
+            rendered
+                .iter()
+                .any(|l| l.contains("880") && l.contains("    }")),
+            "missing file line 880: {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|l| l.contains("890") && l.contains("{!following")),
+            "missing file line 890: {rendered:?}"
+        );
+        // Arrow marker must not appear in source column.
+        assert!(
+            !rendered.iter().any(|l| l.contains('→')),
+            "arrow should be stripped: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn parse_grok_arrow_sparse_and_dense() {
+        let sparse = super::parse_grok_arrow_numbered_lines("880→a\nb\n890→c").unwrap();
+        assert_eq!(
+            sparse,
+            vec![(880, "a".into()), (881, "b".into()), (890, "c".into())]
+        );
+        let dense = super::parse_grok_arrow_numbered_lines("1→x\n2→y").unwrap();
+        assert_eq!(dense, vec![(1, "x".into()), (2, "y".into())]);
+        assert!(super::parse_grok_arrow_numbered_lines("plain\ncode").is_none());
     }
 }

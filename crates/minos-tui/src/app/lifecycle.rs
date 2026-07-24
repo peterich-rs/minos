@@ -4,6 +4,7 @@ impl App {
     pub async fn init(&mut self) -> anyhow::Result<()> {
         let agents = self.backend.detect_clis().await?;
         self.ui.status.update_agents(agents);
+        self.refresh_agent_profiles().await;
         self.sync_input_agent_picker();
         if matches!(
             self.backend.connection_state(),
@@ -13,6 +14,22 @@ impl App {
         }
         self.resolve_startup_project().await;
         Ok(())
+    }
+
+    /// Refresh host agent profiles for @-routing / mention candidates.
+    pub(super) async fn refresh_agent_profiles(&mut self) {
+        match self.backend.list_agent_profiles().await {
+            Ok(profiles) => {
+                self.ui.agent_profiles = profiles;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "minos_tui::app",
+                    error = %e,
+                    "list_agent_profiles failed; profile mentions disabled until refresh"
+                );
+            }
+        }
     }
 
     async fn resolve_startup_project(&mut self) {
@@ -98,23 +115,23 @@ impl App {
             }
             AppEvent::AgentStartedForPrompt {
                 agent,
-                thread_id,
+                session_id,
                 cwd,
                 text,
             } => {
                 self.apply_action(Action::EffectCompleted(
                     crate::action::EffectResult::AgentStarted {
                         agent,
-                        thread_id,
+                        session_id,
                         cwd,
                         text,
                     },
                 ))
                 .await
             }
-            AppEvent::SendMessageFailed { thread_id, error } => {
+            AppEvent::SendMessageFailed { session_id, error } => {
                 self.apply_action(Action::EffectCompleted(
-                    crate::action::EffectResult::SendFailed { thread_id, error },
+                    crate::action::EffectResult::SendFailed { session_id, error },
                 ))
                 .await
             }
@@ -171,7 +188,7 @@ impl App {
             AppEvent::ConversationAgentStarted {
                 conversation_id,
                 agent,
-                thread_id,
+                session_id,
                 cwd,
                 text,
             } => {
@@ -179,7 +196,7 @@ impl App {
                     crate::action::EffectResult::ConversationAgentStarted {
                         conversation_id,
                         agent,
-                        thread_id,
+                        session_id,
                         cwd,
                         text,
                     },
@@ -201,9 +218,9 @@ impl App {
                 self.request_frame();
                 true
             }
-            AppEvent::DaemonThreadsListed { threads } => {
+            AppEvent::DaemonThreadsListed { sessions } => {
                 // Metadata-only: never await history on the poll path (scroll).
-                let redraw = self.apply_daemon_thread_metadata(threads);
+                let redraw = self.apply_daemon_thread_metadata(sessions);
                 if redraw {
                     self.request_frame();
                 }
@@ -230,18 +247,18 @@ impl App {
     pub(super) async fn handle_ingest(&mut self, ingest: minos_protocol::LocalIngestFrame) -> bool {
         if !self
             .ui
-            .thread_panel
+            .session_panel
             .chat_states
-            .contains_key(&ingest.thread_id)
+            .contains_key(&ingest.session_id)
         {
             debug!(
                 agent = %ingest.agent.bin_name(),
-                thread_id = %ingest.thread_id,
+                session_id = %ingest.session_id,
                 "creating chat state for ingest frame",
             );
-            self.ui.thread_panel.chat_states.insert(
-                ingest.thread_id.clone(),
-                ChatState::new(ingest.thread_id.clone(), ingest.agent),
+            self.ui.session_panel.chat_states.insert(
+                ingest.session_id.clone(),
+                ChatState::new(ingest.session_id.clone(), ingest.agent),
             );
         }
         if !self.mark_ingest_applied(&ingest) {
@@ -255,18 +272,18 @@ impl App {
             ingest.ts_ms,
         );
         sync_subagent_info(&mut self.ui, &ingest.ui_events);
-        let thread_id = ingest.thread_id;
+        let session_id = ingest.session_id;
         let agent = ingest.agent;
         let ui_events = ingest.ui_events;
-        if let Some(chat) = self.ui.thread_panel.chat_states.get_mut(&thread_id) {
+        if let Some(chat) = self.ui.session_panel.chat_states.get_mut(&session_id) {
             debug!(
                 agent = %agent.bin_name(),
-                thread_id = %thread_id,
+                session_id = %session_id,
                 event_count = ui_events.len(),
                 "applying projected ingest frame"
             );
             chat.apply_ui_events(ui_events);
-            self.record_agent_conversation_result_if_ingest_done(&thread_id, marks_done)
+            self.record_agent_conversation_result_if_ingest_done(&session_id, marks_done)
                 .await;
             return true;
         }
@@ -360,7 +377,7 @@ impl App {
         self.sync_daemon_threads_from_backend(true).await
     }
 
-    /// Fire-and-forget list_threads so the main loop can keep scrolling.
+    /// Fire-and-forget list_sessions so the main loop can keep scrolling.
     fn schedule_daemon_thread_list_if_due(&mut self) {
         if !self.daemon_thread_sync_due() {
             return;
@@ -371,15 +388,15 @@ impl App {
         self.state.last_daemon_history_sync = Some(Instant::now());
         let backend = self.backend.clone();
         tokio::spawn(async move {
-            match backend.list_threads().await {
-                Ok(threads) => {
-                    let _ = tx.send(AppEvent::DaemonThreadsListed { threads });
+            match backend.list_sessions().await {
+                Ok(sessions) => {
+                    let _ = tx.send(AppEvent::DaemonThreadsListed { sessions });
                 }
                 Err(e) => {
                     tracing::warn!(
                         target: "minos_tui::app",
                         error = %e,
-                        "background list_threads failed"
+                        "background list_sessions failed"
                     );
                 }
             }
@@ -400,9 +417,9 @@ impl App {
     }
 
     pub(super) async fn sync_daemon_threads_from_backend(&mut self, incremental: bool) -> bool {
-        match self.backend.list_threads().await {
-            Ok(threads) => {
-                self.apply_daemon_thread_snapshots(threads, incremental)
+        match self.backend.list_sessions().await {
+            Ok(sessions) => {
+                self.apply_daemon_thread_snapshots(sessions, incremental)
                     .await
             }
             Err(e) => {
@@ -416,29 +433,29 @@ impl App {
         }
     }
 
-    /// Apply daemon `list_threads` snapshots and hydrate unknown threads.
+    /// Apply daemon `list_sessions` snapshots and hydrate unknown sessions.
     ///
     /// Used by init and the headless (no event pump) tick path. The live main
     /// loop must **not** call this for `DaemonThreadsListed` — that path uses
     /// [`Self::apply_daemon_thread_metadata`] only so scroll never awaits
-    /// history RPC. Already-hydrated threads still rely on live ingest.
+    /// history RPC. Already-hydrated sessions still rely on live ingest.
     pub(super) async fn apply_daemon_thread_snapshots(
         &mut self,
-        threads: Vec<crate::backend::BackendThreadSnapshot>,
+        sessions: Vec<crate::backend::BackendSessionSnapshot>,
         _incremental: bool,
     ) -> bool {
-        let mut changed = self.apply_daemon_thread_metadata(threads);
+        let mut changed = self.apply_daemon_thread_metadata(sessions);
         let pending: Vec<String> = self
             .ui
-            .thread_panel
+            .session_panel
             .list
             .items
             .iter()
-            .map(|thread| thread.thread_id.clone())
-            .filter(|thread_id| !self.state.hydrated_threads.contains(thread_id))
+            .map(|thread| thread.session_id.clone())
+            .filter(|session_id| !self.state.hydrated_threads.contains(session_id))
             .collect();
-        for thread_id in pending {
-            if self.hydrate_thread_if_needed(&thread_id).await {
+        for session_id in pending {
+            if self.hydrate_thread_if_needed(&session_id).await {
                 changed = true;
             }
         }
@@ -451,7 +468,7 @@ impl App {
     /// main loop when `DaemonThreadsListed` arrives.
     pub(super) fn apply_daemon_thread_metadata(
         &mut self,
-        threads: Vec<crate::backend::BackendThreadSnapshot>,
+        sessions: Vec<crate::backend::BackendSessionSnapshot>,
     ) -> bool {
         let mut changed = false;
         if self.prune_external_threads() {
@@ -461,31 +478,31 @@ impl App {
         // Batch workspace membership so each path is canonicalized once, not
         // once per (thread × known-workspace) comparison.
         let mut matcher = state::WorkspaceMatcher::from_state(&self.state, &self.ui);
-        let mut belonging = Vec::with_capacity(threads.len());
-        for snap in threads {
+        let mut belonging = Vec::with_capacity(sessions.len());
+        for snap in sessions {
             if matcher.contains(&snap.workspace) {
                 belonging.push(snap);
-            } else if self.remove_thread_local_state(&snap.thread_id) {
+            } else if self.remove_thread_local_state(&snap.session_id) {
                 changed = true;
             }
         }
 
-        // O(1) updates by thread_id — avoid O(threads²) linear finds on the
+        // O(1) updates by session_id — avoid O(threads²) linear finds on the
         // 2s poll path.
         let mut index: std::collections::HashMap<String, usize> = self
             .ui
-            .thread_panel
+            .session_panel
             .list
             .items
             .iter()
             .enumerate()
-            .map(|(i, thread)| (thread.thread_id.clone(), i))
+            .map(|(i, thread)| (thread.session_id.clone(), i))
             .collect();
 
         for snap in belonging {
             let agent = snap.agent.unwrap_or(AgentName::Codex);
-            if let Some(&i) = index.get(&snap.thread_id) {
-                let entry = &mut self.ui.thread_panel.list.items[i];
+            if let Some(&i) = index.get(&snap.session_id) {
+                let entry = &mut self.ui.session_panel.list.items[i];
                 if entry.agent != agent {
                     entry.agent = agent;
                     changed = true;
@@ -498,35 +515,35 @@ impl App {
                     entry.state = snap.state.clone();
                     changed = true;
                 }
-                if entry.parent_thread_id != snap.parent_thread_id {
-                    entry.parent_thread_id = snap.parent_thread_id.clone();
+                if entry.parent_session_id != snap.parent_session_id {
+                    entry.parent_session_id = snap.parent_session_id.clone();
                     changed = true;
                 }
             } else {
-                let thread_id = snap.thread_id.clone();
-                self.ui.thread_panel.list.items.push(ThreadEntry {
-                    thread_id: thread_id.clone(),
+                let session_id = snap.session_id.clone();
+                self.ui.session_panel.list.items.push(SessionEntry {
+                    session_id: session_id.clone(),
                     agent,
                     workspace: snap.workspace.clone(),
                     state: snap.state.clone(),
-                    parent_thread_id: snap.parent_thread_id.clone(),
+                    parent_session_id: snap.parent_session_id.clone(),
                 });
-                index.insert(thread_id, self.ui.thread_panel.list.items.len() - 1);
+                index.insert(session_id, self.ui.session_panel.list.items.len() - 1);
                 changed = true;
             }
 
             // Only touch chat_states when missing or agent identity changed.
-            let needs_chat = match self.ui.thread_panel.chat_states.get(&snap.thread_id) {
+            let needs_chat = match self.ui.session_panel.chat_states.get(&snap.session_id) {
                 None => true,
                 Some(chat) => chat.agent != agent,
             };
             if needs_chat {
-                self.ensure_chat_state_agent(&snap.thread_id, agent);
+                self.ensure_chat_state_agent(&snap.session_id, agent);
             }
         }
 
-        if !self.ui.thread_panel.list.items.is_empty()
-            && self.ui.thread_panel.list.selected.is_none()
+        if !self.ui.session_panel.list.items.is_empty()
+            && self.ui.session_panel.list.selected.is_none()
         {
             self.select_thread(0);
             changed = true;
@@ -536,7 +553,7 @@ impl App {
 
     pub(super) async fn replay_thread_history_from(
         &mut self,
-        thread_id: &str,
+        session_id: &str,
         mut from_seq: Option<u64>,
         mark_hydrated: bool,
     ) -> bool {
@@ -544,7 +561,7 @@ impl App {
         loop {
             let response = match self
                 .backend
-                .read_thread_raw_history(thread_id, from_seq, 1000)
+                .read_session_raw_history(session_id, from_seq, 1000)
                 .await
             {
                 Ok(response) => response,
@@ -552,7 +569,7 @@ impl App {
                     tracing::warn!(
                         target: "minos_tui::app",
                         error = %e,
-                        thread_id = %thread_id,
+                        session_id = %session_id,
                         "replay_thread_history failed"
                     );
                     return changed;
@@ -572,7 +589,7 @@ impl App {
                     changed = true;
                 }
                 sync_subagent_info(&mut self.ui, &frame.ui_events);
-                if let Some(chat) = self.ui.thread_panel.chat_states.get_mut(thread_id) {
+                if let Some(chat) = self.ui.session_panel.chat_states.get_mut(session_id) {
                     if !frame.ui_events.is_empty() {
                         changed = true;
                     }
@@ -582,7 +599,7 @@ impl App {
 
             let Some(next_seq) = response.next_seq else {
                 if mark_hydrated {
-                    self.state.hydrated_threads.insert(thread_id.to_owned());
+                    self.state.hydrated_threads.insert(session_id.to_owned());
                 }
                 return changed;
             };
@@ -592,26 +609,27 @@ impl App {
 
     pub(super) fn retry_pending_agent_conversation_results_if_due(&mut self) -> bool {
         // Daemon owns agent-result writeback; TUI path is a permanent no-op.
-        // Do not walk the thread list on every tick.
+        // Do not walk the session list on every tick.
         let _ = self;
         false
     }
 
-    pub(super) async fn hydrate_thread_if_needed(&mut self, thread_id: &str) -> bool {
-        if self.state.hydrated_threads.contains(thread_id) {
+    pub(super) async fn hydrate_thread_if_needed(&mut self, session_id: &str) -> bool {
+        if self.state.hydrated_threads.contains(session_id) {
             return false;
         }
-        self.replay_thread_history_from(thread_id, None, true).await
+        self.replay_thread_history_from(session_id, None, true)
+            .await
     }
 
-    pub(super) async fn ensure_conversation_agent_session_visible(&mut self, thread_id: &str) {
+    pub(super) async fn ensure_conversation_agent_session_visible(&mut self, session_id: &str) {
         let was_visible = self
             .ui
-            .thread_panel
+            .session_panel
             .list
             .items
             .iter()
-            .any(|t| t.thread_id == thread_id);
+            .any(|t| t.session_id == session_id);
         if !was_visible {
             if let Some((agent, state)) = self
                 .ui
@@ -619,7 +637,7 @@ impl App {
                 .agent_sessions
                 .items
                 .iter()
-                .find(|s| s.thread_id == thread_id)
+                .find(|s| s.session_id == session_id)
                 .map(|session| (session.agent, session.state.clone()))
             {
                 let workspace = self
@@ -635,34 +653,39 @@ impl App {
                     })
                     .map(|project| project.workspace_path.clone())
                     .unwrap_or_else(|| self.state.workspace.clone());
-                self.ensure_thread_visible(thread_id.to_owned(), agent, workspace);
+                self.ensure_thread_visible(session_id.to_owned(), agent, workspace);
                 if let Some(entry) = self
                     .ui
-                    .thread_panel
+                    .session_panel
                     .list
                     .items
                     .iter_mut()
-                    .find(|thread| thread.thread_id == thread_id)
+                    .find(|thread| thread.session_id == session_id)
                 {
                     entry.state = state;
                 }
             }
         }
-        if !self.state.hydrated_threads.contains(thread_id) {
-            self.hydrate_thread_if_needed(thread_id).await;
+        if !self.state.hydrated_threads.contains(session_id) {
+            self.hydrate_thread_if_needed(session_id).await;
         }
     }
 
-    pub(super) fn ensure_chat_state_agent(&mut self, thread_id: &str, agent: AgentName) {
-        match self.ui.thread_panel.chat_states.entry(thread_id.to_owned()) {
+    pub(super) fn ensure_chat_state_agent(&mut self, session_id: &str, agent: AgentName) {
+        match self
+            .ui
+            .session_panel
+            .chat_states
+            .entry(session_id.to_owned())
+        {
             std::collections::hash_map::Entry::Occupied(mut entry) => {
                 if entry.get().agent != agent {
-                    entry.insert(ChatState::new(thread_id.to_owned(), agent));
-                    self.state.hydrated_threads.remove(thread_id);
+                    entry.insert(ChatState::new(session_id.to_owned(), agent));
+                    self.state.hydrated_threads.remove(session_id);
                 }
             }
             std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(ChatState::new(thread_id.to_owned(), agent));
+                entry.insert(ChatState::new(session_id.to_owned(), agent));
             }
         }
     }
@@ -679,8 +702,8 @@ impl App {
         true
     }
 
-    pub(super) fn remove_thread_local_state(&mut self, thread_id: &str) -> bool {
-        if !state::remove_thread_local_state(&mut self.state, &mut self.ui, thread_id) {
+    pub(super) fn remove_thread_local_state(&mut self, session_id: &str) -> bool {
+        if !state::remove_thread_local_state(&mut self.state, &mut self.ui, session_id) {
             return false;
         }
         self.sync_input_agent_picker();
@@ -693,44 +716,44 @@ impl App {
 
     pub(super) async fn handle_manager_event(&mut self, event: ManagerEvent) -> bool {
         match event {
-            ManagerEvent::ThreadAdded {
-                thread_id,
+            ManagerEvent::SessionAdded {
+                session_id,
                 workspace,
                 agent,
-                parent_thread_id,
+                parent_session_id,
             } => {
-                let subagent_parent = parent_thread_id.clone();
+                let subagent_parent = parent_session_id.clone();
                 if !self.workspace_path_belongs_to_current_workspace(&workspace) {
-                    return self.remove_thread_local_state(&thread_id);
+                    return self.remove_thread_local_state(&session_id);
                 }
-                if let Some(parent_thread_id) = subagent_parent.as_deref() {
+                if let Some(parent_session_id) = subagent_parent.as_deref() {
                     if let Some(conversation_id) =
-                        conversation_id_for_parent(&self.state, &self.ui, parent_thread_id)
+                        conversation_id_for_parent(&self.state, &self.ui, parent_session_id)
                     {
                         self.state
-                            .thread_conversations
-                            .insert(thread_id.clone(), conversation_id);
+                            .session_conversations
+                            .insert(session_id.clone(), conversation_id);
                     }
                 }
                 if let Some(index) = self
                     .ui
-                    .thread_panel
+                    .session_panel
                     .list
                     .items
                     .iter()
-                    .position(|t| t.thread_id == thread_id)
+                    .position(|t| t.session_id == session_id)
                 {
-                    if let Some(entry) = self.ui.thread_panel.list.items.get_mut(index) {
+                    if let Some(entry) = self.ui.session_panel.list.items.get_mut(index) {
                         entry.agent = agent;
                         entry.workspace = workspace;
-                        entry.parent_thread_id = parent_thread_id;
+                        entry.parent_session_id = parent_session_id;
                     }
-                    self.ensure_chat_state_agent(&thread_id, agent);
-                    if let Some(parent_thread_id) = subagent_parent.as_deref() {
+                    self.ensure_chat_state_agent(&session_id, agent);
+                    if let Some(parent_session_id) = subagent_parent.as_deref() {
                         upsert_subagent_session(
                             &mut self.ui,
-                            parent_thread_id,
-                            &thread_id,
+                            parent_session_id,
+                            &session_id,
                             agent,
                             None,
                             0,
@@ -739,48 +762,50 @@ impl App {
                     return true;
                 }
 
-                let entry = ThreadEntry {
-                    thread_id: thread_id.clone(),
+                let entry = SessionEntry {
+                    session_id: session_id.clone(),
                     agent,
                     workspace,
-                    state: ThreadState::Starting,
-                    parent_thread_id: parent_thread_id.clone(),
+                    state: SessionState::Starting,
+                    parent_session_id: parent_session_id.clone(),
                 };
-                self.ui.thread_panel.list.items.push(entry);
-                self.ui
-                    .thread_panel
-                    .chat_states
-                    .insert(thread_id.clone(), ChatState::new(thread_id.clone(), agent));
-                if let Some(parent_thread_id) = parent_thread_id.as_deref() {
+                self.ui.session_panel.list.items.push(entry);
+                self.ui.session_panel.chat_states.insert(
+                    session_id.clone(),
+                    ChatState::new(session_id.clone(), agent),
+                );
+                if let Some(parent_session_id) = parent_session_id.as_deref() {
                     upsert_subagent_session(
                         &mut self.ui,
-                        parent_thread_id,
-                        &thread_id,
+                        parent_session_id,
+                        &session_id,
                         agent,
                         None,
                         0,
                     );
                 }
-                self.select_thread(self.ui.thread_panel.list.items.len().saturating_sub(1));
+                self.select_thread(self.ui.session_panel.list.items.len().saturating_sub(1));
                 self.ui.focus.focus(PaneId::Input);
                 self.sync_input_agent_picker();
                 true
             }
-            ManagerEvent::ThreadStateChanged { thread_id, new, .. } => {
+            ManagerEvent::SessionStateChanged {
+                session_id, new, ..
+            } => {
                 let known_thread = self
                     .ui
-                    .thread_panel
+                    .session_panel
                     .list
                     .items
                     .iter()
-                    .any(|t| t.thread_id == thread_id);
+                    .any(|t| t.session_id == session_id);
                 let known_session = self
                     .ui
                     .conversation
                     .agent_sessions
                     .items
                     .iter()
-                    .any(|s| s.thread_id == thread_id);
+                    .any(|s| s.session_id == session_id);
                 if !known_thread && !known_session {
                     return false;
                 }
@@ -790,95 +815,95 @@ impl App {
                     .agent_sessions
                     .items
                     .iter_mut()
-                    .find(|s| s.thread_id == thread_id)
+                    .find(|s| s.session_id == session_id)
                 {
                     session.state = new.clone();
                 }
                 let is_terminal_for_stream = !matches!(
                     new,
-                    ThreadState::Starting | ThreadState::Running { .. } | ThreadState::Resuming
+                    SessionState::Starting | SessionState::Running { .. } | SessionState::Resuming
                 );
                 let thread_agent = self
                     .ui
-                    .thread_panel
+                    .session_panel
                     .list
                     .items
                     .iter()
-                    .find(|t| t.thread_id == thread_id)
+                    .find(|t| t.session_id == session_id)
                     .map(|thread| thread.agent);
                 if let Some(entry) = self
                     .ui
-                    .thread_panel
+                    .session_panel
                     .list
                     .items
                     .iter_mut()
-                    .find(|t| t.thread_id == thread_id)
+                    .find(|t| t.session_id == session_id)
                 {
                     entry.state = new;
                 }
                 if is_terminal_for_stream {
-                    if let Some(chat) = self.ui.thread_panel.chat_states.get_mut(&thread_id) {
+                    if let Some(chat) = self.ui.session_panel.chat_states.get_mut(&session_id) {
                         chat.finish_all_streaming();
                     }
                 }
                 if thread_agent != Some(AgentName::Opencode) {
-                    self.record_agent_conversation_result_if_done(&thread_id)
+                    self.record_agent_conversation_result_if_done(&session_id)
                         .await;
                 }
                 true
             }
-            ManagerEvent::ThreadClosed { thread_id, reason } => {
+            ManagerEvent::SessionClosed { session_id, reason } => {
                 let known_thread = self
                     .ui
-                    .thread_panel
+                    .session_panel
                     .list
                     .items
                     .iter()
-                    .any(|t| t.thread_id == thread_id);
+                    .any(|t| t.session_id == session_id);
                 let known_session = self
                     .ui
                     .conversation
                     .agent_sessions
                     .items
                     .iter()
-                    .any(|s| s.thread_id == thread_id);
+                    .any(|s| s.session_id == session_id);
                 if !known_thread && !known_session {
                     return false;
                 }
-                let closed_state = ThreadState::Closed { reason };
+                let closed_state = SessionState::Closed { reason };
                 if let Some(session) = self
                     .ui
                     .conversation
                     .agent_sessions
                     .items
                     .iter_mut()
-                    .find(|s| s.thread_id == thread_id)
+                    .find(|s| s.session_id == session_id)
                 {
                     session.state = closed_state.clone();
                 }
                 let thread_agent = self
                     .ui
-                    .thread_panel
+                    .session_panel
                     .list
                     .items
                     .iter()
-                    .find(|t| t.thread_id == thread_id)
+                    .find(|t| t.session_id == session_id)
                     .map(|thread| thread.agent);
                 if let Some(entry) = self
                     .ui
-                    .thread_panel
+                    .session_panel
                     .list
                     .items
                     .iter_mut()
-                    .find(|t| t.thread_id == thread_id)
+                    .find(|t| t.session_id == session_id)
                 {
                     entry.state = closed_state;
                 }
-                if let Some(chat) = self.ui.thread_panel.chat_states.get_mut(&thread_id) {
+                if let Some(chat) = self.ui.session_panel.chat_states.get_mut(&session_id) {
                     chat.finish_all_streaming();
                 }
                 if thread_agent != Some(AgentName::Opencode) {
-                    self.record_agent_conversation_result_if_done(&thread_id)
+                    self.record_agent_conversation_result_if_done(&session_id)
                         .await;
                 }
                 true
@@ -892,7 +917,7 @@ impl App {
                     return false;
                 }
                 for tid in affected_threads {
-                    let suspended_state = ThreadState::Suspended {
+                    let suspended_state = SessionState::Suspended {
                         reason: reason.clone(),
                     };
                     if let Some(session) = self
@@ -901,21 +926,21 @@ impl App {
                         .agent_sessions
                         .items
                         .iter_mut()
-                        .find(|s| s.thread_id == tid)
+                        .find(|s| s.session_id == tid)
                     {
                         session.state = suspended_state.clone();
                     }
                     if let Some(entry) = self
                         .ui
-                        .thread_panel
+                        .session_panel
                         .list
                         .items
                         .iter_mut()
-                        .find(|t| t.thread_id == tid)
+                        .find(|t| t.session_id == tid)
                     {
                         entry.state = suspended_state;
                     }
-                    if let Some(chat) = self.ui.thread_panel.chat_states.get_mut(&tid) {
+                    if let Some(chat) = self.ui.session_panel.chat_states.get_mut(&tid) {
                         chat.finish_all_streaming();
                     }
                 }
@@ -934,22 +959,23 @@ fn sync_subagent_sessions(
     let mut changed = false;
     for event in events {
         if let minos_ui_protocol::UiEventMessage::SubagentSpawned {
-            parent_thread_id,
-            sub_thread_id,
+            parent_session_id,
+            sub_session_id,
             agent,
             title,
             ..
         } = event
         {
-            if let Some(conversation_id) = conversation_id_for_parent(state, ui, parent_thread_id) {
+            if let Some(conversation_id) = conversation_id_for_parent(state, ui, parent_session_id)
+            {
                 state
-                    .thread_conversations
-                    .insert(sub_thread_id.clone(), conversation_id);
+                    .session_conversations
+                    .insert(sub_session_id.clone(), conversation_id);
             }
             changed |= upsert_subagent_session(
                 ui,
-                parent_thread_id,
-                sub_thread_id,
+                parent_session_id,
+                sub_session_id,
                 *agent,
                 title.clone(),
                 ts_ms,
@@ -962,11 +988,11 @@ fn sync_subagent_sessions(
 fn conversation_id_for_parent(
     state: &AppState,
     ui: &UiState,
-    parent_thread_id: &str,
+    parent_session_id: &str,
 ) -> Option<String> {
     state
-        .thread_conversations
-        .get(parent_thread_id)
+        .session_conversations
+        .get(parent_session_id)
         .cloned()
         .or_else(|| {
             ui.nav_level()
@@ -976,7 +1002,7 @@ fn conversation_id_for_parent(
                         .agent_sessions
                         .items
                         .iter()
-                        .any(|session| session.thread_id == parent_thread_id)
+                        .any(|session| session.session_id == parent_session_id)
                 })
                 .map(str::to_owned)
         })
@@ -984,19 +1010,19 @@ fn conversation_id_for_parent(
 
 fn upsert_subagent_session(
     ui: &mut UiState,
-    parent_thread_id: &str,
-    sub_thread_id: &str,
+    parent_session_id: &str,
+    sub_session_id: &str,
     agent: AgentName,
     title: Option<String>,
     ts_ms: i64,
 ) -> bool {
-    if sub_thread_id.is_empty()
+    if sub_session_id.is_empty()
         || !ui
             .conversation
             .agent_sessions
             .items
             .iter()
-            .any(|session| session.thread_id == parent_thread_id)
+            .any(|session| session.session_id == parent_session_id)
     {
         return false;
     }
@@ -1006,11 +1032,11 @@ fn upsert_subagent_session(
         .agent_sessions
         .items
         .iter_mut()
-        .find(|session| session.thread_id == sub_thread_id)
+        .find(|session| session.session_id == sub_session_id)
     {
         let mut changed = false;
-        if session.parent_thread_id.as_deref() != Some(parent_thread_id) {
-            session.parent_thread_id = Some(parent_thread_id.to_owned());
+        if session.parent_session_id.as_deref() != Some(parent_session_id) {
+            session.parent_session_id = Some(parent_session_id.to_owned());
             changed = true;
         }
         if session.agent != agent {
@@ -1027,16 +1053,16 @@ fn upsert_subagent_session(
     ui.conversation
         .agent_sessions
         .items
-        .push(crate::backend::ThreadSummaryEntry {
-            thread_id: sub_thread_id.to_owned(),
+        .push(crate::backend::SessionSummaryEntry {
+            session_id: sub_session_id.to_owned(),
             agent,
             title,
             first_ts_ms: ts_ms,
             last_ts_ms: ts_ms,
             message_count: 0,
             ended_at_ms: None,
-            parent_thread_id: Some(parent_thread_id.to_owned()),
-            state: ThreadState::Idle,
+            parent_session_id: Some(parent_session_id.to_owned()),
+            state: SessionState::Idle,
             needs_continue: false,
         });
     if ui.conversation.agent_sessions.selected.is_none() {
@@ -1049,8 +1075,8 @@ fn sync_subagent_info(ui: &mut UiState, events: &[minos_ui_protocol::UiEventMess
     for event in events {
         match event {
             minos_ui_protocol::UiEventMessage::SubagentSpawned {
-                parent_thread_id,
-                sub_thread_id,
+                parent_session_id,
+                sub_session_id,
                 tool_call_id,
                 agent,
                 model,
@@ -1058,9 +1084,9 @@ fn sync_subagent_info(ui: &mut UiState, events: &[minos_ui_protocol::UiEventMess
                 title,
             } => {
                 ui.conversation.subagent_info.insert(
-                    sub_thread_id.clone(),
+                    sub_session_id.clone(),
                     crate::ui::SubagentInfo {
-                        parent_thread_id: parent_thread_id.clone(),
+                        parent_session_id: parent_session_id.clone(),
                         tool_call_id: tool_call_id.clone(),
                         agent: *agent,
                         model: model.clone(),
@@ -1071,10 +1097,10 @@ fn sync_subagent_info(ui: &mut UiState, events: &[minos_ui_protocol::UiEventMess
                 );
             }
             minos_ui_protocol::UiEventMessage::SubagentStatusUpdated {
-                sub_thread_id,
+                sub_session_id,
                 status,
             } => {
-                if let Some(info) = ui.conversation.subagent_info.get_mut(sub_thread_id) {
+                if let Some(info) = ui.conversation.subagent_info.get_mut(sub_session_id) {
                     info.status = *status;
                 }
             }

@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SessionClosedNotification",
+  "type": "object",
+  "required": [
+    "sessionId"
+  ],
+  "properties": {
+    "sessionId": {
+      "type": "string"
+    }
+  }
+}

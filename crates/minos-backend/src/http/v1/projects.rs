@@ -9,7 +9,7 @@ use minos_protocol::{
     CreateProjectRequest, CreateProjectResponse, DeleteProjectRequest, ListProjectsResponse,
     UpdateProjectRequest,
 };
-use minos_ui_protocol::ThreadEndReason;
+use minos_ui_protocol::SessionEndReason;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::bearer;
@@ -55,7 +55,7 @@ struct ProjectAgentSessionSummary {
     title: Option<String>,
     last_activity_at_ms: i64,
     message_count: u32,
-    end_reason: Option<ThreadEndReason>,
+    end_reason: Option<SessionEndReason>,
 }
 
 pub fn router() -> Router<BackendState> {
@@ -256,7 +256,7 @@ async fn list_project_agent_sessions(
         .map(|row| row.session_id.clone())
         .collect::<Vec<_>>();
     let thread_summaries =
-        crate::store::threads::summaries_for_ids(&state.store, &account_id, &session_ids)
+        crate::store::sessions::summaries_for_ids(&state.store, &account_id, &session_ids)
             .await
             .map_err(internal_error)?;
     let next_before_started_at_ms = if rows.len() == usize::try_from(limit).unwrap_or(usize::MAX) {
@@ -321,7 +321,7 @@ fn project_error(error: crate::project::ProjectError) -> (StatusCode, Json<Error
 
 fn project_agent_session_summary(
     row: crate::store::agent_sessions::AgentSessionRow,
-    thread: Option<&minos_protocol::ThreadSummary>,
+    thread: Option<&minos_protocol::SessionSummary>,
 ) -> ProjectAgentSessionSummary {
     let agent = thread
         .map(|summary| summary.agent)

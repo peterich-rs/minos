@@ -36,7 +36,7 @@ function formatThreadTimestamp(ms: number): string {
 
 export function ChatWorkspace() {
   const {
-    threads,
+    sessions,
     selectedThreadId,
     setSelectedThreadId,
     threadRecords,
@@ -51,7 +51,7 @@ export function ChatWorkspace() {
   const [filter, setFilter] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  const selectedThread = threads.find((t) => t.thread_id === selectedThreadId) ?? null
+  const selectedThread = sessions.find((t) => t.session_id === selectedThreadId) ?? null
   const currentRecord = selectedThreadId ? threadRecords[selectedThreadId] : null
   const transcript = transcriptFromEvents(currentRecord?.ui_events ?? [])
 
@@ -62,10 +62,10 @@ export function ChatWorkspace() {
   }, [transcript.items.length, currentRecord?.ui_events.length])
 
   const filteredThreads = filter.trim()
-    ? threads.filter((t) =>
+    ? sessions.filter((t) =>
         (t.title ?? 'Untitled').toLowerCase().includes(filter.trim().toLowerCase()),
       )
-    : threads
+    : sessions
 
   async function handleSend() {
     if (!composerText.trim() || !activeHost || !relaySocket || isSubmitting) return
@@ -79,7 +79,7 @@ export function ChatWorkspace() {
         })
       } else {
         await relaySocket.sendRpc(activeHost, 'minos_send_user_message', {
-          session_id: selectedThread.thread_id,
+          session_id: selectedThread.session_id,
           text: composerText.trim(),
         })
       }
@@ -94,8 +94,8 @@ export function ChatWorkspace() {
   async function handleInterrupt() {
     if (!selectedThread || !activeHost || !relaySocket) return
     try {
-      await relaySocket.sendRpc(activeHost, 'minos_interrupt_thread', {
-        thread_id: selectedThread.thread_id,
+      await relaySocket.sendRpc(activeHost, 'minos_interrupt_session', {
+        session_id: selectedThread.session_id,
       })
     } catch (error) {
       console.error('中断失败', error)
@@ -106,7 +106,7 @@ export function ChatWorkspace() {
 
   return (
     <div className="flex h-full gap-4 p-4">
-      {/* Left — thread list */}
+      {/* Left — session list */}
       <aside className="flex w-72 shrink-0 flex-col overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm">
         <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
           <div>
@@ -169,13 +169,13 @@ export function ChatWorkspace() {
             </div>
           ) : (
             filteredThreads.map((thread) => {
-              const active = selectedThreadId === thread.thread_id
+              const active = selectedThreadId === thread.session_id
               const ended = thread.ended_at_ms != null
               return (
                 <button
-                  key={thread.thread_id}
+                  key={thread.session_id}
                   type="button"
-                  onClick={() => setSelectedThreadId(thread.thread_id)}
+                  onClick={() => setSelectedThreadId(thread.session_id)}
                   className={cn(
                     'mb-1 flex w-full flex-col gap-1 rounded-xl px-3 py-2.5 text-left transition-colors',
                     active
@@ -217,7 +217,7 @@ export function ChatWorkspace() {
         <div className="flex items-center justify-between border-b border-border/60 px-6 py-4">
           <div className="min-w-0">
             <p className="mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-              {selectedThread ? 'active thread' : 'new conversation'}
+              {selectedThread ? 'active session' : 'new conversation'}
             </p>
             <h2 className="truncate text-base font-semibold">
               {selectedThread?.title?.trim() || '你想做点什么?'}
@@ -333,7 +333,7 @@ export function ChatWorkspace() {
             {!canInteract ? (
               <span className="text-destructive">连接未就绪,请前往设备页检查</span>
             ) : selectedThread ? (
-              <span className="mono">thread {selectedThread.thread_id.slice(0, 8)}</span>
+              <span className="mono">thread {selectedThread.session_id.slice(0, 8)}</span>
             ) : null}
           </div>
         </div>

@@ -153,7 +153,7 @@ impl DefaultApprovalService {
         if let Some(decision) = auto_decision {
             let request = ApprovalDecisionRequest {
                 request_id: row.request_id.clone(),
-                thread_id: row.agent_session_id.clone(),
+                session_id: row.agent_session_id.clone(),
                 decision,
             };
             if let Err(error) = self
@@ -187,14 +187,14 @@ impl DefaultApprovalService {
     async fn broadcast_timeout(
         &self,
         host_device_id: DeviceId,
-        thread_id: &str,
+        session_id: &str,
         request_id: &str,
         reason: &str,
     ) {
         let frame = Envelope::Event {
             version: 1,
             event: EventKind::ApprovalTimeout {
-                thread_id: thread_id.to_string(),
+                session_id: session_id.to_string(),
                 request_id: request_id.to_string(),
                 reason: reason.to_string(),
             },
@@ -362,7 +362,7 @@ impl ApprovalService for DefaultApprovalService {
 
         let request = ApprovalDecisionRequest {
             request_id: row.request_id.clone(),
-            thread_id: row.agent_session_id.clone(),
+            session_id: row.agent_session_id.clone(),
             decision: input.decision,
         };
 

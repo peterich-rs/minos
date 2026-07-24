@@ -3,12 +3,33 @@
 //! When a top-level conversation agent finishes a **turn** (not each intermediate
 //! assistant message), this module:
 //! 1. Upserts a durable conversation message (`agent-result:…`)
-//! 2. Completes any running teamwork delegation for that thread
+//! 2. Completes any running teamwork delegation for that session
 //! 3. Delivers the result to the source thread (or queues if busy)
+//!
+//! Timeline order is the durable insert order of `chat_messages.message_seq`
+//! (finish/write order). Delegation results set `reply_to_message_id` to the
+//! request message so UIs can show causality without reordering history.
+//!
+//! ## Final text = last assistant segment
+//!
+//! Grok/Gemini ACP emit intermediate `agent_message_chunk` progress between
+//! tools (e.g. "正在定位…"). The Grok translator completes the open assistant
+//! message at each tool boundary and opens a fresh `message_id` for post-tool
+//! text (see `agent_msg_resets_after_tool` in grok.rs). Session `ChatState`
+//! splits these into separate bubbles and only treats the **last** assistant
+//! text block as the completed answer. Conversation writeback must match that:
+//!
+//! - `MessageCompleted` records any open, non-empty text segment under its own
+//!   `message_id`.
+//! - A subsequent tool / subagent interrupt marks all prior completed segments
+//!   as **interrupted** — they were progress narration, not the final answer.
+//! - `last_completed()` skips interrupted segments; if no clean (non-interrupted)
+//!   segment remains, the turn is treated as progress-only and nothing is
+//!   written back (no progress dump, no delegation completion).
 //!
 //! ## Turn-boundary latch
 //!
-//! Runtime `ThreadState::Idle`/`Closed` and ingest `MessageCompleted` race across
+//! Runtime `SessionState::Idle`/`Closed` and ingest `MessageCompleted` race across
 //! independent tasks. Neither alone is a safe write trigger for every agent:
 //!
 //! - Idle may arrive **before** the final `MessageCompleted` has been projected.
@@ -18,13 +39,13 @@
 //! Unified model:
 //! - `Idle`/`Closed` → set `pending_boundary` and `try_record` if text is ready.
 //! - Ingest terminal events → accumulate; `try_record` only when
-//!   `pending_boundary`, `ThreadClosed`, or Opencode terminal complete.
+//!   `pending_boundary`, `SessionClosed`, or Opencode terminal complete.
 //! - `Running` / user `MessageStarted` → reset turn-scoped projection fields.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use minos_agent_runtime::{AgentManager, ThreadState};
+use minos_agent_runtime::{AgentManager, SessionState};
 use minos_chat_store::{TeamworkSourceDeliveryStatus, TeamworkStore};
 use minos_domain::AgentName;
 use minos_protocol::{ConversationMention, LocalConversationEvent};
@@ -35,13 +56,24 @@ use tracing::{debug, info, warn};
 use crate::store::LocalStore;
 
 #[derive(Default)]
-struct ThreadProjection {
+struct SessionProjection {
     agent: Option<AgentName>,
-    /// Accumulated assistant text by message_id (within the current turn).
+    /// Current open assistant text segment by message_id (within the turn).
+    /// After a tool/reasoning interrupt, the next TextDelta starts a fresh
+    /// segment so intermediate progress is not concatenated into the final body.
     assistant_text: HashMap<String, String>,
     assistant_roles: HashMap<String, MessageRole>,
+    /// message_ids whose current text segment is closed (next text starts new).
+    segment_closed: HashMap<String, bool>,
+    /// tool_call_id → assistant message_id (so ToolCallCompleted can close segment).
+    tool_message_ids: HashMap<String, String>,
     /// Ordered completed assistant results (message_key, text) for this turn.
     completed: Vec<(String, String)>,
+    /// message_keys whose segment was followed by a non-text interrupt (tool /
+    /// subagent). These represent intermediate progress narration, not the
+    /// final answer — excluded from `last_completed()` unless a later, clean
+    /// text segment re-recorded under a fresh key.
+    interrupted_keys: HashSet<String>,
     last_error: Option<(String, String)>,
     /// message_key already written for this turn (within-turn dedupe).
     recorded_key: Option<String>,
@@ -55,19 +87,61 @@ struct ThreadProjection {
     turn_write_id: Option<String>,
 }
 
-impl ThreadProjection {
+impl SessionProjection {
     /// Clear turn-scoped fields so a new Running/user turn cannot resurrect
     /// the previous turn's `last_completed` after reset of write flags.
     fn begin_turn(&mut self) {
         self.assistant_text.clear();
         self.assistant_roles.clear();
+        self.segment_closed.clear();
+        self.tool_message_ids.clear();
         self.completed.clear();
+        self.interrupted_keys.clear();
         self.last_error = None;
         self.recorded_key = None;
         self.turn_recorded = false;
         self.write_in_flight = false;
         self.pending_boundary = false;
         self.turn_write_id = None;
+    }
+
+    fn close_text_segment(&mut self, message_id: &str) {
+        if message_id.is_empty() {
+            return;
+        }
+        self.segment_closed.insert(message_id.to_owned(), true);
+    }
+
+    /// A non-text timeline item (tool / subagent) arrived after some assistant
+    /// text segments were already completed. Those completed segments represent
+    /// intermediate progress narration, not the final turn answer — mark them
+    /// interrupted so `last_completed()` skips them. If a later clean text
+    /// segment completes under a fresh key, it becomes the new answer.
+    fn interrupt_prior_completed(&mut self) {
+        for (key, _) in &self.completed {
+            self.interrupted_keys.insert(key.clone());
+        }
+    }
+
+    fn append_assistant_text(&mut self, message_id: &str, text: String, replace: bool) {
+        if message_id.is_empty() {
+            return;
+        }
+        let start_new = self
+            .segment_closed
+            .get(message_id)
+            .copied()
+            .unwrap_or(false)
+            || !self.assistant_text.contains_key(message_id);
+        if replace || start_new {
+            self.assistant_text.insert(message_id.to_owned(), text);
+            self.segment_closed.insert(message_id.to_owned(), false);
+        } else {
+            self.assistant_text
+                .entry(message_id.to_owned())
+                .or_default()
+                .push_str(&text);
+        }
     }
 
     /// Allocate a turn write id lazily on first successful claim.
@@ -117,7 +191,7 @@ impl ThreadProjection {
                 UiEventMessage::MessageStarted {
                     message_id, role, ..
                 } => {
-                    // A new user message starts a turn even if ThreadState::Running
+                    // A new user message starts a turn even if SessionState::Running
                     // was missed or reordered relative to ingest.
                     if matches!(role, MessageRole::User) {
                         self.begin_turn();
@@ -125,7 +199,10 @@ impl ThreadProjection {
                     }
                     self.assistant_roles.insert(message_id.clone(), *role);
                     if matches!(role, MessageRole::Assistant) {
-                        self.assistant_text.entry(message_id.clone()).or_default();
+                        // Do not seed an empty segment — first TextDelta opens it.
+                        self.segment_closed
+                            .entry(message_id.clone())
+                            .or_insert(true);
                     }
                 }
                 UiEventMessage::TextDelta { message_id, text }
@@ -137,34 +214,88 @@ impl ThreadProjection {
                         || !self.assistant_roles.contains_key(message_id)
                     {
                         let rendered = text.render_preview();
-                        match event {
-                            UiEventMessage::TextReplace { .. } => {
-                                self.assistant_text.insert(message_id.clone(), rendered);
-                            }
-                            _ => {
-                                self.assistant_text
-                                    .entry(message_id.clone())
-                                    .or_default()
-                                    .push_str(&rendered);
-                            }
+                        if rendered.is_empty() {
+                            continue;
                         }
+                        let replace = matches!(event, UiEventMessage::TextReplace { .. });
+                        self.append_assistant_text(message_id, rendered, replace);
+                    }
+                }
+                // Tool/subagent events break the open assistant text bubble
+                // (same as ChatState). Next TextDelta is a new final-answer segment.
+                // Pure reasoning (`ReasoningDelta`/`ReasoningReplace`) does NOT
+                // close the segment — Grok intentionally reuses the same
+                // message_id for thought interleaved with text, and Codex/Claude
+                // emit reasoning under a different id that doesn't affect the
+                // open text segment's lifecycle either way.
+                UiEventMessage::ToolCallPlaced { message_id, .. } => {
+                    if let UiEventMessage::ToolCallPlaced {
+                        message_id,
+                        tool_call_id,
+                        ..
+                    } = event
+                    {
+                        self.tool_message_ids
+                            .insert(tool_call_id.clone(), message_id.clone());
+                        // A tool interrupt invalidates any progress completed
+                        // earlier in this turn (Grok emits MessageCompleted on
+                        // the prior assistant message right before ToolCallPlaced).
+                        self.interrupt_prior_completed();
+                    }
+                    self.close_text_segment(message_id);
+                }
+                UiEventMessage::ToolCallCompleted { tool_call_id, .. } => {
+                    if let Some(message_id) = self.tool_message_ids.remove(tool_call_id) {
+                        self.close_text_segment(&message_id);
+                    } else {
+                        // Unknown tool — close every open assistant segment so a
+                        // post-tool final answer is not glued to progress text.
+                        let ids: Vec<String> = self
+                            .assistant_roles
+                            .iter()
+                            .filter(|(_, role)| matches!(role, MessageRole::Assistant))
+                            .map(|(id, _)| id.clone())
+                            .collect();
+                        for id in ids {
+                            self.close_text_segment(&id);
+                        }
+                    }
+                }
+                UiEventMessage::SubagentSpawned {
+                    parent_session_id: _,
+                    tool_call_id,
+                    ..
+                } => {
+                    if let Some(message_id) = self.tool_message_ids.get(tool_call_id).cloned() {
+                        self.close_text_segment(&message_id);
+                        self.interrupt_prior_completed();
                     }
                 }
                 UiEventMessage::MessageCompleted { message_id, .. } => {
-                    if let Some(text) = self.assistant_text.get(message_id) {
-                        let trimmed = text.trim();
-                        if !trimmed.is_empty() {
-                            let key = if message_id.is_empty() {
-                                format!("text:{trimmed}")
-                            } else {
-                                message_id.clone()
-                            };
-                            self.completed.retain(|(existing, _)| existing != &key);
-                            self.completed.push((key, trimmed.to_owned()));
+                    // Only the last **open** segment. If tools/reasoning closed
+                    // the segment and no further TextDelta arrived, do not fall
+                    // back to pre-interrupt progress narration.
+                    let segment_open = !self
+                        .segment_closed
+                        .get(message_id)
+                        .copied()
+                        .unwrap_or(false);
+                    if segment_open {
+                        if let Some(text) = self.assistant_text.get(message_id) {
+                            let trimmed = text.trim();
+                            if !trimmed.is_empty() {
+                                let key = if message_id.is_empty() {
+                                    format!("text:{trimmed}")
+                                } else {
+                                    message_id.clone()
+                                };
+                                self.completed.retain(|(existing, _)| existing != &key);
+                                self.completed.push((key, trimmed.to_owned()));
+                            }
                         }
                     }
                 }
-                UiEventMessage::ThreadClosed { .. } => {}
+                UiEventMessage::SessionClosed { .. } => {}
                 UiEventMessage::Error {
                     message,
                     message_id,
@@ -187,7 +318,9 @@ impl ThreadProjection {
 
     fn last_completed(&self) -> Option<(String, String)> {
         self.completed
-            .last()
+            .iter()
+            .rev()
+            .find(|(key, _)| !self.interrupted_keys.contains(key))
             .cloned()
             .or_else(|| self.last_error.clone())
     }
@@ -201,7 +334,7 @@ impl ThreadProjection {
         if !(has_message_completed || has_thread_closed) {
             return false;
         }
-        // ThreadClosed is always a boundary (thread gone).
+        // SessionClosed is always a boundary (thread gone).
         if has_thread_closed {
             return true;
         }
@@ -221,7 +354,7 @@ pub(crate) struct ConversationCompletion {
     manager: Arc<AgentManager>,
     default_workspace: std::path::PathBuf,
     local_conversation_event_tx: broadcast::Sender<LocalConversationEvent>,
-    projections: Arc<Mutex<HashMap<String, ThreadProjection>>>,
+    projections: Arc<Mutex<HashMap<String, SessionProjection>>>,
 }
 
 impl ConversationCompletion {
@@ -242,7 +375,7 @@ impl ConversationCompletion {
 
     pub(crate) async fn on_ingest_frame(
         &self,
-        thread_id: &str,
+        session_id: &str,
         agent: AgentName,
         ui_events: &[UiEventMessage],
     ) {
@@ -251,59 +384,59 @@ impl ConversationCompletion {
             .any(|event| matches!(event, UiEventMessage::MessageCompleted { .. }));
         let has_thread_closed = ui_events
             .iter()
-            .any(|event| matches!(event, UiEventMessage::ThreadClosed { .. }));
+            .any(|event| matches!(event, UiEventMessage::SessionClosed { .. }));
 
         let should_try = {
             let mut projections = self.projections.lock().await;
-            let projection = projections.entry(thread_id.to_owned()).or_default();
+            let projection = projections.entry(session_id.to_owned()).or_default();
             projection.apply_events(agent, ui_events);
             projection.should_try_record_on_ingest(has_message_completed, has_thread_closed)
         };
         if should_try {
-            self.try_record_result(thread_id).await;
+            self.try_record_result(session_id).await;
         }
     }
 
-    pub(crate) async fn on_thread_state(&self, thread_id: &str, state: &ThreadState) {
+    pub(crate) async fn on_session_state(&self, session_id: &str, state: &SessionState) {
         match state {
-            ThreadState::Starting | ThreadState::Resuming | ThreadState::Running { .. } => {
+            SessionState::Starting | SessionState::Resuming | SessionState::Running { .. } => {
                 let mut projections = self.projections.lock().await;
                 projections
-                    .entry(thread_id.to_owned())
+                    .entry(session_id.to_owned())
                     .or_default()
                     .begin_turn();
             }
-            ThreadState::Idle | ThreadState::Closed { .. } => {
+            SessionState::Idle | SessionState::Closed { .. } => {
                 {
                     let mut projections = self.projections.lock().await;
-                    let projection = projections.entry(thread_id.to_owned()).or_default();
+                    let projection = projections.entry(session_id.to_owned()).or_default();
                     projection.pending_boundary = true;
                 }
-                self.try_record_result(thread_id).await;
-                self.flush_pending_source_deliveries(thread_id).await;
+                self.try_record_result(session_id).await;
+                self.flush_pending_source_deliveries(session_id).await;
             }
-            ThreadState::Suspended { .. } => {
+            SessionState::Suspended { .. } => {
                 // Crash/suspend does not complete a turn into the conversation
                 // timeline (product: no partial write on instance death).
             }
         }
     }
 
-    async fn try_record_result(&self, thread_id: &str) {
-        let thread_row = match self.store.get_thread(thread_id).await {
+    async fn try_record_result(&self, session_id: &str) {
+        let thread_row = match self.store.get_session(session_id).await {
             Ok(Some(row)) => row,
             Ok(None) => return,
             Err(error) => {
                 warn!(
                     target: "minos_daemon::conversation_completion",
                     error = %error,
-                    thread_id,
+                    session_id,
                     "failed to load thread for completion"
                 );
                 return;
             }
         };
-        if thread_row.parent_thread_id.is_some() {
+        if thread_row.parent_session_id.is_some() {
             return;
         }
         if thread_row.conversation_id.trim().is_empty() {
@@ -313,7 +446,7 @@ impl ConversationCompletion {
 
         let (message_key, text, durable_id, agent) = {
             let mut projections = self.projections.lock().await;
-            let Some(projection) = projections.get_mut(thread_id) else {
+            let Some(projection) = projections.get_mut(session_id) else {
                 return;
             };
             let Some((key, text, durable)) = projection.claim_write() else {
@@ -328,33 +461,33 @@ impl ConversationCompletion {
 
         if text.trim().is_empty() {
             let mut projections = self.projections.lock().await;
-            if let Some(projection) = projections.get_mut(thread_id) {
+            if let Some(projection) = projections.get_mut(session_id) {
                 projection.finish_write_err();
             }
             return;
         }
 
         if let Err(error) = self
-            .write_result(&conversation_id, thread_id, &durable_id, &text, agent)
+            .write_result(&conversation_id, session_id, &durable_id, &text, agent)
             .await
         {
             warn!(
                 target: "minos_daemon::conversation_completion",
                 error = %error,
                 conversation_id = %conversation_id,
-                thread_id,
+                session_id,
                 message_key = %message_key,
                 "failed to write agent conversation result"
             );
             let mut projections = self.projections.lock().await;
-            if let Some(projection) = projections.get_mut(thread_id) {
+            if let Some(projection) = projections.get_mut(session_id) {
                 projection.finish_write_err();
             }
             return;
         }
 
         let mut projections = self.projections.lock().await;
-        if let Some(projection) = projections.get_mut(thread_id) {
+        if let Some(projection) = projections.get_mut(session_id) {
             projection.finish_write_ok();
         }
     }
@@ -362,7 +495,7 @@ impl ConversationCompletion {
     async fn write_result(
         &self,
         conversation_id: &str,
-        thread_id: &str,
+        session_id: &str,
         durable_id: &str,
         text: &str,
         agent: Option<AgentName>,
@@ -370,19 +503,19 @@ impl ConversationCompletion {
         let teamwork =
             open_teamwork_store(&self.store, conversation_id, &self.default_workspace).await?;
         let delegation = teamwork
-            .running_delegation_for_thread(conversation_id, thread_id)
+            .running_delegation_for_thread(conversation_id, session_id)
             .await?;
 
         // durable_id is turn-scoped (claimed once) so concurrent try_record paths
         // upsert the same chat_messages row instead of inserting siblings.
-        let message_id = format!("agent-result:{conversation_id}:{thread_id}:{durable_id}");
+        let message_id = format!("agent-result:{conversation_id}:{session_id}:{durable_id}");
         let (body, reply_to, mentions, delegation_id) =
             if let Some(delegation) = delegation.as_ref() {
                 let source_agent = delegation.source_agent;
-                let source_thread = delegation.source_thread_id.clone();
-                let short = source_thread
+                let source_session = delegation.source_session_id.clone();
+                let short = source_session
                     .as_deref()
-                    .map(short_thread_id)
+                    .map(short_session_id)
                     .unwrap_or_else(|| "unknown".into());
                 let body = match source_agent {
                     Some(source) => format!("@{}#{} {}", source.bin_name(), short, text.trim()),
@@ -392,8 +525,8 @@ impl ConversationCompletion {
                     .map(|source| {
                         vec![ConversationMention {
                             agent: source,
-                            thread_id: source_thread.clone(),
-                            thread_short_id: Some(short),
+                            session_id: source_session.clone(),
+                            session_short_id: Some(short),
                         }]
                     })
                     .unwrap_or_default();
@@ -415,7 +548,7 @@ impl ConversationCompletion {
             .upsert_conversation_message(
                 conversation_id,
                 &message_id,
-                Some(thread_id),
+                Some(session_id),
                 "agent",
                 agent_label.as_deref(),
                 &body,
@@ -434,11 +567,16 @@ impl ConversationCompletion {
 
         if delegation.is_some() {
             match teamwork
-                .complete_delegation_for_thread(conversation_id, thread_id, Some(&message_id), text)
+                .complete_delegation_for_thread(
+                    conversation_id,
+                    session_id,
+                    Some(&message_id),
+                    text,
+                )
                 .await
             {
                 Ok(Some(completed)) => {
-                    self.deliver_to_source(&teamwork, &completed, thread_id, &body)
+                    self.deliver_to_source(&teamwork, &completed, session_id, &body)
                         .await;
                 }
                 Ok(None) => {}
@@ -455,7 +593,7 @@ impl ConversationCompletion {
         info!(
             target: "minos_daemon::conversation_completion",
             conversation_id,
-            thread_id,
+            session_id,
             message_id = %message_id,
             "recorded agent conversation result"
         );
@@ -466,24 +604,24 @@ impl ConversationCompletion {
         &self,
         teamwork: &TeamworkStore,
         delegation: &minos_chat_store::TeamworkDelegation,
-        target_thread_id: &str,
+        target_session_id: &str,
         visible_body: &str,
     ) {
-        let Some(source_thread_id) = delegation.source_thread_id.as_deref() else {
+        let Some(source_session_id) = delegation.source_session_id.as_deref() else {
             return;
         };
-        if source_thread_id == target_thread_id {
+        if source_session_id == target_session_id {
             return;
         }
         let source_body = format!(
             "[{}#{}] {}",
             delegation.target_agent.bin_name(),
-            short_thread_id(target_thread_id),
+            short_session_id(target_session_id),
             visible_body
         );
 
         match self
-            .try_send_to_source(source_thread_id, &source_body)
+            .try_send_to_source(source_session_id, &source_body)
             .await
         {
             Ok(()) => {
@@ -491,7 +629,7 @@ impl ConversationCompletion {
                     .enqueue_source_delivery(
                         &delegation.conversation_id,
                         &delegation.delegation_id,
-                        source_thread_id,
+                        source_session_id,
                         &source_body,
                     )
                     .await
@@ -509,14 +647,14 @@ impl ConversationCompletion {
                 warn!(
                     target: "minos_daemon::conversation_completion",
                     error = %error,
-                    source_thread_id,
+                    source_session_id,
                     "source busy; queueing delegation result delivery"
                 );
                 let _ = teamwork
                     .enqueue_source_delivery(
                         &delegation.conversation_id,
                         &delegation.delegation_id,
-                        source_thread_id,
+                        source_session_id,
                         &source_body,
                     )
                     .await;
@@ -525,14 +663,14 @@ impl ConversationCompletion {
                 warn!(
                     target: "minos_daemon::conversation_completion",
                     error = %error,
-                    source_thread_id,
+                    source_session_id,
                     "failed to deliver delegation result to source"
                 );
                 if let Ok(delivery) = teamwork
                     .enqueue_source_delivery(
                         &delegation.conversation_id,
                         &delegation.delegation_id,
-                        source_thread_id,
+                        source_session_id,
                         &source_body,
                     )
                     .await
@@ -549,27 +687,27 @@ impl ConversationCompletion {
         }
     }
 
-    async fn try_send_to_source(&self, source_thread_id: &str, body: &str) -> anyhow::Result<()> {
+    async fn try_send_to_source(&self, source_session_id: &str, body: &str) -> anyhow::Result<()> {
         self.manager
-            .send_user_message(source_thread_id, body.to_owned())
+            .send_user_message(source_session_id, body.to_owned())
             .await
     }
 
-    async fn flush_pending_source_deliveries(&self, source_thread_id: &str) {
+    async fn flush_pending_source_deliveries(&self, source_session_id: &str) {
         let Ok(teamwork) =
             open_teamwork_store(&self.store, "unused", &self.default_workspace).await
         else {
             return;
         };
         let Ok(pending) = teamwork
-            .list_pending_source_deliveries_for_thread(source_thread_id)
+            .list_pending_source_deliveries_for_thread(source_session_id)
             .await
         else {
             return;
         };
         for delivery in pending {
             match self
-                .try_send_to_source(source_thread_id, &delivery.body)
+                .try_send_to_source(source_session_id, &delivery.body)
                 .await
             {
                 Ok(()) => {
@@ -619,8 +757,8 @@ async fn open_teamwork_store(
     Ok(teamwork)
 }
 
-fn short_thread_id(thread_id: &str) -> String {
-    thread_id[..8.min(thread_id.len())].to_owned()
+fn short_session_id(session_id: &str) -> String {
+    session_id[..8.min(session_id.len())].to_owned()
 }
 
 fn parse_agent_label(value: &str) -> Option<AgentName> {
@@ -676,9 +814,33 @@ mod tests {
         }
     }
 
+    fn tool_placed(message_id: &str, tool_call_id: &str) -> UiEventMessage {
+        UiEventMessage::ToolCallPlaced {
+            message_id: message_id.into(),
+            tool_call_id: tool_call_id.into(),
+            name: "read_file".into(),
+            args_json: DisplayPayload::inline("{}"),
+        }
+    }
+
+    fn tool_completed(tool_call_id: &str) -> UiEventMessage {
+        UiEventMessage::ToolCallCompleted {
+            tool_call_id: tool_call_id.into(),
+            output: DisplayPayload::inline("ok"),
+            is_error: false,
+        }
+    }
+
+    fn reasoning(message_id: &str, text: &str) -> UiEventMessage {
+        UiEventMessage::ReasoningDelta {
+            message_id: message_id.into(),
+            text: DisplayPayload::inline(text),
+        }
+    }
+
     #[test]
     fn non_opencode_message_completed_without_boundary_does_not_try_record() {
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Grok,
             &[
@@ -694,7 +856,7 @@ mod tests {
 
     #[test]
     fn non_opencode_idle_first_then_completed_allows_record() {
-        let mut p = ThreadProjection {
+        let mut p = SessionProjection {
             agent: Some(AgentName::Codex),
             pending_boundary: true, // Idle latched first
             ..Default::default()
@@ -716,7 +878,7 @@ mod tests {
 
     #[test]
     fn multi_completed_defers_until_boundary_and_takes_last() {
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Grok,
             &[
@@ -739,7 +901,7 @@ mod tests {
 
     #[test]
     fn opencode_terminal_completed_can_record_without_idle() {
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Opencode,
             &[assistant_start("m1"), delta("m1", "done"), completed("m1")],
@@ -749,7 +911,7 @@ mod tests {
 
     #[test]
     fn begin_turn_clears_prior_completed_so_cancel_cannot_resurrect() {
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Claude,
             &[
@@ -769,7 +931,7 @@ mod tests {
 
     #[test]
     fn user_message_started_resets_turn_scope() {
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Gemini,
             &[assistant_start("m1"), delta("m1", "old"), completed("m1")],
@@ -787,7 +949,7 @@ mod tests {
 
     #[test]
     fn thread_closed_on_ingest_always_allows_try_record() {
-        let mut p = ThreadProjection {
+        let mut p = SessionProjection {
             agent: Some(AgentName::Codex),
             ..Default::default()
         };
@@ -801,7 +963,7 @@ mod tests {
 
     #[test]
     fn claim_write_is_single_flight_per_turn() {
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Opencode,
             &[assistant_start("m1"), delta("m1", "final"), completed("m1")],
@@ -821,7 +983,7 @@ mod tests {
 
     #[test]
     fn claim_write_reuses_stable_durable_id_after_failed_write() {
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Opencode,
             &[
@@ -852,7 +1014,7 @@ mod tests {
 
     #[test]
     fn opencode_second_message_completed_does_not_try_after_recorded() {
-        let mut p = ThreadProjection::default();
+        let mut p = SessionProjection::default();
         p.apply_events(
             AgentName::Opencode,
             &[assistant_start("m1"), delta("m1", "one"), completed("m1")],
@@ -868,5 +1030,175 @@ mod tests {
         // Ingest may still *want* to try, but claim blocks a second write.
         assert!(p.should_try_record_on_ingest(true, false));
         assert!(p.claim_write().is_none());
+    }
+
+    #[test]
+    fn grok_style_progress_then_tools_then_final_keeps_only_last_segment() {
+        // Mirrors session ChatState: intermediate agent_message_chunk progress
+        // between tools must not be concatenated into conversation body.
+        let mut p = SessionProjection::default();
+        p.apply_events(
+            AgentName::Grok,
+            &[
+                assistant_start("m1"),
+                delta("m1", "正在定位详情页 composer…"),
+                tool_placed("m1", "tc1"),
+                tool_completed("tc1"),
+                delta("m1", "发现键盘高度被错误塞进 bar。"),
+                tool_placed("m1", "tc2"),
+                tool_completed("tc2"),
+                reasoning("m1", "I'll give the user a concise summary."),
+                delta(
+                    "m1",
+                    "已完成：\n- 分支: bugfix/ios-topic-detail-quick-reply-keyboard\n- 提交: 811bd57",
+                ),
+                completed("m1"),
+            ],
+        );
+        p.pending_boundary = true;
+        assert_eq!(
+            p.last_completed().map(|(_, t)| t),
+            Some(
+                "已完成：\n- 分支: bugfix/ios-topic-detail-quick-reply-keyboard\n- 提交: 811bd57"
+                    .into()
+            )
+        );
+        let claimed = p.claim_write().expect("claim final segment");
+        assert_eq!(
+            claimed.1,
+            "已完成：\n- 分支: bugfix/ios-topic-detail-quick-reply-keyboard\n- 提交: 811bd57"
+        );
+    }
+
+    #[test]
+    fn continuous_text_without_interrupt_stays_concatenated() {
+        let mut p = SessionProjection::default();
+        p.apply_events(
+            AgentName::Grok,
+            &[
+                assistant_start("m1"),
+                delta("m1", "Hello "),
+                delta("m1", "world"),
+                completed("m1"),
+            ],
+        );
+        assert_eq!(
+            p.last_completed().map(|(_, t)| t),
+            Some("Hello world".into())
+        );
+    }
+
+    #[test]
+    fn progress_only_before_tools_without_final_segment_is_not_recorded() {
+        // Turn ends after tools with no post-tool answer → do not dump progress.
+        let mut p = SessionProjection::default();
+        p.apply_events(
+            AgentName::Grok,
+            &[
+                assistant_start("m1"),
+                delta("m1", "正在核对当前代码与相关提交…"),
+                tool_placed("m1", "tc1"),
+                tool_completed("tc1"),
+                completed("m1"),
+            ],
+        );
+        assert!(p.last_completed().is_none());
+        assert!(p.claim_write().is_none());
+    }
+
+    #[test]
+    fn grok_multi_message_id_progress_then_tool_without_final_is_not_recorded() {
+        // Real Grok translator shape (proven by grok.rs `agent_msg_resets_after_tool`):
+        //   MessageStarted(m1) → TextDelta(m1, progress) → MessageCompleted(m1)
+        //   → MessageStarted(m2) → ToolCallPlaced(m2, tc1) → ToolCallCompleted(tc1)
+        // The tool event completes m1 first; m1's segment is open at that moment.
+        // Turn ends with no post-tool final text → must NOT write progress back.
+        let mut p = SessionProjection::default();
+        p.apply_events(
+            AgentName::Grok,
+            &[
+                assistant_start("m1"),
+                delta("m1", "正在核对当前代码与相关提交…"),
+                completed("m1"),
+                assistant_start("m2"),
+                tool_placed("m2", "tc1"),
+                tool_completed("tc1"),
+            ],
+        );
+        p.pending_boundary = true;
+        assert!(
+            p.last_completed().is_none(),
+            "progress-only Grok turn must not surface as conversation result"
+        );
+        assert!(p.claim_write().is_none());
+    }
+
+    #[test]
+    fn grok_multi_message_id_progress_then_tool_then_final_keeps_only_last() {
+        // Real Grok shape with post-tool final answer under a fresh message_id:
+        //   m1 progress → MessageCompleted(m1) → tool on m2 → m3 final text →
+        //   MessageCompleted(m3). Only m3 must be written back.
+        let mut p = SessionProjection::default();
+        p.apply_events(
+            AgentName::Grok,
+            &[
+                assistant_start("m1"),
+                delta("m1", "正在定位详情页 composer…"),
+                completed("m1"),
+                assistant_start("m2"),
+                tool_placed("m2", "tc1"),
+                tool_completed("tc1"),
+                assistant_start("m3"),
+                delta("m3", "已完成：修复键盘高度"),
+                completed("m3"),
+            ],
+        );
+        p.pending_boundary = true;
+        assert_eq!(
+            p.last_completed().map(|(_, t)| t),
+            Some("已完成：修复键盘高度".into())
+        );
+        let claimed = p.claim_write().expect("claim final segment");
+        assert_eq!(claimed.1, "已完成：修复键盘高度");
+    }
+
+    #[test]
+    fn grok_thought_between_text_segments_keeps_both_halves() {
+        // Grok deliberately reuses the same message_id for thought interleaved
+        // with text (see grok.rs comment ~697-699). ReasoningDelta must NOT
+        // close the text segment — both halves concatenate into the final body.
+        let mut p = SessionProjection::default();
+        p.apply_events(
+            AgentName::Grok,
+            &[
+                assistant_start("m1"),
+                delta("m1", "First half of answer."),
+                reasoning("m1", "Let me think about the second half."),
+                delta("m1", " Second half."),
+                completed("m1"),
+            ],
+        );
+        p.pending_boundary = true;
+        assert_eq!(
+            p.last_completed().map(|(_, t)| t),
+            Some("First half of answer. Second half.".into())
+        );
+    }
+
+    #[test]
+    fn simple_answer_without_tools_still_records() {
+        let mut p = SessionProjection::default();
+        p.apply_events(
+            AgentName::Codex,
+            &[
+                assistant_start("m1"),
+                delta("m1", "fixed the bug"),
+                completed("m1"),
+            ],
+        );
+        assert_eq!(
+            p.last_completed().map(|(_, t)| t),
+            Some("fixed the bug".into())
+        );
     }
 }

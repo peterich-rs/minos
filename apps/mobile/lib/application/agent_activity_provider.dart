@@ -118,7 +118,7 @@ AgentActivitySnapshot? agentActivitySnapshotFromEvents({
   final toolMessageById = <String, String>{};
   final toolNameById = <String, String>{};
   String? lastAssistantMessageId;
-  var threadClosed = false;
+  var sessionClosed = false;
 
   void markAssistantCandidate(String messageId) {
     if (roleByMessage[messageId] == MessageRole.user) return;
@@ -203,8 +203,8 @@ AgentActivitySnapshot? agentActivitySnapshotFromEvents({
           kind: AgentActivityKind.error,
           tone: AgentActivityTone.error,
         );
-      case UiEventMessage_ThreadOpened():
-      case UiEventMessage_ThreadTitleUpdated():
+      case UiEventMessage_SessionOpened():
+      case UiEventMessage_SessionTitleUpdated():
         break;
       case UiEventMessage_SubagentSpawned(:final agent, :final title):
         final label = title?.trim().isNotEmpty == true
@@ -262,13 +262,13 @@ AgentActivitySnapshot? agentActivitySnapshotFromEvents({
           );
         }
         break;
-      case UiEventMessage_ThreadClosed():
-        threadClosed = true;
+      case UiEventMessage_SessionClosed():
+        sessionClosed = true;
     }
   }
 
   final liveMessageId = lastAssistantMessageId;
-  if (threadClosed ||
+  if (sessionClosed ||
       liveMessageId == null ||
       completedMessages.contains(liveMessageId)) {
     return null;

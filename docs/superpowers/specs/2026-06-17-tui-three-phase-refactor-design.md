@@ -92,8 +92,8 @@ enum Action {
 }
 
 enum EffectResult {
-    AgentStarted { agent: AgentName, thread_id: String, cwd: PathBuf, text: String },
-    SendFailed { thread_id: String, error: String },
+    AgentStarted { agent: AgentName, session_id: String, cwd: PathBuf, text: String },
+    SendFailed { session_id: String, error: String },
     IngestArrived(LocalIngestFrame),
     ManagerEvent(ManagerEvent),
     // 剪贴板读取结果等
@@ -167,12 +167,12 @@ enum ClickTarget { RoomList, GroupChat, AgentList, AgentChat, RoomInput, AgentIn
 ```rust
 enum Effect {
     StartAgent { agent: AgentName, workspace: PathBuf },
-    SendMessage { thread_id: String, text: String },
-    SendApproval { thread_id: String, decision: ApprovalDecision },
+    SendMessage { session_id: String, text: String },
+    SendApproval { session_id: String, decision: ApprovalDecision },
     InterruptThread(String),
     CloseThread(String),
     DeleteThread(String),
-    ResumeThread(String),
+    ResumeSession(String),
     HydrateThreadHistory(String),
     SyncDaemonThreads,
     WriteGroupChat { room: RoomId, message: GroupChatMessage },
@@ -404,7 +404,7 @@ fn build_render_tree(state: &AppState, focus: &FocusManager) -> Box<dyn Renderab
         Column::new(vec![
             Row::new(vec![
                 GroupChatRenderable::new(&state.group_chat, focus.is(PaneId::GroupChat)),
-                AgentListRenderable::new(&state.threads, focus.is(PaneId::AgentList)),
+                AgentListRenderable::new(&state.sessions, focus.is(PaneId::AgentList)),
                 AgentChatRenderable::new(&state.active_chat, focus.is(PaneId::AgentChat)),
             ], vec![45, 20, 35]),
             Row::new(vec![

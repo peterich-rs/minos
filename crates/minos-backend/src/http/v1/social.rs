@@ -524,7 +524,7 @@ fn spawn_group_completion_watcher(
                         error = %error,
                         conversation_id = %conversation_id,
                         session_id = %session_id,
-                        "group completion watcher failed to translate thread state"
+                        "group completion watcher failed to translate session state"
                     );
                 }
             }
@@ -591,16 +591,16 @@ impl CompletionWatchCursor {
 
 async fn find_completed_agent_reply(
     pool: &sqlx::SqlitePool,
-    thread_id: &str,
+    session_id: &str,
     agent_name: AgentName,
     trigger_seq: u64,
 ) -> Result<Option<String>, crate::error::BackendError> {
-    let rows = crate::store::raw_events::read_range(pool, thread_id, 1, 10_000).await?;
+    let rows = crate::store::raw_events::read_range(pool, session_id, 1, 10_000).await?;
 
     match agent_name {
         AgentName::Codex => {
             let mut translator =
-                minos_ui_protocol::CodexTranslatorState::new(thread_id.to_string());
+                minos_ui_protocol::CodexTranslatorState::new(session_id.to_string());
             let mut message_texts = HashMap::<String, String>::new();
             for row in rows {
                 let events = minos_ui_protocol::translate_codex(&mut translator, &row.payload)

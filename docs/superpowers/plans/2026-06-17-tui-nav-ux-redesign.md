@@ -21,7 +21,7 @@
 | File | Responsibility | Status |
 |---|---|---|
 | `src/nav.rs` | `NavLevel` 枚举、`NavStack` 封装 push/pop/peek | new |
-| `src/backend/mod.rs` | `AgentBackend` trait 加 project 方法 + `ProjectEntry`/`ThreadSummaryEntry` 类型 | modify |
+| `src/backend/mod.rs` | `AgentBackend` trait 加 project 方法 + `ProjectEntry`/`SessionSummaryEntry` 类型 | modify |
 | `src/backend/daemon.rs` | 实现 project trait 方法，转发 `minos_*` RPC | modify |
 | `src/backend/embedded.rs` | 实现 project trait 方法，内存 project | modify |
 | `src/app.rs` | `UiState` 加 `nav_stack`；启动 cwd 匹配；`handle_event` 按 NavLevel 分发 | modify |
@@ -81,16 +81,16 @@ impl ProjectEntry {
 }
 ```
 
-- [ ] **Step 2: 在 `backend/mod.rs` 的 trait 定义中（line 40-106 的 `#[async_trait] pub trait AgentBackend`），在 `list_threads` 之后、`resume_thread` 之前加 project 方法**
+- [ ] **Step 2: 在 `backend/mod.rs` 的 trait 定义中（line 40-106 的 `#[async_trait] pub trait AgentBackend`），在 `list_sessions` 之后、`resume_session` 之前加 project 方法**
 
 ```rust
-    async fn list_threads(&self) -> Result<Vec<BackendThreadSnapshot>>;
+    async fn list_sessions(&self) -> Result<Vec<BackendThreadSnapshot>>;
 
     async fn list_projects(&self) -> Result<Vec<ProjectEntry>>;
 
     async fn create_project(&self, name: &str, workspace_path: &Path) -> Result<ProjectEntry>;
 
-    async fn list_project_threads(&self, project_id: &str) -> Result<Vec<ThreadSummaryEntry>>;
+    async fn list_project_sessions(&self, project_id: &str) -> Result<Vec<SessionSummaryEntry>>;
 
     async fn start_agent_in_project(
         &self,
@@ -103,13 +103,13 @@ impl ProjectEntry {
 
 Also add `use std::path::Path;` to the imports at the top of the file (currently only `PathBuf` is imported on line 8 — add `Path`).
 
-And add the `ThreadSummaryEntry` type after `BackendThreadSnapshot` (after line 38):
+And add the `SessionSummaryEntry` type after `BackendThreadSnapshot` (after line 38):
 
 ```rust
-/// TUI-level thread summary for list views, mapped from `minos_protocol::ThreadSummary`.
+/// TUI-level thread summary for list views, mapped from `minos_protocol::SessionSummary`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ThreadSummaryEntry {
-    pub thread_id: String,
+pub struct SessionSummaryEntry {
+    pub session_id: String,
     pub agent: AgentName,
     pub title: Option<String>,
     pub first_ts_ms: i64,
@@ -118,10 +118,10 @@ pub struct ThreadSummaryEntry {
     pub ended_at_ms: Option<i64>,
 }
 
-impl ThreadSummaryEntry {
-    pub fn from_summary(s: &minos_protocol::ThreadSummary) -> Self {
+impl SessionSummaryEntry {
+    pub fn from_summary(s: &minos_protocol::SessionSummary) -> Self {
         Self {
-            thread_id: s.thread_id.clone(),
+            session_id: s.session_id.clone(),
             agent: s.agent,
             title: s.title.clone(),
             first_ts_ms: s.first_ts_ms,
@@ -142,7 +142,7 @@ Expected: errors about missing trait methods in `DaemonBackend`, `EmbeddedBacken
 
 ```bash
 git add crates/minos-tui/src/backend/mod.rs
-git commit -m "feat(tui): add ProjectEntry, ThreadSummaryEntry, and project methods to AgentBackend trait"
+git commit -m "feat(tui): add ProjectEntry, SessionSummaryEntry, and project methods to AgentBackend trait"
 ```
 
 ### Task 1.2: 实现 DaemonBackend 的 project 方法
@@ -150,16 +150,16 @@ git commit -m "feat(tui): add ProjectEntry, ThreadSummaryEntry, and project meth
 **Files:**
 - Modify: `crates/minos-tui/src/backend/daemon.rs`
 
-- [ ] **Step 1: 在 `DaemonBackend` 的 `AgentBackend` impl 块中（line 176 之后），在 `list_threads` 方法之后加入 project 方法**
+- [ ] **Step 1: 在 `DaemonBackend` 的 `AgentBackend` impl 块中（line 176 之后），在 `list_sessions` 方法之后加入 project 方法**
 
 Add these imports at the top of `daemon.rs` (after the existing `use` statements near line 24):
 
 ```rust
-use crate::backend::{ProjectEntry, ThreadSummaryEntry};
+use crate::backend::{ProjectEntry, SessionSummaryEntry};
 use std::path::Path;
 ```
 
-Add the four trait methods after the `list_threads` method (which ends around line 319):
+Add the four trait methods after the `list_sessions` method (which ends around line 319):
 
 ```rust
     async fn list_projects(&self) -> Result<Vec<ProjectEntry>> {
@@ -196,21 +196,21 @@ Add the four trait methods after the `list_threads` method (which ends around li
         Ok(ProjectEntry::from_summary(&response.project, &cwd))
     }
 
-    async fn list_project_threads(&self, project_id: &str) -> Result<Vec<ThreadSummaryEntry>> {
-        let params = minos_protocol::ListProjectThreadsParams {
+    async fn list_project_sessions(&self, project_id: &str) -> Result<Vec<SessionSummaryEntry>> {
+        let params = minos_protocol::ListProjectSessionsParams {
             project_id: project_id.to_owned(),
             limit: 100,
             before_ts_ms: None,
         };
-        let response: minos_protocol::ListProjectThreadsResponse = self
+        let response: minos_protocol::ListProjectSessionsResponse = self
             .client
-            .request("minos_list_project_threads", [params])
+            .request("minos_list_project_sessions", [params])
             .await
-            .context("RPC minos_list_project_threads failed")?;
+            .context("RPC minos_list_project_sessions failed")?;
         Ok(response
-            .threads
+            .sessions
             .iter()
-            .map(ThreadSummaryEntry::from_summary)
+            .map(SessionSummaryEntry::from_summary)
             .collect())
     }
 
@@ -249,7 +249,7 @@ Add the four trait methods after the `list_threads` method (which ends around li
                 .context("RPC minos_local_send_user_message after project start failed")?;
         }
         Ok(StartAgentOutcome {
-            thread_id: response.session_id,
+            session_id: response.session_id,
             cwd: PathBuf::from(response.cwd),
             provider_session_id: None,
         })
@@ -280,7 +280,7 @@ git commit -m "feat(tui): implement project RPC methods in DaemonBackend"
 Read the current `EmbeddedBackend` struct definition. Add a field for in-memory projects:
 
 ```rust
-use crate::backend::{ProjectEntry, ThreadSummaryEntry};
+use crate::backend::{ProjectEntry, SessionSummaryEntry};
 use std::path::Path;
 use std::sync::Mutex as StdMutex;
 ```
@@ -295,7 +295,7 @@ In `EmbeddedBackend::new()` (or wherever it's constructed), initialize:
     projects: StdMutex::new(Vec::new()),
 ```
 
-- [ ] **Step 2: 实现 trait 方法 — 在 `AgentBackend` impl 块中，`list_threads` 之后加**
+- [ ] **Step 2: 实现 trait 方法 — 在 `AgentBackend` impl 块中，`list_sessions` 之后加**
 
 ```rust
     async fn list_projects(&self) -> Result<Vec<ProjectEntry>> {
@@ -336,13 +336,13 @@ In `EmbeddedBackend::new()` (or wherever it's constructed), initialize:
         Ok(entry)
     }
 
-    async fn list_project_threads(&self, _project_id: &str) -> Result<Vec<ThreadSummaryEntry>> {
-        // Embedded mode: return existing threads as flat list, no project scoping.
-        let snapshots = self.list_threads().await?;
+    async fn list_project_sessions(&self, _project_id: &str) -> Result<Vec<SessionSummaryEntry>> {
+        // Embedded mode: return existing sessions as flat list, no project scoping.
+        let snapshots = self.list_sessions().await?;
         Ok(snapshots
             .into_iter()
-            .map(|s| ThreadSummaryEntry {
-                thread_id: s.thread_id,
+            .map(|s| SessionSummaryEntry {
+                session_id: s.session_id,
                 agent: s.agent.unwrap_or(AgentName::Codex),
                 title: None,
                 first_ts_ms: 0,
@@ -362,7 +362,7 @@ In `EmbeddedBackend::new()` (or wherever it's constructed), initialize:
     ) -> Result<StartAgentOutcome> {
         let outcome = self.start_agent(agent, workspace).await?;
         if let Some(text) = prompt {
-            self.send_message(&outcome.thread_id, text).await?;
+            self.send_message(&outcome.session_id, text).await?;
         }
         Ok(outcome)
     }
@@ -400,7 +400,7 @@ git commit -m "feat(tui): implement project methods in EmbeddedBackend with in-m
 ```rust
     projects: Mutex<Vec<crate::backend::ProjectEntry>>,
     created_projects: Mutex<Vec<(String, PathBuf)>>,
-    project_thread_lists: Mutex<Vec<(String, Vec<crate::backend::ThreadSummaryEntry>)>>,
+    project_thread_lists: Mutex<Vec<(String, Vec<crate::backend::SessionSummaryEntry>)>>,
 ```
 
 - [ ] **Step 2: 在 `TestBackend::with_agents` (the `new()` constructor) 中初始化这些字段**
@@ -411,7 +411,7 @@ git commit -m "feat(tui): implement project methods in EmbeddedBackend with in-m
     project_thread_lists: Mutex::new(Vec::new()),
 ```
 
-- [ ] **Step 3: 在 `TestBackend` 的 `AgentBackend` impl 中，`list_threads` 之后加 trait 方法**
+- [ ] **Step 3: 在 `TestBackend` 的 `AgentBackend` impl 中，`list_sessions` 之后加 trait 方法**
 
 ```rust
         async fn list_projects(&self) -> Result<Vec<crate::backend::ProjectEntry>> {
@@ -442,15 +442,15 @@ git commit -m "feat(tui): implement project methods in EmbeddedBackend with in-m
             Ok(entry)
         }
 
-        async fn list_project_threads(
+        async fn list_project_sessions(
             &self,
             project_id: &str,
-        ) -> Result<Vec<crate::backend::ThreadSummaryEntry>> {
-            let lists = self.project_thread_lists.lock().expect("project threads lock");
+        ) -> Result<Vec<crate::backend::SessionSummaryEntry>> {
+            let lists = self.project_thread_lists.lock().expect("project sessions lock");
             Ok(lists
                 .iter()
                 .find(|(pid, _)| pid == project_id)
-                .map(|(_, threads)| threads.clone())
+                .map(|(_, sessions)| sessions.clone())
                 .unwrap_or_default())
         }
 
@@ -475,15 +475,15 @@ After the existing `with_group_chat_pages` method (around line 3573):
             self
         }
 
-        fn with_project_threads(
+        fn with_project_sessions(
             self,
             project_id: &str,
-            threads: Vec<crate::backend::ThreadSummaryEntry>,
+            sessions: Vec<crate::backend::SessionSummaryEntry>,
         ) -> Self {
             self.project_thread_lists
                 .lock()
-                .expect("project threads lock")
-                .push((project_id.to_owned(), threads));
+                .expect("project sessions lock")
+                .push((project_id.to_owned(), sessions));
             self
         }
 ```
@@ -526,12 +526,12 @@ Add at the end of the test module (before the closing `}`):
     }
 
     #[tokio::test]
-    async fn list_project_threads_returns_seeded_data() {
+    async fn list_project_sessions_returns_seeded_data() {
         let backend = Arc::new(
-            TestBackend::new().with_project_threads(
+            TestBackend::new().with_project_sessions(
                 "proj-1",
-                vec![crate::backend::ThreadSummaryEntry {
-                    thread_id: "thread-99".into(),
+                vec![crate::backend::SessionSummaryEntry {
+                    session_id: "thread-99".into(),
                     agent: AgentName::Codex,
                     title: Some("test title".into()),
                     first_ts_ms: 1000,
@@ -541,10 +541,10 @@ Add at the end of the test module (before the closing `}`):
                 }],
             ),
         );
-        let threads = backend.list_project_threads("proj-1").await.unwrap();
-        assert_eq!(threads.len(), 1);
-        assert_eq!(threads[0].thread_id, "thread-99");
-        assert_eq!(threads[0].title.as_deref(), Some("test title"));
+        let sessions = backend.list_project_sessions("proj-1").await.unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "thread-99");
+        assert_eq!(sessions[0].title.as_deref(), Some("test title"));
     }
 
     #[tokio::test]
@@ -561,7 +561,7 @@ Add at the end of the test module (before the closing `}`):
             )
             .await
             .unwrap();
-        assert!(outcome.thread_id.starts_with("thread-"));
+        assert!(outcome.session_id.starts_with("thread-"));
         let started = backend.started.lock().expect("started lock");
         assert_eq!(*started, vec![AgentName::Codex]);
     }
@@ -569,7 +569,7 @@ Add at the end of the test module (before the closing `}`):
 
 - [ ] **Step 2: Run tests**
 
-Run: `cargo test -p minos-tui -- create_project list_project_threads start_agent_in_project 2>&1 | tail -15`
+Run: `cargo test -p minos-tui -- create_project list_project_sessions start_agent_in_project 2>&1 | tail -15`
 Expected: 3 new tests pass.
 
 - [ ] **Step 3: Commit**
@@ -599,14 +599,14 @@ use minos_domain::AgentName;
 pub enum NavLevel {
     /// Top level: list of all projects.
     Projects,
-    /// Second level: threads within a project.
+    /// Second level: sessions within a project.
     Threads { project_id: String },
     /// Third level: a single thread (group chat with agent overview sidebar).
-    Thread { project_id: String, thread_id: String },
+    Thread { project_id: String, session_id: String },
     /// Detail view: a specific agent's conversation within a thread.
     Agent {
         project_id: String,
-        thread_id: String,
+        session_id: String,
         agent: AgentName,
     },
 }
@@ -622,12 +622,12 @@ impl NavLevel {
         }
     }
 
-    /// Returns the thread_id if this level is within a thread context.
-    pub fn thread_id(&self) -> Option<&str> {
+    /// Returns the session_id if this level is within a session context.
+    pub fn session_id(&self) -> Option<&str> {
         match self {
             NavLevel::Projects | NavLevel::Threads { .. } => None,
-            NavLevel::Thread { thread_id, .. }
-            | NavLevel::Agent { thread_id, .. } => Some(thread_id.as_str()),
+            NavLevel::Thread { session_id, .. }
+            | NavLevel::Agent { session_id, .. } => Some(session_id.as_str()),
         }
     }
 
@@ -702,9 +702,9 @@ mod tests {
         assert_eq!(
             NavLevel::Thread {
                 project_id: "p1".into(),
-                thread_id: "t1".into()
+                session_id: "t1".into()
             }
-            .thread_id(),
+            .session_id(),
             Some("t1")
         );
     }
@@ -768,7 +768,7 @@ In the `UiState` struct (after `pub render_cache: RenderCache,` around line 66),
     pub projects: Vec<crate::backend::ProjectEntry>,
     pub selected_project: Option<usize>,
     pub project_list_state: ListState,
-    pub thread_summaries: Vec<crate::backend::ThreadSummaryEntry>,
+    pub thread_summaries: Vec<crate::backend::SessionSummaryEntry>,
 ```
 
 - [ ] **Step 2: Initialize the new fields in `UiState::new()`**
@@ -817,7 +817,7 @@ In `app.rs`, in the `impl App` block, add a new method after `init()`:
             .find(|p| workspace_paths_match(&p.workspace_path, cwd));
 
         if let Some(project) = matched {
-            self.load_project_threads(&project.project_id).await?;
+            self.load_project_sessions(&project.project_id).await?;
             self.ui.nav_stack.reset_to(crate::nav::NavLevel::Threads {
                 project_id: project.project_id.clone(),
             });
@@ -833,10 +833,10 @@ In `app.rs`, in the `impl App` block, add a new method after `init()`:
         Ok(())
     }
 
-    /// Load threads for a project into `ui.thread_summaries`.
-    async fn load_project_threads(&mut self, project_id: &str) -> anyhow::Result<()> {
-        let threads = self.backend.list_project_threads(project_id).await?;
-        self.ui.thread_summaries = threads;
+    /// Load sessions for a project into `ui.thread_summaries`.
+    async fn load_project_sessions(&mut self, project_id: &str) -> anyhow::Result<()> {
+        let sessions = self.backend.list_project_sessions(project_id).await?;
+        self.ui.thread_summaries = sessions;
         Ok(())
     }
 ```
@@ -1290,13 +1290,13 @@ This ensures the nav stack always has at least one level, even in tests that don
 - [ ] **Step 4: Verify build and run all existing tests**
 
 Run: `cargo test -p minos-tui 2>&1 | tail -10`
-Expected: all tests pass. Existing tests that push threads and interact will now start at Projects level but fall through to legacy renderer (since they don't set nav to Threads/Thread level). The tests that directly call `handle_key` with specific key events and check backend state will still work because the legacy renderer is used.
+Expected: all tests pass. Existing tests that push sessions and interact will now start at Projects level but fall through to legacy renderer (since they don't set nav to Threads/Thread level). The tests that directly call `handle_key` with specific key events and check backend state will still work because the legacy renderer is used.
 
 **Important:** Some existing tests call `app.select_thread(0)` and expect detail mode. These tests will need the nav stack set to `Thread` level to trigger legacy detail rendering. Check if any tests break.
 
 - [ ] **Step 5: Fix any broken tests**
 
-If tests break because `nav_stack.current()` is `Projects` but the test expects thread/chat interaction: add `app.ui.nav_stack.reset_to(crate::nav::NavLevel::Thread { project_id: "test".into(), thread_id: "thread-1".into() });` to those tests.
+If tests break because `nav_stack.current()` is `Projects` but the test expects thread/chat interaction: add `app.ui.nav_stack.reset_to(crate::nav::NavLevel::Thread { project_id: "test".into(), session_id: "thread-1".into() });` to those tests.
 
 Run: `cargo test -p minos-tui 2>&1 | tail -20`
 Expected: all tests pass.
@@ -1368,8 +1368,8 @@ In `impl App`, add:
         if let Some(idx) = self.ui.selected_project {
             if let Some(project) = self.ui.projects.get(idx) {
                 let project_id = project.project_id.clone();
-                if let Err(e) = self.load_project_threads(&project_id).await {
-                    self.flash_error(format!("Failed to load threads: {e}"));
+                if let Err(e) = self.load_project_sessions(&project_id).await {
+                    self.flash_error(format!("Failed to load sessions: {e}"));
                     return;
                 }
                 self.ui.nav_stack.push(crate::nav::NavLevel::Threads {
@@ -1629,8 +1629,8 @@ Add a new method for dialog key handling:
             Ok(project) => {
                 let project_id = project.project_id.clone();
                 self.ui.projects.push(project);
-                if let Err(e) = self.load_project_threads(&project_id).await {
-                    self.flash_error(format!("Failed to load threads: {e}"));
+                if let Err(e) = self.load_project_sessions(&project_id).await {
+                    self.flash_error(format!("Failed to load sessions: {e}"));
                     return;
                 }
                 self.ui.nav_stack.push(crate::nav::NavLevel::Threads {
@@ -1876,7 +1876,7 @@ pub mod thread_list_v2;
 - [ ] **Step 2: Create `src/ui/thread_list_v2.rs`**
 
 ```rust
-use crate::backend::ThreadSummaryEntry;
+use crate::backend::SessionSummaryEntry;
 use crate::ui::theme;
 use ratatui::{
     layout::Rect,
@@ -1886,12 +1886,12 @@ use ratatui::{
     Frame,
 };
 
-/// Render the threads list in the main content area.
+/// Render the sessions list in the main content area.
 pub fn render_threads_list(
     f: &mut Frame,
     area: Rect,
     project_name: &str,
-    threads: &[ThreadSummaryEntry],
+    sessions: &[SessionSummaryEntry],
     selected: Option<usize>,
     list_state: &mut ListState,
     focused: bool,
@@ -1906,10 +1906,10 @@ pub fn render_threads_list(
         .title(title)
         .border_style(border_style);
 
-    let items: Vec<ListItem> = threads
+    let items: Vec<ListItem> = sessions
         .iter()
         .map(|t| {
-            let id_short = &t.thread_id[..8.min(t.thread_id.len())];
+            let id_short = &t.session_id[..8.min(t.session_id.len())];
             let title_text = t.title.clone().unwrap_or_else(|| "(untitled)".to_owned());
             let line = Line::from(vec![
                 Span::styled(
@@ -1929,11 +1929,11 @@ pub fn render_threads_list(
     f.render_stateful_widget(list, area, list_state);
 }
 
-/// Render the thread sidebar (selected thread's info).
+/// Render the session sidebar (selected thread's info).
 pub fn render_thread_sidebar(
     f: &mut Frame,
     area: Rect,
-    threads: &[ThreadSummaryEntry],
+    sessions: &[SessionSummaryEntry],
     selected: Option<usize>,
 ) {
     let block = Block::bordered()
@@ -1941,7 +1941,7 @@ pub fn render_thread_sidebar(
         .border_style(Style::new().fg(theme::BORDER_FG));
 
     let content = if let Some(idx) = selected {
-        if let Some(thread) = threads.get(idx) {
+        if let Some(thread) = sessions.get(idx) {
             let title = thread.title.clone().unwrap_or_else(|| "(untitled)".to_owned());
             let lines = vec![
                 Line::from(vec![
@@ -2080,7 +2080,7 @@ Expected: clean.
 
 ```bash
 git add crates/minos-tui/src/ui/mod.rs crates/minos-tui/src/app.rs
-git commit -m "feat(tui): threads list view with input bar and Esc navigation"
+git commit -m "feat(tui): sessions list view with input bar and Esc navigation"
 ```
 
 ### Task 4.3: Threads 列表导航 + 从输入创建新 Thread
@@ -2139,14 +2139,14 @@ git commit -m "feat(tui): threads list view with input bar and Esc navigation"
                     .unwrap_or_default();
                 self.ui.nav_stack.push(crate::nav::NavLevel::Thread {
                     project_id,
-                    thread_id: thread.thread_id.clone(),
+                    session_id: thread.session_id.clone(),
                 });
             }
         }
     }
 ```
 
-- [ ] **Step 2: Wire threads list key handling into `handle_key`**
+- [ ] **Step 2: Wire sessions list key handling into `handle_key`**
 
 Add after the Threads Esc block:
 
@@ -2157,7 +2157,7 @@ Add after the Threads Esc block:
             }
 ```
 
-- [ ] **Step 3: Handle Enter in the threads input bar to create a new thread**
+- [ ] **Step 3: Handle Enter in the sessions input bar to create a new thread**
 
 In `handle_key`, when at Threads level and focus is on RoomInput and Enter is pressed, intercept it before the existing submit logic:
 
@@ -2207,7 +2207,7 @@ Add the method:
                     if let Some(tx) = event_tx {
                         let _ = tx.send(AppEvent::AgentStartedForPrompt {
                             agent,
-                            thread_id: outcome.thread_id,
+                            session_id: outcome.session_id,
                             cwd: outcome.cwd,
                             text: prompt,
                         });
@@ -2216,7 +2216,7 @@ Add the method:
                 Err(e) => {
                     if let Some(tx) = event_tx {
                         let _ = tx.send(AppEvent::SendMessageFailed {
-                            thread_id: String::new(),
+                            session_id: String::new(),
                             error: e.to_string(),
                         });
                     }
@@ -2251,7 +2251,7 @@ In the `handle_event` method's `AppEvent::AgentStartedForPrompt` arm, add nav-le
 ```rust
         AppEvent::AgentStartedForPrompt {
             agent,
-            thread_id,
+            session_id,
             cwd,
             text,
         } => {
@@ -2271,7 +2271,7 @@ In the `handle_event` method's `AppEvent::AgentStartedForPrompt` arm, add nav-le
                     .unwrap_or_default();
                 self.ui.nav_stack.push(crate::nav::NavLevel::Thread {
                     project_id,
-                    thread_id: thread_id.clone(),
+                    session_id: session_id.clone(),
                 });
             }
             // ... rest of existing handling ...
@@ -2328,7 +2328,7 @@ Expected: all pass.
 
 ```bash
 git add crates/minos-tui/src/app.rs
-git commit -m "feat(tui): thread creation from threads input bar with @mention parsing"
+git commit -m "feat(tui): thread creation from sessions input bar with @mention parsing"
 ```
 
 ---

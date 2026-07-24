@@ -157,7 +157,7 @@ enum DaemonBootstrap {
         let relayLink = daemon.currentRelayLink()
         let peer = daemon.currentPeer()
         let agentState = daemon.currentAgentState()
-        let agentThread = try await daemon.currentAgentThread()
+        let agentThread = try await daemon.currentAgentSession()
         let trustedDevice = try await daemon.currentTrustedDevice()
         let peers = try await daemon.currentPeers()
         return AppState.BootSnapshot(

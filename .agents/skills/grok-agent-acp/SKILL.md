@@ -98,12 +98,15 @@ Compared to Codex:
 
 | `sessionUpdate` | Meaning | Minos UI mapping |
 |-----------------|---------|------------------|
-| `agent_message_chunk` | Assistant text chunk | `TextDelta` |
-| `agent_thought_chunk` | Reasoning chunk | `ReasoningDelta` |
-| `tool_call` | Tool started | `ToolCallPlaced` |
-| `tool_call_update` | Tool progress/result | `ToolCallCompleted` when status completed |
+| `agent_message_chunk` | Assistant text chunk | `TextDelta` (new `message_id` after tool / `streamStartMs` change) |
+| `agent_thought_chunk` | Reasoning chunk | `ReasoningDelta` (no Raw; thought does not close the open assistant message — same `message_id` is reused) |
+| `tool_call` | Tool started | `ToolCallPlaced` (or suppressed for todo/wait/task plumbing → `Raw(grok/turn_activity)` activity only) |
+| `tool_call_update` | Tool progress/result | `ToolCallCompleted` when completed/failed; orphan updates buffered (failed/cancelled orphans replay with `is_error: true`). **Tool body projection** prefers typed `raw_output` (pager parity) over model-noisy `content`: Edit→unified patch, Read→plain/densify line nos (not sparse `N→`), Bash→`output_for_prompt`+ANSI strip, Grep→`file_matches`, ListDir listing, etc. Never dump ToolOutput JSON. See `docs/architecture-grok-acp-projection.md`. |
 | `plan` | Plan payload | `Raw` (`grok/plan`) |
 | `current_mode_update` / `available_commands_update` / `session_info_update` | Meta | `Raw` |
+| `params._meta` | `streamStartMs`, timestamps, `promptId`, tokens | Applied internally for **agent text** segmentation only: a `streamStartMs` change on `agent_message_chunk` closes the open assistant message. Thought chunks use a different concurrent `streamStartMs` and must **not** close text (interleave would otherwise yield one bubble per token). **No `Raw(grok/notification_meta)` is emitted** — Grok stamps `_meta` on nearly every `session/update`, and emitting per-notification Raw events would flood ingest frames and break Desktop live-merge scroll. |
+
+Grok projection lives in `minos-ui-protocol/src/grok.rs` and mirrors grok-build `AcpUpdateTracker`: close assistant text on tools and stream boundaries; prefer `rawInput.description` for tool titles.
 
 ### Core ACP methods
 
@@ -168,7 +171,7 @@ The JSON-RPC `result` is likewise the flat `ExtResponse` body (no wrapper):
 | Wire JSON-RPC `method` | Flat `params` keys | Meaning | Reply `result` |
 |------------------------|--------------------|---------|-----------------|
 | `_x.ai/exit_plan_mode` | `sessionId`, `toolCallId`, `planContent?` | Present plan for approve / revise / abandon | `{ "outcome": "approved" \| "cancelled" \| "abandoned", "feedback"?: string }` |
-| `_x.ai/ask_user_question` | `sessionId`, `toolCallId`, ... | Structured questions | `{ "outcome": ... }` |
+| `_x.ai/ask_user_question` | `sessionId`, `toolCallId`, `questions`, `mode?` | Structured questions | `{ "outcome": "accepted", "answers": { "0": ["label"] } }` / `cancelled` / plan-mode extras |
 
 `outcome` semantics for `exit_plan_mode`: `approved` → exit plan mode and implement; `cancelled` + optional `feedback` → stay in plan mode, feed revision notes back; `abandoned` → close plan mode. Malformed/transport errors fail **closed** (stay in plan mode).
 

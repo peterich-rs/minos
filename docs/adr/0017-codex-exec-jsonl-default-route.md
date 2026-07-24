@@ -29,7 +29,7 @@ JavaScript remodex bridge, and `codex exec-server` remains experimental.
 - `minos-agent-runtime` uses `codex exec --json` for the first turn and
   `codex exec resume --json` for subsequent turns as the default production
   transport.
-- `start_agent` mints a synthetic Minos thread id (`thr-exec-*`) immediately,
+- `start_agent` mints a synthetic Minos session id (`thr-exec-*`) immediately,
   transitions runtime state to `Running`, and emits `thread/started` without
   waiting for a prompt-bearing Codex subprocess.
 - The runtime captures the real Codex session id from `session_meta` JSONL
@@ -53,7 +53,7 @@ JavaScript remodex bridge, and `codex exec-server` remains experimental.
   required for normal production turns.
 
 **Neutral**
-- Minos thread ids are now runtime-generated identifiers distinct from the
+- Minos session ids are now runtime-generated identifiers distinct from the
   underlying Codex session id.
 - A live session may have no child process between turns; only active turns own
   a running Codex subprocess.

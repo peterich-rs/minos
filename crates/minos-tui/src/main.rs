@@ -73,7 +73,7 @@ struct McpSidecarArgs {
     source_agent: Option<String>,
 
     #[arg(long)]
-    source_thread_id: Option<String>,
+    source_session_id: Option<String>,
 
     #[arg(long)]
     disable_list_conversation_messages: bool,
@@ -105,7 +105,7 @@ impl McpSidecarArgs {
             socket_path: self.socket_path,
             conversation_id: self.conversation_id,
             source_agent,
-            source_thread_id: self.source_thread_id,
+            source_session_id: self.source_session_id,
             permissions: minos_chat_store::mcp_server::McpToolPermissions {
                 list_conversation_messages: !self.disable_list_conversation_messages,
                 delegate_to_agent: !self.disable_delegate_to_agent,

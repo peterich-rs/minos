@@ -82,8 +82,8 @@ class SelectedProjectThread extends _$SelectedProjectThread {
   @override
   String? build(String projectId) => null;
 
-  void select(String? threadId) {
-    state = threadId;
+  void select(String? sessionId) {
+    state = sessionId;
   }
 }
 

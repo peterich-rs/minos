@@ -12,8 +12,8 @@ ADR 0009-broker-architecture-pivot.md introduced `minos-relay` as a *broker* tha
 
 In plan 05 the same crate gains four new responsibilities:
 
-1. **Persistence.** `threads` and `raw_events` tables hold the full history of every agent run for re-translation on read (see ADR 0013).
-2. **Translation.** It runs `minos-ui-protocol::translate_*` on every ingested raw event and on every `read_thread` request.
+1. **Persistence.** `sessions` and `raw_events` tables hold the full history of every agent run for re-translation on read (see ADR 0013).
+2. **Translation.** It runs `minos-ui-protocol::translate_*` on every ingested raw event and on every `read_session` request.
 3. **Credential distribution.** It holds Cloudflare Access tokens in env vars and assembles the full pairing QR payload (see ADR 0014).
 4. **Per-thread fan-out routing.** It owns the registry of paired sessions and pushes `EventKind::UiEventMessage` to every paired mobile peer of a given agent-host.
 

@@ -29,18 +29,28 @@ impl App {
             SocketRequest::DelegateToAgent {
                 conversation_id,
                 source_agent,
-                source_thread_id,
+                source_session_id,
                 target_agent,
+                profile_id,
+                target_profile,
                 prompt,
             } => {
+                // Production MCP is daemon-owned; this in-process path is for unit tests.
+                // Profile name/`profile_id` resolution + launch merge stay on the daemon.
+                // Here we only resolve agent identity and pass profile_id through start.
                 self.ensure_mcp_conversation(&conversation_id)?;
-                let target_agent = parse_agent_name(&target_agent)
-                    .ok_or_else(|| anyhow::anyhow!("unknown agent: {target_agent}"))?;
+                let prompt = prompt.trim().to_owned();
+                anyhow::ensure!(!prompt.is_empty(), "delegate_to_agent prompt is empty");
+                let (target_agent, resolved_profile_id) = self
+                    .resolve_in_process_delegate_target(
+                        target_agent.as_deref(),
+                        profile_id.as_deref(),
+                        target_profile.as_deref(),
+                    )
+                    .await?;
                 if let Some(error) = self.agent_unavailability_error(target_agent) {
                     anyhow::bail!(error);
                 }
-                let prompt = prompt.trim().to_owned();
-                anyhow::ensure!(!prompt.is_empty(), "delegate_to_agent prompt is empty");
                 let source_agent = source_agent
                     .as_deref()
                     .map(|agent| {
@@ -48,34 +58,39 @@ impl App {
                             .ok_or_else(|| anyhow::anyhow!("unknown source agent: {agent}"))
                     })
                     .transpose()?;
-                self.validate_mcp_source_thread(
+                self.validate_mcp_source_session(
                     &conversation_id,
                     source_agent,
-                    source_thread_id.as_deref(),
+                    source_session_id.as_deref(),
                 )
                 .await?;
                 self.state
                     .teamwork_store
                     .ensure_delegate_target_allowed(
                         &conversation_id,
-                        source_thread_id.as_deref(),
+                        source_session_id.as_deref(),
                         target_agent,
                     )
                     .await?;
                 let workspace = self.workspace_for_conversation(&conversation_id);
                 let outcome = self
                     .backend
-                    .start_agent_in_conversation(&conversation_id, target_agent, workspace)
+                    .start_agent_in_conversation(
+                        &conversation_id,
+                        target_agent,
+                        workspace,
+                        resolved_profile_id.clone(),
+                    )
                     .await?;
                 self.ensure_thread_visible(
-                    outcome.thread_id.clone(),
+                    outcome.session_id.clone(),
                     target_agent,
                     outcome.cwd.clone(),
                 );
                 self.refresh_current_conversation_sessions(&conversation_id)
                     .await;
                 self.backend
-                    .send_message(&outcome.thread_id, &prompt)
+                    .send_message(&outcome.session_id, &prompt)
                     .await?;
                 let delegation = self
                     .state
@@ -83,15 +98,15 @@ impl App {
                     .create_delegation(
                         &conversation_id,
                         source_agent,
-                        source_thread_id.clone(),
+                        source_session_id.clone(),
                         target_agent,
                         prompt,
-                        Some(outcome.thread_id.clone()),
+                        Some(outcome.session_id.clone()),
                     )
                     .await?;
                 let visible_prompt = delegation_visible_message(
                     target_agent,
-                    &outcome.thread_id,
+                    &outcome.session_id,
                     &delegation.prompt,
                 );
                 let sender_role = if source_agent.is_some() {
@@ -103,7 +118,7 @@ impl App {
                     .append_conversation_message(
                         &conversation_id,
                         None,
-                        source_thread_id.as_deref(),
+                        source_session_id.as_deref(),
                         sender_role,
                         source_agent,
                         &visible_prompt,
@@ -115,7 +130,8 @@ impl App {
                     data: Some(serde_json::json!({
                         "accepted": true,
                         "target_agent": target_agent.bin_name(),
-                        "thread_id": outcome.thread_id,
+                        "profile_id": resolved_profile_id,
+                        "session_id": outcome.session_id,
                         "delegation": delegation,
                     })),
                 })
@@ -170,8 +186,8 @@ impl App {
                     .teamwork_store
                     .cancel_delegation(&conversation_id, &delegation_id, reason)
                     .await?;
-                if let Some(thread_id) = delegation.thread_id.as_deref() {
-                    let _ = self.backend.interrupt_thread(thread_id).await;
+                if let Some(session_id) = delegation.session_id.as_deref() {
+                    let _ = self.backend.interrupt_session(session_id).await;
                 }
                 Ok(SocketResponse::Ok {
                     data: Some(serde_json::to_value(delegation)?),
@@ -180,7 +196,7 @@ impl App {
             SocketRequest::PostConversationUpdate {
                 conversation_id,
                 source_agent,
-                source_thread_id,
+                source_session_id,
                 message,
             } => {
                 self.ensure_mcp_conversation(&conversation_id)?;
@@ -191,10 +207,10 @@ impl App {
                             .ok_or_else(|| anyhow::anyhow!("unknown source agent: {agent}"))
                     })
                     .transpose()?;
-                self.validate_mcp_source_thread(
+                self.validate_mcp_source_session(
                     &conversation_id,
                     source_agent,
-                    source_thread_id.as_deref(),
+                    source_session_id.as_deref(),
                 )
                 .await?;
                 let body = mcp_visible_message(message.trim())?;
@@ -210,7 +226,7 @@ impl App {
                     .append_conversation_message(
                         &conversation_id,
                         None,
-                        source_thread_id.as_deref(),
+                        source_session_id.as_deref(),
                         sender_role,
                         source_agent,
                         &body,
@@ -225,17 +241,17 @@ impl App {
         }
     }
 
-    async fn validate_mcp_source_thread(
+    async fn validate_mcp_source_session(
         &self,
         conversation_id: &str,
         source_agent: Option<AgentName>,
-        source_thread_id: Option<&str>,
+        source_session_id: Option<&str>,
     ) -> anyhow::Result<()> {
         anyhow::ensure!(
-            source_agent.is_none() || source_thread_id.is_some(),
-            "MCP source_thread_id is required when source_agent is set"
+            source_agent.is_none() || source_session_id.is_some(),
+            "MCP source_session_id is required when source_agent is set"
         );
-        let Some(source_thread_id) = source_thread_id else {
+        let Some(source_session_id) = source_session_id else {
             return Ok(());
         };
         let sessions = self
@@ -244,16 +260,16 @@ impl App {
             .await?;
         let Some(session) = sessions
             .iter()
-            .find(|session| session.thread_id == source_thread_id)
+            .find(|session| session.session_id == source_session_id)
         else {
             anyhow::bail!(
-                "MCP source thread {source_thread_id} does not belong to conversation {conversation_id}"
+                "MCP source thread {source_session_id} does not belong to conversation {conversation_id}"
             );
         };
         if let Some(source_agent) = source_agent {
             anyhow::ensure!(
                 session.agent == source_agent,
-                "MCP source thread {source_thread_id} belongs to {}, not {}",
+                "MCP source thread {source_session_id} belongs to {}, not {}",
                 session.agent.bin_name(),
                 source_agent.bin_name()
             );
@@ -266,45 +282,129 @@ impl App {
         conversation_id: &str,
         body: &str,
     ) -> anyhow::Result<String> {
-        let Some((target, prompt)) = parse_agent_routing(body) else {
+        let profiles = self.ui.mention_profiles();
+        let Some((target, prompt)) = parse_agent_routing(body, &profiles) else {
             return Ok(body.to_owned());
         };
         let prompt = prompt.trim().to_owned();
         if prompt.is_empty() {
             return Ok(body.to_owned());
         }
-        if let Some(thread_short_id) = target.thread_short_id {
-            let thread_id = self
-                .thread_id_for_agent_short_id(target.agent, &thread_short_id)
+        if let Some(session_short_id) = target.session_short_id {
+            let session_id = self
+                .session_id_for_agent_short_id(target.agent, &session_short_id)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "No existing {} session matches #{}",
                         target.agent.bin_name(),
-                        thread_short_id
+                        session_short_id
                     )
                 })?;
-            self.backend.send_message(&thread_id, &prompt).await?;
+            self.backend.send_message(&session_id, &prompt).await?;
             return Ok(body.to_owned());
         }
         if let Some(error) = self.agent_unavailability_error(target.agent) {
             anyhow::bail!(error);
         }
         let workspace = self.workspace_for_conversation(conversation_id);
+        // Bare @agent / profile mentions: pass profile_id when route has one;
+        // bare agent uses newest profile convenience (same as conversation submit).
+        let profile_id = target
+            .profile_id
+            .clone()
+            .or_else(|| self.newest_profile_id_for_agent(target.agent));
         let outcome = self
             .backend
-            .start_agent_in_conversation(conversation_id, target.agent, workspace)
+            .start_agent_in_conversation(conversation_id, target.agent, workspace, profile_id)
             .await?;
-        self.ensure_thread_visible(outcome.thread_id.clone(), target.agent, outcome.cwd);
+        self.ensure_thread_visible(outcome.session_id.clone(), target.agent, outcome.cwd);
         self.refresh_current_conversation_sessions(conversation_id)
             .await;
         self.backend
-            .send_message(&outcome.thread_id, &prompt)
+            .send_message(&outcome.session_id, &prompt)
             .await?;
         Ok(delegation_visible_message(
             target.agent,
-            &outcome.thread_id,
+            &outcome.session_id,
             &prompt,
         ))
+    }
+
+    /// Resolve agent + profile for the in-process MCP test path (daemon is SSOT in prod).
+    async fn resolve_in_process_delegate_target(
+        &self,
+        target_agent: Option<&str>,
+        profile_id: Option<&str>,
+        target_profile: Option<&str>,
+    ) -> anyhow::Result<(AgentName, Option<String>)> {
+        let requested = target_agent
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|name| {
+                parse_agent_name(name).ok_or_else(|| anyhow::anyhow!("unknown agent: {name}"))
+            })
+            .transpose()?;
+
+        if let Some(pid) = profile_id.map(str::trim).filter(|s| !s.is_empty()) {
+            let profile = self
+                .ui
+                .agent_profiles
+                .iter()
+                .find(|p| p.id == pid)
+                .ok_or_else(|| anyhow::anyhow!("agent profile not found: {pid}"))?;
+            if let Some(requested) = requested {
+                anyhow::ensure!(
+                    requested == profile.runtime_agent,
+                    "agent mismatch for profile {pid}: request agent is {}, profile runtime is {}",
+                    requested.bin_name(),
+                    profile.runtime_agent.bin_name()
+                );
+            }
+            return Ok((profile.runtime_agent, Some(profile.id.clone())));
+        }
+
+        if let Some(name) = target_profile.map(str::trim).filter(|s| !s.is_empty()) {
+            let key = name.to_ascii_lowercase();
+            let matches: Vec<_> = self
+                .ui
+                .agent_profiles
+                .iter()
+                .filter(|p| p.name.trim().to_ascii_lowercase() == key)
+                .collect();
+            match matches.as_slice() {
+                [] => anyhow::bail!("agent profile not found by name: {name}"),
+                [only] => {
+                    if let Some(requested) = requested {
+                        anyhow::ensure!(
+                            requested == only.runtime_agent,
+                            "agent mismatch for profile {}: request agent is {}, profile runtime is {}",
+                            only.id,
+                            requested.bin_name(),
+                            only.runtime_agent.bin_name()
+                        );
+                    }
+                    return Ok((only.runtime_agent, Some(only.id.clone())));
+                }
+                _ => anyhow::bail!(
+                    "agent profile name is ambiguous ({} matches): {name}; use profile_id",
+                    matches.len()
+                ),
+            }
+        }
+
+        let Some(agent) = requested else {
+            anyhow::bail!("delegate_to_agent requires target_agent, profile_id, or target_profile");
+        };
+        Ok((agent, self.newest_profile_id_for_agent(agent)))
+    }
+
+    fn newest_profile_id_for_agent(&self, agent: AgentName) -> Option<String> {
+        self.ui
+            .agent_profiles
+            .iter()
+            .filter(|p| p.runtime_agent == agent)
+            .max_by_key(|p| p.updated_at_ms)
+            .map(|p| p.id.clone())
     }
 
     fn ensure_mcp_conversation(&self, conversation_id: &str) -> anyhow::Result<()> {
@@ -424,7 +524,7 @@ fn conversation_message_page(
                 "message_seq": message.message_seq,
                 "message_id": message.message_id,
                 "conversation_id": message.conversation_id,
-                "thread_id": message.thread_id,
+                "session_id": message.session_id,
                 "created_at_ms": message.created_at_ms,
                 "sender_role": message.sender_role,
                 "agent": message.agent.map(|agent| agent.bin_name().to_owned()),
@@ -452,13 +552,13 @@ fn mcp_visible_message(body: &str) -> anyhow::Result<String> {
 #[allow(dead_code)] // used by test-only in-process MCP handlers
 fn delegation_visible_message(
     target_agent: AgentName,
-    target_thread_id: &str,
+    target_session_id: &str,
     prompt: &str,
 ) -> String {
     format!(
         "@{}#{} {}",
         target_agent.bin_name(),
-        short_thread_id(target_thread_id),
+        short_session_id(target_session_id),
         prompt.trim()
     )
 }

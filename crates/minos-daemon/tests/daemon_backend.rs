@@ -14,7 +14,7 @@ use minos_daemon::local_rpc::{start_local_rpc_server, LocalRpcConfig};
 use minos_daemon::store::event_writer::EventWriter;
 use minos_daemon::store::LocalStore;
 use minos_domain::AgentName;
-use minos_protocol::{AgentLaunchMode, ReadThreadParams, StartAgentRequest, StartAgentResponse};
+use minos_protocol::{AgentLaunchMode, ReadSessionParams, StartAgentRequest, StartAgentResponse};
 
 use async_trait::async_trait;
 use minos_cli_detect::CommandOutcome;
@@ -111,6 +111,10 @@ async fn start_agent_and_send_message_round_trip() {
                 agent: AgentName::Codex,
                 workspace: String::new(),
                 mode: Some(AgentLaunchMode::Server),
+                profile_id: None,
+                model: None,
+                reasoning_effort: None,
+                instructions: None,
             }],
         )
         .await
@@ -131,13 +135,13 @@ async fn start_agent_and_send_message_round_trip() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn list_threads_returns_data_after_agent_starts() {
+async fn list_sessions_returns_data_after_agent_starts() {
     let (_glue, _handle, tmp, _fake) = setup().await;
     let url = discovery_addr(&tmp);
     let client = WsClientBuilder::default().build(&url).await.unwrap();
 
-    let threads_before: Vec<minos_protocol::LocalThreadSnapshot> = client
-        .request("minos_local_list_local_threads", ArrayParams::new())
+    let threads_before: Vec<minos_protocol::LocalSessionSnapshot> = client
+        .request("minos_local_list_local_sessions", ArrayParams::new())
         .await
         .unwrap();
     assert!(threads_before.is_empty());
@@ -149,6 +153,10 @@ async fn list_threads_returns_data_after_agent_starts() {
                 agent: AgentName::Codex,
                 workspace: String::new(),
                 mode: Some(AgentLaunchMode::Server),
+                profile_id: None,
+                model: None,
+                reasoning_effort: None,
+                instructions: None,
             }],
         )
         .await
@@ -156,17 +164,17 @@ async fn list_threads_returns_data_after_agent_starts() {
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let threads_after: Vec<minos_protocol::LocalThreadSnapshot> = client
-        .request("minos_local_list_local_threads", ArrayParams::new())
+    let threads_after: Vec<minos_protocol::LocalSessionSnapshot> = client
+        .request("minos_local_list_local_sessions", ArrayParams::new())
         .await
         .unwrap();
 
     assert_eq!(threads_after.len(), 1);
-    assert_eq!(threads_after[0].thread_id, start_resp.session_id);
+    assert_eq!(threads_after[0].session_id, start_resp.session_id);
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn resume_thread_and_read_history() {
+async fn resume_session_and_read_history() {
     let (glue, _handle, tmp, fake) = setup().await;
     let url = discovery_addr(&tmp);
     let client = WsClientBuilder::default().build(&url).await.unwrap();
@@ -178,20 +186,24 @@ async fn resume_thread_and_read_history() {
                 agent: AgentName::Codex,
                 workspace: String::new(),
                 mode: Some(AgentLaunchMode::Server),
+                profile_id: None,
+                model: None,
+                reasoning_effort: None,
+                instructions: None,
             }],
         )
         .await
         .unwrap();
 
-    let thread_id = start_resp.session_id.clone();
+    let session_id = start_resp.session_id.clone();
 
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let history: minos_protocol::ReadThreadRawHistoryResponse = client
+    let history: minos_protocol::ReadSessionRawHistoryResponse = client
         .request(
-            "minos_local_read_thread_raw_history",
-            [ReadThreadParams {
-                thread_id: thread_id.clone(),
+            "minos_local_read_session_raw_history",
+            [ReadSessionParams {
+                session_id: session_id.clone(),
                 from_seq: None,
                 limit: 100,
             }],
@@ -202,33 +214,33 @@ async fn resume_thread_and_read_history() {
         history
             .events
             .iter()
-            .all(|event| event.thread_id == thread_id),
+            .all(|event| event.session_id == session_id),
         "raw history should only contain events for the requested thread"
     );
 
     let needs = glue
         .manager
-        .suspend_for_daemon_stop(&thread_id)
+        .suspend_for_daemon_stop(&session_id)
         .await
         .unwrap();
     assert!(!needs);
     glue.store()
-        .suspend_thread_for_daemon_restart(&thread_id, false, 1)
+        .suspend_thread_for_daemon_restart(&session_id, false, 1)
         .await
         .unwrap();
 
     let resume_resp: StartAgentResponse = client
         .request(
-            "minos_local_resume_thread",
-            [minos_protocol::ResumeThreadRequest {
-                thread_id: thread_id.clone(),
+            "minos_local_resume_session",
+            [minos_protocol::ResumeSessionRequest {
+                session_id: session_id.clone(),
                 auto_continue: false,
             }],
         )
         .await
         .unwrap();
 
-    assert_eq!(resume_resp.session_id, thread_id);
+    assert_eq!(resume_resp.session_id, session_id);
 
     fake.stop().await;
 }

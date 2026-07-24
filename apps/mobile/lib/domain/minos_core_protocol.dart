@@ -139,7 +139,7 @@ abstract class MinosCoreProtocol {
   });
 
   /// Paged thread summaries for the paired agent-host.
-  Future<ListThreadsResponse> listThreads(ListThreadsParams params);
+  Future<ListSessionsResponse> listThreads(ListSessionsParams params);
 
   /// Recent agent sessions, optionally scoped to one social conversation.
   Future<List<AgentSessionSummaryDto>> listAgentSessions({
@@ -150,8 +150,8 @@ abstract class MinosCoreProtocol {
   /// Subscribe the live WebSocket to one agent session topic.
   Future<void> subscribeAgentSession({required String sessionId});
 
-  /// Translated UI event history for one thread.
-  Future<ReadThreadResponse> readThread(ReadThreadParams params);
+  /// Translated UI event history for one session.
+  Future<ReadSessionResponse> readThread(ReadSessionParams params);
 
   // ---- Projects (Phase P) ----
 
@@ -171,8 +171,8 @@ abstract class MinosCoreProtocol {
   /// Delete a project.
   Future<void> deleteProject({required String projectId});
 
-  /// List threads within a project.
-  Future<ListProjectThreadsResponse> listProjectThreads({
+  /// List sessions within a project.
+  Future<ListProjectSessionsResponse> listProjectThreads({
     required String projectId,
     int limit = 50,
     int? beforeTsMs,
@@ -217,27 +217,27 @@ abstract class MinosCoreProtocol {
   // ---- Agent dispatch (Phase 8) ----
 
   /// Send a follow-up user message to an existing agent session. The
-  /// `sessionId` is the session/thread identifier.
+  /// `sessionId` is the session/session identifier.
   Future<void> sendUserMessage({
     required String sessionId,
     required String text,
   });
 
-  /// Pause an in-flight turn while keeping the thread resumable.
-  Future<void> interruptThread({required String threadId});
+  /// Pause an in-flight turn while keeping the session resumable.
+  Future<void> interruptThread({required String sessionId});
 
-  /// Close an agent thread by its `thread_id`. Replaces the pre-Phase-C
+  /// Close an agent session by its `session_id`. Replaces the pre-Phase-C
   /// `stop_agent()` surface — the multi-thread `AgentManager` keys lifecycle
-  /// operations on `thread_id` rather than implicitly on the single active
+  /// operations on `session_id` rather than implicitly on the single active
   /// session. Idempotent on the daemon side; calling for an already-closed
   /// thread is a benign no-op.
-  Future<void> closeThread({required String threadId});
+  Future<void> closeThread({required String sessionId});
 
   /// Permanently delete a thread. Used exclusively for the swipe-to-delete
-  /// gesture in the thread list. Semantically identical to [closeThread] on
+  /// gesture in the session list. Semantically identical to [closeThread] on
   /// the wire, but named distinctly so call-sites express intent: interrupt
   /// pauses a session for later resume, while delete is a permanent close.
-  Future<void> deleteThread({required String threadId});
+  Future<void> deleteThread({required String sessionId});
 
   /// Detect CLI agents available on the paired runtime.
   Future<List<AgentDescriptor>> listClis();
@@ -279,13 +279,13 @@ abstract class MinosCoreProtocol {
 
   /// Send an approval decision (accept/decline) for a pending approval
   /// request. The [requestId] must match the original request's id, and
-  /// [threadId] identifies the thread the approval belongs to. The
+  /// [sessionId] identifies the session the approval belongs to. The
   /// [decision] is a JSON-encodable value matching the expected response
   /// shape for the approval variant (command execution, file change, or
   /// permissions).
   Future<void> sendApprovalDecision({
     required String requestId,
-    required String threadId,
+    required String sessionId,
     required Map<String, dynamic> decision,
   });
 

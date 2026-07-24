@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use minos_agent_runtime::{
     CloseReason as RuntimeCloseReason, ManagerEvent, PauseReason as RuntimePauseReason,
-    StartAgentOutcome, ThreadState as RuntimeThreadState,
+    SessionState as RuntimeSessionState, StartAgentOutcome,
 };
 use minos_domain::AgentDescriptor;
 use minos_domain::AgentName;
@@ -23,12 +23,12 @@ pub enum BackendConnectionState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BackendThreadSnapshot {
-    pub thread_id: String,
+pub struct BackendSessionSnapshot {
+    pub session_id: String,
     pub agent: Option<AgentName>,
     pub workspace: PathBuf,
-    pub state: minos_agent_runtime::ThreadState,
-    pub parent_thread_id: Option<String>,
+    pub state: minos_agent_runtime::SessionState,
+    pub parent_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,50 +60,50 @@ impl ProjectEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ThreadSummaryEntry {
-    pub thread_id: String,
+pub struct SessionSummaryEntry {
+    pub session_id: String,
     pub agent: AgentName,
     pub title: Option<String>,
     pub first_ts_ms: i64,
     pub last_ts_ms: i64,
     pub message_count: u32,
     pub ended_at_ms: Option<i64>,
-    pub parent_thread_id: Option<String>,
-    pub state: RuntimeThreadState,
+    pub parent_session_id: Option<String>,
+    pub state: RuntimeSessionState,
     pub needs_continue: bool,
 }
 
-impl ThreadSummaryEntry {
-    pub fn from_summary(s: &minos_protocol::ThreadSummary) -> Self {
+impl SessionSummaryEntry {
+    pub fn from_summary(s: &minos_protocol::SessionSummary) -> Self {
         Self {
-            thread_id: s.thread_id.clone(),
+            session_id: s.session_id.clone(),
             agent: s.agent,
             title: s.title.clone(),
             first_ts_ms: s.first_ts_ms,
             last_ts_ms: s.last_ts_ms,
             message_count: s.message_count,
             ended_at_ms: s.ended_at_ms,
-            parent_thread_id: s.parent_thread_id.clone(),
-            state: protocol_thread_state_to_runtime(&s.state),
+            parent_session_id: s.parent_session_id.clone(),
+            state: protocol_session_state_to_runtime(&s.state),
             needs_continue: s.needs_continue,
         }
     }
 }
 
-fn protocol_thread_state_to_runtime(state: &minos_protocol::ThreadState) -> RuntimeThreadState {
+fn protocol_session_state_to_runtime(state: &minos_protocol::SessionState) -> RuntimeSessionState {
     match state {
-        minos_protocol::ThreadState::Starting => RuntimeThreadState::Starting,
-        minos_protocol::ThreadState::Idle => RuntimeThreadState::Idle,
-        minos_protocol::ThreadState::Running { turn_started_at_ms } => {
-            RuntimeThreadState::Running {
+        minos_protocol::SessionState::Starting => RuntimeSessionState::Starting,
+        minos_protocol::SessionState::Idle => RuntimeSessionState::Idle,
+        minos_protocol::SessionState::Running { turn_started_at_ms } => {
+            RuntimeSessionState::Running {
                 turn_started_at_ms: *turn_started_at_ms,
             }
         }
-        minos_protocol::ThreadState::Suspended { reason } => RuntimeThreadState::Suspended {
+        minos_protocol::SessionState::Suspended { reason } => RuntimeSessionState::Suspended {
             reason: protocol_pause_reason_to_runtime(reason),
         },
-        minos_protocol::ThreadState::Resuming => RuntimeThreadState::Resuming,
-        minos_protocol::ThreadState::Closed { reason } => RuntimeThreadState::Closed {
+        minos_protocol::SessionState::Resuming => RuntimeSessionState::Resuming,
+        minos_protocol::SessionState::Closed { reason } => RuntimeSessionState::Closed {
             reason: protocol_close_reason_to_runtime(reason),
         },
     }
@@ -159,7 +159,7 @@ pub struct ConversationMessageEntry {
     pub message_seq: i64,
     pub message_id: String,
     pub conversation_id: String,
-    pub thread_id: Option<String>,
+    pub session_id: Option<String>,
     pub created_at_ms: i64,
     pub sender_role: String,
     pub agent: Option<AgentName>,
@@ -181,7 +181,7 @@ impl ConversationMessageEntry {
             message_seq: s.message_seq,
             message_id: s.message_id.clone(),
             conversation_id: s.conversation_id.clone(),
-            thread_id: s.thread_id.clone(),
+            session_id: s.session_id.clone(),
             created_at_ms: s.created_at_ms,
             sender_role: s.sender_role.clone(),
             agent: s.agent,
@@ -199,36 +199,36 @@ pub trait AgentBackend: Send + Sync {
 
     async fn start_agent(&self, agent: AgentName, workspace: PathBuf) -> Result<StartAgentOutcome>;
 
-    async fn send_message(&self, thread_id: &str, text: &str) -> Result<()>;
+    async fn send_message(&self, session_id: &str, text: &str) -> Result<()>;
 
     async fn send_approval_decision(
         &self,
         request_id: &str,
-        thread_id: &str,
+        session_id: &str,
         decision: Value,
     ) -> Result<()>;
 
     async fn respond_opencode_permission(
         &self,
-        thread_id: &str,
+        session_id: &str,
         permission_id: &str,
         response: &str,
     ) -> Result<()>;
 
     async fn respond_opencode_question(
         &self,
-        thread_id: &str,
+        session_id: &str,
         question_id: &str,
         answers: Vec<Vec<String>>,
     ) -> Result<()>;
 
-    async fn interrupt_thread(&self, thread_id: &str) -> Result<()>;
+    async fn interrupt_session(&self, session_id: &str) -> Result<()>;
 
-    async fn close_thread(&self, thread_id: &str) -> Result<()>;
+    async fn close_session(&self, session_id: &str) -> Result<()>;
 
-    async fn delete_thread(&self, thread_id: &str) -> Result<()>;
+    async fn delete_session(&self, session_id: &str) -> Result<()>;
 
-    async fn list_threads(&self) -> Result<Vec<BackendThreadSnapshot>>;
+    async fn list_sessions(&self) -> Result<Vec<BackendSessionSnapshot>>;
 
     async fn list_projects(&self) -> Result<Vec<ProjectEntry>>;
 
@@ -247,20 +247,30 @@ pub trait AgentBackend: Send + Sync {
     async fn list_conversation_agent_sessions(
         &self,
         conversation_id: &str,
-    ) -> Result<Vec<ThreadSummaryEntry>>;
+    ) -> Result<Vec<SessionSummaryEntry>>;
 
+    /// Start an agent in a conversation.
+    ///
+    /// When `profile_id` is set, leave model/effort/instructions unset so
+    /// daemon `resolve_launch_options` fills them from the profile.
     async fn start_agent_in_conversation(
         &self,
         conversation_id: &str,
         agent: AgentName,
         workspace: PathBuf,
+        profile_id: Option<String>,
     ) -> Result<StartAgentOutcome>;
+
+    /// List host agent profiles (for @-mentions + bare-agent newest-profile default).
+    async fn list_agent_profiles(&self) -> Result<Vec<minos_protocol::AgentProfileSummary>> {
+        Ok(Vec::new())
+    }
 
     async fn append_conversation_message(
         &self,
         conversation_id: &str,
         message_id: Option<&str>,
-        thread_id: Option<&str>,
+        session_id: Option<&str>,
         sender_role: &str,
         agent: Option<AgentName>,
         body: &str,
@@ -268,18 +278,18 @@ pub trait AgentBackend: Send + Sync {
 
     /// Reattach a persisted/suspended thread. When `auto_continue` is true and
     /// the store has `needs_continue`, injects a one-shot CONTINUE prompt.
-    async fn resume_thread(
+    async fn resume_session(
         &self,
-        thread_id: &str,
+        session_id: &str,
         auto_continue: bool,
     ) -> Result<StartAgentOutcome>;
 
-    async fn read_thread_raw_history(
+    async fn read_session_raw_history(
         &self,
-        thread_id: &str,
+        session_id: &str,
         from_seq: Option<u64>,
         limit: u32,
-    ) -> Result<minos_protocol::local_rpc::ReadThreadRawHistoryResponse>;
+    ) -> Result<minos_protocol::local_rpc::ReadSessionRawHistoryResponse>;
 
     async fn subscribe_ingest(&self) -> broadcast::Receiver<LocalIngestFrame>;
 

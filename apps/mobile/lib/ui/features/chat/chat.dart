@@ -1,6 +1,6 @@
 /// Feature: Chat (Agent Thread View)
 ///
-/// Real-time chat surface for agent threads. Renders translated
+/// Real-time chat surface for agent sessions. Renders translated
 /// UiEventMessage streams as message bubbles, tool-call cards, and
 /// reasoning sections with a sticky composer.
 ///

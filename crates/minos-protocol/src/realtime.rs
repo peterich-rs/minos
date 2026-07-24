@@ -227,14 +227,14 @@ pub enum ServerFrame {
         close_code: u16,
     },
     HostIngestAck {
-        thread_id: String,
+        session_id: String,
         accepted_to_seq: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         batch_id: Option<String>,
     },
     PullIngestRange {
         request_id: String,
-        thread_id: String,
+        session_id: String,
         from_seq: u64,
         to_seq: u64,
         max_bytes: u64,
@@ -243,7 +243,7 @@ pub enum ServerFrame {
     },
     PullAck {
         request_id: String,
-        thread_id: String,
+        session_id: String,
         accepted_to_seq: u64,
     },
     Pong {
@@ -285,7 +285,7 @@ pub struct SeqRange {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HostIngestChunk {
     pub event_id: String,
-    pub thread_id: String,
+    pub session_id: String,
     pub seq: u64,
     pub agent: minos_domain::AgentName,
     pub kind: String,
@@ -307,7 +307,7 @@ pub struct HostIngestLiveBatch {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionGapManifest {
-    pub thread_id: String,
+    pub session_id: String,
     pub backend_acked_seq: u64,
     pub local_from_seq: u64,
     pub local_to_seq: u64,
@@ -330,7 +330,7 @@ pub struct HostGapManifest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HostIngestPullResponse {
     pub request_id: String,
-    pub thread_id: String,
+    pub session_id: String,
     pub from_seq: u64,
     pub to_seq: u64,
     pub chunks: Vec<HostIngestChunk>,
@@ -652,7 +652,7 @@ mod tests {
     fn sample_host_ingest_chunk(seq: u64) -> HostIngestChunk {
         HostIngestChunk {
             event_id: format!("evt-{seq}"),
-            thread_id: "thr-sync".into(),
+            session_id: "thr-sync".into(),
             seq,
             agent: minos_domain::AgentName::Codex,
             kind: "agent_event".into(),
@@ -692,7 +692,7 @@ mod tests {
                 manifest_id: "manifest-1".into(),
                 host_id: minos_domain::DeviceId::new(),
                 sessions: vec![SessionGapManifest {
-                    thread_id: "thr-A".into(),
+                    session_id: "thr-A".into(),
                     backend_acked_seq: 100,
                     local_from_seq: 101,
                     local_to_seq: 500,
@@ -715,7 +715,7 @@ mod tests {
         let frame = ClientFrame::HostIngestPullResponse {
             response: HostIngestPullResponse {
                 request_id: "pull-1".into(),
-                thread_id: "thr-sync".into(),
+                session_id: "thr-sync".into(),
                 from_seq: 1,
                 to_seq: 2,
                 chunks: vec![sample_host_ingest_chunk(1), sample_host_ingest_chunk(2)],
@@ -731,7 +731,7 @@ mod tests {
     fn server_frame_pull_and_ack_round_trip() {
         let pull = ServerFrame::PullIngestRange {
             request_id: "pull-1".into(),
-            thread_id: "thr-sync".into(),
+            session_id: "thr-sync".into(),
             from_seq: 1,
             to_seq: 50,
             max_bytes: 2_000_000,
@@ -743,7 +743,7 @@ mod tests {
         assert_eq!(pull, back);
 
         let ack = ServerFrame::HostIngestAck {
-            thread_id: "thr-sync".into(),
+            session_id: "thr-sync".into(),
             accepted_to_seq: 50,
             batch_id: Some("batch-1".into()),
         };
@@ -753,7 +753,7 @@ mod tests {
 
         let pull_ack = ServerFrame::PullAck {
             request_id: "pull-1".into(),
-            thread_id: "thr-sync".into(),
+            session_id: "thr-sync".into(),
             accepted_to_seq: 50,
         };
         let json = serde_json::to_string(&pull_ack).unwrap();

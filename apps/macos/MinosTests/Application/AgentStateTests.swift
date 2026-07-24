@@ -11,7 +11,7 @@ final class AgentStateTests: XCTestCase {
     func testAgentObserverPushDrivesAppState() async {
         let daemon = MockDaemon()
         let appState = await bootedAppState(with: daemon)
-        let expected = ThreadState.running(turnStartedAtMs: 1_700_000_000_000)
+        let expected = SessionState.running(turnStartedAtMs: 1_700_000_000_000)
 
         daemon.emitAgentState(expected)
         await Task.yield()
@@ -22,10 +22,10 @@ final class AgentStateTests: XCTestCase {
 
     @MainActor
     func testAgentObserverRefreshesCurrentThreadSnapshot() async {
-        let expected = ThreadState.running(turnStartedAtMs: 1_700_000_000_000)
+        let expected = SessionState.running(turnStartedAtMs: 1_700_000_000_000)
         let daemon = MockDaemon(
-            currentAgentThread: MockDaemon.makeAgentThreadSnapshot(
-                threadId: "mobile-thread",
+            currentAgentSession: MockDaemon.makeAgentSessionSnapshot(
+                sessionId: "mobile-thread",
                 workspaceRoot: "/Users/fan/work",
                 state: expected
             )
@@ -54,7 +54,7 @@ final class AgentStateTests: XCTestCase {
 
         XCTAssertEqual(
             daemon.startAgentCalls,
-            [StartAgentRequest(agent: .codex, workspace: "", mode: .jsonl)]
+            [MockDaemon.makeStartAgentRequest(mode: .jsonl)]
         )
         XCTAssertEqual(appState.currentSession?.sessionId, "t1")
         XCTAssertNil(appState.agentError)
@@ -73,7 +73,7 @@ final class AgentStateTests: XCTestCase {
 
         XCTAssertEqual(
             daemon.startAgentCalls,
-            [StartAgentRequest(agent: .codex, workspace: "", mode: .server)]
+            [MockDaemon.makeStartAgentRequest(mode: .server)]
         )
     }
 
@@ -86,7 +86,7 @@ final class AgentStateTests: XCTestCase {
 
         XCTAssertEqual(
             daemon.startAgentCalls,
-            [StartAgentRequest(agent: .codex, workspace: "", mode: .jsonl)]
+            [MockDaemon.makeStartAgentRequest(mode: .jsonl)]
         )
         XCTAssertEqual(appState.agentState, .idle)
         XCTAssertEqual(appState.agentError, .AgentAlreadyRunning)
@@ -107,7 +107,7 @@ final class AgentStateTests: XCTestCase {
     }
 
     @MainActor
-    func testStopAgentClosesActiveThread() async {
+    func testStopAgentClosesActiveSession() async {
         let daemon = MockDaemon()
         let appState = await bootedAppState(with: daemon)
         appState.currentSession = MockDaemon.makeStartAgentResponse(sessionId: "thread-99", cwd: "/w")
@@ -115,8 +115,8 @@ final class AgentStateTests: XCTestCase {
         await appState.stopAgent()
 
         XCTAssertEqual(
-            daemon.closeThreadCalls,
-            [CloseThreadRequest(threadId: "thread-99")]
+            daemon.closeSessionCalls,
+            [CloseSessionRequest(sessionId: "thread-99")]
         )
         XCTAssertNil(appState.currentSession)
     }

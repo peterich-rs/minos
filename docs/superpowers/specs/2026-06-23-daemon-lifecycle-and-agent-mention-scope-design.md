@@ -11,13 +11,13 @@
 
 在 conversation 中输入 `@` 选择已有 agent session 时，候选列表显示了**不属于当前 conversation** 的 agent session hashid。
 
-**根因:** 修复前 `room_agent_mention_candidates()` (`crates/minos-tui/src/ui/mod.rs:250`) 从 `self.threads`（全局线程列表，包含所有 conversation 的 agent）而非 `self.conversation_agent_sessions`（当前 conversation 的 session 列表）获取 "existing" 候选。`thread_id_for_agent_short_id()` (`submission.rs:414`) 同样从全局 `self.threads` 解析，保持了一致的错误。
+**根因:** 修复前 `room_agent_mention_candidates()` (`crates/minos-tui/src/ui/mod.rs:250`) 从 `self.sessions`（全局线程列表，包含所有 conversation 的 agent）而非 `self.conversation_agent_sessions`（当前 conversation 的 session 列表）获取 "existing" 候选。`session_id_for_agent_short_id()` (`submission.rs:414`) 同样从全局 `self.sessions` 解析，保持了一致的错误。
 
 ### 1.2 Issue 2: TUI 重启后 agent session 全部关闭
 
 用户关闭 TUI 再打开后，之前用过的 agent session 处于 Closed 状态，无法继续使用。
 
-**根因:** 当 TUI 没有发现外部 daemon 时，`start_managed_daemon_for_tui()` (`main.rs:241`) 在 TUI 进程**内部**运行 daemon（共享 Tokio runtime）。TUI 退出时 `main.rs:423-424` 调用 `managed_daemon.stop()` 杀掉 daemon 及其所有 agent thread。下次启动时新 daemon 从零开始，旧 thread 状态丢失或变为 Closed/Suspended。
+**根因:** 当 TUI 没有发现外部 daemon 时，`start_managed_daemon_for_tui()` (`main.rs:241`) 在 TUI 进程**内部**运行 daemon（共享 Tokio runtime）。TUI 退出时 `main.rs:423-424` 调用 `managed_daemon.stop()` 杀掉 daemon 及其所有 agent session。下次启动时新 daemon 从零开始，旧 thread 状态丢失或变为 Closed/Suspended。
 
 ### 1.3 目标行为
 
@@ -44,19 +44,19 @@ Daemon 是常驻服务，TUI 是可随时连接/断开的视图层：
 
 > 注意：当前 TUI `NavLevel` 只有 `Projects / Conversations / Conversation / AgentDetail`，尚未建模独立的 `Agent`/`Agents` 层。不要把 Conversations 层当作全局 Agent 层；它没有 active conversation，因此不能暴露 existing session hash。
 
-`ThreadSummaryEntry` (`backend/mod.rs:70`) 缺少 `state` 字段。利用 `ended_at_ms: Option<i64>` 作为 closed 判断依据（`Some` = 已结束 = 跳过），或者给 `ThreadSummaryEntry` 添加 `state` 字段。**推荐添加 `state` 字段**，因为 `ended_at_ms` 语义不够精确（Suspended thread 不会有 `ended_at_ms` 但也不应出现在 mention 候选中——实际上 Suspended thread 可以接受消息所以应出现）。
+`SessionSummaryEntry` (`backend/mod.rs:70`) 缺少 `state` 字段。利用 `ended_at_ms: Option<i64>` 作为 closed 判断依据（`Some` = 已结束 = 跳过），或者给 `SessionSummaryEntry` 添加 `state` 字段。**推荐添加 `state` 字段**，因为 `ended_at_ms` 语义不够精确（Suspended thread 不会有 `ended_at_ms` 但也不应出现在 mention 候选中——实际上 Suspended thread 可以接受消息所以应出现）。
 
 #### 2.1.2 短 ID 解析对称更新
 
-`thread_id_for_agent_short_id()` (`submission.rs:414`) 同样需要根据 nav level 从对应列表解析。如果当前在 conversation 内，只搜索 `conversation_agent_sessions`。
+`session_id_for_agent_short_id()` (`submission.rs:414`) 同样需要根据 nav level 从对应列表解析。如果当前在 conversation 内，只搜索 `conversation_agent_sessions`。
 
 #### 2.1.3 影响范围
 
 - `crates/minos-tui/src/ui/mod.rs` — `room_agent_mention_candidates()` 添加 nav level 参数或内部判断
-- `crates/minos-tui/src/app/submission.rs` — `thread_id_for_agent_short_id()` 对称更新
-- `crates/minos-tui/src/backend/mod.rs` — `ThreadSummaryEntry` 可能添加 `state` 字段
-- `crates/minos-tui/src/backend/daemon.rs` / `embedded.rs` — `list_conversation_agent_sessions` 实现需要返回 state；daemon 端必须采用与 `get_thread` 相同的 live-manager-state 优先、DB row fallback 策略（见 `crates/minos-daemon/src/agent.rs:763-782`），否则运行中线程的 state 可能滞后，mention 过滤 closed/open 会不准
-- `crates/minos-protocol/` — `ThreadSummary` 如果缺少 state 也需添加
+- `crates/minos-tui/src/app/submission.rs` — `session_id_for_agent_short_id()` 对称更新
+- `crates/minos-tui/src/backend/mod.rs` — `SessionSummaryEntry` 可能添加 `state` 字段
+- `crates/minos-tui/src/backend/daemon.rs` / `embedded.rs` — `list_conversation_agent_sessions` 实现需要返回 state；daemon 端必须采用与 `get_session` 相同的 live-manager-state 优先、DB row fallback 策略（见 `crates/minos-daemon/src/agent.rs:763-782`），否则运行中线程的 state 可能滞后，mention 过滤 closed/open 会不准
+- `crates/minos-protocol/` — `SessionSummary` 如果缺少 state 也需添加
 
 ### 2.2 Issue 2: Daemon 常驻化
 
@@ -197,9 +197,9 @@ Daemon 的关闭只通过两条路径触发，均走 `shutdown_daemon` RPC metho
 | 文件 | 变更 |
 |------|------|
 | `crates/minos-tui/src/ui/mod.rs:250` | `room_agent_mention_candidates()` 在 conversation 内时从 `conversation_agent_sessions` 取候选 |
-| `crates/minos-tui/src/app/submission.rs:414` | `thread_id_for_agent_short_id()` 对称更新，在 conversation 内时只搜索 `conversation_agent_sessions` |
-| `crates/minos-tui/src/backend/mod.rs:70` | `ThreadSummaryEntry` 添加 `state` 字段（或使用 `ended_at_ms` 过滤） |
-| `crates/minos-protocol/` | `ThreadSummary` 如需添加 `state` 字段则同步更新 |
+| `crates/minos-tui/src/app/submission.rs:414` | `session_id_for_agent_short_id()` 对称更新，在 conversation 内时只搜索 `conversation_agent_sessions` |
+| `crates/minos-tui/src/backend/mod.rs:70` | `SessionSummaryEntry` 添加 `state` 字段（或使用 `ended_at_ms` 过滤） |
+| `crates/minos-protocol/` | `SessionSummary` 如需添加 `state` 字段则同步更新 |
 | `crates/minos-tui/src/backend/daemon.rs` | `list_conversation_agent_sessions` 返回 state（live-manager 优先） |
 | `crates/minos-tui/src/backend/embedded.rs` | 同上 |
 | `crates/minos-tui/src/app_tests/` | 添加测试：conversation 内 mention 只显示当前 conversation 的 agent |
@@ -223,7 +223,7 @@ Daemon 的关闭只通过两条路径触发，均走 `shutdown_daemon` RPC metho
 
 ### 不变的部分
 
-- Daemon 本身的 agent 管理逻辑（`AgentManager`, `close_thread`, `resume_thread` 等）不变
+- Daemon 本身的 agent 管理逻辑（`AgentManager`, `close_session`, `resume_session` 等）不变
 - `ThreadState` 状态机不变（Closed 仍是终态——但 daemon 常驻后用户不会因 TUI 重启遇到意外的 Closed）
 - `shutdown()` 的 embedded mode guard 不变（embedded mode 仍关闭所有 thread）
 - Discovery 文件格式和路径不变
@@ -234,7 +234,7 @@ Daemon 的关闭只通过两条路径触发，均走 `shutdown_daemon` RPC metho
 ### Issue 1
 
 - 单元测试：`room_agent_mention_candidates()` 在 conversation nav level 下只返回 `conversation_agent_sessions` 中的 thread
-- 单元测试：`thread_id_for_agent_short_id()` 在 conversation 内只解析当前 conversation 的 session
+- 单元测试：`session_id_for_agent_short_id()` 在 conversation 内只解析当前 conversation 的 session
 - 单元测试：Conversations/new-conversation input 不返回任何 existing session hash
 
 ### Issue 2
@@ -262,8 +262,8 @@ Daemon 的关闭只通过两条路径触发，均走 `shutdown_daemon` RPC metho
 建议分两个独立 PR：
 
 **PR 1: Issue 1 — Agent Mention 会话作用域修复**（小，低风险）
-1. 给 `ThreadSummaryEntry` / `ThreadSummary` 添加 `state` 字段（如需要）
-2. 修改 `room_agent_mention_candidates()` 和 `thread_id_for_agent_short_id()`
+1. 给 `SessionSummaryEntry` / `SessionSummary` 添加 `state` 字段（如需要）
+2. 修改 `room_agent_mention_candidates()` 和 `session_id_for_agent_short_id()`
 3. 添加单元测试
 
 **PR 2: Issue 2 — Daemon 常驻化**（大，架构变更）

@@ -46,7 +46,7 @@ import {
   normalizeAgentWorkspace,
   saveAgentWorkspace,
 } from '@/lib/agent-profiles'
-import type { AgentName, HostSummary, ThreadSummary } from '@/lib/minos'
+import type { AgentName, HostSummary, SessionSummary } from '@/lib/minos'
 import { useAppStore } from '@/lib/store'
 import { cn } from '@/lib/utils'
 
@@ -87,7 +87,7 @@ function formatRelative(ms: number): string {
 
 type ThreadBucket = 'running' | 'done' | 'error'
 
-function bucketOf(t: ThreadSummary): ThreadBucket {
+function bucketOf(t: SessionSummary): ThreadBucket {
   if (!t.ended_at_ms) return 'running'
   if (t.end_reason?.kind === 'crashed' || t.end_reason?.kind === 'timeout') return 'error'
   return 'done'
@@ -151,7 +151,7 @@ function commitDraft(
 
 export function TasksWorkspace() {
   const {
-    threads,
+    sessions,
     hosts,
     activeHost,
     setSelectedThreadId,
@@ -169,12 +169,12 @@ export function TasksWorkspace() {
     saveAgentWorkspace(workspace)
   }, [workspace])
 
-  const buckets = threads.reduce(
+  const buckets = sessions.reduce(
     (acc, thread) => {
       acc[bucketOf(thread)].push(thread)
       return acc
     },
-    { running: [] as ThreadSummary[], done: [] as ThreadSummary[], error: [] as ThreadSummary[] },
+    { running: [] as SessionSummary[], done: [] as SessionSummary[], error: [] as SessionSummary[] },
   )
   const selectedProfile =
     workspace.profiles.find((p) => p.id === selectedProfileId) ?? null
@@ -236,8 +236,8 @@ export function TasksWorkspace() {
     commitWorkspace({ ...workspace, preferredProfileId: profileId })
   }
 
-  function openThread(thread: ThreadSummary) {
-    setSelectedThreadId(thread.thread_id)
+  function openThread(thread: SessionSummary) {
+    setSelectedThreadId(thread.session_id)
     setRoute('chat')
   }
 
@@ -256,7 +256,7 @@ export function TasksWorkspace() {
             title="进行中"
             bucket="running"
             tone="primary"
-            threads={buckets.running}
+            sessions={buckets.running}
             onOpen={openThread}
             empty="没有正在运行的 Agent"
           />
@@ -264,7 +264,7 @@ export function TasksWorkspace() {
             title="已完成"
             bucket="done"
             tone="success"
-            threads={buckets.done}
+            sessions={buckets.done}
             onOpen={openThread}
             empty="没有已完成的记录"
           />
@@ -272,7 +272,7 @@ export function TasksWorkspace() {
             title="异常"
             bucket="error"
             tone="destructive"
-            threads={buckets.error}
+            sessions={buckets.error}
             onOpen={openThread}
             empty="没有异常结束的任务"
           />
@@ -538,16 +538,16 @@ function ThreadBucketColumn({
   title,
   bucket,
   tone,
-  threads,
+  sessions,
   empty,
   onOpen,
 }: {
   title: string
   bucket: ThreadBucket
   tone: 'primary' | 'success' | 'destructive'
-  threads: ThreadSummary[]
+  sessions: SessionSummary[]
   empty: string
-  onOpen: (t: ThreadSummary) => void
+  onOpen: (t: SessionSummary) => void
 }) {
   const icon =
     bucket === 'running' ? <Activity size={14} /> : bucket === 'done' ? <CheckCircle2 size={14} /> : <XCircle size={14} />
@@ -566,18 +566,18 @@ function ThreadBucketColumn({
           <span>{title}</span>
         </div>
         <Badge variant="outline" className="mono">
-          {threads.length}
+          {sessions.length}
         </Badge>
       </div>
       <div className="flex flex-col gap-2">
-        {threads.length === 0 ? (
+        {sessions.length === 0 ? (
           <p className="rounded-lg border border-dashed border-border/70 px-3 py-6 text-center text-xs text-muted-foreground">
             {empty}
           </p>
         ) : (
-          threads.slice(0, 10).map((t) => (
+          sessions.slice(0, 10).map((t) => (
             <motion.button
-              key={t.thread_id}
+              key={t.session_id}
               type="button"
               onClick={() => onOpen(t)}
               whileHover={{ y: -1 }}

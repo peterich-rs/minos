@@ -9,7 +9,7 @@
 //! Phase C retired the single-session `AgentRuntime` (lived in `runtime.rs`)
 //! and the legacy `AgentState` value object (lived in `state.rs`). The
 //! replacement is a multi-workspace `AgentManager` that owns one
-//! `AppServerInstance` per workspace and N `ThreadHandle`s per instance.
+//! `AppServerInstance` per workspace and N `SessionHandle`s per instance.
 //!
 //! ## Dependency rule
 //!
@@ -42,9 +42,9 @@ pub mod manager_event;
 pub mod opencode_driver;
 pub(crate) mod process;
 pub mod pty_agent;
+pub mod session_handle;
 pub mod state_machine;
 pub mod store_facing;
-pub mod thread_handle;
 
 #[cfg(feature = "test-support")]
 pub mod test_support;
@@ -59,12 +59,12 @@ pub use grok_driver::GrokAcpInstance;
 pub use ingest::{Ingestor, IngestorHandle};
 pub use instance::AppServerInstance;
 pub use manager::{
-    AgentManager, DispatchOutcome, IngestSink, InstanceCaps, SessionPolicies, StartAgentOutcome,
-    CONTINUE_PROMPT,
+    AgentLaunchOptions, AgentManager, DispatchOutcome, IngestSink, InstanceCaps, SessionPolicies,
+    StartAgentOutcome, CONTINUE_PROMPT,
 };
 pub use manager_event::ManagerEvent;
 pub use minos_domain::AgentName as AgentKind;
 pub use opencode_driver::OpencodeServerInstance;
 pub use pty_agent::PtyAgent;
-pub use state_machine::{CloseReason, PauseReason, ThreadState};
-pub use thread_handle::ThreadHandle;
+pub use session_handle::SessionHandle;
+pub use state_machine::{CloseReason, PauseReason, SessionState};

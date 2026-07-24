@@ -16,7 +16,7 @@ Use `assets/node-stdio-client.ts` as a starting point. The pattern is:
 Maintain these maps:
 
 - `pendingRequests: Map<number, {resolve, reject, method}>`
-- `threads: Map<string, ThreadState>`
+- `sessions: Map<string, ThreadState>`
 - `turns: Map<string, TurnState>` keyed by `turnId`
 - `items: Map<string, ItemState>` keyed by `item.id`
 - `approvalRequests: Map<string, ApprovalRequest>` keyed by request id or item id
@@ -39,7 +39,7 @@ Start a new thread:
 Start a turn:
 
 ```json
-{ "method": "turn/start", "id": 30, "params": { "threadId": "thr_123", "input": [{ "type": "text", "text": "Run tests" }], "cwd": "/Users/me/project", "approvalPolicy": "unlessTrusted", "sandboxPolicy": { "type": "workspaceWrite", "writableRoots": ["/Users/me/project"], "networkAccess": true }, "model": "gpt-5.4", "effort": "medium", "summary": "concise" } }
+{ "method": "turn/start", "id": 30, "params": { "sessionId": "thr_123", "input": [{ "type": "text", "text": "Run tests" }], "cwd": "/Users/me/project", "approvalPolicy": "unlessTrusted", "sandboxPolicy": { "type": "workspaceWrite", "writableRoots": ["/Users/me/project"], "networkAccess": true }, "model": "gpt-5.4", "effort": "medium", "summary": "concise" } }
 ```
 
 Input item types documented for turn input include:
@@ -91,7 +91,7 @@ Approval UX rules:
 
 - Show command, cwd, reason, proposed policy amendment, and available decisions when present.
 - When `networkApprovalContext` is present, render it as network access to host/protocol/port, not as a generic shell command.
-- Scope prompts by `threadId` and `turnId`.
+- Scope prompts by `sessionId` and `turnId`.
 - Resolve or clear stale prompts when `serverRequest/resolved`, `turn/completed`, or `turn/interrupt` arrives.
 
 ## Error handling

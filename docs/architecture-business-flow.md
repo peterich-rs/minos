@@ -138,7 +138,7 @@
 1. daemon 运行 agent，将 `RawIngest` 降为 canonical `IngestChunk`，预分配 host-local `seq`。
 2. daemon 同时批量写本地 SQLite，并在 WS 在线时通过 `/ws/host` 发送 `HostIngestLiveBatch`。本地写库不等待 relay outbound queue。
 2. 后端:
-   - 按 `(host_device_id, thread_id, seq)` 幂等写入 `raw_events`
+   - 按 `(host_device_id, session_id, seq)` 幂等写入 `raw_events`
    - 同 key 同 checksum 视为重复；同 key 不同 checksum 是不变量错误
    - 将 chunk 内 projection 发布为 `StreamEvent`
    - Client gateway 推送到订阅客户端
@@ -209,13 +209,13 @@ TUI / Desktop 通过 JSON-RPC 连接 `minos-daemon`:
 
 ### Host-local agent session resume（TUI / Desktop）
 
-与云端 `agent_sessions` 无关：host 本地 SQLite `threads` 行在 managed daemon 退出后仍可复用。
+与云端 `agent_sessions` 无关：host 本地 SQLite `sessions` 行在 managed daemon 退出后仍可复用。
 
 | 场景 | 行为 |
 |------|------|
-| 退出时 idle | 落库 `suspended` + `needs_continue=0`；下次 `resume_thread` reattach，用户下一条消息续历史 |
-| 退出时 running | 落库 `suspended` + `needs_continue=1`；打开 conversation 时 **最多一个** top-level session `resume_thread(auto_continue=true)` 注入 CONTINUE |
-| 用户立即发消息 | send 路径 `resume_thread(auto_continue=false)` + `send_user_message`；`take_needs_continue` 清 flag，**不**注入 CONTINUE |
+| 退出时 idle | 落库保持 **`idle`** + `needs_continue=0`（不显示 Paused）；下次 `resume_session` reattach，用户下一条消息续历史 |
+| 退出时 running | 落库 `suspended` + `needs_continue=1`；打开 conversation 时 **最多一个** top-level session `resume_session(auto_continue=true)` 注入 CONTINUE |
+| 用户立即发消息 | send 路径 `resume_session(auto_continue=false)` + `send_user_message`；`take_needs_continue` 清 flag，**不**注入 CONTINUE |
 | 用户显式 close | `Closed`，不可 resume / 默认复用 |
 
 常驻 detached daemon + Soft/Hard quit 见 `docs/superpowers/specs/2026-06-23-daemon-lifecycle-and-agent-mention-scope-design.md`（后续）；本路径保证 process-death recovery 正确。

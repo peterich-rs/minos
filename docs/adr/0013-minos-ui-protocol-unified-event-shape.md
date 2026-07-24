@@ -24,7 +24,7 @@ Introduce a new dedicated crate, **`minos-ui-protocol`**, that owns:
 - One enum `UiEventMessage` whose variants are the union of meaningful events any agent CLI can emit, tagged at the **discriminator level the UI cares about**. Variants today:
 
   ```text
-  ThreadOpened / ThreadTitleUpdated / ThreadClosed
+  SessionOpened / SessionTitleUpdated / SessionClosed
   MessageStarted / MessageCompleted
   TextDelta / ReasoningDelta
   ToolCallPlaced / ToolCallCompleted
@@ -32,7 +32,7 @@ Introduce a new dedicated crate, **`minos-ui-protocol`**, that owns:
   Raw
   ```
 
-- One translator function per CLI: `translate_codex(state, raw)` is fully implemented; `translate_claude` and `translate_gemini` are typed stubs returning `TranslationError::NotImplemented`. The codex translator carries per-thread state (`CodexTranslatorState`) for tool-call argument buffering and open-message tracking.
+- One translator function per CLI: `translate_codex(state, raw)` is fully implemented; `translate_claude` and `translate_gemini` are typed stubs returning `TranslationError::NotImplemented`. The codex translator carries per-session state (`CodexTranslatorState`) for tool-call argument buffering and open-message tracking.
 
 - A `Raw { kind, payload_json }` escape hatch that any translator can emit when it sees a method it doesn't recognize. The viewer renders `Raw` as a monospace `kind: payload` line so unknown events stay visible without crashing the UI or stalling the stream.
 
@@ -40,7 +40,7 @@ The crate is consumed in two places:
 - **Backend** (`minos-backend::ingest`): runs `translate_*` on every persisted raw event before fanning out.
 - **Mobile** (`minos-mobile::client`): receives the already-translated `UiEventMessage` over the wire and renders it directly. **Mobile owns no translation logic.**
 
-The native event format stays available — backend persists raw events under `(thread_id, seq)` and re-runs the translator on history reads, so a translator change ships fully retroactive without a backfill.
+The native event format stays available — backend persists raw events under `(session_id, seq)` and re-runs the translator on history reads, so a translator change ships fully retroactive without a backfill.
 
 Spec references: §5.2 (single-shape rationale), §6.4 (the enum + serde shape), §6.5 (translator contract).
 
@@ -48,12 +48,12 @@ Spec references: §5.2 (single-shape rationale), §6.4 (the enum + serde shape),
 
 **Positive:**
 - One Dart code path renders any agent. Adding a new CLI (e.g. `aider`) means adding a new `translate_<cli>` and zero changes to the viewer.
-- Translator changes are retroactive: backend re-translates from `raw_events` on read, so a bug fix or a new variant in `UiEventMessage` lights up old threads automatically.
+- Translator changes are retroactive: backend re-translates from `raw_events` on read, so a bug fix or a new variant in `UiEventMessage` lights up old sessions automatically.
 - The `Raw` escape hatch is forward-compatible: a host running an older `minos-ui-protocol` than the backend sees unknown methods as `Raw` instead of erroring.
 - Tests live close to the data: `crates/minos-ui-protocol/tests/golden/codex/*` are 12 input/expected pairs covering every codex method we currently translate. Adding a fixture is the diff a new contributor would expect.
 
 **Negative:**
-- Per-thread translator state (`CodexTranslatorState`) is mutable and lives in a `DashMap` on the backend. A bug there manifests as wrong UI events for one thread without a per-frame error signal. Mitigated by: history reads use a *fresh* state, so every read is deterministic regardless of live-stream state corruption (see plan §C2).
+- Per-thread translator state (`CodexTranslatorState`) is mutable and lives in a `DashMap` on the backend. A bug there manifests as wrong UI events for one session without a per-frame error signal. Mitigated by: history reads use a *fresh* state, so every read is deterministic regardless of live-stream state corruption (see plan §C2).
 - Two separate `UiEventMessage` deserializers exist (Rust `serde` + Dart frb mirror). Drift between them is caught by frb codegen drift in `cargo xtask check-all`, but only structurally — semantic drift in a new variant requires a deliberate mirror update.
 - The codex translator depends on the codex app-server's ordering guarantees (`item/started` before `item/.../delta`, `argumentsCompleted` before `completed`). A future codex update that relaxes ordering would force the translator to buffer differently. Out of scope for this ADR.
 

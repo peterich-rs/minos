@@ -198,13 +198,26 @@ fn locate_teamwork_mcp_command_from(
 
 fn current_exe_sidecar_command(current_exe: &Path) -> Option<LocatedMcpCommand> {
     let stem = current_exe.file_stem()?.to_string_lossy();
-    if !matches!(stem.as_ref(), "minos-tui" | "minos-daemon") {
+    if !is_teamwork_mcp_sidecar_host(stem.as_ref()) {
         return None;
     }
     is_executable_file(current_exe).then(|| LocatedMcpCommand {
         server_bin: current_exe.to_path_buf(),
         server_args: vec![TEAMWORK_MCP_SIDECAR_ARG.to_owned()],
     })
+}
+
+/// Host binaries that implement the hidden `__minos-teamwork-mcp` subcommand
+/// (stdio MCP server for conversation-bound agents).
+///
+/// Desktop ships as Tauri productName `Minos` / cargo package `minos-desktop`
+/// and embeds the daemon in-process. Without this match, `enable_default_mcp`
+/// skips injection and no agent gets conversation-bound teamwork MCP.
+fn is_teamwork_mcp_sidecar_host(stem: &str) -> bool {
+    matches!(
+        stem.to_ascii_lowercase().as_str(),
+        "minos-tui" | "minos-daemon" | "minos-desktop" | "minos"
+    )
 }
 
 fn find_executable_on_path(
@@ -335,7 +348,7 @@ pub enum ToolStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RawIngest {
     pub agent: AgentName,
-    pub thread_id: String,
+    pub session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -348,14 +361,14 @@ pub struct RawIngest {
 
 impl RawIngest {
     #[must_use]
-    pub fn from_json(agent: AgentName, thread_id: String, payload: Value, ts_ms: i64) -> Self {
+    pub fn from_json(agent: AgentName, session_id: String, payload: Value, ts_ms: i64) -> Self {
         let provider_session_id = provider_session_id_from_value(agent, &payload);
         let event_type = event_type_from_value(agent, &payload);
         let provider_event_id = provider_event_id_from_value(&payload);
         let bytes = serde_json::to_vec(&payload).unwrap_or_else(|_| b"null".to_vec());
         Self::from_bytes_with_meta(
             agent,
-            thread_id,
+            session_id,
             bytes,
             "application/json".to_string(),
             ts_ms,
@@ -368,14 +381,14 @@ impl RawIngest {
     #[must_use]
     pub fn from_bytes(
         agent: AgentName,
-        thread_id: String,
+        session_id: String,
         bytes: Vec<u8>,
         media_type: impl Into<String>,
         ts_ms: i64,
     ) -> Self {
         Self::from_bytes_with_meta(
             agent,
-            thread_id,
+            session_id,
             bytes,
             media_type.into(),
             ts_ms,
@@ -388,7 +401,7 @@ impl RawIngest {
     #[must_use]
     pub fn from_bytes_with_meta(
         agent: AgentName,
-        thread_id: String,
+        session_id: String,
         bytes: Vec<u8>,
         media_type: String,
         ts_ms: i64,
@@ -398,7 +411,7 @@ impl RawIngest {
     ) -> Self {
         Self {
             agent,
-            thread_id,
+            session_id,
             provider_session_id,
             provider_event_id,
             event_type,
@@ -628,6 +641,39 @@ mod tests {
                 server_args: vec![TEAMWORK_MCP_SIDECAR_ARG.to_owned()],
             })
         );
+    }
+
+    #[test]
+    fn teamwork_mcp_locator_uses_desktop_exe_as_hidden_sidecar() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let exe_dir = tmp.path().join("exe");
+        std::fs::create_dir_all(&exe_dir).expect("mkdir exe");
+
+        // Tauri productName "Minos" and cargo package "minos-desktop".
+        for name in ["Minos", "minos-desktop"] {
+            let current_exe = exe_dir.join(name);
+            make_executable(&current_exe);
+            let found = locate_teamwork_mcp_command_from(None, Some(current_exe.clone()), None);
+            assert_eq!(
+                found,
+                Some(LocatedMcpCommand {
+                    server_bin: current_exe,
+                    server_args: vec![TEAMWORK_MCP_SIDECAR_ARG.to_owned()],
+                }),
+                "stem {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_teamwork_mcp_sidecar_host_covers_desktop_names() {
+        assert!(is_teamwork_mcp_sidecar_host("minos-tui"));
+        assert!(is_teamwork_mcp_sidecar_host("minos-daemon"));
+        assert!(is_teamwork_mcp_sidecar_host("minos-desktop"));
+        assert!(is_teamwork_mcp_sidecar_host("Minos"));
+        assert!(is_teamwork_mcp_sidecar_host("minos"));
+        assert!(!is_teamwork_mcp_sidecar_host("node"));
+        assert!(!is_teamwork_mcp_sidecar_host("opencode"));
     }
 
     #[test]

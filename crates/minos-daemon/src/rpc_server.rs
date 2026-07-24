@@ -17,10 +17,10 @@ use jsonrpsee::types::ErrorObjectOwned;
 use minos_cli_detect::{detect_all, CommandRunner};
 use minos_domain::MinosError;
 use minos_protocol::{
-    AgentDispatchRequest, ApprovalDecisionRequest, CloseThreadRequest, GetThreadParams,
-    GetThreadResponse, HealthResponse, InterruptThreadRequest, ListClisResponse,
+    AgentDispatchRequest, ApprovalDecisionRequest, CloseSessionRequest, GetSessionParams,
+    GetSessionResponse, HealthResponse, InterruptSessionRequest, ListClisResponse,
     ListHostSkillsRequest, ListHostSkillsResponse, ListHostWorkspacesRequest,
-    ListHostWorkspacesResponse, ListThreadsParams, ListThreadsResponse, MinosRpcServer,
+    ListHostWorkspacesResponse, ListSessionsParams, ListSessionsResponse, MinosRpcServer,
     PairRequest, PairResponse, RespondOpencodeQuestionRequest, SendUserMessageRequest,
     StartAgentRequest, StartAgentResponse, WriteHostSkillConfigRequest,
     WriteHostSkillConfigResponse,
@@ -115,29 +115,29 @@ impl MinosRpcServer for RpcServerImpl {
             .map_err(rpc_err)
     }
 
-    async fn interrupt_thread(
+    async fn interrupt_session(
         &self,
-        req: InterruptThreadRequest,
+        req: InterruptSessionRequest,
     ) -> jsonrpsee::core::RpcResult<()> {
-        self.agent.interrupt_thread(req).await.map_err(rpc_err)
+        self.agent.interrupt_session(req).await.map_err(rpc_err)
     }
 
-    async fn close_thread(&self, req: CloseThreadRequest) -> jsonrpsee::core::RpcResult<()> {
-        self.agent.close_thread(req).await.map_err(rpc_err)
+    async fn close_session(&self, req: CloseSessionRequest) -> jsonrpsee::core::RpcResult<()> {
+        self.agent.close_session(req).await.map_err(rpc_err)
     }
 
-    async fn list_threads(
+    async fn list_sessions(
         &self,
-        req: ListThreadsParams,
-    ) -> jsonrpsee::core::RpcResult<ListThreadsResponse> {
-        self.agent.list_threads(req).await.map_err(rpc_err)
+        req: ListSessionsParams,
+    ) -> jsonrpsee::core::RpcResult<ListSessionsResponse> {
+        self.agent.list_sessions(req).await.map_err(rpc_err)
     }
 
-    async fn get_thread(
+    async fn get_session(
         &self,
-        req: GetThreadParams,
-    ) -> jsonrpsee::core::RpcResult<GetThreadResponse> {
-        self.agent.get_thread(req).await.map_err(rpc_err)
+        req: GetSessionParams,
+    ) -> jsonrpsee::core::RpcResult<GetSessionResponse> {
+        self.agent.get_session(req).await.map_err(rpc_err)
     }
 }
 
@@ -198,6 +198,10 @@ pub async fn invoke_host_command(
                 workspace: String,
                 #[serde(default)]
                 initial_user_message: Option<String>,
+                #[serde(default)]
+                model: Option<String>,
+                #[serde(default)]
+                reasoning_effort: Option<String>,
             }
             let req: StartAgentSessionParams = parse_params(&params)?;
             let agent_label = req.runtime_agent.as_deref().unwrap_or(&req.agent_id);
@@ -206,6 +210,10 @@ pub async fn invoke_host_command(
                 agent,
                 workspace: req.workspace,
                 mode: None,
+                profile_id: None,
+                model: req.model,
+                reasoning_effort: req.reasoning_effort,
+                instructions: None,
             };
             server
                 .agent
@@ -251,13 +259,13 @@ pub async fn invoke_host_command(
                 .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
                 .map_err(|e| rpc_err_value(e))
         }
-        "minos_interrupt_thread" => {
-            let req: InterruptThreadRequest = parse_params(&params)?;
-            into_result(server.interrupt_thread(req).await)
+        "minos_interrupt_session" => {
+            let req: InterruptSessionRequest = parse_params(&params)?;
+            into_result(server.interrupt_session(req).await)
         }
-        "minos_close_thread" => {
-            let req: CloseThreadRequest = parse_params(&params)?;
-            into_result(server.close_thread(req).await)
+        "minos_close_session" => {
+            let req: CloseSessionRequest = parse_params(&params)?;
+            into_result(server.close_session(req).await)
         }
         "agent_session.stop" => {
             #[derive(serde::Deserialize)]
@@ -267,19 +275,19 @@ pub async fn invoke_host_command(
             let req: StopAgentSessionParams = parse_params(&params)?;
             into_result(
                 server
-                    .close_thread(CloseThreadRequest {
-                        thread_id: req.session_id,
+                    .close_session(CloseSessionRequest {
+                        session_id: req.session_id,
                     })
                     .await,
             )
         }
-        "minos_list_threads" => {
-            let req: ListThreadsParams = parse_params(&params)?;
-            into_result(server.list_threads(req).await)
+        "minos_list_sessions" => {
+            let req: ListSessionsParams = parse_params(&params)?;
+            into_result(server.list_sessions(req).await)
         }
-        "minos_get_thread" => {
-            let req: GetThreadParams = parse_params(&params)?;
-            into_result(server.get_thread(req).await)
+        "minos_get_session" => {
+            let req: GetSessionParams = parse_params(&params)?;
+            into_result(server.get_session(req).await)
         }
         "minos_create_project" => {
             let req: minos_protocol::CreateProjectRequest = parse_params(&params)?;
@@ -413,7 +421,7 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    fn fake_thread_start_reply(thread_id: &str) -> serde_json::Value {
+    fn fake_thread_start_reply(session_id: &str) -> serde_json::Value {
         json!({
             "approvalPolicy": "never",
             "approvalsReviewer": "user",
@@ -423,7 +431,7 @@ mod tests {
             "modelProvider": "fake",
             "sandbox": { "type": "dangerFullAccess" },
             "thread": {
-                "id": thread_id,
+                "id": session_id,
                 "cliVersion": "0.0.0-fake",
                 "createdAt": 0,
                 "cwd": "/tmp",
@@ -439,10 +447,10 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    fn command_approval_params(thread_id: &str, turn_id: &str) -> serde_json::Value {
+    fn command_approval_params(session_id: &str, turn_id: &str) -> serde_json::Value {
         json!({
             "itemId": "item-1",
-            "threadId": thread_id,
+            "sessionId": session_id,
             "turnId": turn_id,
         })
     }
@@ -580,7 +588,7 @@ mod tests {
                 .display()
                 .to_string()
         );
-        let row = store.get_thread("sess-formal-1").await.unwrap().unwrap();
+        let row = store.get_session("sess-formal-1").await.unwrap().unwrap();
         assert_eq!(row.workspace_root, value["cwd"].as_str().unwrap());
 
         fake.stop().await;

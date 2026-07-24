@@ -5,7 +5,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'thread_events_provider.g.dart';
 
-/// Loads the translated history for one thread and keeps it live by
+/// Loads the translated history for one session and keeps it live by
 /// listening to the backend's fan-out. Per-thread watermark dedup keeps
 /// the view consistent with the backend's raw_events seq (spec §9.1).
 ///
@@ -18,14 +18,17 @@ class ThreadEvents extends _$ThreadEvents {
   BigInt _watermark = BigInt.zero;
 
   @override
-  Future<List<UiEventMessage>> build(String threadId) async {
+  Future<List<UiEventMessage>> build(String sessionId) async {
     final repository = ref.read(threadRepositoryProvider);
-    logFlutterDebug('thread_events', 'load thread events threadId=$threadId');
-
-    final resp = await _readInitialPage(repository, threadId);
     logFlutterDebug(
       'thread_events',
-      'loaded initial thread events threadId=$threadId count=${resp.uiEvents.length}',
+      'load session events sessionId=$sessionId',
+    );
+
+    final resp = await _readInitialPage(repository, sessionId);
+    logFlutterDebug(
+      'thread_events',
+      'loaded initial session events sessionId=$sessionId count=${resp.uiEvents.length}',
     );
     if (resp.nextSeq != null) {
       _watermark = resp.nextSeq! - BigInt.one;
@@ -39,7 +42,7 @@ class ThreadEvents extends _$ThreadEvents {
 
     final sub = repository.uiEvents.listen(
       (frame) {
-        if (frame.threadId != threadId) return;
+        if (frame.sessionId != sessionId) return;
         if (frame.seq <= _watermark) return;
         _watermark = frame.seq;
         final prev = state.asData?.value ?? const <UiEventMessage>[];
@@ -48,7 +51,7 @@ class ThreadEvents extends _$ThreadEvents {
       onError: (Object error, StackTrace stackTrace) {
         logFlutterWarn(
           'thread_events',
-          'live event stream failed threadId=$threadId',
+          'live event stream failed sessionId=$sessionId',
           error: error,
           stackTrace: stackTrace,
         );
@@ -57,7 +60,7 @@ class ThreadEvents extends _$ThreadEvents {
       onDone: () {
         logFlutterInfo(
           'thread_events',
-          'live event stream completed threadId=$threadId',
+          'live event stream completed sessionId=$sessionId',
         );
         ref.invalidateSelf();
       },
@@ -67,20 +70,20 @@ class ThreadEvents extends _$ThreadEvents {
     return resp.uiEvents;
   }
 
-  Future<ReadThreadResponse> _readInitialPage(
+  Future<ReadSessionResponse> _readInitialPage(
     ThreadRepository repository,
-    String threadId,
+    String sessionId,
   ) async {
     const maxAttempts = 8;
 
     for (var attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        return await repository.readThread(threadId: threadId);
-      } on MinosError_ThreadNotFound catch (error, stackTrace) {
+        return await repository.readThread(sessionId: sessionId);
+      } on MinosError_SessionNotFound catch (error, stackTrace) {
         if (attempt == maxAttempts - 1) {
           logFlutterError(
             'thread_events',
-            'readThread exhausted retries threadId=$threadId attempts=$maxAttempts',
+            'readThread exhausted retries sessionId=$sessionId attempts=$maxAttempts',
             error: error,
             stackTrace: stackTrace,
           );
@@ -88,7 +91,7 @@ class ThreadEvents extends _$ThreadEvents {
         }
         logFlutterWarn(
           'thread_events',
-          'readThread retry scheduled threadId=$threadId attempt=${attempt + 1}',
+          'readThread retry scheduled sessionId=$sessionId attempt=${attempt + 1}',
           error: error,
           stackTrace: stackTrace,
         );
@@ -96,6 +99,6 @@ class ThreadEvents extends _$ThreadEvents {
       }
     }
 
-    throw MinosError.threadNotFound(threadId: threadId);
+    throw MinosError.sessionNotFound(sessionId: sessionId);
   }
 }

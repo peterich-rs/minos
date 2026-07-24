@@ -291,6 +291,10 @@ pub(super) fn agent_picker_status_label(
                 ratatui::style::Style::new().fg(ratatui::style::Color::Red),
             )),
         },
+        AgentMentionCandidateKind::Profile { .. } => Some((
+            format!("profile · {}", candidate.agent.bin_name()),
+            ratatui::style::Style::new().fg(ratatui::style::Color::Cyan),
+        )),
         AgentMentionCandidateKind::Existing { .. } => None,
     }
 }

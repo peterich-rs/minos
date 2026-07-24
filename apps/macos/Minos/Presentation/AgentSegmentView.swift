@@ -45,7 +45,7 @@ struct AgentSegmentView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 6) {
-                Text("Thread")
+                Text("Session")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Text(session.sessionId)
@@ -88,7 +88,7 @@ struct AgentSegmentView: View {
         }
     }
 
-    private func stateLabel(_ state: ThreadState) -> String {
+    private func stateLabel(_ state: SessionState) -> String {
         switch state {
         case .idle: return "Idle"
         case .starting: return "Starting"

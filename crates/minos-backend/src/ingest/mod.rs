@@ -3,7 +3,7 @@
 //! Entry point [`dispatch`] is called once per inbound `Envelope::Ingest`
 //! frame. It:
 //!
-//! 1. Upserts the `threads` row.
+//! 1. Upserts the `sessions` row.
 //! 2. Persists the raw event, discarding exact retransmits while assigning a
 //!    fresh backend seq when a resumed daemon reuses an old process-local seq.
 //! 3. Runs the per-agent translator. Translator errors surface as a
@@ -32,10 +32,10 @@ use minos_ui_protocol::{MessageRole, UiEventMessage};
 use serde_json::Value;
 
 use crate::error::BackendError;
-use crate::ingest::translate::ThreadTranslators;
+use crate::ingest::translate::SessionTranslators;
 use crate::realtime::{peer_target_cache_backend, RealtimeFanout, RealtimeTopic};
 use crate::session::SessionRegistry;
-use crate::store::{raw_events, threads, AsStorePool, StorePoolRef};
+use crate::store::{raw_events, sessions, AsStorePool, StorePoolRef};
 
 pub async fn invalidate_peer_targets_for_host(
     host_device_id: minos_domain::DeviceId,
@@ -82,27 +82,34 @@ async fn peer_targets_for_host(
 pub async fn dispatch(
     store: &impl AsStorePool,
     registry: &SessionRegistry,
-    translators: &ThreadTranslators,
+    translators: &SessionTranslators,
     approvals: &dyn ApprovalService,
     realtime: &RealtimeFanout,
     agent: AgentName,
-    thread_id: &str,
+    session_id: &str,
     seq: u64,
     payload: &Value,
     ts_ms: i64,
     owner_device_id: minos_domain::DeviceId,
 ) -> Result<(), BackendError> {
-    // 1. Upsert the thread row (creates on first ingest, bumps last_ts_ms otherwise).
-    threads::upsert(store, thread_id, agent, &owner_device_id.to_string(), ts_ms).await?;
+    // 1. Upsert the session row (creates on first ingest, bumps last_ts_ms otherwise).
+    sessions::upsert(
+        store,
+        session_id,
+        agent,
+        &owner_device_id.to_string(),
+        ts_ms,
+    )
+    .await?;
 
     // 2. Persist raw. The backend may assign a fresh seq when the daemon
     // resumes an existing thread with a process-local counter reset.
     let Some(persisted_seq) =
-        raw_events::insert_assigning_seq(store, thread_id, seq, agent, payload, ts_ms).await?
+        raw_events::insert_assigning_seq(store, session_id, seq, agent, payload, ts_ms).await?
     else {
         tracing::debug!(
             target: "minos_backend::ingest",
-            thread_id, seq, "ingest seq retransmit, dropping"
+            session_id, seq, "ingest seq retransmit, dropping"
         );
         return Ok(());
     };
@@ -110,14 +117,14 @@ pub async fn dispatch(
     if should_skip_external_sql_approval_event(store, payload) {
         tracing::info!(
             target: "minos_backend::ingest",
-            thread_id,
+            session_id,
             "skipping approval realtime event because external-sql approval runtime is still unavailable"
         );
         return Ok(());
     }
 
     if let Some(event) =
-        special_event_from_payload(approvals, thread_id, payload, ts_ms, owner_device_id).await?
+        special_event_from_payload(approvals, session_id, payload, ts_ms, owner_device_id).await?
     {
         let env = Envelope::Event { version: 1, event };
         broadcast_to_peers_of(store, registry, realtime, owner_device_id, &env).await;
@@ -126,12 +133,12 @@ pub async fn dispatch(
 
     // 3. Translate. Translator failures are non-fatal: we emit a synthetic
     // Error UI event so mobile sees a deterministic surface.
-    let mut translated = match translators.translate(agent, thread_id, payload) {
+    let mut translated = match translators.translate(agent, session_id, payload) {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(
                 target: "minos_backend::ingest",
-                ?e, thread_id, "translation failed; emitting synthetic Error"
+                ?e, session_id, "translation failed; emitting synthetic Error"
             );
             vec![minos_ui_protocol::UiEventMessage::Error {
                 code: "translation_failed".into(),
@@ -144,50 +151,50 @@ pub async fn dispatch(
     let has_explicit_title = translated.iter().any(|ui| {
         matches!(
             ui,
-            minos_ui_protocol::UiEventMessage::ThreadTitleUpdated { .. }
+            minos_ui_protocol::UiEventMessage::SessionTitleUpdated { .. }
         )
     });
-    if !has_explicit_title && thread_title_is_missing(store, thread_id).await {
+    if !has_explicit_title && thread_title_is_missing(store, session_id).await {
         if let Some(title) = derive_fallback_title(payload, &translated) {
-            let _ = threads::update_title(store, thread_id, &title).await;
+            let _ = sessions::update_title(store, session_id, &title).await;
             translated.insert(
                 0,
-                minos_ui_protocol::UiEventMessage::ThreadTitleUpdated {
-                    thread_id: thread_id.to_string(),
+                minos_ui_protocol::UiEventMessage::SessionTitleUpdated {
+                    session_id: session_id.to_string(),
                     title,
                 },
             );
         }
     }
 
-    sync_formal_agent_session_from_ui_events(store, thread_id, &translated, ts_ms).await?;
+    sync_formal_agent_session_from_ui_events(store, session_id, &translated, ts_ms).await?;
 
     // 4. Fan out each UI event to every live peer paired with owner_device_id.
     let suppress_social_fanout =
-        match crate::store::social::suppress_live_ui_fanout_for_session(store, thread_id).await {
+        match crate::store::social::suppress_live_ui_fanout_for_session(store, session_id).await {
             Ok(value) => value,
             Err(error) => {
                 tracing::warn!(
                     target: "minos_backend::ingest",
                     error = %error,
-                    thread_id,
+                    session_id,
                     "failed to probe social fan-out mode; defaulting to regular fan-out"
                 );
                 false
             }
         };
     for ui in translated {
-        // Side effects on DB when the UI event implies a thread mutation.
+        // Side effects on DB when the UI event implies a session mutation.
         match &ui {
-            minos_ui_protocol::UiEventMessage::ThreadTitleUpdated { title, .. } => {
-                let _ = threads::update_title(store, thread_id, title).await;
+            minos_ui_protocol::UiEventMessage::SessionTitleUpdated { title, .. } => {
+                let _ = sessions::update_title(store, session_id, title).await;
             }
             minos_ui_protocol::UiEventMessage::MessageStarted { .. } => {
-                let _ = threads::increment_message_count(store, thread_id).await;
+                let _ = sessions::increment_message_count(store, session_id).await;
             }
-            minos_ui_protocol::UiEventMessage::ThreadClosed { reason, .. } => {
-                let _ = threads::mark_ended(store, thread_id, reason, ts_ms).await;
-                translators.drop_thread(thread_id);
+            minos_ui_protocol::UiEventMessage::SessionClosed { reason, .. } => {
+                let _ = sessions::mark_ended(store, session_id, reason, ts_ms).await;
+                translators.drop_thread(session_id);
             }
             _ => {}
         }
@@ -199,14 +206,14 @@ pub async fn dispatch(
                     tracing::warn!(
                         target: "minos_backend::ingest",
                         error = %error,
-                        thread_id,
+                        session_id,
                         "failed to encode suppressed social ui event for formal stream"
                     );
                     continue;
                 }
             };
             realtime.fanout_stream_event(
-                &RealtimeTopic::AgentSession(thread_id.to_string()),
+                &RealtimeTopic::AgentSession(session_id.to_string()),
                 "ui_event",
                 i64::try_from(persisted_seq).ok(),
                 payload,
@@ -217,7 +224,7 @@ pub async fn dispatch(
         let env = Envelope::Event {
             version: 1,
             event: EventKind::UiEventMessage {
-                thread_id: thread_id.to_string(),
+                session_id: session_id.to_string(),
                 seq: persisted_seq,
                 ui,
                 ts_ms,
@@ -323,7 +330,7 @@ async fn sync_formal_agent_session_from_ui_events(
                     }
                 }
             }
-            UiEventMessage::ThreadClosed { closed_at_ms, .. } => {
+            UiEventMessage::SessionClosed { closed_at_ms, .. } => {
                 let _ = crate::store::agent_sessions::update_status(
                     store,
                     session_id,
@@ -443,7 +450,7 @@ fn should_skip_external_sql_approval_event(store: &impl AsStorePool, payload: &V
 
 async fn special_event_from_payload(
     approvals: &dyn ApprovalService,
-    thread_id: &str,
+    session_id: &str,
     payload: &Value,
     ts_ms: i64,
     _owner_device_id: minos_domain::DeviceId,
@@ -479,7 +486,7 @@ async fn special_event_from_payload(
             approvals
                 .record_request(RecordApprovalRequestInput {
                     request_id: request_id.clone(),
-                    agent_session_id: thread_id.to_string(),
+                    agent_session_id: session_id.to_string(),
                     turn_id: (!turn_id.is_empty()).then_some(turn_id.clone()),
                     method: approval_method.clone(),
                     params_json: approval_params.clone(),
@@ -489,7 +496,7 @@ async fn special_event_from_payload(
                 .await?;
 
             Ok(Some(EventKind::ApprovalRequest {
-                thread_id: thread_id.to_string(),
+                session_id: session_id.to_string(),
                 turn_id,
                 request_id,
                 method: approval_method,
@@ -514,7 +521,7 @@ async fn special_event_from_payload(
                 .await?;
 
             Ok(Some(EventKind::ApprovalTimeout {
-                thread_id: thread_id.to_string(),
+                session_id: session_id.to_string(),
                 request_id,
                 reason,
             }))
@@ -523,21 +530,21 @@ async fn special_event_from_payload(
     }
 }
 
-async fn thread_title_is_missing(store: &impl AsStorePool, thread_id: &str) -> bool {
+async fn thread_title_is_missing(store: &impl AsStorePool, session_id: &str) -> bool {
     let result = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_scalar::<_, Option<String>>(
-                "SELECT title FROM threads WHERE thread_id = ?1",
+                "SELECT title FROM sessions WHERE session_id = ?1",
             )
-            .bind(thread_id)
+            .bind(session_id)
             .fetch_optional(pool)
             .await
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_scalar::<_, Option<String>>(
-                "SELECT title FROM threads WHERE thread_id = $1",
+                "SELECT title FROM sessions WHERE session_id = $1",
             )
-            .bind(thread_id)
+            .bind(session_id)
             .fetch_optional(pool)
             .await
         }
@@ -549,7 +556,7 @@ async fn thread_title_is_missing(store: &impl AsStorePool, thread_id: &str) -> b
             tracing::warn!(
                 target: "minos_backend::ingest",
                 error = ?e,
-                thread_id,
+                session_id,
                 "failed to probe thread title before fallback"
             );
             false

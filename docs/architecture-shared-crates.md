@@ -31,7 +31,7 @@
 | 模块 | 类型 | 描述 |
 |------|------|------|
 | `ids` | `DeviceId(Uuid)`, `PairingToken(String)`, `DeviceSecret(String)` | 设备标识、配对令牌（32 字节 base64url 一次性）、设备密钥（Debug/Display 中脱敏） |
-| `agent` | `AgentName` (Codex, Claude, Gemini, Opencode), `AgentStatus` (Ok, Missing, Error), `AgentDescriptor` | 支持的 CLI agent 枚举、健康状态、安装描述符 |
+| `agent` | `AgentName` (Codex, Claude, Gemini, Opencode, Grok), `AgentStatus`, `AgentDescriptor`, `ModelDiscovery` | 支持的 CLI agent 枚举（runtime SSOT）、健康状态、安装+能力描述符（`display_name` / `supports_model_selection` / `supports_reasoning_effort`）、模型发现策略 |
 | `connection` | `ConnectionState` (Disconnected, Pairing, Connected, Reconnecting) | 连接状态 |
 | `pairing_state` | `PairingState` (Unpaired, AwaitingPeer, Paired) | 配对状态机 |
 | `relay_state` | `RelayLinkState`, `PeerState` | Relay 链路 + 配对双轴状态 |
@@ -98,7 +98,7 @@
 
 | 类型 | 描述 |
 |------|------|
-| `detect_all(runner)` | 探测所有四个已知 agent，返回 `Vec<AgentDescriptor>` |
+| `detect_all(runner)` | 探测 `AgentName::all()` 中每个 agent，返回 `Vec<AgentDescriptor>`（能力字段由 domain 填充） |
 | `CommandRunner` trait | `which(bin)` + `run(bin, args, timeout)` 异步 trait |
 | `capture_user_shell_env()` | 运行 `$SHELL -lic 'env -0'` 捕获用户 shell 环境 |
 
@@ -118,8 +118,8 @@
 | 类型 | 描述 |
 |------|------|
 | `AgentRuntimeConfig` | runtime 配置。Codex initialize handshake 默认 5 秒，`thread/start` 默认 30 秒（`thread_start_timeout`），避免冷启动或 workspace 初始化偏慢时误判失败。Teamwork MCP command 优先使用 `MINOS_TEAMWORK_MCP_BIN` / 同目录 `minos-teamwork-mcp`，开发态可回落到 `minos-tui` 或 `minos-daemon` 的 `__minos-teamwork-mcp` hidden sidecar |
-| `AgentManager` | 多工作区 agent 管理器。每个工作区一个 `AppServerInstance`，N 个 `ThreadHandle` |
-| `ThreadState` | Starting, Idle, Running, Suspended, Resuming, Closed |
+| `AgentManager` | 多工作区 agent 管理器。每个工作区一个 `AppServerInstance`，N 个 `SessionHandle` |
+| `SessionState` | Starting, Idle, Running, Suspended, Resuming, Closed |
 | `PauseReason` | UserInterrupt, CodexCrashed, DaemonRestart, InstanceReaped |
 | `CloseReason` | UserClose, TerminalError |
 | `RawIngest` | 原始事件转发类型，携带 `RawBody::InlineBytes` 或 `RawBody::Artifact`，不携带 `serde_json::Value` 主体 |
@@ -210,19 +210,24 @@
 
 | 类型 | 描述 |
 |------|------|
-| `UiEventMessage` | 15 变体枚举: ThreadOpened, ThreadClosed, MessageStarted, MessageCompleted, TextDelta, TextReplace, ReasoningDelta, ReasoningReplace, ToolCallPlaced, ToolCallCompleted, Error, Raw 等 |
+| `UiEventMessage` | 15 变体枚举: SessionOpened, SessionClosed, MessageStarted, MessageCompleted, TextDelta, TextReplace, ReasoningDelta, ReasoningReplace, ToolCallPlaced, ToolCallCompleted, Error, Raw 等 |
 | `DisplayPayload` | UI 展示载荷: `Inline`, `StreamingWindow`, `WindowedFinal`。文本 delta、tool args/output 都通过它传递 preview/artifact 信息 |
-| `ArtifactRef` | artifact 归属和校验信息: `thread_id`, `artifact_id`, `size_bytes`, `sha256`, `media_type` |
+| `ArtifactRef` | artifact 归属和校验信息: `session_id`, `artifact_id`, `size_bytes`, `sha256`, `media_type` |
 | `MessageRole` | User / Assistant / System |
-| `ThreadEndReason` | UserStopped / AgentDone / Crashed / Timeout / HostDisconnected |
+| `SessionEndReason` | UserStopped / AgentDone / Crashed / Timeout / HostDisconnected |
 | `CodexTranslatorState` | 有状态 Codex 事件翻译器 |
 | `ClaudeTranslatorState` | 有状态 Claude 事件翻译器 |
 | `GeminiTranslatorState` | 有状态 Gemini 事件翻译器 |
+| `GrokTranslatorState` | 有状态 Grok ACP 事件翻译器 |
 | `OpencodeTranslatorState` | 有状态 Opencode 事件翻译器 |
 
 ### 翻译函数
 
-`translate_codex()`, `translate_claude()`, `translate_gemini()`, `translate_opencode()` — 每个 CLI agent 的原生事件 → `Vec<UiEventMessage>`
+`translate_codex()`, `translate_claude()`, `translate_gemini()`, `translate_grok()`, `translate_opencode()` — 每个 CLI agent 的原生事件 → `Vec<UiEventMessage>`
+
+### Grok edit / tool output
+
+Grok file edits (`SearchReplace` / write / `ApplyPatch`) arrive as ACP `ToolCallContent::Diff` plus optional structured `raw_output`. `translate_grok` converts these into unified-diff tool output (not raw `EditsApplied` JSON) so TUI/Desktop can reuse the agent-agnostic diff renderer.
 
 ---
 
@@ -237,9 +242,9 @@
 |------|---------|
 | `minos-daemon` | `DaemonHandle`, observer 协议, `RelayQrPayload`, `PeerRecord`, `Subscription` |
 | `minos-domain` | `AgentDescriptor`, `AgentName`, `DeviceId`, `PeerState`, `RelayLinkState` |
-| `minos-agent-runtime` | `ThreadState`, `PauseReason`, `CloseReason` |
+| `minos-agent-runtime` | `SessionState`, `PauseReason`, `CloseReason` |
 | `minos-protocol` | `AgentLaunchMode`, `StartAgentRequest`, `SendUserMessageRequest` 等 |
-| `minos-ui-protocol` | `ThreadEndReason` |
+| `minos-ui-protocol` | `SessionEndReason` |
 
 ### 导出函数
 
@@ -261,5 +266,6 @@
 | `api/minos.rs` | `#[frb(...)]` 注解函数，codegen 扫描生成 Dart API |
 | `frb_generated.rs` | 自动生成（checked in，CI Dart leg 不需要 Rust toolchain） |
 
-**依赖**: `flutter_rust_bridge = "=2.12.0"`（严格匹配 codegen 版本）
+**依赖**: `flutter_rust_bridge = "=2.12.0"`（严格匹配 codegen CLI 版本）
+**Codegen**: `just gen-frb` / `cargo xtask gen-frb`（bootstrap 安装 `flutter_rust_bridge_codegen` 2.12.0）
 **目标**: `cdylib`（Android）、`staticlib`（iOS）、`rlib`（workspace 内测试）

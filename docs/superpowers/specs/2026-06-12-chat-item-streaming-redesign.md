@@ -62,7 +62,7 @@ Semantics:
 
 ```rust
 struct ChatState {
-    pub thread_id: String,
+    pub session_id: String,
     pub agent: AgentName,
     pub translation_state: AgentTranslationState,
     pub items: Vec<ChatItem>,

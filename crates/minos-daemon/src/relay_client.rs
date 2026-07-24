@@ -937,17 +937,17 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
             route_durable_event(&kind, &payload, ctx).await;
         }
         ServerFrame::HostIngestAck {
-            thread_id,
+            session_id,
             accepted_to_seq,
             ..
         } => {
             if let Some(sync) = ingest_sync(ctx) {
-                sync.mark_backend_acked(&thread_id, accepted_to_seq).await;
+                sync.mark_backend_acked(&session_id, accepted_to_seq).await;
             }
         }
         ServerFrame::PullIngestRange {
             request_id,
-            thread_id,
+            session_id,
             from_seq,
             to_seq,
             max_bytes,
@@ -956,18 +956,18 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
         } => {
             if let Some(sync) = ingest_sync(ctx) {
                 sync.handle_pull_range(
-                    request_id, thread_id, from_seq, to_seq, max_bytes, priority, reason,
+                    request_id, session_id, from_seq, to_seq, max_bytes, priority, reason,
                 )
                 .await;
             }
         }
         ServerFrame::PullAck {
-            thread_id,
+            session_id,
             accepted_to_seq,
             ..
         } => {
             if let Some(sync) = ingest_sync(ctx) {
-                sync.mark_backend_acked(&thread_id, accepted_to_seq).await;
+                sync.mark_backend_acked(&session_id, accepted_to_seq).await;
             }
         }
         ServerFrame::HostForceClose { reason, close_code } => {

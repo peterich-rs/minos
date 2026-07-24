@@ -5,7 +5,7 @@ use minos_backend::http::{router, test_support::backend_state, test_support::TES
 use minos_backend::session::SessionHandle;
 use minos_backend::store::{
     account_host_pairings, agent_sessions, devices, durable_event_log, host_commands, raw_events,
-    social, threads,
+    sessions, social,
 };
 use minos_domain::{AgentName, DeviceId, DeviceRole};
 use minos_protocol::Envelope;
@@ -882,7 +882,7 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
     )
     .await;
 
-    threads::upsert(
+    sessions::upsert(
         &state.store,
         &session_id,
         AgentName::Codex,
@@ -901,7 +901,7 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
             "method": "item/started",
             "params": {
                 "item": { "type": "agentMessage", "id": "agent-msg-1" },
-                "threadId": session_id,
+                "sessionId": session_id,
                 "turnId": "turn-1"
             }
         }),

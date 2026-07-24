@@ -9,18 +9,18 @@
 
 ### 1.1 问题:层级错乱
 
-当前 TUI 的 `Project → Sessions` 导航存在系统性层级错乱。`list_project_threads` 直接返回**单个 agent 的 session**(每次 agent run),跳过了"对话容器"这一层。用户在 Sessions 列表看到的是零散的 agent run,而非一个可以容纳多 agent 的对话。
+当前 TUI 的 `Project → Sessions` 导航存在系统性层级错乱。`list_project_sessions` 直接返回**单个 agent 的 session**(每次 agent run),跳过了"对话容器"这一层。用户在 Sessions 列表看到的是零散的 agent run,而非一个可以容纳多 agent 的对话。
 
-根因在 daemon 存储层:`threads` 表一行 = 一次 agent run,`project_id` 只是平铺外键,没有任何"对话容器"把多个 agent session 归并。协议层、TUI 层都继承了这个错误前提。
+根因在 daemon 存储层:`sessions` 表一行 = 一次 agent run,`project_id` 只是平铺外键,没有任何"对话容器"把多个 agent session 归并。协议层、TUI 层都继承了这个错误前提。
 
 ### 1.2 两个割裂的系统
 
 当前 daemon 有两套并行的聊天存储:
 
-- **threads/events 系统**:per-agent-session 的完整 streaming 日志(tool call、diff、reasoning)。seq 是 per-thread 的,无法跨 thread 合并成统一时间线。
+- **sessions/events 系统**:per-agent-session 的完整 streaming 日志(tool call、diff、reasoning)。seq 是 per-session 的,无法跨 thread 合并成统一时间线。
 - **chat_rooms/chat_messages 系统**:workspace-derived 的群聊,只有粗粒度(user 消息 + agent 最终回复),已经是跨 agent 全局时间线。但 `room_id` 锁死成一个 workspace 一个 room,和 project 体系完全脱节。
 
-两者没有 FK 关联,只有 `chat_messages.thread_id` 软链接(非 FK)。
+两者没有 FK 关联,只有 `chat_messages.session_id` 软链接(非 FK)。
 
 ### 1.3 范围
 
@@ -34,9 +34,9 @@
 |------|------|------|
 | 对话容器(project 下的聊天室) | **conversation** | 用户可见、RPC 命名、NavLevel、UI |
 | 单个 agent 的一次 run | **thread** (= agent session) | 内部存储、events 键 |
-| agent session 的唯一标识 | **agent_session_id** (= thread_id) | NavLevel 检索、ChatItem 归属 |
+| agent session 的唯一标识 | **agent_session_id** (= session_id) | NavLevel 检索、ChatItem 归属 |
 
-`thread_id` 只出现在 daemon store 和 protocol 的 `ThreadSummary` 内部类型中。TUI 用户可见层一律用 `agent_session_id`。
+`session_id` 只出现在 daemon store 和 protocol 的 `SessionSummary` 内部类型中。TUI 用户可见层一律用 `agent_session_id`。
 
 ## 2. 关键设计决策
 
@@ -90,33 +90,33 @@ CREATE TABLE chat_messages (
     message_seq     INTEGER PRIMARY KEY,
     message_id      TEXT NOT NULL UNIQUE,
     conversation_id TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
-    thread_id       TEXT REFERENCES threads(thread_id) ON DELETE SET NULL,
+    session_id       TEXT REFERENCES sessions(session_id) ON DELETE SET NULL,
     created_at_ms   INTEGER NOT NULL,
     sender_role     TEXT NOT NULL CHECK(sender_role IN ('user', 'agent')),
     agent           TEXT,
     body            TEXT NOT NULL,
     CHECK(
-        (sender_role = 'user' AND thread_id IS NULL AND agent IS NULL)
+        (sender_role = 'user' AND session_id IS NULL AND agent IS NULL)
         OR
-        (sender_role = 'agent' AND thread_id IS NOT NULL AND agent IS NOT NULL)
+        (sender_role = 'agent' AND session_id IS NOT NULL AND agent IS NOT NULL)
     )
 );
 CREATE INDEX chat_messages_by_conversation_seq
     ON chat_messages(conversation_id, message_seq DESC);
-CREATE INDEX chat_messages_by_thread_seq
-    ON chat_messages(thread_id, message_seq DESC)
-    WHERE thread_id IS NOT NULL;
+CREATE INDEX chat_messages_by_session_seq
+    ON chat_messages(session_id, message_seq DESC)
+    WHERE session_id IS NOT NULL;
 ```
 
 - `message_seq`:全局递增 rowid,跨 conversation。这是统一时间线的排序键。
-- `thread_id`:真 FK。user 消息为 NULL;agent_result 指向产出该消息的 agent session。
+- `session_id`:真 FK。user 消息为 NULL;agent_result 指向产出该消息的 agent session。
 - `agent`:agent_result 时填 agent 标签(如 "codex");user 时 NULL。
 
-### 3.3 threads 表(加 conversation_id,去 project_id)
+### 3.3 sessions 表(加 conversation_id,去 project_id)
 
 ```sql
-CREATE TABLE threads (
-    thread_id           TEXT PRIMARY KEY,
+CREATE TABLE sessions (
+    session_id           TEXT PRIMARY KEY,
     conversation_id     TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
     workspace_root      TEXT NOT NULL REFERENCES workspaces(root),
     agent               TEXT NOT NULL,
@@ -129,12 +129,12 @@ CREATE TABLE threads (
     last_activity_at    INTEGER NOT NULL,
     ended_at            INTEGER
 );
-CREATE INDEX threads_by_conversation_last
-    ON threads(conversation_id, last_activity_at DESC, thread_id);
-CREATE INDEX threads_by_conversation_agent_last
-    ON threads(conversation_id, agent, last_activity_at DESC, thread_id);
-CREATE INDEX threads_by_workspace ON threads(workspace_root, last_activity_at DESC);
-CREATE INDEX threads_by_status ON threads(status, last_activity_at DESC);
+CREATE INDEX sessions_by_conversation_last
+    ON sessions(conversation_id, last_activity_at DESC, session_id);
+CREATE INDEX sessions_by_conversation_agent_last
+    ON sessions(conversation_id, agent, last_activity_at DESC, session_id);
+CREATE INDEX sessions_by_workspace ON sessions(workspace_root, last_activity_at DESC);
+CREATE INDEX sessions_by_status ON sessions(status, last_activity_at DESC);
 ```
 
 改动点(相对旧 schema):
@@ -145,16 +145,16 @@ CREATE INDEX threads_by_status ON threads(status, last_activity_at DESC);
 ### 3.4 events 表 — 不变
 
 ```sql
-events (thread_id, seq, body_kind, body_inline, artifact_id, ..., projection_json, ts_ms)
-PRIMARY KEY (thread_id, seq)
+events (session_id, seq, body_kind, body_inline, artifact_id, ..., projection_json, ts_ms)
+PRIMARY KEY (session_id, seq)
 ```
 
-per-thread event log。AgentDetail 子视图按 `thread_id` 读,逻辑完全复用。
+per-session event log。AgentDetail 子视图按 `session_id` 读,逻辑完全复用。
 
 ### 3.5 删除的表
 
 - `chat_rooms` → 被 `conversations` 取代
-- `chat_agent_sessions` → 信息从 `threads.conversation_id + threads.agent` 派生
+- `chat_agent_sessions` → 信息从 `sessions.conversation_id + sessions.agent` 派生
 - 旧 `chat_messages`(workspace-derived room_id 版)→ 被新 `chat_messages` 取代
 
 ### 3.6 ER 关系图
@@ -166,21 +166,21 @@ projects (project_id, name, workspace_path)
 conversations (conversation_id, project_id, title, updated_at_ms)
     │ 1:N                          │ 1:N
     ▼                              ▼
-chat_messages                  threads (agent sessions)
-  (conversation_id,              (thread_id, conversation_id,
+chat_messages                  sessions (agent sessions)
+  (conversation_id,              (session_id, conversation_id,
    message_seq [全局],            agent, status, ...)
    sender_role,                     │ 1:N
    agent, body)                    ▼
                                 events
-                                  (thread_id, seq, ...)
+                                  (session_id, seq, ...)
 ```
 
 ### 3.7 数据流总结(呼应决策 C)
 
 - **Conversation 列表**:查 `conversations WHERE project_id = ? ORDER BY updated_at_ms DESC, conversation_id` → 直接拿计数和摘要,不额外 count。
 - **Conversation 主时间线**(群聊视图):查 `chat_messages WHERE conversation_id = ? AND message_seq < ? ORDER BY message_seq DESC LIMIT ?` → keyset 分页后 UI 反转展示。
-- **Agent 细节**(AgentDetail 子视图):查 `threads WHERE conversation_id = ?` 得到 agent 列表;选中某 agent 后查 `events WHERE thread_id = ?` 渲染完整 streaming 细节。
-- **新 agent session 创建**:`@mention` → 创建 `threads` 行(填 conversation_id,同事务更新 `agent_session_count`)→ 启动 agent → streaming 写 events → 完成后 upsert 一条 `chat_messages`(sender_role='agent')并更新 conversation 摘要/计数。
+- **Agent 细节**(AgentDetail 子视图):查 `sessions WHERE conversation_id = ?` 得到 agent 列表;选中某 agent 后查 `events WHERE session_id = ?` 渲染完整 streaming 细节。
+- **新 agent session 创建**:`@mention` → 创建 `sessions` 行(填 conversation_id,同事务更新 `agent_session_count`)→ 启动 agent → streaming 写 events → 完成后 upsert 一条 `chat_messages`(sender_role='agent')并更新 conversation 摘要/计数。
 
 ## 4. 协议层 RPC
 
@@ -205,7 +205,7 @@ pub struct LocalConversationMessage {
     pub message_seq: i64,
     pub message_id: String,
     pub conversation_id: String,
-    pub thread_id: Option<String>,
+    pub session_id: Option<String>,
     pub created_at_ms: i64,
     pub sender_role: String,        // "user" | "agent"
     pub agent: Option<AgentName>,
@@ -222,14 +222,14 @@ pub struct LocalConversationMessage {
 | **`list_conversations`** | project_id, limit | `Vec<LocalConversationSummary>` | conversations 表 |
 | **`create_conversation`** | project_id, title | `LocalConversationSummary` | conversations 表 |
 | **`list_conversation_messages`** | conversation_id, before_seq, limit | `Vec<LocalConversationMessage>` | chat_messages 表 |
-| **`list_conversation_agent_sessions`** | conversation_id | `Vec<ThreadSummary>` | threads 表 |
-| **`start_agent_in_conversation`** | conversation_id, agent, workspace | `StartAgentOutcome` | threads/events 表 |
-| **`append_conversation_message`** | conversation_id, message_id, thread_id, role, agent, body | message_seq | chat_messages 表 |
-| `read_thread_raw_history` | thread_id, from_seq, limit | `Vec<LocalIngestFrame>` | events 表(不变) |
+| **`list_conversation_agent_sessions`** | conversation_id | `Vec<SessionSummary>` | sessions 表 |
+| **`start_agent_in_conversation`** | conversation_id, agent, workspace | `StartAgentOutcome` | sessions/events 表 |
+| **`append_conversation_message`** | conversation_id, message_id, session_id, role, agent, body | message_seq | chat_messages 表 |
+| `read_session_raw_history` | session_id, from_seq, limit | `Vec<LocalIngestFrame>` | events 表(不变) |
 
 ### 4.3 删除的 RPC
 
-- `list_project_threads`(被 `list_conversations` 取代)
+- `list_project_sessions`(被 `list_conversations` 取代)
 - `start_agent_in_project`(被 `start_agent_in_conversation` 取代)
 
 ### 4.4 新 RPC 定义
@@ -265,7 +265,7 @@ pub struct ListConversationAgentSessionsParams {
     pub conversation_id: String,
 }
 pub struct ListConversationAgentSessionsResponse {
-    pub threads: Vec<ThreadSummary>,
+    pub sessions: Vec<SessionSummary>,
 }
 
 pub struct StartAgentInConversationRequest {
@@ -278,7 +278,7 @@ pub struct StartAgentInConversationRequest {
 pub struct AppendConversationMessageParams {
     pub conversation_id: String,
     pub message_id: String,
-    pub thread_id: Option<String>,
+    pub session_id: Option<String>,
     pub sender_role: String,        // "user" | "agent"
     pub agent: Option<AgentName>,
     pub body: String,
@@ -301,12 +301,12 @@ pub async fn touch_conversation(&self, conversation_id, preview: Option<String>)
 pub async fn list_agents_for_conversations(&self, conversation_ids) -> Result<HashMap<String, Vec<AgentName>>>;
 
 // chat_messages
-pub async fn append_message(&self, conversation_id, message_id, thread_id, role, agent, body) -> Result<i64>;
+pub async fn append_message(&self, conversation_id, message_id, session_id, role, agent, body) -> Result<i64>;
 pub async fn list_conversation_messages(&self, conversation_id, before_seq, limit) -> Result<Vec<ChatMessageRow>>;
 
-// threads(改用 conversation_id)
-pub async fn list_threads_by_conversation(&self, conversation_id) -> Result<Vec<ThreadRow>>;
-pub async fn assign_thread_to_conversation(&self, thread_id, conversation_id);
+// sessions(改用 conversation_id)
+pub async fn list_sessions_by_conversation(&self, conversation_id) -> Result<Vec<SessionRow>>;
+pub async fn assign_thread_to_conversation(&self, session_id, conversation_id);
 ```
 
 Row 结构:
@@ -327,7 +327,7 @@ pub struct ChatMessageRow {
     pub message_seq: i64,
     pub message_id: String,
     pub conversation_id: String,
-    pub thread_id: Option<String>,
+    pub session_id: Option<String>,
     pub created_at_ms: i64,
     pub sender_role: String,
     pub agent: Option<String>,
@@ -335,7 +335,7 @@ pub struct ChatMessageRow {
 }
 ```
 
-`ThreadRow` 改动:去掉 `project_id`,加 `conversation_id`;`codex_session_id` 改名 `provider_session_id`。
+`SessionRow` 改动:去掉 `project_id`,加 `conversation_id`;`codex_session_id` 改名 `provider_session_id`。
 
 ### 5.2 LocalConversationSummary 组装
 
@@ -354,16 +354,16 @@ fn conversation_summary_from_row(
 start_agent_in_conversation(conversation_id, agent, workspace):
   1. get_conversation(conversation_id) → 拿 project_id
   2. get_project(project_id) → 拿 workspace_path / workspace_slug
-  3. AgentManager::start_agent_in_conversation(agent, workspace, conversation_id) → 生成 thread_id，并注入 conversation-bound teamwork MCP
-  4. persist_thread_parent_rows(thread_id, workspace, agent, ...)
-     - insert_thread 填 conversation_id(不再填 project_id)
+  3. AgentManager::start_agent_in_conversation(agent, workspace, conversation_id) → 生成 session_id，并注入 conversation-bound teamwork MCP
+  4. persist_thread_parent_rows(session_id, workspace, agent, ...)
+     - insert_session 填 conversation_id(不再填 project_id)
      - 同事务 conversations.agent_session_count += 1
-  5. 返回 { thread_id, conversation_id }
+  5. 返回 { session_id, conversation_id }
 ```
 
 ### 5.4 删除的 daemon 代码
 
-- `list_project_threads` 相关 store/agent/local_rpc 代码全删
+- `list_project_sessions` 相关 store/agent/local_rpc 代码全删
 - `assign_thread_to_project`(被 `assign_thread_to_conversation` 取代)
 - 旧 group_chat store 方法和 workspace-derived room API
 
@@ -398,7 +398,7 @@ pub struct UiState {
 
 ```rust
 pub struct AgentRef {
-    pub session_id: String,   // 唯一标识(= thread_id)
+    pub session_id: String,   // 唯一标识(= session_id)
     pub agent: AgentName,     // 显示用
 }
 ```
@@ -451,14 +451,14 @@ pub struct UiState {
     pub selected_agent_card: Option<usize>,
     pub conversation_input: String,
 
-    // AgentDetail 层(复用现有 chat_states: HashMap<thread_id, ChatState>)
+    // AgentDetail 层(复用现有 chat_states: HashMap<session_id, ChatState>)
     // 通用
     pub focus: Focus,
     // ...
 }
 ```
 
-删除:`rooms`、`selected_room`、`threads`(旧 per-agent list)、`agent_detail_visible`、`project_sessions`。
+删除:`rooms`、`selected_room`、`sessions`(旧 per-agent list)、`agent_detail_visible`、`project_sessions`。
 
 ### 6.6 新建/修改/删除的 UI 文件
 
@@ -548,9 +548,9 @@ fn split_main_sidebar(area: Rect) -> (Rect, Rect, Rect) {
 | 任务 | 文件 |
 |------|------|
 | 改 daemon canonical schema 到终态;开发库 reset,不写兼容迁移 | `minos-daemon/migrations/*.sql` |
-| ThreadRow 改字段(conversation_id 替代 project_id, codex_session_id→provider_session_id) | `store/mod.rs` |
+| SessionRow 改字段(conversation_id 替代 project_id, codex_session_id→provider_session_id) | `store/mod.rs` |
 | ConversationRow / ChatMessageRow 结构 + CRUD 方法 | `store/mod.rs` |
-| list_conversations_by_project / list_agents_for_conversations / list_threads_by_conversation / append_message / touch_conversation | `store/mod.rs` |
+| list_conversations_by_project / list_agents_for_conversations / list_sessions_by_conversation / append_message / touch_conversation | `store/mod.rs` |
 | 单元测试:conversation CRUD、message 全局 seq 递增、跨 conversation 查询 | `store/mod.rs` tests |
 
 **验证**:`cargo test -p minos-daemon -- store::`
@@ -563,7 +563,7 @@ fn split_main_sidebar(area: Rect) -> (Rect, Rect, Rect) {
 | LocalConversationSummary / LocalConversationMessage 类型 | `minos-protocol/src/messages.rs` |
 | 6 个新 RPC 的 params/response | `minos-protocol/src/messages.rs` |
 | LocalDaemonRpc trait 加新方法 | `minos-protocol/src/local_rpc.rs` |
-| 删除 list_project_threads / start_agent_in_project 的 protocol 定义 | `local_rpc.rs` |
+| 删除 list_project_sessions / start_agent_in_project 的 protocol 定义 | `local_rpc.rs` |
 
 **验证**:`cargo check -p minos-protocol`
 **依赖**:Phase 1(类型引用的 Row 转换在 daemon 侧,protocol 层可先编译)。
@@ -576,7 +576,7 @@ fn split_main_sidebar(area: Rect) -> (Rect, Rect, Rect) {
 | AgentGlue: conversation_summary_from_row / list_conversations / create_conversation / list_conversation_agent_sessions | `minos-daemon/src/agent.rs` |
 | start_agent_in_conversation(替代 start_agent_in_project,填 conversation_id) | `agent.rs` |
 | append_conversation_message RPC | `agent.rs` + `local_rpc.rs` |
-| 删除 list_project_threads / assign_thread_to_project 相关代码 | `agent.rs` + `store/mod.rs` + `local_rpc.rs` |
+| 删除 list_project_sessions / assign_thread_to_project 相关代码 | `agent.rs` + `store/mod.rs` + `local_rpc.rs` |
 
 **验证**:`cargo test -p minos-daemon` + 手动用 wscall 测 RPC
 **依赖**:Phase 1 + 2。
@@ -586,7 +586,7 @@ fn split_main_sidebar(area: Rect) -> (Rect, Rect, Rect) {
 | 任务 | 文件 |
 |------|------|
 | AgentBackend trait:6 个新方法 | `backend/mod.rs` |
-| 删除 list_project_threads / start_agent_in_project(trait 签名) | `backend/mod.rs` |
+| 删除 list_project_sessions / start_agent_in_project(trait 签名) | `backend/mod.rs` |
 | DaemonBackend 实现新 trait 方法(转发 RPC) | `backend/daemon.rs` |
 | EmbeddedBackend 实现(内存 Vec<LocalConversationSummary>) | `backend/embedded.rs` |
 | ConversationEntry / ConversationMessageEntry / AgentRef TUI 侧类型 | `backend/mod.rs` |
@@ -668,7 +668,7 @@ Phase 7 (交互衔接)
 |------|------|
 | conversations 冗余计数与消息表不一致 | 写消息/创建 session 必须和更新 conversation 摘要、计数放在同一事务;测试覆盖计数更新 |
 | participating_agents 批量聚合实现复杂 | 先对当前页 conversation_ids 做一次 `WHERE conversation_id IN (...)` 查询,不做逐行查询 |
-| AgentRef.session_id 与 thread_id 概念混淆 | 文档明确:用户可见层用 agent_session_id,内部存储用 thread_id,二者值相同 |
+| AgentRef.session_id 与 session_id 概念混淆 | 文档明确:用户可见层用 agent_session_id,内部存储用 session_id,二者值相同 |
 | minos-chat-store 边界变更过大 | 已收窄为 teamwork MCP/socket/tool catalog + conversation-scoped delegation 存储 |
 | @mention 解析鲁棒性(部分匹配、多 agent、无空格) | Phase 7 实现时参考现有 agent_picker 的补全逻辑;先支持单 agent `@name 消息`,多 agent 后续迭代 |
 
@@ -677,9 +677,9 @@ Phase 7 (交互衔接)
 本 spec 取代旧 spec 的 Sessions 层语义:
 
 - 旧 spec 的 `Thread = Room 合并` → 本 spec 明确为 `conversation` 统一术语
-- 旧 spec 的 `list_project_threads` → 本 spec 删除,改为 `list_conversations`
+- 旧 spec 的 `list_project_sessions` → 本 spec 删除,改为 `list_conversations`
 - 旧 spec 的 `start_agent_in_project` → 本 spec 改为 `start_agent_in_conversation`
 - 旧 spec 的 Thread 视图(群聊 + Agent 卡片)→ 本 spec 保留 80/20 布局设计,数据源明确为 chat_messages + events 两层
-- 旧 spec 的 AgentDetail 用 thread_id → 本 spec 改为 agent_session_id(值相同,命名统一)
+- 旧 spec 的 AgentDetail 用 session_id → 本 spec 改为 agent_session_id(值相同,命名统一)
 
 Projects 层、cwd→project 匹配、Project 创建对话框、响应式 overlay 等设计沿用旧 spec,不重复。

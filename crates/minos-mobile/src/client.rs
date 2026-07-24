@@ -28,12 +28,12 @@ use minos_protocol::{
     ConversationMembersResponse, ConversationReadResponse, ConversationResponse,
     ConversationsResponse, CreateFriendRequestRequest, CreateGroupConversationRequest,
     EnsureDirectConversationRequest, FriendRequestSummary, FriendRequestsResponse, FriendsResponse,
-    GetThreadLastSeqParams, GetThreadLastSeqResponse, HostSummary, ListAgentsResponse,
-    ListChatMessagesResponse, ListClisResponse, ListHostSkillsResponse, ListThreadsParams,
-    ListThreadsResponse, MyProfileResponse, PairingQrPayload, ReadThreadParams, ReadThreadResponse,
-    RefreshResponse, RegisterAgentRequest, RemoveAgentFromGroupRequest, RemoveGroupMemberRequest,
-    SendChatMessageRequest, SetMinosIdRequest, UpdateAgentRequest, UserSummary,
-    WriteHostSkillConfigResponse,
+    GetSessionLastSeqParams, GetSessionLastSeqResponse, HostSummary, ListAgentsResponse,
+    ListChatMessagesResponse, ListClisResponse, ListHostSkillsResponse, ListSessionsParams,
+    ListSessionsResponse, MyProfileResponse, PairingQrPayload, ReadSessionParams,
+    ReadSessionResponse, RefreshResponse, RegisterAgentRequest, RemoveAgentFromGroupRequest,
+    RemoveGroupMemberRequest, SendChatMessageRequest, SetMinosIdRequest, UpdateAgentRequest,
+    UserSummary, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::UiEventMessage;
 use openwire::websocket::WebSocket;
@@ -65,7 +65,7 @@ macro_rules! auth_http_call {
 /// these via [`MobileClient::ui_events_stream`] (broadcast receiver).
 #[derive(Debug, Clone)]
 pub struct UiEventFrame {
-    pub thread_id: String,
+    pub session_id: String,
     pub seq: u64,
     pub ui: UiEventMessage,
     pub ts_ms: i64,
@@ -492,11 +492,11 @@ impl MobileClient {
 
     /// Request a page of thread summaries from the backend. Bearer-only
     /// post ADR-0020.
-    pub async fn list_threads(
+    pub async fn list_sessions(
         &self,
-        req: ListThreadsParams,
-    ) -> Result<ListThreadsResponse, MinosError> {
-        auth_http_call!(self, |http, access| http.list_threads(&access, req))
+        req: ListSessionsParams,
+    ) -> Result<ListSessionsResponse, MinosError> {
+        auth_http_call!(self, |http, access| http.list_sessions(&access, req))
     }
 
     pub async fn list_agent_sessions(
@@ -534,21 +534,21 @@ impl MobileClient {
         Ok(())
     }
 
-    /// Read a window of translated UI events from one thread.
-    pub async fn read_thread(
+    /// Read a window of translated UI events from one session.
+    pub async fn read_session(
         &self,
-        req: ReadThreadParams,
-    ) -> Result<ReadThreadResponse, MinosError> {
-        auth_http_call!(self, |http, access| http.read_thread(&access, req))
+        req: ReadSessionParams,
+    ) -> Result<ReadSessionResponse, MinosError> {
+        auth_http_call!(self, |http, access| http.read_session(&access, req))
     }
 
     /// Host-only helper (mobile rarely uses this; included for parity).
-    pub async fn get_thread_last_seq(
+    pub async fn get_session_last_seq(
         &self,
-        req: GetThreadLastSeqParams,
-    ) -> Result<GetThreadLastSeqResponse, MinosError> {
+        req: GetSessionLastSeqParams,
+    ) -> Result<GetSessionLastSeqResponse, MinosError> {
         auth_http_call!(self, |http, access| {
-            http.get_thread_last_seq(&access, &req.thread_id)
+            http.get_session_last_seq(&access, &req.session_id)
         })
     }
 
@@ -992,7 +992,7 @@ impl MobileClient {
     pub async fn send_approval_decision(
         &self,
         request_id: String,
-        thread_id: String,
+        session_id: String,
         decision: serde_json::Value,
     ) -> Result<(), MinosError> {
         auth_http_call!(self, |http, access| {
@@ -1000,7 +1000,7 @@ impl MobileClient {
                 &access,
                 ApprovalDecisionRequest {
                     request_id,
-                    thread_id,
+                    session_id,
                     decision,
                 },
             )
@@ -1021,16 +1021,16 @@ impl MobileClient {
     }
 
     /// Pause an in-flight turn on the named thread via REST.
-    pub async fn interrupt_thread(&self, thread_id: String) -> Result<(), MinosError> {
+    pub async fn interrupt_session(&self, session_id: String) -> Result<(), MinosError> {
         auth_http_call!(self, |http, access| {
-            http.stop_agent_session(&access, &thread_id)
+            http.stop_agent_session(&access, &session_id)
         })
     }
 
     /// Permanently close the named thread via REST. Idempotent.
-    pub async fn close_thread(&self, thread_id: String) -> Result<(), MinosError> {
+    pub async fn close_session(&self, session_id: String) -> Result<(), MinosError> {
         auth_http_call!(self, |http, access| {
-            http.stop_agent_session(&access, &thread_id)
+            http.stop_agent_session(&access, &session_id)
         })
     }
 
@@ -1065,13 +1065,13 @@ impl MobileClient {
         auth_http_call!(self, |http, access| http.delete_project(&access, req))
     }
 
-    /// List backend-known threads within a project.
-    pub async fn list_project_threads(
+    /// List backend-known sessions within a project.
+    pub async fn list_project_sessions(
         &self,
-        req: minos_protocol::ListProjectThreadsParams,
-    ) -> Result<minos_protocol::ListProjectThreadsResponse, MinosError> {
+        req: minos_protocol::ListProjectSessionsParams,
+    ) -> Result<minos_protocol::ListProjectSessionsResponse, MinosError> {
         auth_http_call!(self, |http, access| {
-            http.list_project_threads(&access, req)
+            http.list_project_sessions(&access, req)
         })
     }
 
@@ -1148,12 +1148,12 @@ impl MobileClient {
     }
 
     /// Log out of the current session. Wipes local auth state and drops the
-    /// WS; the daemon's per-thread close happens via `close_thread` (Phase C
+    /// WS; the daemon's per-session close happens via `close_session` (Phase C
     /// rewrite — the legacy `stop_agent` RPC is gone). Spec §5.4 / §8.3.
     pub async fn logout(&self) -> Result<(), MinosError> {
         // Pre-Phase-C this called `stop_agent` to halt the active session.
-        // Post-Phase-C the daemon owns multiple threads; logout no longer
-        // closes them implicitly. The Mac side reaps idle threads via the
+        // Post-Phase-C the daemon owns multiple sessions; logout no longer
+        // closes them implicitly. The Mac side reaps idle sessions via the
         // manager's reaper (C19) once the iOS client disconnects.
 
         let session = self.auth_session.read().await.clone();
@@ -2087,13 +2087,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_threads_without_persisted_state_errors_unauthorized() {
-        // ADR-0020 dropped the device-secret rail; list_threads is
+    async fn list_sessions_without_persisted_state_errors_unauthorized() {
+        // ADR-0020 dropped the device-secret rail; list_sessions is
         // bearer-only. With no auth_session it surfaces Unauthorized
         // (not StoreCorrupt — the device-secret is no longer required).
         let client = MobileClient::new_with_in_memory_store("test".into());
         let err = client
-            .list_threads(ListThreadsParams {
+            .list_sessions(ListSessionsParams {
                 limit: 10,
                 before_ts_ms: None,
                 agent: None,
@@ -2213,9 +2213,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn close_thread_requires_authentication() {
+    async fn close_session_requires_authentication() {
         let client = MobileClient::new_with_in_memory_store("iPhone".into());
-        let res = client.close_thread("thr".into()).await;
+        let res = client.close_session("thr".into()).await;
         assert!(matches!(res, Err(MinosError::Unauthorized { .. })));
     }
 

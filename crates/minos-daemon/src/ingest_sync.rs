@@ -66,12 +66,12 @@ impl IngestSyncHandle {
         }
     }
 
-    pub async fn mark_backend_acked(&self, thread_id: &str, accepted_to_seq: u64) {
-        if let Err(error) = mark_backend_acked(&self.store, thread_id, accepted_to_seq).await {
+    pub async fn mark_backend_acked(&self, session_id: &str, accepted_to_seq: u64) {
+        if let Err(error) = mark_backend_acked(&self.store, session_id, accepted_to_seq).await {
             tracing::warn!(
                 target: "minos_daemon::ingest_sync",
                 error = %error,
-                thread_id,
+                session_id,
                 accepted_to_seq,
                 "failed to persist backend ingest ack",
             );
@@ -104,7 +104,7 @@ impl IngestSyncHandle {
     pub async fn handle_pull_range(
         &self,
         request_id: String,
-        thread_id: String,
+        session_id: String,
         from_seq: u64,
         to_seq: u64,
         max_bytes: u64,
@@ -117,7 +117,7 @@ impl IngestSyncHandle {
             tracing::debug!(
                 target: "minos_daemon::ingest_sync",
                 request_id,
-                thread_id,
+                session_id,
                 ?priority,
                 ?reason,
                 "deferring low-priority pull because live upload queue is busy",
@@ -128,7 +128,7 @@ impl IngestSyncHandle {
             &self.store,
             self.host_id,
             request_id,
-            thread_id,
+            session_id,
             from_seq,
             to_seq,
             max_bytes,
@@ -164,7 +164,7 @@ impl IngestSyncHandle {
             tracing::warn!(
                 target: "minos_daemon::ingest_sync",
                 error = %error,
-                thread_id = %chunk.thread_id(),
+                session_id = %chunk.session_id(),
                 seq = chunk.seq,
                 "failed to persist dirty ingest range",
             );
@@ -221,10 +221,10 @@ async fn live_upload_loop(handle: IngestSyncHandle, mut rx: mpsc::Receiver<Inges
 async fn mark_dirty_chunk(store: &LocalStore, chunk: &IngestChunk) -> Result<()> {
     sqlx::query(
         "INSERT INTO ingest_sync_state( \
-            thread_id, backend_acked_seq, dirty_from_seq, dirty_to_seq, \
+            session_id, backend_acked_seq, dirty_from_seq, dirty_to_seq, \
             dirty_bytes, dirty_events, updated_at \
          ) VALUES (?, 0, ?, ?, ?, 1, ?) \
-         ON CONFLICT(thread_id) DO UPDATE SET \
+         ON CONFLICT(session_id) DO UPDATE SET \
             dirty_from_seq = CASE \
                 WHEN dirty_from_seq IS NULL OR dirty_from_seq > excluded.dirty_from_seq \
                 THEN excluded.dirty_from_seq ELSE dirty_from_seq END, \
@@ -235,7 +235,7 @@ async fn mark_dirty_chunk(store: &LocalStore, chunk: &IngestChunk) -> Result<()>
             dirty_events = dirty_events + 1, \
             updated_at = excluded.updated_at",
     )
-    .bind(&chunk.ingest.thread_id)
+    .bind(&chunk.ingest.session_id)
     .bind(chunk.seq as i64)
     .bind(chunk.seq as i64)
     .bind(chunk.byte_len as i64)
@@ -247,16 +247,16 @@ async fn mark_dirty_chunk(store: &LocalStore, chunk: &IngestChunk) -> Result<()>
 
 async fn mark_backend_acked(
     store: &LocalStore,
-    thread_id: &str,
+    session_id: &str,
     accepted_to_seq: u64,
 ) -> Result<()> {
     let now = chrono::Utc::now().timestamp_millis();
     sqlx::query(
         "INSERT INTO ingest_sync_state( \
-            thread_id, backend_acked_seq, dirty_from_seq, dirty_to_seq, \
+            session_id, backend_acked_seq, dirty_from_seq, dirty_to_seq, \
             dirty_bytes, dirty_events, updated_at \
          ) VALUES (?, ?, NULL, NULL, 0, 0, ?) \
-         ON CONFLICT(thread_id) DO UPDATE SET \
+         ON CONFLICT(session_id) DO UPDATE SET \
             backend_acked_seq = CASE \
                 WHEN backend_acked_seq < excluded.backend_acked_seq \
                 THEN excluded.backend_acked_seq ELSE backend_acked_seq END, \
@@ -277,7 +277,7 @@ async fn mark_backend_acked(
                 ELSE dirty_bytes END, \
             updated_at = excluded.updated_at",
     )
-    .bind(thread_id)
+    .bind(session_id)
     .bind(accepted_to_seq as i64)
     .bind(now)
     .execute(store.pool())
@@ -286,13 +286,13 @@ async fn mark_backend_acked(
 }
 
 async fn build_manifest(store: &LocalStore, host_id: DeviceId) -> Result<Option<HostGapManifest>> {
-    let rows = sqlx::query_as::<_, ManifestThreadRow>(
+    let rows = sqlx::query_as::<_, ManifestSessionRow>(
         "SELECT \
-            t.thread_id AS thread_id, t.last_seq AS local_to_seq, t.status AS status, \
+            t.session_id AS session_id, t.last_seq AS local_to_seq, t.status AS status, \
             COALESCE(s.backend_acked_seq, 0) AS backend_acked_seq, \
             s.dirty_from_seq AS dirty_from_seq, s.dirty_to_seq AS dirty_to_seq \
-         FROM threads t \
-         LEFT JOIN ingest_sync_state s ON s.thread_id = t.thread_id \
+         FROM sessions t \
+         LEFT JOIN ingest_sync_state s ON s.session_id = t.session_id \
          WHERE t.last_seq > COALESCE(s.backend_acked_seq, 0) \
             OR s.dirty_to_seq IS NOT NULL \
          ORDER BY t.last_activity_at DESC \
@@ -319,9 +319,9 @@ async fn build_manifest(store: &LocalStore, host_id: DeviceId) -> Result<Option<
             .map(|seq| seq.max(0) as u64)
             .unwrap_or(local_to_seq)
             .max(local_to_seq);
-        let summary = range_summary(store, &row.thread_id, local_from_seq, local_to_seq).await?;
+        let summary = range_summary(store, &row.session_id, local_from_seq, local_to_seq).await?;
         sessions.push(SessionGapManifest {
-            thread_id: row.thread_id,
+            session_id: row.session_id,
             backend_acked_seq,
             local_from_seq,
             local_to_seq,
@@ -349,7 +349,7 @@ async fn build_manifest(store: &LocalStore, host_id: DeviceId) -> Result<Option<
 
 async fn range_summary(
     store: &LocalStore,
-    thread_id: &str,
+    session_id: &str,
     from_seq: u64,
     to_seq: u64,
 ) -> Result<RangeSummary> {
@@ -361,9 +361,9 @@ async fn range_summary(
             COUNT(*) AS event_count, \
             COALESCE(MIN(ts_ms), 0) AS first_ts_ms, \
             COALESCE(MAX(ts_ms), 0) AS last_ts_ms \
-         FROM events WHERE thread_id = ? AND seq BETWEEN ? AND ?",
+         FROM events WHERE session_id = ? AND seq BETWEEN ? AND ?",
     )
-    .bind(thread_id)
+    .bind(session_id)
     .bind(from_seq as i64)
     .bind(to_seq as i64)
     .fetch_one(store.pool())
@@ -375,16 +375,16 @@ async fn build_pull_response(
     store: &LocalStore,
     host_id: DeviceId,
     request_id: String,
-    thread_id: String,
+    session_id: String,
     from_seq: u64,
     to_seq: u64,
     max_bytes: u64,
 ) -> Result<HostIngestPullResponse> {
     let thread = store
-        .get_thread(&thread_id)
+        .get_session(&session_id)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("thread not found for pull: {thread_id}"))?;
-    let rows = store.read_events(&thread_id, from_seq, to_seq).await?;
+        .ok_or_else(|| anyhow::anyhow!("thread not found for pull: {session_id}"))?;
+    let rows = store.read_events(&session_id, from_seq, to_seq).await?;
     let mut chunks = Vec::new();
     let mut bytes = 0_u64;
     let mut last_seq = from_seq.saturating_sub(1);
@@ -402,7 +402,7 @@ async fn build_pull_response(
     let has_more = last_seq < to_seq;
     Ok(HostIngestPullResponse {
         request_id,
-        thread_id,
+        session_id,
         from_seq,
         to_seq: last_seq,
         chunks,
@@ -411,8 +411,8 @@ async fn build_pull_response(
 }
 
 #[derive(sqlx::FromRow)]
-struct ManifestThreadRow {
-    thread_id: String,
+struct ManifestSessionRow {
+    session_id: String,
     local_to_seq: i64,
     status: String,
     backend_acked_seq: i64,
@@ -464,7 +464,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO threads(thread_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
+            "INSERT INTO sessions(session_id, conversation_id, workspace_root, agent, status, last_seq, started_at, last_activity_at) \
              VALUES ('thr-sync', 'c-sync', '/w', 'codex', 'running', 3, 0, 300)",
         )
         .execute(store.pool())
@@ -474,7 +474,7 @@ mod tests {
         for seq in 1..=3_i64 {
             sqlx::query(
                 "INSERT INTO events( \
-                    thread_id, seq, body_kind, body_inline, projection_json, ts_ms, source \
+                    session_id, seq, body_kind, body_inline, projection_json, ts_ms, source \
                  ) VALUES ('thr-sync', ?, 'inline', ?, ?, ?, 'live')",
             )
             .bind(seq)
@@ -522,7 +522,7 @@ mod tests {
         };
         assert_eq!(manifest.sessions.len(), 1);
         let session = &manifest.sessions[0];
-        assert_eq!(session.thread_id, "thr-sync");
+        assert_eq!(session.session_id, "thr-sync");
         assert_eq!(session.local_from_seq, 1);
         assert_eq!(session.local_to_seq, 3);
         assert_eq!(session.event_count, 3);
@@ -550,7 +550,7 @@ mod tests {
             panic!("expected HostIngestPullResponse");
         };
         assert_eq!(response.request_id, "pull-1");
-        assert_eq!(response.thread_id, "thr-sync");
+        assert_eq!(response.session_id, "thr-sync");
         assert_eq!(response.from_seq, 2);
         assert_eq!(response.to_seq, 3);
         assert!(!response.has_more);

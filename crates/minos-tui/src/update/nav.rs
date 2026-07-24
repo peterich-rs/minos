@@ -180,7 +180,7 @@ fn handle_conversation_level(
         NavAction::Downlevel => {
             if let Some(idx) = ui.conversation.agent_sessions.selected {
                 if let Some(session) = ui.flat_session_entry(idx) {
-                    let thread_id = session.thread_id.clone();
+                    let session_id = session.session_id.clone();
                     let agent = session.agent;
                     let project_id = ui
                         .nav_level()
@@ -195,12 +195,12 @@ fn handle_conversation_level(
                     ui.push_nav(NavLevel::AgentDetail {
                         project_id,
                         conversation_id,
-                        thread_id: thread_id.clone(),
+                        session_id: session_id.clone(),
                         agent,
                     });
                     return (
                         StateChange::redraw(),
-                        vec![Effect::OpenAgentSession { thread_id }],
+                        vec![Effect::OpenAgentSession { session_id }],
                     );
                 }
             }
@@ -232,16 +232,17 @@ fn submit_conversation_input(state: &mut AppState, ui: &mut UiState) -> (StateCh
         return (StateChange::redraw(), vec![]);
     }
     let message_body = text.trim_end().to_owned();
-    let parsed = crate::agent_route::parse_agent_routing(text.as_str());
+    let profiles = ui.mention_profiles();
+    let parsed = crate::agent_route::parse_agent_routing(text.as_str(), &profiles);
     let has_explicit_target = parsed.is_some();
-    let (agent, prompt_text) = match parsed.as_ref() {
-        Some((target, body)) => (target.agent, body.clone()),
+    let (agent, prompt_text, route_profile_id) = match parsed.as_ref() {
+        Some((target, body)) => (target.agent, body.clone(), target.profile_id.clone()),
         None => {
             let Some(agent) = ui.status.agents.first().map(|a| a.name) else {
                 ui.set_error("No agents detected. Install codex/claude/gemini/opencode.".into());
                 return (StateChange::redraw(), vec![]);
             };
-            (agent, text.clone())
+            (agent, text.clone(), None)
         }
     };
     if prompt_text.trim().is_empty() && !has_explicit_target {
@@ -253,22 +254,22 @@ fn submit_conversation_input(state: &mut AppState, ui: &mut UiState) -> (StateCh
     ui.inputs.conversation.history.record(text.as_str());
 
     if let Some((target, _)) = parsed.as_ref() {
-        if let Some(thread_short_id) = target.thread_short_id.as_deref() {
-            let thread_id = find_conversation_thread(ui, target.agent, thread_short_id);
-            let Some(thread_id) = thread_id else {
+        if let Some(session_short_id) = target.session_short_id.as_deref() {
+            let session_id = find_conversation_thread(ui, target.agent, session_short_id);
+            let Some(session_id) = session_id else {
                 ui.set_error(format!(
                     "No existing {} session matches #{}",
                     target.agent.bin_name(),
-                    thread_short_id
+                    session_short_id
                 ));
                 return (StateChange::redraw(), vec![]);
             };
-            if let Some(state) = super::thread_runtime_state(ui, &thread_id) {
+            if let Some(state) = super::session_runtime_state(ui, &session_id) {
                 if !crate::agent_route::thread_can_receive_message(state) {
                     ui.set_error(format!(
                         "{} session #{} is closed. Use @{} to start a new session.",
                         target.agent.bin_name(),
-                        crate::agent_route::short_thread_id(&thread_id),
+                        crate::agent_route::short_session_id(&session_id),
                         target.agent.bin_name()
                     ));
                     return (StateChange::redraw(), vec![]);
@@ -283,13 +284,40 @@ fn submit_conversation_input(state: &mut AppState, ui: &mut UiState) -> (StateCh
             return (
                 StateChange::redraw(),
                 vec![Effect::SendTextToThread {
-                    thread_id,
+                    session_id,
                     text: prompt_text,
                     message_body: Some(message_body),
                 }],
             );
         }
     }
+
+    // Explicit @ProfileName / @p/<id>: always start a new session with that profile_id.
+    // Bare @agent (or default agent): desktop parity — reuse most recent top-level
+    // non-closed session for this agent when one exists; only then start new with
+    // newest-profile convenience.
+    let explicit_profile = route_profile_id.is_some();
+    if !explicit_profile {
+        if let Some(session_id) = find_reusable_agent_session(ui, agent) {
+            if let Some(conversation_id) = ui.nav_level().conversation_id().map(str::to_owned) {
+                super::push_pending_conversation_user_message(ui, &conversation_id, &message_body);
+            }
+            if prompt_text.trim().is_empty() {
+                return (StateChange::redraw(), vec![]);
+            }
+            return (
+                StateChange::redraw(),
+                vec![Effect::SendTextToThread {
+                    session_id,
+                    text: prompt_text,
+                    message_body: Some(message_body),
+                }],
+            );
+        }
+    }
+
+    let profile_id = route_profile_id
+        .or_else(|| crate::agent_route::newest_profile_id_for_agent(&profiles, agent));
 
     match ui.nav_level() {
         NavLevel::Conversations { project_id } => {
@@ -302,6 +330,7 @@ fn submit_conversation_input(state: &mut AppState, ui: &mut UiState) -> (StateCh
                     agent,
                     message_body,
                     prompt: prompt_text,
+                    profile_id,
                 }],
             )
         }
@@ -327,6 +356,7 @@ fn submit_conversation_input(state: &mut AppState, ui: &mut UiState) -> (StateCh
                     workspace,
                     message_body,
                     prompt: prompt_text,
+                    profile_id,
                 }],
             )
         }
@@ -354,18 +384,37 @@ fn find_conversation_thread(
         .agent_sessions
         .items
         .iter()
-        .filter(|session| session.parent_thread_id.is_none())
+        .filter(|session| session.parent_session_id.is_none())
         .filter(|session| crate::agent_route::thread_can_receive_message(&session.state))
         .find(|session| {
             session.agent == agent
-                && (crate::agent_route::short_thread_id(&session.thread_id).to_ascii_lowercase()
+                && (crate::agent_route::short_session_id(&session.session_id).to_ascii_lowercase()
                     == short_id
                     || session
-                        .thread_id
+                        .session_id
                         .to_ascii_lowercase()
                         .starts_with(&short_id))
         })
-        .map(|session| session.thread_id.clone())
+        .map(|session| session.session_id.clone())
+}
+
+/// Desktop parity: bare `@agent` reuses the most recent open top-level session.
+fn find_reusable_agent_session(ui: &UiState, agent: minos_domain::AgentName) -> Option<String> {
+    ui.nav_level().conversation_id()?;
+    let candidates: Vec<_> = ui
+        .conversation
+        .agent_sessions
+        .items
+        .iter()
+        .map(|session| crate::agent_route::SessionReuseCandidate {
+            session_id: session.session_id.as_str(),
+            agent: session.agent,
+            parent_session_id: session.parent_session_id.as_deref(),
+            state: &session.state,
+            last_ts_ms: session.last_ts_ms,
+        })
+        .collect();
+    crate::agent_route::pick_reusable_session_id(&candidates, agent)
 }
 
 #[cfg(test)]

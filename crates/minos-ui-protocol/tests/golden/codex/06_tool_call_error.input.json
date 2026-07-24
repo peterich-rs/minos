@@ -1,7 +1,7 @@
 [
   {"method":"item/started","params":{
     "item":{"type":"agentMessage","id":"i1","text":""},
-    "threadId":"thr_fixture","turnId":"t1"
+    "sessionId":"thr_fixture","turnId":"t1"
   }},
   {"method":"item/toolCall/started","params":{"itemId":"i1","toolCallId":"tc_bad","name":"run_command"}},
   {"method":"item/toolCall/arguments","params":{"toolCallId":"tc_bad","argumentsDelta":"{\"cmd\":\"false\"}"}},

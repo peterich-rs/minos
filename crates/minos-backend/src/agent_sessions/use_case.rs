@@ -28,6 +28,8 @@ const DEFAULT_HOST_COMMAND_DEADLINE_MS: i64 = 5_000;
 struct ResolvedAgent {
     runtime_agent: String,
     owner_account_id: Option<String>,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -110,9 +112,20 @@ impl DefaultAgentSessionService {
 
     async fn resolve_agent(&self, agent_id: &str) -> Result<ResolvedAgent, AgentSessionError> {
         if let Some(agent) = crate::store::social::get_agent(&self.store, agent_id).await? {
+            let model = {
+                let t = agent.model.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(t.to_string())
+                }
+            };
             return Ok(ResolvedAgent {
                 runtime_agent: agent.runtime_agent,
                 owner_account_id: Some(agent.owner_account_id),
+                model,
+                // Host profiles store effort; social agents table has model only for now.
+                reasoning_effort: None,
             });
         }
         let runtime_agent = match agent_id {
@@ -126,6 +139,8 @@ impl DefaultAgentSessionService {
         Ok(ResolvedAgent {
             runtime_agent: runtime_agent.into(),
             owner_account_id: None,
+            model: None,
+            reasoning_effort: None,
         })
     }
 
@@ -229,7 +244,9 @@ impl AgentSessionService for DefaultAgentSessionService {
             return Err(AgentSessionError::ConversationForbidden);
         }
         let resolved_agent = self.resolve_agent(&input.agent_id).await?;
-        let runtime_agent = resolved_agent.runtime_agent;
+        let runtime_agent = resolved_agent.runtime_agent.clone();
+        let agent_model = resolved_agent.model.clone();
+        let agent_effort = resolved_agent.reasoning_effort.clone();
 
         let session_id = deterministic_uuid(
             "agent-session-start",
@@ -356,6 +373,8 @@ impl AgentSessionService for DefaultAgentSessionService {
                         "workspace": workspace_path.clone().unwrap_or_default(),
                         "workspace_path": workspace_path,
                         "initial_user_message": input.initial_user_message.clone(),
+                        "model": agent_model,
+                        "reasoning_effort": agent_effort,
                     }),
                     requested_by_account_id: Some(input.caller_account_id.clone()),
                     deadline_at_ms: started_at_ms.saturating_add(DEFAULT_HOST_COMMAND_DEADLINE_MS),
@@ -522,7 +541,7 @@ impl AgentSessionService for DefaultAgentSessionService {
             .and_then(Self::parse_host_device_id)?;
 
         let params = minos_protocol::RespondOpencodeQuestionRequest {
-            thread_id: session.session_id.clone(),
+            session_id: session.session_id.clone(),
             question_id: input.question_id.clone(),
             answers: input.answers,
         };

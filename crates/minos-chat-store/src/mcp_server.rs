@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use crate::mcp_socket::{SocketRequest, SocketResponse};
 use crate::teamwork_mcp::{TeamworkMcpToolCatalog, ToolCallContext};
 
-const SERVER_INSTRUCTIONS: &str = "This MCP server exposes the Minos conversation bound to the current agent session. Use list_conversation_messages to read recent conversation history before answering when conversation context matters. Use delegate_to_agent for focused work assigned to another Minos agent, then wait_delegation when the next critical-path step needs the result, or get_delegation_status/cancel_delegation when tracking that work. If this session was itself delegated from another agent, delegate_to_agent may only delegate back to that source agent. Use post_conversation_update only for concise user-visible updates.";
+const SERVER_INSTRUCTIONS: &str = "This MCP server exposes the Minos conversation bound to the current agent session. Use list_conversation_messages to read recent conversation history before answering when conversation context matters. Use delegate_to_agent for focused work assigned to another Minos agent (optional profile_id or target_profile name; bare target_agent applies the newest host profile for that runtime when one exists), then wait_delegation when the next critical-path step needs the result, or get_delegation_status/cancel_delegation when tracking that work. If this session was itself delegated from another agent, delegate_to_agent may only delegate back to that source agent. Use post_conversation_update only for concise user-visible updates.";
 
 pub use crate::teamwork_mcp::TeamworkMcpPermissions as McpToolPermissions;
 
@@ -17,7 +17,7 @@ pub struct McpServerConfig {
     pub socket_path: PathBuf,
     pub conversation_id: String,
     pub source_agent: Option<AgentName>,
-    pub source_thread_id: Option<String>,
+    pub source_session_id: Option<String>,
     pub permissions: McpToolPermissions,
 }
 
@@ -123,7 +123,7 @@ async fn handle_tool_call(
         ToolCallContext {
             conversation_id: config.conversation_id.clone(),
             source_agent: config.source_agent,
-            source_thread_id: config.source_thread_id.clone(),
+            source_session_id: config.source_session_id.clone(),
         },
         name,
         args,

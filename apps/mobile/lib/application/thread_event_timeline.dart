@@ -305,10 +305,10 @@ List<ThreadTimelineItem> buildThreadEventTimeline(
         }
       case UiEventMessage_Error(:final code, :final message):
         markers.add(TimelineError(eventIndex: i, code: code, message: message));
-      case UiEventMessage_ThreadClosed():
+      case UiEventMessage_SessionClosed():
         markers.add(TimelineClosed(eventIndex: i));
-      case UiEventMessage_ThreadOpened():
-      case UiEventMessage_ThreadTitleUpdated():
+      case UiEventMessage_SessionOpened():
+      case UiEventMessage_SessionTitleUpdated():
       case UiEventMessage_SubagentSpawned():
       case UiEventMessage_SubagentStatusUpdated():
       case UiEventMessage_Raw():

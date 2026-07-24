@@ -13,7 +13,7 @@ pub enum NavLevel {
     AgentDetail {
         project_id: String,
         conversation_id: String,
-        thread_id: String,
+        session_id: String,
         agent: AgentName,
     },
 }

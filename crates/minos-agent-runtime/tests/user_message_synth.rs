@@ -33,7 +33,7 @@ async fn send_user_message_emits_synth_user_item_started() {
     // can only come from manager-side synthesis.
     let mut rx = mgr.ingest_stream();
 
-    mgr.send_user_message(&session.thread_id, "hello world".into())
+    mgr.send_user_message(&session.session_id, "hello world".into())
         .await
         .unwrap();
 
@@ -46,7 +46,7 @@ async fn send_user_message_emits_synth_user_item_started() {
         .expect("synth ingest must arrive within 2s")
         .expect("ingest broadcast must yield a frame");
 
-    assert_eq!(ingest.thread_id, session.thread_id);
+    assert_eq!(ingest.session_id, session.session_id);
 
     let payload = &ingest
         .json_value()
@@ -81,9 +81,12 @@ async fn send_user_message_emits_synth_user_item_started() {
         Some("hello world")
     );
 
+    // Codex wire shape still keys items by provider `threadId` (see
+    // ItemStartedNotification). Logical Minos session id lives on the
+    // ingest envelope (`ingest.session_id`), already asserted above.
     assert_eq!(
         params.get("threadId").and_then(Value::as_str),
-        Some(session.thread_id.as_str())
+        Some(session.session_id.as_str())
     );
 
     fake.stop().await;
