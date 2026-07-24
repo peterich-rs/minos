@@ -108,6 +108,34 @@ describe("mergeTranscriptOlder", () => {
     const b = item({ id: "same", kind: "user", seq: 1, text: "a" });
     assert.deepEqual(mergeTranscriptOlder([a], [b]), [b]);
   });
+
+  it("empty older page is a no-op (keeps newer window)", () => {
+    const newer = [
+      item({ id: "n1", kind: "user", seq: 5, text: "hi" }),
+      item({ id: "n2", kind: "assistant", seq: 6, text: "yo" }),
+    ];
+    assert.equal(mergeTranscriptOlder([], newer), newer);
+  });
+
+  it("fully overlapping older page is a no-op", () => {
+    const newer = [
+      item({ id: "a", kind: "user", seq: 1, text: "a" }),
+      item({ id: "b", kind: "assistant", seq: 2, text: "b" }),
+    ];
+    const out = mergeTranscriptOlder(
+      [
+        item({ id: "a", kind: "user", seq: 1, text: "a" }),
+        item({ id: "b", kind: "assistant", seq: 2, text: "b" }),
+      ],
+      newer,
+    );
+    assert.equal(out, newer);
+  });
+
+  it("empty newer window accepts the older page as the whole list", () => {
+    const older = [item({ id: "o1", kind: "user", seq: 1, text: "old" })];
+    assert.equal(mergeTranscriptOlder(older, []), older);
+  });
 });
 
 describe("metaAfterTailLoad", () => {
@@ -132,6 +160,16 @@ describe("trimTranscriptHardMax", () => {
     assert.equal(out.items.length, 1);
   });
 
+  it("keeps all when length equals hardMax (no-op boundary)", () => {
+    const items = [
+      item({ id: "a", seq: 1, kind: "user" }),
+      item({ id: "b", seq: 2, kind: "assistant" }),
+    ];
+    const out = trimTranscriptHardMax(items, 2);
+    assert.equal(out.trimmed, false);
+    assert.equal(out.items, items);
+  });
+
   it("drops oldest and reports trimmed", () => {
     const items = [
       item({ id: "a", seq: 1, kind: "user" }),
@@ -144,6 +182,35 @@ describe("trimTranscriptHardMax", () => {
       out.items.map((i) => i.id),
       ["b", "c"],
     );
+  });
+
+  it("trimming head implies hasOlder for callers even when page said no more", () => {
+    // Store layers set hasOlder = (nextFirst > 1) || trimmed.trimmed (or
+    // page.nextSeq != null || trimmed). Head drop alone must surface as hasOlder.
+    const items = [
+      item({ id: "a", seq: 10, kind: "user" }),
+      item({ id: "b", seq: 20, kind: "assistant" }),
+      item({ id: "c", seq: 30, kind: "tool" }),
+      item({ id: "d", seq: 40, kind: "assistant" }),
+    ];
+    const out = trimTranscriptHardMax(items, 2);
+    assert.equal(out.trimmed, true);
+    assert.deepEqual(
+      out.items.map((i) => i.seq),
+      [30, 40],
+    );
+    const pageHasOlder = false;
+    assert.equal(pageHasOlder || out.trimmed, true);
+  });
+
+  it("hardMax <= 0 leaves the list untouched", () => {
+    const items = [
+      item({ id: "a", seq: 1, kind: "user" }),
+      item({ id: "b", seq: 2, kind: "assistant" }),
+    ];
+    const out = trimTranscriptHardMax(items, 0);
+    assert.equal(out.trimmed, false);
+    assert.equal(out.items, items);
   });
 
   it("default hardMax is TRANSCRIPT_HARD_MAX_ITEMS", () => {
