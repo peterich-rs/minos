@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect } from "react";
 import { AppShell } from "@/app/AppShell";
 import { BootScreen } from "@/app/BootScreen";
+import { useWebviewZoomShortcuts } from "@/app/useWebviewZoomShortcuts";
 import { ErrorBoundary } from "@/shared/ui/ErrorBoundary";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { useUiStore } from "@/store/ui-store";
@@ -15,6 +16,10 @@ export default function App() {
   const projects = useWorkspaceStore((s) => s.projects);
   const projectId = useUiStore((s) => s.projectId);
   const selectProject = useUiStore((s) => s.selectProject);
+
+  // Always mounted (boot + shell) so stored minos:text-scale applies before
+  // AppShell, and Cmd± works during BootScreen.
+  useWebviewZoomShortcuts();
 
   // First layout commit → host may show the window (BootScreen is fine).
   // Do not wait for bootstrap; that would delay reveal unnecessarily.
