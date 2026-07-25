@@ -320,14 +320,17 @@ impl UiState {
             .collect();
 
         let mention_profiles = self.mention_profiles();
-        candidates.extend(mention_profiles.iter().filter(|p| allows(p.runtime_agent)).map(
-            |p| {
-                // Insert form is `@Name ` or `@p/<id> `; picker stores token without `@`/space.
-                let insert = crate::agent_route::profile_mention_insert(p, &mention_profiles);
-                let token = insert.trim_start_matches('@').trim_end().to_owned();
-                AgentMentionCandidate::profile(token, p.runtime_agent, p.id.clone())
-            },
-        ));
+        candidates.extend(
+            mention_profiles
+                .iter()
+                .filter(|p| allows(p.runtime_agent))
+                .map(|p| {
+                    // Insert form is `@Name ` or `@p/<id> `; picker stores token without `@`/space.
+                    let insert = crate::agent_route::profile_mention_insert(p, &mention_profiles);
+                    let token = insert.trim_start_matches('@').trim_end().to_owned();
+                    AgentMentionCandidate::profile(token, p.runtime_agent, p.id.clone())
+                }),
+        );
 
         if self.nav_level().conversation_id().is_some() {
             candidates.extend(
