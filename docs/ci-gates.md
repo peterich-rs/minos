@@ -34,7 +34,7 @@ naming hit fails before clippy/xcodebuild/the suite.
 
 1. **static** — gen-uniffi → gen-xcode → `swiftlint --strict`
 2. **compile** — build-macos Debug → `xcodebuild` Minos build → `cargo check -p minos-desktop`
-3. **test** — `xcodebuild` MinosTests → Flutter `--tags ffi` (or full Flutter in local `check-all`)
+3. **test** — `xcodebuild` MinosTests → Flutter `--tags ffi` (or full Flutter in local `check-all`). Empty `ffi` tag matches are OK (`package:test` exit 79).
 
 ### local `check-all` (after `check-rust`)
 

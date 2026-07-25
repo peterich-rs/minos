@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -601,15 +601,26 @@ fn flutter_leg_ffi_only(mobile_root: &Path, workspace_root: &Path) -> Result<()>
     }
 
     eprintln!("==> fvm flutter test --no-pub --tags ffi (apps/mobile)");
-    // When no test is tagged `ffi` yet, Flutter reports "No tests ran" and
-    // exits 0 — the step stays green and becomes meaningful as soon as an
-    // ffi-tagged test is added.
-    run(
+    // package:test exits 79 when the tag filter matches zero tests ("No tests
+    // ran"). Until an ffi-tagged host-dylib test lands, treat that as success
+    // so the macOS lane stays green and becomes meaningful on first add.
+    let status = run_status(
         "fvm",
         &["flutter", "test", "--no-pub", "--tags", "ffi"],
         mobile_root,
     )?;
-    Ok(())
+    if flutter_ffi_tag_filter_ok(status.success(), status.code()) {
+        if !status.success() {
+            eprintln!("==> flutter ffi tests: no tests tagged ffi (ok)");
+        }
+        return Ok(());
+    }
+    bail!("`fvm [\"flutter\", \"test\", \"--no-pub\", \"--tags\", \"ffi\"]` exited {status}");
+}
+
+/// Accept a successful `flutter test --tags ffi` run, or exit 79 (no matches).
+fn flutter_ffi_tag_filter_ok(success: bool, code: Option<i32>) -> bool {
+    success || code == Some(79)
 }
 
 fn bootstrap() -> Result<()> {
@@ -1618,6 +1629,14 @@ fn run(program: &str, args: &[&str], cwd: &Path) -> Result<()> {
     run_env(program, args, &[], cwd)
 }
 
+fn run_status(program: &str, args: &[&str], cwd: &Path) -> Result<ExitStatus> {
+    Command::new(program)
+        .args(args)
+        .current_dir(cwd)
+        .status()
+        .with_context(|| format!("spawning `{program} {args:?}`"))
+}
+
 fn run_owned(program: &str, args: &[String], cwd: &Path) -> Result<()> {
     let status = Command::new(program)
         .args(args)
@@ -1691,5 +1710,14 @@ mod tests {
     fn replace_optional_returns_buf_unchanged_when_needle_missing() {
         let result = replace_optional("hello world".into(), "MISSING", "x");
         assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn flutter_ffi_tag_filter_ok_accepts_success_and_no_tests_ran() {
+        assert!(flutter_ffi_tag_filter_ok(true, Some(0)));
+        // package:test uses 79 for "No tests ran" (empty tag filter match).
+        assert!(flutter_ffi_tag_filter_ok(false, Some(79)));
+        assert!(!flutter_ffi_tag_filter_ok(false, Some(1)));
+        assert!(!flutter_ffi_tag_filter_ok(false, None));
     }
 }
