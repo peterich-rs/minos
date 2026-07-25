@@ -9,15 +9,39 @@ portability lane.
 
 | Command | What it runs |
 |---------|----------------|
-| `just check` / `cargo xtask check-all` | `check-rust` + (macOS) native/Swift/`minos-desktop` + full Flutter when fvm is present + frb drift when codegen is installed |
-| `just check-rust` / `cargo xtask check-rust` | fmt, clippy (`--exclude minos-desktop`), lint-naming, lint-docs, `cargo test --workspace --exclude minos-desktop`, `cargo test -p minos-daemon --features test-support`, backend platform schema drift |
-| `just check-macos` / `cargo xtask check-macos` | UniFFI, universal staticlib, XcodeGen, xcodebuild, MinosTests, swiftlint, `cargo check -p minos-desktop`, Flutter `--tags ffi` (macOS only) |
+| `just check` / `cargo xtask check-all` | `check-rust` → frb drift → (macOS) native/Swift/`minos-desktop` → full Flutter when fvm is present |
+| `just check-rust` / `cargo xtask check-rust` | phased rust gate (see below) |
+| `just check-macos` / `cargo xtask check-macos` | phased Apple gate (see below) |
 | `just check-backend` | schema drift + backend tests + daemon `test-support` tests |
 | `just check-web` | `apps/web` `pnpm check` (eslint + production build) |
 | `just check-desktop` | `apps/desktop` `pnpm check:all` (tsc + unit tests + biome + file-size + px-text) |
 
 Stub lints (`lint-conventions`, `lint-metrics`) remain as standalone xtask
 commands but are **not** part of any gate until implemented.
+
+## Phase order (cheapest first)
+
+Every composite gate runs **static → compile → test** so a missing newline or
+naming hit fails before clippy/xcodebuild/the suite.
+
+### `check-rust`
+
+1. **static** — `cargo fmt --check` → lint-naming → lint-docs → backend platform schema drift
+2. **compile** — `cargo clippy --workspace --all-targets --exclude minos-desktop -D warnings`
+3. **test** — `cargo test --workspace --exclude minos-desktop` → `cargo test -p minos-daemon --features test-support`
+
+### `check-macos` / macOS leg of `check-all`
+
+1. **static** — gen-uniffi → gen-xcode → `swiftlint --strict`
+2. **compile** — build-macos Debug → `xcodebuild` Minos build → `cargo check -p minos-desktop`
+3. **test** — `xcodebuild` MinosTests → Flutter `--tags ffi` (or full Flutter in local `check-all`)
+
+### local `check-all` (after `check-rust`)
+
+1. frb codegen drift (static/codegen; skips if codegen binary missing)
+2. macOS leg (when on macOS)
+3. Flutter full: format → analyze → build host dylib → `flutter test`
+4. optional codex smoke (`--with-codex`)
 
 ## CI matrix (`.github/workflows/ci.yml`)
 
