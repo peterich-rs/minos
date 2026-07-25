@@ -186,7 +186,20 @@ impl Visit for MessageVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard};
     use tracing_subscriber::prelude::*;
+
+    /// Capture layer + ring + default subscriber are process-global. Parallel
+    /// lib tests otherwise race: one test's `fresh_state`/`set_default` can
+    /// wipe or steal another mid-assert (seen as empty `recent()` under
+    /// `cargo test -p minos-mobile --lib`).
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_capture_tests() -> MutexGuard<'static, ()> {
+        TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     fn fresh_state() {
         if let Ok(mut ring) = state().ring.lock() {
@@ -196,27 +209,28 @@ mod tests {
 
     #[test]
     fn capture_layer_records_message_and_fields() {
+        let _serial = lock_capture_tests();
+        const TARGET: &str = "minos_mobile::log_capture::message_fields_test";
         fresh_state();
         let _guard =
             tracing::subscriber::set_default(tracing_subscriber::registry().with(CaptureLayer));
 
-        tracing::info!(target: "minos_mobile::log_capture::tests", url = "wss://x", "ping");
+        tracing::info!(target: TARGET, url = "wss://x", "ping");
 
         let records = recent();
         assert!(
-            records
-                .iter()
-                .any(|r| r.message.contains("ping") && r.message.contains("url=wss://x")),
+            records.iter().any(|r| {
+                r.target == TARGET
+                    && r.message.contains("ping")
+                    && r.message.contains("url=wss://x")
+            }),
             "expected 'ping url=wss://x' in records, got {records:?}"
         );
     }
 
     #[test]
     fn ring_buffer_is_bounded_and_drops_oldest() {
-        // The ring is process-global, so concurrent tests can push extra
-        // records onto it. Filter by a unique target and assert that the
-        // first surviving entry from *our* target has an index past the
-        // eviction floor — foreign records only push that floor higher.
+        let _serial = lock_capture_tests();
         const TARGET: &str = "minos_mobile::log_capture::ring_test";
         fresh_state();
         let _guard =
@@ -260,9 +274,7 @@ mod tests {
 
     #[tokio::test]
     async fn subscribers_receive_live_records() {
-        // The capture layer + broadcast channel are process-global, so any
-        // other test running concurrently can also push records onto our
-        // subscriber. Filter on a unique target so we ignore that crosstalk.
+        let _serial = lock_capture_tests();
         const TARGET: &str = "minos_mobile::log_capture::live_tail_test";
         fresh_state();
         let mut rx = subscribe();
