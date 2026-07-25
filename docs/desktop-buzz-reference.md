@@ -229,10 +229,8 @@ Minos 现状：壳子在、chat 基础在、zustand 偏重、UI primitive 偏少
 4. **Chrome layout CSS 变量** + macOS top inset — **partial done**（`chromeLayout` vars；titlebar 仍系统装饰，traffic-light inset 待 hidden titlebar）
 5. **连接状态 → 侧栏卡片 / toast 策略** — **done**（`SidebarConnectionCard` + `connection-card-policy`，与 toast 同 2s 防抖）
 
-整合分支节奏（少碎分支）：engineering-gates → wave-b → wave-c（含 shell）→ **P0 reset 合回 wave-c**。  
-Wave B：helpers 拆分 + useStable* + platform。  
-Wave C：motion / chrome / connection card / AuxiliaryPanel。  
-P0 收尾：workspace module reset 注册表。
+整合分支：`refactor/desktop-engineering-alignment`（门禁 + helpers/stable + shell + workspace reset；少碎分支）。  
+覆盖：SessionsView/helpers 拆分、rem+zoom、invokeDaemon、useStable*、motion/chrome、连接卡、AuxiliaryPanel、`resetWorkspaceModuleState`。
 
 ### P1 — 产品形态对齐
 
@@ -322,4 +320,4 @@ Minos 已经走在同一条路上；下一步最有杠杆的是：
 | 2026-07-24 | 初版：对照 buzz `desktop/` 与 minos `apps/desktop/` 整理 |
 | 2026-07-24 | Wave B：helpers 拆分 + useStable* + 列表 memo 合同落地 |
 | 2026-07-24 | Wave C：shell 手感 — motion / chrome / connection card / AuxiliaryPanel |
-| 2026-07-24 | P0 收尾：`resetWorkspaceModuleState` 注册表（合入 wave-c 线） |
+| 2026-07-24 | P0 收尾：`resetWorkspaceModuleState`；分支收敛为 `refactor/desktop-engineering-alignment` |
