@@ -272,8 +272,11 @@ mod tests {
         assert_eq!(last_index, RING_CAPACITY + 49);
     }
 
-    #[tokio::test]
-    async fn subscribers_receive_live_records() {
+    #[test]
+    fn subscribers_receive_live_records() {
+        // Sync test + try_recv poll: holding TEST_LOCK across `.await` trips
+        // clippy::await_holding_lock, and dropping the lock before await races
+        // other log_capture tests on the process-global ring/subscriber.
         let _serial = lock_capture_tests();
         const TARGET: &str = "minos_mobile::log_capture::live_tail_test";
         fresh_state();
@@ -283,20 +286,24 @@ mod tests {
 
         tracing::warn!(target: TARGET, "live tail");
 
-        let deadline = std::time::Duration::from_millis(500);
-        let received = tokio::time::timeout(deadline, async {
-            loop {
-                match rx.recv().await {
-                    Ok(record) if record.target == TARGET => return record,
-                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        panic!("broadcast closed before our record arrived")
-                    }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        let received = loop {
+            match rx.try_recv() {
+                Ok(record) if record.target == TARGET => break record,
+                Ok(_)
+                | Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+                | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
+                    assert!(
+                        std::time::Instant::now() <= deadline,
+                        "subscriber timed out waiting for {TARGET}",
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                    panic!("broadcast closed before our record arrived")
                 }
             }
-        })
-        .await
-        .expect("subscriber timed out");
+        };
         assert_eq!(received.level, LogLevel::Warn);
         assert!(received.message.contains("live tail"));
     }
