@@ -196,6 +196,12 @@ pub trait LocalDaemonRpc {
         req: crate::UpdateConversationParams,
     ) -> jsonrpsee::core::RpcResult<crate::UpdateConversationResponse>;
 
+    #[method(name = "remove_conversation_agent")]
+    async fn remove_conversation_agent(
+        &self,
+        req: crate::RemoveConversationAgentParams,
+    ) -> jsonrpsee::core::RpcResult<crate::RemoveConversationAgentResponse>;
+
     #[method(name = "list_conversation_messages")]
     async fn list_conversation_messages(
         &self,

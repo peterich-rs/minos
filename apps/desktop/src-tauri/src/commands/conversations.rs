@@ -1,5 +1,7 @@
 use crate::app_state::AppState;
-use crate::daemon::{ConversationDto, MessagePageDto, ToggleReactionResultDto};
+use crate::daemon::{
+    ConversationDto, MessagePageDto, RemoveConversationAgentDto, ToggleReactionResultDto,
+};
 use tauri::State;
 
 #[tauri::command]
@@ -40,6 +42,19 @@ pub async fn daemon_update_conversation(
     state
         .daemon
         .update_conversation(conversation_id, title, priority, progress)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn daemon_remove_conversation_agent(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    agent: String,
+) -> Result<RemoveConversationAgentDto, String> {
+    state
+        .daemon
+        .remove_conversation_agent(conversation_id, agent)
         .await
         .map_err(|e| e.to_string())
 }
