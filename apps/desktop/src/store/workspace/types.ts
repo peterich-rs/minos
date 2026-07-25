@@ -5,6 +5,7 @@
 import type { StoreApi } from "zustand";
 import type {
   Conversation,
+  ConversationPriority,
   ConversationProgress,
   DeliveryStatus,
   Project,
@@ -230,7 +231,15 @@ export type WorkspaceState = {
     conversationId: string,
     messageId: string,
   ) => Promise<void>;
-  createConversation: (projectId: string, title: string) => Promise<string | null>;
+  createConversation: (
+    projectId: string,
+    input: {
+      title: string;
+      priority?: ConversationPriority | null;
+      /** Runtime agent ids to start after create (opt-in). */
+      agents?: string[];
+    },
+  ) => Promise<string | null>;
   updateConversationTitle: (
     conversationId: string,
     title: string,

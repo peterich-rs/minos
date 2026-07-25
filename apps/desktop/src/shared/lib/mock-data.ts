@@ -71,6 +71,11 @@ export type Conversation = {
   messageCount: number;
   boardColumn: ConversationBoardColumn;
   agentSessionCount: number;
+  /**
+   * Runtime agents on the conversation roster (membership SSOT).
+   * @mention / start_agent are gated on this list — not on installed CLIs alone.
+   */
+  participatingAgents: string[];
   runningCount: number;
   approvalCount: number;
   /** Git branch snapshot at conversation create time. */
@@ -206,6 +211,7 @@ export const conversations: Conversation[] = [
     messageCount: 14,
     boardColumn: "running",
     agentSessionCount: 2,
+    participatingAgents: ["codex", "claude"],
     runningCount: 1,
     approvalCount: 1,
     branch: "feature/jwt-auth",
@@ -223,6 +229,7 @@ export const conversations: Conversation[] = [
     messageCount: 6,
     boardColumn: "needs_you",
     agentSessionCount: 1,
+    participatingAgents: ["codex"],
     runningCount: 0,
     approvalCount: 1,
     branch: "feature/mobile-auth-and-agent-session",
@@ -239,6 +246,7 @@ export const conversations: Conversation[] = [
     messageCount: 9,
     boardColumn: "done",
     agentSessionCount: 1,
+    participatingAgents: ["codex"],
     runningCount: 0,
     approvalCount: 0,
     branch: "feat/ingest-sync",
@@ -255,6 +263,7 @@ export const conversations: Conversation[] = [
     messageCount: 1,
     boardColumn: "backlog",
     agentSessionCount: 0,
+    participatingAgents: [],
     runningCount: 0,
     approvalCount: 0,
     branch: "docs/architecture",
@@ -271,6 +280,7 @@ export const conversations: Conversation[] = [
     messageCount: 1,
     boardColumn: "backlog",
     agentSessionCount: 0,
+    participatingAgents: ["claude"],
     runningCount: 0,
     approvalCount: 0,
     branch: "main",
@@ -287,6 +297,7 @@ export const conversations: Conversation[] = [
     messageCount: 4,
     boardColumn: "done",
     agentSessionCount: 1,
+    participatingAgents: ["gemini"],
     runningCount: 0,
     approvalCount: 0,
     branch: "chore/seo-meta",
@@ -304,6 +315,7 @@ export const conversations: Conversation[] = [
     messageCount: 3,
     boardColumn: "needs_you",
     agentSessionCount: 1,
+    participatingAgents: ["grok"],
     runningCount: 1,
     approvalCount: 1,
     branch: "fix/ws-backoff",

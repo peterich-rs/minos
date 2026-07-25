@@ -67,6 +67,7 @@ minos-tui [OPTIONS]
 | `create_conversation(project_id, title)` | 创建 conversation |
 | `list_conversation_messages(conversation_id)` | 主时间线消息 |
 | `list_conversation_agent_sessions(conversation_id)` | 右侧 agent session 列表 |
+| `create_conversation(..., agents)` | 创建时写入 roster；`@` picker 仅展示 `participating_agents` 成员 |
 | `start_agent_in_conversation(conversation_id, agent, workspace, profile_id?)` | 在 conversation 内创建 agent run；可选 `profile_id`（daemon `resolve_launch_options` 填 model/effort/instructions） |
 | `list_agent_profiles()` | Host agent profiles（@ 补全与 bare `@agent` 最新 profile convenience） |
 | `append_conversation_message(...)` | 写 conversation 主时间线 |

@@ -295,21 +295,41 @@ impl UiState {
     pub const COPIED_FLASH_TTL: std::time::Duration = std::time::Duration::from_secs(2);
 
     pub fn conversation_agent_mention_candidates(&self) -> Vec<AgentMentionCandidate> {
-        // Order matches desktop: runtimes → profiles → continue sessions.
+        // Membership-gated: only conversation roster agents (and their profiles /
+        // open sessions) appear in @picker. Order matches desktop.
+        let member_set: std::collections::HashSet<AgentName> = self
+            .nav_level()
+            .conversation_id()
+            .and_then(|id| {
+                self.conversations
+                    .items
+                    .iter()
+                    .find(|c| c.conversation_id == id)
+                    .map(|c| c.participating_agents.iter().copied().collect())
+            })
+            .unwrap_or_default();
+
+        // Empty roster ⇒ no bare agents (cannot @anyone until members exist).
         let mut candidates: Vec<AgentMentionCandidate> = self
             .status
             .agents
             .iter()
+            .filter(|agent| member_set.contains(&agent.name))
             .map(|agent| AgentMentionCandidate::installed(agent.name, agent.status.clone()))
             .collect();
 
         let mention_profiles = self.mention_profiles();
-        candidates.extend(mention_profiles.iter().map(|p| {
-            // Insert form is `@Name ` or `@p/<id> `; picker stores token without `@`/space.
-            let insert = crate::agent_route::profile_mention_insert(p, &mention_profiles);
-            let token = insert.trim_start_matches('@').trim_end().to_owned();
-            AgentMentionCandidate::profile(token, p.runtime_agent, p.id.clone())
-        }));
+        candidates.extend(
+            mention_profiles
+                .iter()
+                .filter(|p| member_set.contains(&p.runtime_agent))
+                .map(|p| {
+                    // Insert form is `@Name ` or `@p/<id> `; picker stores token without `@`/space.
+                    let insert = crate::agent_route::profile_mention_insert(p, &mention_profiles);
+                    let token = insert.trim_start_matches('@').trim_end().to_owned();
+                    AgentMentionCandidate::profile(token, p.runtime_agent, p.id.clone())
+                }),
+        );
 
         if self.nav_level().conversation_id().is_some() {
             candidates.extend(
@@ -317,6 +337,7 @@ impl UiState {
                     .agent_sessions
                     .items
                     .iter()
+                    .filter(|session| member_set.contains(&session.agent))
                     .filter(|session| session.parent_session_id.is_none())
                     .filter(|session| !matches!(session.state, SessionState::Closed { .. }))
                     .map(|session| {

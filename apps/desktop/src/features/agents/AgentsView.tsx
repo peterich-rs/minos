@@ -34,6 +34,7 @@ import {
   type ModelCatalogEntry,
   type RuntimeCliDescriptor,
 } from "./lib/agentConfigProjection";
+import { MODAL_BACKDROP_CLASS } from "@/shared/ui/modalBackdrop";
 
 type AgentProfile = {
   id: string;
@@ -419,7 +420,10 @@ function CreateAgentDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4"
+      className={cn(
+        "fixed inset-0 z-50 flex items-center justify-center p-4",
+        MODAL_BACKDROP_CLASS,
+      )}
       role="dialog"
       aria-modal="true"
       aria-label="Create agent"

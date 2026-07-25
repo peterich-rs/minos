@@ -1037,6 +1037,13 @@ pub struct ListConversationsResponse {
 pub struct CreateConversationParams {
     pub project_id: String,
     pub title: String,
+    /// Optional user priority at create: `high` | `medium` | `low`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<String>,
+    /// Runtime agent roster for this conversation (`codex` / `claude` / …).
+    /// Only members may be @mentioned or started in the conversation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

@@ -210,4 +210,60 @@ describe("buildAgentMentionOptions", () => {
     assert.equal(opts[0]?.label, "@opencode");
     assert.equal(opts[0]?.disabled, true);
   });
+
+  it("gates options to conversation member roster", () => {
+    const opts = buildAgentMentionOptions({
+      query: "",
+      clis: [
+        { agent: "codex", installed: true, status: "ok" },
+        { agent: "claude", installed: true, status: "ok" },
+        { agent: "grok", installed: true, status: "ok" },
+      ],
+      sessions: [
+        {
+          id: "s-claude",
+          agent: "claude",
+          shortId: "aabbccdd",
+          status: "idle",
+        },
+        {
+          id: "s-grok",
+          agent: "grok",
+          shortId: "eeff0011",
+          status: "idle",
+        },
+      ],
+      profiles: [
+        {
+          id: "profile-research",
+          name: "ResearchGrok",
+          runtimeAgent: "grok",
+        },
+        {
+          id: "profile-code",
+          name: "CodeClaude",
+          runtimeAgent: "claude",
+        },
+      ],
+      memberAgents: ["claude"],
+    });
+    const labels = opts.map((o) => o.label);
+    assert.ok(labels.includes("@claude"));
+    assert.ok(labels.includes("@claude#aabbccdd"));
+    assert.ok(labels.includes("@CodeClaude"));
+    assert.ok(!labels.includes("@codex"));
+    assert.ok(!labels.includes("@grok"));
+    assert.ok(!labels.includes("@grok#eeff0011"));
+    assert.ok(!labels.includes("@ResearchGrok"));
+  });
+
+  it("returns no options when roster is empty", () => {
+    const opts = buildAgentMentionOptions({
+      query: "",
+      clis: [{ agent: "codex", installed: true, status: "ok" }],
+      sessions: [],
+      memberAgents: [],
+    });
+    assert.deepEqual(opts, []);
+  });
 });

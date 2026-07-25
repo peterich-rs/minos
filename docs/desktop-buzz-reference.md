@@ -75,6 +75,7 @@ Minos 已有 ThemeProvider / button / dialog / tooltip。建议补齐：
 | `UserAvatar` + framing CSS | `shared/ui/UserAvatar.tsx` | 头像裁切一致性 | Agent/user avatar |
 | Markdown 管线 | `shared/ui/markdown*` | GFM + code + mention | Agent transcript（按需裁剪，别整份 2000 行搬） |
 | Composer 族 | `features/messages/ui/MessageComposer*` | TipTap + draft + attach + emoji | 聊天输入（Minos Composer 可对照深化） |
+| Create channel dialog | `features/sidebar/ui/CreateChannelDialog*` + form hook | 标题/描述/权限配置后再创建 | **已借鉴**：`features/work/ui/CreateConversationDialog`（title / priority / **agent roster**；roster 约束后续 @mention） |
 | Message row 拆分 | `MessageRow` / `MessageHeader` / `MessageActionBar` / `MessageReactions` | 一行消息拆成稳定子树 | 已有雏形，可继续对齐 |
 | Timeline 虚拟化 | `TimelineMessageList` + `useAnchoredScroll` + `useBufferedTimelineMessages` | stick-to-bottom / 加载更早 / 锚定滚动 | **聊天核心，最高价值** |
 
@@ -223,7 +224,7 @@ Minos 现状：壳子在、chat 基础在、zustand 偏重、UI primitive 偏少
 
 ### P0 — 立刻可做，收益大
 
-1. **Motion / surface token**（modal/popover 统一） — **done**（`modalMotion` / `popoverSurface` / `deferredModalOpen`）
+1. **Motion / surface token**（modal/popover 统一） — **done**（`modalMotion` / `popoverSurface` / `deferredModalOpen` / `modalBackdrop` blur+black tint）
 2. **`useStable*` + memo 合同**（timeline/session list） — **done**（Wave B）
 3. **Workspace/host 切换 reset 注册表** — **done**（`resetWorkspaceModuleState`；project 切换不触发）
 4. **Chrome layout CSS 变量** + macOS top inset — **partial done**（`chromeLayout` vars；titlebar 仍系统装饰，traffic-light inset 待 hidden titlebar）

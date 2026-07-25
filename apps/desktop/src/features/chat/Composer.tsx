@@ -53,6 +53,11 @@ export function Composer({ conversationId }: { conversationId: string }) {
   const loadInspector = useWorkspaceStore((s) => s.loadInspector);
   const source = useWorkspaceStore((s) => s.source);
   const clis = useWorkspaceStore((s) => s.clis);
+  const participatingAgents = useWorkspaceStore(
+    (s) =>
+      s.conversations.find((c) => c.id === conversationId)
+        ?.participatingAgents ?? [],
+  );
   const sessions = useWorkspaceStore(
     (s) => s.sessionsByConversation[conversationId] ?? EMPTY_SESSIONS,
   );
@@ -77,14 +82,15 @@ export function Composer({ conversationId }: { conversationId: string }) {
   const mention = mentionQueryAtCursor(draft, cursor);
   const mentionOptions = useMemo(() => {
     if (!mention) return [];
-    // Bare `@agent` + profiles (`@Name` / `@p/id`) + `@agent#short` continue.
-    return buildAgentMentionOptions(
-      mention.query,
+    // Membership-gated: only conversation roster agents + their profiles/sessions.
+    return buildAgentMentionOptions({
+      query: mention.query,
       clis,
       sessions,
-      mentionProfiles,
-    );
-  }, [mention, clis, sessions, mentionProfiles]);
+      profiles: mentionProfiles,
+      memberAgents: participatingAgents,
+    });
+  }, [mention, clis, sessions, mentionProfiles, participatingAgents]);
 
   // When @-mention UI opens and sessions are empty, ensure Inspector working set
   // so @agent#short options can list existing sessions without opening the rail.
@@ -335,7 +341,7 @@ export function Composer({ conversationId }: { conversationId: string }) {
       </div>
       <p className="mt-2 px-1 text-2xs text-ink-muted">
         {source === "daemon"
-          ? "Connected · @agent new session · @agent#id continue · ⌘/Ctrl+Enter send"
+          ? "Connected · @member agent · @agent#id continue · ⌘/Ctrl+Enter send"
           : "Mock mode"}
         {phase === "loading" && hasCachedMessages ? " · refreshing…" : ""}
       </p>

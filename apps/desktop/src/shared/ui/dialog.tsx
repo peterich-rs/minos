@@ -2,6 +2,7 @@ import * as React from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import { cn } from "@/shared/lib/utils";
+import { MODAL_BACKDROP_CLASS } from "@/shared/ui/modalBackdrop";
 import {
   MODAL_CONTENT_MOTION_CLASS,
   MODAL_OVERLAY_MOTION_CLASS,
@@ -18,8 +19,10 @@ const DialogOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Overlay
     ref={ref}
+    data-testid="dialog-overlay"
     className={cn(
-      "fixed inset-0 z-50 bg-ink/40",
+      "fixed inset-0 z-50",
+      MODAL_BACKDROP_CLASS,
       MODAL_OVERLAY_MOTION_CLASS,
       className,
     )}
@@ -33,15 +36,18 @@ const DialogContent = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
     /** Hide the default top-right close control. */
     hideClose?: boolean;
+    /** Extra classes for this dialog's backdrop. */
+    overlayClassName?: string;
   }
->(({ className, children, hideClose = false, ...props }, ref) => (
+>(({ className, children, hideClose = false, overlayClassName, ...props }, ref) => (
   <DialogPortal>
-    <DialogOverlay />
+    <DialogOverlay className={overlayClassName} />
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
         "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%]",
-        "gap-0 border border-ink/10 bg-surface shadow-2xl",
+        // Elevated panel on frosted backdrop — ring separates from blur wash.
+        "gap-0 border border-ink/10 bg-surface shadow-2xl ring-1 ring-black/5 dark:ring-white/10",
         "sm:rounded-2xl",
         MODAL_CONTENT_MOTION_CLASS,
         className,

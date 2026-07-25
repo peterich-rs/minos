@@ -1281,6 +1281,24 @@ impl AgentGlue {
                 message: "conversation title cannot be empty".into(),
             });
         }
+        let priority = match req.priority.as_deref() {
+            None => None,
+            Some(p) => {
+                let normalized = p.trim().to_ascii_lowercase();
+                match normalized.as_str() {
+                    "" => None,
+                    "high" | "medium" | "low" => Some(normalized),
+                    other => {
+                        return Err(MinosError::CodexProtocolError {
+                            method: "create_conversation".into(),
+                            message: format!(
+                                "invalid priority '{other}'; expected high|medium|low"
+                            ),
+                        });
+                    }
+                }
+            }
+        };
         let conversation_id = uuid::Uuid::new_v4().to_string();
         let now_ms = current_unix_ms();
 
@@ -1291,11 +1309,26 @@ impl AgentGlue {
             .map(|p| crate::git_snapshot::detect_git_snapshot(std::path::Path::new(p)))
             .unwrap_or((None, None));
         let meta = crate::store::ConversationCreateMeta {
-            priority: None,
+            priority,
             progress: Some("todo".into()),
             branch,
             worktree_path,
         };
+
+        // Normalize + validate roster up front (membership gates @mention / start).
+        let mut member_agents: Vec<String> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for raw in &req.agents {
+            let label = raw.trim();
+            if label.is_empty() || !seen.insert(label.to_ascii_lowercase()) {
+                continue;
+            }
+            let agent = parse_agent_label(label).map_err(|e| MinosError::CodexProtocolError {
+                method: "create_conversation".into(),
+                message: format!("invalid agent member '{label}': {e}"),
+            })?;
+            member_agents.push(agent_label(agent).to_owned());
+        }
 
         self.store
             .create_conversation_with_meta(
@@ -1307,11 +1340,16 @@ impl AgentGlue {
             )
             .await
             .map_err(|e| map_store_error("create_conversation", e))?;
+        self.store
+            .set_conversation_agent_members(&conversation_id, &member_agents, now_ms)
+            .await
+            .map_err(|e| map_store_error("create_conversation.set_members", e))?;
         tracing::info!(
             target: "minos_daemon::agent",
             project_id = %project.project_id,
             conversation_id = %conversation_id,
             branch = ?meta.branch,
+            agent_count = member_agents.len(),
             "conversation created",
         );
         let row = self
@@ -1320,8 +1358,12 @@ impl AgentGlue {
             .await
             .map_err(|e| map_store_error("create_conversation.reload", e))?
             .expect("conversation inserted above");
+        let participating_agents = member_agents
+            .iter()
+            .map(|a| parse_agent_label(a))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(minos_protocol::CreateConversationResponse {
-            conversation: conversation_summary_from_row(row, Vec::new())?,
+            conversation: conversation_summary_from_row(row, participating_agents)?,
         })
     }
 
@@ -1639,6 +1681,21 @@ impl AgentGlue {
                 method: "start_agent_in_conversation".into(),
                 message: format!("project not found: {}", conversation.project_id),
             })?;
+        let agent_name = agent_label(req.agent);
+        let is_member = self
+            .store
+            .is_conversation_agent_member(&req.conversation_id, agent_name)
+            .await
+            .map_err(|e| map_store_error("start_agent_in_conversation.is_member", e))?;
+        if !is_member {
+            return Err(MinosError::CodexProtocolError {
+                method: "start_agent_in_conversation".into(),
+                message: format!(
+                    "agent '{agent_name}' is not a member of this conversation; \
+                     add it when creating the conversation"
+                ),
+            });
+        }
         let workspace = if req.workspace.trim().is_empty() {
             project
                 .workspace_path
@@ -2524,6 +2581,13 @@ async fn handle_daemon_mcp_request(
             let workspace =
                 workspace_for_mcp_conversation(&store, &conversation_id, &default_workspace)
                     .await?;
+            let target_label = agent_label(target_agent);
+            anyhow::ensure!(
+                store
+                    .is_conversation_agent_member(&conversation_id, target_label)
+                    .await?,
+                "agent '{target_label}' is not a member of conversation {conversation_id}"
+            );
             // Same launch path as start_agent_in_conversation RPC: profile fields via
             // AgentLaunchOptions (explicit request fields are not on the MCP tool).
             let outcome = manager
@@ -2854,6 +2918,13 @@ async fn deliver_daemon_post_update_target(
 
     let workspace =
         workspace_for_mcp_conversation(&store, conversation_id, default_workspace).await?;
+    let target_label = agent_label(target_agent);
+    anyhow::ensure!(
+        store
+            .is_conversation_agent_member(conversation_id, target_label)
+            .await?,
+        "agent '{target_label}' is not a member of conversation {conversation_id}"
+    );
     let outcome = manager
         .start_agent_in_conversation(target_agent, workspace.clone(), conversation_id.to_owned())
         .await?;

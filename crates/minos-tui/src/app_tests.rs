@@ -292,6 +292,7 @@ impl AgentBackend for TestBackend {
         &self,
         project_id: &str,
         title: &str,
+        agents: &[minos_domain::AgentName],
     ) -> Result<crate::backend::ConversationEntry> {
         let entry = crate::backend::ConversationEntry {
             conversation_id: format!("test-conversation-{}", title.replace(' ', "-")),
@@ -302,7 +303,7 @@ impl AgentBackend for TestBackend {
             updated_at_ms: 0,
             message_count: 0,
             agent_session_count: 0,
-            participating_agents: Vec::new(),
+            participating_agents: agents.to_vec(),
         };
         self.conversations
             .lock()

@@ -233,10 +233,16 @@ export const daemonApi = {
     }),
   listSessions: (conversationId: string) =>
     call<DaemonSession[]>("daemon_list_sessions", { conversationId }),
-  createConversation: (projectId: string, title: string) =>
+  createConversation: (
+    projectId: string,
+    title: string,
+    opts?: { priority?: string | null; agents?: string[] },
+  ) =>
     call<DaemonConversation>("daemon_create_conversation", {
       projectId,
       title,
+      priority: opts?.priority ?? null,
+      agents: opts?.agents ?? [],
     }),
   updateConversation: (
     conversationId: string,
