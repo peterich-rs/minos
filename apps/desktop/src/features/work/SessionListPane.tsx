@@ -6,6 +6,7 @@ import {
   MessageSquare,
   PanelLeftClose,
 } from "lucide-react";
+import { useStableArrayShallow } from "@/shared/hooks/useStableReference";
 import { agentMeta, statusMeta } from "@/shared/lib/mock-data";
 import { Avatar } from "@/shared/ui/Avatar";
 import { VirtualizedList } from "@/shared/ui/VirtualizedList";
@@ -45,9 +46,11 @@ export function SessionListPane({
   onRetry: () => void;
   onCollapseList: () => void;
 }) {
-  const rows = useMemo(
-    () => flattenSessionListRows(groups, collapsedConvIds),
-    [groups, collapsedConvIds],
+  const rows = useStableArrayShallow(
+    useMemo(
+      () => flattenSessionListRows(groups, collapsedConvIds),
+      [groups, collapsedConvIds],
+    ),
   );
   const conversationCount = groups.length;
   const liveTotal = groups.reduce((n, g) => n + g.runningCount, 0);
@@ -84,7 +87,7 @@ export function SessionListPane({
             <button
               type="button"
               onClick={onRetry}
-              className="rounded-lg bg-ink px-3 py-1.5 text-2xs font-semibold text-white"
+              className="rounded-lg bg-ink px-3 py-1.5 text-2xs font-semibold text-surface"
             >
               Retry
             </button>
@@ -141,7 +144,7 @@ const SessionListRow = memo(function SessionListRow({
         group={row.group}
         collapsed={row.collapsed}
         selectedSessionId={selectedSessionId}
-        onToggle={() => onToggleConversation(row.group.conversationId)}
+        onToggleConversation={onToggleConversation}
       />
     );
   }
@@ -160,23 +163,25 @@ const SessionListRow = memo(function SessionListRow({
   );
 });
 
-function ConversationSessionFolderHeader({
-  group,
-  collapsed,
-  selectedSessionId,
-  onToggle,
-}: {
-  group: ConversationSessionGroup;
-  collapsed: boolean;
-  selectedSessionId: string | null;
-  onToggle: () => void;
-}) {
+const ConversationSessionFolderHeader = memo(
+  function ConversationSessionFolderHeader({
+    group,
+    collapsed,
+    selectedSessionId,
+    onToggleConversation,
+  }: {
+    group: ConversationSessionGroup;
+    collapsed: boolean;
+    selectedSessionId: string | null;
+    /** Stable parent callback — row calls with conversationId (no per-row closure). */
+    onToggleConversation: (conversationId: string) => void;
+  }) {
   const hasSelected = group.sessions.some((s) => s.id === selectedSessionId);
 
   return (
     <button
       type="button"
-      onClick={onToggle}
+      onClick={() => onToggleConversation(group.conversationId)}
       className={cn(
         "flex w-full items-center gap-1.5 rounded-xl px-2 py-2 text-left transition-colors",
         "hover:bg-surface-hover",
@@ -198,13 +203,13 @@ function ConversationSessionFolderHeader({
         {group.title}
       </span>
       {group.runningCount > 0 ? (
-        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-3xs font-medium text-amber-800">
+        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-status-running/20 px-1.5 py-0.5 text-3xs font-medium text-status-running">
           <Loader2 className="h-3 w-3 animate-spin" />
           {group.runningCount}
         </span>
       ) : null}
       {group.attentionCount > 0 && group.runningCount === 0 ? (
-        <span className="shrink-0 rounded-full bg-rose-100 px-1.5 py-0.5 text-3xs font-medium text-rose-800">
+        <span className="shrink-0 rounded-full bg-status-failed/20 px-1.5 py-0.5 text-3xs font-medium text-status-failed">
           {group.attentionCount}
         </span>
       ) : null}
@@ -213,7 +218,8 @@ function ConversationSessionFolderHeader({
       </span>
     </button>
   );
-}
+},
+);
 
 const SessionTreeRow = memo(function SessionTreeRow({
   session,

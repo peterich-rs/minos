@@ -77,7 +77,7 @@ export function Timeline({ conversationId }: { conversationId: string }) {
           <button
             type="button"
             onClick={() => void loadTimeline(conversationId)}
-            className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-white"
+            className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-surface"
           >
             Retry load
           </button>

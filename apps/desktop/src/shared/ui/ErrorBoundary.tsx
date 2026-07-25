@@ -48,21 +48,21 @@ export class ErrorBoundary extends Component<Props, State> {
     if (!error) return this.props.children;
 
     return (
-      <div className="flex h-full min-h-0 w-full flex-col gap-3 overflow-auto bg-rose-50 p-6 text-rose-950">
+      <div className="flex h-full min-h-0 w-full flex-col gap-3 overflow-auto bg-status-failed/10 p-6 text-status-failed">
         <div className="text-base font-semibold">
           UI crashed{this.props.label ? ` (${this.props.label})` : ""}
         </div>
-        <pre className="whitespace-pre-wrap break-words rounded-lg border border-rose-200 bg-white p-3 font-mono text-xs leading-relaxed text-rose-900">
+        <pre className="whitespace-pre-wrap break-words rounded-lg border border-status-failed/30 bg-surface-raised p-3 font-mono text-xs leading-relaxed text-status-failed">
           {error.name}: {error.message}
         </pre>
         {info ? (
-          <pre className="whitespace-pre-wrap break-words rounded-lg border border-rose-100 bg-white/80 p-3 font-mono text-2xs leading-relaxed text-rose-800/90">
+          <pre className="whitespace-pre-wrap break-words rounded-lg border border-status-failed/20 bg-surface-raised/80 p-3 font-mono text-2xs leading-relaxed text-status-failed/90">
             {info}
           </pre>
         ) : null}
         <button
           type="button"
-          className="self-start rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-white"
+          className="self-start rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-surface"
           onClick={() => this.setState({ error: null, info: null })}
         >
           Try render again

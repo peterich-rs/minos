@@ -8,7 +8,7 @@ export function FileChangeRow({ file }: { file: FileChangeEntry }) {
       className={cn(
         "rounded-lg px-2 py-1.5 font-mono text-2xs leading-snug",
         file.failed
-          ? "bg-rose-50/80 text-rose-900"
+          ? "bg-status-failed/10 text-status-failed"
           : "bg-surface-muted/50 text-ink-secondary",
       )}
       title={file.path}

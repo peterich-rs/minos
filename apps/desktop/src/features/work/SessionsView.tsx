@@ -1,5 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Bot } from "lucide-react";
+import {
+  useStableArrayShallow,
+  useStableSet,
+} from "@/shared/hooks/useStableReference";
 import { useUiStore } from "@/store/ui-store";
 import {
   useWorkspaceStore,
@@ -49,9 +53,10 @@ export function SessionsView({ projectId }: { projectId: string }) {
   const livePush = useWorkspaceStore((s) => s.livePush);
 
   /** Conversation ids the user has collapsed (default: all expanded). */
-  const [collapsedConvIds, setCollapsedConvIds] = useState<Set<string>>(
+  const [collapsedConvIdsState, setCollapsedConvIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const collapsedConvIds = useStableSet(collapsedConvIdsState);
 
   // conversationId → projectId, so deep-link resolution can reject a foreign
   // project's session even during the project-sessions loading race.
@@ -64,34 +69,47 @@ export function SessionsView({ projectId }: { projectId: string }) {
   }, [conversations]);
 
   // Merge deep-linked session into the list only if it belongs to this project.
-  const displaySessions = useMemo(() => {
-    if (!selectedSessionId) return projectSessions;
-    if (sessionBelongsToProject(selectedSessionId, projectSessions)) {
-      return projectSessions;
-    }
-    const fallback = resolveSessionForView(
-      selectedSessionId,
-      projectId,
+  const displaySessions = useStableArrayShallow(
+    useMemo(() => {
+      if (!selectedSessionId) return projectSessions;
+      if (sessionBelongsToProject(selectedSessionId, projectSessions)) {
+        return projectSessions;
+      }
+      const fallback = resolveSessionForView(
+        selectedSessionId,
+        projectId,
+        projectSessions,
+        sessionsByConversation,
+        conversationProjectById,
+      );
+      if (!fallback) return projectSessions;
+      // Still only inject while list is empty (deep-link race), never a foreign id.
+      if (projectSessions.length > 0) return projectSessions;
+      return [fallback, ...projectSessions];
+    }, [
       projectSessions,
+      selectedSessionId,
       sessionsByConversation,
       conversationProjectById,
-    );
-    if (!fallback) return projectSessions;
-    // Still only inject while list is empty (deep-link race), never a foreign id.
-    if (projectSessions.length > 0) return projectSessions;
-    return [fallback, ...projectSessions];
-  }, [
-    projectSessions,
-    selectedSessionId,
-    sessionsByConversation,
-    conversationProjectById,
-    projectId,
-  ]);
-
-  const groups = useMemo(
-    () => groupSessionsByConversation(displaySessions),
-    [displaySessions],
+      projectId,
+    ]),
   );
+
+  const groups = useStableArrayShallow(
+    useMemo(
+      () => groupSessionsByConversation(displaySessions),
+      [displaySessions],
+    ),
+  );
+
+  const handleToggleConversation = useCallback((conversationId: string) => {
+    setCollapsedConvIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(conversationId)) next.delete(conversationId);
+      else next.add(conversationId);
+      return next;
+    });
+  }, []);
 
   // Load project sessions when:
   // - projectId / bootEpoch changes, or
@@ -209,15 +227,6 @@ export function SessionsView({ projectId }: { projectId: string }) {
   );
   const phase = listStatus?.phase ?? "idle";
 
-  const toggleConversation = (conversationId: string) => {
-    setCollapsedConvIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(conversationId)) next.delete(conversationId);
-      else next.add(conversationId);
-      return next;
-    });
-  };
-
   return (
     <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
       {listCollapsed ? (
@@ -239,7 +248,7 @@ export function SessionsView({ projectId }: { projectId: string }) {
           error={listStatus?.error}
           selectedSessionId={selectedSessionId}
           collapsedConvIds={collapsedConvIds}
-          onToggleConversation={toggleConversation}
+          onToggleConversation={handleToggleConversation}
           onSelectSession={selectSession}
           onRetry={() => void loadProjectSessions(projectId)}
           onCollapseList={toggleSessionsList}

@@ -14,6 +14,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
 } from "lucide-react";
+import { useStableArrayShallow } from "@/shared/hooks/useStableReference";
 import { agentMeta } from "@/shared/lib/mock-data";
 import { Avatar } from "@/shared/ui/Avatar";
 import { toast } from "@/shared/lib/toast";
@@ -98,9 +99,12 @@ export function TranscriptPane({
     }
     return session;
   }, [sessionEntity, session]);
-  const items = useWorkspaceStore(
+  const itemsRaw = useWorkspaceStore(
     (s) => s.transcriptsBySession[sessionId] ?? EMPTY_TRANSCRIPT,
   );
+  // mergeTranscriptItems already returns `prev` when unchanged; still stabilize
+  // in case a quiet path rebuilds an equal-length list of same item refs.
+  const items = useStableArrayShallow(itemsRaw);
   const status = useWorkspaceStore(
     (s) => s.transcriptStatusBySession[sessionId],
   );
@@ -506,7 +510,7 @@ export function TranscriptPane({
                         approvalStatusPolicy: "sync",
                       })
                     }
-                    className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-white"
+                    className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-surface"
                   >
                     Retry
                   </button>

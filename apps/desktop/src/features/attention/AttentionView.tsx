@@ -50,7 +50,7 @@ export function AttentionView() {
             <button
               type="button"
               onClick={() => void loadAttentionSessions()}
-              className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-white"
+              className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-surface"
             >
               Retry
             </button>
@@ -70,7 +70,7 @@ export function AttentionView() {
           return (
             <div
               key={session.id}
-              className="rounded-2xl border border-ink/5 bg-white p-4 shadow-sm"
+              className="rounded-2xl border border-ink/5 bg-surface-raised p-4 shadow-sm"
             >
               <div className="flex items-start gap-3">
                 <div
@@ -80,7 +80,7 @@ export function AttentionView() {
                       ? "bg-rose-100 text-rose-700"
                       : isFailed
                         ? "bg-red-100 text-red-700"
-                        : "bg-sky-100 text-sky-700",
+                        : "bg-status-suspended/15 text-status-suspended",
                   )}
                 >
                   {isApproval ? (
@@ -103,7 +103,7 @@ export function AttentionView() {
                     <span
                       className={cn(
                         "rounded-md px-1.5 py-0.5 text-2xs font-medium",
-                        meta?.color ?? "bg-stone-100 text-stone-700",
+                        meta?.color ?? "bg-ink/10 text-ink-secondary",
                       )}
                     >
                       {meta?.label ?? session.agent} #{session.shortId}
@@ -123,7 +123,7 @@ export function AttentionView() {
                           selectProject(project.id);
                           selectConversation(conv.id);
                         }}
-                        className="rounded-lg border border-ink/10 bg-white px-3 py-1.5 text-xs font-medium text-ink hover:bg-surface-muted"
+                        className="rounded-lg border border-ink/10 bg-surface-raised px-3 py-1.5 text-xs font-medium text-ink hover:bg-surface-muted"
                       >
                         Open conversation
                       </button>
@@ -138,7 +138,7 @@ export function AttentionView() {
                           session.conversationId,
                         );
                       }}
-                      className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+                      className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-surface hover:opacity-90"
                     >
                       {isApproval ? "Review / approve" : "Open transcript"}
                     </button>

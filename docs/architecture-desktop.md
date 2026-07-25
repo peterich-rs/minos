@@ -94,7 +94,7 @@ Feature-slice 布局（Wave 1 Phase 1–2）：按 **app 壳 / features / shared
 | 命令 | 作用 |
 |------|------|
 | `pnpm check` | `tsc --noEmit` |
-| `pnpm test` | `src/shared/lib/*.test.ts` + `src/shared/api/*.test.ts` + `src/features/{chat,agents,work}/lib/*.test.ts` |
+| `pnpm test` | `src/shared/{lib,api,hooks,ui}/*.test.ts` + `src/store/workspace/*.test.ts` + `src/features/{chat,agents,work}/lib/*.test.ts` |
 | `pnpm check:biome` | Biome **lint errors only**（format 不进 gate；warnings 可残留） |
 | `pnpm check:file-sizes` | `src/**/*.{ts,tsx}` 行数：warn `>400` / hard `>800`（ALLOWLIST 当前为空） |
 | `pnpm check:px-text` | 禁止 `text-[Npx]` / `font-size: Npx`；**allowlist 已清空**，新增即失败 |
@@ -102,7 +102,8 @@ Feature-slice 布局（Wave 1 Phase 1–2）：按 **app 壳 / features / shared
 
 - Biome 作用域：`src/**`、`scripts/**`、根配置；排除 `dist/`、`src-tauri/`、`node_modules/`。
 - Formatter **opt-in**：`pnpm format`；gate 只拦 lint **errors**，不强制全树 reformat，不因 warnings 失败。
-- 文件体积：`SessionsView` 已拆为 thin shell（~265 行）+ `features/work/ui/*` / `lib/*`；file-size ALLOWLIST **无** SessionsView 条目。`TranscriptPane`（~561）仅 soft warn（`>400`），未抬 hard cap。
+- 文件体积：`SessionsView` 已拆为 thin shell（~265 行）+ `features/work/ui/*` / `lib/*`；file-size ALLOWLIST **无** SessionsView 条目。`helpers.ts` 已拆为 `dto-map` / `transcript-merge` / `empty-workspace` / `mock-bundle`（barrel 保留）。`TranscriptPane`（~561）仅 soft warn（`>400`），未抬 hard cap。
+- 列表 memo 合同：派生 `Map`/`[]`/`Set` 经 `useStable*` 保 identity；行组件 `React.memo`；回调传稳定 `(id) => void`，禁止 per-row inline closure。
 - 包管理：`pnpm` + `pnpm-lock.yaml` 为唯一 lockfile（勿再生成 `package-lock.json`）。
 
 ### Design tokens + markdown（Wave 1 Phase 4）
@@ -139,7 +140,7 @@ apps/desktop/
     main.tsx · App.tsx · index.css · vite-env.d.ts
     app/                         # App shell composition
       AppShell.tsx · Sidebar.tsx · BootScreen.tsx
-      CommandPalette.tsx · ConnectionToasts.tsx
+      CommandPalette.tsx · ConnectionToasts.tsx · SidebarConnectionCard.tsx
       useWebviewZoomShortcuts.ts # Cmd±/0 → root rem scale; webview zoom pinned to 1
     features/
       work/                      # Project → Conversations / Sessions / Board
@@ -181,7 +182,17 @@ apps/desktop/
       ui/                        # Avatar · StatusPill · Tag · ErrorBoundary
                                  # MarkdownText · DiffView · ReadView · IncrementalText
                                  # button · dialog · dropdown-menu · popover · toaster · tooltip
+                                 # modalMotion · popoverSurface · deferredModalOpen
+                                 # sidebar-action-card (connection / nudge cards)
+      hooks/
+        useStableReference.ts    # useStableMap/Array/Set — keep derived identity for memo
+        useMediaQuery.ts         # narrow viewport → inspector overlay
+      layout/
+        chromeLayout.ts          # sidebar / aux panel CSS vars + breakpoints
+        AuxiliaryPanel.tsx       # split | rail | overlay right panel shell
       lib/
+        platform.ts              # hasPrimaryShortcutModifier (⌘/Ctrl)
+        connection-card-policy.ts # when to show sidebar daemon offline card
         host-status.ts           # Ready · Local only / Linked / This Mac
         mock-data.ts
         toast.ts                 # sonner wrappers
@@ -202,7 +213,12 @@ apps/desktop/
       workspace-store.ts         # thin create() + re-export useWorkspaceStore
       workspace/
         types.ts                 # WorkspaceState / ResourceFetchStatus / ProjectSession
-        helpers.ts               # DTO mapping, emptyWorkspace, mockBundle
+        helpers.ts               # barrel re-export (stable import path)
+        dto-map.ts               # Daemon DTO → UI + list patches
+        transcript-merge.ts      # mergeTranscriptItems / tool lifecycle dedupe
+        empty-workspace.ts       # empty caches, bootstrap flight, refresh timers
+        reset-workspace-state.ts # module singleton teardown (Buzz resetCommunityState)
+        mock-bundle.ts           # browser mock seed + KNOWN_AGENTS_FALLBACK
         projection.ts            # commitSessionEntity + hydrate sibling projection
         shared.ts                # quietRefresh / startNewAgentSession helpers
         create-actions.ts        # compose L1–L6 action factories
@@ -227,7 +243,10 @@ apps/desktop/
 | Work 三栏可拖拽 | `react-resizable-panels`；列表折叠时退回 rail + flex |
 | 全局跳转 | ⌘/Ctrl+K → `CommandPalette` |
 | 文本缩放 | `useWebviewZoomShortcuts` 挂在 **`App`**（boot + shell 始终生效）：⌘/Ctrl ±/0 调 `documentElement` rem（`minos:text-scale`）；Tauri webview zoom 固定为 1 |
-| Daemon 连接反馈 | `ConnectionToasts` 监听 `connection.connected` 边沿；**disconnect 防抖 2s**（`connection-toast-policy`），避免 daemon 短闪断 toast 抖动 |
+| Daemon 连接反馈 | `ConnectionToasts` 监听 `connection.connected` 边沿；**disconnect 防抖 2s**（`connection-toast-policy`）。持久侧栏卡 `SidebarConnectionCard`（同防抖 + dismiss 至本 episode；Retry → bootstrap / Host） |
+| Workspace 边界 reset | `resetWorkspaceModuleState`：bootstrap wipe / mock 路径统一清 timers、inflight、event bridge、reactions、composer ephemeral。**Project 切换不调用**。新模块单例必须登记于此 |
+| Inspector 辅面板 | `AuxiliaryPanel`：`split`（resizable）/ `rail` / `overlay`（&lt;1100px 浮层+backdrop）；`SessionInspector` 统一壳 |
+| Motion tokens | `modalMotion` / `popoverSurface` 统一 Dialog / Popover / Dropdown enter-exit |
 | Transcript 滚动 | stick-to-bottom（rAF 合并 pin + wheel-up suppress re-follow/pin）+ tail/load-older；identity 锚点；top sentinel；`overscroll-y-none` |
 | Timeline 分页 | 打开只拉 tail（`MESSAGE_PAGE_SIZE`）；`loadOlderMessages(beforeSeq)`；**hard + quiet** 均 `mergeMessagesQuietTail`（保留 older + 并发更新）；identity restore / following 不 restore |
 | Transcript 打开 | 用 Entity/list `messageCount`（= last_seq）seek tail；ingest 抬升 `messageCount`；若 page `nextSeq` 仍指向更新事件则 catch-up 追到末尾，避免 stale last_seq 只看到中间窗 |

@@ -448,8 +448,19 @@ fn flutter_leg(workspace_root: &Path) -> Result<()> {
     eprintln!("==> cargo build -p minos-ffi-frb (host dylib for flutter test)");
     run("cargo", &["build", "-p", "minos-ffi-frb"], workspace_root)?;
 
+    // Prefer offline when pubspec.lock is present so hosts with a flaky/hung
+    // pub.dev path still gate. Fall back to online only if offline fails.
     eprintln!("==> fvm flutter pub get (apps/mobile)");
-    run("fvm", &["flutter", "pub", "get"], &mobile_root)?;
+    let has_lock = mobile_root.join("pubspec.lock").is_file();
+    if has_lock {
+        if let Err(offline_err) = run("fvm", &["flutter", "pub", "get", "--offline"], &mobile_root)
+        {
+            eprintln!("==> flutter pub get --offline failed ({offline_err}); retrying online");
+            run("fvm", &["flutter", "pub", "get"], &mobile_root)?;
+        }
+    } else {
+        run("fvm", &["flutter", "pub", "get"], &mobile_root)?;
+    }
 
     eprintln!("==> fvm dart format --set-exit-if-changed lib test (apps/mobile)");
     // Scope explicitly to the project's own Dart sources.  `dart format .`
@@ -464,15 +475,17 @@ fn flutter_leg(workspace_root: &Path) -> Result<()> {
         &mobile_root,
     )?;
 
-    eprintln!("==> fvm flutter analyze --fatal-infos (apps/mobile)");
+    // `--no-pub`: we already resolved deps above. Without this, analyze/test
+    // re-enter `pub get` and can hang indefinitely on a stuck pub.dev path.
+    eprintln!("==> fvm flutter analyze --fatal-infos --no-pub (apps/mobile)");
     run(
         "fvm",
-        &["flutter", "analyze", "--fatal-infos"],
+        &["flutter", "analyze", "--fatal-infos", "--no-pub"],
         &mobile_root,
     )?;
 
-    eprintln!("==> fvm flutter test (apps/mobile)");
-    run("fvm", &["flutter", "test"], &mobile_root)?;
+    eprintln!("==> fvm flutter test --no-pub (apps/mobile)");
+    run("fvm", &["flutter", "test", "--no-pub"], &mobile_root)?;
 
     Ok(())
 }

@@ -51,15 +51,20 @@
   --radius-panel: 14px;
   --radius-code: 10px;
 
-  /* ── Shadows ── */
+  /* ── Shadows (ink-tinted; stay readable when --color-ink flips for dark) ── */
   --shadow-shell:
-    0 24px 80px rgb(28 25 23 / 0.12), 0 2px 8px rgb(28 25 23 / 0.04);
-  --shadow-panel: 0 1px 0 rgb(28 25 23 / 0.04);
+    0 24px 80px rgb(var(--color-ink) / 0.14), 0 2px 8px rgb(var(--color-ink) / 0.06);
+  --shadow-panel: 0 1px 0 rgb(var(--color-ink) / 0.06);
 
   /* ── Motion (prefer duration-150 / duration-200 utilities) ── */
   --duration-fast: 150ms;
   --duration-normal: 200ms;
   --ease-out: cubic-bezier(0, 0, 0.2, 1);
+
+  /* ── Shell chrome geometry (see shared/layout/chromeLayout.ts) ── */
+  --minos-sidebar-width: 240px;
+  --minos-top-chrome-height: 0px;
+  --minos-auxiliary-panel-width: 280px;
 
   /* ── Markdown tone defaults (light / agent bubbles) ── */
   --md-link: #92400e;
@@ -287,4 +292,26 @@ textarea {
 }
 .markdown-body li::marker {
   color: var(--md-marker);
+}
+
+/* Right auxiliary panel enter (rail / overlay) */
+@keyframes minos-side-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.minos-side-panel-enter {
+  animation: minos-side-panel-in var(--duration-normal) var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .minos-side-panel-enter {
+    animation: none;
+  }
 }

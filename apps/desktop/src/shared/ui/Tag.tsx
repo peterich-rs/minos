@@ -11,18 +11,19 @@ const priorityStyles: Record<
 > = {
   high: {
     label: "High",
-    className: "bg-rose-50 text-rose-700 ring-rose-200/80",
+    className: "bg-status-failed/15 text-status-failed ring-status-failed/30",
     dot: "bg-rose-500",
   },
   medium: {
     label: "Medium",
-    className: "bg-amber-50 text-amber-800 ring-amber-200/80",
-    dot: "bg-amber-500",
+    className: "bg-status-running/15 text-status-running ring-status-running/30",
+    dot: "bg-status-running",
   },
   low: {
     label: "Low",
-    className: "bg-sky-50 text-sky-700 ring-sky-200/80",
-    dot: "bg-sky-500",
+    className:
+      "bg-status-suspended/15 text-status-suspended ring-status-suspended/30",
+    dot: "bg-status-suspended",
   },
 };
 
@@ -32,19 +33,19 @@ const progressStyles: Record<
 > = {
   todo: {
     label: "To do",
-    className: "bg-stone-100 text-stone-600 ring-stone-200/80",
+    className: "bg-ink/10 text-ink-secondary ring-ink/10",
   },
   in_progress: {
     label: "In progress",
-    className: "bg-violet-50 text-violet-700 ring-violet-200/80",
+    className: "bg-violet-500/15 text-violet-800 ring-violet-500/25 dark:text-violet-200",
   },
   in_review: {
     label: "In review",
-    className: "bg-indigo-50 text-indigo-700 ring-indigo-200/80",
+    className: "bg-indigo-500/15 text-indigo-800 ring-indigo-500/25 dark:text-indigo-200",
   },
   done: {
     label: "Done",
-    className: "bg-emerald-50 text-emerald-700 ring-emerald-200/80",
+    className: "bg-status-done/15 text-status-done ring-status-done/30",
   },
 };
 

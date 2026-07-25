@@ -186,7 +186,20 @@ impl Visit for MessageVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard};
     use tracing_subscriber::prelude::*;
+
+    /// Capture layer + ring + default subscriber are process-global. Parallel
+    /// lib tests otherwise race: one test's `fresh_state`/`set_default` can
+    /// wipe or steal another mid-assert (seen as empty `recent()` under
+    /// `cargo test -p minos-mobile --lib`).
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_capture_tests() -> MutexGuard<'static, ()> {
+        TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     fn fresh_state() {
         if let Ok(mut ring) = state().ring.lock() {
@@ -196,27 +209,28 @@ mod tests {
 
     #[test]
     fn capture_layer_records_message_and_fields() {
+        let _serial = lock_capture_tests();
+        const TARGET: &str = "minos_mobile::log_capture::message_fields_test";
         fresh_state();
         let _guard =
             tracing::subscriber::set_default(tracing_subscriber::registry().with(CaptureLayer));
 
-        tracing::info!(target: "minos_mobile::log_capture::tests", url = "wss://x", "ping");
+        tracing::info!(target: TARGET, url = "wss://x", "ping");
 
         let records = recent();
         assert!(
-            records
-                .iter()
-                .any(|r| r.message.contains("ping") && r.message.contains("url=wss://x")),
+            records.iter().any(|r| {
+                r.target == TARGET
+                    && r.message.contains("ping")
+                    && r.message.contains("url=wss://x")
+            }),
             "expected 'ping url=wss://x' in records, got {records:?}"
         );
     }
 
     #[test]
     fn ring_buffer_is_bounded_and_drops_oldest() {
-        // The ring is process-global, so concurrent tests can push extra
-        // records onto it. Filter by a unique target and assert that the
-        // first surviving entry from *our* target has an index past the
-        // eviction floor — foreign records only push that floor higher.
+        let _serial = lock_capture_tests();
         const TARGET: &str = "minos_mobile::log_capture::ring_test";
         fresh_state();
         let _guard =
@@ -258,11 +272,12 @@ mod tests {
         assert_eq!(last_index, RING_CAPACITY + 49);
     }
 
-    #[tokio::test]
-    async fn subscribers_receive_live_records() {
-        // The capture layer + broadcast channel are process-global, so any
-        // other test running concurrently can also push records onto our
-        // subscriber. Filter on a unique target so we ignore that crosstalk.
+    #[test]
+    fn subscribers_receive_live_records() {
+        // Sync test + try_recv poll: holding TEST_LOCK across `.await` trips
+        // clippy::await_holding_lock, and dropping the lock before await races
+        // other log_capture tests on the process-global ring/subscriber.
+        let _serial = lock_capture_tests();
         const TARGET: &str = "minos_mobile::log_capture::live_tail_test";
         fresh_state();
         let mut rx = subscribe();
@@ -271,20 +286,24 @@ mod tests {
 
         tracing::warn!(target: TARGET, "live tail");
 
-        let deadline = std::time::Duration::from_millis(500);
-        let received = tokio::time::timeout(deadline, async {
-            loop {
-                match rx.recv().await {
-                    Ok(record) if record.target == TARGET => return record,
-                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        panic!("broadcast closed before our record arrived")
-                    }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        let received = loop {
+            match rx.try_recv() {
+                Ok(record) if record.target == TARGET => break record,
+                Ok(_)
+                | Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+                | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
+                    assert!(
+                        std::time::Instant::now() <= deadline,
+                        "subscriber timed out waiting for {TARGET}",
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                    panic!("broadcast closed before our record arrived")
                 }
             }
-        })
-        .await
-        .expect("subscriber timed out");
+        };
         assert_eq!(received.level, LogLevel::Warn);
         assert!(received.message.contains("live tail"));
     }

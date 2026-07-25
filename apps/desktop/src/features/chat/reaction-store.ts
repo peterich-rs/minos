@@ -26,6 +26,12 @@ type ReactionState = {
   inFlightCountByMessageId: Record<string, number>;
   /** Clear seed and switch to daemon as source of truth. */
   enterDurableMode: () => void;
+  /**
+   * Workspace-boundary reset.
+   * - `durable-empty`: daemon path (empty maps, durable on)
+   * - `mock-seed`: browser preview fixtures
+   */
+  resetForWorkspaceBoundary: (mode: "durable-empty" | "mock-seed") => void;
   /** True while a durable toggle RPC is in flight for this message. */
   hasInFlightToggle: (messageId: string) => boolean;
   /**
@@ -98,6 +104,19 @@ export const useReactionStore = create<ReactionState>((set, get) => ({
   inFlightCountByMessageId: {},
 
   enterDurableMode: () => {
+    get().resetForWorkspaceBoundary("durable-empty");
+  },
+
+  resetForWorkspaceBoundary: (mode) => {
+    if (mode === "mock-seed") {
+      set({
+        durableMode: false,
+        reactionsByMessageId: seedReactionsByMessageId(),
+        toggleGenByMessageId: {},
+        inFlightCountByMessageId: {},
+      });
+      return;
+    }
     set({
       durableMode: true,
       reactionsByMessageId: {},

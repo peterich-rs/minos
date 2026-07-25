@@ -88,7 +88,7 @@ export function ProjectHeader({ projectId }: { projectId?: string }) {
                 if (id) selectConversation(id);
               })();
             }}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-ink px-2.5 text-xs font-semibold text-white transition-opacity hover:opacity-90 sm:px-3"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-ink px-2.5 text-xs font-semibold text-surface transition-opacity hover:opacity-90 sm:px-3"
           >
             <Plus className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">New conversation</span>

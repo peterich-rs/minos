@@ -12,6 +12,7 @@ import {
   type MentionProfile,
 } from "@/shared/lib/agent-route";
 import type { TimelineMessage } from "@/shared/lib/mock-data";
+import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
 import { cn } from "@/shared/lib/utils";
 import { toast } from "@/shared/lib/toast";
 import { daemonApi, isTauriRuntime } from "@/shared/lib/daemon";
@@ -289,7 +290,7 @@ export function Composer({ conversationId }: { conversationId: string }) {
               clearReplyTo(conversationId);
               return;
             }
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            if (e.key === "Enter" && hasPrimaryShortcutModifier(e)) {
               e.preventDefault();
               void onSend();
             }
@@ -325,7 +326,7 @@ export function Composer({ conversationId }: { conversationId: string }) {
             type="button"
             disabled={sending || !draft.trim()}
             onClick={() => void onSend()}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-ink px-3.5 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-ink px-3.5 py-2 text-xs font-semibold text-surface hover:opacity-90 disabled:opacity-40"
           >
             {sending ? "Sending…" : "Send"}
             <Send className="h-3.5 w-3.5" />

@@ -5,6 +5,8 @@
  */
 export default {
   content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
+  // ThemeProvider toggles `dark` on <html> when Shiki-derived luminance is dark.
+  darkMode: "class",
   theme: {
     extend: {
       colors: {

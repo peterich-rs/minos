@@ -9,6 +9,11 @@ import {
 import { ArrowDown, Loader2 } from "lucide-react";
 import { VList, type VListHandle } from "virtua";
 import type { TimelineMessage } from "@/shared/lib/mock-data";
+import {
+  useStableArrayShallow,
+  useStableMap,
+  useStableSet,
+} from "@/shared/hooks/useStableReference";
 import { followContentKey } from "@/shared/lib/stick-to-bottom";
 import { nextEnterAnimationIds } from "@/shared/lib/enter-animation";
 import { EMPTY_MESSAGE_HISTORY } from "@/shared/lib/message-history";
@@ -55,18 +60,20 @@ export function MessageList({ conversationId }: { conversationId: string }) {
       EMPTY_MESSAGE_HISTORY.firstLoadedSeq,
   );
 
-  const messages = useMemo(
-    () => sortTimelineMessages(messagesRaw),
-    [messagesRaw],
+  // Stable refs: sort/build often allocate equal content after quiet polls;
+  // keep identity so MessageRow memo + virtua children can bail.
+  const messages = useStableArrayShallow(
+    useMemo(() => sortTimelineMessages(messagesRaw), [messagesRaw]),
   );
-  const messageById = useMemo(() => {
-    const map = new Map<string, TimelineMessage>();
-    for (const m of messages) map.set(m.id, m);
-    return map;
-  }, [messages]);
-  const virtualItems = useMemo(
-    () => buildVirtualTimelineItems(messages),
-    [messages],
+  const messageById = useStableMap(
+    useMemo(() => {
+      const map = new Map<string, TimelineMessage>();
+      for (const m of messages) map.set(m.id, m);
+      return map;
+    }, [messages]),
+  );
+  const virtualItems = useStableArrayShallow(
+    useMemo(() => buildVirtualTimelineItems(messages), [messages]),
   );
   const phase = timelineStatus?.phase ?? "idle";
   const detailError = timelineStatus?.error;
@@ -78,7 +85,10 @@ export function MessageList({ conversationId }: { conversationId: string }) {
   const olderInFlightRef = useRef(false);
   const prevFirstSeqRef = useRef<number | null | undefined>(undefined);
   const seenMessageIdsRef = useRef<Set<string>>(new Set());
-  const [animateIds, setAnimateIds] = useState<Set<string>>(() => new Set());
+  const [animateIdsState, setAnimateIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const animateIds = useStableSet(animateIdsState);
 
   const setFollowingState = useCallback((next: boolean) => {
     followingRef.current = next;
@@ -211,26 +221,31 @@ export function MessageList({ conversationId }: { conversationId: string }) {
 
   const showJumpToLatest = !following && messages.length > 0;
 
-  const renderVirtualItem = (item: VirtualTimelineItem) => {
-    if (item.type === "day") {
-      return <DayDivider key={item.id} ms={item.ms} />;
-    }
-    return (
-      <div key={item.id} data-scroll-id={item.id}>
-        <MessageRow
-          message={item.message}
-          conversationId={conversationId}
-          replyParent={
-            item.message.replyToMessageId
-              ? messageById.get(item.message.replyToMessageId)
-              : undefined
-          }
-          animateIn={animateIds.has(item.id)}
-          groupedWithPrevious={item.groupedWithPrevious}
-        />
-      </div>
-    );
-  };
+  // Memoized row renderer: stable deps so list parent re-renders (scroll
+  // following flag, etc.) do not rebuild every MessageRow element tree.
+  const renderVirtualItem = useCallback(
+    (item: VirtualTimelineItem) => {
+      if (item.type === "day") {
+        return <DayDivider key={item.id} ms={item.ms} />;
+      }
+      return (
+        <div key={item.id} data-scroll-id={item.id}>
+          <MessageRow
+            message={item.message}
+            conversationId={conversationId}
+            replyParent={
+              item.message.replyToMessageId
+                ? messageById.get(item.message.replyToMessageId)
+                : undefined
+            }
+            animateIn={animateIds.has(item.id)}
+            groupedWithPrevious={item.groupedWithPrevious}
+          />
+        </div>
+      );
+    },
+    [animateIds, conversationId, messageById],
+  );
 
   const emptyOrStatus =
     phase === "loading" && !hasCachedMessages ? (
@@ -245,7 +260,7 @@ export function MessageList({ conversationId }: { conversationId: string }) {
         <button
           type="button"
           onClick={() => void loadTimeline(conversationId)}
-          className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+          className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-surface hover:opacity-90"
         >
           Retry
         </button>

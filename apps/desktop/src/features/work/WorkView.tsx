@@ -11,6 +11,8 @@ import { SessionInspector } from "./SessionInspector";
 import { ProjectBoard } from "./ProjectBoard";
 import { SessionsView } from "./SessionsView";
 import { CreateProjectEmpty } from "./CreateProjectEmpty";
+import { useIsNarrowViewport } from "@/shared/hooks/useMediaQuery";
+import { AUXILIARY_PANEL_OVERLAY_BREAKPOINT_PX } from "@/shared/layout/chromeLayout";
 import { ErrorBoundary } from "@/shared/ui/ErrorBoundary";
 import { useUiStore } from "@/store/ui-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
@@ -33,6 +35,10 @@ export function WorkView() {
   const conversations = useWorkspaceStore((s) => s.conversations);
   const conversationsStatusByProject = useWorkspaceStore(
     (s) => s.conversationsStatusByProject,
+  );
+  // Narrow viewports: inspector becomes a floating overlay so timeline keeps width.
+  const inspectorOverlay = useIsNarrowViewport(
+    AUXILIARY_PANEL_OVERLAY_BREAKPOINT_PX,
   );
 
   // Resolve project for this paint: do not wait a frame for App's select
@@ -121,8 +127,10 @@ export function WorkView() {
                 <TimelineEmpty />
               )}
               {detailsOpen && conversationId ? (
-                // Not inside a resizable Panel — fixed rail width (fill=false).
-                <SessionInspector conversationId={conversationId} />
+                <SessionInspector
+                  conversationId={conversationId}
+                  layout={inspectorOverlay ? "overlay" : "rail"}
+                />
               ) : conversationId ? (
                 <InspectorToggle onOpen={toggleDetails} />
               ) : null}
@@ -171,7 +179,7 @@ export function WorkView() {
                 <TimelineEmpty />
               )}
             </Panel>
-            {detailsOpen && conversationId ? (
+            {detailsOpen && conversationId && !inspectorOverlay ? (
               <>
                 <Separator
                   className={cn(
@@ -185,9 +193,17 @@ export function WorkView() {
                   defaultSize="25"
                   className="min-h-0 min-w-0"
                 >
-                  <SessionInspector conversationId={conversationId} fill />
+                  <SessionInspector
+                    conversationId={conversationId}
+                    layout="split"
+                  />
                 </Panel>
               </>
+            ) : detailsOpen && conversationId && inspectorOverlay ? (
+              <SessionInspector
+                conversationId={conversationId}
+                layout="overlay"
+              />
             ) : conversationId ? (
               <InspectorToggle onOpen={toggleDetails} />
             ) : null}

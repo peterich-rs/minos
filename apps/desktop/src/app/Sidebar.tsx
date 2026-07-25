@@ -18,11 +18,13 @@ import {
 } from "@/shared/lib/host-status";
 import { sortByAttentionThenTime } from "@/shared/lib/list-sort";
 import { cn } from "@/shared/lib/utils";
+import { shellChrome } from "@/shared/layout/chromeLayout";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/shared/ui/tooltip";
+import { SidebarConnectionCard } from "@/app/SidebarConnectionCard";
 
 const navItems: {
   id: PrimaryNav;
@@ -54,9 +56,14 @@ export function Sidebar() {
   });
 
   return (
-    <aside className="flex w-[240px] shrink-0 flex-col border-r border-ink/5 bg-surface">
+    <aside
+      className={cn(
+        "flex shrink-0 flex-col border-r border-ink/5 bg-surface",
+        shellChrome.sidebarWidth,
+      )}
+    >
       <div className="flex items-center gap-2.5 border-b border-ink/5 px-4 py-3.5">
-        <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-ink text-white">
+        <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-ink text-surface">
           <Sparkles className="h-4 w-4" strokeWidth={2.2} />
         </div>
         <div className="min-w-0 flex-1">
@@ -190,6 +197,8 @@ export function Sidebar() {
           </p>
         ) : null}
       </div>
+
+      <SidebarConnectionCard />
 
       <div className="border-t border-ink/5 px-3 py-2">
         <Tooltip>

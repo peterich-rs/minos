@@ -42,6 +42,12 @@ type UiState = {
   clearReplyTo: (conversationId: string) => void;
   commandPaletteOpen: boolean;
   setCommandPaletteOpen: (open: boolean) => void;
+  /**
+   * Clear session-scoped composer/reply UI when the workspace data plane is wiped
+   * (daemon bootstrap emptyWorkspace). Keeps projectId / lastConversation map
+   * so navigation restore still works after reconnect.
+   */
+  clearWorkspaceEphemeralUi: () => void;
 };
 
 export const useUiStore = create<UiState>()(
@@ -157,6 +163,13 @@ export const useUiStore = create<UiState>()(
         })),
       commandPaletteOpen: false,
       setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
+      clearWorkspaceEphemeralUi: () =>
+        set({
+          selectedSessionId: null,
+          draftByConversationId: {},
+          replyToMessageIdByConversation: {},
+          commandPaletteOpen: false,
+        }),
     }),
     {
       name: "minos.ui-store.v1",

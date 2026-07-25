@@ -81,7 +81,7 @@ export function CreateProjectEmpty({ variant = "full", className }: Props) {
           pending && "pointer-events-none opacity-60",
         )}
       >
-        <span className="flex h-20 w-20 items-center justify-center rounded-2xl bg-ink text-white shadow-md transition-transform group-hover:scale-105">
+        <span className="flex h-20 w-20 items-center justify-center rounded-2xl bg-ink text-surface shadow-md transition-transform group-hover:scale-105">
           {pending ? (
             <span className="h-8 w-8 animate-pulse rounded-full border-2 border-white/40 border-t-white" />
           ) : (

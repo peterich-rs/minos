@@ -1,6 +1,7 @@
 import * as React from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 
+import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
 import { isTauriRuntime } from "@/shared/lib/runtime";
 
 const DEFAULT_ZOOM_FACTOR = 1;
@@ -14,10 +15,6 @@ type ZoomAction = "increase" | "decrease" | "reset";
 
 function roundZoomFactor(zoomFactor: number) {
   return Math.round(zoomFactor * 10) / 10;
-}
-
-function hasPrimaryShortcutModifier(event: KeyboardEvent) {
-  return event.metaKey || event.ctrlKey;
 }
 
 function getZoomAction(event: KeyboardEvent): ZoomAction | null {

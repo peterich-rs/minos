@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import {
+  Check,
   ChevronDown,
   Circle,
   Link2,
@@ -17,9 +18,21 @@ import {
 import { cn } from "@/shared/lib/utils";
 import {
   ACCENT_COLORS,
+  NEUTRAL_ACCENT,
   useTheme,
 } from "@/shared/theme/ThemeProvider";
 import { THEME_LABELS, type SyntaxThemeName } from "@/shared/theme/theme-loader";
+
+/**
+ * Shared Host settings card.
+ * Match the Appearance card look: same surface as the page stack (not raised),
+ * hairline inset ring only — no heavy border, no muted header stripe.
+ */
+const hostCardClass =
+  "overflow-hidden rounded-xl bg-surface ring-1 ring-inset ring-ink/[0.06]";
+
+const hostCardHeaderClass =
+  "flex items-center gap-2 border-b border-ink/[0.06] px-3.5 py-2";
 
 export function HostView() {
   const connection = useWorkspaceStore((s) => s.connection);
@@ -54,7 +67,7 @@ export function HostView() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-surface">
-      <header className="flex shrink-0 items-start justify-between gap-4 border-b border-ink/5 px-5 py-4 sm:px-6">
+      <header className="flex shrink-0 items-start justify-between gap-4 border-b border-ink/[0.06] px-5 py-4 sm:px-6">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2.5">
             <h1 className="text-lg font-semibold tracking-tight text-ink">
@@ -64,11 +77,11 @@ export function HostView() {
               className={cn(
                 "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-2xs font-medium",
                 presence.tone === "ready" &&
-                  "bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200/70",
+                  "bg-status-done/15 text-status-done",
                 presence.tone === "unavailable" &&
-                  "bg-rose-50 text-rose-800 ring-1 ring-rose-200/70",
+                  "bg-status-failed/15 text-status-failed",
                 presence.tone === "preview" &&
-                  "bg-amber-50 text-amber-900 ring-1 ring-amber-200/70",
+                  "bg-status-running/15 text-status-running",
               )}
             >
               <Circle
@@ -87,7 +100,7 @@ export function HostView() {
         <button
           type="button"
           onClick={() => void bootstrap()}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-surface-muted px-3 py-1.5 text-xs font-semibold text-ink ring-1 ring-inset ring-ink/10 transition-colors hover:bg-surface-hover"
         >
           <RefreshCw className="h-3.5 w-3.5" strokeWidth={2} />
           {presence.runtimeReady ? "Reconnect" : "Connect"}
@@ -95,14 +108,13 @@ export function HostView() {
       </header>
 
       <div className="scrollbar-thin flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-xl px-5 py-4 sm:px-6">
-          {/* Single dense status block — no repeated summary cards */}
-          <section className="overflow-hidden rounded-xl border border-ink/8 bg-white">
-            <div className="flex items-center gap-2 border-b border-ink/5 bg-surface-muted/40 px-3.5 py-2">
+        <div className="mx-auto max-w-xl space-y-3 px-5 py-4 sm:px-6">
+          <section className={hostCardClass}>
+            <div className={hostCardHeaderClass}>
               <Server className="h-3.5 w-3.5 text-ink-muted" strokeWidth={1.8} />
               <h2 className="text-xs font-semibold text-ink">Runtime</h2>
             </div>
-            <dl className="divide-y divide-ink/5">
+            <dl className="divide-y divide-ink/[0.05]">
               <Row label="Machine" value={PROJECT_HOST_THIS_MAC} />
               <Row
                 label="Status"
@@ -110,9 +122,9 @@ export function HostView() {
                   <span
                     className={cn(
                       "font-medium",
-                      presence.tone === "ready" && "text-emerald-700",
-                      presence.tone === "unavailable" && "text-rose-700",
-                      presence.tone === "preview" && "text-amber-800",
+                      presence.tone === "ready" && "text-status-done",
+                      presence.tone === "unavailable" && "text-status-failed",
+                      presence.tone === "preview" && "text-status-running",
                     )}
                   >
                     {presence.readinessLabel}
@@ -141,8 +153,8 @@ export function HostView() {
             </dl>
           </section>
 
-          <section className="mt-3 overflow-hidden rounded-xl border border-ink/8 bg-surface">
-            <div className="flex items-center gap-2 border-b border-ink/5 bg-surface-muted/40 px-3.5 py-2">
+          <section className={hostCardClass}>
+            <div className={hostCardHeaderClass}>
               <Palette
                 className="h-3.5 w-3.5 text-ink-muted"
                 strokeWidth={1.8}
@@ -158,62 +170,79 @@ export function HostView() {
                 </span>
               )}
             </div>
-            <div className="space-y-3 px-3.5 py-3">
+            <div className="space-y-3.5 px-3.5 py-3">
               <div>
-                <p className="mb-1.5 text-2xs font-medium text-ink-secondary">
-                  Theme (Shiki-driven)
+                <p className="mb-2 text-2xs font-medium text-ink-muted">
+                  Theme
                 </p>
                 <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
-                  {themes.map((name) => (
-                    <button
-                      key={name}
-                      type="button"
-                      onClick={() => setTheme(name)}
-                      className={cn(
-                        "rounded-lg border px-2 py-1.5 text-left text-2xs font-medium transition-colors",
-                        themeName === name
-                          ? "border-accent bg-accent-soft text-ink ring-1 ring-accent/30"
-                          : "border-ink/10 bg-surface-muted/60 text-ink-secondary hover:bg-surface-hover",
-                      )}
-                    >
-                      {THEME_LABELS[name as SyntaxThemeName] ?? name}
-                    </button>
-                  ))}
+                  {themes.map((name) => {
+                    const selected = themeName === name;
+                    return (
+                      <button
+                        key={name}
+                        type="button"
+                        onClick={() => setTheme(name)}
+                        aria-pressed={selected}
+                        className={cn(
+                          "flex items-center justify-between gap-1.5 rounded-lg px-2.5 py-2 text-left text-2xs font-medium transition-colors",
+                          selected
+                            ? "bg-accent/15 text-ink"
+                            : "bg-surface-muted/50 text-ink-secondary hover:bg-surface-hover hover:text-ink",
+                        )}
+                      >
+                        <span className="min-w-0 truncate">
+                          {THEME_LABELS[name as SyntaxThemeName] ?? name}
+                        </span>
+                        {selected ? (
+                          <Check
+                            className="h-3 w-3 shrink-0 text-accent-strong"
+                            strokeWidth={2.5}
+                            aria-hidden
+                          />
+                        ) : null}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
               <div>
-                <p className="mb-1.5 text-2xs font-medium text-ink-secondary">
+                <p className="mb-2 text-2xs font-medium text-ink-muted">
                   Accent
                 </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {ACCENT_COLORS.map((c) => (
-                    <button
-                      key={c.value}
-                      type="button"
-                      title={c.name}
-                      onClick={() => setAccentColor(c.value)}
-                      className={cn(
-                        "h-7 w-7 rounded-full border-2 transition-transform hover:scale-105",
-                        accentColor === c.value
-                          ? "border-ink scale-105"
-                          : "border-transparent",
-                      )}
-                      style={{
-                        background:
-                          c.value === "neutral"
-                            ? "linear-gradient(135deg,#a8a29e,#57534e)"
-                            : c.value,
-                      }}
-                      aria-label={`Accent ${c.name}`}
-                    />
-                  ))}
+                <div className="flex flex-wrap gap-2">
+                  {ACCENT_COLORS.map((c) => {
+                    const selected = accentColor === c.value;
+                    return (
+                      <button
+                        key={c.value}
+                        type="button"
+                        title={c.name}
+                        onClick={() => setAccentColor(c.value)}
+                        className={cn(
+                          "h-7 w-7 rounded-full transition-transform hover:scale-105",
+                          selected
+                            ? "ring-2 ring-accent ring-offset-2 ring-offset-surface"
+                            : "ring-1 ring-ink/10 ring-offset-1 ring-offset-surface",
+                        )}
+                        style={{
+                          background:
+                            c.value === NEUTRAL_ACCENT
+                              ? "linear-gradient(135deg,#a8a29e,#57534e)"
+                              : c.value,
+                        }}
+                        aria-label={`Accent ${c.name}`}
+                        aria-pressed={selected}
+                      />
+                    );
+                  })}
                 </div>
               </div>
             </div>
           </section>
 
-          <section className="mt-3 overflow-hidden rounded-xl border border-ink/8 bg-white">
-            <div className="flex items-center justify-between gap-3 border-b border-ink/5 bg-surface-muted/40 px-3.5 py-2">
+          <section className={hostCardClass}>
+            <div className={cn(hostCardHeaderClass, "justify-between")}>
               <div className="flex min-w-0 items-center gap-2">
                 <QrCode
                   className="h-3.5 w-3.5 shrink-0 text-ink-muted"
@@ -227,9 +256,7 @@ export function HostView() {
             </div>
             <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
               <div className="min-w-0">
-                <p className="text-sm font-medium text-ink">
-                  Remote control
-                </p>
+                <p className="text-sm font-medium text-ink">Remote control</p>
                 <p className="mt-0.5 text-2xs leading-snug text-ink-muted">
                   Pair a phone or another client when link is available. Not
                   required for local projects.
@@ -238,7 +265,7 @@ export function HostView() {
               <button
                 type="button"
                 disabled
-                className="shrink-0 rounded-lg border border-ink/10 bg-surface-muted px-2.5 py-1.5 text-2xs font-semibold text-ink-muted opacity-70"
+                className="shrink-0 rounded-lg bg-surface-muted px-2.5 py-1.5 text-2xs font-semibold text-ink-muted opacity-70"
                 title="Pairing lands with relay link"
               >
                 Show QR
@@ -247,7 +274,7 @@ export function HostView() {
           </section>
 
           {lastError ? (
-            <div className="mt-3 rounded-xl border border-rose-200/80 bg-rose-50/80 px-3.5 py-2.5 text-xs text-rose-900">
+            <div className="rounded-xl bg-status-failed/10 px-3.5 py-2.5 text-xs text-status-failed ring-1 ring-inset ring-status-failed/25">
               <div className="font-semibold">Last error</div>
               <p className="mt-0.5 break-all font-mono text-2xs leading-snug opacity-90">
                 {lastError}
@@ -255,11 +282,11 @@ export function HostView() {
             </div>
           ) : null}
 
-          <section className="mt-3 overflow-hidden rounded-xl border border-ink/8 bg-white">
+          <section className={hostCardClass}>
             <button
               type="button"
               onClick={() => setDiagOpen((v) => !v)}
-              className="flex w-full items-center justify-between gap-2 px-3.5 py-2 text-left hover:bg-surface-muted/50"
+              className="flex w-full items-center justify-between gap-2 px-3.5 py-2 text-left transition-colors hover:bg-surface-muted/40"
               aria-expanded={diagOpen}
             >
               <span className="text-xs font-semibold text-ink-secondary">
@@ -274,7 +301,7 @@ export function HostView() {
               />
             </button>
             {diagOpen ? (
-              <dl className="border-t border-ink/5 divide-y divide-ink/5">
+              <dl className="border-t border-ink/[0.06] divide-y divide-ink/[0.05]">
                 <Row label="Data source" value={source} mono />
                 <Row
                   label="Connect path"
@@ -294,7 +321,7 @@ export function HostView() {
                 <Row label="Last error" value={lastError ?? "—"} mono />
               </dl>
             ) : (
-              <p className="border-t border-ink/5 px-3.5 py-2 text-2xs text-ink-muted">
+              <p className="border-t border-ink/[0.06] px-3.5 py-2 text-2xs text-ink-muted">
                 Endpoint, process mode, connect path — expand if debugging.
               </p>
             )}
