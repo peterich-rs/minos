@@ -247,6 +247,7 @@ apps/desktop/
 | Workspace 边界 reset | `resetWorkspaceModuleState`：bootstrap wipe / mock 路径统一清 timers、inflight、event bridge、reactions、composer ephemeral。**Project 切换不调用**。新模块单例必须登记于此 |
 | Inspector 辅面板 | `AuxiliaryPanel`：`split`（resizable）/ `rail` / `overlay`（&lt;1100px 浮层+backdrop）；`SessionInspector` 统一壳 |
 | Motion tokens | `modalMotion` / `popoverSurface` 统一 Dialog / Popover / Dropdown enter-exit |
+| Modal backdrop | `modalBackdrop`：`backdrop-blur-[10px]` + `bg-black/[0.04] dark:bg-black/25`（偏透毛玻璃，能看清背景结构；禁止 `bg-ink/…` 当 scrim） |
 | Transcript 滚动 | stick-to-bottom（rAF 合并 pin + wheel-up suppress re-follow/pin）+ tail/load-older；identity 锚点；top sentinel；`overscroll-y-none` |
 | Timeline 分页 | 打开只拉 tail（`MESSAGE_PAGE_SIZE`）；`loadOlderMessages(beforeSeq)`；**hard + quiet** 均 `mergeMessagesQuietTail`（保留 older + 并发更新）；identity restore / following 不 restore |
 | Transcript 打开 | 用 Entity/list `messageCount`（= last_seq）seek tail；ingest 抬升 `messageCount`；若 page `nextSeq` 仍指向更新事件则 catch-up 追到末尾，避免 stale last_seq 只看到中间窗 |
@@ -494,7 +495,7 @@ Sessions 主区是 **Grok-style 日志 transcript** + 右侧 **session summary**
 | `branch` / `worktree_path` | **创建时** git 快照 | 只读 chip；不跟随后续 checkout |
 | Board 列 | 派生，非独立任务系统 | `done` 优先；`needs_you` 来自 suspended/approval 运行态（progress 仍为 `in_progress`） |
 
-新建会话：一键创建（默认 title `New conversation`，progress `todo`），不弹配置窗。首次 `start_agent_in_conversation` 时若仍为 `todo` 则自动升为 `in_progress`。
+新建会话：`ProjectHeader` → **Create conversation** 弹窗（对标 Buzz create-channel）配置 title / optional priority / **required agent roster**，再 `create_conversation`（protocol：`priority?` + `agents[]`）写入 `conversation_agent_members`；progress 默认 `todo`。**成员资格是 @mention / start 的 SSOT**：空 roster 时 picker 为空且 send 拒绝；仅 roster 内 runtime（及其 profile / open session）可被 @；`start_agent_in_conversation` 对非成员返回错误。创建时**不**预启动 session（懒启动：首次 @ 或 bare send 再 start）。首次 `start_agent_in_conversation` 时若仍为 `todo` 则自动升为 `in_progress`。
 
 ### Agent 运行态与审批（Desktop 缺口修复）
 

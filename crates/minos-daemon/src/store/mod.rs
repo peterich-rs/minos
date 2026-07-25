@@ -621,6 +621,8 @@ impl LocalStore {
         Ok(rows)
     }
 
+    /// Roster of runtime agents allowed in each conversation (membership SSOT).
+    /// Distinct from sessions: a member may have zero sessions yet.
     pub async fn list_agents_for_conversations(
         &self,
         conversation_ids: &[String],
@@ -632,10 +634,9 @@ impl LocalStore {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT conversation_id, agent FROM sessions \
+            "SELECT conversation_id, agent FROM conversation_agent_members \
              WHERE conversation_id IN ({placeholders}) \
-             GROUP BY conversation_id, agent \
-             ORDER BY conversation_id, agent"
+             ORDER BY conversation_id, joined_at_ms ASC, agent"
         );
         let mut query = sqlx::query(&sql);
         for id in conversation_ids {
@@ -650,6 +651,77 @@ impl LocalStore {
                 .push(row.try_get("agent")?);
         }
         Ok(by_conversation)
+    }
+
+    pub async fn is_conversation_agent_member(
+        &self,
+        conversation_id: &str,
+        agent: &str,
+    ) -> anyhow::Result<bool> {
+        let row: Option<(i64,)> = sqlx::query_as(
+            "SELECT 1 FROM conversation_agent_members \
+             WHERE conversation_id = ? AND agent = ? LIMIT 1",
+        )
+        .bind(conversation_id)
+        .bind(agent)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.is_some())
+    }
+
+    /// Replace the full agent roster for a conversation (deduped, order preserved).
+    pub async fn set_conversation_agent_members(
+        &self,
+        conversation_id: &str,
+        agents: &[String],
+        joined_at_ms: i64,
+    ) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM conversation_agent_members WHERE conversation_id = ?")
+            .bind(conversation_id)
+            .execute(&mut *tx)
+            .await?;
+        let mut seen = std::collections::HashSet::new();
+        for agent in agents {
+            let trimmed = agent.trim();
+            if trimmed.is_empty() || !seen.insert(trimmed.to_owned()) {
+                continue;
+            }
+            sqlx::query(
+                "INSERT INTO conversation_agent_members (conversation_id, agent, joined_at_ms) \
+                 VALUES (?, ?, ?)",
+            )
+            .bind(conversation_id)
+            .bind(trimmed)
+            .bind(joined_at_ms)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Idempotent add of one runtime agent to the conversation roster.
+    pub async fn add_conversation_agent_member(
+        &self,
+        conversation_id: &str,
+        agent: &str,
+        joined_at_ms: i64,
+    ) -> anyhow::Result<()> {
+        let trimmed = agent.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+        sqlx::query(
+            "INSERT OR IGNORE INTO conversation_agent_members \
+             (conversation_id, agent, joined_at_ms) VALUES (?, ?, ?)",
+        )
+        .bind(conversation_id)
+        .bind(trimmed)
+        .bind(joined_at_ms)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     pub async fn list_sessions_by_conversation(
@@ -1324,6 +1396,57 @@ mod tests {
         let row = store.get_conversation("c2").await.unwrap().unwrap();
         assert_eq!(row.progress, "in_progress");
         assert!(row.branch.is_none());
+    }
+
+    #[tokio::test]
+    async fn conversation_agent_membership_is_roster_not_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = LocalStore::open(&tmp.path().join("members.sqlite"))
+            .await
+            .unwrap();
+        store
+            .create_project("p", "Project", "project", Some("/w"), 0)
+            .await
+            .unwrap();
+        store
+            .create_conversation("c1", "p", "Team", 10)
+            .await
+            .unwrap();
+
+        store
+            .set_conversation_agent_members(
+                "c1",
+                &["codex".into(), "claude".into(), "codex".into()],
+                11,
+            )
+            .await
+            .unwrap();
+        let map = store
+            .list_agents_for_conversations(&["c1".into()])
+            .await
+            .unwrap();
+        // Same joined_at_ms → secondary sort by agent name.
+        assert_eq!(
+            map.get("c1").map(Vec::as_slice),
+            Some(&["claude".into(), "codex".into()][..])
+        );
+        assert!(store
+            .is_conversation_agent_member("c1", "codex")
+            .await
+            .unwrap());
+        assert!(!store
+            .is_conversation_agent_member("c1", "grok")
+            .await
+            .unwrap());
+
+        store
+            .add_conversation_agent_member("c1", "grok", 12)
+            .await
+            .unwrap();
+        assert!(store
+            .is_conversation_agent_member("c1", "grok")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]

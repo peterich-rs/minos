@@ -832,9 +832,16 @@ impl DaemonBridge {
         &self,
         project_id: String,
         title: String,
+        priority: Option<String>,
+        agents: Vec<String>,
     ) -> Result<ConversationDto> {
         let client = self.client().await?;
-        let params = CreateConversationParams { project_id, title };
+        let params = CreateConversationParams {
+            project_id,
+            title,
+            priority,
+            agents,
+        };
         let response: minos_protocol::CreateConversationResponse = client
             .request("minos_local_create_conversation", [params])
             .await

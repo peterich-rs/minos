@@ -236,8 +236,15 @@ pub trait AgentBackend: Send + Sync {
 
     async fn list_conversations(&self, project_id: &str) -> Result<Vec<ConversationEntry>>;
 
-    async fn create_conversation(&self, project_id: &str, title: &str)
-        -> Result<ConversationEntry>;
+    /// Create a conversation. `agents` is the runtime roster (who may be
+    /// @mentioned / started). Empty is allowed but then no agent can join until
+    /// membership is set at create time by a client that supports it.
+    async fn create_conversation(
+        &self,
+        project_id: &str,
+        title: &str,
+        agents: &[AgentName],
+    ) -> Result<ConversationEntry>;
 
     async fn list_conversation_messages(
         &self,

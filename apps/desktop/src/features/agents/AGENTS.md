@@ -28,12 +28,12 @@ Presentation-only maps (colors, avatar tone) are fine and may fall back by agent
 
 ## `@agent` / `@profile` routing
 
-- Prefer CLI inventory for mention rows (`buildAgentMentionOptions(clis, sessions, profiles)`).
-- `KNOWN_AGENTS` in `shared/lib/agent-route.ts` is an **offline parse fallback only** when clis are empty. It is not the capability catalog.
-- **Bare `@agent`**: **reuse** the most recent top-level non-closed session for that runtime in the conversation when present (desktop send use-case **and TUI**). Only when none exists, start a new session and convenience-bind the newest host profile for that runtime (`profile_id` when one exists).
-- **`@ProfileName` / `@p/<id>`**: always start a **new** session with explicit `profile_id`. Insert `@Name` when the name is unique among profiles + runtimes; otherwise `@p/<id>`. Runtime names win over same-named profiles at parse time.
+- **Membership first**: conversation roster (`participatingAgents` / `conversation_agent_members`) is the SSOT for who may be @mentioned or started. Picker uses `buildAgentMentionOptions({ …, memberAgents })`. Empty roster ⇒ no options. Non-member start is rejected by daemon.
+- Within the roster, prefer CLI inventory for mention rows. `KNOWN_AGENTS` in `shared/lib/agent-route.ts` is an **offline parse fallback only** when clis are empty — not the capability catalog, and not a bypass of membership.
+- **Bare `@agent`**: only if that runtime is a member; **reuse** the most recent top-level non-closed session for that runtime when present (desktop + TUI). Only when none exists, start a new session and convenience-bind the newest host profile for that runtime (`profile_id` when one exists).
+- **`@ProfileName` / `@p/<id>`**: profile's `runtime_agent` must be a member; always start a **new** session with explicit `profile_id`. Insert `@Name` when the name is unique among profiles + runtimes; otherwise `@p/<id>`. Runtime names win over same-named profiles at parse time.
 - Launch fields are **server-owned**: daemon `resolve_launch_options` loads the profile and applies model / reasoning_effort / instructions. Explicit request fields override profile fields (`explicit > profile > None`). `request.agent` must match `profile.runtime_agent`.
-- **TUI and MCP** bind the same way: clients pass `profile_id` (or MCP `target_profile` name → id); daemon resolves launch options. Bare runtime / `target_agent` convenience-binds the newest host profile when **starting new**. Clients must not merge model/effort/instructions locally.
+- **TUI and MCP** bind the same way and honor membership: clients pass `profile_id` (or MCP `target_profile` name → id); daemon resolves launch options. Bare runtime / `target_agent` convenience-binds the newest host profile when **starting new**. Clients must not merge model/effort/instructions locally.
 
 ## How to add a new runtime
 

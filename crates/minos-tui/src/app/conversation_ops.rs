@@ -88,8 +88,9 @@ pub(super) async fn create_conversation_and_start_agent(
     profile_id: Option<String>,
 ) -> Result<(OpenedConversation, StartedAgent), String> {
     let title = conversation_title_from_prompt(&prompt);
+    // Membership gates start/@mention — include the agent we are about to start.
     let conversation = backend
-        .create_conversation(&project_id, &title)
+        .create_conversation(&project_id, &title, &[agent])
         .await
         .map_err(|error| format!("Failed to create conversation: {error}"))?;
     let conversation_id = conversation.conversation_id;

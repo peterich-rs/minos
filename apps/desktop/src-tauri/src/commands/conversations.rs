@@ -19,10 +19,12 @@ pub async fn daemon_create_conversation(
     state: State<'_, AppState>,
     project_id: String,
     title: String,
+    priority: Option<String>,
+    agents: Option<Vec<String>>,
 ) -> Result<ConversationDto, String> {
     state
         .daemon
-        .create_conversation(project_id, title)
+        .create_conversation(project_id, title, priority, agents.unwrap_or_default())
         .await
         .map_err(|e| e.to_string())
 }

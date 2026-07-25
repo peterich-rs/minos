@@ -102,6 +102,17 @@ async fn at_completion_inserts_selected_agent() {
     ]));
     let mut app = App::new(backend, false, PathBuf::from("/tmp"));
     set_test_conversation_nav(&mut app, "test", "conversation-1");
+    app.ui.conversations.items = vec![crate::backend::ConversationEntry {
+        conversation_id: "conversation-1".into(),
+        project_id: "test".into(),
+        title: "Test".into(),
+        last_message_preview: None,
+        created_at_ms: 0,
+        updated_at_ms: 0,
+        message_count: 0,
+        agent_session_count: 0,
+        participating_agents: vec![AgentName::Codex, AgentName::Claude, AgentName::Gemini],
+    }];
     app.ui.status.update_agents(vec![
         ok_agent(AgentName::Codex),
         ok_agent(AgentName::Claude),

@@ -239,23 +239,72 @@ export type MentionSession = {
   parentId?: string | null;
 };
 
+export type BuildAgentMentionOptionsArgs = {
+  query: string;
+  clis: readonly MentionCli[];
+  sessions: readonly MentionSession[];
+  profiles?: readonly MentionProfile[];
+  /**
+   * Conversation roster (membership SSOT). When provided, only these runtime
+   * agents (and profiles/sessions for them) appear. Empty array ⇒ no options.
+   * Omit only for offline/unit contexts that intentionally list all CLIs.
+   */
+  memberAgents?: readonly string[];
+  limit?: number;
+};
+
 /**
- * TUI-parity @-picker rows:
- * 1. Installed (or known) agents as bare `@agent` → start (newest profile default)
- * 2. Host profiles as `@ProfileName` (or `@p/id` if name collides) → explicit profile
- * 3. Existing open sessions as `@agent#short` → continue that run
+ * TUI-parity @-picker rows (membership-gated when `memberAgents` is set):
+ * 1. Member runtimes as bare `@agent` → start (newest profile default)
+ * 2. Host profiles for member runtimes as `@ProfileName` / `@p/id`
+ * 3. Existing open member sessions as `@agent#short` → continue
  */
 export function buildAgentMentionOptions(
-  query: string,
-  clis: readonly MentionCli[],
-  sessions: readonly MentionSession[],
-  profiles: readonly MentionProfile[] = [],
-  limit = 16,
+  queryOrArgs: string | BuildAgentMentionOptionsArgs,
+  clisArg?: readonly MentionCli[],
+  sessionsArg?: readonly MentionSession[],
+  profilesArg: readonly MentionProfile[] = [],
+  limitArg = 16,
 ): MentionOption[] {
+  // Support both positional (legacy tests) and object form.
+  const args: BuildAgentMentionOptionsArgs =
+    typeof queryOrArgs === "string"
+      ? {
+          query: queryOrArgs,
+          clis: clisArg ?? [],
+          sessions: sessionsArg ?? [],
+          profiles: profilesArg,
+          limit: limitArg,
+        }
+      : queryOrArgs;
+
+  const query = args.query;
+  const clis = args.clis;
+  const sessions = args.sessions;
+  const profiles = args.profiles ?? [];
+  const limit = args.limit ?? 16;
+  const memberFilter =
+    args.memberAgents === undefined
+      ? null
+      : new Set(
+          args.memberAgents
+            .map((a) => a.trim().toLowerCase())
+            .filter((a) => a.length > 0),
+        );
+
+  const isMember = (agent: string) =>
+    memberFilter === null || memberFilter.has(agent.toLowerCase());
+
+  // Explicit empty roster: nothing is @-able.
+  if (memberFilter !== null && memberFilter.size === 0) {
+    return [];
+  }
+
   const q = query.toLowerCase();
   const matches = (s: string) => !q || s.toLowerCase().includes(q);
 
-  const fromCli = clis
+  const memberClis = clis.filter((c) => isMember(c.agent));
+  const fromCli = memberClis
     .filter((c) => matches(c.agent) || matches(`@${c.agent}`))
     .map((c) => ({
       id: `new:${c.agent}`,
@@ -268,24 +317,37 @@ export function buildAgentMentionOptions(
   const fromKnown =
     fromCli.length > 0
       ? fromCli
-      : KNOWN_AGENTS.filter((a) => matches(a) || matches(`@${a}`)).map(
-          (a) => ({
-            id: `new:${a}`,
-            label: `@${a}`,
-            hint: "new session",
-            insert: `@${a} `,
-            disabled: false,
-          }),
-        );
+      : memberFilter === null
+        ? KNOWN_AGENTS.filter((a) => matches(a) || matches(`@${a}`)).map(
+            (a) => ({
+              id: `new:${a}`,
+              label: `@${a}`,
+              hint: "new session",
+              insert: `@${a} `,
+              disabled: false,
+            }),
+          )
+        : // Roster set but CLI inventory empty: still offer bare member tokens.
+          [...memberFilter]
+            .filter((a) => matches(a) || matches(`@${a}`))
+            .map((a) => ({
+              id: `new:${a}`,
+              label: `@${a}`,
+              hint: "new session",
+              insert: `@${a} `,
+              disabled: false,
+            }));
 
   const runtimeNames = [
     ...new Set([
       ...KNOWN_AGENTS,
       ...clis.map((c) => c.agent),
+      ...(memberFilter ? [...memberFilter] : []),
     ]),
   ];
 
   const fromProfiles = profiles
+    .filter((p) => isMember(p.runtimeAgent))
     .filter(
       (p) =>
         matches(p.name) ||
@@ -310,6 +372,7 @@ export function buildAgentMentionOptions(
     });
 
   const fromSessions = sessions
+    .filter((s) => isMember(s.agent))
     .filter((s) => !s.parentId)
     .filter((s) => s.status !== "done" && s.status !== "failed")
     .filter(

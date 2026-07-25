@@ -134,6 +134,7 @@ export function toUiConversation(
       approvalCount,
     }),
     agentSessionCount: row.agentSessionCount,
+    participatingAgents: row.participatingAgents ?? [],
     runningCount,
     approvalCount,
     priority,

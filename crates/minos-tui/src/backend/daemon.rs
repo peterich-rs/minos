@@ -263,10 +263,16 @@ fn list_conversations_request(project_id: &str) -> ListConversationsParams {
     }
 }
 
-fn create_conversation_request(project_id: &str, title: &str) -> CreateConversationParams {
+fn create_conversation_request(
+    project_id: &str,
+    title: &str,
+    agents: Vec<String>,
+) -> CreateConversationParams {
     CreateConversationParams {
         project_id: project_id.to_owned(),
         title: title.to_owned(),
+        priority: None,
+        agents,
     }
 }
 
@@ -553,12 +559,17 @@ impl AgentBackend for DaemonBackend {
         &self,
         project_id: &str,
         title: &str,
+        agents: &[AgentName],
     ) -> Result<ConversationEntry> {
+        let agent_labels = agents
+            .iter()
+            .map(|a| a.bin_name().to_owned())
+            .collect::<Vec<_>>();
         let response: minos_protocol::CreateConversationResponse = self
             .client
             .request(
                 "minos_local_create_conversation",
-                [create_conversation_request(project_id, title)],
+                [create_conversation_request(project_id, title, agent_labels)],
             )
             .await
             .context("RPC minos_local_create_conversation failed")?;

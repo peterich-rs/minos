@@ -52,6 +52,19 @@ CREATE TABLE conversations (
 CREATE INDEX conversations_by_project_updated
     ON conversations(project_id, updated_at_ms DESC, conversation_id);
 
+-- Host-local conversation roster (runtime agent names). Mentions / starts are
+-- gated on membership; sessions alone do not imply membership.
+CREATE TABLE conversation_agent_members (
+    conversation_id  TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+    agent            TEXT NOT NULL,
+    joined_at_ms     INTEGER NOT NULL,
+    PRIMARY KEY (conversation_id, agent),
+    CHECK(length(agent) > 0)
+);
+
+CREATE INDEX conversation_agent_members_by_agent
+    ON conversation_agent_members(agent, conversation_id);
+
 CREATE TABLE sessions (
     session_id            TEXT PRIMARY KEY,
     conversation_id       TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,

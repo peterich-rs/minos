@@ -11,6 +11,7 @@ import { createTranscriptActions } from "./transcript";
 import { createAttentionActions } from "./attention";
 import { createLiveIngressActions } from "./live-ingress";
 import { createAgentsHostActions } from "./agents-host";
+import { createConversationMutationActions } from "./conversation-mutations";
 import { createUseCasesActions } from "./use-cases";
 
 export function createWorkspaceActions(
@@ -58,5 +59,6 @@ export function createWorkspaceActions(
     ...createLiveIngressActions(set, get),
     ...createAgentsHostActions(set, get),
     ...createUseCasesActions(set, get),
+    ...createConversationMutationActions(set, get),
   };
 }
