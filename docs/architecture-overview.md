@@ -98,6 +98,7 @@ Minos/
 | Grok ACP 投影 | [docs/architecture-grok-acp-projection.md](architecture-grok-acp-projection.md) |
 | 共享 Crate | [docs/architecture-shared-crates.md](architecture-shared-crates.md) |
 | 业务流程 | [docs/architecture-business-flow.md](architecture-business-flow.md) |
+| CI / 本地门禁 | [docs/ci-gates.md](ci-gates.md) |
 
 ## 后端关键 HTTP 路径
 
@@ -119,7 +120,7 @@ Minos/
 | 数据库 | PostgreSQL (生产) / SQLite (开发) |
 | 缓存/消息 | Redis (生产) / In-memory (开发) |
 | macOS | SwiftUI + XcodeGen + UniFFI |
-| 移动端 | Flutter 3.41.6 + flutter_rust_bridge v2 |
+| 移动端 | Flutter 3.44.0 + flutter_rust_bridge v2 |
 | Web | React 19 + TypeScript 6 + Vite 8 + shadcn/ui |
 | Desktop | Tauri 2 + React 19 + TypeScript + Vite + Tailwind |
 | TUI | Rust + Ratatui 0.29 + Crossterm 0.28 |

@@ -68,24 +68,24 @@ pressures shape the design:
     `.freezed.dart` / `.g.dart` partials consumed by it);
   - `crates/minos-ffi-frb/src/frb_generated.rs` (Rust-side frb output
     — hand-written `src/api/` remains the source of truth).
-- **Drift guard.** `cargo xtask check-all` appends a step that
-  regenerates via `flutter_rust_bridge_codegen generate
-  --config-file flutter_rust_bridge.yaml` and runs `git diff
-  --exit-code` over the two paths above. Any silent mismatch between
+- **Drift guard.** Local `cargo xtask check-all` (and the CI `dart`
+  job as the sole CI owner) regenerate via
+  `flutter_rust_bridge_codegen generate --config-file
+  flutter_rust_bridge.yaml` and run `git diff --exit-code` over the
+  two paths above. Any silent mismatch between
   `crates/minos-ffi-frb/src/api/**` and the committed generated trees
-  fails CI.
+  fails the gate. See [`docs/ci-gates.md`](../ci-gates.md).
 - **Regeneration path.** `cargo xtask gen-frb` is the one-liner used
   by both developers and the drift guard. It invokes the codegen from
   `apps/mobile/` (where `.fvmrc` lives) so `fvm flutter` resolves the
   pinned version; YAML paths inside `flutter_rust_bridge.yaml` are
   resolved relative to the config file, not CWD.
-- **CI lane split.** The Ubuntu `dart` job runs
-  format / analyze / build_runner / codegen drift without loading
-  `libminos_ffi_frb.so` — the single FFI-coupled test
-  (`minos_error_display_test.dart`) is tagged `ffi` via
-  `test/dart_test.yaml` and skipped there. The macOS lane runs
-  `cargo xtask check-all`, which `cargo build`s the host cdylib and
-  then runs the full `flutter test` suite including the tagged test.
+- **CI lane split.** The Ubuntu `dart` job owns format / analyze /
+  build_runner / non-ffi tests / **frb codegen drift** without loading
+  `libminos_ffi_frb.so`. FFI-coupled tests are tagged `ffi` and skipped
+  there. The macOS lane runs `cargo xtask check-macos`, which builds
+  the host cdylib and runs `flutter test --tags ffi` only — it does
+  not re-run format, analyze, or frb drift.
 
 ## Consequences
 

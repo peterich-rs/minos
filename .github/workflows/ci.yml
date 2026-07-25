@@ -9,111 +9,69 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  RUST_TOOLCHAIN: "1.97.0"
+  FLUTTER_VERSION: "3.44.0"
+  FRB_CODEGEN_VERSION: "2.12.0"
+  SQLX_CLI_VERSION: "0.8.6"
+  # Dev-fallback silences build.rs warn-on-debug on CI debug builds.
+  MINOS_BACKEND_URL: ws://127.0.0.1:8787/devices
+
 jobs:
-  linux:
-    name: linux (xtask check-all + daemon CLI build)
-    # The macOS lane is a content superset of this job; we keep the Linux lane
-    # for two reasons: (1) portability insurance — the daemon crate has
-    # macOS-ish shortcuts (Homebrew paths, `#[cfg(unix)]`) that could silently
-    # regress into macOS-only code, and (2) fast feedback — Ubuntu returns
-    # red a few minutes before the macOS runner can.
+  # -------------------------------------------------------------------------
+  # rust — primary Rust quality gate (ubuntu). Owns fmt/clippy/tests/schema.
+  # -------------------------------------------------------------------------
+  rust:
+    name: rust (xtask check-rust)
+    # Portability insurance for non-Apple hosts + fast feedback before the
+    # 10x macOS runner starts. Does not run Swift/Flutter/FRB/desktop GUI.
     runs-on: ubuntu-latest
-    env:
-      # Pin the dev-fallback so the new build.rs warn-on-debug stays quiet.
-      # CI does debug-only builds; release builds (when added — see TODO at
-      # the bottom of this file) must pull the production URL from
-      # secrets.MINOS_BACKEND_URL via a `just build-mobile-ios Release`
-      # invocation that propagates the var to xcodebuild.
-      MINOS_BACKEND_URL: ws://127.0.0.1:8787/devices
     steps:
       - uses: actions/checkout@v4
 
       - name: Install rust toolchain (linux-only override)
-        # The repo's rust-toolchain.toml lists Apple targets that aren't useful
-        # on the Ubuntu CI runner; install the linux-x86_64 toolchain explicitly
-        # to skip ~2 min of unused cross-target downloads.
+        # rust-toolchain.toml lists Apple targets that waste ~2 min on Ubuntu.
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.97.0
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
         continue-on-error: true
 
       - name: Install sqlx-cli
-        # Needed for the offline-metadata freshness check below. Sqlite-only
-        # plus postgres features keep the install aligned with the backend's
-        # real adapter set; rust-cache persists the binary in
-        # `~/.cargo/bin` across runs, so the `cargo install` is a near-noop
-        # on cache hits.
-        run: cargo install sqlx-cli --version 0.8.6 --no-default-features --features sqlite,postgres --locked
+        # Offline-metadata freshness check. Sqlite+postgres features match the
+        # backend adapter set. rust-cache keeps ~/.cargo/bin across runs.
+        run: cargo install sqlx-cli --version ${{ env.SQLX_CLI_VERSION }} --no-default-features --features sqlite,postgres --locked
 
       - name: Verify sqlx offline metadata
-        # Catches stale `.sqlx/` cache entries before they surface as opaque
-        # `cargo test` failures inside `cargo xtask check-all`. The
-        # `-- -p minos-backend --all-targets` forwarding is required because the
-        # workspace manifest sets `default-members = []`; without it,
-        # `cargo sqlx prepare` errors with "no crates to check". The `.sqlx/`
-        # directory was committed in a297e28 (relay store CRUD).
+        # Catches stale `.sqlx/` before opaque test failures inside check-rust.
+        # `-- -p minos-backend --all-targets` is required because the workspace
+        # sets `default-members = []`.
         run: |
           mkdir -p target
           DATABASE_URL=sqlite://target/sqlx-prepare.sqlite?mode=rwc cargo sqlx prepare --check --workspace -- -p minos-backend --all-targets
 
-      - name: Verify backend platform schema drift
-        # The backend generator now emits the runtime contract plus OpenAPI and
-        # websocket schema artifacts from the same formal route/runtime inputs.
-        run: cargo xtask gen-backend-platform-contract --check
+      - name: cargo xtask check-rust
+        # Single Rust SSOT: fmt, clippy, real lints, workspace tests,
+        # daemon --features test-support, backend platform schema drift.
+        run: cargo xtask check-rust
 
-      - name: cargo xtask check-all
-        # Single source of truth — same command developers run locally.
-        # Includes: cargo fmt --check, cargo clippy --workspace -- -D warnings,
-        # cargo test --workspace. The Flutter leg and frb-drift guard inside
-        # check-all both self-skip when fvm / flutter_rust_bridge_codegen are
-        # absent, so this lane stays Rust-only.
-        run: cargo xtask check-all
-
-      - name: cargo test -p minos-backend
-        # Keep the backend cutover pass on an explicit CI hook even though
-        # `check-all` already runs workspace tests. This makes backend-only
-        # regressions and route-contract failures obvious in the linux lane.
-        run: cargo test -p minos-backend
-
-      - name: cargo build -p minos-daemon --bin minos-daemon
-        # Explicit Linux build of the daemon CLI binary. `check-all` already
-        # compiles it as part of `cargo test --workspace`, but a dedicated
-        # step makes the intent obvious — and pins a clearer failure mode
-        # whenever the `cargo run -p minos-daemon -- doctor` path regresses
-        # Linux-side.
-        run: cargo build -p minos-daemon --bin minos-daemon
-
-      - name: cargo test -p minos-daemon --features test-support
-        # Relay-backed host e2e coverage depends on the daemon's
-        # `test-support` seam for injecting a fake codex app-server URL.
-        run: cargo test -p minos-daemon --features test-support
-
-      - name: cargo check -p minos-ffi-frb (linux host)
-        # The frb adapter is iOS/Android-oriented, but its host build must
-        # also stay green so the repo compiles cleanly on contributors'
-        # Linux boxes and so `flutter test` on the macOS lane has a host
-        # dylib to load.
-        run: cargo check -p minos-ffi-frb
-
+  # -------------------------------------------------------------------------
+  # windows-host — narrow portability lane for host runtime crates.
+  # -------------------------------------------------------------------------
   windows-host:
     name: windows (host crates)
-    # Scope this lane to the host-side Rust crates that must stay portable
-    # across Windows/macOS/Linux. The macOS GUI, Flutter, and Xcode-specific
-    # legs remain on the macOS runner; this lane exists purely to stop the
-    # host runtime from drifting back into Unix-only assumptions.
+    # Stops the host runtime from drifting into Unix-only assumptions.
+    # Does not re-run the full workspace suite (rust job owns that).
     runs-on: windows-latest
-    env:
-      MINOS_BACKEND_URL: ws://127.0.0.1:8787/devices
     steps:
       - uses: actions/checkout@v4
 
       - name: Install rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.97.0
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
@@ -133,77 +91,63 @@ jobs:
           cargo build -p minos-cli-detect --bin minos-detect
           cargo build -p minos-daemon --bin minos-daemon
 
+  # -------------------------------------------------------------------------
+  # dart — mobile logic gate + sole owner of frb codegen drift.
+  # -------------------------------------------------------------------------
   dart:
-    name: dart (apps/mobile analyze + codegen drift)
-    # Ubuntu lane owns the cheap Dart checks: format, analyze, Riverpod
-    # build_runner idempotence, and frb codegen drift. The FFI-coupled
-    # unit test (which requires libminos_ffi_frb.{dylib,so}) is tagged
-    # `ffi` and runs only on the macOS lane as part of cargo xtask
-    # check-all's Flutter leg. See ADR 0008.
+    name: dart (apps/mobile analyze + frb drift)
+    # Owns format/analyze/non-ffi tests + frb drift. FFI-coupled tests need a
+    # host dylib and run only on the macOS lane via `check-macos`.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain (for frb-drift regeneration)
-        # Needed to compile flutter_rust_bridge_codegen and to run
-        # `cargo check -p minos-ffi-frb` during the drift regeneration.
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.97.0
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
         continue-on-error: true
 
       - name: Install Flutter ${{ env.FLUTTER_VERSION }}
-        # CI uses plain `flutter` (not fvm) to avoid the extra tool hop. The
-        # pinned version here must match apps/mobile/.fvmrc so local and CI
-        # runs exercise the same toolchain.
-        env:
-          FLUTTER_VERSION: 3.44.0
+        # Plain `flutter` (not fvm) on CI. Version must match apps/mobile/.fvmrc.
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: 3.44.0
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
 
       - name: Install flutter_rust_bridge_codegen
-        # Matches the `cargo install` pin in `cargo xtask bootstrap` so a
-        # fresh CI container and a fresh local checkout resolve to the
-        # same codegen binary.
-        run: cargo install flutter_rust_bridge_codegen --version 2.12.0 --locked
+        # Pin matches `cargo xtask bootstrap` / workspace flutter_rust_bridge.
+        run: cargo install flutter_rust_bridge_codegen --version ${{ env.FRB_CODEGEN_VERSION }} --locked
 
       - name: flutter pub get
         working-directory: apps/mobile
         run: flutter pub get
 
       - name: dart run build_runner build --delete-conflicting-outputs
-        # Primes Riverpod / freezed generated sources. Checked-in `*.g.dart`
-        # / `*.freezed.dart` shipped with Phase D should already be in place;
-        # this is idempotent and guards against source drift.
         working-directory: apps/mobile
         run: dart run build_runner build --delete-conflicting-outputs
 
-      - name: dart format --set-exit-if-changed lib
-        # Scope to project sources. `dart format .` also walks
-        # `rust_builder/cargokit/**` (vendored upstream) and `build/**`
-        # (ephemeral), neither of which we want CI to enforce style on.
+      - name: dart format --set-exit-if-changed lib test
+        # Scope to project sources (not rust_builder/cargokit or build/).
         working-directory: apps/mobile
-        run: dart format --set-exit-if-changed lib
+        run: |
+          if [ -d test ]; then
+            dart format --set-exit-if-changed lib test
+          else
+            dart format --set-exit-if-changed lib
+          fi
 
       - name: dart analyze
         working-directory: apps/mobile
-        # Keep analyzer warnings/errors fatal, but leave info-level lint output
-        # advisory. The prefer_shorthands plugin emits broad info diagnostics
-        # on new Flutter/Dart releases and should not block unrelated PRs.
+        # Warnings/errors fatal; info-level lints stay advisory (prefer_shorthands
+        # and similar can spike on SDK bumps without blocking unrelated PRs).
         run: dart analyze
 
       - name: flutter test (exclude ffi-coupled tests)
-        # `minos_error_display_test.dart` is tagged `ffi` because it loads
-        # the host cdylib produced by `cargo build -p minos-ffi-frb`. We
-        # skip tagged tests here and route them through the macOS lane
-        # (where cargo + Flutter coexist). Logic-only tests
-        # (pairing_controller_test, etc.) still run on this lane.
         working-directory: apps/mobile
         run: |
           if [ -d test ]; then
@@ -213,84 +157,104 @@ jobs:
           fi
 
       - name: frb codegen drift
-        # Regenerate the bridge and fail if anything changed. Catches
-        # forgotten `cargo xtask gen-frb` runs before they reach main.
-        # The config lives at the repo root but we run from apps/mobile so
-        # frb's internal `fvm flutter --version` resolves the pinned SDK
-        # via .fvmrc (mirrors `xtask::gen_frb`).
+        # Sole CI owner of FRB drift. Run from apps/mobile so frb's internal
+        # `fvm flutter --version` resolves via .fvmrc when fvm is present;
+        # plain flutter-action still regenerates from the root config file.
+        working-directory: apps/mobile
         run: |
           flutter_rust_bridge_codegen generate --config-file "$GITHUB_WORKSPACE/flutter_rust_bridge.yaml"
-          git diff --exit-code -- "$GITHUB_WORKSPACE/apps/mobile/lib/src/rust" "$GITHUB_WORKSPACE/crates/minos-ffi-frb/src/frb_generated.rs"
-        working-directory: apps/mobile
+          git diff --exit-code -- \
+            "$GITHUB_WORKSPACE/apps/mobile/lib/src/rust" \
+            "$GITHUB_WORKSPACE/crates/minos-ffi-frb/src/frb_generated.rs"
 
+  # -------------------------------------------------------------------------
+  # frontend — web admin + desktop shell (JS/TS gates; no Tauri native link).
+  # -------------------------------------------------------------------------
+  frontend:
+    name: frontend (web + desktop)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            apps/web/pnpm-lock.yaml
+            apps/desktop/pnpm-lock.yaml
+
+      - name: apps/web pnpm check
+        working-directory: apps/web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm check
+
+      - name: apps/desktop pnpm check:all
+        working-directory: apps/desktop
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm check:all
+
+  # -------------------------------------------------------------------------
+  # macos — Apple-native gate. Needs rust green first (avoid 10x burn on fmt).
+  # -------------------------------------------------------------------------
   macos:
-    name: macos (xtask check-all)
+    name: macos (xtask check-macos)
+    needs: [rust]
     runs-on: macos-15
     env:
-      # Pin the macOS lane to the same Xcode major/minor used in local
-      # development instead of inheriting the runner default (`Xcode.app`).
+      # Pin to the Xcode used in local development (not runner default).
       DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
-      # Same dev-fallback as the linux lane; silences build.rs warn-on-debug.
-      MINOS_BACKEND_URL: ws://127.0.0.1:8787/devices
     steps:
       - uses: actions/checkout@v4
 
       - name: Verify pinned Xcode
-        # Fail early with a clear error if the runner image ever drops this
-        # exact Xcode installation.
         run: |
           test -d "$DEVELOPER_DIR"
           xcodebuild -version
 
       - name: Install rust toolchain
-        # `cargo xtask build-macos` produces a universal static library,
-        # so the runner needs both macOS Rust targets. The iOS targets are
-        # also needed by `cargo xtask build-ios` (not run in CI today, but
-        # included here so `cargo xtask bootstrap` on the runner stays a
-        # no-op on rustup state).
+        # Universal macOS staticlib needs both darwin targets. iOS targets keep
+        # bootstrap / future build-ios paths aligned with local rustup state.
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.97.0
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
           targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim
 
       - uses: Swatinem/rust-cache@v2
         continue-on-error: true
 
-      - name: Install Flutter 3.44.0
-        # The Flutter leg inside `cargo xtask check-all` drives `fvm flutter`.
-        # `fvm` needs a backing SDK; installing Flutter 3.44.0 via the action
-        # both preps the binary and matches apps/mobile/.fvmrc.
+      - name: Install Flutter ${{ env.FLUTTER_VERSION }}
+        # check-macos flutter leg drives `fvm flutter` for ffi-tagged tests.
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: 3.44.0
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
 
       - name: Install fvm
-        # `cargo xtask check-all`'s Flutter leg invokes `fvm flutter ...` so
-        # the pinned Flutter version is resolved consistently with local dev.
-        # The install is a one-shot pub-global activation; the action-installed
-        # Flutter above provides the backing SDK `fvm` proxies to.
         run: |
           dart pub global activate fvm
           echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
 
       - name: Bootstrap macOS build tools
-        # Reuse the same bootstrap path as local development so CI exercises
-        # the checked-in Brewfile plus cargo-installed CLI tooling, frb
-        # codegen install, iOS rustup targets, and `fvm flutter pub get` +
-        # build_runner for apps/mobile.
+        # Brewfile (xcodegen/swiftlint/just) + uniffi + frb codegen + fvm pub get.
         env:
           HOMEBREW_NO_AUTO_UPDATE: "1"
         run: cargo xtask bootstrap
 
-      - name: cargo xtask check-all
-        # Single source of truth for the macOS lane: Rust checks, UniFFI
-        # codegen, universal staticlib, XcodeGen, xcodebuild, Swift unit
-        # tests, swiftlint, Flutter (pub get + dart format + analyze +
-        # test), and frb codegen drift.
-        run: cargo xtask check-all
+      - name: cargo xtask check-macos
+        # Apple SSOT: UniFFI, universal staticlib, XcodeGen, xcodebuild,
+        # MinosTests, swiftlint, cargo check -p minos-desktop, Flutter ffi tests.
+        # Does NOT re-run workspace cargo test / frb drift / dart format+analyze
+        # (owned by rust + dart jobs).
+        run: cargo xtask check-macos
 
 # TODO (plan 09 follow-up): iOS release job. Per ADR 0018, all build
 # invocations go through `just`. The job should:

@@ -343,7 +343,12 @@ export function transcriptFromEvents(events: UiEventMessage[]) {
     return a.rank - b.rank
   })
 
-  const items: TranscriptItem[] = timed.map(({ eventIndex: _e, rank: _r, ...item }) => item)
+  const items: TranscriptItem[] = timed.map((entry) => {
+    const { eventIndex, rank, ...item } = entry
+    void eventIndex
+    void rank
+    return item
+  })
 
   // Legacy message aggregation for any call site that still expects messages[].
   const messages: TranscriptMessage[] = []

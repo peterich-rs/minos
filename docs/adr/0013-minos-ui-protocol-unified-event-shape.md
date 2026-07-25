@@ -54,7 +54,7 @@ Spec references: §5.2 (single-shape rationale), §6.4 (the enum + serde shape),
 
 **Negative:**
 - Per-thread translator state (`CodexTranslatorState`) is mutable and lives in a `DashMap` on the backend. A bug there manifests as wrong UI events for one session without a per-frame error signal. Mitigated by: history reads use a *fresh* state, so every read is deterministic regardless of live-stream state corruption (see plan §C2).
-- Two separate `UiEventMessage` deserializers exist (Rust `serde` + Dart frb mirror). Drift between them is caught by frb codegen drift in `cargo xtask check-all`, but only structurally — semantic drift in a new variant requires a deliberate mirror update.
+- Two separate `UiEventMessage` deserializers exist (Rust `serde` + Dart frb mirror). Drift between them is caught by frb codegen drift (CI `dart` job / local `cargo xtask check-all`), but only structurally — semantic drift in a new variant requires a deliberate mirror update.
 - The codex translator depends on the codex app-server's ordering guarantees (`item/started` before `item/.../delta`, `argumentsCompleted` before `completed`). A future codex update that relaxes ordering would force the translator to buffer differently. Out of scope for this ADR.
 
 **Out of scope:**

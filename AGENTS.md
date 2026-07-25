@@ -17,6 +17,7 @@ Minos 是一个远程 AI 编码控制系统：Mac 运行 host 端，通过手机
 | [docs/architecture-grok-acp-projection.md](docs/architecture-grok-acp-projection.md) | Grok ACP tool content/raw_output 双通道 → Minos UI 投影清单 |
 | [docs/architecture-shared-crates.md](docs/architecture-shared-crates.md) | 12 个共享 crate：domain、protocol、transport、pairing、cli-detect、agent-runtime、chat-store、acp-protocol、codex-protocol、ui-protocol、ffi-uniffi、ffi-frb |
 | [docs/architecture-business-flow.md](docs/architecture-business-flow.md) | 完整业务流程：注册 → 配对 → 实时连接 → Agent 会话 → 流式交互 → 审批 → 重连恢复 |
+| [docs/ci-gates.md](docs/ci-gates.md) | CI / 本地质量门禁矩阵：rust、dart、frontend、macos、windows 职责划分与 just/xtask 入口 |
 
 # Development-State Compatibility Policy
 

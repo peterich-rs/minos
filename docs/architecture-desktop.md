@@ -100,6 +100,8 @@ Feature-slice 布局（Wave 1 Phase 1–2）：按 **app 壳 / features / shared
 | `pnpm check:px-text` | 禁止 `text-[Npx]` / `font-size: Npx`；**allowlist 已清空**，新增即失败 |
 | `pnpm check:all` | 以上串联（= `just check-desktop`） |
 
+CI：`frontend` job 跑 `pnpm check:all`（ubuntu）。Tauri Rust crate `minos-desktop` 不在 Linux workspace clippy/test 内（GUI 系统依赖）；由 macOS `cargo xtask check-macos` 执行 `cargo check -p minos-desktop`。门禁矩阵见 [`docs/ci-gates.md`](ci-gates.md)。
+
 - Biome 作用域：`src/**`、`scripts/**`、根配置；排除 `dist/`、`src-tauri/`、`node_modules/`。
 - Formatter **opt-in**：`pnpm format`；gate 只拦 lint **errors**，不强制全树 reformat，不因 warnings 失败。
 - 文件体积：`SessionsView` 已拆为 thin shell（~265 行）+ `features/work/ui/*` / `lib/*`；file-size ALLOWLIST **无** SessionsView 条目。`helpers.ts` 已拆为 `dto-map` / `transcript-merge` / `empty-workspace` / `mock-bundle`（barrel 保留）。`TranscriptPane`（~561）仅 soft warn（`>400`），未抬 hard cap。
