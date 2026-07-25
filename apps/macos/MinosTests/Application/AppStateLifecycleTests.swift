@@ -169,18 +169,26 @@ final class AppStateLifecycleTests: XCTestCase {
         let first = controller.applicationShouldTerminate {
             replies.append($0)
         }
-        await AppStateFixtures.drainMainActor()
+        // Unstructured Task may not hit stop() after a single yield on CI load.
+        // Wait until shutdown has started (stop is in-flight, blocked on gate).
+        for _ in 0..<100 where daemon.stopCallCount == 0 {
+            await AppStateFixtures.drainMainActor()
+        }
         let second = controller.applicationShouldTerminate {
             replies.append($0)
         }
 
         XCTAssertEqual(first, .terminateLater)
         XCTAssertEqual(second, .terminateLater)
-        XCTAssertEqual(daemon.stopCallCount, 1)
-        XCTAssertTrue(replies.isEmpty)
+        XCTAssertEqual(
+            daemon.stopCallCount,
+            1,
+            "shutdown must start exactly once before the gate is released"
+        )
+        XCTAssertTrue(replies.isEmpty, "reply must wait until stop finishes")
 
         await gate.release()
-        for _ in 0..<20 where replies.isEmpty {
+        for _ in 0..<100 where replies.isEmpty {
             await AppStateFixtures.drainMainActor()
         }
 
