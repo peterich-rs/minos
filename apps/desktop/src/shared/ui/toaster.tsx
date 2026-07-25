@@ -13,7 +13,7 @@ export function Toaster() {
             "group border border-ink/10 bg-surface text-ink shadow-lg rounded-xl",
           title: "text-sm font-semibold text-ink",
           description: "text-xs text-ink-muted",
-          actionButton: "bg-ink text-white",
+          actionButton: "bg-ink text-surface",
           cancelButton: "bg-surface-muted text-ink-secondary",
           error: "border-rose-200/80",
           success: "border-emerald-200/80",

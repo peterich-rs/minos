@@ -165,7 +165,7 @@ export function ConversationList({
             <button
               type="button"
               onClick={() => void loadConversations(projectId)}
-              className="rounded-lg bg-ink px-3 py-1.5 text-2xs font-semibold text-white"
+              className="rounded-lg bg-ink px-3 py-1.5 text-2xs font-semibold text-surface"
             >
               Retry
             </button>

@@ -313,7 +313,7 @@ function SessionDetail({
         onClick={() =>
           openSessionTranscript(session.id, session.conversationId)
         }
-        className="flex w-full items-center justify-between rounded-xl border border-ink/10 bg-white px-3 py-2.5 text-left text-xs font-medium text-ink hover:bg-surface-muted"
+        className="flex w-full items-center justify-between rounded-xl border border-ink/10 bg-surface-raised px-3 py-2.5 text-left text-xs font-medium text-ink hover:bg-surface-muted"
       >
         Open full transcript
         <ChevronRight className="h-4 w-4 text-ink-muted" />

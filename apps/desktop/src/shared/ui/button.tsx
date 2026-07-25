@@ -8,11 +8,11 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-ink text-white shadow-sm hover:bg-ink/90",
+        default: "bg-ink text-surface shadow-sm hover:bg-ink/90",
         destructive:
           "bg-rose-600 text-white shadow-sm hover:bg-rose-600/90",
         outline:
-          "border border-ink/10 bg-white text-ink shadow-sm hover:bg-surface-hover",
+          "border border-ink/10 bg-surface-raised text-ink shadow-sm hover:bg-surface-hover",
         secondary:
           "border border-ink/10 bg-surface-muted text-ink-secondary hover:bg-surface-hover hover:text-ink",
         ghost: "text-ink-muted hover:bg-surface-hover hover:text-ink",

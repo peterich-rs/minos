@@ -510,7 +510,7 @@ export function TranscriptPane({
                         approvalStatusPolicy: "sync",
                       })
                     }
-                    className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-white"
+                    className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-surface"
                   >
                     Retry
                   </button>

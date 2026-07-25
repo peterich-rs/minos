@@ -24,8 +24,8 @@ type SidebarActionCardProps = {
 
 const toneRing: Record<NonNullable<SidebarActionCardProps["tone"]>, string> = {
   neutral: "border-ink/10 bg-surface-muted/80",
-  danger: "border-rose-200 bg-rose-50/90",
-  success: "border-emerald-200 bg-emerald-50/90",
+  danger: "border-status-failed/30 bg-status-failed/10",
+  success: "border-status-done/30 bg-status-done/10",
 };
 
 /**

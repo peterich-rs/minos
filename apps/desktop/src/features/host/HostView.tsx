@@ -64,11 +64,11 @@ export function HostView() {
               className={cn(
                 "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-2xs font-medium",
                 presence.tone === "ready" &&
-                  "bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200/70",
+                  "bg-status-done/15 text-status-done ring-1 ring-status-done/30",
                 presence.tone === "unavailable" &&
-                  "bg-rose-50 text-rose-800 ring-1 ring-rose-200/70",
+                  "bg-status-failed/15 text-status-failed ring-1 ring-status-failed/30",
                 presence.tone === "preview" &&
-                  "bg-amber-50 text-amber-900 ring-1 ring-amber-200/70",
+                  "bg-status-running/15 text-status-running ring-1 ring-status-running/30",
               )}
             >
               <Circle
@@ -87,7 +87,7 @@ export function HostView() {
         <button
           type="button"
           onClick={() => void bootstrap()}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-surface hover:opacity-90"
         >
           <RefreshCw className="h-3.5 w-3.5" strokeWidth={2} />
           {presence.runtimeReady ? "Reconnect" : "Connect"}
@@ -97,7 +97,7 @@ export function HostView() {
       <div className="scrollbar-thin flex-1 overflow-y-auto">
         <div className="mx-auto max-w-xl px-5 py-4 sm:px-6">
           {/* Single dense status block — no repeated summary cards */}
-          <section className="overflow-hidden rounded-xl border border-ink/8 bg-white">
+          <section className="overflow-hidden rounded-xl border border-ink/8 bg-surface-raised">
             <div className="flex items-center gap-2 border-b border-ink/5 bg-surface-muted/40 px-3.5 py-2">
               <Server className="h-3.5 w-3.5 text-ink-muted" strokeWidth={1.8} />
               <h2 className="text-xs font-semibold text-ink">Runtime</h2>
@@ -110,9 +110,9 @@ export function HostView() {
                   <span
                     className={cn(
                       "font-medium",
-                      presence.tone === "ready" && "text-emerald-700",
-                      presence.tone === "unavailable" && "text-rose-700",
-                      presence.tone === "preview" && "text-amber-800",
+                      presence.tone === "ready" && "text-status-done",
+                      presence.tone === "unavailable" && "text-status-failed",
+                      presence.tone === "preview" && "text-status-running",
                     )}
                   >
                     {presence.readinessLabel}
@@ -212,7 +212,7 @@ export function HostView() {
             </div>
           </section>
 
-          <section className="mt-3 overflow-hidden rounded-xl border border-ink/8 bg-white">
+          <section className="mt-3 overflow-hidden rounded-xl border border-ink/8 bg-surface-raised">
             <div className="flex items-center justify-between gap-3 border-b border-ink/5 bg-surface-muted/40 px-3.5 py-2">
               <div className="flex min-w-0 items-center gap-2">
                 <QrCode
@@ -247,7 +247,7 @@ export function HostView() {
           </section>
 
           {lastError ? (
-            <div className="mt-3 rounded-xl border border-rose-200/80 bg-rose-50/80 px-3.5 py-2.5 text-xs text-rose-900">
+            <div className="mt-3 rounded-xl border border-status-failed/30 bg-status-failed/10 px-3.5 py-2.5 text-xs text-status-failed">
               <div className="font-semibold">Last error</div>
               <p className="mt-0.5 break-all font-mono text-2xs leading-snug opacity-90">
                 {lastError}
@@ -255,7 +255,7 @@ export function HostView() {
             </div>
           ) : null}
 
-          <section className="mt-3 overflow-hidden rounded-xl border border-ink/8 bg-white">
+          <section className="mt-3 overflow-hidden rounded-xl border border-ink/8 bg-surface-raised">
             <button
               type="button"
               onClick={() => setDiagOpen((v) => !v)}

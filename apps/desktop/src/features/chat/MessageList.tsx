@@ -260,7 +260,7 @@ export function MessageList({ conversationId }: { conversationId: string }) {
         <button
           type="button"
           onClick={() => void loadTimeline(conversationId)}
-          className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+          className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-surface hover:opacity-90"
         >
           Retry
         </button>

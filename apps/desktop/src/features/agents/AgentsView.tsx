@@ -46,7 +46,7 @@ type AgentProfile = {
 };
 
 const fieldClass =
-  "w-full rounded-xl border border-ink/10 bg-white px-3.5 py-2.5 text-sm text-ink shadow-sm outline-none transition placeholder:text-ink-muted/70 focus:border-ink/25 focus:ring-2 focus:ring-ink/10";
+  "w-full rounded-xl border border-ink/10 bg-surface-raised px-3.5 py-2.5 text-sm text-ink shadow-sm outline-none transition placeholder:text-ink-muted/70 focus:border-ink/25 focus:ring-2 focus:ring-ink/10";
 
 export function AgentsView() {
   const clis = useWorkspaceStore((s) => s.clis);
@@ -101,7 +101,7 @@ export function AgentsView() {
         <button
           type="button"
           onClick={() => setCreateOpen(true)}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-ink px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-ink/90"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-ink px-3.5 py-2 text-xs font-semibold text-surface shadow-sm hover:bg-ink/90"
         >
           <Plus className="h-3.5 w-3.5" />
           Create agent
@@ -135,7 +135,7 @@ export function AgentsView() {
               <button
                 type="button"
                 onClick={() => void loadClis()}
-                className="rounded-xl bg-ink px-3 py-1.5 text-xs font-semibold text-white"
+                className="rounded-xl bg-ink px-3 py-1.5 text-xs font-semibold text-surface"
               >
                 Retry detect
               </button>
@@ -151,12 +151,12 @@ export function AgentsView() {
                 const agent = rt.agent as AgentRuntime;
                 const meta = agentMeta[agent] ?? {
                   label: rt.displayName ?? rt.agent,
-                  color: "bg-stone-100 text-stone-700",
+                  color: "bg-ink/10 text-ink-secondary",
                 };
                 return (
                   <div
                     key={rt.agent}
-                    className="rounded-2xl border border-ink/5 bg-white p-4 shadow-sm"
+                    className="rounded-2xl border border-ink/5 bg-surface-raised p-4 shadow-sm"
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div>
@@ -214,7 +214,7 @@ export function AgentsView() {
             ) : null}
           </div>
           {profiles.length === 0 ? (
-            <p className="rounded-2xl border border-dashed border-ink/10 bg-white/70 px-4 py-10 text-center text-sm leading-relaxed text-ink-muted">
+            <p className="rounded-2xl border border-dashed border-ink/10 bg-surface-raised/70 px-4 py-10 text-center text-sm leading-relaxed text-ink-muted">
               No personalized agents yet.
               <br />
               Create one to pin runtime, model, effort, and system instructions.
@@ -225,12 +225,12 @@ export function AgentsView() {
                 const runtime = p.runtime_agent as AgentRuntime;
                 const meta = agentMeta[runtime] ?? {
                   label: p.runtime_agent,
-                  color: "bg-stone-100 text-stone-700",
+                  color: "bg-ink/10 text-ink-secondary",
                 };
                 return (
                   <div
                     key={p.id}
-                    className="rounded-2xl border border-ink/5 bg-white p-4 shadow-sm"
+                    className="rounded-2xl border border-ink/5 bg-surface-raised p-4 shadow-sm"
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
@@ -266,7 +266,7 @@ export function AgentsView() {
                             }
                           })();
                         }}
-                        className="rounded-lg p-1.5 text-ink-muted hover:bg-rose-50 hover:text-rose-700"
+                        className="rounded-lg p-1.5 text-ink-muted hover:bg-status-failed/10 hover:text-status-failed"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -431,7 +431,7 @@ function CreateAgentDialog({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="flex max-h-[min(92vh,760px)] w-full max-w-[440px] flex-col overflow-hidden rounded-2xl border border-ink/8 bg-[#f7f3ec] shadow-2xl">
+      <div className="flex max-h-[min(92vh,760px)] w-full max-w-[440px] flex-col overflow-hidden rounded-2xl border border-ink/8 bg-surface shadow-2xl">
         <header className="flex shrink-0 items-center justify-between px-5 pb-3 pt-5">
           <div>
             <h2 className="text-base font-semibold tracking-tight text-ink">
@@ -444,7 +444,7 @@ function CreateAgentDialog({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl p-2 text-ink-muted hover:bg-white/80 hover:text-ink"
+            className="rounded-xl p-2 text-ink-muted hover:bg-surface-raised/80 hover:text-ink"
           >
             <X className="h-4 w-4" />
           </button>
@@ -477,7 +477,7 @@ function CreateAgentDialog({
               {runtimeOptions.map((opt) => {
                 const meta = agentMeta[opt.id as AgentRuntime] ?? {
                   label: opt.displayName,
-                  color: "bg-stone-100 text-stone-700",
+                  color: "bg-ink/10 text-ink-secondary",
                 };
                 const isOn = opt.installed;
                 const selected = runtime === opt.id;
@@ -490,8 +490,8 @@ function CreateAgentDialog({
                     className={cn(
                       "rounded-xl border px-2.5 py-2.5 text-left transition",
                       selected
-                        ? "border-ink/30 bg-white shadow-sm ring-2 ring-ink/10"
-                        : "border-ink/8 bg-white/60 hover:border-ink/15 hover:bg-white",
+                        ? "border-ink/30 bg-surface-raised shadow-sm ring-2 ring-ink/10"
+                        : "border-ink/8 bg-surface-raised/60 hover:border-ink/15 hover:bg-surface-raised",
                       !isOn && "cursor-not-allowed opacity-40",
                     )}
                   >
@@ -520,7 +520,7 @@ function CreateAgentDialog({
                 type="button"
                 title="Refresh models for this runtime"
                 onClick={() => refreshModels()}
-                className="inline-flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-2xs text-ink-muted hover:bg-white hover:text-ink"
+                className="inline-flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-2xs text-ink-muted hover:bg-surface-raised hover:text-ink"
               >
                 <RefreshCw
                   className={cn("h-3 w-3", loadingModels && "animate-spin")}
@@ -622,11 +622,11 @@ function CreateAgentDialog({
           {err ? <p className="text-xs text-rose-600">{err}</p> : null}
         </div>
 
-        <footer className="flex shrink-0 justify-end gap-2 border-t border-ink/5 bg-[#f0ebe3]/60 px-5 py-3.5">
+        <footer className="flex shrink-0 justify-end gap-2 border-t border-ink/5 bg-surface-muted/60 px-5 py-3.5">
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl border border-ink/10 bg-white px-3.5 py-2 text-xs font-medium text-ink-muted hover:bg-surface"
+            className="rounded-xl border border-ink/10 bg-surface-raised px-3.5 py-2 text-xs font-medium text-ink-muted hover:bg-surface"
           >
             Cancel
           </button>
@@ -634,7 +634,7 @@ function CreateAgentDialog({
             type="button"
             disabled={saving || loadingModels}
             onClick={() => void onSubmit()}
-            className="rounded-xl bg-ink px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-ink/90 disabled:opacity-50"
+            className="rounded-xl bg-ink px-4 py-2 text-xs font-semibold text-surface shadow-sm hover:bg-ink/90 disabled:opacity-50"
           >
             {saving ? "Creating…" : "Create agent"}
           </button>
@@ -660,8 +660,8 @@ function EffortChip({
       className={cn(
         "rounded-full px-3 py-1.5 text-xs font-medium capitalize transition",
         active
-          ? "bg-ink text-white shadow-sm"
-          : "bg-white text-ink-secondary ring-1 ring-ink/10 hover:ring-ink/20",
+          ? "bg-ink text-surface shadow-sm"
+          : "bg-surface-raised text-ink-secondary ring-1 ring-ink/10 hover:ring-ink/20",
       )}
     >
       {label}

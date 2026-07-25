@@ -63,7 +63,7 @@ export function Sidebar() {
       )}
     >
       <div className="flex items-center gap-2.5 border-b border-ink/5 px-4 py-3.5">
-        <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-ink text-white">
+        <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-ink text-surface">
           <Sparkles className="h-4 w-4" strokeWidth={2.2} />
         </div>
         <div className="min-w-0 flex-1">

@@ -51,10 +51,10 @@
   --radius-panel: 14px;
   --radius-code: 10px;
 
-  /* ── Shadows ── */
+  /* ── Shadows (ink-tinted; stay readable when --color-ink flips for dark) ── */
   --shadow-shell:
-    0 24px 80px rgb(28 25 23 / 0.12), 0 2px 8px rgb(28 25 23 / 0.04);
-  --shadow-panel: 0 1px 0 rgb(28 25 23 / 0.04);
+    0 24px 80px rgb(var(--color-ink) / 0.14), 0 2px 8px rgb(var(--color-ink) / 0.06);
+  --shadow-panel: 0 1px 0 rgb(var(--color-ink) / 0.06);
 
   /* ── Motion (prefer duration-150 / duration-200 utilities) ── */
   --duration-fast: 150ms;

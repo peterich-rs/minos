@@ -96,7 +96,9 @@ export function createThemeVars(
       : mix(surface, "#ebe4d8", 0.35);
   const surfaceMuted = adjust(surface, dir * 0.04);
   const surfaceHover = adjust(surface, dir * 0.06);
-  const surfaceRaised = isDark ? adjust(surface, 0.06) : "#ffffff";
+  // Raised cards need enough lift on dark themes (pure white cards were the
+  // multi-theme bug — components must use bg-surface-raised, not bg-white).
+  const surfaceRaised = isDark ? adjust(surface, 0.1) : "#ffffff";
   const ink = syntaxFg;
   const inkSecondary = mix(syntaxFg, syntaxComment, 0.35);
   const inkMuted = syntaxComment;

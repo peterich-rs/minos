@@ -92,12 +92,12 @@ export function DiffView({
   return (
     <div
       className={cn(
-        "mt-1 max-h-72 overflow-auto rounded-lg border border-ink/8 bg-[#f7f4ef]",
+        "mt-1 max-h-72 overflow-auto rounded-lg border border-ink/8 bg-surface-muted",
         className,
       )}
     >
       {stats && (stats.add > 0 || stats.del > 0) ? (
-        <div className="sticky top-0 z-[1] flex items-center gap-2 border-b border-ink/6 bg-[#f0ebe3]/95 px-2.5 py-1 text-2xs tabular-nums backdrop-blur-sm">
+        <div className="sticky top-0 z-[1] flex items-center gap-2 border-b border-ink/6 bg-surface/95 px-2.5 py-1 text-2xs tabular-nums backdrop-blur-sm">
           <span className="font-medium text-ink-muted">Diff</span>
           <span className="text-emerald-700">+{stats.add}</span>
           <span className="text-ink-muted/50">/</span>

@@ -93,7 +93,7 @@ export function ApprovalModal({
                 onClick={() => {
                   void runAction({ type: "decision", decision: opt.label });
                 }}
-                className="flex w-full flex-col rounded-xl border border-ink/10 bg-white px-3.5 py-2.5 text-left transition-colors duration-150 hover:border-ink/25 hover:bg-surface-muted/60 disabled:opacity-50"
+                className="flex w-full flex-col rounded-xl border border-ink/10 bg-surface-raised px-3.5 py-2.5 text-left transition-colors duration-150 hover:border-ink/25 hover:bg-surface-muted/60 disabled:opacity-50"
               >
                 <span className="text-sm font-semibold text-ink">
                   {opt.label}

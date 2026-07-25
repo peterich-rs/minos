@@ -88,15 +88,15 @@ export const TranscriptItemView = memo(function TranscriptItemView({
     }
     return (
       <>
-        <div className="rounded-xl border border-rose-200/80 bg-rose-50/80 p-3">
+        <div className="rounded-xl border border-status-failed/30 bg-status-failed/10 p-3">
           <div className="flex items-start gap-2.5">
             <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-semibold text-rose-900">
+              <div className="text-sm font-semibold text-status-failed">
                 {item.title ??
                   (isQuestion ? "Question" : "Approval required")}
               </div>
-              <p className="mt-1 whitespace-pre-wrap text-xs leading-snug text-rose-900/80">
+              <p className="mt-1 whitespace-pre-wrap text-xs leading-snug text-status-failed/80">
                 {item.text}
               </p>
               {isQuestion && item.options && item.options.length > 0 ? (
@@ -112,7 +112,7 @@ export const TranscriptItemView = memo(function TranscriptItemView({
                           decision: opt.label,
                         });
                       }}
-                      className="rounded-lg border border-rose-300/80 bg-white px-2.5 py-1 text-xs font-medium text-rose-900 hover:bg-rose-50 disabled:opacity-50"
+                      className="rounded-lg border border-status-failed/40 bg-surface-raised px-2.5 py-1 text-xs font-medium text-status-failed hover:bg-status-failed/10 disabled:opacity-50"
                     >
                       {opt.label}
                     </button>
@@ -133,7 +133,7 @@ export const TranscriptItemView = memo(function TranscriptItemView({
                   <button
                     type="button"
                     onClick={() => setPlanOpen(true)}
-                    className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-white hover:bg-ink/90"
+                    className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-surface hover:bg-ink/90"
                   >
                     {isPlan ? "View plan" : "View details"}
                   </button>
@@ -360,7 +360,7 @@ export const TranscriptItemView = memo(function TranscriptItemView({
 
   if (item.kind === "error") {
     return (
-      <div className="rounded-lg border border-rose-200/80 bg-rose-50/70 px-3 py-2 text-sm text-rose-900">
+      <div className="rounded-lg border border-status-failed/30 bg-status-failed/10 px-3 py-2 text-sm text-status-failed">
         {item.text}
       </div>
     );

@@ -47,7 +47,7 @@ export function ProjectBoard({ projectId }: { projectId: string }) {
                 </div>
                 <span
                   className={cn(
-                    "rounded-md bg-white/70 px-1.5 py-0.5 text-2xs font-semibold tabular-nums",
+                    "rounded-md bg-surface-raised/70 px-1.5 py-0.5 text-2xs font-semibold tabular-nums",
                     col.headerText,
                   )}
                 >

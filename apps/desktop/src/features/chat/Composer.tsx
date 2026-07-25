@@ -326,7 +326,7 @@ export function Composer({ conversationId }: { conversationId: string }) {
             type="button"
             disabled={sending || !draft.trim()}
             onClick={() => void onSend()}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-ink px-3.5 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-ink px-3.5 py-2 text-xs font-semibold text-surface hover:opacity-90 disabled:opacity-40"
           >
             {sending ? "Sending…" : "Send"}
             <Send className="h-3.5 w-3.5" />

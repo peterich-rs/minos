@@ -87,7 +87,7 @@ export function SessionListPane({
             <button
               type="button"
               onClick={onRetry}
-              className="rounded-lg bg-ink px-3 py-1.5 text-2xs font-semibold text-white"
+              className="rounded-lg bg-ink px-3 py-1.5 text-2xs font-semibold text-surface"
             >
               Retry
             </button>
@@ -203,13 +203,13 @@ const ConversationSessionFolderHeader = memo(
         {group.title}
       </span>
       {group.runningCount > 0 ? (
-        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-3xs font-medium text-amber-800">
+        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-status-running/20 px-1.5 py-0.5 text-3xs font-medium text-status-running">
           <Loader2 className="h-3 w-3 animate-spin" />
           {group.runningCount}
         </span>
       ) : null}
       {group.attentionCount > 0 && group.runningCount === 0 ? (
-        <span className="shrink-0 rounded-full bg-rose-100 px-1.5 py-0.5 text-3xs font-medium text-rose-800">
+        <span className="shrink-0 rounded-full bg-status-failed/20 px-1.5 py-0.5 text-3xs font-medium text-status-failed">
           {group.attentionCount}
         </span>
       ) : null}

@@ -556,68 +556,105 @@ export const boardColumns: {
   {
     id: "backlog",
     label: "Backlog",
-    headerBg: "bg-sky-100",
-    headerText: "text-sky-800",
+    headerBg: "bg-status-suspended/15",
+    headerText: "text-status-suspended",
   },
   {
     id: "running",
     label: "Running",
-    headerBg: "bg-amber-100",
-    headerText: "text-amber-800",
+    headerBg: "bg-status-running/20",
+    headerText: "text-status-running",
   },
   {
     id: "needs_you",
     label: "Needs you",
-    headerBg: "bg-rose-100",
-    headerText: "text-rose-800",
+    headerBg: "bg-status-approval/15",
+    headerText: "text-status-approval",
   },
   {
     id: "done",
     label: "Done",
-    headerBg: "bg-emerald-100",
-    headerText: "text-emerald-800",
+    headerBg: "bg-status-done/15",
+    headerText: "text-status-done",
   },
 ];
 
+/** Soft brand chips — opacity on solid hues so light/dark themes both work. */
 export const agentMeta: Record<
   AgentRuntime,
   { label: string; tone: AvatarTone; color: string }
 > = {
-  codex: { label: "Codex", tone: "orange", color: "bg-orange-100 text-orange-800" },
-  claude: { label: "Claude", tone: "purple", color: "bg-violet-100 text-violet-800" },
-  gemini: { label: "Gemini", tone: "blue", color: "bg-sky-100 text-sky-800" },
-  opencode: { label: "OpenCode", tone: "slate", color: "bg-slate-100 text-slate-700" },
-  grok: { label: "Grok", tone: "amber", color: "bg-amber-100 text-amber-900" },
+  codex: {
+    label: "Codex",
+    tone: "orange",
+    color: "bg-orange-500/15 text-orange-800 dark:text-orange-200",
+  },
+  claude: {
+    label: "Claude",
+    tone: "purple",
+    color: "bg-violet-500/15 text-violet-800 dark:text-violet-200",
+  },
+  gemini: {
+    label: "Gemini",
+    tone: "blue",
+    color: "bg-sky-500/15 text-sky-800 dark:text-sky-200",
+  },
+  opencode: {
+    label: "OpenCode",
+    tone: "slate",
+    color: "bg-ink/10 text-ink-secondary",
+  },
+  grok: {
+    label: "Grok",
+    tone: "amber",
+    color: "bg-status-running/20 text-status-running",
+  },
 };
 
 export const toneClasses: Record<AvatarTone, string> = {
-  green: "bg-emerald-100 text-emerald-700",
-  blue: "bg-sky-100 text-sky-700",
-  pink: "bg-pink-100 text-pink-700",
-  orange: "bg-orange-100 text-orange-700",
-  purple: "bg-violet-100 text-violet-700",
-  slate: "bg-slate-100 text-slate-700",
-  amber: "bg-amber-100 text-amber-800",
+  green: "bg-emerald-500/15 text-emerald-800 dark:text-emerald-200",
+  blue: "bg-sky-500/15 text-sky-800 dark:text-sky-200",
+  pink: "bg-pink-500/15 text-pink-800 dark:text-pink-200",
+  orange: "bg-orange-500/15 text-orange-800 dark:text-orange-200",
+  purple: "bg-violet-500/15 text-violet-800 dark:text-violet-200",
+  slate: "bg-ink/10 text-ink-secondary",
+  amber: "bg-status-running/20 text-status-running",
 };
 
 export const statusMeta: Record<
   SessionStatus,
   { label: string; dot: string; pill: string }
 > = {
-  idle: { label: "Idle", dot: "bg-stone-400", pill: "bg-stone-100 text-stone-600" },
-  running: { label: "Running", dot: "bg-amber-500", pill: "bg-amber-100 text-amber-800" },
+  idle: {
+    label: "Idle",
+    dot: "bg-ink-muted",
+    pill: "bg-ink/10 text-ink-secondary",
+  },
+  running: {
+    label: "Running",
+    dot: "bg-status-running",
+    pill: "bg-status-running/20 text-status-running",
+  },
   needs_approval: {
     label: "Needs approval",
-    dot: "bg-rose-500",
-    pill: "bg-rose-100 text-rose-800",
+    dot: "bg-status-approval",
+    pill: "bg-status-approval/15 text-status-approval",
   },
   suspended: {
     label: "Paused",
-    dot: "bg-sky-500",
-    pill: "bg-sky-100 text-sky-800",
+    dot: "bg-status-suspended",
+    pill: "bg-status-suspended/15 text-status-suspended",
   },
-  failed: { label: "Failed", dot: "bg-red-600", pill: "bg-red-100 text-red-800" },
-  done: { label: "Done", dot: "bg-emerald-500", pill: "bg-emerald-100 text-emerald-800" },
+  failed: {
+    label: "Failed",
+    dot: "bg-status-failed",
+    pill: "bg-status-failed/15 text-status-failed",
+  },
+  done: {
+    label: "Done",
+    dot: "bg-status-done",
+    pill: "bg-status-done/20 text-status-done",
+  },
 };
 
 export function initials(name: string): string {
