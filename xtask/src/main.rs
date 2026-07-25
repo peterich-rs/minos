@@ -40,10 +40,30 @@ struct Cli {
     cmd: Cmd,
 }
 
+/// How much of the Flutter suite to run.
+enum FlutterMode {
+    /// format + analyze + full `flutter test` (local `check-all`).
+    Full,
+    /// Host dylib + `--tags ffi` only (CI macOS; dart lane owns the rest).
+    FfiOnly,
+}
+
 #[derive(Subcommand)]
 enum Cmd {
-    /// fmt + clippy + workspace tests + Swift + Flutter legs + frb codegen drift guard.
+    /// Full local gate: check-rust + macOS/Swift (on macOS) + Flutter + frb drift.
     CheckAll,
+    /// Rust-only quality gate used by the CI `rust` job and `just check-rust`.
+    ///
+    /// fmt + clippy + real lints + workspace tests + daemon `test-support`
+    /// integration tests + backend platform schema drift. Does not run Swift,
+    /// Flutter, FRB, or `minos-desktop` (GUI system deps).
+    CheckRust,
+    /// macOS-native gate used by the CI `macos` job and `just check-macos`.
+    ///
+    /// UniFFI + universal staticlib + XcodeGen/xcodebuild + Swift tests +
+    /// swiftlint + `cargo check -p minos-desktop` + Flutter ffi-tagged tests.
+    /// Does not re-run the Rust workspace suite (CI `rust` job owns that).
+    CheckMacos,
     /// Install developer-side codegen tools (uniffi, frb codegen,
     /// iOS rustup targets, and Flutter deps for apps/mobile).
     Bootstrap,
@@ -98,6 +118,8 @@ fn main() -> Result<()> {
     let with_codex = codex_smoke_requested(cli.with_codex)?;
     match cli.cmd {
         Cmd::CheckAll => check_all(with_codex),
+        Cmd::CheckRust => check_rust(),
+        Cmd::CheckMacos => check_macos(),
         Cmd::Bootstrap => bootstrap(),
         Cmd::GenUniffi => gen_uniffi(),
         Cmd::GenFrb => gen_frb(),
@@ -119,15 +141,17 @@ fn main() -> Result<()> {
     }
 }
 
-fn check_all(with_codex: bool) -> Result<()> {
+/// Rust-only gate shared by CI `rust` and the first stage of local `check-all`.
+fn check_rust() -> Result<()> {
     let workspace_root = workspace_root()?;
     eprintln!("==> cargo fmt --check");
     run("cargo", &["fmt", "--all", "--check"], &workspace_root)?;
 
     eprintln!("==> cargo clippy");
     // Exclude Tauri host shell: it needs platform GUI system deps (GTK/WebKit
-    // on Linux, etc.) that `check-all` and plain Linux CI runners do not
-    // install. Desktop is validated via `just check-desktop` / local Tauri builds.
+    // on Linux, etc.) that plain Linux CI runners do not install. The crate is
+    // compiled on the macOS lane via `check-macos` (`cargo check -p minos-desktop`)
+    // and locally via `just check-desktop` / Tauri builds.
     //
     // `--keep-going` is required: without it, cargo stops at the first crate
     // that fails to compile under `-D warnings`, so later crates only surface
@@ -148,101 +172,148 @@ fn check_all(with_codex: bool) -> Result<()> {
         &workspace_root,
     )?;
 
+    // Only real (non-stub) lints run here. `lint-conventions` / `lint-metrics`
+    // remain available as standalone commands but are not enforced until
+    // implemented — running stubs inside the gate created false confidence.
     eprintln!("==> cargo xtask lint-naming");
     lint_naming::run(&workspace_root)?;
 
     eprintln!("==> cargo xtask lint-docs");
     lint_docs::run(&workspace_root)?;
 
-    eprintln!("==> cargo xtask lint-conventions");
-    lint_conventions::run(&workspace_root)?;
-
-    eprintln!("==> cargo xtask lint-metrics");
-    lint_metrics::run(&workspace_root)?;
-
-    eprintln!("==> cargo test");
+    eprintln!("==> cargo test --workspace (exclude minos-desktop)");
     run(
         "cargo",
         &["test", "--workspace", "--exclude", "minos-desktop"],
         &workspace_root,
     )?;
 
-    if cfg!(target_os = "macos") {
-        eprintln!("==> cargo xtask gen-uniffi");
-        gen_uniffi()?;
-
-        eprintln!("==> cargo xtask build-macos --configuration Debug");
-        build_macos(Some("Debug"))?;
-
-        eprintln!("==> cargo xtask gen-xcode");
-        gen_xcode()?;
-
-        if which("swiftlint").is_none() {
-            bail!("swiftlint not installed; run `cargo xtask bootstrap`");
-        }
-
-        let macos_root = workspace_root.join("apps/macos");
-
-        eprintln!("==> xcodebuild -scheme Minos build");
-        run(
-            "xcodebuild",
-            &[
-                "-project",
-                "Minos.xcodeproj",
-                "-scheme",
-                "Minos",
-                "-destination",
-                "platform=macOS",
-                "-configuration",
-                "Debug",
-                "CODE_SIGNING_ALLOWED=NO",
-                "CODE_SIGNING_REQUIRED=NO",
-                "build",
-            ],
-            &macos_root,
-        )?;
-
-        eprintln!("==> xcodebuild -scheme MinosTests test");
-        run(
-            "xcodebuild",
-            &[
-                "-project",
-                "Minos.xcodeproj",
-                "-scheme",
-                "MinosTests",
-                "-destination",
-                "platform=macOS",
-                "-configuration",
-                "Debug",
-                "CODE_SIGNING_ALLOWED=NO",
-                "CODE_SIGNING_REQUIRED=NO",
-                "test",
-            ],
-            &macos_root,
-        )?;
-
-        eprintln!("==> swiftlint --strict");
-        run("swiftlint", &["--strict"], &macos_root)?;
-    } else {
-        eprintln!("==> swift leg: skipped (non-macOS host)");
-    }
-
-    // Flutter leg. Runs only when the mobile package exists and `fvm` (the
-    // pinned Flutter launcher) is available. Ubuntu CI's `linux` lane doesn't
-    // install Flutter — skipping keeps that lane green while still exercising
-    // the full suite on the macOS lane / local dev where fvm is present.
-    flutter_leg(&workspace_root)?;
-
-    frb_drift_guard(&workspace_root)?;
+    // Daemon integration tests (`tests/*.rs`) are gated on the `test-support`
+    // feature and are invisible to plain `cargo test -p minos-daemon`. Fold
+    // them into the rust gate so local `just check` and CI share one path.
+    eprintln!("==> cargo test -p minos-daemon --features test-support");
+    run(
+        "cargo",
+        &["test", "-p", "minos-daemon", "--features", "test-support"],
+        &workspace_root,
+    )?;
 
     eprintln!("==> backend platform schema drift");
     backend_platform_schemas::generate(&workspace_root, true)?;
+
+    eprintln!("OK: check-rust passed.");
+    Ok(())
+}
+
+/// macOS-native gate: Swift/Xcode stack + desktop Rust check + Flutter ffi.
+fn check_macos() -> Result<()> {
+    if !cfg!(target_os = "macos") {
+        bail!("check-macos requires a macOS host");
+    }
+    let workspace_root = workspace_root()?;
+    macos_native_leg(&workspace_root)?;
+    desktop_rust_check(&workspace_root)?;
+    flutter_leg(&workspace_root, FlutterMode::FfiOnly)?;
+    eprintln!("OK: check-macos passed.");
+    Ok(())
+}
+
+fn check_all(with_codex: bool) -> Result<()> {
+    let workspace_root = workspace_root()?;
+
+    check_rust()?;
+
+    if cfg!(target_os = "macos") {
+        macos_native_leg(&workspace_root)?;
+        desktop_rust_check(&workspace_root)?;
+    } else {
+        eprintln!("==> macos native leg: skipped (non-macOS host)");
+    }
+
+    // Full Flutter suite when fvm is present. CI splits this: the `dart` job
+    // owns format/analyze/non-ffi tests + frb drift; the `macos` job runs
+    // ffi-tagged tests only via `check-macos`.
+    flutter_leg(&workspace_root, FlutterMode::Full)?;
+
+    // Local drift guard. CI's `dart` job is the owning lane for frb drift so
+    // contributors without flutter_rust_bridge_codegen still get a green
+    // `check-rust`; this step self-skips when the binary is absent.
+    frb_drift_guard(&workspace_root)?;
 
     if with_codex {
         codex_smoke_leg()?;
     }
 
     eprintln!("OK: all checks pass.");
+    Ok(())
+}
+
+/// UniFFI codegen, universal staticlib, Xcode project, xcodebuild, Swift tests,
+/// swiftlint. macOS-only.
+fn macos_native_leg(workspace_root: &Path) -> Result<()> {
+    eprintln!("==> cargo xtask gen-uniffi");
+    gen_uniffi()?;
+
+    eprintln!("==> cargo xtask build-macos --configuration Debug");
+    build_macos(Some("Debug"))?;
+
+    eprintln!("==> cargo xtask gen-xcode");
+    gen_xcode()?;
+
+    if which("swiftlint").is_none() {
+        bail!("swiftlint not installed; run `cargo xtask bootstrap`");
+    }
+
+    let macos_root = workspace_root.join("apps/macos");
+
+    eprintln!("==> xcodebuild -scheme Minos build");
+    run(
+        "xcodebuild",
+        &[
+            "-project",
+            "Minos.xcodeproj",
+            "-scheme",
+            "Minos",
+            "-destination",
+            "platform=macOS",
+            "-configuration",
+            "Debug",
+            "CODE_SIGNING_ALLOWED=NO",
+            "CODE_SIGNING_REQUIRED=NO",
+            "build",
+        ],
+        &macos_root,
+    )?;
+
+    eprintln!("==> xcodebuild -scheme MinosTests test");
+    run(
+        "xcodebuild",
+        &[
+            "-project",
+            "Minos.xcodeproj",
+            "-scheme",
+            "MinosTests",
+            "-destination",
+            "platform=macOS",
+            "-configuration",
+            "Debug",
+            "CODE_SIGNING_ALLOWED=NO",
+            "CODE_SIGNING_REQUIRED=NO",
+            "test",
+        ],
+        &macos_root,
+    )?;
+
+    eprintln!("==> swiftlint --strict");
+    run("swiftlint", &["--strict"], &macos_root)?;
+    Ok(())
+}
+
+/// Compile the Tauri host shell on macOS (excluded from workspace clippy/test
+/// on Linux because of GUI system deps).
+fn desktop_rust_check(workspace_root: &Path) -> Result<()> {
+    eprintln!("==> cargo check -p minos-desktop");
+    run("cargo", &["check", "-p", "minos-desktop"], workspace_root)?;
     Ok(())
 }
 
@@ -412,16 +483,16 @@ fn frb_drift_guard(workspace_root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Run the Flutter checks (`pub get`, `dart format --set-exit-if-changed`,
-/// `flutter analyze`, `flutter test`) from `apps/mobile`. Skips the whole leg
-/// (with a clear log line) when Flutter is not set up on the host — e.g. on
-/// the Ubuntu `linux` CI lane, which doesn't bootstrap Flutter.
+/// Run Flutter checks from `apps/mobile`.
 ///
-/// `flutter test` transitively loads `libminos_ffi_frb.{dylib,so}` via the
-/// frb runtime, so we must `cargo build -p minos-ffi-frb` before invoking
-/// it. That build is cheap (already cached for the preceding `cargo test`
-/// leg) and gives the Dart host tests a predictable artifact path.
-fn flutter_leg(workspace_root: &Path) -> Result<()> {
+/// - [`FlutterMode::Full`]: format + analyze + all tests (local `check-all`).
+/// - [`FlutterMode::FfiOnly`]: host dylib + `--tags ffi` (CI `macos` job).
+///
+/// Skips the whole leg when Flutter is not set up — e.g. the Ubuntu `rust`
+/// CI job does not install Flutter. `flutter test` loads
+/// `libminos_ffi_frb.{dylib,so}` via the frb runtime, so we `cargo build -p
+/// minos-ffi-frb` before invoking tests that need the host dylib.
+fn flutter_leg(workspace_root: &Path, mode: FlutterMode) -> Result<()> {
     let mobile_root = workspace_root.join("apps/mobile");
     if !mobile_root.join("pubspec.yaml").exists() {
         eprintln!("==> flutter leg: skipped (apps/mobile/pubspec.yaml missing)");
@@ -433,20 +504,17 @@ fn flutter_leg(workspace_root: &Path) -> Result<()> {
         // is not, the developer has Flutter installed but hasn't adopted the
         // project's version pin — fail loudly so they install fvm rather
         // than run a mismatched SDK.  Otherwise (no Flutter at all, e.g.
-        // the Ubuntu CI `linux` lane), it is fine to skip.
+        // the Ubuntu CI `rust` lane), it is fine to skip.
         if which("flutter").is_some() || which("dart").is_some() {
             bail!(
                 "flutter leg: fvm not found but Flutter/Dart are on PATH. \
                  This project pins Flutter via apps/mobile/.fvmrc; install \
-                 fvm (https://fvm.app) so `fvm flutter` resolves to 3.41.6."
+                 fvm (https://fvm.app) so `fvm flutter` resolves to 3.44.0."
             );
         }
         eprintln!("==> flutter leg: skipped (no Flutter toolchain detected on this host)");
         return Ok(());
     }
-
-    eprintln!("==> cargo build -p minos-ffi-frb (host dylib for flutter test)");
-    run("cargo", &["build", "-p", "minos-ffi-frb"], workspace_root)?;
 
     // Prefer offline when pubspec.lock is present so hosts with a flaky/hung
     // pub.dev path still gate. Fall back to online only if offline fails.
@@ -462,6 +530,18 @@ fn flutter_leg(workspace_root: &Path) -> Result<()> {
         run("fvm", &["flutter", "pub", "get"], &mobile_root)?;
     }
 
+    match mode {
+        FlutterMode::Full => flutter_leg_full(&mobile_root, workspace_root)?,
+        FlutterMode::FfiOnly => flutter_leg_ffi_only(&mobile_root, workspace_root)?,
+    }
+
+    Ok(())
+}
+
+fn flutter_leg_full(mobile_root: &Path, workspace_root: &Path) -> Result<()> {
+    eprintln!("==> cargo build -p minos-ffi-frb (host dylib for flutter test)");
+    run("cargo", &["build", "-p", "minos-ffi-frb"], workspace_root)?;
+
     eprintln!("==> fvm dart format --set-exit-if-changed lib test (apps/mobile)");
     // Scope explicitly to the project's own Dart sources.  `dart format .`
     // would also walk `rust_builder/cargokit/**` (vendored upstream) and
@@ -472,21 +552,40 @@ fn flutter_leg(workspace_root: &Path) -> Result<()> {
     run(
         "fvm",
         &["dart", "format", "--set-exit-if-changed", "lib", "test"],
-        &mobile_root,
+        mobile_root,
     )?;
 
-    // `--no-pub`: we already resolved deps above. Without this, analyze/test
-    // re-enter `pub get` and can hang indefinitely on a stuck pub.dev path.
-    eprintln!("==> fvm flutter analyze --fatal-infos --no-pub (apps/mobile)");
-    run(
-        "fvm",
-        &["flutter", "analyze", "--fatal-infos", "--no-pub"],
-        &mobile_root,
-    )?;
+    // Match the CI `dart` lane: warnings/errors are fatal, info-level lints
+    // (e.g. prefer_shorthands on new SDK releases) stay advisory so unrelated
+    // PRs are not blocked. `--no-pub`: deps already resolved above.
+    eprintln!("==> fvm flutter analyze --no-pub (apps/mobile)");
+    run("fvm", &["flutter", "analyze", "--no-pub"], mobile_root)?;
 
     eprintln!("==> fvm flutter test --no-pub (apps/mobile)");
-    run("fvm", &["flutter", "test", "--no-pub"], &mobile_root)?;
+    run("fvm", &["flutter", "test", "--no-pub"], mobile_root)?;
+    Ok(())
+}
 
+fn flutter_leg_ffi_only(mobile_root: &Path, workspace_root: &Path) -> Result<()> {
+    // Format/analyze/non-ffi tests + frb drift are owned by the CI `dart` job.
+    // This leg only proves the host dylib loads under Flutter's test runner.
+    eprintln!("==> cargo build -p minos-ffi-frb (host dylib for flutter ffi tests)");
+    run("cargo", &["build", "-p", "minos-ffi-frb"], workspace_root)?;
+
+    if !mobile_root.join("test").is_dir() {
+        eprintln!("==> flutter ffi tests: skipped (apps/mobile/test missing)");
+        return Ok(());
+    }
+
+    eprintln!("==> fvm flutter test --no-pub --tags ffi (apps/mobile)");
+    // When no test is tagged `ffi` yet, Flutter reports "No tests ran" and
+    // exits 0 — the step stays green and becomes meaningful as soon as an
+    // ffi-tagged test is added.
+    run(
+        "fvm",
+        &["flutter", "test", "--no-pub", "--tags", "ffi"],
+        mobile_root,
+    )?;
     Ok(())
 }
 

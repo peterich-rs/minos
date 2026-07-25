@@ -24,11 +24,19 @@ cargo xtask bootstrap
 # Configure runtime/build env loaded by just.
 cp .env.example .env.local
 
-# Run all checks.
-# On macOS this includes UniFFI/XcodeGen generation, xcodebuild, MinosTests,
-# and swiftlint in addition to the Rust workspace checks.
+# Run all checks (rust + platform legs).
+# On macOS this includes UniFFI/XcodeGen, xcodebuild, MinosTests, swiftlint,
+# minos-desktop check, and Flutter when fvm is present.
 just check
+
+# Layered gates (same commands CI jobs call):
+just check-rust      # fmt/clippy/tests/daemon test-support/schema
+just check-macos     # Apple native + minos-desktop + Flutter ffi (macOS only)
+just check-web       # apps/web pnpm check
+just check-desktop   # apps/desktop pnpm check:all
 ```
+
+CI matrix and ownership: [`docs/ci-gates.md`](docs/ci-gates.md).
 
 ## macOS app
 

@@ -65,14 +65,26 @@ backend:
         --listen "${MINOS_BACKEND_LISTEN:-127.0.0.1:8787}" \
         --db "${MINOS_BACKEND_DB:-./minos-backend.db}"
 
-# Workspace-wide compile + test gate. Wraps cargo xtask check-all.
+# Full local gate. Wraps cargo xtask check-all (rust + platform legs).
+# On macOS this includes UniFFI/Xcode/Swift, minos-desktop check, and Flutter.
 check:
     cargo xtask check-all
+
+# Rust-only gate (fmt/clippy/lints/tests/daemon test-support/schema).
+# Same command as the CI `rust` job.
+check-rust:
+    cargo xtask check-rust
+
+# macOS-native gate (UniFFI/Xcode/Swift + minos-desktop + Flutter ffi).
+# Same command as the CI `macos` job. Requires a macOS host.
+check-macos:
+    cargo xtask check-macos
 
 # Backend-focused verification for formal-cutover work.
 check-backend:
     cargo xtask gen-backend-platform-contract --check
     cargo test -p minos-backend
+    cargo test -p minos-daemon --features test-support
 
 # Regenerate the backend runtime contract, OpenAPI, and websocket schema artifacts.
 gen-backend-platform-contract:
