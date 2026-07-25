@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -8,10 +9,13 @@ use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
+pub mod delegation_signal;
 pub mod mcp_handler;
 pub mod mcp_server;
 pub mod mcp_socket;
 pub mod teamwork_mcp;
+
+pub use delegation_signal::DelegationSignalBus;
 
 const OPEN_RETRY_DELAYS: [Duration; 5] = [
     Duration::from_millis(25),
@@ -21,9 +25,15 @@ const OPEN_RETRY_DELAYS: [Duration; 5] = [
     Duration::from_millis(400),
 ];
 
+/// Default SQLite fallback interval when no terminal signal arrives.
+/// Fast enough for multi-process writers; in-process waiters wake via
+/// [`DelegationSignalBus`] immediately.
+pub const DEFAULT_DELEGATION_WAIT_FALLBACK_POLL: Duration = Duration::from_secs(2);
+
 #[derive(Debug, Clone)]
 pub struct TeamworkStore {
     pool: SqlitePool,
+    signals: Arc<DelegationSignalBus>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,7 +123,9 @@ impl TeamworkStore {
             .connect_with(opts)
             .await?;
         Self::migrate(&pool).await?;
-        Ok(Self { pool })
+        // Attach after migrate so the file exists and path canonicalization is stable.
+        let signals = DelegationSignalBus::for_db_path(db_path);
+        Ok(Self { pool, signals })
     }
 
     pub async fn ensure_conversation(
@@ -327,6 +339,10 @@ impl TeamworkStore {
     }
 
     /// Block until the delegation reaches a terminal status or timeout.
+    ///
+    /// Prefers in-process [`DelegationSignalBus`] wakeups (complete/cancel).
+    /// `poll_interval` is only a fallback ceiling for multi-process writers or
+    /// missed signals — pass [`DEFAULT_DELEGATION_WAIT_FALLBACK_POLL`] in production.
     pub async fn wait_delegation(
         &self,
         conversation_id: &str,
@@ -335,6 +351,9 @@ impl TeamworkStore {
         poll_interval: Duration,
     ) -> Result<(TeamworkDelegation, bool)> {
         let deadline = tokio::time::Instant::now() + timeout;
+        let mut seen_generation = self
+            .signals
+            .current_generation(conversation_id, delegation_id);
         loop {
             let Some(delegation) = self.get_delegation(conversation_id, delegation_id).await?
             else {
@@ -347,8 +366,16 @@ impl TeamworkStore {
             if now >= deadline {
                 return Ok((delegation, true));
             }
-            let sleep_for = poll_interval.min(deadline.saturating_duration_since(now));
-            tokio::time::sleep(sleep_for).await;
+            let slice = poll_interval.min(deadline.saturating_duration_since(now));
+            let changed = self
+                .signals
+                .wait_change(conversation_id, delegation_id, seen_generation, slice)
+                .await;
+            if changed {
+                seen_generation = self
+                    .signals
+                    .current_generation(conversation_id, delegation_id);
+            }
         }
     }
 
@@ -427,6 +454,8 @@ impl TeamworkStore {
         .bind(TeamworkDelegationStatus::Running.as_db())
         .execute(&self.pool)
         .await?;
+        self.signals
+            .notify_terminal(conversation_id, &delegation.delegation_id);
         self.get_delegation(conversation_id, &delegation.delegation_id)
             .await
     }
@@ -506,9 +535,32 @@ impl TeamworkStore {
         .bind(delegation_id)
         .execute(&self.pool)
         .await?;
+        self.signals.notify_terminal(conversation_id, delegation_id);
         self.get_delegation(conversation_id, delegation_id)
             .await?
             .with_context(|| format!("delegation disappeared after cancel: {delegation_id}"))
+    }
+
+    /// Running delegations where `agent` is the target or the recorded source.
+    pub async fn list_running_delegations_involving_agent(
+        &self,
+        conversation_id: &str,
+        agent: AgentName,
+    ) -> Result<Vec<TeamworkDelegation>> {
+        let agent_label = agent.bin_name();
+        let rows = sqlx::query(
+            "SELECT * FROM teamwork_delegations \
+             WHERE conversation_id = ? AND status = ? \
+               AND (target_agent = ? OR source_agent = ?) \
+             ORDER BY delegation_seq ASC",
+        )
+        .bind(conversation_id)
+        .bind(TeamworkDelegationStatus::Running.as_db())
+        .bind(agent_label)
+        .bind(agent_label)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(delegation_from_row).collect()
     }
 
     async fn migrate(pool: &SqlitePool) -> Result<()> {
@@ -989,5 +1041,110 @@ mod tests {
         assert!(!timed_out);
         assert_eq!(completed.status, TeamworkDelegationStatus::Completed);
         assert_eq!(completed.result_text.as_deref(), Some("done"));
+    }
+
+    #[tokio::test]
+    async fn wait_delegation_wakes_on_signal_without_busy_poll() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("teamwork.sqlite");
+        let store = TeamworkStore::open(&db).await.unwrap();
+        store
+            .ensure_conversation("conversation-main", "main", "/tmp/ws")
+            .await
+            .unwrap();
+        let delegation = store
+            .create_delegation(
+                "conversation-main",
+                Some(AgentName::Codex),
+                Some("thread-codex".into()),
+                AgentName::Gemini,
+                "work".into(),
+                Some("thread-gemini".into()),
+            )
+            .await
+            .unwrap();
+
+        // Second open of the same DB must share the signal bus.
+        let completer = TeamworkStore::open(&db).await.unwrap();
+        let wait_store = store.clone();
+        let delegation_id = delegation.delegation_id.clone();
+        let waiter = tokio::spawn(async move {
+            wait_store
+                .wait_delegation(
+                    "conversation-main",
+                    &delegation_id,
+                    // Long timeout + long fallback poll: only a signal wake finishes promptly.
+                    Duration::from_secs(5),
+                    Duration::from_secs(30),
+                )
+                .await
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        completer
+            .complete_delegation_for_thread(
+                "conversation-main",
+                "thread-gemini",
+                Some("msg-1"),
+                "done via signal",
+            )
+            .await
+            .unwrap();
+
+        let (completed, timed_out) = tokio::time::timeout(Duration::from_millis(500), waiter)
+            .await
+            .expect("wait_delegation should wake on complete signal")
+            .unwrap()
+            .unwrap();
+        assert!(!timed_out);
+        assert_eq!(completed.status, TeamworkDelegationStatus::Completed);
+        assert_eq!(completed.result_text.as_deref(), Some("done via signal"));
+    }
+
+    #[tokio::test]
+    async fn list_running_delegations_involving_agent_filters_source_and_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TeamworkStore::open(&tmp.path().join("teamwork.sqlite"))
+            .await
+            .unwrap();
+        store
+            .ensure_conversation("c1", "main", "/tmp/ws")
+            .await
+            .unwrap();
+        store
+            .create_delegation(
+                "c1",
+                Some(AgentName::Codex),
+                Some("src".into()),
+                AgentName::Claude,
+                "a".into(),
+                Some("tgt".into()),
+            )
+            .await
+            .unwrap();
+        store
+            .create_delegation(
+                "c1",
+                Some(AgentName::Gemini),
+                Some("g".into()),
+                AgentName::Grok,
+                "b".into(),
+                Some("k".into()),
+            )
+            .await
+            .unwrap();
+
+        let involving_codex = store
+            .list_running_delegations_involving_agent("c1", AgentName::Codex)
+            .await
+            .unwrap();
+        assert_eq!(involving_codex.len(), 1);
+        assert_eq!(involving_codex[0].target_agent, AgentName::Claude);
+
+        let involving_claude = store
+            .list_running_delegations_involving_agent("c1", AgentName::Claude)
+            .await
+            .unwrap();
+        assert_eq!(involving_claude.len(), 1);
     }
 }

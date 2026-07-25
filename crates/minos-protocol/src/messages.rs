@@ -1071,6 +1071,24 @@ pub struct UpdateConversationResponse {
     pub conversation: LocalConversationSummary,
 }
 
+/// Remove a runtime agent from a conversation roster.
+/// Existing sessions for that agent are closed with reason `roster_removed`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RemoveConversationAgentParams {
+    pub conversation_id: String,
+    /// Runtime agent label (`codex` / `claude` / …).
+    pub agent: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RemoveConversationAgentResponse {
+    pub conversation: LocalConversationSummary,
+    /// Sessions closed because the agent left the roster.
+    pub closed_session_ids: Vec<String>,
+    /// Running teamwork delegations cancelled because the agent left.
+    pub cancelled_delegation_ids: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ListConversationMessagesParams {
     pub conversation_id: String,

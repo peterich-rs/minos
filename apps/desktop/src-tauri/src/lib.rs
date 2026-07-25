@@ -100,6 +100,7 @@ pub fn run() {
             daemon_read_transcript,
             daemon_create_conversation,
             daemon_update_conversation,
+            daemon_remove_conversation_agent,
             daemon_append_user_message,
             daemon_list_clis,
             daemon_start_agent_in_conversation,

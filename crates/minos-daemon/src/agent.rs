@@ -1485,6 +1485,169 @@ impl AgentGlue {
         })
     }
 
+    /// Remove a runtime agent from the conversation roster and tear down its
+    /// live work: close open sessions and cancel running teamwork delegations
+    /// that involve the agent as source or target.
+    pub async fn remove_conversation_agent(
+        &self,
+        req: minos_protocol::RemoveConversationAgentParams,
+    ) -> Result<minos_protocol::RemoveConversationAgentResponse, MinosError> {
+        let _existing = self
+            .store
+            .get_conversation(&req.conversation_id)
+            .await
+            .map_err(|e| map_store_error("remove_conversation_agent.get", e))?
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "remove_conversation_agent".into(),
+                message: format!("conversation not found: {}", req.conversation_id),
+            })?;
+
+        let agent =
+            parse_agent_label(req.agent.trim()).map_err(|e| MinosError::CodexProtocolError {
+                method: "remove_conversation_agent".into(),
+                message: format!("invalid agent '{}': {e}", req.agent),
+            })?;
+        let agent_label = agent_label(agent).to_owned();
+
+        let removed = self
+            .store
+            .remove_conversation_agent_member(&req.conversation_id, &agent_label)
+            .await
+            .map_err(|e| map_store_error("remove_conversation_agent.remove", e))?;
+        if !removed {
+            return Err(MinosError::CodexProtocolError {
+                method: "remove_conversation_agent".into(),
+                message: format!(
+                    "agent '{agent_label}' is not a member of conversation {}",
+                    req.conversation_id
+                ),
+            });
+        }
+
+        let now_ms = current_unix_ms();
+        let session_rows = self
+            .store
+            .list_sessions_by_conversation(&req.conversation_id)
+            .await
+            .map_err(|e| map_store_error("remove_conversation_agent.list_sessions", e))?;
+        let mut closed_session_ids = Vec::new();
+        for row in session_rows {
+            if row.agent != agent_label || row.status == "closed" {
+                continue;
+            }
+            let session_id = row.session_id.clone();
+            if let Err(error) = self.manager.close_session(&session_id).await {
+                tracing::debug!(
+                    target: "minos_daemon::agent",
+                    error = %error,
+                    session_id = %session_id,
+                    "manager.close_session during roster remove",
+                );
+            }
+            if let Err(error) = self
+                .store
+                .close_session_row(&session_id, "roster_removed", now_ms)
+                .await
+            {
+                tracing::warn!(
+                    target: "minos_daemon::agent",
+                    error = %error,
+                    session_id = %session_id,
+                    "store.close_session_row failed during roster remove",
+                );
+            }
+            closed_session_ids.push(session_id);
+        }
+
+        let mut cancelled_delegation_ids = Vec::new();
+        match minos_chat_store::TeamworkStore::open(self.store.db_path()).await {
+            Ok(teamwork) => {
+                match teamwork
+                    .list_running_delegations_involving_agent(&req.conversation_id, agent)
+                    .await
+                {
+                    Ok(running) => {
+                        for delegation in running {
+                            match teamwork
+                                .cancel_delegation(
+                                    &req.conversation_id,
+                                    &delegation.delegation_id,
+                                    Some(format!(
+                                        "agent '{agent_label}' removed from conversation roster"
+                                    )),
+                                )
+                                .await
+                            {
+                                Ok(cancelled) => {
+                                    if let Some(session_id) = cancelled.session_id.as_deref() {
+                                        let _ = self.manager.interrupt_session(session_id).await;
+                                    }
+                                    cancelled_delegation_ids.push(cancelled.delegation_id);
+                                }
+                                Err(error) => {
+                                    tracing::debug!(
+                                        target: "minos_daemon::agent",
+                                        error = %error,
+                                        delegation_id = %delegation.delegation_id,
+                                        "cancel_delegation during roster remove skipped",
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            target: "minos_daemon::agent",
+                            error = %error,
+                            conversation_id = %req.conversation_id,
+                            agent = %agent_label,
+                            "list_running_delegations_involving_agent failed during roster remove",
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_daemon::agent",
+                    error = %error,
+                    "open teamwork store failed during roster remove",
+                );
+            }
+        }
+
+        tracing::info!(
+            target: "minos_daemon::agent",
+            conversation_id = %req.conversation_id,
+            agent = %agent_label,
+            closed_sessions = closed_session_ids.len(),
+            cancelled_delegations = cancelled_delegation_ids.len(),
+            "removed conversation agent from roster",
+        );
+
+        let row = self
+            .store
+            .get_conversation(&req.conversation_id)
+            .await
+            .map_err(|e| map_store_error("remove_conversation_agent.reload", e))?
+            .expect("conversation exists above");
+        let agents = self
+            .store
+            .list_agents_for_conversations(&[req.conversation_id.clone()])
+            .await
+            .map_err(|e| map_store_error("remove_conversation_agent.agents", e))?;
+        let participating_agents = agents
+            .get(&req.conversation_id)
+            .into_iter()
+            .flatten()
+            .map(|agent| parse_agent_label(agent))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(minos_protocol::RemoveConversationAgentResponse {
+            conversation: conversation_summary_from_row(row, participating_agents)?,
+            closed_session_ids,
+            cancelled_delegation_ids,
+        })
+    }
+
     pub async fn list_conversations(
         &self,
         req: minos_protocol::ListConversationsParams,
@@ -2718,7 +2881,8 @@ async fn handle_daemon_mcp_request(
             )
             .await?;
             let timeout = std::time::Duration::from_millis(timeout_ms as u64);
-            let poll = std::time::Duration::from_millis(200);
+            // Event-driven wake via DelegationSignalBus; this is only a multi-process fallback.
+            let poll = minos_chat_store::DEFAULT_DELEGATION_WAIT_FALLBACK_POLL;
             let (delegation, timed_out) = teamwork_store
                 .wait_delegation(&conversation_id, &delegation_id, timeout, poll)
                 .await?;
@@ -2874,18 +3038,35 @@ async fn validate_mcp_source_session(
     let rows = store.list_sessions_by_conversation(conversation_id).await?;
     let Some(row) = rows.iter().find(|row| row.session_id == source_session_id) else {
         anyhow::bail!(
-            "MCP source thread {source_session_id} does not belong to conversation {conversation_id}"
+            "MCP source session {source_session_id} does not belong to conversation {conversation_id} \
+             (session may have been closed or never started)"
         );
     };
+    if row.status == "closed" {
+        let reason = row.last_close_reason.as_deref().unwrap_or("unknown");
+        anyhow::bail!(
+            "MCP source session {source_session_id} is closed (reason={reason}); \
+             teamwork tools are unavailable for this session"
+        );
+    }
+    let session_agent = parse_socket_agent(&row.agent)?;
     if let Some(source_agent) = source_agent {
-        let actual = parse_socket_agent(&row.agent)?;
         anyhow::ensure!(
-            actual == source_agent,
-            "MCP source thread {source_session_id} belongs to {}, not {}",
-            actual.bin_name(),
+            session_agent == source_agent,
+            "MCP source session {source_session_id} belongs to {}, not {}",
+            session_agent.bin_name(),
             source_agent.bin_name()
         );
     }
+    // Roster is membership SSOT: a removed agent must not keep using MCP.
+    let member_label = agent_label(session_agent);
+    anyhow::ensure!(
+        store
+            .is_conversation_agent_member(conversation_id, member_label)
+            .await?,
+        "MCP source agent '{member_label}' is no longer a member of conversation {conversation_id}; \
+         session work was invalidated when the agent left the roster"
+    );
     Ok(())
 }
 
@@ -3606,6 +3787,19 @@ mod tests {
             .unwrap();
     }
 
+    async fn seed_conversation_with_agents(
+        glue: &AgentGlue,
+        conversation_id: &str,
+        agents: &[&str],
+    ) {
+        seed_conversation(glue, conversation_id).await;
+        let members = agents.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        glue.store
+            .set_conversation_agent_members(conversation_id, &members, 1)
+            .await
+            .unwrap();
+    }
+
     #[test]
     fn validate_agent_profile_name_accepts_clean_tokens() {
         assert_eq!(
@@ -3984,7 +4178,7 @@ mod tests {
     #[tokio::test]
     async fn daemon_mcp_post_conversation_update_appends_and_emits_local_event() {
         let test = test_glue().await;
-        seed_conversation(&test.glue, "conversation-mcp").await;
+        seed_conversation_with_agents(&test.glue, "conversation-mcp", &["codex"]).await;
         test.glue.store.upsert_workspace("/w", 1).await.unwrap();
         test.glue
             .store
@@ -4048,7 +4242,12 @@ mod tests {
     #[tokio::test]
     async fn daemon_mcp_delegate_blocks_third_agent_from_delegated_thread() {
         let test = test_glue().await;
-        seed_conversation(&test.glue, "conversation-mcp").await;
+        seed_conversation_with_agents(
+            &test.glue,
+            "conversation-mcp",
+            &["codex", "opencode", "gemini"],
+        )
+        .await;
         test.glue.store.upsert_workspace("/w", 1).await.unwrap();
         test.glue
             .store
@@ -4115,6 +4314,144 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn remove_conversation_agent_closes_sessions_and_cancels_delegations() {
+        let test = test_glue().await;
+        seed_conversation_with_agents(&test.glue, "conversation-roster", &["codex", "claude"])
+            .await;
+        test.glue.store.upsert_workspace("/w", 1).await.unwrap();
+        test.glue
+            .store
+            .insert_session_in_conversation(
+                "thread-claude-1",
+                "conversation-roster",
+                "/w",
+                "claude",
+                Some("thread-claude-1"),
+                None,
+                "running",
+                1,
+                true,
+            )
+            .await
+            .unwrap();
+        test.glue
+            .store
+            .insert_session_in_conversation(
+                "thread-codex-1",
+                "conversation-roster",
+                "/w",
+                "codex",
+                Some("thread-codex-1"),
+                None,
+                "idle",
+                1,
+                true,
+            )
+            .await
+            .unwrap();
+
+        let teamwork = minos_chat_store::TeamworkStore::open(test.glue.store.db_path())
+            .await
+            .unwrap();
+        teamwork
+            .ensure_conversation("conversation-roster", "roster", "/w")
+            .await
+            .unwrap();
+        let delegation = teamwork
+            .create_delegation(
+                "conversation-roster",
+                Some(AgentName::Codex),
+                Some("thread-codex-1".into()),
+                AgentName::Claude,
+                "do work".into(),
+                Some("thread-claude-1".into()),
+            )
+            .await
+            .unwrap();
+
+        let response = test
+            .glue
+            .remove_conversation_agent(minos_protocol::RemoveConversationAgentParams {
+                conversation_id: "conversation-roster".into(),
+                agent: "claude".into(),
+            })
+            .await
+            .unwrap();
+
+        assert!(!response
+            .conversation
+            .participating_agents
+            .contains(&AgentName::Claude));
+        assert!(response
+            .conversation
+            .participating_agents
+            .contains(&AgentName::Codex));
+        assert_eq!(
+            response.closed_session_ids,
+            vec!["thread-claude-1".to_owned()]
+        );
+        assert_eq!(
+            response.cancelled_delegation_ids,
+            vec![delegation.delegation_id.clone()]
+        );
+
+        let claude_row = test
+            .glue
+            .store
+            .get_session("thread-claude-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(claude_row.status, "closed");
+        assert_eq!(
+            claude_row.last_close_reason.as_deref(),
+            Some("roster_removed")
+        );
+
+        let codex_row = test
+            .glue
+            .store
+            .get_session("thread-codex-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(codex_row.status, "idle");
+
+        let cancelled = teamwork
+            .get_delegation("conversation-roster", &delegation.delegation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            cancelled.status,
+            minos_chat_store::TeamworkDelegationStatus::Cancelled
+        );
+
+        // MCP from the removed agent session must fail with a membership error.
+        let (event_tx, _) = broadcast::channel(4);
+        let error = handle_daemon_mcp_request(
+            test.glue.manager.clone(),
+            test.glue.store.clone(),
+            test.glue.store.db_path().to_path_buf(),
+            test.glue.default_workspace.clone(),
+            event_tx,
+            SocketRequest::PostConversationUpdate {
+                conversation_id: "conversation-roster".into(),
+                source_agent: Some("claude".into()),
+                source_session_id: Some("thread-claude-1".into()),
+                message: "still here".into(),
+            },
+        )
+        .await
+        .expect_err("removed agent MCP should be rejected");
+        let message = error.to_string();
+        assert!(
+            message.contains("closed") || message.contains("no longer a member"),
+            "unexpected error: {message}"
+        );
     }
 
     #[tokio::test]

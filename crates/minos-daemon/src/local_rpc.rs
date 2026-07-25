@@ -16,6 +16,7 @@ use minos_protocol::{
     ListConversationsResponse, ListProjectsResponse, LocalConversationEvent, LocalDaemonRpcServer,
     LocalIngestFrame, LocalManagerEvent, LocalSessionSnapshot, ReadArtifactRangeRequest,
     ReadArtifactRangeResponse, ReadSessionParams, ReadSessionRawHistoryResponse,
+    RemoveConversationAgentParams, RemoveConversationAgentResponse,
     RespondOpencodePermissionRequest, RespondOpencodeQuestionRequest, SendUserMessageRequest,
     StartAgentInConversationRequest, StartAgentRequest, StartAgentResponse,
     ToggleConversationMessageReactionParams, ToggleConversationMessageReactionResponse,
@@ -203,6 +204,22 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
             "local RPC update_conversation",
         );
         self.agent.update_conversation(req).await.map_err(rpc_err)
+    }
+
+    async fn remove_conversation_agent(
+        &self,
+        req: RemoveConversationAgentParams,
+    ) -> jsonrpsee::core::RpcResult<RemoveConversationAgentResponse> {
+        tracing::info!(
+            target: "minos_daemon::local_rpc",
+            conversation_id = %req.conversation_id,
+            agent = %req.agent,
+            "local RPC remove_conversation_agent",
+        );
+        self.agent
+            .remove_conversation_agent(req)
+            .await
+            .map_err(rpc_err)
     }
 
     async fn list_conversation_messages(

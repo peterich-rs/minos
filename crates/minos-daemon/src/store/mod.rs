@@ -724,6 +724,28 @@ impl LocalStore {
         Ok(())
     }
 
+    /// Remove one runtime agent from the conversation roster.
+    /// Returns `true` when a membership row was deleted.
+    pub async fn remove_conversation_agent_member(
+        &self,
+        conversation_id: &str,
+        agent: &str,
+    ) -> anyhow::Result<bool> {
+        let trimmed = agent.trim();
+        if trimmed.is_empty() {
+            return Ok(false);
+        }
+        let result = sqlx::query(
+            "DELETE FROM conversation_agent_members \
+             WHERE conversation_id = ? AND agent = ?",
+        )
+        .bind(conversation_id)
+        .bind(trimmed)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn list_sessions_by_conversation(
         &self,
         conversation_id: &str,
@@ -1445,6 +1467,19 @@ mod tests {
             .unwrap();
         assert!(store
             .is_conversation_agent_member("c1", "grok")
+            .await
+            .unwrap());
+
+        assert!(store
+            .remove_conversation_agent_member("c1", "grok")
+            .await
+            .unwrap());
+        assert!(!store
+            .is_conversation_agent_member("c1", "grok")
+            .await
+            .unwrap());
+        assert!(!store
+            .remove_conversation_agent_member("c1", "grok")
             .await
             .unwrap());
     }

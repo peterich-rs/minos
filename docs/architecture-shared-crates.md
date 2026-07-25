@@ -55,7 +55,7 @@
 | `envelope` | `Envelope` (Forward, Forwarded, Event, Ingest), `EventKind` | WebSocket relay 帧格式 |
 | `auth` | `AuthRequest/Response`, `RefreshRequest/Response` | 认证 HTTP DTO |
 | `realtime` | `ClientFrame`, `ServerFrame`, `DurableEvent` (17 变体), `RealtimeTopic` | Topic-based 实时网关线类型 |
-| `local_rpc` | `ListConversationMessagesParams/Response`, `AppendConversationMessageParams`, `StartAgentInConversationRequest` | TUI 本地 RPC 类型 |
+| `local_rpc` | `ListConversationMessagesParams/Response`, `AppendConversationMessageParams`, `StartAgentInConversationRequest`, `RemoveConversationAgentParams/Response` | TUI/Desktop 本地 RPC 类型 |
 
 ---
 
@@ -145,23 +145,24 @@
 
 ---
 
-## 7. `minos-chat-store` — 聊天持久化
+## 7. `minos-chat-store` — Teamwork 持久化 + MCP sidecar
 
 **路径**: `crates/minos-chat-store/`
-**特性**: SQLite 持久化群聊房间、消息、agent 会话和 MCP 命令。
+**特性**: Host teamwork 委派 SQLite（与 daemon `daemon.sqlite` 同库）、Unix socket MCP handler、stdio MCP sidecar。
 
 ### 关键类型
 
 | 类型 | 描述 |
 |------|------|
-| `ChatStore` | 主结构（SqlitePool）: open, ensure_room, append_message, upsert_message_by_id, list_messages |
-| `ChatRoom` | 聊天房间（room_id, title, workspace_root） |
-| `ChatMessage` | 消息（seq, message_id, sender_role, event_type, text） |
-| `ChatAgentSession` | Agent-房间绑定 |
-| `ChatMcpCommand` | MCP 命令队列（MentionAgent/MentionUser） |
-| `ChatMessagePage` | 分页响应 |
+| `TeamworkStore` | 委派 SSOT：create/get/complete/cancel/wait + source delivery 队列 |
+| `DelegationSignalBus` | 同 DB path 进程内共享；complete/cancel 唤醒 `wait_delegation`（fallback poll 默认 2s） |
+| `TeamworkDelegation` / `TeamworkDelegationStatus` | running/completed/cancelled/failed |
+| `mcp_socket::SocketRequest` | sidecar↔daemon 帧请求（含 `WaitDelegation { timeout_ms }`） |
+| `mcp_server` | stdio MCP：`read_timeout_for_request` 对 wait 取 `timeout_ms + 5s`；错误码 `-32001` daemon 不可用 / `-32002` socket 关闭 / `-32003` daemon 拒绝 / `-32602` 参数错误 |
+| `mcp_handler::McpSocketHandler` | daemon 侧 UDS 服务 |
+| `teamwork_mcp` | 工具目录与 permissions（list/delegate/wait/status/cancel/post） |
 
-**数据库**: SQLite WAL 模式。表: chat_rooms, chat_messages, chat_agent_sessions, chat_mcp_commands。`chat_messages.message_id` 是群聊消息的稳定 upsert key；TUI 对每个 thread turn 只创建一条流式 agent result，后续增量更新原行 body，不推进 sequence。
+**数据库**: SQLite WAL。表: `teamwork_conversations`, `teamwork_delegations`, `teamwork_source_deliveries`。默认路径 `$MINOS_HOME/daemon.sqlite`（与 LocalStore 共用）。
 
 ---
 

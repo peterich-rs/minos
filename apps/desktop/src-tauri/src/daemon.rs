@@ -21,9 +21,10 @@ use minos_protocol::{
     CreateProjectRequest, ListClisResponse, ListConversationAgentSessionsParams,
     ListConversationMessagesParams, ListConversationsParams, ListProjectsResponse,
     LocalConversationMessage, LocalConversationSummary, LocalReactionGroup, ProjectSummary,
-    ReadSessionParams, SendUserMessageRequest, SessionState, SessionSummary,
-    StartAgentInConversationRequest, StartAgentResponse, ToggleConversationMessageReactionParams,
-    ToggleConversationMessageReactionResponse, UpdateConversationParams,
+    ReadSessionParams, RemoveConversationAgentParams, SendUserMessageRequest, SessionState,
+    SessionSummary, StartAgentInConversationRequest, StartAgentResponse,
+    ToggleConversationMessageReactionParams, ToggleConversationMessageReactionResponse,
+    UpdateConversationParams,
 };
 use minos_ui_protocol::UiEventMessage;
 use serde::Serialize;
@@ -87,6 +88,14 @@ pub struct ConversationDto {
     pub worktree: Option<String>,
     pub running_count: u32,
     pub approval_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveConversationAgentDto {
+    pub conversation: ConversationDto,
+    pub closed_session_ids: Vec<String>,
+    pub cancelled_delegation_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -868,6 +877,27 @@ impl DaemonBridge {
             .await
             .context("minos_local_update_conversation")?;
         Ok(map_conversation(response.conversation))
+    }
+
+    pub async fn remove_conversation_agent(
+        &self,
+        conversation_id: String,
+        agent: String,
+    ) -> Result<RemoveConversationAgentDto> {
+        let client = self.client().await?;
+        let params = RemoveConversationAgentParams {
+            conversation_id,
+            agent,
+        };
+        let response: minos_protocol::RemoveConversationAgentResponse = client
+            .request("minos_local_remove_conversation_agent", [params])
+            .await
+            .context("minos_local_remove_conversation_agent")?;
+        Ok(RemoveConversationAgentDto {
+            conversation: map_conversation(response.conversation),
+            closed_session_ids: response.closed_session_ids,
+            cancelled_delegation_ids: response.cancelled_delegation_ids,
+        })
     }
 
     pub async fn append_user_message(

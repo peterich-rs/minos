@@ -495,7 +495,7 @@ Sessions 主区是 **Grok-style 日志 transcript** + 右侧 **session summary**
 | `branch` / `worktree_path` | **创建时** git 快照 | 只读 chip；不跟随后续 checkout |
 | Board 列 | 派生，非独立任务系统 | `done` 优先；`needs_you` 来自 suspended/approval 运行态（progress 仍为 `in_progress`） |
 
-新建会话：`ProjectHeader` → **Create conversation** 弹窗（对标 Buzz create-channel）配置 title / optional priority / **required agent roster**，再 `create_conversation`（protocol：`priority?` + `agents[]`）写入 `conversation_agent_members`；progress 默认 `todo`。**成员资格是 @mention / start 的 SSOT**：空 roster 时 picker 为空且 send 拒绝；仅 roster 内 runtime（及其 profile / open session）可被 @；`start_agent_in_conversation` 对非成员返回错误。创建时**不**预启动 session（懒启动：首次 @ 或 bare send 再 start）。首次 `start_agent_in_conversation` 时若仍为 `todo` 则自动升为 `in_progress`。
+新建会话：`ProjectHeader` → **Create conversation** 弹窗（对标 Buzz create-channel）配置 title / optional priority / **required agent roster**，再 `create_conversation`（protocol：`priority?` + `agents[]`）写入 `conversation_agent_members`；progress 默认 `todo`。**成员资格是 @mention / start 的 SSOT**：空 roster 时 picker 为空且 send 拒绝；仅 roster 内 runtime（及其 profile / open session）可被 @；`start_agent_in_conversation` 对非成员返回错误。创建时**不**预启动 session（懒启动：首次 @ 或 bare send 再 start）。首次 `start_agent_in_conversation` 时若仍为 `todo` 则自动升为 `in_progress`。从 roster 移除：`daemon_remove_conversation_agent` → `minos_local_remove_conversation_agent`，关闭该 agent 悬挂 sessions（`roster_removed`）并取消相关 running delegations；被移除 agent 的 MCP 调用被拒绝。
 
 ### Agent 运行态与审批（Desktop 缺口修复）
 
