@@ -196,6 +196,7 @@ jobs:
       - name: Build Tauri (macOS aarch64)
         working-directory: apps/desktop
         env:
+          MINOS_BACKEND_URL: ${{ secrets.MINOS_BACKEND_URL }}
           MINOS_UPDATER_PUBLIC_KEY: ${{ secrets.MINOS_UPDATER_PUBLIC_KEY }}
           MINOS_UPDATER_ENDPOINT: ${{ env.MINOS_UPDATER_ENDPOINT }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -206,6 +207,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
+          test -n "$MINOS_BACKEND_URL" || { echo "missing MINOS_BACKEND_URL secret"; exit 1; }
           ARGS=(build --target aarch64-apple-darwin --config src-tauri/tauri.release.conf.json)
           if [[ "${{ steps.apple.outputs.enabled }}" != "true" ]]; then
             echo "::warning::Apple signing secrets not fully configured; building with --no-sign"
@@ -328,11 +330,14 @@ jobs:
       - name: Build Tauri AppImage
         working-directory: apps/desktop
         env:
+          MINOS_BACKEND_URL: ${{ secrets.MINOS_BACKEND_URL }}
           MINOS_UPDATER_PUBLIC_KEY: ${{ secrets.MINOS_UPDATER_PUBLIC_KEY }}
           MINOS_UPDATER_ENDPOINT: ${{ env.MINOS_UPDATER_ENDPOINT }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: pnpm tauri build --bundles appimage --config src-tauri/tauri.release.conf.json
+        run: |
+          test -n "$MINOS_BACKEND_URL" || { echo "missing MINOS_BACKEND_URL secret"; exit 1; }
+          pnpm tauri build --bundles appimage --config src-tauri/tauri.release.conf.json
 
       - name: Locate AppImage + sig
         id: pack

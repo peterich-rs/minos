@@ -44,7 +44,8 @@ dev binaries never hit a production endpoint.
 | `MINOS_UPDATER_PUBLIC_KEY` | minisign public key embedded in the app (also used by conf inject) |
 | `TAURI_SIGNING_PRIVATE_KEY` | minisign private key for signing updater archives |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | password for the private key (if any) |
-| Apple signing / notarize secrets | codesign + notarize DMG / .app (required for macOS trust) |
+| `MINOS_BACKEND_URL` | required for release `minos-daemon` builds (`crates/minos-daemon/build.rs`) |
+| Apple signing / notarize secrets | codesign + notarize DMG / .app (required for macOS Gatekeeper trust) |
 
 Generate a keypair once (see [Tauri updater](https://v2.tauri.app/plugin/updater/)):
 
