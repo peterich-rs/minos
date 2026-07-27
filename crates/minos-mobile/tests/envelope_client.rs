@@ -313,7 +313,18 @@ async fn resume_persisted_session_reconnects_with_formal_ticket_flow() {
         .resume_persisted_session_at(&backend_url)
         .await
         .unwrap();
-    assert_eq!(client.current_state(), ConnectionState::Connected);
+    // Resume may resolve slightly before the watch state settles on Connected
+    // (brief Reconnecting { attempt: 1 } during WS arm). Poll for Connected.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        match client.current_state() {
+            ConnectionState::Connected => break,
+            ConnectionState::Reconnecting { .. } if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            other => panic!("expected Connected after resume, got {other:?}"),
+        }
+    }
 
     let _ = client.logout().await;
 }
