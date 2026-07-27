@@ -3427,14 +3427,15 @@ fn spawn_mcp_socket_handler(
         let default_workspace = default_workspace.clone();
         let local_conversation_event_tx = local_conversation_event_tx.clone();
         tokio::spawn(async move {
-            handle_daemon_mcp_request(
+            // Pin: PostGitUpdate / delegate paths make this future large.
+            Box::pin(handle_daemon_mcp_request(
                 manager,
                 store,
                 db_path,
                 default_workspace,
                 local_conversation_event_tx,
                 request,
-            )
+            ))
             .await
         })
     });
@@ -5096,7 +5097,7 @@ mod tests {
             .unwrap();
         let (event_tx, mut event_rx) = broadcast::channel(4);
 
-        let response = handle_daemon_mcp_request(
+        let response = Box::pin(handle_daemon_mcp_request(
             test.glue.manager.clone(),
             test.glue.store.clone(),
             PathBuf::from("unused-teamwork.sqlite"),
@@ -5108,7 +5109,7 @@ mod tests {
                 source_session_id: Some("thread-codex-1234".into()),
                 message: "review posted".into(),
             },
-        )
+        ))
         .await
         .unwrap();
 
@@ -5184,7 +5185,7 @@ mod tests {
             .unwrap();
         let (event_tx, _) = broadcast::channel(4);
 
-        let error = handle_daemon_mcp_request(
+        let error = Box::pin(handle_daemon_mcp_request(
             test.glue.manager.clone(),
             test.glue.store.clone(),
             teamwork_db,
@@ -5199,7 +5200,7 @@ mod tests {
                 target_profile: None,
                 prompt: "say hi".into(),
             },
-        )
+        ))
         .await
         .expect_err("third-agent delegation should be rejected");
 
@@ -5331,7 +5332,7 @@ mod tests {
 
         // MCP from the removed agent session must fail with a membership error.
         let (event_tx, _) = broadcast::channel(4);
-        let error = handle_daemon_mcp_request(
+        let error = Box::pin(handle_daemon_mcp_request(
             test.glue.manager.clone(),
             test.glue.store.clone(),
             test.glue.store.db_path().to_path_buf(),
@@ -5343,7 +5344,7 @@ mod tests {
                 source_session_id: Some("thread-claude-1".into()),
                 message: "still here".into(),
             },
-        )
+        ))
         .await
         .expect_err("removed agent MCP should be rejected");
         let message = error.to_string();

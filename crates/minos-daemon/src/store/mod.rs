@@ -503,7 +503,7 @@ impl LocalStore {
         .bind(meta.branch.as_deref())
         .bind(meta.worktree_path.as_deref())
         .bind(meta.git_mode.as_deref())
-        .bind(meta.git_dirty.map(|d| if d { 1i64 } else { 0 }))
+        .bind(meta.git_dirty.map(i64::from))
         .bind(meta.git_head.as_deref())
         .execute(&self.pool)
         .await?;
@@ -545,7 +545,7 @@ impl LocalStore {
         .bind(branch)
         .bind(worktree_path)
         .bind(git_mode)
-        .bind(git_dirty.map(|d| if d { 1i64 } else { 0 }))
+        .bind(git_dirty.map(i64::from))
         .bind(git_head)
         .bind(ts_ms)
         .bind(conversation_id)

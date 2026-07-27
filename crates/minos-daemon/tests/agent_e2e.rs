@@ -690,7 +690,7 @@ async fn dispatch_message_creates_new_session() -> anyhow::Result<()> {
     let session_id = reply["result"]["session_id"]
         .as_str()
         .expect("dispatch should return session_id");
-    assert_eq!(session_id, session_id);
+    assert!(!session_id.is_empty());
 
     harness.teardown(fake_codex).await
 }
@@ -753,7 +753,7 @@ async fn dispatch_message_steers_running_session() -> anyhow::Result<()> {
     let session_id = reply1["result"]["session_id"]
         .as_str()
         .expect("first dispatch should return session_id");
-    assert_eq!(session_id, session_id);
+    assert!(!session_id.is_empty());
 
     // Small delay to let the turn/start response propagate and set state to Running
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -856,7 +856,7 @@ async fn interrupt_then_resume_session() -> anyhow::Result<()> {
     let session_id = reply["result"]["session_id"]
         .as_str()
         .expect("dispatch should return session_id");
-    assert_eq!(session_id, session_id);
+    assert!(!session_id.is_empty());
 
     // Small delay to let the turn start and state become Running
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -960,7 +960,7 @@ async fn approval_forwarding_and_decision() -> anyhow::Result<()> {
     let session_id = reply["result"]["session_id"]
         .as_str()
         .expect("dispatch should return session_id");
-    assert_eq!(session_id, session_id);
+    assert!(!session_id.is_empty());
 
     // Step 2: Wait for the approval request ingest to be translated and
     // recorded by the backend approval runtime.

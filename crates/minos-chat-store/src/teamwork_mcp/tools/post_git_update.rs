@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn rejects_too_many_subjects() {
-        let subjects: Vec<String> = (0..MAX_SUBJECTS + 1).map(|i| format!("c{i}")).collect();
+        let subjects: Vec<String> = (0..=MAX_SUBJECTS).map(|i| format!("c{i}")).collect();
         let err = PostGitUpdateTool
             .to_socket_request(
                 ToolCallContext {
