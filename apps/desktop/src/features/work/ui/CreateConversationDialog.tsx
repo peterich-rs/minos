@@ -13,9 +13,11 @@ import {
 import {
   buildCreateConversationInput,
   canSubmitCreateConversation,
+  CREATE_CONVERSATION_GIT_MODES,
   CREATE_CONVERSATION_PRIORITIES,
   defaultCreateConversationForm,
   toggleSelectedAgent,
+  type ConversationGitMode,
   type CreateConversationFormInput,
 } from "@/features/work/lib/create-conversation-form";
 import { agentMeta, type AgentRuntime } from "@/shared/lib/mock-data";
@@ -56,6 +58,7 @@ export function CreateConversationDialog({
   const [priority, setPriority] = useState<
     ReturnType<typeof defaultCreateConversationForm>["priority"]
   >(null);
+  const [gitMode, setGitMode] = useState<ConversationGitMode>("worktree");
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -76,6 +79,7 @@ export function CreateConversationDialog({
     const defaults = defaultCreateConversationForm();
     setTitle(defaults.title);
     setPriority(defaults.priority);
+    setGitMode(defaults.gitMode);
     setSelectedAgents(defaults.selectedAgents);
     setErrorMessage(null);
     submitInFlightRef.current = false;
@@ -96,6 +100,7 @@ export function CreateConversationDialog({
       title,
       priority,
       selectedAgents,
+      gitMode,
     });
     if (!input) return;
     submitInFlightRef.current = true;
@@ -198,6 +203,49 @@ export function CreateConversationDialog({
                     )}
                   >
                     {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="flex items-baseline justify-between gap-2">
+              <div className="text-sm font-medium text-ink">Git workspace</div>
+              <span className="text-2xs text-ink-muted">
+                Isolation for agent edits
+              </span>
+            </div>
+            <div
+              className="grid gap-1.5"
+              role="radiogroup"
+              aria-label="Git workspace mode"
+              data-testid="create-conversation-git-mode"
+            >
+              {CREATE_CONVERSATION_GIT_MODES.map((opt) => {
+                const active = gitMode === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    disabled={isCreating}
+                    onClick={() => setGitMode(opt.value)}
+                    className={cn(
+                      "flex min-h-11 flex-col items-start gap-0.5 rounded-xl border px-3 py-2.5 text-left transition-colors duration-150",
+                      active
+                        ? "border-ink/25 bg-surface-raised shadow-sm"
+                        : "border-ink/10 bg-surface-muted/40 hover:border-ink/20 hover:bg-surface-hover",
+                      isCreating && "opacity-60",
+                    )}
+                  >
+                    <span className="text-sm font-medium text-ink">
+                      {opt.label}
+                    </span>
+                    <span className="text-2xs leading-snug text-ink-muted">
+                      {opt.description}
+                    </span>
                   </button>
                 );
               })}

@@ -86,6 +86,12 @@ pub struct ConversationDto {
     pub branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_dirty: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_head: Option<String>,
     pub running_count: u32,
     pub approval_count: u32,
 }
@@ -137,6 +143,30 @@ pub struct MessageDto {
     pub mentions: Vec<MentionDto>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reactions: Vec<ReactionGroupDto>,
+    /// Structured git milestone when present (worktree / PR / commits…).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_activity: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStatusDto {
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub short_head: Option<String>,
+    pub dirty: bool,
+    pub has_untracked: bool,
+    pub ahead_count: u32,
+    pub behind_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+    pub is_linked_worktree: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<ConversationDto>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -843,6 +873,7 @@ impl DaemonBridge {
         title: String,
         priority: Option<String>,
         agents: Vec<String>,
+        git_mode: Option<String>,
     ) -> Result<ConversationDto> {
         let client = self.client().await?;
         let params = CreateConversationParams {
@@ -850,12 +881,44 @@ impl DaemonBridge {
             title,
             priority,
             agents,
+            git_mode,
         };
         let response: minos_protocol::CreateConversationResponse = client
             .request("minos_local_create_conversation", [params])
             .await
             .context("minos_local_create_conversation")?;
         Ok(map_conversation(response.conversation))
+    }
+
+    pub async fn git_get_status(
+        &self,
+        conversation_id: String,
+        refresh_conversation: bool,
+    ) -> Result<GitStatusDto> {
+        let client = self.client().await?;
+        let params = minos_protocol::GitStatusParams {
+            conversation_id: Some(conversation_id),
+            project_id: None,
+            path: None,
+            refresh_conversation,
+        };
+        let response: minos_protocol::GitStatusResponse = client
+            .request("minos_local_git_get_status", [params])
+            .await
+            .context("minos_local_git_get_status")?;
+        Ok(GitStatusDto {
+            path: response.path,
+            branch: response.branch,
+            head: response.head,
+            short_head: response.short_head,
+            dirty: response.dirty,
+            has_untracked: response.has_untracked,
+            ahead_count: response.ahead_count,
+            behind_count: response.behind_count,
+            upstream: response.upstream,
+            is_linked_worktree: response.is_linked_worktree,
+            conversation: response.conversation.map(map_conversation),
+        })
     }
 
     pub async fn update_conversation(
@@ -1311,6 +1374,9 @@ fn map_conversation(c: LocalConversationSummary) -> ConversationDto {
         },
         branch: c.branch,
         worktree: c.worktree_path,
+        git_mode: c.git_mode,
+        git_dirty: c.git_dirty,
+        git_head: c.git_head,
         running_count: c.running_count,
         approval_count: c.needs_attention_count,
     }
@@ -1324,8 +1390,12 @@ fn map_conversation(c: LocalConversationSummary) -> ConversationDto {
 /// substrings like `"approval"` / `"Permission:"`: agent prose about plans
 /// ("plan-approval", "needs approval") would false-positive and render a dead
 /// Allow/Deny card (TUI never does this).
-fn conversation_timeline_kind(_body: &str) -> &'static str {
-    "text"
+fn conversation_timeline_kind(has_git_activity: bool) -> &'static str {
+    if has_git_activity {
+        "git_activity"
+    } else {
+        "text"
+    }
 }
 
 fn map_reaction_group(g: LocalReactionGroup) -> ReactionGroupDto {
@@ -1346,7 +1416,11 @@ fn map_reaction_group(g: LocalReactionGroup) -> ReactionGroupDto {
 }
 
 fn map_message(m: LocalConversationMessage) -> MessageDto {
-    let kind = conversation_timeline_kind(&m.body);
+    let git_activity = m
+        .git_activity
+        .as_ref()
+        .and_then(|a| serde_json::to_value(a).ok());
+    let kind = conversation_timeline_kind(git_activity.is_some());
     let mentions = m
         .mentions
         .into_iter()
@@ -1370,6 +1444,7 @@ fn map_message(m: LocalConversationMessage) -> MessageDto {
         delegation_id: m.delegation_id,
         mentions,
         reactions: m.reactions.into_iter().map(map_reaction_group).collect(),
+        git_activity,
     }
 }
 

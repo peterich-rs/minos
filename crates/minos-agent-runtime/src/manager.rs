@@ -32,7 +32,8 @@ pub const MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS: &str = "\
 You are running inside Minos teamwork mode, where CLI coding agents work in a shared conversation with the user and other agents. \
 Treat the Minos conversation as coordination context, not as a generic terminal session. \
 When conversation history, teammate output, mentions, current chat state, or cross-agent coordination matters, use the `minos_teamwork` MCP server to inspect the bound conversation before answering. \
-Use `list_conversation_messages` for recent conversation history, `delegate_to_agent` with `wait_delegation` when blocked on the result (or `get_delegation_status`/`cancel_delegation` for tracking), and `post_conversation_update` only for concise user-visible updates.";
+Use `list_conversation_messages` for recent conversation history, `delegate_to_agent` with `wait_delegation` when blocked on the result (or `get_delegation_status`/`cancel_delegation` for tracking), and `post_conversation_update` only for concise user-visible updates. \
+When shipping code changes, work in the conversation worktree when present (do not edit the default branch directly) and post git milestones with `post_git_update` (commits_made, pr_opened, ready_for_review, checks_failed, merged).";
 
 /// Host-owned one-shot prompt injected when a turn was interrupted by process
 /// death. Synthesized as a normal user message for history consistency.
@@ -3010,6 +3011,9 @@ fn mcp_permission_args(
     }
     if !permissions.post_conversation_update {
         args.push("--disable-post-conversation-update".into());
+    }
+    if !permissions.post_git_update {
+        args.push("--disable-post-git-update".into());
     }
     args
 }

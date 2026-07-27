@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import {
   FolderGit2,
@@ -9,6 +10,7 @@ import {
   Circle,
 } from "lucide-react";
 import { CreateProjectEmpty } from "@/features/work/CreateProjectEmpty";
+import { SidebarUpdateCard } from "@/features/settings/SidebarUpdateCard";
 import { useUiStore, type PrimaryNav } from "@/store/ui-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import {
@@ -47,6 +49,7 @@ export function Sidebar() {
   const connection = useWorkspaceStore((s) => s.connection);
   const source = useWorkspaceStore((s) => s.source);
   const reduceMotion = useReducedMotion();
+  const [updateDismissed, setUpdateDismissed] = useState(false);
   const attention = projects.reduce((sum, p) => sum + p.needsAttention, 0);
   // v1: only local daemon is wired; relayLinked stays false → "Local only".
   const presence = deriveHostPresence({
@@ -199,6 +202,9 @@ export function Sidebar() {
       </div>
 
       <SidebarConnectionCard />
+      {!updateDismissed ? (
+        <SidebarUpdateCard onDismiss={() => setUpdateDismissed(true)} />
+      ) : null}
 
       <div className="border-t border-ink/5 px-3 py-2">
         <Tooltip>

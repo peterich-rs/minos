@@ -50,6 +50,13 @@ pub enum SocketRequest {
         source_session_id: Option<String>,
         message: String,
     },
+    PostGitUpdate {
+        conversation_id: String,
+        source_agent: Option<String>,
+        source_session_id: Option<String>,
+        /// JSON object matching minos_protocol::GitActivity (tagged `kind`).
+        activity: serde_json::Value,
+    },
     Ping,
 }
 

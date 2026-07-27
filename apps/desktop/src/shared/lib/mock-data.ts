@@ -78,10 +78,16 @@ export type Conversation = {
   participatingAgents: string[];
   runningCount: number;
   approvalCount: number;
-  /** Git branch snapshot at conversation create time. */
+  /** Git branch for this conversation work unit. */
   branch?: string;
-  /** Optional linked git worktree path snapshot at create. */
+  /** Optional linked git worktree path. */
   worktree?: string;
+  /** Git isolation mode: inherit | worktree. */
+  gitMode?: string;
+  /** Cached dirty flag from last git status refresh. */
+  gitDirty?: boolean;
+  /** Cached HEAD from last git status refresh. */
+  gitHead?: string;
   /** User priority tag; omit when unset. */
   priority?: ConversationPriority;
   /** Workflow progress (default todo). */
@@ -96,6 +102,28 @@ export type TimelineMention = {
 
 export type DeliveryStatus = "sending" | "sent" | "failed";
 
+/** Git milestone shown as a dedicated timeline card. */
+export type TimelineGitActivity = {
+  kind:
+    | "worktree_created"
+    | "commits_made"
+    | "pr_opened"
+    | "checks_failed"
+    | "ready_for_review"
+    | "merged";
+  branch?: string;
+  worktreePath?: string;
+  baseBranch?: string;
+  count?: number;
+  subjects?: string[];
+  head?: string;
+  url?: string;
+  number?: number;
+  title?: string;
+  summary?: string;
+  mergeCommit?: string;
+};
+
 export type TimelineMessage = {
   id: string;
   /** Durable sort key from daemon; optimistic rows may omit until reload. */
@@ -106,10 +134,11 @@ export type TimelineMessage = {
   body: string;
   time: string;
   createdAtMs?: number;
-  kind?: "text" | "tool_summary" | "approval";
+  kind?: "text" | "tool_summary" | "approval" | "git_activity";
   replyToMessageId?: string;
   delegationId?: string;
   mentions?: TimelineMention[];
+  gitActivity?: TimelineGitActivity;
   /**
    * Local delivery lifecycle for user messages.
    * - `sending`: optimistic bubble shown immediately, awaiting append/RPC ack.

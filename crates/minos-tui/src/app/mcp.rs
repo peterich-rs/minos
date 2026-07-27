@@ -238,6 +238,54 @@ impl App {
                     data: Some(serde_json::json!({ "accepted": true })),
                 })
             }
+            SocketRequest::PostGitUpdate {
+                conversation_id,
+                source_agent,
+                source_session_id,
+                activity,
+            } => {
+                self.ensure_mcp_conversation(&conversation_id)?;
+                let source_agent = source_agent
+                    .as_deref()
+                    .map(|agent| {
+                        parse_agent_name(agent)
+                            .ok_or_else(|| anyhow::anyhow!("unknown source agent: {agent}"))
+                    })
+                    .transpose()?;
+                self.validate_mcp_source_session(
+                    &conversation_id,
+                    source_agent,
+                    source_session_id.as_deref(),
+                )
+                .await?;
+                let activity: minos_protocol::GitActivity = serde_json::from_value(activity)
+                    .map_err(|e| anyhow::anyhow!("invalid git activity payload: {e}"))?;
+                // Embed structured payload the same way daemon git::activity does.
+                let json = serde_json::to_string(&activity)?;
+                let body = format!(
+                    "Git activity\n\n<!--minos-git-activity:{json}-->"
+                );
+                let sender_role = if source_agent.is_some() {
+                    "agent"
+                } else {
+                    "user"
+                };
+                self.backend
+                    .append_conversation_message(
+                        &conversation_id,
+                        None,
+                        source_session_id.as_deref(),
+                        sender_role,
+                        source_agent,
+                        &body,
+                    )
+                    .await?;
+                self.refresh_current_conversation_messages(&conversation_id)
+                    .await;
+                Ok(SocketResponse::Ok {
+                    data: Some(serde_json::json!({ "accepted": true })),
+                })
+            }
         }
     }
 

@@ -490,8 +490,8 @@ impl LocalStore {
         sqlx::query(
             "INSERT INTO conversations( \
                 conversation_id, project_id, title, created_at_ms, updated_at_ms, \
-                priority, progress, branch, worktree_path \
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                priority, progress, branch, worktree_path, git_mode, git_dirty, git_head \
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(conversation_id)
         .bind(project_id)
@@ -502,9 +502,45 @@ impl LocalStore {
         .bind(progress)
         .bind(meta.branch.as_deref())
         .bind(meta.worktree_path.as_deref())
+        .bind(meta.git_mode.as_deref())
+        .bind(meta.git_dirty.map(|d| if d { 1i64 } else { 0 }))
+        .bind(meta.git_head.as_deref())
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Persist live git binding fields for a conversation work unit.
+    pub async fn update_conversation_git_fields(
+        &self,
+        conversation_id: &str,
+        branch: Option<&str>,
+        worktree_path: Option<&str>,
+        git_mode: Option<&str>,
+        git_dirty: Option<bool>,
+        git_head: Option<&str>,
+        ts_ms: i64,
+    ) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            "UPDATE conversations SET \
+                branch = ?, \
+                worktree_path = ?, \
+                git_mode = COALESCE(?, git_mode), \
+                git_dirty = ?, \
+                git_head = ?, \
+                updated_at_ms = ? \
+             WHERE conversation_id = ?",
+        )
+        .bind(branch)
+        .bind(worktree_path)
+        .bind(git_mode)
+        .bind(git_dirty.map(|d| if d { 1i64 } else { 0 }))
+        .bind(git_head)
+        .bind(ts_ms)
+        .bind(conversation_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
     }
 
     pub async fn get_conversation(
@@ -1139,6 +1175,9 @@ const CONVERSATION_SELECT_COLS: &str = "\
     COALESCE(c.progress, 'todo') AS progress, \
     c.branch, \
     c.worktree_path, \
+    c.git_mode, \
+    c.git_dirty, \
+    c.git_head, \
     (SELECT COUNT(*) FROM sessions th \
      WHERE th.conversation_id = c.conversation_id \
        AND th.status IN ('starting', 'running', 'resuming')) AS running_count, \
@@ -1155,6 +1194,9 @@ pub struct ConversationCreateMeta {
     pub progress: Option<String>,
     pub branch: Option<String>,
     pub worktree_path: Option<String>,
+    pub git_mode: Option<String>,
+    pub git_dirty: Option<bool>,
+    pub git_head: Option<String>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -1171,6 +1213,9 @@ pub struct ConversationRow {
     pub progress: String,
     pub branch: Option<String>,
     pub worktree_path: Option<String>,
+    pub git_mode: Option<String>,
+    pub git_dirty: Option<i64>,
+    pub git_head: Option<String>,
     pub running_count: i64,
     pub needs_attention_count: i64,
 }
@@ -1372,6 +1417,9 @@ mod tests {
                     progress: Some("todo".into()),
                     branch: Some("feature/jwt".into()),
                     worktree_path: Some("/tmp/wt/jwt".into()),
+                    git_mode: Some("worktree".into()),
+                    git_dirty: Some(false),
+                    git_head: Some("abc1234".into()),
                 },
             )
             .await
@@ -1383,6 +1431,9 @@ mod tests {
         assert_eq!(row.progress, "todo");
         assert_eq!(row.branch.as_deref(), Some("feature/jwt"));
         assert_eq!(row.worktree_path.as_deref(), Some("/tmp/wt/jwt"));
+        assert_eq!(row.git_mode.as_deref(), Some("worktree"));
+        assert_eq!(row.git_dirty, Some(0));
+        assert_eq!(row.git_head.as_deref(), Some("abc1234"));
 
         store
             .update_conversation_fields(

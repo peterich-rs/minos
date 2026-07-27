@@ -1,0 +1,411 @@
+# Desktop release + Tauri auto-updater.
+#
+# Builds installers, signs updater archives with minisign
+# (TAURI_SIGNING_PRIVATE_KEY), publishes:
+#   - vX.Y.Z                 human-facing assets
+#   - minos-desktop-latest   rolling latest.json + updater archives
+#
+# Required secrets:
+#   MINOS_UPDATER_PUBLIC_KEY
+#   TAURI_SIGNING_PRIVATE_KEY
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  (empty string OK)
+#
+# Optional Apple secrets (macOS codesign + notarize when all present):
+#   APPLE_CERTIFICATE          base64 .p12
+#   APPLE_CERTIFICATE_PASSWORD
+#   APPLE_SIGNING_IDENTITY     e.g. "Developer ID Application: …"
+#   APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID
+#
+# See docs/desktop-auto-update.md
+
+name: desktop-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver to publish (must match apps/desktop package version or will be patched)"
+        required: true
+        type: string
+      create_tag:
+        description: "Create git tag vX.Y.Z from the checkout SHA"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ github.event.inputs.version }}
+  cancel-in-progress: false
+
+env:
+  MINOS_UPDATER_ENDPOINT: https://github.com/${{ github.repository }}/releases/download/minos-desktop-latest/latest.json
+
+jobs:
+  prepare:
+    name: Prepare version + rolling release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Normalize version
+        id: meta
+        run: |
+          set -euo pipefail
+          V="${{ github.event.inputs.version }}"
+          V="${V#v}"
+          if [[ ! "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-].*)?$ ]]; then
+            echo "::error::invalid version: $V"
+            exit 1
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "tag=v$V" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update versioned release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            EXTRA=()
+            if [[ "${{ github.event.inputs.create_tag }}" == "true" ]]; then
+              EXTRA+=(--target "${{ github.sha }}")
+            fi
+            gh release create "$TAG" \
+              --title "Minos Desktop $VERSION" \
+              --notes "Desktop release $VERSION. Prefer the auto-updater for upgrades; use installers below for fresh installs." \
+              "${EXTRA[@]}" || gh release create "$TAG" --title "Minos Desktop $VERSION" --notes "Desktop $VERSION" --generate-notes
+          fi
+
+      - name: Ensure rolling minos-desktop-latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view minos-desktop-latest >/dev/null 2>&1; then
+            gh release edit minos-desktop-latest \
+              --title "Minos Desktop auto-updater (rolling)" \
+              --notes "Rolling release for the Tauri auto-updater. Prefer versioned releases for manual installs."
+          else
+            # Rolling tag is moved each release; create lightweight if missing.
+            git tag -f minos-desktop-latest "${{ github.sha }}"
+            git push -f origin minos-desktop-latest || true
+            gh release create minos-desktop-latest \
+              --title "Minos Desktop auto-updater (rolling)" \
+              --notes "Rolling release for the Tauri auto-updater. Do not download installers from here for first install — use a versioned vX.Y.Z release." \
+              --target "${{ github.sha }}" || \
+            gh release create minos-desktop-latest \
+              --title "Minos Desktop auto-updater (rolling)" \
+              --notes "Rolling updater channel." \
+              --latest=false
+          fi
+
+  build-macos-aarch64:
+    name: macOS aarch64
+    needs: prepare
+    runs-on: macos-14
+    outputs:
+      platform_key: darwin-aarch64
+      archive_name: ${{ steps.pack.outputs.archive_name }}
+      has_sig: ${{ steps.pack.outputs.has_sig }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+
+      - name: Install frontend deps
+        working-directory: apps/desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Patch desktop version
+        working-directory: apps/desktop
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          node -e "
+            const fs=require('fs');
+            const v=process.env.VERSION;
+            for (const f of ['package.json','src-tauri/tauri.conf.json']) {
+              const j=JSON.parse(fs.readFileSync(f,'utf8'));
+              j.version=v;
+              fs.writeFileSync(f, JSON.stringify(j,null,2)+'\n');
+            }
+            console.log('version ->', v);
+          "
+
+      - name: Require updater secrets
+        env:
+          MINOS_UPDATER_PUBLIC_KEY: ${{ secrets.MINOS_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          test -n "$MINOS_UPDATER_PUBLIC_KEY" || { echo "missing MINOS_UPDATER_PUBLIC_KEY"; exit 1; }
+          test -n "$TAURI_SIGNING_PRIVATE_KEY" || { echo "missing TAURI_SIGNING_PRIVATE_KEY"; exit 1; }
+
+      - name: Write release config
+        working-directory: apps/desktop
+        env:
+          MINOS_UPDATER_PUBLIC_KEY: ${{ secrets.MINOS_UPDATER_PUBLIC_KEY }}
+          MINOS_UPDATER_ENDPOINT: ${{ env.MINOS_UPDATER_ENDPOINT }}
+        run: node scripts/build-release-config.mjs
+
+      - name: Import Apple certificate (optional)
+        id: apple
+        if: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.APPLE_SIGNING_IDENTITY != '' }}
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          KEYCHAIN="$RUNNER_TEMP/minos-signing.keychain-db"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p actions "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p actions "$KEYCHAIN"
+          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions "$KEYCHAIN"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build Tauri (macOS aarch64)
+        working-directory: apps/desktop
+        env:
+          MINOS_UPDATER_PUBLIC_KEY: ${{ secrets.MINOS_UPDATER_PUBLIC_KEY }}
+          MINOS_UPDATER_ENDPOINT: ${{ env.MINOS_UPDATER_ENDPOINT }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          ARGS=(build --target aarch64-apple-darwin --config src-tauri/tauri.release.conf.json)
+          if [[ "${{ steps.apple.outputs.enabled }}" != "true" ]]; then
+            echo "::warning::Apple signing secrets not fully configured; building with --no-sign"
+            ARGS+=(--no-sign)
+          fi
+          pnpm tauri "${ARGS[@]}"
+
+      - name: Package updater archive if missing
+        id: pack
+        working-directory: apps/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          BUNDLE="src-tauri/target/aarch64-apple-darwin/release/bundle"
+          APP=$(find "$BUNDLE/macos" -maxdepth 1 -name '*.app' -type d | head -1)
+          if [[ -z "$APP" ]]; then
+            echo "::error::No .app found under $BUNDLE/macos"
+            exit 1
+          fi
+          APP_NAME=$(basename "$APP")
+          ARCHIVE="$BUNDLE/macos/${APP_NAME}.tar.gz"
+          if [[ ! -f "$ARCHIVE" ]]; then
+            (cd "$BUNDLE/macos" && tar -czf "${APP_NAME}.tar.gz" "$APP_NAME")
+          fi
+          if [[ ! -f "${ARCHIVE}.sig" ]]; then
+            pnpm tauri signer sign "$ARCHIVE"
+          fi
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+          echo "archive_name=$(basename "$ARCHIVE")" >> "$GITHUB_OUTPUT"
+          echo "has_sig=true" >> "$GITHUB_OUTPUT"
+          # DMG for human install
+          DMG=$(find "$BUNDLE/dmg" -name '*.dmg' -type f 2>/dev/null | head -1 || true)
+          echo "dmg=${DMG:-}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifacts to GitHub releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          ARCHIVE: ${{ steps.pack.outputs.archive }}
+          DMG: ${{ steps.pack.outputs.dmg }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Stable names for latest.json URLs
+          STABLE_ARCHIVE="Minos_${VERSION}_aarch64.app.tar.gz"
+          cp "$ARCHIVE" "$STABLE_ARCHIVE"
+          cp "${ARCHIVE}.sig" "${STABLE_ARCHIVE}.sig"
+          gh release upload "$TAG" "$STABLE_ARCHIVE" "${STABLE_ARCHIVE}.sig" --clobber
+          gh release upload minos-desktop-latest "$STABLE_ARCHIVE" "${STABLE_ARCHIVE}.sig" --clobber
+          if [[ -n "${DMG:-}" && -f "$DMG" ]]; then
+            gh release upload "$TAG" "$DMG" --clobber
+          fi
+          # Stash sig text for assemble job
+          mkdir -p /tmp/sigout
+          cp "${STABLE_ARCHIVE}.sig" /tmp/sigout/darwin-aarch64.sig
+          echo "https://github.com/${{ github.repository }}/releases/download/minos-desktop-latest/${STABLE_ARCHIVE}" > /tmp/sigout/darwin-aarch64.url
+
+      - name: Upload sig meta artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-meta-darwin-aarch64
+          path: /tmp/sigout/*
+
+  build-linux-x86_64:
+    name: Linux x86_64 AppImage
+    needs: prepare
+    runs-on: ubuntu-22.04
+    outputs:
+      platform_key: linux-x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf libssl-dev libgtk-3-dev
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+
+      - name: Install frontend deps
+        working-directory: apps/desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Patch desktop version
+        working-directory: apps/desktop
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          node -e "
+            const fs=require('fs');
+            const v=process.env.VERSION;
+            for (const f of ['package.json','src-tauri/tauri.conf.json']) {
+              const j=JSON.parse(fs.readFileSync(f,'utf8'));
+              j.version=v;
+              fs.writeFileSync(f, JSON.stringify(j,null,2)+'\n');
+            }
+          "
+
+      - name: Write release config
+        working-directory: apps/desktop
+        env:
+          MINOS_UPDATER_PUBLIC_KEY: ${{ secrets.MINOS_UPDATER_PUBLIC_KEY }}
+          MINOS_UPDATER_ENDPOINT: ${{ env.MINOS_UPDATER_ENDPOINT }}
+        run: node scripts/build-release-config.mjs
+
+      - name: Build Tauri AppImage
+        working-directory: apps/desktop
+        env:
+          MINOS_UPDATER_PUBLIC_KEY: ${{ secrets.MINOS_UPDATER_PUBLIC_KEY }}
+          MINOS_UPDATER_ENDPOINT: ${{ env.MINOS_UPDATER_ENDPOINT }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm tauri build --bundles appimage --config src-tauri/tauri.release.conf.json
+
+      - name: Locate AppImage + sig
+        id: pack
+        working-directory: apps/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          BUNDLE="src-tauri/target/release/bundle"
+          APPIMAGE=$(find "$BUNDLE/appimage" -name '*.AppImage' -type f | head -1)
+          test -n "$APPIMAGE"
+          if [[ ! -f "${APPIMAGE}.sig" ]]; then
+            pnpm tauri signer sign "$APPIMAGE"
+          fi
+          echo "appimage=$APPIMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Linux assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          APPIMAGE: ${{ steps.pack.outputs.appimage }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          STABLE="Minos_${VERSION}_amd64.AppImage"
+          cp "$APPIMAGE" "$STABLE"
+          cp "${APPIMAGE}.sig" "${STABLE}.sig"
+          gh release upload "$TAG" "$STABLE" "${STABLE}.sig" --clobber
+          gh release upload minos-desktop-latest "$STABLE" "${STABLE}.sig" --clobber
+          mkdir -p /tmp/sigout
+          cp "${STABLE}.sig" /tmp/sigout/linux-x86_64.sig
+          echo "https://github.com/${{ github.repository }}/releases/download/minos-desktop-latest/${STABLE}" > /tmp/sigout/linux-x86_64.url
+
+      - name: Upload sig meta artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-meta-linux-x86_64
+          path: /tmp/sigout/*
+
+  assemble-latest-json:
+    name: Assemble latest.json
+    needs: [prepare, build-macos-aarch64, build-linux-x86_64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download platform meta
+        uses: actions/download-artifact@v4
+        with:
+          pattern: updater-meta-*
+          merge-multiple: true
+          path: meta
+
+      - name: Generate and upload latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          chmod +x apps/desktop/scripts/generate-latest-json.sh
+          TRIPLES=()
+          for platform in darwin-aarch64 linux-x86_64; do
+            SIG="meta/${platform}.sig"
+            URL_FILE="meta/${platform}.url"
+            if [[ -f "$SIG" && -f "$URL_FILE" ]]; then
+              URL=$(cat "$URL_FILE")
+              TRIPLES+=("${platform}:${SIG}:${URL}")
+            else
+              echo "::warning::missing meta for $platform — skipping"
+            fi
+          done
+          if [[ ${#TRIPLES[@]} -eq 0 ]]; then
+            echo "::error::no platform meta collected"
+            exit 1
+          fi
+          apps/desktop/scripts/generate-latest-json.sh "$VERSION" "${TRIPLES[@]}" > latest.json
+          cat latest.json
+          gh release upload minos-desktop-latest latest.json --clobber
+          # Also attach to versioned release for audit
+          gh release upload "v${VERSION}" latest.json --clobber

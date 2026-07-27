@@ -92,6 +92,7 @@ struct McpSidecarArgs {
 
     #[arg(long)]
     disable_post_conversation_update: bool,
+    disable_post_git_update: bool,
 }
 
 impl McpSidecarArgs {
@@ -113,6 +114,7 @@ impl McpSidecarArgs {
                 wait_delegation: !self.disable_wait_delegation,
                 cancel_delegation: !self.disable_cancel_delegation,
                 post_conversation_update: !self.disable_post_conversation_update,
+                post_git_update: !self.disable_post_git_update,
             },
         })
         .await

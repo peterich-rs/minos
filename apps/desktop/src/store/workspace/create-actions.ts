@@ -37,6 +37,7 @@ export function createWorkspaceActions(
   | "sendMessage"
   | "retryFailedMessage"
   | "createConversation"
+  | "refreshConversationGitStatus"
   | "updateConversationTitle"
   | "cycleConversationPriority"
   | "cycleConversationProgress"

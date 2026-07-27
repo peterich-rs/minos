@@ -273,6 +273,7 @@ fn create_conversation_request(
         title: title.to_owned(),
         priority: None,
         agents,
+        git_mode: None,
     }
 }
 

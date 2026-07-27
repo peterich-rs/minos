@@ -106,6 +106,17 @@ export function TimelineHeader({
             <MetaChip>
               <GitBranch className="h-3 w-3 shrink-0 text-ink-muted" />
               <span className="truncate">{conversation.branch}</span>
+              {conversation.gitDirty ? (
+                <span
+                  className="ml-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500"
+                  title={
+                    conversation.gitHead
+                      ? `Uncommitted changes @ ${conversation.gitHead}`
+                      : "Uncommitted changes"
+                  }
+                  aria-label="dirty working tree"
+                />
+              ) : null}
             </MetaChip>
           ) : null}
           {conversation.worktree ? (

@@ -320,6 +320,65 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
             .map_err(rpc_err)
     }
 
+    async fn git_get_status(
+        &self,
+        req: minos_protocol::GitStatusParams,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::GitStatusResponse> {
+        self.agent.git_get_status(req).await.map_err(rpc_err)
+    }
+
+    async fn git_get_diff(
+        &self,
+        req: minos_protocol::GitDiffParams,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::GitDiffResponse> {
+        self.agent.git_get_diff(req).await.map_err(rpc_err)
+    }
+
+    async fn git_create_worktree(
+        &self,
+        req: minos_protocol::GitCreateWorktreeParams,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::GitCreateWorktreeResponse> {
+        self.agent.git_create_worktree(req).await.map_err(rpc_err)
+    }
+
+    async fn git_remove_worktree(
+        &self,
+        req: minos_protocol::GitRemoveWorktreeParams,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::GitRemoveWorktreeResponse> {
+        self.agent.git_remove_worktree(req).await.map_err(rpc_err)
+    }
+
+    async fn git_ensure_identity(
+        &self,
+        req: minos_protocol::GitEnsureIdentityParams,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::GitEnsureIdentityResponse> {
+        self.agent.git_ensure_identity(req).await.map_err(rpc_err)
+    }
+
+    async fn git_push_branch(
+        &self,
+        req: minos_protocol::GitPushBranchParams,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::GitPushBranchResponse> {
+        self.agent.git_push_branch(req).await.map_err(rpc_err)
+    }
+
+    async fn git_open_pull_request(
+        &self,
+        req: minos_protocol::GitOpenPullRequestParams,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::GitOpenPullRequestResponse> {
+        self.agent
+            .git_open_pull_request(req)
+            .await
+            .map_err(rpc_err)
+    }
+
+    async fn post_git_update(
+        &self,
+        req: minos_protocol::PostGitUpdateParams,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::PostGitUpdateResponse> {
+        self.agent.post_git_update(req).await.map_err(rpc_err)
+    }
+
     async fn read_session_raw_history(
         &self,
         req: ReadSessionParams,

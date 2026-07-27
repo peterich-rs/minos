@@ -38,6 +38,9 @@ struct Args {
 
     #[arg(long)]
     disable_post_conversation_update: bool,
+
+    #[arg(long)]
+    disable_post_git_update: bool,
 }
 
 #[tokio::main]
@@ -60,6 +63,7 @@ async fn main() -> Result<()> {
             wait_delegation: !args.disable_wait_delegation,
             cancel_delegation: !args.disable_cancel_delegation,
             post_conversation_update: !args.disable_post_conversation_update,
+            post_git_update: !args.disable_post_git_update,
         },
     })
     .await

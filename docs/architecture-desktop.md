@@ -47,6 +47,7 @@
 | 状态 | Zustand 5 + TanStack Query 5 | **混合**：RQ 管 catalog/index 只读列表（projects/conversations/**projectSessions**/inspectorSessions/clis/profiles/models）；Zustand 管 timeline/transcript/SessionEntity/乐观发送/UI 指针（L0–L6） |
 | 图标 | Lucide React | 导航与工具栏 |
 | 本机 API | `@tauri-apps/api` | `invoke` → Rust |
+| 自动更新 | `tauri-plugin-updater` + `plugin-process` | 仅 release 构建启用；见 [desktop-auto-update.md](./desktop-auto-update.md) |
 
 ## 信息架构
 
