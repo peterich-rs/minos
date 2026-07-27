@@ -105,7 +105,9 @@ impl TeamworkMcpTool for PostGitUpdateTool {
 
     fn to_socket_request(&self, ctx: ToolCallContext, args: Value) -> Result<SocketRequest> {
         let conversation_id = bound_conversation_id(&args, &ctx, self.name())?;
-        let kind = required_string_arg(&args, "kind")?.trim().to_ascii_lowercase();
+        let kind = required_string_arg(&args, "kind")?
+            .trim()
+            .to_ascii_lowercase();
         let activity = build_activity(&kind, &args)?;
         Ok(SocketRequest::PostGitUpdate {
             conversation_id,
@@ -176,7 +178,10 @@ fn build_activity(kind: &str, args: &Value) -> Result<Value> {
     map.insert("kind".into(), json!(kind));
     match kind {
         "worktree_created" => {
-            map.insert("branch".into(), json!(capped_required(args, "branch", MAX_BRANCH_LEN)?));
+            map.insert(
+                "branch".into(),
+                json!(capped_required(args, "branch", MAX_BRANCH_LEN)?),
+            );
             map.insert(
                 "worktree_path".into(),
                 json!(capped_required(args, "worktree_path", MAX_PATH_LEN)?),
@@ -200,7 +205,10 @@ fn build_activity(kind: &str, args: &Value) -> Result<Value> {
             }
         }
         "pr_opened" => {
-            map.insert("url".into(), json!(capped_required(args, "url", MAX_URL_LEN)?));
+            map.insert(
+                "url".into(),
+                json!(capped_required(args, "url", MAX_URL_LEN)?),
+            );
             if let Some(n) = args.get("number").and_then(Value::as_u64) {
                 map.insert("number".into(), json!(n));
             }
@@ -215,7 +223,10 @@ fn build_activity(kind: &str, args: &Value) -> Result<Value> {
             );
         }
         "ready_for_review" => {
-            map.insert("branch".into(), json!(capped_required(args, "branch", MAX_BRANCH_LEN)?));
+            map.insert(
+                "branch".into(),
+                json!(capped_required(args, "branch", MAX_BRANCH_LEN)?),
+            );
             if let Some(head) = capped_optional(args, "head", MAX_HEAD_LEN)? {
                 map.insert("head".into(), json!(head));
             }

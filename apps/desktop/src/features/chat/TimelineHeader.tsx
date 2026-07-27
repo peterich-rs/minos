@@ -108,6 +108,7 @@ export function TimelineHeader({
               <span className="truncate">{conversation.branch}</span>
               {conversation.gitDirty ? (
                 <span
+                  role="img"
                   className="ml-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500"
                   title={
                     conversation.gitHead

@@ -17,9 +17,7 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 /// Attach `tauri-plugin-updater` only for release binaries built with updater secrets.
-fn maybe_register_updater(
-    builder: tauri::Builder<tauri::Wry>,
-) -> tauri::Builder<tauri::Wry> {
+fn maybe_register_updater(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     #[cfg(minos_updater_enabled)]
     {
         if !cfg!(debug_assertions) {

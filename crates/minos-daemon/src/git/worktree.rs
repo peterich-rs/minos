@@ -141,9 +141,7 @@ pub fn create_conversation_worktree(
     }
     let toplevel = show_toplevel(project_workspace)?;
     let repo_lock = lock_for_repo(&toplevel);
-    let _guard = repo_lock
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _guard = repo_lock.lock().unwrap_or_else(|e| e.into_inner());
     create_conversation_worktree_locked(&toplevel, conversation_id, title)
 }
 
@@ -162,12 +160,8 @@ fn create_conversation_worktree_locked(
         .collect();
     let dir_name = format!("{}-{}", slugify_segment(title, 24), short_id);
     let root = worktrees_root_for_repo(toplevel);
-    std::fs::create_dir_all(&root).map_err(|e| {
-        format!(
-            "failed to create worktrees root {}: {e}",
-            root.display()
-        )
-    })?;
+    std::fs::create_dir_all(&root)
+        .map_err(|e| format!("failed to create worktrees root {}: {e}", root.display()))?;
     let path = root.join(dir_name);
 
     if path.is_dir() && is_inside_work_tree(&path) {
@@ -222,10 +216,7 @@ pub fn remove_conversation_worktree(
     }
     let toplevel = show_toplevel(project_workspace)?;
     let path_str = worktree_path.to_string_lossy().into_owned();
-    match run_git(
-        &toplevel,
-        &["worktree", "remove", "--force", &path_str],
-    ) {
+    match run_git(&toplevel, &["worktree", "remove", "--force", &path_str]) {
         Ok(_) => Ok(()),
         Err(_) => {
             // Last resort: prune + delete directory.
@@ -365,8 +356,8 @@ mod tests {
         assert!(wt.is_some());
 
         // Idempotent reuse
-        let again = create_conversation_worktree(&repo, "conv-abcdef12", "Fix Auth Flow")
-            .expect("reuse");
+        let again =
+            create_conversation_worktree(&repo, "conv-abcdef12", "Fix Auth Flow").expect("reuse");
         assert!(!again.created);
         assert_eq!(again.path, result.path);
     }
@@ -383,8 +374,8 @@ mod tests {
         git_ok(&repo, &["add", "README"]);
         git_ok(&repo, &["commit", "-m", "init"]);
 
-        let orphan = create_conversation_worktree(&repo, "conv-orphan01", "Orphan")
-            .expect("orphan wt");
+        let orphan =
+            create_conversation_worktree(&repo, "conv-orphan01", "Orphan").expect("orphan wt");
         assert!(orphan.path.is_dir());
 
         let report = prune_orphan_worktrees(&[], &[repo.clone()]);

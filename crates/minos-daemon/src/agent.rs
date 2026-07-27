@@ -1343,17 +1343,17 @@ impl AgentGlue {
                     match crate::git::create_conversation_worktree(ws, &conversation_id, title) {
                         Ok(wt) => {
                             branch = Some(wt.branch.clone());
-                            worktree_path =
-                                Some(wt.path.to_string_lossy().into_owned());
+                            worktree_path = Some(wt.path.to_string_lossy().into_owned());
                             if let Ok(live) = crate::git::detect_live_status(&wt.path) {
                                 git_dirty = Some(live.dirty);
                                 git_head = live.short_head.or(live.head);
                             }
-                            worktree_activity = Some(minos_protocol::GitActivity::WorktreeCreated {
-                                branch: wt.branch,
-                                worktree_path: wt.path.to_string_lossy().into_owned(),
-                                base_branch: wt.base_branch,
-                            });
+                            worktree_activity =
+                                Some(minos_protocol::GitActivity::WorktreeCreated {
+                                    branch: wt.branch,
+                                    worktree_path: wt.path.to_string_lossy().into_owned(),
+                                    base_branch: wt.base_branch,
+                                });
                         }
                         Err(err) => {
                             tracing::warn!(
@@ -1432,13 +1432,7 @@ impl AgentGlue {
 
         if let Some(activity) = worktree_activity {
             if let Err(e) = self
-                .post_git_activity_message(
-                    &conversation_id,
-                    activity,
-                    None,
-                    None,
-                    now_ms,
-                )
+                .post_git_activity_message(&conversation_id, activity, None, None, now_ms)
                 .await
             {
                 tracing::warn!(
@@ -2015,16 +2009,13 @@ impl AgentGlue {
                 method: "git.refresh".into(),
                 message: format!("conversation not found: {conversation_id}"),
             })?;
-        let worktree_path = conversation
-            .worktree_path
-            .clone()
-            .or_else(|| {
-                if live.is_linked_worktree {
-                    Some(live.path.to_string_lossy().into_owned())
-                } else {
-                    None
-                }
-            });
+        let worktree_path = conversation.worktree_path.clone().or_else(|| {
+            if live.is_linked_worktree {
+                Some(live.path.to_string_lossy().into_owned())
+            } else {
+                None
+            }
+        });
         let now_ms = current_unix_ms();
         self.store
             .update_conversation_git_fields(
@@ -2102,12 +2093,11 @@ impl AgentGlue {
                 req.path.as_deref(),
             )
             .await?;
-        let live = crate::git::detect_live_status(&path).map_err(|e| {
-            MinosError::CodexProtocolError {
+        let live =
+            crate::git::detect_live_status(&path).map_err(|e| MinosError::CodexProtocolError {
                 method: "git_get_status".into(),
                 message: e,
-            }
-        })?;
+            })?;
         let conversation = if req.refresh_conversation {
             if let Some(cid) = req.conversation_id.as_deref() {
                 self.refresh_conversation_git_cache(cid, &path).await?;
@@ -2164,12 +2154,13 @@ impl AgentGlue {
                 req.path.as_deref(),
             )
             .await?;
-        let diff = crate::git::get_diff(&path, req.base.as_deref(), req.head.as_deref()).map_err(
-            |e| MinosError::CodexProtocolError {
-                method: "git_get_diff".into(),
-                message: e,
-            },
-        )?;
+        let diff =
+            crate::git::get_diff(&path, req.base.as_deref(), req.head.as_deref()).map_err(|e| {
+                MinosError::CodexProtocolError {
+                    method: "git_get_diff".into(),
+                    message: e,
+                }
+            })?;
         Ok(minos_protocol::GitDiffResponse {
             path: path.to_string_lossy().into_owned(),
             base: diff.base,
@@ -2227,11 +2218,12 @@ impl AgentGlue {
                 method: "git_create_worktree".into(),
                 message: "project has no workspace path".into(),
             })?;
-        let wt = crate::git::create_conversation_worktree(ws, &req.conversation_id, &conversation.title)
-            .map_err(|e| MinosError::CodexProtocolError {
-                method: "git_create_worktree".into(),
-                message: e,
-            })?;
+        let wt =
+            crate::git::create_conversation_worktree(ws, &req.conversation_id, &conversation.title)
+                .map_err(|e| MinosError::CodexProtocolError {
+                    method: "git_create_worktree".into(),
+                    message: e,
+                })?;
         let live = crate::git::detect_live_status(&wt.path).ok();
         let now_ms = current_unix_ms();
         self.store
@@ -2387,16 +2379,16 @@ impl AgentGlue {
             .resolve_git_checkout_path(Some(&req.conversation_id), None, None)
             .await?;
         let id = crate::git::read_identity(&path);
-        id.ensure_complete().map_err(|e| MinosError::CodexProtocolError {
-            method: "git_push_branch".into(),
-            message: e,
-        })?;
-        let live = crate::git::detect_live_status(&path).map_err(|e| {
-            MinosError::CodexProtocolError {
+        id.ensure_complete()
+            .map_err(|e| MinosError::CodexProtocolError {
                 method: "git_push_branch".into(),
                 message: e,
-            }
-        })?;
+            })?;
+        let live =
+            crate::git::detect_live_status(&path).map_err(|e| MinosError::CodexProtocolError {
+                method: "git_push_branch".into(),
+                message: e,
+            })?;
         if live.dirty {
             return Err(MinosError::CodexProtocolError {
                 method: "git_push_branch".into(),
@@ -2427,7 +2419,9 @@ impl AgentGlue {
             method: "git_push_branch".into(),
             message: e,
         })?;
-        let _ = self.refresh_conversation_git_cache(&req.conversation_id, &path).await;
+        let _ = self
+            .refresh_conversation_git_cache(&req.conversation_id, &path)
+            .await;
         Ok(minos_protocol::GitPushBranchResponse {
             branch,
             remote: remote.to_owned(),
@@ -2452,16 +2446,18 @@ impl AgentGlue {
                 method: "git_open_pull_request".into(),
                 message: format!("conversation not found: {}", req.conversation_id),
             })?;
-        let live = crate::git::detect_live_status(&path).map_err(|e| {
-            MinosError::CodexProtocolError {
+        let live =
+            crate::git::detect_live_status(&path).map_err(|e| MinosError::CodexProtocolError {
                 method: "git_open_pull_request".into(),
                 message: e,
-            }
-        })?;
-        let branch = live.branch.clone().ok_or_else(|| MinosError::CodexProtocolError {
-            method: "git_open_pull_request".into(),
-            message: "detached HEAD cannot open a pull request".into(),
-        })?;
+            })?;
+        let branch = live
+            .branch
+            .clone()
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "git_open_pull_request".into(),
+                message: "detached HEAD cannot open a pull request".into(),
+            })?;
         let title = req
             .title
             .as_deref()
@@ -2518,10 +2514,7 @@ impl AgentGlue {
                 message: "gh pr create succeeded but returned no URL".into(),
             });
         }
-        let number = url
-            .rsplit('/')
-            .next()
-            .and_then(|s| s.parse::<u32>().ok());
+        let number = url.rsplit('/').next().and_then(|s| s.parse::<u32>().ok());
         let now_ms = current_unix_ms();
         let activity = minos_protocol::GitActivity::PrOpened {
             url: url.clone(),
@@ -3819,8 +3812,8 @@ async fn handle_daemon_mcp_request(
                 .map_err(|e| anyhow::anyhow!("invalid git activity payload: {e}"))?;
             // Use AgentGlue helpers via a short-lived path: open store rows already loaded.
             // Re-implement post path inline to avoid requiring full AgentGlue in this free function.
-            let body = crate::git::format_activity_body(&activity)
-                .map_err(|e| anyhow::anyhow!(e))?;
+            let body =
+                crate::git::format_activity_body(&activity).map_err(|e| anyhow::anyhow!(e))?;
             let message_id = format!("git:{}:{}", conversation_id, uuid::Uuid::new_v4());
             let (sender_role, agent_label_opt) = if let Some(a) = source_agent {
                 ("agent", Some(agent_label(a)))

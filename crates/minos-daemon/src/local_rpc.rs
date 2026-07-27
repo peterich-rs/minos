@@ -366,10 +366,7 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
         &self,
         req: minos_protocol::GitOpenPullRequestParams,
     ) -> jsonrpsee::core::RpcResult<minos_protocol::GitOpenPullRequestResponse> {
-        self.agent
-            .git_open_pull_request(req)
-            .await
-            .map_err(rpc_err)
+        self.agent.git_open_pull_request(req).await.map_err(rpc_err)
     }
 
     async fn post_git_update(

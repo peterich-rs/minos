@@ -36,9 +36,7 @@ pub fn validate_activity(activity: &GitActivity) -> Result<(), String> {
                 ensure_len("base_branch", b, MAX_BRANCH_LEN)?;
             }
         }
-        GitActivity::CommitsMade {
-            subjects, head, ..
-        } => {
+        GitActivity::CommitsMade { subjects, head, .. } => {
             if subjects.len() > MAX_SUBJECTS {
                 return Err(format!("subjects exceeds max count {MAX_SUBJECTS}"));
             }

@@ -79,13 +79,20 @@ pub fn detect_live_status(workspace: &Path) -> Result<LiveGitStatus, String> {
 
     let upstream = run_git(
         workspace,
-        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+        &[
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ],
     )
     .ok();
 
     let (ahead_count, behind_count) = if upstream.is_some() {
-        match run_git(workspace, &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
-        {
+        match run_git(
+            workspace,
+            &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+        ) {
             Ok(raw) => {
                 let mut parts = raw.split_whitespace();
                 let ahead = parts
@@ -137,10 +144,7 @@ pub fn resolve_work_path(
 }
 
 pub fn current_branch_name(workspace: &Path) -> Option<String> {
-    first_line(
-        &run_git(workspace, &["rev-parse", "--abbrev-ref", "HEAD"]).ok()?,
-    )
-    .and_then(|name| {
+    first_line(&run_git(workspace, &["rev-parse", "--abbrev-ref", "HEAD"]).ok()?).and_then(|name| {
         if name == "HEAD" {
             run_git(workspace, &["rev-parse", "--short", "HEAD"]).ok()
         } else {

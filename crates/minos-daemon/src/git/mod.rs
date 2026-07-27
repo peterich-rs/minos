@@ -20,6 +20,6 @@ pub use snapshot::{
 };
 pub use worktree::{
     create_conversation_worktree, default_branch_name, prune_orphan_worktrees,
-    remove_conversation_worktree, slugify_segment, worktrees_root_for_repo, OrphanWorktreePruneReport,
-    WorktreeCreateResult,
+    remove_conversation_worktree, slugify_segment, worktrees_root_for_repo,
+    OrphanWorktreePruneReport, WorktreeCreateResult,
 };

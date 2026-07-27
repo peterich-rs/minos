@@ -262,9 +262,7 @@ impl App {
                     .map_err(|e| anyhow::anyhow!("invalid git activity payload: {e}"))?;
                 // Embed structured payload the same way daemon git::activity does.
                 let json = serde_json::to_string(&activity)?;
-                let body = format!(
-                    "Git activity\n\n<!--minos-git-activity:{json}-->"
-                );
+                let body = format!("Git activity\n\n<!--minos-git-activity:{json}-->");
                 let sender_role = if source_agent.is_some() {
                     "agent"
                 } else {
