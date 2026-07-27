@@ -171,12 +171,17 @@ jobs:
 
       - name: Import Apple certificate (optional)
         id: apple
-        if: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.APPLE_SIGNING_IDENTITY != '' }}
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
+          if [[ -z "${APPLE_CERTIFICATE:-}" || -z "${APPLE_CERTIFICATE_PASSWORD:-}" || -z "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Apple signing secrets not configured; will build with --no-sign"
+            exit 0
+          fi
           CERT_PATH="$RUNNER_TEMP/certificate.p12"
           KEYCHAIN="$RUNNER_TEMP/minos-signing.keychain-db"
           echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
