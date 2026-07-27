@@ -98,6 +98,11 @@ pub enum LocalConversationEvent {
         message_id: String,
         reactions: Vec<crate::LocalReactionGroup>,
     },
+    /// Conversation agent roster membership or briefs changed.
+    RosterChanged {
+        conversation_id: String,
+        members: Vec<crate::ConversationRosterMember>,
+    },
 }
 
 fn default_instance_crashed_reason() -> crate::PauseReason {
@@ -207,6 +212,12 @@ pub trait LocalDaemonRpc {
         &self,
         req: crate::ListConversationMessagesParams,
     ) -> jsonrpsee::core::RpcResult<crate::ListConversationMessagesResponse>;
+
+    #[method(name = "list_conversation_roster")]
+    async fn list_conversation_roster(
+        &self,
+        req: crate::ListConversationRosterParams,
+    ) -> jsonrpsee::core::RpcResult<crate::ListConversationRosterResponse>;
 
     #[method(name = "toggle_conversation_message_reaction")]
     async fn toggle_conversation_message_reaction(

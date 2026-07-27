@@ -5,8 +5,8 @@ use serde_json::Value;
 use super::permissions::TeamworkMcpPermissions;
 use super::tools::{
     CancelDelegationTool, DelegateToAgentTool, GetDelegationStatusTool,
-    ListConversationMessagesTool, PostConversationUpdateTool, PostGitUpdateTool, TeamworkMcpTool,
-    WaitDelegationTool,
+    ListConversationMessagesTool, ListConversationRosterTool, PostConversationUpdateTool,
+    PostGitUpdateTool, TeamworkMcpTool, WaitDelegationTool,
 };
 use crate::mcp_socket::SocketRequest;
 
@@ -45,6 +45,7 @@ impl TeamworkMcpToolCatalog {
         Self {
             tools: vec![
                 Box::new(ListConversationMessagesTool),
+                Box::new(ListConversationRosterTool),
                 Box::new(DelegateToAgentTool),
                 Box::new(GetDelegationStatusTool),
                 Box::new(WaitDelegationTool),
@@ -112,6 +113,7 @@ mod tests {
         let catalog = TeamworkMcpToolCatalog::default_catalog();
         let schemas = catalog.tool_schemas(TeamworkMcpPermissions {
             list_conversation_messages: true,
+            list_conversation_roster: true,
             delegate_to_agent: false,
             get_delegation_status: true,
             wait_delegation: true,
@@ -128,6 +130,7 @@ mod tests {
             names,
             vec![
                 "list_conversation_messages",
+                "list_conversation_roster",
                 "get_delegation_status",
                 "wait_delegation",
                 "cancel_delegation",
@@ -144,6 +147,7 @@ mod tests {
             .socket_request_for_call(
                 TeamworkMcpPermissions {
                     list_conversation_messages: true,
+                    list_conversation_roster: true,
                     delegate_to_agent: false,
                     get_delegation_status: true,
                     wait_delegation: true,

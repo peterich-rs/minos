@@ -1401,10 +1401,10 @@ impl AgentGlue {
         };
 
         // Normalize + validate roster up front (membership gates @mention / start).
-        let mut member_agents: Vec<String> = Vec::new();
+        let mut member_inputs: Vec<crate::store::ConversationAgentMemberInput> = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        for raw in &req.agents {
-            let label = raw.trim();
+        for spec in &req.agents {
+            let label = spec.agent.trim();
             if label.is_empty() || !seen.insert(label.to_ascii_lowercase()) {
                 continue;
             }
@@ -1412,7 +1412,10 @@ impl AgentGlue {
                 method: "create_conversation".into(),
                 message: format!("invalid agent member '{label}': {e}"),
             })?;
-            member_agents.push(agent_label(agent).to_owned());
+            member_inputs.push(crate::store::ConversationAgentMemberInput {
+                agent: agent_label(agent).to_owned(),
+                brief: spec.brief.clone(),
+            });
         }
 
         self.store
@@ -1426,7 +1429,7 @@ impl AgentGlue {
             .await
             .map_err(|e| map_store_error("create_conversation", e))?;
         self.store
-            .set_conversation_agent_members(&conversation_id, &member_agents, now_ms)
+            .set_conversation_agent_members(&conversation_id, &member_inputs, now_ms)
             .await
             .map_err(|e| map_store_error("create_conversation.set_members", e))?;
 
@@ -1444,6 +1447,34 @@ impl AgentGlue {
             }
         }
 
+        if !member_inputs.is_empty() {
+            if let Err(e) = self
+                .post_roster_system_message(
+                    &conversation_id,
+                    &crate::roster::format_roster_established_system_message(
+                        &member_inputs
+                            .iter()
+                            .map(|m| crate::store::ConversationAgentMemberRow {
+                                agent: m.agent.clone(),
+                                brief: m.brief.clone(),
+                                joined_at_ms: now_ms,
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                    now_ms,
+                )
+                .await
+            {
+                tracing::warn!(
+                    target: "minos_daemon::agent",
+                    error = %e,
+                    conversation_id = %conversation_id,
+                    "failed to post roster established system message",
+                );
+            }
+            self.publish_roster_changed(&conversation_id).await;
+        }
+
         tracing::info!(
             target: "minos_daemon::agent",
             project_id = %project.project_id,
@@ -1451,7 +1482,7 @@ impl AgentGlue {
             branch = ?meta.branch,
             git_mode = %effective_git_mode,
             worktree_path = ?meta.worktree_path,
-            agent_count = member_agents.len(),
+            agent_count = member_inputs.len(),
             "conversation created",
         );
         let row = self
@@ -1460,12 +1491,8 @@ impl AgentGlue {
             .await
             .map_err(|e| map_store_error("create_conversation.reload", e))?
             .expect("conversation inserted above");
-        let participating_agents = member_agents
-            .iter()
-            .map(|a| parse_agent_label(a))
-            .collect::<Result<Vec<_>, _>>()?;
         Ok(minos_protocol::CreateConversationResponse {
-            conversation: conversation_summary_from_row(row, participating_agents)?,
+            conversation: self.conversation_summary_loaded(row).await?,
         })
     }
 
@@ -1549,7 +1576,7 @@ impl AgentGlue {
 
         if title.is_none() && priority_patch.is_none() && progress_patch.is_none() {
             return Ok(minos_protocol::UpdateConversationResponse {
-                conversation: conversation_summary_from_row(existing, Vec::new())?,
+                conversation: self.conversation_summary_loaded(existing).await?,
             });
         }
 
@@ -1571,19 +1598,8 @@ impl AgentGlue {
             .await
             .map_err(|e| map_store_error("update_conversation.reload", e))?
             .expect("conversation updated above");
-        let agents = self
-            .store
-            .list_agents_for_conversations(&[req.conversation_id.clone()])
-            .await
-            .map_err(|e| map_store_error("update_conversation.agents", e))?;
-        let participating_agents = agents
-            .get(&req.conversation_id)
-            .into_iter()
-            .flatten()
-            .map(|agent| parse_agent_label(agent))
-            .collect::<Result<Vec<_>, _>>()?;
         Ok(minos_protocol::UpdateConversationResponse {
-            conversation: conversation_summary_from_row(row, participating_agents)?,
+            conversation: self.conversation_summary_loaded(row).await?,
         })
     }
 
@@ -1726,25 +1742,24 @@ impl AgentGlue {
             "removed conversation agent from roster",
         );
 
+        // Conversation-visible system coordination (not a user message).
+        let _ = self
+            .post_roster_system_message(
+                &req.conversation_id,
+                &crate::roster::format_roster_removed_system_message(&agent_label),
+                now_ms,
+            )
+            .await;
+        self.publish_roster_changed(&req.conversation_id).await;
+
         let row = self
             .store
             .get_conversation(&req.conversation_id)
             .await
             .map_err(|e| map_store_error("remove_conversation_agent.reload", e))?
             .expect("conversation exists above");
-        let agents = self
-            .store
-            .list_agents_for_conversations(&[req.conversation_id.clone()])
-            .await
-            .map_err(|e| map_store_error("remove_conversation_agent.agents", e))?;
-        let participating_agents = agents
-            .get(&req.conversation_id)
-            .into_iter()
-            .flatten()
-            .map(|agent| parse_agent_label(agent))
-            .collect::<Result<Vec<_>, _>>()?;
         Ok(minos_protocol::RemoveConversationAgentResponse {
-            conversation: conversation_summary_from_row(row, participating_agents)?,
+            conversation: self.conversation_summary_loaded(row).await?,
             closed_session_ids,
             cancelled_delegation_ids,
         })
@@ -1759,28 +1774,35 @@ impl AgentGlue {
             .list_conversations_by_project(&req.project_id, req.before_updated_at_ms, req.limit)
             .await
             .map_err(|e| map_store_error("list_conversations", e))?;
-        let ids = rows
-            .iter()
-            .map(|row| row.conversation_id.clone())
-            .collect::<Vec<_>>();
-        let agents = self
-            .store
-            .list_agents_for_conversations(&ids)
-            .await
-            .map_err(|e| map_store_error("list_agents_for_conversations", e))?;
-        let conversations = rows
-            .into_iter()
-            .map(|row| {
-                let participating_agents = agents
-                    .get(&row.conversation_id)
-                    .into_iter()
-                    .flatten()
-                    .map(|agent| parse_agent_label(agent))
-                    .collect::<Result<Vec<_>, _>>()?;
-                conversation_summary_from_row(row, participating_agents)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut conversations = Vec::with_capacity(rows.len());
+        for row in rows {
+            conversations.push(self.conversation_summary_loaded(row).await?);
+        }
         Ok(minos_protocol::ListConversationsResponse { conversations })
+    }
+
+    pub async fn list_conversation_roster(
+        &self,
+        req: minos_protocol::ListConversationRosterParams,
+    ) -> Result<minos_protocol::ListConversationRosterResponse, MinosError> {
+        let _ = self
+            .store
+            .get_conversation(&req.conversation_id)
+            .await
+            .map_err(|e| map_store_error("list_conversation_roster.get", e))?
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "list_conversation_roster".into(),
+                message: format!("conversation not found: {}", req.conversation_id),
+            })?;
+        let rows = self
+            .store
+            .list_conversation_roster(&req.conversation_id)
+            .await
+            .map_err(|e| map_store_error("list_conversation_roster", e))?;
+        Ok(minos_protocol::ListConversationRosterResponse {
+            conversation_id: req.conversation_id,
+            members: roster_members_from_rows(&rows)?,
+        })
     }
 
     pub async fn list_conversation_messages(
@@ -2110,18 +2132,7 @@ impl AgentGlue {
                         method: "git_get_status".into(),
                         message: format!("conversation not found: {cid}"),
                     })?;
-                let members = self
-                    .store
-                    .list_agents_for_conversations(&[cid.to_owned()])
-                    .await
-                    .map_err(|e| map_store_error("git_get_status.members", e))?;
-                let agents = members
-                    .get(cid)
-                    .into_iter()
-                    .flatten()
-                    .map(|m| parse_agent_label(m))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Some(conversation_summary_from_row(row, agents)?)
+                Some(self.conversation_summary_loaded(row).await?)
             } else {
                 None
             }
@@ -2253,19 +2264,8 @@ impl AgentGlue {
             .await
             .map_err(|e| map_store_error("git_create_worktree.reload", e))?
             .expect("updated above");
-        let members = self
-            .store
-            .list_agents_for_conversations(&[req.conversation_id.clone()])
-            .await
-            .map_err(|e| map_store_error("git_create_worktree.members", e))?;
-        let agents = members
-            .get(&req.conversation_id)
-            .into_iter()
-            .flatten()
-            .map(|m| parse_agent_label(m))
-            .collect::<Result<Vec<_>, _>>()?;
         Ok(minos_protocol::GitCreateWorktreeResponse {
-            conversation: conversation_summary_from_row(row, agents)?,
+            conversation: self.conversation_summary_loaded(row).await?,
             created: wt.created,
             branch: wt.branch,
             worktree_path: wt.path.to_string_lossy().into_owned(),
@@ -2335,19 +2335,8 @@ impl AgentGlue {
             .await
             .map_err(|e| map_store_error("git_remove_worktree.reload", e))?
             .expect("updated");
-        let members = self
-            .store
-            .list_agents_for_conversations(&[req.conversation_id.clone()])
-            .await
-            .map_err(|e| map_store_error("git_remove_worktree.members", e))?;
-        let agents = members
-            .get(&req.conversation_id)
-            .into_iter()
-            .flatten()
-            .map(|m| parse_agent_label(m))
-            .collect::<Result<Vec<_>, _>>()?;
         Ok(minos_protocol::GitRemoveWorktreeResponse {
-            conversation: conversation_summary_from_row(row, agents)?,
+            conversation: self.conversation_summary_loaded(row).await?,
         })
     }
 
@@ -2660,7 +2649,7 @@ impl AgentGlue {
                 "git cache refresh skipped",
             );
         }
-        let launch = self
+        let mut launch = self
             .resolve_launch_options(
                 req.agent,
                 req.profile_id.as_deref(),
@@ -2669,6 +2658,23 @@ impl AgentGlue {
                 req.instructions.clone(),
             )
             .await?;
+        // Inject conversation roster briefing into session-start instructions
+        // (developer / append-system-prompt / rules — not a conversation user row).
+        if let Ok(rows) = self
+            .store
+            .list_conversation_roster(&req.conversation_id)
+            .await
+        {
+            let briefing = crate::roster::format_roster_briefing(agent_name, &rows);
+            if let Some(merged) = crate::roster::merge_launch_instructions(
+                launch.as_ref().and_then(|l| l.instructions.clone()),
+                &briefing,
+            ) {
+                let mut opts = launch.unwrap_or_default();
+                opts.instructions = Some(merged);
+                launch = Some(opts);
+            }
+        }
         let outcome = self
             .manager
             .start_agent_in_conversation_with_options(
@@ -3022,10 +3028,85 @@ fn session_summary_from_row(row: crate::store::SessionRow) -> Result<SessionSumm
     })
 }
 
+impl AgentGlue {
+    async fn conversation_summary_loaded(
+        &self,
+        row: ConversationRow,
+    ) -> Result<minos_protocol::LocalConversationSummary, MinosError> {
+        let cid = row.conversation_id.clone();
+        let members = self
+            .store
+            .list_conversation_roster(&cid)
+            .await
+            .map_err(|e| map_store_error("conversation_summary.roster", e))?;
+        conversation_summary_from_row(row, roster_members_from_rows(&members)?)
+    }
+
+    async fn post_roster_system_message(
+        &self,
+        conversation_id: &str,
+        body: &str,
+        now_ms: i64,
+    ) -> Result<(), MinosError> {
+        let message_id = format!("sys:roster:{}:{}", conversation_id, uuid::Uuid::new_v4());
+        let message_seq = self
+            .store
+            .upsert_conversation_message(
+                conversation_id,
+                &message_id,
+                None,
+                "system",
+                None,
+                body,
+                now_ms,
+                None,
+                None,
+                "[]",
+            )
+            .await
+            .map_err(|e| map_store_error("post_roster_system_message", e))?;
+        self.publish_conversation_message_appended(conversation_id, message_seq);
+        Ok(())
+    }
+
+    async fn publish_roster_changed(&self, conversation_id: &str) {
+        let members = match self.store.list_conversation_roster(conversation_id).await {
+            Ok(rows) => match roster_members_from_rows(&rows) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!(
+                        target: "minos_daemon::agent",
+                        error = %e,
+                        conversation_id = %conversation_id,
+                        "roster_changed event skipped: bad agent label",
+                    );
+                    return;
+                }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    target: "minos_daemon::agent",
+                    error = %e,
+                    conversation_id = %conversation_id,
+                    "roster_changed event skipped: store error",
+                );
+                return;
+            }
+        };
+        let _ = self
+            .local_conversation_event_tx
+            .send(LocalConversationEvent::RosterChanged {
+                conversation_id: conversation_id.to_owned(),
+                members,
+            });
+    }
+}
+
 fn conversation_summary_from_row(
     row: ConversationRow,
-    participating_agents: Vec<AgentName>,
+    roster: Vec<minos_protocol::ConversationRosterMember>,
 ) -> Result<minos_protocol::LocalConversationSummary, MinosError> {
+    let participating_agents = roster.iter().map(|m| m.agent).collect();
     Ok(minos_protocol::LocalConversationSummary {
         conversation_id: row.conversation_id,
         project_id: row.project_id,
@@ -3036,6 +3117,7 @@ fn conversation_summary_from_row(
         message_count: u32::try_from(row.message_count.max(0)).unwrap_or(u32::MAX),
         agent_session_count: u32::try_from(row.agent_session_count.max(0)).unwrap_or(u32::MAX),
         participating_agents,
+        roster,
         priority: row.priority.filter(|p| !p.is_empty()),
         progress: if row.progress.is_empty() {
             "todo".into()
@@ -3050,6 +3132,20 @@ fn conversation_summary_from_row(
         running_count: u32::try_from(row.running_count.max(0)).unwrap_or(u32::MAX),
         needs_attention_count: u32::try_from(row.needs_attention_count.max(0)).unwrap_or(u32::MAX),
     })
+}
+
+fn roster_members_from_rows(
+    rows: &[crate::store::ConversationAgentMemberRow],
+) -> Result<Vec<minos_protocol::ConversationRosterMember>, MinosError> {
+    rows.iter()
+        .map(|r| {
+            Ok(minos_protocol::ConversationRosterMember {
+                agent: parse_agent_label(&r.agent)?,
+                brief: r.brief.clone(),
+                joined_at_ms: r.joined_at_ms,
+            })
+        })
+        .collect()
 }
 
 fn local_conversation_message_from_row(
@@ -3500,6 +3596,25 @@ async fn handle_daemon_mcp_request(
                     "messages": messages,
                     "next_before_seq": next_before_seq,
                     "has_more": has_more,
+                })),
+            })
+        }
+        SocketRequest::ListConversationRoster { conversation_id } => {
+            let rows = store.list_conversation_roster(&conversation_id).await?;
+            let members = rows
+                .into_iter()
+                .map(|r| {
+                    Ok(serde_json::json!({
+                        "agent": r.agent,
+                        "brief": r.brief,
+                        "joined_at_ms": r.joined_at_ms,
+                    }))
+                })
+                .collect::<Result<Vec<_>, anyhow::Error>>()?;
+            Ok(SocketResponse::Ok {
+                data: Some(serde_json::json!({
+                    "conversation_id": conversation_id,
+                    "members": members,
                 })),
             })
         }
@@ -4693,7 +4808,13 @@ mod tests {
         agents: &[&str],
     ) {
         seed_conversation(glue, conversation_id).await;
-        let members = agents.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        let members = agents
+            .iter()
+            .map(|a| crate::store::ConversationAgentMemberInput {
+                agent: (*a).to_owned(),
+                brief: None,
+            })
+            .collect::<Vec<_>>();
         glue.store
             .set_conversation_agent_members(conversation_id, &members, 1)
             .await
@@ -5751,7 +5872,10 @@ mod tests {
                 project_id: project.project.project_id.clone(),
                 title: "Auth Fix".into(),
                 priority: None,
-                agents: vec!["codex".into()],
+                agents: vec![minos_protocol::ConversationAgentSpec {
+                    agent: "codex".into(),
+                    brief: Some("implements features".into()),
+                }],
                 git_mode: Some("worktree".into()),
             })
             .await
@@ -5852,7 +5976,10 @@ mod tests {
                 project_id: project.project.project_id,
                 title: "Shared tree".into(),
                 priority: None,
-                agents: vec!["codex".into()],
+                agents: vec![minos_protocol::ConversationAgentSpec {
+                    agent: "codex".into(),
+                    brief: Some("implements features".into()),
+                }],
                 git_mode: Some("inherit".into()),
             })
             .await

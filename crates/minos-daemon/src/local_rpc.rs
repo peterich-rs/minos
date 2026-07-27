@@ -232,6 +232,16 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
             .map_err(rpc_err)
     }
 
+    async fn list_conversation_roster(
+        &self,
+        req: minos_protocol::ListConversationRosterParams,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::ListConversationRosterResponse> {
+        self.agent
+            .list_conversation_roster(req)
+            .await
+            .map_err(rpc_err)
+    }
+
     async fn toggle_conversation_message_reaction(
         &self,
         req: ToggleConversationMessageReactionParams,

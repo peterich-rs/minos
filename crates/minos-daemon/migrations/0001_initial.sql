@@ -61,12 +61,15 @@ CREATE INDEX conversations_by_project_updated
 
 -- Host-local conversation roster (runtime agent names). Mentions / starts are
 -- gated on membership; sessions alone do not imply membership.
+-- `brief` is a short peer-facing role description for multi-agent coordination.
 CREATE TABLE conversation_agent_members (
     conversation_id  TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
     agent            TEXT NOT NULL,
     joined_at_ms     INTEGER NOT NULL,
+    brief            TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (conversation_id, agent),
-    CHECK(length(agent) > 0)
+    CHECK(length(agent) > 0),
+    CHECK(length(brief) <= 500)
 );
 
 CREATE INDEX conversation_agent_members_by_agent

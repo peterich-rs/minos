@@ -20,6 +20,7 @@ pub mod paths;
 pub mod relay_client;
 pub mod relay_http;
 pub mod relay_pairing;
+pub mod roster;
 pub mod rpc_server;
 pub mod store;
 pub mod subscription;

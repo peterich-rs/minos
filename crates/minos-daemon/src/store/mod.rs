@@ -681,7 +681,7 @@ impl LocalStore {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT conversation_id, agent FROM conversation_agent_members \
+            "SELECT conversation_id, agent, brief, joined_at_ms FROM conversation_agent_members \
              WHERE conversation_id IN ({placeholders}) \
              ORDER BY conversation_id, joined_at_ms ASC, agent"
         );
@@ -698,6 +698,31 @@ impl LocalStore {
                 .push(row.try_get("agent")?);
         }
         Ok(by_conversation)
+    }
+
+    /// Full roster rows (agent + brief + join time) for one conversation.
+    pub async fn list_conversation_roster(
+        &self,
+        conversation_id: &str,
+    ) -> anyhow::Result<Vec<ConversationAgentMemberRow>> {
+        let rows = sqlx::query(
+            "SELECT agent, brief, joined_at_ms FROM conversation_agent_members \
+             WHERE conversation_id = ? \
+             ORDER BY joined_at_ms ASC, agent",
+        )
+        .bind(conversation_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let brief: String = row.try_get("brief")?;
+            out.push(ConversationAgentMemberRow {
+                agent: row.try_get("agent")?,
+                brief: if brief.is_empty() { None } else { Some(brief) },
+                joined_at_ms: row.try_get("joined_at_ms")?,
+            });
+        }
+        Ok(out)
     }
 
     pub async fn is_conversation_agent_member(
@@ -720,7 +745,7 @@ impl LocalStore {
     pub async fn set_conversation_agent_members(
         &self,
         conversation_id: &str,
-        agents: &[String],
+        members: &[ConversationAgentMemberInput],
         joined_at_ms: i64,
     ) -> anyhow::Result<()> {
         let mut tx = self.pool.begin().await?;
@@ -729,18 +754,21 @@ impl LocalStore {
             .execute(&mut *tx)
             .await?;
         let mut seen = std::collections::HashSet::new();
-        for agent in agents {
-            let trimmed = agent.trim();
-            if trimmed.is_empty() || !seen.insert(trimmed.to_owned()) {
+        for member in members {
+            let trimmed = member.agent.trim();
+            if trimmed.is_empty() || !seen.insert(trimmed.to_ascii_lowercase()) {
                 continue;
             }
+            let brief = normalize_roster_brief(member.brief.as_deref());
             sqlx::query(
-                "INSERT INTO conversation_agent_members (conversation_id, agent, joined_at_ms) \
-                 VALUES (?, ?, ?)",
+                "INSERT INTO conversation_agent_members \
+                 (conversation_id, agent, joined_at_ms, brief) \
+                 VALUES (?, ?, ?, ?)",
             )
             .bind(conversation_id)
             .bind(trimmed)
             .bind(joined_at_ms)
+            .bind(brief)
             .execute(&mut *tx)
             .await?;
         }
@@ -749,23 +777,32 @@ impl LocalStore {
     }
 
     /// Idempotent add of one runtime agent to the conversation roster.
+    /// When the row already exists, `brief` is updated when non-empty.
     pub async fn add_conversation_agent_member(
         &self,
         conversation_id: &str,
         agent: &str,
         joined_at_ms: i64,
+        brief: Option<&str>,
     ) -> anyhow::Result<()> {
         let trimmed = agent.trim();
         if trimmed.is_empty() {
             return Ok(());
         }
+        let brief = normalize_roster_brief(brief);
         sqlx::query(
-            "INSERT OR IGNORE INTO conversation_agent_members \
-             (conversation_id, agent, joined_at_ms) VALUES (?, ?, ?)",
+            "INSERT INTO conversation_agent_members \
+             (conversation_id, agent, joined_at_ms, brief) VALUES (?, ?, ?, ?) \
+             ON CONFLICT(conversation_id, agent) DO UPDATE SET \
+               brief = CASE \
+                 WHEN excluded.brief != '' THEN excluded.brief \
+                 ELSE conversation_agent_members.brief \
+               END",
         )
         .bind(conversation_id)
         .bind(trimmed)
         .bind(joined_at_ms)
+        .bind(brief)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -1164,6 +1201,35 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for SessionRow {
     }
 }
 
+/// One roster membership write (create / set members).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationAgentMemberInput {
+    pub agent: String,
+    pub brief: Option<String>,
+}
+
+/// Durable roster row with optional peer-facing brief.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationAgentMemberRow {
+    pub agent: String,
+    pub brief: Option<String>,
+    pub joined_at_ms: i64,
+}
+
+/// Cap and trim roster briefs stored in SQLite.
+pub fn normalize_roster_brief(raw: Option<&str>) -> String {
+    let trimmed = raw.map(str::trim).unwrap_or("").to_owned();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    const MAX: usize = 500;
+    if trimmed.chars().count() <= MAX {
+        trimmed
+    } else {
+        trimmed.chars().take(MAX).collect()
+    }
+}
+
 /// Shared SELECT list for conversation rows (list + get).
 /// Includes live thread aggregates for board / attention chips.
 const CONVERSATION_SELECT_COLS: &str = "\
@@ -1500,16 +1566,35 @@ mod tests {
         store
             .set_conversation_agent_members(
                 "c1",
-                &["codex".into(), "claude".into(), "codex".into()],
+                &[
+                    ConversationAgentMemberInput {
+                        agent: "codex".into(),
+                        brief: Some("implements features".into()),
+                    },
+                    ConversationAgentMemberInput {
+                        agent: "claude".into(),
+                        brief: Some("reviews PRs".into()),
+                    },
+                    ConversationAgentMemberInput {
+                        agent: "codex".into(),
+                        brief: None,
+                    },
+                ],
                 11,
             )
             .await
             .unwrap();
+        let roster = store.list_conversation_roster("c1").await.unwrap();
+        assert_eq!(roster.len(), 2);
+        // Same joined_at_ms → secondary sort by agent name.
+        assert_eq!(roster[0].agent, "claude");
+        assert_eq!(roster[0].brief.as_deref(), Some("reviews PRs"));
+        assert_eq!(roster[1].agent, "codex");
+        assert_eq!(roster[1].brief.as_deref(), Some("implements features"));
         let map = store
             .list_agents_for_conversations(&["c1".into()])
             .await
             .unwrap();
-        // Same joined_at_ms → secondary sort by agent name.
         assert_eq!(
             map.get("c1").map(Vec::as_slice),
             Some(&["claude".into(), "codex".into()][..])
@@ -1524,7 +1609,7 @@ mod tests {
             .unwrap());
 
         store
-            .add_conversation_agent_member("c1", "grok", 12)
+            .add_conversation_agent_member("c1", "grok", 12, Some("experiments"))
             .await
             .unwrap();
         assert!(store

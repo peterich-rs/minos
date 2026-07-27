@@ -927,6 +927,9 @@ pub struct LocalConversationSummary {
     pub agent_session_count: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub participating_agents: Vec<AgentName>,
+    /// Roster with optional peer-facing briefs (SSOT for multi-agent coordination).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roster: Vec<ConversationRosterMember>,
     /// User priority: `high` | `medium` | `low`. Absent = unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,
@@ -1274,6 +1277,25 @@ pub struct PostGitUpdateResponse {
     pub body: String,
 }
 
+/// One roster member at conversation create (runtime + optional brief).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ConversationAgentSpec {
+    /// Runtime agent label (`codex` / `claude` / …).
+    pub agent: String,
+    /// Optional short peer-facing role description (≤500 chars).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief: Option<String>,
+}
+
+/// Durable roster row returned on conversation summaries / list_conversation_roster.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ConversationRosterMember {
+    pub agent: AgentName,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief: Option<String>,
+    pub joined_at_ms: i64,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct CreateConversationParams {
     pub project_id: String,
@@ -1281,14 +1303,25 @@ pub struct CreateConversationParams {
     /// Optional user priority at create: `high` | `medium` | `low`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,
-    /// Runtime agent roster for this conversation (`codex` / `claude` / …).
+    /// Runtime agent roster for this conversation.
     /// Only members may be @mentioned or started in the conversation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub agents: Vec<String>,
+    pub agents: Vec<ConversationAgentSpec>,
     /// Git isolation mode: `worktree` (default when project is a git repo) or
     /// `inherit` (use project workspace as-is). Unknown values are rejected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_mode: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListConversationRosterParams {
+    pub conversation_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ListConversationRosterResponse {
+    pub conversation_id: String,
+    pub members: Vec<ConversationRosterMember>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

@@ -26,7 +26,12 @@ Do not assume the prompt contains the current conversation state if MCP is avail
   "current chat", prior teammate output, mentions, coordination status, or
   anything another agent may have said. Message objects may include structured
   `delegation_id`, `reply_to_message_id`, and `mentions` fields in addition to
-  plain `body` text.
+  plain `body` text. System rows may start with `[minos:system]` (roster updates);
+  treat them as host coordination, not user chat.
+- Call `list_conversation_roster` when you need the live teammate directory (who
+  is on the conversation, and each member's role brief). Prefer this over memory
+  or the session-start roster snapshot after membership may have changed.
+  Match `delegate_to_agent` targets to the teammate whose brief fits the work.
 - Call `delegate_to_agent` when another Minos agent is better positioned to
   provide focused help. Keep the prompt specific and include the exact context
   needed. Save the returned `delegation_id`.

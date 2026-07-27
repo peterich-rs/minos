@@ -331,6 +331,19 @@ pub enum ConversationEventDto {
         message_id: String,
         reactions: Vec<ReactionGroupDto>,
     },
+    RosterChanged {
+        conversation_id: String,
+        members: Vec<RosterMemberDto>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RosterMemberDto {
+    pub agent: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brief: Option<String>,
+    pub joined_at_ms: i64,
 }
 
 /// Whether JSON-RPC subscription pumps are currently healthy for the webview.
@@ -900,7 +913,10 @@ impl DaemonBridge {
             project_id,
             title,
             priority,
-            agents,
+            agents: agents
+                .into_iter()
+                .map(|agent| minos_protocol::ConversationAgentSpec { agent, brief: None })
+                .collect(),
             git_mode,
         };
         let response: minos_protocol::CreateConversationResponse = client
@@ -1407,12 +1423,14 @@ fn map_conversation(c: LocalConversationSummary) -> ConversationDto {
 /// Returns `"git_activity"` when structured git activity was parsed from the
 /// body; otherwise `"text"`. Approval UI is **not** derived here — real
 /// approvals are session reverse-requests, not conversation timeline rows.
-fn conversation_timeline_kind(has_git_activity: bool) -> &'static str {
+fn conversation_timeline_kind(role: &str, has_git_activity: bool) -> &'static str {
     if has_git_activity {
-        "git_activity"
-    } else {
-        "text"
+        return "git_activity";
     }
+    if role.eq_ignore_ascii_case("system") {
+        return "system";
+    }
+    "text"
 }
 
 fn map_reaction_group(g: LocalReactionGroup) -> ReactionGroupDto {
@@ -1437,7 +1455,7 @@ fn map_message(m: LocalConversationMessage) -> MessageDto {
         .git_activity
         .as_ref()
         .and_then(|a| serde_json::to_value(a).ok());
-    let kind = conversation_timeline_kind(git_activity.is_some());
+    let kind = conversation_timeline_kind(&m.sender_role, git_activity.is_some());
     let mentions = m
         .mentions
         .into_iter()
@@ -3641,6 +3659,32 @@ fn spawn_conversation_pump(
                             target: "minos_desktop",
                             error = %e,
                             "emit daemon://conversation reaction failed"
+                        );
+                    }
+                }
+                Some(Ok(LocalConversationEvent::RosterChanged {
+                    conversation_id,
+                    members,
+                })) => {
+                    if !pump_still_current(my_gen, &gen_flag) {
+                        break;
+                    }
+                    let dto = ConversationEventDto::RosterChanged {
+                        conversation_id,
+                        members: members
+                            .into_iter()
+                            .map(|m| RosterMemberDto {
+                                agent: agent_label(m.agent),
+                                brief: m.brief,
+                                joined_at_ms: m.joined_at_ms,
+                            })
+                            .collect(),
+                    };
+                    if let Err(e) = app.emit(EVENT_CONVERSATION, &dto) {
+                        warn!(
+                            target: "minos_desktop",
+                            error = %e,
+                            "emit daemon://conversation roster_changed failed"
                         );
                     }
                 }
