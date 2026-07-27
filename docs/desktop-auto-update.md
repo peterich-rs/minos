@@ -67,10 +67,26 @@ Configured as repo variable `MINOS_UPDATER_ENDPOINT`. Updater minisign secrets
 are stored as Actions secrets (`MINOS_UPDATER_PUBLIC_KEY`,
 `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`).
 
-Publish two GitHub releases per cut:
+Publish two GitHub releases per cut (both created with `--latest=false` so they
+do not fight for the GitHub “latest” pointer):
 
-1. **`vX.Y.Z`** — human installers + notes  
-2. **`minos-desktop-latest`** — updater archives + `latest.json` (clobber each release)
+1. **`vX.Y.Z`** — human installers + notes (optional git tag `vX.Y.Z`)
+2. **`minos-desktop-latest`** — **named** rolling release only (no movable git
+   tag / force-push). Assets + `latest.json` are clobbered each cut.
+
+CI signs updater archives and runs `node scripts/verify-updater-sig.mjs`
+(same minisign algorithm as `tauri-plugin-updater`) against
+`MINOS_UPDATER_PUBLIC_KEY` so key rotation mismatches fail the job instead of
+client install.
+
+`prepare_for_app_update` hard-timeouts managed daemon stop (same budget as app
+exit) and returns `Err` on failure; install is blocked until prepare succeeds.
+
+If prepare/install/relaunch fails **after** teardown may have run, the UI calls
+`restore_after_failed_update`: clears the prepare guard and
+`DaemonBridge::connect` starts a fresh managed daemon so the shell is not left
+without local RPC. The original install error is still shown; restore failure
+is appended to that message.
 
 ### Build steps (outline)
 
@@ -120,6 +136,12 @@ Before `update.install()` + `relaunch()`:
 2. Host stops the managed in-process daemon (and thus agent children)
 3. Install swaps the Desktop bundle
 4. Relaunch starts a clean process tree
+
+On failure after step 1–2 (install signature/disk error, relaunch error, or
+prepare timeout after teardown began):
+
+5. Frontend calls `restore_after_failed_update` → reset guard + restart managed daemon
+6. Workspace `connection` is updated so the UI is not stuck “daemon down”
 
 Exit / signal teardown shares the same stop path and is idempotent with
 prepare (no double-stop races).

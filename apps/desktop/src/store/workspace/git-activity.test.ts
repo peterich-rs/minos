@@ -6,7 +6,7 @@ import {
 } from "./git-activity-map.ts";
 
 describe("normalizeGitActivity", () => {
-  it("maps snake_case and camelCase fields", () => {
+  it("maps snake_case wire fields to camelCase UI model", () => {
     const activity = normalizeGitActivity({
       kind: "worktree_created",
       branch: "minos/fix-1",
@@ -30,7 +30,10 @@ describe("normalizeGitActivity", () => {
   });
 
   it("rejects unknown kinds", () => {
-    assert.equal(normalizeGitActivity({ kind: "nope" }), undefined);
+    assert.equal(
+      normalizeGitActivity({ kind: "nope" } as never),
+      undefined,
+    );
     assert.equal(normalizeGitActivity(null), undefined);
   });
 });

@@ -68,7 +68,10 @@ export type DaemonReactionGroup = {
   actors?: DaemonReactionActor[];
 };
 
-/** Structured git milestone embedded in a conversation message. */
+/**
+ * Structured git milestone embedded in a conversation message.
+ * Canonical shape matches `minos_protocol::GitActivity` (snake_case wire JSON).
+ */
 export type DaemonGitActivity = {
   kind:
     | "worktree_created"
@@ -79,9 +82,7 @@ export type DaemonGitActivity = {
     | "merged";
   branch?: string;
   worktree_path?: string;
-  worktreePath?: string;
   base_branch?: string;
-  baseBranch?: string;
   count?: number;
   subjects?: string[];
   head?: string;
@@ -90,7 +91,6 @@ export type DaemonGitActivity = {
   title?: string;
   summary?: string;
   merge_commit?: string;
-  mergeCommit?: string;
 };
 
 export type DaemonMessage = {

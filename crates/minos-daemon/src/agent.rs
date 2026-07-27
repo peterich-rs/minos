@@ -2413,6 +2413,10 @@ impl AgentGlue {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .unwrap_or("origin");
+        validate_git_remote_name(remote).map_err(|e| MinosError::CodexProtocolError {
+            method: "git_push_branch".into(),
+            message: e,
+        })?;
         let mut args = vec!["push"];
         if req.set_upstream {
             args.push("-u");
@@ -2984,6 +2988,27 @@ fn project_workspace_dir(default_workspace: &std::path::Path, workspace_slug: &s
         .join(workspace_slug)
         .display()
         .to_string()
+}
+
+/// Remote names are passed as bare `git` args — reject option injection.
+fn validate_git_remote_name(remote: &str) -> Result<(), String> {
+    let remote = remote.trim();
+    if remote.is_empty() {
+        return Err("remote name must not be empty".into());
+    }
+    if remote.starts_with('-') {
+        return Err(format!("invalid remote name (leading dash): {remote}"));
+    }
+    if remote.len() > 128 {
+        return Err("remote name too long".into());
+    }
+    let ok = remote
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'));
+    if !ok {
+        return Err(format!("invalid remote name: {remote}"));
+    }
+    Ok(())
 }
 
 fn session_summary_from_row(row: crate::store::SessionRow) -> Result<SessionSummary, MinosError> {

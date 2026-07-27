@@ -25,14 +25,50 @@ pub struct DiffResult {
     pub file_count: u32,
 }
 
-/// Diff `base...head` (or working tree when head is empty / "WORKTREE").
+/// Validate a git revision name passed as a bare CLI arg.
+///
+/// Rejects option-like strings (`-foo`) and characters outside the usual rev
+/// charset so callers cannot inject extra `git` options.
+pub fn validate_rev_name(rev: &str) -> Result<(), String> {
+    let rev = rev.trim();
+    if rev.is_empty() {
+        return Err("revision name must not be empty".into());
+    }
+    if rev == "WORKTREE" || rev == "worktree" {
+        return Ok(());
+    }
+    if rev.starts_with('-') {
+        return Err(format!("invalid revision name (leading dash): {rev}"));
+    }
+    if rev.len() > 256 {
+        return Err("revision name too long".into());
+    }
+    let ok = rev.chars().all(|c| {
+        c.is_ascii_alphanumeric()
+            || matches!(c, '.' | '_' | '/' | '-' | '~' | '^' | '{' | '}' | '@' | '+')
+    });
+    if !ok {
+        return Err(format!("invalid revision name: {rev}"));
+    }
+    Ok(())
+}
+
+/// Diff via git's three-dot form `base...head` (symmetric difference from
+/// merge-base of base and head to head). This is the usual PR-style range,
+/// not the two-dot `base..head` history walk.
+///
+/// When `head` is empty / `"WORKTREE"`, diffs the working tree against `base`.
 pub fn get_diff(repo: &Path, base: Option<&str>, head: Option<&str>) -> Result<DiffResult, String> {
     let base = base
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("HEAD")
         .to_owned();
+    validate_rev_name(&base)?;
     let head = head.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(h) = head {
+        validate_rev_name(h)?;
+    }
 
     let name_status = match head {
         None | Some("WORKTREE") | Some("worktree") => {
@@ -125,4 +161,17 @@ pub fn recent_commit_subjects(repo: &Path, max: usize) -> Result<Vec<String>, St
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_rev_rejects_option_injection() {
+        assert!(validate_rev_name("-upload-pack=evil").is_err());
+        assert!(validate_rev_name("main").is_ok());
+        assert!(validate_rev_name("abc123~1").is_ok());
+        assert!(validate_rev_name("WORKTREE").is_ok());
+    }
 }

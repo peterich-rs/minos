@@ -8,8 +8,8 @@ use tracing::{info, warn};
 
 /// Outer budget for full managed-daemon stop (agent suspend + provider SIGTERM
 /// grace already ≤5s inside `DaemonHandle::stop`). Prevents Cmd+Q / window
-/// close from hanging the UI forever if a child ignores signals.
-const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+/// close / pre-update prepare from hanging forever if a child ignores signals.
+pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Idempotent managed-daemon teardown shared by ExitRequested, Exit, and signals.
 ///
@@ -30,8 +30,14 @@ pub fn shutdown_managed_once(daemon: &Arc<DaemonBridge>, done: &AtomicBool) {
     // process teardown drops the runtime without group signals to provider children.
     tauri::async_runtime::block_on(async move {
         match tokio::time::timeout(SHUTDOWN_TIMEOUT, daemon.shutdown_managed()).await {
-            Ok(()) => {
+            Ok(Ok(())) => {
                 info!("desktop host managed daemon shutdown complete");
+            }
+            Ok(Err(e)) => {
+                warn!(
+                    error = %e,
+                    "managed daemon shutdown failed; continuing process exit"
+                );
             }
             Err(_) => {
                 warn!(

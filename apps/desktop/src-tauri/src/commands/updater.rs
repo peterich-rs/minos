@@ -1,12 +1,12 @@
 //! Desktop auto-update helpers (Tauri updater plugin + process relaunch).
 
 use crate::app_state::AppState;
-use crate::daemon::DaemonBridge;
-use crate::shutdown;
+use crate::daemon::{ConnectionDto, DaemonBridge};
+use crate::shutdown::{self, SHUTDOWN_TIMEOUT};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::State;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Process-wide guard so prepare-for-update and ExitRequested do not race.
 static UPDATE_SHUTDOWN_DONE: AtomicBool = AtomicBool::new(false);
@@ -41,17 +41,91 @@ pub fn is_updater_plugin_enabled() -> bool {
 ///
 /// Must run before `update.install()` + process relaunch so the new binary
 /// does not fight orphaned OpenCode/Codex processes or a stale daemon port.
+///
+/// Hard-timeout + error propagation: callers must not install if this fails.
+/// On any subsequent install/relaunch failure, call
+/// [`restore_after_failed_update`] so the shell is usable again.
 #[tauri::command]
 pub async fn prepare_for_app_update(state: State<'_, AppState>) -> Result<(), String> {
-    if UPDATE_SHUTDOWN_DONE.swap(true, Ordering::SeqCst) {
+    if UPDATE_SHUTDOWN_DONE.load(Ordering::SeqCst) {
         info!(target: "minos_desktop::updater", "prepare_for_app_update already completed");
         return Ok(());
     }
     info!(target: "minos_desktop::updater", "stopping managed daemon before app update");
-    // Prefer the async path so we do not block_on inside an async command.
-    state.daemon.shutdown_managed().await;
-    info!(target: "minos_desktop::updater", "managed daemon stopped; safe to install update");
-    Ok(())
+    match tokio::time::timeout(SHUTDOWN_TIMEOUT, state.daemon.shutdown_managed()).await {
+        Ok(Ok(())) => {
+            UPDATE_SHUTDOWN_DONE.store(true, Ordering::SeqCst);
+            info!(target: "minos_desktop::updater", "managed daemon stopped; safe to install update");
+            Ok(())
+        }
+        Ok(Err(e)) => {
+            // stop may have partially torn down children — leave guard false so
+            // restore / exit can still act, and surface the error to the UI.
+            warn!(
+                target: "minos_desktop::updater",
+                error = %e,
+                "prepare_for_app_update failed"
+            );
+            Err(e)
+        }
+        Err(_) => {
+            warn!(
+                target: "minos_desktop::updater",
+                timeout_secs = SHUTDOWN_TIMEOUT.as_secs(),
+                "prepare_for_app_update timed out"
+            );
+            // Timeout leaves teardown in an unknown state; do not set the done
+            // guard. Frontend should call restore_after_failed_update.
+            Err(format!(
+                "managed daemon shutdown timed out after {}s",
+                SHUTDOWN_TIMEOUT.as_secs()
+            ))
+        }
+    }
+}
+
+/// Undo prepare teardown after a failed install/relaunch (or failed prepare).
+///
+/// Resets the prepare guard and restarts a managed daemon so the desktop shell
+/// is not left without local RPC for the rest of the process lifetime.
+#[tauri::command]
+pub async fn restore_after_failed_update(
+    state: State<'_, AppState>,
+) -> Result<ConnectionDto, String> {
+    UPDATE_SHUTDOWN_DONE.store(false, Ordering::SeqCst);
+    info!(
+        target: "minos_desktop::updater",
+        "restoring managed daemon after failed app update"
+    );
+    let connection = state.daemon.connect(None).await;
+    if connection.connected {
+        info!(
+            target: "minos_desktop::updater",
+            source = %connection.source,
+            managed = connection.managed,
+            "managed daemon restored after failed update"
+        );
+        Ok(connection)
+    } else {
+        let msg = connection
+            .error
+            .clone()
+            .unwrap_or_else(|| "daemon restore failed after update".into());
+        warn!(
+            target: "minos_desktop::updater",
+            error = %msg,
+            "daemon restore after failed update did not connect"
+        );
+        Err(msg)
+    }
+}
+
+/// Reset the prepare guard after a failed install so the next attempt re-runs teardown.
+/// Prefer [`restore_after_failed_update`] from the UI failure path.
+#[tauri::command]
+pub fn reset_update_shutdown_guard() {
+    UPDATE_SHUTDOWN_DONE.store(false, Ordering::SeqCst);
+    info!(target: "minos_desktop::updater", "update shutdown guard reset");
 }
 
 /// Idempotent sync teardown for Exit / signals (shares guard with prepare).
@@ -99,5 +173,12 @@ mod tests {
         UPDATE_SHUTDOWN_DONE.store(true, Ordering::SeqCst);
         assert!(UPDATE_SHUTDOWN_DONE.load(Ordering::SeqCst));
         reset_update_shutdown_guard_for_tests();
+    }
+
+    #[test]
+    fn reset_command_clears_guard() {
+        UPDATE_SHUTDOWN_DONE.store(true, Ordering::SeqCst);
+        reset_update_shutdown_guard();
+        assert!(!UPDATE_SHUTDOWN_DONE.load(Ordering::SeqCst));
     }
 }

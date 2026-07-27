@@ -36,6 +36,12 @@ minos-ui-protocol = { path = "../../../crates/minos-ui-protocol" }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 ctrlc = "3"
+minisign-verify = "0.2"
+base64 = "0.22"
+
+[[bin]]
+name = "verify-updater-sig"
+path = "src/bin/verify_updater_sig.rs"
 
 [lints]
 workspace = true

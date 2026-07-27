@@ -610,23 +610,43 @@ impl DaemonBridge {
     /// (including OpenCode `serve`) are killed via `DaemonHandle::stop` →
     /// `shutdown_instances`. Call on app exit so processes are not reparented
     /// to launchd and left holding ports 4096..=4106.
-    pub async fn shutdown_managed(&self) {
+    /// Stop the managed in-process daemon. Returns `Err` when stop fails so
+    /// updater prepare can refuse to install over live children.
+    ///
+    /// After success the bridge owns neither a client nor a managed handle;
+    /// a later [`Self::connect`] starts a fresh managed daemon (used by
+    /// `restore_after_failed_update`).
+    pub async fn shutdown_managed(&self) -> Result<(), String> {
+        // Drop the WS client first so subscription pumps exit promptly.
         let managed = {
             let mut guard = self.inner.lock().await;
             guard.client = None;
             guard.endpoint = None;
             guard.managed.take()
         };
+        // Invalidate discovery so a concurrent connect does not attach to a
+        // port that is about to close (or already closed).
+        remove_discovery_file();
+        // Bump pump generation so any lingering pump tasks exit.
+        self.pump_generation.fetch_add(1, Ordering::SeqCst);
+
         if let Some(handle) = managed {
-            if let Err(e) = handle.stop().await {
-                warn!(
-                    target: "minos_desktop",
-                    error = %e,
-                    "managed daemon stop failed on app exit"
-                );
-            } else {
-                info!(target: "minos_desktop", "managed daemon stopped on app exit");
+            match handle.stop().await {
+                Ok(()) => {
+                    info!(target: "minos_desktop", "managed daemon stopped");
+                    Ok(())
+                }
+                Err(e) => {
+                    warn!(
+                        target: "minos_desktop",
+                        error = %e,
+                        "managed daemon stop failed"
+                    );
+                    Err(e.to_string())
+                }
             }
+        } else {
+            Ok(())
         }
     }
 
@@ -1382,14 +1402,11 @@ fn map_conversation(c: LocalConversationSummary) -> ConversationDto {
     }
 }
 
-/// Conversation timeline kind for durable `chat_messages` rows.
+/// Map a durable conversation message to a timeline kind.
 ///
-/// Real agent approvals are **session reverse-requests** (permission / plan /
-/// opencode question) with a `request_id` on the transcript — never free text
-/// on the conversation timeline. Do **not** infer `"approval"` from body
-/// substrings like `"approval"` / `"Permission:"`: agent prose about plans
-/// ("plan-approval", "needs approval") would false-positive and render a dead
-/// Allow/Deny card (TUI never does this).
+/// Returns `"git_activity"` when structured git activity was parsed from the
+/// body; otherwise `"text"`. Approval UI is **not** derived here — real
+/// approvals are session reverse-requests, not conversation timeline rows.
 fn conversation_timeline_kind(has_git_activity: bool) -> &'static str {
     if has_git_activity {
         "git_activity"

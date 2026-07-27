@@ -28,7 +28,7 @@
 1. 初始化 logging（mars-xlog）
 2. 解析路径，加载 `LocalState`（或用新 DeviceId 初始化）
 3. 可选配置本地 JSON-RPC 服务器（给 TUI 用）
-4. 调用 `DaemonHandle::start_with_local_rpc()`
+4. 调用 `DaemonHandle::start_with_local_rpc()`（内部：open store → `mark_orphans_suspended` → **`prune_orphan_worktrees`** → agent/relay）
 5. 可选打印配对 QR
 6. 阻塞等待 SIGINT/SIGTERM
 7. 调用 `handle.stop()`（优雅停机）
@@ -299,7 +299,7 @@ Host-local **agent profiles**（`agent_profiles` 表，见 `0001_initial`）stor
 
 Conversation 元数据（`conversations` 表，见 `0001_initial`）：`priority`、`progress`（默认 `todo`）、git work-unit 绑定（`branch` / `worktree_path` / `git_mode` / `git_dirty` / `git_head`）。`create_conversation` 接受可选 `git_mode`：`worktree`（项目是 git 仓库时的**默认**）会在 `{repo_parent}/.minos-worktrees/<slug>-<id>` 下 `git worktree add -b minos/...` 并写入绑定；`inherit` 只快照 project workspace。创建成功后会向时间线发一条结构化 `worktree_created` git activity（body 内嵌 `<!--minos-git-activity:{...}-->`）。Agent **roster** 在 `conversation_agent_members`（runtime 名：`codex`/`claude`/…）；`create_conversation` 接受可选 `priority` 与 `agents[]` 写入 roster。`LocalConversationSummary.participating_agents` **来自 roster，不是 sessions**。`start_agent_in_conversation` 要求目标 agent 已是成员，否则 protocol error；cwd **优先 conversation `worktree_path`**，并在启动时 refresh git dirty/head 缓存。`update_conversation` 可改 title / priority / progress。`remove_conversation_agent` 从 roster 移除 runtime，并 **关闭** 该 agent 在会话内的非 closed sessions（`last_close_reason=roster_removed`）、**取消** 其作为 source/target 的 running teamwork delegations；被移除后 MCP source 校验拒绝 closed / 非成员 session。列表同时聚合 `running_count` 与 `needs_attention_count`（suspended sessions）。首次 `start_agent_in_conversation` 时若 progress 仍为 `todo` 则升为 `in_progress`。
 
-Host git 实现位于 `crates/minos-daemon/src/git/`（`exec` / `snapshot` / `worktree` / `diff` / `identity` / `activity`），经 LocalDaemonRpc 暴露，供 TUI/Desktop/Mobile 共用；不做 forge hosting。`git_push_branch` 要求完整 `user.name`/`user.email` 且工作区干净；`git_open_pull_request` 走本机 `gh pr create` 并自动 `post_git_update(pr_opened)`。
+Host git 实现位于 `crates/minos-daemon/src/git/`（`exec` / `snapshot` / `worktree` / `diff` / `identity` / `activity`），经 LocalDaemonRpc 暴露，供 TUI/Desktop/Mobile 共用；不做 forge hosting。`git_push_branch` 要求完整 `user.name`/`user.email` 且工作区干净，并对 `remote` 做 `^[A-Za-z0-9._/-]+$` 校验（拒绝 leading `-`）；`git_open_pull_request` 走本机 `gh pr create` 并自动 `post_git_update(pr_opened)`。`create_conversation_worktree` 按 repo toplevel 串行化（`Mutex`），分支是否已存在用 `git show-ref --verify` 判断。daemon 启动时 `prune_orphan_worktrees`：扫描各 project 的 `.minos-worktrees/`，删除 **DB 无引用** 的孤儿目录（不自动删 `minos/*` 分支）。`post_git_update` / `format_activity_body` 对 summary/url/subjects 等有 per-field 长度上限，防止灌库扇出。
 
 Desktop：打开 conversation（Timeline mount）时调用 `git_get_status(refresh=true)` 刷新 header 上的 branch/dirty；create conversation 表单可显式选 `git_mode`（isolated worktree / project workspace）；时间线对 `git_activity` 消息渲染专用卡片（`GitActivityCard`）。
 

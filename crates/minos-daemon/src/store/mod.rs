@@ -510,6 +510,17 @@ impl LocalStore {
         Ok(())
     }
 
+    /// All non-empty conversation worktree paths (for startup orphan prune).
+    pub async fn list_registered_worktree_paths(&self) -> anyhow::Result<Vec<String>> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT worktree_path FROM conversations \
+             WHERE worktree_path IS NOT NULL AND TRIM(worktree_path) != ''",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(p,)| p).collect())
+    }
+
     /// Persist live git binding fields for a conversation work unit.
     pub async fn update_conversation_git_fields(
         &self,

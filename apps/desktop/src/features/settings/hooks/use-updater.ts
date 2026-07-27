@@ -3,6 +3,10 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { invoke } from "@tauri-apps/api/core";
 import { isTauriRuntime } from "@/shared/lib/runtime";
+import {
+  formatUpdateFailureMessage,
+  restoreRuntimeAfterFailedUpdate,
+} from "./restore-after-failed-update";
 
 export type UpdateStatus =
   | { state: "idle" }
@@ -139,15 +143,30 @@ export function useUpdater() {
     }
 
     installInFlightRef.current = true;
+    /** True once prepare may have stopped the managed daemon. */
+    let teardownStarted = false;
     try {
       setStatus({ state: "installing" });
-      // Phase C: tear down managed daemon / agent children before binary swap.
+      // Tear down managed daemon / agents before binary swap. Failure blocks
+      // install; any failure after this point must restore runtime.
+      teardownStarted = true;
       await prepareForAppUpdate();
       await update.install();
       updateRef.current = null;
       await relaunch();
     } catch (err) {
-      setStatus({ state: "error", message: toErrorMessage(err) });
+      const installError = toErrorMessage(err);
+      if (teardownStarted) {
+        // prepare / install / relaunch failed after we may have stopped the
+        // daemon — bring local RPC back so the shell is not left dead.
+        const restore = await restoreRuntimeAfterFailedUpdate();
+        setStatus({
+          state: "error",
+          message: formatUpdateFailureMessage(installError, restore),
+        });
+      } else {
+        setStatus({ state: "error", message: installError });
+      }
     } finally {
       installInFlightRef.current = false;
     }

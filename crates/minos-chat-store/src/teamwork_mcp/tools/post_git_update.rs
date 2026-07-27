@@ -5,6 +5,16 @@ use super::{bound_conversation_id, required_string_arg, TeamworkMcpTool, ToolCal
 use crate::mcp_socket::SocketRequest;
 use crate::teamwork_mcp::permissions::TeamworkMcpPermission;
 
+/// Per-field caps so agent-controlled git activity cannot flood chat storage / fan-out.
+const MAX_SUMMARY_LEN: usize = 2000;
+const MAX_URL_LEN: usize = 2048;
+const MAX_PATH_LEN: usize = 1024;
+const MAX_TITLE_LEN: usize = 200;
+const MAX_BRANCH_LEN: usize = 200;
+const MAX_HEAD_LEN: usize = 128;
+const MAX_SUBJECTS: usize = 50;
+const MAX_SUBJECT_LEN: usize = 200;
+
 pub struct PostGitUpdateTool;
 
 impl TeamworkMcpTool for PostGitUpdateTool {
@@ -58,6 +68,7 @@ impl TeamworkMcpTool for PostGitUpdateTool {
             json!({
                 "type": "array",
                 "items": { "type": "string" },
+                "maxItems": MAX_SUBJECTS,
                 "description": "Recent commit subjects (commits_made)"
             }),
         );
@@ -105,25 +116,73 @@ impl TeamworkMcpTool for PostGitUpdateTool {
     }
 }
 
+fn capped_required(args: &Value, name: &str, max_len: usize) -> Result<String> {
+    let raw = required_string_arg(args, name)?.trim();
+    anyhow::ensure!(!raw.is_empty(), "{name} must not be empty");
+    anyhow::ensure!(
+        raw.chars().count() <= max_len,
+        "{name} exceeds max length {max_len}"
+    );
+    Ok(raw.to_owned())
+}
+
+fn capped_optional(args: &Value, name: &str, max_len: usize) -> Result<Option<String>> {
+    let Some(raw) = args.get(name).and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        raw.chars().count() <= max_len,
+        "{name} exceeds max length {max_len}"
+    );
+    Ok(Some(raw.to_owned()))
+}
+
+fn capped_subjects(args: &Value) -> Result<Vec<String>> {
+    let Some(subjects) = args.get("subjects") else {
+        return Ok(Vec::new());
+    };
+    let arr = subjects
+        .as_array()
+        .context("subjects must be an array of strings")?;
+    anyhow::ensure!(
+        arr.len() <= MAX_SUBJECTS,
+        "subjects exceeds max count {MAX_SUBJECTS}"
+    );
+    let mut out = Vec::with_capacity(arr.len());
+    for (i, item) in arr.iter().enumerate() {
+        let s = item
+            .as_str()
+            .with_context(|| format!("subjects[{i}] must be a string"))?
+            .trim();
+        if s.is_empty() {
+            continue;
+        }
+        anyhow::ensure!(
+            s.chars().count() <= MAX_SUBJECT_LEN,
+            "subjects[{i}] exceeds max length {MAX_SUBJECT_LEN}"
+        );
+        out.push(s.to_owned());
+    }
+    Ok(out)
+}
+
 fn build_activity(kind: &str, args: &Value) -> Result<Value> {
     // Forward as JSON object with `kind` tag matching protocol GitActivity.
     let mut map = Map::new();
     map.insert("kind".into(), json!(kind));
     match kind {
         "worktree_created" => {
-            map.insert(
-                "branch".into(),
-                json!(required_string_arg(args, "branch")?.trim()),
-            );
+            map.insert("branch".into(), json!(capped_required(args, "branch", MAX_BRANCH_LEN)?));
             map.insert(
                 "worktree_path".into(),
-                json!(required_string_arg(args, "worktree_path")?.trim()),
+                json!(capped_required(args, "worktree_path", MAX_PATH_LEN)?),
             );
-            if let Some(base) = args.get("base_branch").and_then(Value::as_str) {
-                let base = base.trim();
-                if !base.is_empty() {
-                    map.insert("base_branch".into(), json!(base));
-                }
+            if let Some(base) = capped_optional(args, "base_branch", MAX_BRANCH_LEN)? {
+                map.insert("base_branch".into(), json!(base));
             }
         }
         "commits_made" => {
@@ -132,58 +191,41 @@ fn build_activity(kind: &str, args: &Value) -> Result<Value> {
                 .and_then(Value::as_u64)
                 .context("count is required for commits_made")?;
             map.insert("count".into(), json!(count));
-            if let Some(subjects) = args.get("subjects").cloned() {
-                map.insert("subjects".into(), subjects);
+            let subjects = capped_subjects(args)?;
+            if !subjects.is_empty() {
+                map.insert("subjects".into(), json!(subjects));
             }
-            if let Some(head) = args.get("head").and_then(Value::as_str) {
-                let head = head.trim();
-                if !head.is_empty() {
-                    map.insert("head".into(), json!(head));
-                }
+            if let Some(head) = capped_optional(args, "head", MAX_HEAD_LEN)? {
+                map.insert("head".into(), json!(head));
             }
         }
         "pr_opened" => {
-            map.insert("url".into(), json!(required_string_arg(args, "url")?.trim()));
+            map.insert("url".into(), json!(capped_required(args, "url", MAX_URL_LEN)?));
             if let Some(n) = args.get("number").and_then(Value::as_u64) {
                 map.insert("number".into(), json!(n));
             }
-            if let Some(title) = args.get("title").and_then(Value::as_str) {
-                let title = title.trim();
-                if !title.is_empty() {
-                    map.insert("title".into(), json!(title));
-                }
+            if let Some(title) = capped_optional(args, "title", MAX_TITLE_LEN)? {
+                map.insert("title".into(), json!(title));
             }
         }
         "checks_failed" => {
             map.insert(
                 "summary".into(),
-                json!(required_string_arg(args, "summary")?.trim()),
+                json!(capped_required(args, "summary", MAX_SUMMARY_LEN)?),
             );
         }
         "ready_for_review" => {
-            map.insert(
-                "branch".into(),
-                json!(required_string_arg(args, "branch")?.trim()),
-            );
-            if let Some(head) = args.get("head").and_then(Value::as_str) {
-                let head = head.trim();
-                if !head.is_empty() {
-                    map.insert("head".into(), json!(head));
-                }
+            map.insert("branch".into(), json!(capped_required(args, "branch", MAX_BRANCH_LEN)?));
+            if let Some(head) = capped_optional(args, "head", MAX_HEAD_LEN)? {
+                map.insert("head".into(), json!(head));
             }
         }
         "merged" => {
-            if let Some(c) = args.get("merge_commit").and_then(Value::as_str) {
-                let c = c.trim();
-                if !c.is_empty() {
-                    map.insert("merge_commit".into(), json!(c));
-                }
+            if let Some(c) = capped_optional(args, "merge_commit", MAX_HEAD_LEN)? {
+                map.insert("merge_commit".into(), json!(c));
             }
-            if let Some(b) = args.get("branch").and_then(Value::as_str) {
-                let b = b.trim();
-                if !b.is_empty() {
-                    map.insert("branch".into(), json!(b));
-                }
+            if let Some(b) = capped_optional(args, "branch", MAX_BRANCH_LEN)? {
+                map.insert("branch".into(), json!(b));
             }
         }
         other => anyhow::bail!("unknown git activity kind: {other}"),
@@ -230,5 +272,37 @@ mod tests {
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[test]
+    fn rejects_oversized_summary() {
+        let long = "x".repeat(MAX_SUMMARY_LEN + 1);
+        let err = PostGitUpdateTool
+            .to_socket_request(
+                ToolCallContext {
+                    conversation_id: "c1".into(),
+                    source_agent: None,
+                    source_session_id: None,
+                },
+                json!({ "kind": "checks_failed", "summary": long }),
+            )
+            .expect_err("must reject");
+        assert!(err.to_string().contains("max length"), "{err}");
+    }
+
+    #[test]
+    fn rejects_too_many_subjects() {
+        let subjects: Vec<String> = (0..MAX_SUBJECTS + 1).map(|i| format!("c{i}")).collect();
+        let err = PostGitUpdateTool
+            .to_socket_request(
+                ToolCallContext {
+                    conversation_id: "c1".into(),
+                    source_agent: None,
+                    source_session_id: None,
+                },
+                json!({ "kind": "commits_made", "count": 99, "subjects": subjects }),
+            )
+            .expect_err("must reject");
+        assert!(err.to_string().contains("max count"), "{err}");
     }
 }

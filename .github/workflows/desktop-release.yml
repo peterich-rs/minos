@@ -76,14 +76,17 @@ jobs:
         run: |
           set -euo pipefail
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            EXTRA=()
+            EXTRA=(--latest=false)
             if [[ "${{ github.event.inputs.create_tag }}" == "true" ]]; then
               EXTRA+=(--target "${{ github.sha }}")
             fi
             gh release create "$TAG" \
               --title "Minos Desktop $VERSION" \
               --notes "Desktop release $VERSION. Prefer the auto-updater for upgrades; use installers below for fresh installs." \
-              "${EXTRA[@]}" || gh release create "$TAG" --title "Minos Desktop $VERSION" --notes "Desktop $VERSION" --generate-notes
+              "${EXTRA[@]}"
+          else
+            # Never promote this channel to GitHub "latest" pointer.
+            gh release edit "$TAG" --latest=false
           fi
 
       - name: Ensure rolling minos-desktop-latest release
@@ -91,21 +94,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # Named release only — do not force-push a movable git tag.
+          # Assets are clobbered on each cut; --target records the build SHA.
           if gh release view minos-desktop-latest >/dev/null 2>&1; then
             gh release edit minos-desktop-latest \
               --title "Minos Desktop auto-updater (rolling)" \
-              --notes "Rolling release for the Tauri auto-updater. Prefer versioned releases for manual installs."
+              --notes "Rolling release for the Tauri auto-updater. Prefer versioned releases for manual installs." \
+              --latest=false
           else
-            # Rolling tag is moved each release; create lightweight if missing.
-            git tag -f minos-desktop-latest "${{ github.sha }}"
-            git push -f origin minos-desktop-latest || true
             gh release create minos-desktop-latest \
               --title "Minos Desktop auto-updater (rolling)" \
               --notes "Rolling release for the Tauri auto-updater. Do not download installers from here for first install — use a versioned vX.Y.Z release." \
-              --target "${{ github.sha }}" || \
-            gh release create minos-desktop-latest \
-              --title "Minos Desktop auto-updater (rolling)" \
-              --notes "Rolling updater channel." \
+              --target "${{ github.sha }}" \
               --latest=false
           fi
 
@@ -241,6 +241,13 @@ jobs:
             pnpm tauri signer sign "$ARCHIVE"
           fi
           test -f "${ARCHIVE}.sig" || { echo "::error::missing ${ARCHIVE}.sig"; exit 1; }
+          # Fail CI when private key / embedded pubkey are out of sync.
+          PUBKEY="${{ secrets.MINOS_UPDATER_PUBLIC_KEY }}"
+          if [[ -z "$PUBKEY" ]]; then
+            echo "::error::MINOS_UPDATER_PUBLIC_KEY secret is empty; cannot verify updater signature"
+            exit 1
+          fi
+          node scripts/verify-updater-sig.mjs "$ARCHIVE" "$PUBKEY"
           echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
           echo "archive_name=$(basename "$ARCHIVE")" >> "$GITHUB_OUTPUT"
           echo "has_sig=true" >> "$GITHUB_OUTPUT"
@@ -362,6 +369,12 @@ jobs:
             pnpm tauri signer sign "$APPIMAGE"
           fi
           test -f "${APPIMAGE}.sig" || { echo "::error::missing ${APPIMAGE}.sig"; exit 1; }
+          PUBKEY="${{ secrets.MINOS_UPDATER_PUBLIC_KEY }}"
+          if [[ -z "$PUBKEY" ]]; then
+            echo "::error::MINOS_UPDATER_PUBLIC_KEY secret is empty; cannot verify updater signature"
+            exit 1
+          fi
+          node scripts/verify-updater-sig.mjs "$APPIMAGE" "$PUBKEY"
           echo "appimage=$APPIMAGE" >> "$GITHUB_OUTPUT"
 
       - name: Upload Linux assets

@@ -3980,10 +3980,12 @@ name = "minos-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "ctrlc",
  "futures",
  "jsonrpsee",
+ "minisign-verify",
  "minos-chat-store",
  "minos-daemon",
  "minos-domain",

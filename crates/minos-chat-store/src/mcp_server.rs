@@ -1,10 +1,10 @@
-use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use minos_domain::AgentName;
 use serde_json::{json, Value};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::mcp_socket::{SocketRequest, SocketResponse};
 use crate::teamwork_mcp::{TeamworkMcpToolCatalog, ToolCallContext};
@@ -16,6 +16,8 @@ const SERVER_INSTRUCTIONS: &str = "This MCP server exposes the Minos conversatio
 pub const WAIT_DELEGATION_SOCKET_MARGIN: Duration = Duration::from_secs(5);
 const DEFAULT_SOCKET_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_SOCKET_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Exit if the agent process stops speaking on stdio for this long (sidecar leak guard).
+const STDIO_IDLE_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// JSON-RPC server error: Minos daemon / UDS is not reachable.
 pub const MCP_ERR_DAEMON_UNAVAILABLE: i64 = -32001;
@@ -75,11 +77,25 @@ impl McpSocketClientError {
 
 pub async fn serve_stdio(config: McpServerConfig) -> Result<()> {
     let socket_path = config.socket_path.clone();
-    let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout();
+    let mut reader = BufReader::new(tokio::io::stdin());
+    let mut stdout = tokio::io::stdout();
+    let mut line = String::new();
 
-    for line in stdin.lock().lines() {
-        let line = line?;
+    loop {
+        line.clear();
+        let read = tokio::time::timeout(STDIO_IDLE_TIMEOUT, reader.read_line(&mut line)).await;
+        match read {
+            Ok(Ok(0)) => break, // EOF — agent closed stdin
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => return Err(e.into()),
+            Err(_) => {
+                eprintln!(
+                    "minos-teamwork-mcp: stdio idle for {}s; exiting to avoid sidecar leak",
+                    STDIO_IDLE_TIMEOUT.as_secs()
+                );
+                break;
+            }
+        }
         if line.trim().is_empty() {
             continue;
         }
@@ -93,7 +109,8 @@ pub async fn serve_stdio(config: McpServerConfig) -> Result<()> {
                         "id": null,
                         "error": {"code": -32700, "message": error.to_string()}
                     }),
-                )?;
+                )
+                .await?;
                 continue;
             }
         };
@@ -101,7 +118,7 @@ pub async fn serve_stdio(config: McpServerConfig) -> Result<()> {
             continue;
         };
         let response = handle_request(&config, &socket_path, id, request).await;
-        write_json(&mut stdout, &response?)?;
+        write_json(&mut stdout, &response?).await?;
     }
     Ok(())
 }
@@ -319,10 +336,11 @@ fn error_response(id: Value, code: i64, message: &str) -> Value {
     })
 }
 
-fn write_json(stdout: &mut std::io::Stdout, response: &Value) -> Result<()> {
-    serde_json::to_writer(&mut *stdout, response)?;
-    stdout.write_all(b"\n")?;
-    stdout.flush()?;
+async fn write_json(stdout: &mut tokio::io::Stdout, response: &Value) -> Result<()> {
+    let bytes = serde_json::to_vec(response)?;
+    stdout.write_all(&bytes).await?;
+    stdout.write_all(b"\n").await?;
+    stdout.flush().await?;
     Ok(())
 }
 

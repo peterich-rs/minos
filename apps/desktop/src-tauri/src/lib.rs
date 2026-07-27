@@ -139,6 +139,8 @@ pub fn run() {
             is_auto_update_supported,
             is_updater_plugin_enabled,
             prepare_for_app_update,
+            restore_after_failed_update,
+            reset_update_shutdown_guard,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Minos desktop")

@@ -427,7 +427,16 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    // Dropping frames silently leaves clients inconsistent; close so
+                    // they resubscribe and re-fetch state.
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            target: "minos_daemon::local_rpc",
+                            n,
+                            "ingest subscription lagged; closing sink for resync"
+                        );
+                        break;
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
@@ -453,7 +462,14 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            target: "minos_daemon::local_rpc",
+                            n,
+                            "manager subscription lagged; closing sink for resync"
+                        );
+                        break;
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
@@ -479,7 +495,14 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            target: "minos_daemon::local_rpc",
+                            n,
+                            "conversation subscription lagged; closing sink for resync"
+                        );
+                        break;
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
@@ -506,14 +529,17 @@ pub async fn start_local_rpc_server(
         conversation_event_broadcaster: conversation_evt_tx.clone(),
     };
 
-    let server =
-        Server::builder()
-            .build(config.addr)
-            .await
-            .map_err(|e| MinosError::CodexProtocolError {
-                method: "local_rpc_server_bind".into(),
-                message: e.to_string(),
-            })?;
+    // Local desktop/TUI only — keep connection/subscription caps so a misbehaving
+    // client cannot open unbounded WS fan-out.
+    let server = Server::builder()
+        .max_connections(32)
+        .max_subscriptions_per_connection(16)
+        .build(config.addr)
+        .await
+        .map_err(|e| MinosError::CodexProtocolError {
+            method: "local_rpc_server_bind".into(),
+            message: e.to_string(),
+        })?;
 
     let local_addr = server
         .local_addr()

@@ -5,8 +5,6 @@ pub mod config;
 pub mod conversation_completion;
 pub mod device_secret_store;
 pub mod git;
-/// Back-compat re-export: git snapshot helpers live in `git::snapshot`.
-pub use git::snapshot as git_snapshot;
 pub mod handle;
 pub mod host_bootstrap_key_store;
 pub mod ingest_chunk;
