@@ -223,10 +223,12 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          BUNDLE="src-tauri/target/aarch64-apple-darwin/release/bundle"
+          # Cargo workspace places targets at repo root, not under src-tauri/.
+          BUNDLE="${GITHUB_WORKSPACE}/target/aarch64-apple-darwin/release/bundle"
           APP=$(find "$BUNDLE/macos" -maxdepth 1 -name '*.app' -type d | head -1)
           if [[ -z "$APP" ]]; then
             echo "::error::No .app found under $BUNDLE/macos"
+            find "${GITHUB_WORKSPACE}/target" -name '*.app' -type d 2>/dev/null | head -20 || true
             exit 1
           fi
           APP_NAME=$(basename "$APP")
@@ -235,8 +237,10 @@ jobs:
             (cd "$BUNDLE/macos" && tar -czf "${APP_NAME}.tar.gz" "$APP_NAME")
           fi
           if [[ ! -f "${ARCHIVE}.sig" ]]; then
+            # --no-sign skips updater sig during build; sign explicitly here.
             pnpm tauri signer sign "$ARCHIVE"
           fi
+          test -f "${ARCHIVE}.sig" || { echo "::error::missing ${ARCHIVE}.sig"; exit 1; }
           echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
           echo "archive_name=$(basename "$ARCHIVE")" >> "$GITHUB_OUTPUT"
           echo "has_sig=true" >> "$GITHUB_OUTPUT"
@@ -347,12 +351,17 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          BUNDLE="src-tauri/target/release/bundle"
+          BUNDLE="${GITHUB_WORKSPACE}/target/release/bundle"
           APPIMAGE=$(find "$BUNDLE/appimage" -name '*.AppImage' -type f | head -1)
-          test -n "$APPIMAGE"
+          if [[ -z "$APPIMAGE" ]]; then
+            echo "::error::No AppImage under $BUNDLE/appimage"
+            find "${GITHUB_WORKSPACE}/target" -name '*.AppImage' 2>/dev/null | head -20 || true
+            exit 1
+          fi
           if [[ ! -f "${APPIMAGE}.sig" ]]; then
             pnpm tauri signer sign "$APPIMAGE"
           fi
+          test -f "${APPIMAGE}.sig" || { echo "::error::missing ${APPIMAGE}.sig"; exit 1; }
           echo "appimage=$APPIMAGE" >> "$GITHUB_OUTPUT"
 
       - name: Upload Linux assets
