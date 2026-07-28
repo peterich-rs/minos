@@ -25,6 +25,10 @@ import type {
   ResourceFetchPhase,
   ResourceFetchStatus,
 } from "./types";
+import {
+  normalizeGitActivity,
+  timelineKindForMessage,
+} from "./git-activity-map";
 
 export function coerceUiSessionStatus(status: string): SessionStatus {
   if (
@@ -141,6 +145,9 @@ export function toUiConversation(
     progress,
     branch: row.branch ?? undefined,
     worktree: row.worktree ?? undefined,
+    gitMode: row.gitMode ?? undefined,
+    gitDirty: row.gitDirty ?? undefined,
+    gitHead: row.gitHead ?? undefined,
   };
 }
 
@@ -168,6 +175,7 @@ export function toUiMessage(m: DaemonMessage): TimelineMessage {
       : m.agent
         ? "agent"
         : "user";
+  const gitActivity = normalizeGitActivity(m.gitActivity ?? null);
   return {
     id: m.id,
     messageSeq: m.messageSeq,
@@ -178,10 +186,10 @@ export function toUiMessage(m: DaemonMessage): TimelineMessage {
     // Format in the browser with the user's local timezone.
     time: m.createdAtMs ? formatLocalClock(m.createdAtMs) : m.time,
     createdAtMs: m.createdAtMs,
-    kind:
-      m.kind === "approval" || m.kind === "tool_summary" ? m.kind : "text",
+    kind: timelineKindForMessage(m.kind, gitActivity),
     replyToMessageId: m.replyToMessageId ?? undefined,
     delegationId: m.delegationId ?? undefined,
+    gitActivity,
   };
 }
 

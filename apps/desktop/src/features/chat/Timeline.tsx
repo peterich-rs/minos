@@ -18,6 +18,9 @@ const EMPTY_MESSAGES: never[] = [];
 export function Timeline({ conversationId }: { conversationId: string }) {
   const conversations = useWorkspaceStore((s) => s.conversations);
   const loadTimeline = useWorkspaceStore((s) => s.loadTimeline);
+  const refreshConversationGitStatus = useWorkspaceStore(
+    (s) => s.refreshConversationGitStatus,
+  );
   const source = useWorkspaceStore((s) => s.source);
   const bootEpoch = useWorkspaceStore((s) => s.bootEpoch);
   const livePush = useWorkspaceStore((s) => s.livePush);
@@ -40,7 +43,15 @@ export function Timeline({ conversationId }: { conversationId: string }) {
   useEffect(() => {
     if (source !== "daemon") return;
     void loadTimeline(conversationId);
-  }, [conversationId, source, loadTimeline, bootEpoch]);
+    // Live git dirty/branch for header chips (best-effort).
+    void refreshConversationGitStatus(conversationId);
+  }, [
+    conversationId,
+    source,
+    loadTimeline,
+    refreshConversationGitStatus,
+    bootEpoch,
+  ]);
 
   // Degraded quiet poll of Timeline only when live push is off.
   // Live path relies on applyConversationEvent → conditional loadTimeline.

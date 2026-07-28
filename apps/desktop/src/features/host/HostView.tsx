@@ -3,6 +3,7 @@ import {
   Check,
   ChevronDown,
   Circle,
+  Download,
   Link2,
   Palette,
   QrCode,
@@ -22,6 +23,7 @@ import {
   useTheme,
 } from "@/shared/theme/ThemeProvider";
 import { THEME_LABELS, type SyntaxThemeName } from "@/shared/theme/theme-loader";
+import { UpdateChecker } from "@/features/settings/UpdateChecker";
 
 /**
  * Shared Host settings card.
@@ -151,6 +153,19 @@ export function HostView() {
                 mono={presence.runtimeReady}
               />
             </dl>
+          </section>
+
+          <section className={hostCardClass}>
+            <div className={hostCardHeaderClass}>
+              <Download
+                className="h-3.5 w-3.5 text-ink-muted"
+                strokeWidth={1.8}
+              />
+              <h2 className="text-xs font-semibold text-ink">Updates</h2>
+            </div>
+            <div className="px-3.5 py-3">
+              <UpdateChecker />
+            </div>
           </section>
 
           <section className={hostCardClass}>

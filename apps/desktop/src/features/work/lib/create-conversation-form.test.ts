@@ -5,16 +5,18 @@ import {
   canSubmitCreateConversation,
   defaultCreateConversationForm,
   normalizeCreateConversationTitle,
+  normalizeGitMode,
   sanitizeSelectedAgents,
   toggleSelectedAgent,
 } from "./create-conversation-form.ts";
 
 describe("create-conversation-form", () => {
-  it("defaults to empty title, no priority, no agents", () => {
+  it("defaults to empty title, no priority, no agents, worktree git mode", () => {
     assert.deepEqual(defaultCreateConversationForm(), {
       title: "",
       priority: null,
       selectedAgents: [],
+      gitMode: "worktree",
     });
   });
 
@@ -51,12 +53,20 @@ describe("create-conversation-form", () => {
     );
   });
 
+  it("normalizes git mode", () => {
+    assert.equal(normalizeGitMode("worktree"), "worktree");
+    assert.equal(normalizeGitMode("inherit"), "inherit");
+    assert.equal(normalizeGitMode(null), "worktree");
+    assert.equal(normalizeGitMode("nope"), "worktree");
+  });
+
   it("builds submit payload or null when title empty", () => {
     assert.equal(
       buildCreateConversationInput({
         title: "  ",
         priority: "high",
         selectedAgents: ["codex"],
+        gitMode: "worktree",
       }),
       null,
     );
@@ -65,11 +75,13 @@ describe("create-conversation-form", () => {
         title: "  Ship board  ",
         priority: "medium",
         selectedAgents: ["codex", "codex", " claude "],
+        gitMode: "inherit",
       }),
       {
         title: "Ship board",
         priority: "medium",
         agents: ["codex", "claude"],
+        gitMode: "inherit",
       },
     );
     assert.deepEqual(
@@ -82,6 +94,7 @@ describe("create-conversation-form", () => {
         title: "Solo",
         priority: null,
         agents: [],
+        gitMode: "worktree",
       },
     );
   });

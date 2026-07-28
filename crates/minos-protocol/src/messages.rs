@@ -933,12 +933,21 @@ pub struct LocalConversationSummary {
     /// Workflow progress: `todo` | `in_progress` | `in_review` | `done`.
     #[serde(default = "default_conversation_progress")]
     pub progress: String,
-    /// Git branch snapshot captured when the conversation was created.
+    /// Git branch for this conversation work unit (live when refreshed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
-    /// Linked worktree path snapshot at create (when workspace is a git worktree).
+    /// Linked worktree path when the conversation uses an isolated worktree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_path: Option<String>,
+    /// How this conversation binds to git: `inherit` | `worktree`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_mode: Option<String>,
+    /// Cached dirty flag from last git status refresh (working tree + untracked).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_dirty: Option<bool>,
+    /// Cached short/full HEAD from last git status refresh.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_head: Option<String>,
     /// Live agent sessions in starting/running/resuming (list-time aggregate).
     #[serde(default)]
     pub running_count: u32,
@@ -998,6 +1007,9 @@ pub struct LocalConversationMessage {
     /// Aggregated emoji reactions (durable local daemon). Empty when none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reactions: Vec<LocalReactionGroup>,
+    /// Structured git milestone when this message embeds a git activity payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_activity: Option<GitActivity>,
 }
 
 /// Idempotent toggle: if local actor already reacted with `emoji`, remove; else add.
@@ -1033,6 +1045,235 @@ pub struct ListConversationsResponse {
     pub conversations: Vec<LocalConversationSummary>,
 }
 
+// ── Host-local git (conversation work units) ──────────────────────────────
+
+/// Structured git milestone posted into a conversation timeline.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GitActivity {
+    WorktreeCreated {
+        branch: String,
+        worktree_path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base_branch: Option<String>,
+    },
+    CommitsMade {
+        count: u32,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        subjects: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        head: Option<String>,
+    },
+    PrOpened {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        number: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+    },
+    ChecksFailed {
+        summary: String,
+    },
+    ReadyForReview {
+        branch: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        head: Option<String>,
+    },
+    Merged {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        merge_commit: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
+    },
+}
+
+/// Resolve which checkout to inspect: conversation work unit, project, or raw path.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct GitStatusParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    /// Absolute path override (advanced). Ignored when conversation_id is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// When true and conversation_id is set, persist branch/dirty/head back to the row.
+    #[serde(default)]
+    pub refresh_conversation: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct GitStatusResponse {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short_head: Option<String>,
+    pub dirty: bool,
+    pub has_untracked: bool,
+    pub ahead_count: u32,
+    pub behind_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+    pub is_linked_worktree: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<LocalConversationSummary>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct GitDiffParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Base ref (default HEAD for worktree diff, or merge-base style left side).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    /// Head ref; omit or `WORKTREE` for working-tree diff against base.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct GitDiffFile {
+    pub path: String,
+    pub status: String,
+    pub patch: String,
+    pub truncated: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct GitDiffResponse {
+    pub path: String,
+    pub base: String,
+    pub head: String,
+    pub files: Vec<GitDiffFile>,
+    pub patch: String,
+    pub truncated: bool,
+    pub file_count: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct GitCreateWorktreeParams {
+    pub conversation_id: String,
+    /// When true, replace an existing conversation worktree binding.
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct GitCreateWorktreeResponse {
+    pub conversation: LocalConversationSummary,
+    pub created: bool,
+    pub branch: String,
+    pub worktree_path: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct GitRemoveWorktreeParams {
+    pub conversation_id: String,
+    /// When true, also delete the worktree directory from disk.
+    #[serde(default = "default_true")]
+    pub delete_files: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct GitRemoveWorktreeResponse {
+    pub conversation: LocalConversationSummary,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct GitEnsureIdentityParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct GitEnsureIdentityResponse {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    pub complete: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct GitPushBranchParams {
+    pub conversation_id: String,
+    /// Remote name (default `origin`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
+    /// When true, pass `--set-upstream`.
+    #[serde(default = "default_true")]
+    pub set_upstream: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct GitPushBranchResponse {
+    pub branch: String,
+    pub remote: String,
+    pub head: Option<String>,
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct GitOpenPullRequestParams {
+    pub conversation_id: String,
+    /// PR title (default: conversation title).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// PR body markdown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    /// Base branch (default: remote HEAD / main).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    /// When true, create as draft.
+    #[serde(default)]
+    pub draft: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct GitOpenPullRequestResponse {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<u32>,
+    pub branch: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+}
+
+/// Post a structured git milestone into a conversation (daemon / MCP).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct PostGitUpdateParams {
+    pub conversation_id: String,
+    pub activity: GitActivity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentName>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct PostGitUpdateResponse {
+    pub message_seq: i64,
+    pub message_id: String,
+    pub body: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct CreateConversationParams {
     pub project_id: String,
@@ -1044,6 +1285,10 @@ pub struct CreateConversationParams {
     /// Only members may be @mentioned or started in the conversation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agents: Vec<String>,
+    /// Git isolation mode: `worktree` (default when project is a git repo) or
+    /// `inherit` (use project workspace as-is). Unknown values are rejected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_mode: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -1362,6 +1607,7 @@ mod tests {
             delegation_id: None,
             mentions: vec![],
             reactions: vec![],
+            git_activity: None,
         };
         let value = serde_json::to_value(&msg).unwrap();
         assert!(

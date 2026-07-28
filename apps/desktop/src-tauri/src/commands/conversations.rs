@@ -1,6 +1,7 @@
 use crate::app_state::AppState;
 use crate::daemon::{
-    ConversationDto, MessagePageDto, RemoveConversationAgentDto, ToggleReactionResultDto,
+    ConversationDto, GitStatusDto, MessagePageDto, RemoveConversationAgentDto,
+    ToggleReactionResultDto,
 };
 use tauri::State;
 
@@ -23,10 +24,30 @@ pub async fn daemon_create_conversation(
     title: String,
     priority: Option<String>,
     agents: Option<Vec<String>>,
+    git_mode: Option<String>,
 ) -> Result<ConversationDto, String> {
     state
         .daemon
-        .create_conversation(project_id, title, priority, agents.unwrap_or_default())
+        .create_conversation(
+            project_id,
+            title,
+            priority,
+            agents.unwrap_or_default(),
+            git_mode,
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn daemon_git_get_status(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    refresh_conversation: Option<bool>,
+) -> Result<GitStatusDto, String> {
+    state
+        .daemon
+        .git_get_status(conversation_id, refresh_conversation.unwrap_or(true))
         .await
         .map_err(|e| e.to_string())
 }

@@ -261,6 +261,54 @@ pub trait LocalDaemonRpc {
         req: crate::AppendConversationMessageParams,
     ) -> jsonrpsee::core::RpcResult<crate::AppendConversationMessageResponse>;
 
+    #[method(name = "git_get_status")]
+    async fn git_get_status(
+        &self,
+        req: crate::GitStatusParams,
+    ) -> jsonrpsee::core::RpcResult<crate::GitStatusResponse>;
+
+    #[method(name = "git_get_diff")]
+    async fn git_get_diff(
+        &self,
+        req: crate::GitDiffParams,
+    ) -> jsonrpsee::core::RpcResult<crate::GitDiffResponse>;
+
+    #[method(name = "git_create_worktree")]
+    async fn git_create_worktree(
+        &self,
+        req: crate::GitCreateWorktreeParams,
+    ) -> jsonrpsee::core::RpcResult<crate::GitCreateWorktreeResponse>;
+
+    #[method(name = "git_remove_worktree")]
+    async fn git_remove_worktree(
+        &self,
+        req: crate::GitRemoveWorktreeParams,
+    ) -> jsonrpsee::core::RpcResult<crate::GitRemoveWorktreeResponse>;
+
+    #[method(name = "git_ensure_identity")]
+    async fn git_ensure_identity(
+        &self,
+        req: crate::GitEnsureIdentityParams,
+    ) -> jsonrpsee::core::RpcResult<crate::GitEnsureIdentityResponse>;
+
+    #[method(name = "git_push_branch")]
+    async fn git_push_branch(
+        &self,
+        req: crate::GitPushBranchParams,
+    ) -> jsonrpsee::core::RpcResult<crate::GitPushBranchResponse>;
+
+    #[method(name = "git_open_pull_request")]
+    async fn git_open_pull_request(
+        &self,
+        req: crate::GitOpenPullRequestParams,
+    ) -> jsonrpsee::core::RpcResult<crate::GitOpenPullRequestResponse>;
+
+    #[method(name = "post_git_update")]
+    async fn post_git_update(
+        &self,
+        req: crate::PostGitUpdateParams,
+    ) -> jsonrpsee::core::RpcResult<crate::PostGitUpdateResponse>;
+
     #[method(name = "read_session_raw_history")]
     async fn read_session_raw_history(
         &self,

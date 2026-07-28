@@ -42,6 +42,21 @@ Do not assume the prompt contains the current conversation state if MCP is avail
 - Call `post_conversation_update` only for concise conversation-visible updates that should appear
   in the shared conversation. Do not duplicate routine final answers into the conversation
   unless the user or workflow needs a visible status update.
+- Call `post_git_update` for structured git milestones instead of free-form text:
+  `worktree_created`, `commits_made`, `pr_opened`, `ready_for_review`,
+  `checks_failed`, `merged`. Prefer this whenever you finish a delivery step
+  that involves commits or a pull request.
+
+## Git work units
+
+Conversations may be bound to an isolated git worktree (`git_mode=worktree`).
+When your session cwd is already a linked worktree, keep all file changes there;
+do not checkout or edit the project's default branch for feature work.
+
+- Before committing, ensure `git config user.name` / `user.email` are set.
+- After meaningful commits, call `post_git_update` with `kind=commits_made`.
+- When a PR is opened (or ready for review / merged / checks failed), post the
+  matching `post_git_update` kind so the conversation timeline stays the SSOT.
 
 ## Result delivery
 

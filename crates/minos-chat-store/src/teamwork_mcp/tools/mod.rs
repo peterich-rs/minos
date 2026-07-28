@@ -3,6 +3,7 @@ mod delegate_to_agent;
 mod get_delegation_status;
 mod list_conversation_messages;
 mod post_conversation_update;
+mod post_git_update;
 mod wait_delegation;
 
 use anyhow::{Context, Result};
@@ -18,6 +19,7 @@ pub use delegate_to_agent::DelegateToAgentTool;
 pub use get_delegation_status::GetDelegationStatusTool;
 pub use list_conversation_messages::ListConversationMessagesTool;
 pub use post_conversation_update::PostConversationUpdateTool;
+pub use post_git_update::PostGitUpdateTool;
 pub use wait_delegation::WaitDelegationTool;
 
 pub trait TeamworkMcpTool: Send + Sync {

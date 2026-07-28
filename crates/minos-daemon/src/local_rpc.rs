@@ -320,6 +320,62 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
             .map_err(rpc_err)
     }
 
+    async fn git_get_status(
+        &self,
+        req: minos_protocol::GitStatusParams,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::GitStatusResponse> {
+        self.agent.git_get_status(req).await.map_err(rpc_err)
+    }
+
+    async fn git_get_diff(
+        &self,
+        req: minos_protocol::GitDiffParams,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::GitDiffResponse> {
+        self.agent.git_get_diff(req).await.map_err(rpc_err)
+    }
+
+    async fn git_create_worktree(
+        &self,
+        req: minos_protocol::GitCreateWorktreeParams,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::GitCreateWorktreeResponse> {
+        self.agent.git_create_worktree(req).await.map_err(rpc_err)
+    }
+
+    async fn git_remove_worktree(
+        &self,
+        req: minos_protocol::GitRemoveWorktreeParams,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::GitRemoveWorktreeResponse> {
+        self.agent.git_remove_worktree(req).await.map_err(rpc_err)
+    }
+
+    async fn git_ensure_identity(
+        &self,
+        req: minos_protocol::GitEnsureIdentityParams,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::GitEnsureIdentityResponse> {
+        self.agent.git_ensure_identity(req).await.map_err(rpc_err)
+    }
+
+    async fn git_push_branch(
+        &self,
+        req: minos_protocol::GitPushBranchParams,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::GitPushBranchResponse> {
+        self.agent.git_push_branch(req).await.map_err(rpc_err)
+    }
+
+    async fn git_open_pull_request(
+        &self,
+        req: minos_protocol::GitOpenPullRequestParams,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::GitOpenPullRequestResponse> {
+        self.agent.git_open_pull_request(req).await.map_err(rpc_err)
+    }
+
+    async fn post_git_update(
+        &self,
+        req: minos_protocol::PostGitUpdateParams,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::PostGitUpdateResponse> {
+        self.agent.post_git_update(req).await.map_err(rpc_err)
+    }
+
     async fn read_session_raw_history(
         &self,
         req: ReadSessionParams,
@@ -368,7 +424,16 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    // Dropping frames silently leaves clients inconsistent; close so
+                    // they resubscribe and re-fetch state.
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            target: "minos_daemon::local_rpc",
+                            n,
+                            "ingest subscription lagged; closing sink for resync"
+                        );
+                        break;
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
@@ -394,7 +459,14 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            target: "minos_daemon::local_rpc",
+                            n,
+                            "manager subscription lagged; closing sink for resync"
+                        );
+                        break;
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
@@ -420,7 +492,14 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            target: "minos_daemon::local_rpc",
+                            n,
+                            "conversation subscription lagged; closing sink for resync"
+                        );
+                        break;
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
@@ -447,14 +526,17 @@ pub async fn start_local_rpc_server(
         conversation_event_broadcaster: conversation_evt_tx.clone(),
     };
 
-    let server =
-        Server::builder()
-            .build(config.addr)
-            .await
-            .map_err(|e| MinosError::CodexProtocolError {
-                method: "local_rpc_server_bind".into(),
-                message: e.to_string(),
-            })?;
+    // Local desktop/TUI only — keep connection/subscription caps so a misbehaving
+    // client cannot open unbounded WS fan-out.
+    let server = Server::builder()
+        .max_connections(32)
+        .max_subscriptions_per_connection(16)
+        .build(config.addr)
+        .await
+        .map_err(|e| MinosError::CodexProtocolError {
+            method: "local_rpc_server_bind".into(),
+            message: e.to_string(),
+        })?;
 
     let local_addr = server
         .local_addr()

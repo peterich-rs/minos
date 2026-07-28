@@ -86,6 +86,12 @@ pub struct ConversationDto {
     pub branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_dirty: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_head: Option<String>,
     pub running_count: u32,
     pub approval_count: u32,
 }
@@ -137,6 +143,30 @@ pub struct MessageDto {
     pub mentions: Vec<MentionDto>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reactions: Vec<ReactionGroupDto>,
+    /// Structured git milestone when present (worktree / PR / commits…).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_activity: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStatusDto {
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub short_head: Option<String>,
+    pub dirty: bool,
+    pub has_untracked: bool,
+    pub ahead_count: u32,
+    pub behind_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+    pub is_linked_worktree: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<ConversationDto>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -580,23 +610,43 @@ impl DaemonBridge {
     /// (including OpenCode `serve`) are killed via `DaemonHandle::stop` →
     /// `shutdown_instances`. Call on app exit so processes are not reparented
     /// to launchd and left holding ports 4096..=4106.
-    pub async fn shutdown_managed(&self) {
+    /// Stop the managed in-process daemon. Returns `Err` when stop fails so
+    /// updater prepare can refuse to install over live children.
+    ///
+    /// After success the bridge owns neither a client nor a managed handle;
+    /// a later [`Self::connect`] starts a fresh managed daemon (used by
+    /// `restore_after_failed_update`).
+    pub async fn shutdown_managed(&self) -> Result<(), String> {
+        // Drop the WS client first so subscription pumps exit promptly.
         let managed = {
             let mut guard = self.inner.lock().await;
             guard.client = None;
             guard.endpoint = None;
             guard.managed.take()
         };
+        // Invalidate discovery so a concurrent connect does not attach to a
+        // port that is about to close (or already closed).
+        remove_discovery_file();
+        // Bump pump generation so any lingering pump tasks exit.
+        self.pump_generation.fetch_add(1, Ordering::SeqCst);
+
         if let Some(handle) = managed {
-            if let Err(e) = handle.stop().await {
-                warn!(
-                    target: "minos_desktop",
-                    error = %e,
-                    "managed daemon stop failed on app exit"
-                );
-            } else {
-                info!(target: "minos_desktop", "managed daemon stopped on app exit");
+            match handle.stop().await {
+                Ok(()) => {
+                    info!(target: "minos_desktop", "managed daemon stopped");
+                    Ok(())
+                }
+                Err(e) => {
+                    warn!(
+                        target: "minos_desktop",
+                        error = %e,
+                        "managed daemon stop failed"
+                    );
+                    Err(e.to_string())
+                }
             }
+        } else {
+            Ok(())
         }
     }
 
@@ -843,6 +893,7 @@ impl DaemonBridge {
         title: String,
         priority: Option<String>,
         agents: Vec<String>,
+        git_mode: Option<String>,
     ) -> Result<ConversationDto> {
         let client = self.client().await?;
         let params = CreateConversationParams {
@@ -850,12 +901,44 @@ impl DaemonBridge {
             title,
             priority,
             agents,
+            git_mode,
         };
         let response: minos_protocol::CreateConversationResponse = client
             .request("minos_local_create_conversation", [params])
             .await
             .context("minos_local_create_conversation")?;
         Ok(map_conversation(response.conversation))
+    }
+
+    pub async fn git_get_status(
+        &self,
+        conversation_id: String,
+        refresh_conversation: bool,
+    ) -> Result<GitStatusDto> {
+        let client = self.client().await?;
+        let params = minos_protocol::GitStatusParams {
+            conversation_id: Some(conversation_id),
+            project_id: None,
+            path: None,
+            refresh_conversation,
+        };
+        let response: minos_protocol::GitStatusResponse = client
+            .request("minos_local_git_get_status", [params])
+            .await
+            .context("minos_local_git_get_status")?;
+        Ok(GitStatusDto {
+            path: response.path,
+            branch: response.branch,
+            head: response.head,
+            short_head: response.short_head,
+            dirty: response.dirty,
+            has_untracked: response.has_untracked,
+            ahead_count: response.ahead_count,
+            behind_count: response.behind_count,
+            upstream: response.upstream,
+            is_linked_worktree: response.is_linked_worktree,
+            conversation: response.conversation.map(map_conversation),
+        })
     }
 
     pub async fn update_conversation(
@@ -1311,21 +1394,25 @@ fn map_conversation(c: LocalConversationSummary) -> ConversationDto {
         },
         branch: c.branch,
         worktree: c.worktree_path,
+        git_mode: c.git_mode,
+        git_dirty: c.git_dirty,
+        git_head: c.git_head,
         running_count: c.running_count,
         approval_count: c.needs_attention_count,
     }
 }
 
-/// Conversation timeline kind for durable `chat_messages` rows.
+/// Map a durable conversation message to a timeline kind.
 ///
-/// Real agent approvals are **session reverse-requests** (permission / plan /
-/// opencode question) with a `request_id` on the transcript — never free text
-/// on the conversation timeline. Do **not** infer `"approval"` from body
-/// substrings like `"approval"` / `"Permission:"`: agent prose about plans
-/// ("plan-approval", "needs approval") would false-positive and render a dead
-/// Allow/Deny card (TUI never does this).
-fn conversation_timeline_kind(_body: &str) -> &'static str {
-    "text"
+/// Returns `"git_activity"` when structured git activity was parsed from the
+/// body; otherwise `"text"`. Approval UI is **not** derived here — real
+/// approvals are session reverse-requests, not conversation timeline rows.
+fn conversation_timeline_kind(has_git_activity: bool) -> &'static str {
+    if has_git_activity {
+        "git_activity"
+    } else {
+        "text"
+    }
 }
 
 fn map_reaction_group(g: LocalReactionGroup) -> ReactionGroupDto {
@@ -1346,7 +1433,11 @@ fn map_reaction_group(g: LocalReactionGroup) -> ReactionGroupDto {
 }
 
 fn map_message(m: LocalConversationMessage) -> MessageDto {
-    let kind = conversation_timeline_kind(&m.body);
+    let git_activity = m
+        .git_activity
+        .as_ref()
+        .and_then(|a| serde_json::to_value(a).ok());
+    let kind = conversation_timeline_kind(git_activity.is_some());
     let mentions = m
         .mentions
         .into_iter()
@@ -1370,6 +1461,7 @@ fn map_message(m: LocalConversationMessage) -> MessageDto {
         delegation_id: m.delegation_id,
         mentions,
         reactions: m.reactions.into_iter().map(map_reaction_group).collect(),
+        git_activity,
     }
 }
 

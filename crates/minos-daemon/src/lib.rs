@@ -4,7 +4,7 @@ pub mod agent;
 pub mod config;
 pub mod conversation_completion;
 pub mod device_secret_store;
-pub mod git_snapshot;
+pub mod git;
 pub mod handle;
 pub mod host_bootstrap_key_store;
 pub mod ingest_chunk;

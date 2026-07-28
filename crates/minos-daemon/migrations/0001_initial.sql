@@ -39,14 +39,21 @@ CREATE TABLE conversations (
     agent_session_count   INTEGER NOT NULL DEFAULT 0,
     created_at_ms         INTEGER NOT NULL,
     updated_at_ms         INTEGER NOT NULL,
-    -- Product metadata (priority / workflow / git snapshot at create)
+    -- Product metadata (priority / workflow / git work-unit binding)
     priority              TEXT,
     progress              TEXT NOT NULL DEFAULT 'todo',
     branch                TEXT,
     worktree_path         TEXT,
+    -- inherit | worktree (null = legacy inherit snapshot)
+    git_mode              TEXT,
+    -- Cached live git flags (refreshed by git_get_status / agent start)
+    git_dirty             INTEGER,
+    git_head              TEXT,
     CHECK(length(title) > 0),
     CHECK(message_count >= 0),
-    CHECK(agent_session_count >= 0)
+    CHECK(agent_session_count >= 0),
+    CHECK(git_mode IS NULL OR git_mode IN ('inherit', 'worktree')),
+    CHECK(git_dirty IS NULL OR git_dirty IN (0, 1))
 );
 
 CREATE INDEX conversations_by_project_updated

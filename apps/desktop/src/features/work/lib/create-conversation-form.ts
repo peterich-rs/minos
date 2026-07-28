@@ -5,12 +5,21 @@
 
 import type { ConversationPriority } from "@/shared/lib/mock-data";
 
+/** How the conversation binds to git on create. */
+export type ConversationGitMode = "worktree" | "inherit";
+
 export type CreateConversationFormInput = {
   title: string;
   /** Unset when null/undefined. */
   priority?: ConversationPriority | null;
   /** Runtime agent ids to start after the conversation is created. */
   agents?: string[];
+  /**
+   * Git isolation mode.
+   * - `worktree` (default): dedicated branch + linked worktree when project is a git repo
+   * - `inherit`: use the project workspace checkout as-is
+   */
+  gitMode?: ConversationGitMode;
 };
 
 export type CreateConversationAgentOption = {
@@ -29,16 +38,36 @@ export const CREATE_CONVERSATION_PRIORITIES: Array<{
   { value: "low", label: "Low" },
 ];
 
+export const CREATE_CONVERSATION_GIT_MODES: Array<{
+  value: ConversationGitMode;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "worktree",
+    label: "Isolated worktree",
+    description:
+      "Create a linked worktree and branch so agents do not touch the default branch.",
+  },
+  {
+    value: "inherit",
+    label: "Project workspace",
+    description: "Use the project checkout as-is (shared working tree).",
+  },
+];
+
 /** Default form values when the dialog opens. Agents start empty (opt-in). */
 export function defaultCreateConversationForm(): {
   title: string;
   priority: ConversationPriority | null;
   selectedAgents: string[];
+  gitMode: ConversationGitMode;
 } {
   return {
     title: "",
     priority: null,
     selectedAgents: [],
+    gitMode: "worktree",
   };
 }
 
@@ -91,10 +120,17 @@ export function sanitizeSelectedAgents(
   return out;
 }
 
+export function normalizeGitMode(
+  value: string | null | undefined,
+): ConversationGitMode {
+  return value === "inherit" ? "inherit" : "worktree";
+}
+
 export function buildCreateConversationInput(form: {
   title: string;
   priority: ConversationPriority | null;
   selectedAgents: readonly string[];
+  gitMode?: ConversationGitMode | null;
 }): CreateConversationFormInput | null {
   const title = normalizeCreateConversationTitle(form.title);
   if (!title) return null;
@@ -105,5 +141,6 @@ export function buildCreateConversationInput(form: {
     title,
     priority: form.priority ?? null,
     agents,
+    gitMode: normalizeGitMode(form.gitMode),
   };
 }

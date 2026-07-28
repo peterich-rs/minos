@@ -16,6 +16,17 @@ use tauri_plugin_window_state::StateFlags;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
+/// Attach `tauri-plugin-updater` only for release binaries built with updater secrets.
+fn maybe_register_updater(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
+    #[cfg(minos_updater_enabled)]
+    {
+        if !cfg!(debug_assertions) {
+            return builder.plugin(tauri_plugin_updater::Builder::new().build());
+        }
+    }
+    builder
+}
+
 fn init_tracing() {
     // Host is the tracing SSOT for this process. Managed in-process daemon does
     // **not** call `minos_daemon::logging::init` (that path is only for the
@@ -45,7 +56,7 @@ pub fn run() {
     #[cfg(unix)]
     shutdown::install_signal_handler(Arc::clone(&daemon), Arc::clone(&shutdown_done));
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             // Focus the existing window when a duplicate instance launches so
             // we never start a second managed daemon from a second process.
@@ -74,6 +85,15 @@ pub fn run() {
         .plugin(window_reveal::plugin())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // Always register process so release builds can relaunch after install.
+        .plugin(tauri_plugin_process::init());
+
+    // Register the updater only in configured release builds; omit it locally.
+    // Requires MINOS_UPDATER_PUBLIC_KEY + MINOS_UPDATER_ENDPOINT at compile time
+    // (see build.rs) and a non-debug binary.
+    let builder = maybe_register_updater(builder);
+
+    builder
         .manage(AppState {
             daemon: Arc::clone(&daemon),
         })
@@ -99,6 +119,7 @@ pub fn run() {
             daemon_list_project_sessions,
             daemon_read_transcript,
             daemon_create_conversation,
+            daemon_git_get_status,
             daemon_update_conversation,
             daemon_remove_conversation_agent,
             daemon_append_user_message,
@@ -113,6 +134,11 @@ pub fn run() {
             daemon_resolve_approval,
             daemon_respond_opencode_permission,
             daemon_respond_opencode_question,
+            is_auto_update_supported,
+            is_updater_plugin_enabled,
+            prepare_for_app_update,
+            restore_after_failed_update,
+            reset_update_shutdown_guard,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Minos desktop")
@@ -120,12 +146,10 @@ pub fn run() {
             // Kill provider children (OpenCode serve, Codex, …) on exit.
             // Without this, `opencode serve` is reparented to launchd and
             // exhausts ports 4096..=4106 across Desktop restarts.
+            // prepare_for_app_update shares the same teardown; skip double-stop.
             match event {
-                RunEvent::ExitRequested { .. } => {
-                    shutdown::shutdown_managed_once(&daemon_for_exit, &shutdown_done);
-                }
-                RunEvent::Exit => {
-                    shutdown::shutdown_managed_once(&daemon_for_exit, &shutdown_done);
+                RunEvent::ExitRequested { .. } | RunEvent::Exit => {
+                    commands::shutdown_for_exit(&daemon_for_exit, &shutdown_done);
                 }
                 _ => {}
             }

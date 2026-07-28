@@ -140,6 +140,46 @@ impl DaemonHandle {
             ),
         }
 
+        // Prune `.minos-worktrees/*` directories not referenced by any conversation
+        // (crash / kill without `git_remove_worktree(delete_files)` leaves orphans).
+        match (
+            store.list_registered_worktree_paths().await,
+            store.list_projects().await,
+        ) {
+            (Ok(paths), Ok(projects)) => {
+                let registered: Vec<std::path::PathBuf> =
+                    paths.into_iter().map(std::path::PathBuf::from).collect();
+                let workspaces: Vec<std::path::PathBuf> = projects
+                    .into_iter()
+                    .filter_map(|p| p.workspace_path.map(std::path::PathBuf::from))
+                    .collect();
+                let report = crate::git::prune_orphan_worktrees(&registered, &workspaces);
+                if report.pruned > 0 || !report.errors.is_empty() {
+                    tracing::info!(
+                        target: "minos_daemon::handle",
+                        scanned_roots = report.scanned_roots,
+                        pruned = report.pruned,
+                        errors = report.errors.len(),
+                        "startup worktree orphan reconciliation finished",
+                    );
+                }
+                for err in report.errors {
+                    tracing::warn!(
+                        target: "minos_daemon::handle",
+                        error = %err,
+                        "worktree orphan prune error",
+                    );
+                }
+            }
+            (Err(e), _) | (_, Err(e)) => {
+                tracing::warn!(
+                    target: "minos_daemon::handle",
+                    error = %e,
+                    "worktree orphan reconciliation skipped; non-fatal",
+                );
+            }
+        }
+
         // Build the agent glue ahead of the relay. Live ingest upload is
         // attached after the relay exists; local SQLite persistence works
         // immediately and no longer depends on a relay outbound queue.

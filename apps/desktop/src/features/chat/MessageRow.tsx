@@ -13,6 +13,7 @@ import { MessageActionBar } from "./MessageActionBar";
 import { MessageAuthorText, MessageHeaderRow } from "./MessageHeader";
 import { MessageTimestamp } from "./MessageTimestamp";
 import { useReactionStore } from "./reaction-store";
+import { GitActivityCard } from "./GitActivityCard";
 
 /**
  * Slack/Buzz-style message row: full-width, left-aligned for every author.
@@ -98,6 +99,14 @@ export const MessageRow = memo(function MessageRow({
         <Wrench className="h-3.5 w-3.5 shrink-0 text-ink-muted" />
         <span className="min-w-0 flex-1 truncate">{message.body}</span>
         <span className="shrink-0 text-ink-muted">{message.time}</span>
+      </div>
+    );
+  }
+
+  if (message.kind === "git_activity" && message.gitActivity) {
+    return (
+      <div className={cn("w-full px-0.5", enterClass)}>
+        <GitActivityCard activity={message.gitActivity} time={message.time} />
       </div>
     );
   }

@@ -1302,17 +1302,102 @@ impl AgentGlue {
         let conversation_id = uuid::Uuid::new_v4().to_string();
         let now_ms = current_unix_ms();
 
-        // Snapshot git context from the project workspace at create time.
-        let (branch, worktree_path) = project
+        let project_workspace = project
             .workspace_path
             .as_deref()
-            .map(|p| crate::git_snapshot::detect_git_snapshot(std::path::Path::new(p)))
-            .unwrap_or((None, None));
+            .map(std::path::Path::new)
+            .filter(|p| p.is_dir());
+        let is_git = project_workspace
+            .map(crate::git::exec::is_inside_work_tree)
+            .unwrap_or(false);
+
+        let requested_mode = req
+            .git_mode
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_ascii_lowercase());
+        let git_mode = match requested_mode.as_deref() {
+            None if is_git => "worktree",
+            None => "inherit",
+            Some("worktree") => "worktree",
+            Some("inherit") => "inherit",
+            Some(other) => {
+                return Err(MinosError::CodexProtocolError {
+                    method: "create_conversation".into(),
+                    message: format!("invalid git_mode '{other}'; expected worktree|inherit"),
+                });
+            }
+        };
+
+        // Resolve git binding: optional isolated worktree, else inherit snapshot.
+        let mut branch = None;
+        let mut worktree_path = None;
+        let mut git_dirty = None;
+        let mut git_head = None;
+        let mut worktree_activity: Option<minos_protocol::GitActivity> = None;
+
+        if git_mode == "worktree" {
+            if let Some(ws) = project_workspace {
+                if is_git {
+                    match crate::git::create_conversation_worktree(ws, &conversation_id, title) {
+                        Ok(wt) => {
+                            branch = Some(wt.branch.clone());
+                            worktree_path = Some(wt.path.to_string_lossy().into_owned());
+                            if let Ok(live) = crate::git::detect_live_status(&wt.path) {
+                                git_dirty = Some(live.dirty);
+                                git_head = live.short_head.or(live.head);
+                            }
+                            worktree_activity =
+                                Some(minos_protocol::GitActivity::WorktreeCreated {
+                                    branch: wt.branch,
+                                    worktree_path: wt.path.to_string_lossy().into_owned(),
+                                    base_branch: wt.base_branch,
+                                });
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                target: "minos_daemon::agent",
+                                error = %err,
+                                project_id = %project.project_id,
+                                "worktree create failed; falling back to inherit snapshot",
+                            );
+                            let (b, w) = crate::git::detect_git_snapshot(ws);
+                            branch = b;
+                            worktree_path = w;
+                        }
+                    }
+                }
+            }
+        } else if let Some(ws) = project_workspace {
+            let (b, w) = crate::git::detect_git_snapshot(ws);
+            branch = b;
+            worktree_path = w;
+            if is_git {
+                if let Ok(live) = crate::git::detect_live_status(ws) {
+                    git_dirty = Some(live.dirty);
+                    git_head = live.short_head.or(live.head);
+                    if branch.is_none() {
+                        branch = live.branch;
+                    }
+                }
+            }
+        }
+
+        let effective_git_mode = if worktree_path.is_some() && git_mode == "worktree" {
+            "worktree"
+        } else {
+            "inherit"
+        };
+
         let meta = crate::store::ConversationCreateMeta {
             priority,
             progress: Some("todo".into()),
             branch,
             worktree_path,
+            git_mode: Some(effective_git_mode.into()),
+            git_dirty,
+            git_head,
         };
 
         // Normalize + validate roster up front (membership gates @mention / start).
@@ -1344,11 +1429,28 @@ impl AgentGlue {
             .set_conversation_agent_members(&conversation_id, &member_agents, now_ms)
             .await
             .map_err(|e| map_store_error("create_conversation.set_members", e))?;
+
+        if let Some(activity) = worktree_activity {
+            if let Err(e) = self
+                .post_git_activity_message(&conversation_id, activity, None, None, now_ms)
+                .await
+            {
+                tracing::warn!(
+                    target: "minos_daemon::agent",
+                    error = %e,
+                    conversation_id = %conversation_id,
+                    "failed to post worktree_created activity",
+                );
+            }
+        }
+
         tracing::info!(
             target: "minos_daemon::agent",
             project_id = %project.project_id,
             conversation_id = %conversation_id,
             branch = ?meta.branch,
+            git_mode = %effective_git_mode,
+            worktree_path = ?meta.worktree_path,
             agent_count = member_agents.len(),
             "conversation created",
         );
@@ -1822,6 +1924,659 @@ impl AgentGlue {
         Ok(minos_protocol::AppendConversationMessageResponse { message_seq })
     }
 
+    // ── Git work-unit service (Phase 1–3) ─────────────────────────────────
+
+    async fn resolve_git_checkout_path(
+        &self,
+        conversation_id: Option<&str>,
+        project_id: Option<&str>,
+        path: Option<&str>,
+    ) -> Result<PathBuf, MinosError> {
+        if let Some(raw) = path.map(str::trim).filter(|s| !s.is_empty()) {
+            return Ok(PathBuf::from(raw));
+        }
+        if let Some(cid) = conversation_id.map(str::trim).filter(|s| !s.is_empty()) {
+            let conversation = self
+                .store
+                .get_conversation(cid)
+                .await
+                .map_err(|e| map_store_error("git.resolve_path.conversation", e))?
+                .ok_or_else(|| MinosError::CodexProtocolError {
+                    method: "git".into(),
+                    message: format!("conversation not found: {cid}"),
+                })?;
+            let project = self
+                .store
+                .get_project(&conversation.project_id)
+                .await
+                .map_err(|e| map_store_error("git.resolve_path.project", e))?
+                .ok_or_else(|| MinosError::CodexProtocolError {
+                    method: "git".into(),
+                    message: format!("project not found: {}", conversation.project_id),
+                })?;
+            return crate::git::resolve_work_path(
+                conversation.worktree_path.as_deref(),
+                project.workspace_path.as_deref(),
+            )
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "git".into(),
+                message: format!("no usable git path for conversation {cid}"),
+            });
+        }
+        if let Some(pid) = project_id.map(str::trim).filter(|s| !s.is_empty()) {
+            let project = self
+                .store
+                .get_project(pid)
+                .await
+                .map_err(|e| map_store_error("git.resolve_path.project_only", e))?
+                .ok_or_else(|| MinosError::CodexProtocolError {
+                    method: "git".into(),
+                    message: format!("project not found: {pid}"),
+                })?;
+            return project
+                .workspace_path
+                .as_deref()
+                .map(PathBuf::from)
+                .filter(|p| p.is_dir())
+                .ok_or_else(|| MinosError::CodexProtocolError {
+                    method: "git".into(),
+                    message: format!("project has no workspace path: {pid}"),
+                });
+        }
+        Err(MinosError::CodexProtocolError {
+            method: "git".into(),
+            message: "conversation_id, project_id, or path is required".into(),
+        })
+    }
+
+    async fn refresh_conversation_git_cache(
+        &self,
+        conversation_id: &str,
+        workspace: &Path,
+    ) -> Result<(), MinosError> {
+        let live = crate::git::detect_live_status(workspace).map_err(|e| {
+            MinosError::CodexProtocolError {
+                method: "git.refresh".into(),
+                message: e,
+            }
+        })?;
+        let conversation = self
+            .store
+            .get_conversation(conversation_id)
+            .await
+            .map_err(|e| map_store_error("git.refresh.get", e))?
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "git.refresh".into(),
+                message: format!("conversation not found: {conversation_id}"),
+            })?;
+        let worktree_path = conversation.worktree_path.clone().or_else(|| {
+            if live.is_linked_worktree {
+                Some(live.path.to_string_lossy().into_owned())
+            } else {
+                None
+            }
+        });
+        let now_ms = current_unix_ms();
+        self.store
+            .update_conversation_git_fields(
+                conversation_id,
+                live.branch.as_deref().or(conversation.branch.as_deref()),
+                worktree_path.as_deref(),
+                None,
+                Some(live.dirty),
+                live.short_head
+                    .as_deref()
+                    .or(live.head.as_deref())
+                    .or(conversation.git_head.as_deref()),
+                now_ms,
+            )
+            .await
+            .map_err(|e| map_store_error("git.refresh.update", e))?;
+        Ok(())
+    }
+
+    async fn post_git_activity_message(
+        &self,
+        conversation_id: &str,
+        activity: minos_protocol::GitActivity,
+        session_id: Option<&str>,
+        agent: Option<AgentName>,
+        now_ms: i64,
+    ) -> Result<(i64, String, String), MinosError> {
+        let body = crate::git::format_activity_body(&activity).map_err(|e| {
+            MinosError::CodexProtocolError {
+                method: "post_git_update".into(),
+                message: e,
+            }
+        })?;
+        let message_id = format!("git:{}:{}", conversation_id, uuid::Uuid::new_v4());
+        let (sender_role, agent_label_opt) = if let Some(a) = agent {
+            ("agent", Some(agent_label(a)))
+        } else {
+            ("user", None)
+        };
+        // Agent rows require session_id; fall back to user when session missing.
+        let (sender_role, session_id, agent_label_opt) =
+            if sender_role == "agent" && session_id.is_none() {
+                ("user", None, None)
+            } else {
+                (sender_role, session_id, agent_label_opt)
+            };
+        let message_seq = self
+            .store
+            .upsert_conversation_message(
+                conversation_id,
+                &message_id,
+                session_id,
+                sender_role,
+                agent_label_opt,
+                &body,
+                now_ms,
+                None,
+                None,
+                "[]",
+            )
+            .await
+            .map_err(|e| map_store_error("post_git_update", e))?;
+        self.publish_conversation_message_appended(conversation_id, message_seq);
+        Ok((message_seq, message_id, body))
+    }
+
+    pub async fn git_get_status(
+        &self,
+        req: minos_protocol::GitStatusParams,
+    ) -> Result<minos_protocol::GitStatusResponse, MinosError> {
+        let path = self
+            .resolve_git_checkout_path(
+                req.conversation_id.as_deref(),
+                req.project_id.as_deref(),
+                req.path.as_deref(),
+            )
+            .await?;
+        let live =
+            crate::git::detect_live_status(&path).map_err(|e| MinosError::CodexProtocolError {
+                method: "git_get_status".into(),
+                message: e,
+            })?;
+        let conversation = if req.refresh_conversation {
+            if let Some(cid) = req.conversation_id.as_deref() {
+                self.refresh_conversation_git_cache(cid, &path).await?;
+                let row = self
+                    .store
+                    .get_conversation(cid)
+                    .await
+                    .map_err(|e| map_store_error("git_get_status.reload", e))?
+                    .ok_or_else(|| MinosError::CodexProtocolError {
+                        method: "git_get_status".into(),
+                        message: format!("conversation not found: {cid}"),
+                    })?;
+                let members = self
+                    .store
+                    .list_agents_for_conversations(&[cid.to_owned()])
+                    .await
+                    .map_err(|e| map_store_error("git_get_status.members", e))?;
+                let agents = members
+                    .get(cid)
+                    .into_iter()
+                    .flatten()
+                    .map(|m| parse_agent_label(m))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Some(conversation_summary_from_row(row, agents)?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        Ok(minos_protocol::GitStatusResponse {
+            path: live.path.to_string_lossy().into_owned(),
+            branch: live.branch,
+            head: live.head,
+            short_head: live.short_head,
+            dirty: live.dirty,
+            has_untracked: live.has_untracked,
+            ahead_count: live.ahead_count,
+            behind_count: live.behind_count,
+            upstream: live.upstream,
+            is_linked_worktree: live.is_linked_worktree,
+            conversation,
+        })
+    }
+
+    pub async fn git_get_diff(
+        &self,
+        req: minos_protocol::GitDiffParams,
+    ) -> Result<minos_protocol::GitDiffResponse, MinosError> {
+        let path = self
+            .resolve_git_checkout_path(
+                req.conversation_id.as_deref(),
+                req.project_id.as_deref(),
+                req.path.as_deref(),
+            )
+            .await?;
+        let diff =
+            crate::git::get_diff(&path, req.base.as_deref(), req.head.as_deref()).map_err(|e| {
+                MinosError::CodexProtocolError {
+                    method: "git_get_diff".into(),
+                    message: e,
+                }
+            })?;
+        Ok(minos_protocol::GitDiffResponse {
+            path: path.to_string_lossy().into_owned(),
+            base: diff.base,
+            head: diff.head,
+            files: diff
+                .files
+                .into_iter()
+                .map(|f| minos_protocol::GitDiffFile {
+                    path: f.path,
+                    status: f.status,
+                    patch: f.patch,
+                    truncated: f.truncated,
+                })
+                .collect(),
+            patch: diff.patch,
+            truncated: diff.truncated,
+            file_count: diff.file_count,
+        })
+    }
+
+    pub async fn git_create_worktree(
+        &self,
+        req: minos_protocol::GitCreateWorktreeParams,
+    ) -> Result<minos_protocol::GitCreateWorktreeResponse, MinosError> {
+        let conversation = self
+            .store
+            .get_conversation(&req.conversation_id)
+            .await
+            .map_err(|e| map_store_error("git_create_worktree.get", e))?
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "git_create_worktree".into(),
+                message: format!("conversation not found: {}", req.conversation_id),
+            })?;
+        if conversation.worktree_path.is_some() && !req.force {
+            return Err(MinosError::CodexProtocolError {
+                method: "git_create_worktree".into(),
+                message: "conversation already has a worktree; pass force=true to replace".into(),
+            });
+        }
+        let project = self
+            .store
+            .get_project(&conversation.project_id)
+            .await
+            .map_err(|e| map_store_error("git_create_worktree.project", e))?
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "git_create_worktree".into(),
+                message: format!("project not found: {}", conversation.project_id),
+            })?;
+        let ws = project
+            .workspace_path
+            .as_deref()
+            .map(Path::new)
+            .filter(|p| p.is_dir())
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "git_create_worktree".into(),
+                message: "project has no workspace path".into(),
+            })?;
+        let wt =
+            crate::git::create_conversation_worktree(ws, &req.conversation_id, &conversation.title)
+                .map_err(|e| MinosError::CodexProtocolError {
+                    method: "git_create_worktree".into(),
+                    message: e,
+                })?;
+        let live = crate::git::detect_live_status(&wt.path).ok();
+        let now_ms = current_unix_ms();
+        self.store
+            .update_conversation_git_fields(
+                &req.conversation_id,
+                Some(&wt.branch),
+                Some(&wt.path.to_string_lossy()),
+                Some("worktree"),
+                live.as_ref().map(|l| l.dirty),
+                live.as_ref()
+                    .and_then(|l| l.short_head.as_deref().or(l.head.as_deref())),
+                now_ms,
+            )
+            .await
+            .map_err(|e| map_store_error("git_create_worktree.update", e))?;
+        let activity = minos_protocol::GitActivity::WorktreeCreated {
+            branch: wt.branch.clone(),
+            worktree_path: wt.path.to_string_lossy().into_owned(),
+            base_branch: wt.base_branch.clone(),
+        };
+        let _ = self
+            .post_git_activity_message(&req.conversation_id, activity, None, None, now_ms)
+            .await;
+        let row = self
+            .store
+            .get_conversation(&req.conversation_id)
+            .await
+            .map_err(|e| map_store_error("git_create_worktree.reload", e))?
+            .expect("updated above");
+        let members = self
+            .store
+            .list_agents_for_conversations(&[req.conversation_id.clone()])
+            .await
+            .map_err(|e| map_store_error("git_create_worktree.members", e))?;
+        let agents = members
+            .get(&req.conversation_id)
+            .into_iter()
+            .flatten()
+            .map(|m| parse_agent_label(m))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(minos_protocol::GitCreateWorktreeResponse {
+            conversation: conversation_summary_from_row(row, agents)?,
+            created: wt.created,
+            branch: wt.branch,
+            worktree_path: wt.path.to_string_lossy().into_owned(),
+        })
+    }
+
+    pub async fn git_remove_worktree(
+        &self,
+        req: minos_protocol::GitRemoveWorktreeParams,
+    ) -> Result<minos_protocol::GitRemoveWorktreeResponse, MinosError> {
+        let conversation = self
+            .store
+            .get_conversation(&req.conversation_id)
+            .await
+            .map_err(|e| map_store_error("git_remove_worktree.get", e))?
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "git_remove_worktree".into(),
+                message: format!("conversation not found: {}", req.conversation_id),
+            })?;
+        let project = self
+            .store
+            .get_project(&conversation.project_id)
+            .await
+            .map_err(|e| map_store_error("git_remove_worktree.project", e))?
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "git_remove_worktree".into(),
+                message: format!("project not found: {}", conversation.project_id),
+            })?;
+        if req.delete_files {
+            if let Some(wt) = conversation.worktree_path.as_deref() {
+                if let Some(ws) = project.workspace_path.as_deref() {
+                    if let Err(e) =
+                        crate::git::remove_conversation_worktree(Path::new(ws), Path::new(wt))
+                    {
+                        tracing::warn!(
+                            target: "minos_daemon::agent",
+                            error = %e,
+                            conversation_id = %req.conversation_id,
+                            "worktree remove failed",
+                        );
+                    }
+                }
+            }
+        }
+        let now_ms = current_unix_ms();
+        // Fall back to project workspace snapshot after detach.
+        let (branch, _) = project
+            .workspace_path
+            .as_deref()
+            .map(|p| crate::git::detect_git_snapshot(Path::new(p)))
+            .unwrap_or((None, None));
+        self.store
+            .update_conversation_git_fields(
+                &req.conversation_id,
+                branch.as_deref(),
+                None,
+                Some("inherit"),
+                None,
+                None,
+                now_ms,
+            )
+            .await
+            .map_err(|e| map_store_error("git_remove_worktree.update", e))?;
+        let row = self
+            .store
+            .get_conversation(&req.conversation_id)
+            .await
+            .map_err(|e| map_store_error("git_remove_worktree.reload", e))?
+            .expect("updated");
+        let members = self
+            .store
+            .list_agents_for_conversations(&[req.conversation_id.clone()])
+            .await
+            .map_err(|e| map_store_error("git_remove_worktree.members", e))?;
+        let agents = members
+            .get(&req.conversation_id)
+            .into_iter()
+            .flatten()
+            .map(|m| parse_agent_label(m))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(minos_protocol::GitRemoveWorktreeResponse {
+            conversation: conversation_summary_from_row(row, agents)?,
+        })
+    }
+
+    pub async fn git_ensure_identity(
+        &self,
+        req: minos_protocol::GitEnsureIdentityParams,
+    ) -> Result<minos_protocol::GitEnsureIdentityResponse, MinosError> {
+        let path = self
+            .resolve_git_checkout_path(
+                req.conversation_id.as_deref(),
+                req.project_id.as_deref(),
+                req.path.as_deref(),
+            )
+            .await?;
+        let id = crate::git::read_identity(&path);
+        Ok(minos_protocol::GitEnsureIdentityResponse {
+            path: path.to_string_lossy().into_owned(),
+            name: id.name.clone(),
+            email: id.email.clone(),
+            complete: id.is_complete(),
+        })
+    }
+
+    pub async fn git_push_branch(
+        &self,
+        req: minos_protocol::GitPushBranchParams,
+    ) -> Result<minos_protocol::GitPushBranchResponse, MinosError> {
+        let path = self
+            .resolve_git_checkout_path(Some(&req.conversation_id), None, None)
+            .await?;
+        let id = crate::git::read_identity(&path);
+        id.ensure_complete()
+            .map_err(|e| MinosError::CodexProtocolError {
+                method: "git_push_branch".into(),
+                message: e,
+            })?;
+        let live =
+            crate::git::detect_live_status(&path).map_err(|e| MinosError::CodexProtocolError {
+                method: "git_push_branch".into(),
+                message: e,
+            })?;
+        if live.dirty {
+            return Err(MinosError::CodexProtocolError {
+                method: "git_push_branch".into(),
+                message: "working tree has uncommitted changes; commit or stash before push".into(),
+            });
+        }
+        let branch = live.branch.ok_or_else(|| MinosError::CodexProtocolError {
+            method: "git_push_branch".into(),
+            message: "detached HEAD cannot be pushed as a branch".into(),
+        })?;
+        let remote = req
+            .remote
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("origin");
+        validate_git_remote_name(remote).map_err(|e| MinosError::CodexProtocolError {
+            method: "git_push_branch".into(),
+            message: e,
+        })?;
+        let mut args = vec!["push"];
+        if req.set_upstream {
+            args.push("-u");
+        }
+        args.push(remote);
+        args.push(&branch);
+        crate::git::exec::run_git(&path, &args).map_err(|e| MinosError::CodexProtocolError {
+            method: "git_push_branch".into(),
+            message: e,
+        })?;
+        let _ = self
+            .refresh_conversation_git_cache(&req.conversation_id, &path)
+            .await;
+        Ok(minos_protocol::GitPushBranchResponse {
+            branch,
+            remote: remote.to_owned(),
+            head: live.short_head.or(live.head),
+            message: "pushed".into(),
+        })
+    }
+
+    pub async fn git_open_pull_request(
+        &self,
+        req: minos_protocol::GitOpenPullRequestParams,
+    ) -> Result<minos_protocol::GitOpenPullRequestResponse, MinosError> {
+        let path = self
+            .resolve_git_checkout_path(Some(&req.conversation_id), None, None)
+            .await?;
+        let conversation = self
+            .store
+            .get_conversation(&req.conversation_id)
+            .await
+            .map_err(|e| map_store_error("git_open_pull_request.get", e))?
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "git_open_pull_request".into(),
+                message: format!("conversation not found: {}", req.conversation_id),
+            })?;
+        let live =
+            crate::git::detect_live_status(&path).map_err(|e| MinosError::CodexProtocolError {
+                method: "git_open_pull_request".into(),
+                message: e,
+            })?;
+        let branch = live
+            .branch
+            .clone()
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "git_open_pull_request".into(),
+                message: "detached HEAD cannot open a pull request".into(),
+            })?;
+        let title = req
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(conversation.title.as_str());
+        let body = req.body.as_deref().unwrap_or("");
+        let mut args = vec![
+            "pr".to_owned(),
+            "create".to_owned(),
+            "--title".to_owned(),
+            title.to_owned(),
+            "--body".to_owned(),
+            body.to_owned(),
+            "--head".to_owned(),
+            branch.clone(),
+        ];
+        if let Some(base) = req.base.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            args.push("--base".into());
+            args.push(base.to_owned());
+        }
+        if req.draft {
+            args.push("--draft".into());
+        }
+        // Prefer GitHub CLI when available.
+        let output = std::process::Command::new("gh")
+            .args(&args)
+            .current_dir(&path)
+            .output()
+            .map_err(|e| MinosError::CodexProtocolError {
+                method: "git_open_pull_request".into(),
+                message: format!("failed to spawn gh: {e}"),
+            })?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            return Err(MinosError::CodexProtocolError {
+                method: "git_open_pull_request".into(),
+                message: if stderr.is_empty() {
+                    "gh pr create failed".into()
+                } else {
+                    stderr
+                },
+            });
+        }
+        let url = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("http"))
+            .unwrap_or("")
+            .to_owned();
+        if url.is_empty() {
+            return Err(MinosError::CodexProtocolError {
+                method: "git_open_pull_request".into(),
+                message: "gh pr create succeeded but returned no URL".into(),
+            });
+        }
+        let number = url.rsplit('/').next().and_then(|s| s.parse::<u32>().ok());
+        let now_ms = current_unix_ms();
+        let activity = minos_protocol::GitActivity::PrOpened {
+            url: url.clone(),
+            number,
+            title: Some(title.to_owned()),
+        };
+        let _ = self
+            .post_git_activity_message(&req.conversation_id, activity, None, None, now_ms)
+            .await;
+        Ok(minos_protocol::GitOpenPullRequestResponse {
+            url,
+            number,
+            branch,
+            base: req.base,
+        })
+    }
+
+    pub async fn post_git_update(
+        &self,
+        req: minos_protocol::PostGitUpdateParams,
+    ) -> Result<minos_protocol::PostGitUpdateResponse, MinosError> {
+        let _ = self
+            .store
+            .get_conversation(&req.conversation_id)
+            .await
+            .map_err(|e| map_store_error("post_git_update.get", e))?
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "post_git_update".into(),
+                message: format!("conversation not found: {}", req.conversation_id),
+            })?;
+        let now_ms = current_unix_ms();
+        // Best-effort: refresh dirty/head when activity implies local commits.
+        if matches!(
+            req.activity,
+            minos_protocol::GitActivity::CommitsMade { .. }
+                | minos_protocol::GitActivity::ReadyForReview { .. }
+        ) {
+            if let Ok(path) = self
+                .resolve_git_checkout_path(Some(&req.conversation_id), None, None)
+                .await
+            {
+                let _ = self
+                    .refresh_conversation_git_cache(&req.conversation_id, &path)
+                    .await;
+            }
+        }
+        let (message_seq, message_id, body) = self
+            .post_git_activity_message(
+                &req.conversation_id,
+                req.activity,
+                req.session_id.as_deref(),
+                req.agent,
+                now_ms,
+            )
+            .await?;
+        Ok(minos_protocol::PostGitUpdateResponse {
+            message_seq,
+            message_id,
+            body,
+        })
+    }
+
     pub async fn start_agent_in_conversation(
         &self,
         req: minos_protocol::StartAgentInConversationRequest,
@@ -1859,7 +2614,19 @@ impl AgentGlue {
                 ),
             });
         }
-        let workspace = if req.workspace.trim().is_empty() {
+        // Prefer conversation worktree when present; else explicit req; else project workspace.
+        let workspace = if !req.workspace.trim().is_empty() {
+            PathBuf::from(req.workspace.trim())
+        } else if let Some(wt) = conversation
+            .worktree_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir())
+        {
+            wt
+        } else {
             project
                 .workspace_path
                 .as_deref()
@@ -1871,8 +2638,6 @@ impl AgentGlue {
                         .join("workspaces")
                         .join(project.workspace_slug)
                 })
-        } else {
-            PathBuf::from(req.workspace.trim())
         };
         if let Err(e) = std::fs::create_dir_all(&workspace) {
             tracing::warn!(
@@ -1881,6 +2646,18 @@ impl AgentGlue {
                 path = %workspace.display(),
                 conversation_id = %req.conversation_id,
                 "failed to create conversation workspace directory",
+            );
+        }
+        // Refresh live git cache so UI dirty/branch stay current when work starts.
+        if let Err(e) = self
+            .refresh_conversation_git_cache(&req.conversation_id, &workspace)
+            .await
+        {
+            tracing::debug!(
+                target: "minos_daemon::agent",
+                error = %e,
+                conversation_id = %req.conversation_id,
+                "git cache refresh skipped",
             );
         }
         let launch = self
@@ -2206,6 +2983,27 @@ fn project_workspace_dir(default_workspace: &std::path::Path, workspace_slug: &s
         .to_string()
 }
 
+/// Remote names are passed as bare `git` args — reject option injection.
+fn validate_git_remote_name(remote: &str) -> Result<(), String> {
+    let remote = remote.trim();
+    if remote.is_empty() {
+        return Err("remote name must not be empty".into());
+    }
+    if remote.starts_with('-') {
+        return Err(format!("invalid remote name (leading dash): {remote}"));
+    }
+    if remote.len() > 128 {
+        return Err("remote name too long".into());
+    }
+    let ok = remote
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'));
+    if !ok {
+        return Err(format!("invalid remote name: {remote}"));
+    }
+    Ok(())
+}
+
 fn session_summary_from_row(row: crate::store::SessionRow) -> Result<SessionSummary, MinosError> {
     let end_reason = row_end_reason(&row);
     let state = row_state_to_proto(&row)?;
@@ -2246,6 +3044,9 @@ fn conversation_summary_from_row(
         },
         branch: row.branch.filter(|b| !b.is_empty()),
         worktree_path: row.worktree_path.filter(|w| !w.is_empty()),
+        git_mode: row.git_mode.filter(|m| !m.is_empty()),
+        git_dirty: row.git_dirty.map(|v| v != 0),
+        git_head: row.git_head.filter(|h| !h.is_empty()),
         running_count: u32::try_from(row.running_count.max(0)).unwrap_or(u32::MAX),
         needs_attention_count: u32::try_from(row.needs_attention_count.max(0)).unwrap_or(u32::MAX),
     })
@@ -2255,6 +3056,7 @@ fn local_conversation_message_from_row(
     row: ChatMessageRow,
     reactions: Vec<minos_protocol::LocalReactionGroup>,
 ) -> Result<minos_protocol::LocalConversationMessage, MinosError> {
+    let git_activity = crate::git::parse_activity_body(&row.body);
     let mentions = if row.mentions_json.trim().is_empty() {
         Vec::new()
     } else {
@@ -2278,6 +3080,7 @@ fn local_conversation_message_from_row(
         delegation_id: row.delegation_id,
         mentions,
         reactions,
+        git_activity,
     })
 }
 
@@ -2624,14 +3427,15 @@ fn spawn_mcp_socket_handler(
         let default_workspace = default_workspace.clone();
         let local_conversation_event_tx = local_conversation_event_tx.clone();
         tokio::spawn(async move {
-            handle_daemon_mcp_request(
+            // Pin: PostGitUpdate / delegate paths make this future large.
+            Box::pin(handle_daemon_mcp_request(
                 manager,
                 store,
                 db_path,
                 default_workspace,
                 local_conversation_event_tx,
                 request,
-            )
+            ))
             .await
         })
     });
@@ -2986,6 +3790,102 @@ async fn handle_daemon_mcp_request(
             );
             Ok(SocketResponse::Ok {
                 data: Some(serde_json::json!({ "accepted": true })),
+            })
+        }
+        SocketRequest::PostGitUpdate {
+            conversation_id,
+            source_agent,
+            source_session_id,
+            activity,
+        } => {
+            let source_agent = source_agent
+                .as_deref()
+                .map(parse_socket_agent)
+                .transpose()?;
+            validate_mcp_source_session(
+                &store,
+                &conversation_id,
+                source_agent,
+                source_session_id.as_deref(),
+            )
+            .await?;
+            let activity: minos_protocol::GitActivity = serde_json::from_value(activity)
+                .map_err(|e| anyhow::anyhow!("invalid git activity payload: {e}"))?;
+            // Use AgentGlue helpers via a short-lived path: open store rows already loaded.
+            // Re-implement post path inline to avoid requiring full AgentGlue in this free function.
+            let body =
+                crate::git::format_activity_body(&activity).map_err(|e| anyhow::anyhow!(e))?;
+            let message_id = format!("git:{}:{}", conversation_id, uuid::Uuid::new_v4());
+            let (sender_role, agent_label_opt) = if let Some(a) = source_agent {
+                ("agent", Some(agent_label(a)))
+            } else {
+                ("user", None)
+            };
+            let (sender_role, session_id, agent_label_opt) =
+                if sender_role == "agent" && source_session_id.is_none() {
+                    ("user", None, None)
+                } else {
+                    (sender_role, source_session_id.as_deref(), agent_label_opt)
+                };
+            let message_seq = store
+                .upsert_conversation_message(
+                    &conversation_id,
+                    &message_id,
+                    session_id,
+                    sender_role,
+                    agent_label_opt,
+                    &body,
+                    current_unix_ms(),
+                    None,
+                    None,
+                    "[]",
+                )
+                .await?;
+            // Best-effort live git cache refresh for commit/review milestones.
+            if matches!(
+                activity,
+                minos_protocol::GitActivity::CommitsMade { .. }
+                    | minos_protocol::GitActivity::ReadyForReview { .. }
+            ) {
+                if let Ok(conv) = store.get_conversation(&conversation_id).await {
+                    if let Some(conv) = conv {
+                        if let Ok(Some(project)) = store.get_project(&conv.project_id).await {
+                            if let Some(path) = crate::git::resolve_work_path(
+                                conv.worktree_path.as_deref(),
+                                project.workspace_path.as_deref(),
+                            ) {
+                                if let Ok(live) = crate::git::detect_live_status(&path) {
+                                    let _ = store
+                                        .update_conversation_git_fields(
+                                            &conversation_id,
+                                            live.branch.as_deref().or(conv.branch.as_deref()),
+                                            conv.worktree_path.as_deref(),
+                                            None,
+                                            Some(live.dirty),
+                                            live.short_head
+                                                .as_deref()
+                                                .or(live.head.as_deref())
+                                                .or(conv.git_head.as_deref()),
+                                            current_unix_ms(),
+                                        )
+                                        .await;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            publish_conversation_message_appended(
+                &local_conversation_event_tx,
+                &conversation_id,
+                message_seq,
+            );
+            Ok(SocketResponse::Ok {
+                data: Some(serde_json::json!({
+                    "accepted": true,
+                    "message_id": message_id,
+                    "message_seq": message_seq,
+                })),
             })
         }
     }
@@ -4197,7 +5097,7 @@ mod tests {
             .unwrap();
         let (event_tx, mut event_rx) = broadcast::channel(4);
 
-        let response = handle_daemon_mcp_request(
+        let response = Box::pin(handle_daemon_mcp_request(
             test.glue.manager.clone(),
             test.glue.store.clone(),
             PathBuf::from("unused-teamwork.sqlite"),
@@ -4209,7 +5109,7 @@ mod tests {
                 source_session_id: Some("thread-codex-1234".into()),
                 message: "review posted".into(),
             },
-        )
+        ))
         .await
         .unwrap();
 
@@ -4285,7 +5185,7 @@ mod tests {
             .unwrap();
         let (event_tx, _) = broadcast::channel(4);
 
-        let error = handle_daemon_mcp_request(
+        let error = Box::pin(handle_daemon_mcp_request(
             test.glue.manager.clone(),
             test.glue.store.clone(),
             teamwork_db,
@@ -4300,7 +5200,7 @@ mod tests {
                 target_profile: None,
                 prompt: "say hi".into(),
             },
-        )
+        ))
         .await
         .expect_err("third-agent delegation should be rejected");
 
@@ -4432,7 +5332,7 @@ mod tests {
 
         // MCP from the removed agent session must fail with a membership error.
         let (event_tx, _) = broadcast::channel(4);
-        let error = handle_daemon_mcp_request(
+        let error = Box::pin(handle_daemon_mcp_request(
             test.glue.manager.clone(),
             test.glue.store.clone(),
             test.glue.store.db_path().to_path_buf(),
@@ -4444,7 +5344,7 @@ mod tests {
                 source_session_id: Some("thread-claude-1".into()),
                 message: "still here".into(),
             },
-        )
+        ))
         .await
         .expect_err("removed agent MCP should be rejected");
         let message = error.to_string();
@@ -4808,6 +5708,160 @@ mod tests {
                 .await
                 .as_deref(),
             Some("gemini-provider-session")
+        );
+    }
+
+    /// End-to-end work-unit path: create conversation with worktree → resolve
+    /// agent cwd to that worktree → refresh dirty/branch via git_get_status.
+    #[tokio::test]
+    async fn create_conversation_worktree_first_and_agent_cwd_uses_worktree() {
+        use std::process::Command;
+
+        let test = test_glue().await;
+        let repo = test._tmp.path().join("project-repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git_ok = |args: &[&str]| {
+            let st = Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .status()
+                .expect("git");
+            assert!(st.success(), "git {args:?} failed");
+        };
+        git_ok(&["init", "-b", "main"]);
+        git_ok(&["config", "user.email", "test@example.com"]);
+        git_ok(&["config", "user.name", "test"]);
+        std::fs::write(repo.join("README"), "hello").unwrap();
+        git_ok(&["add", "README"]);
+        git_ok(&["commit", "-m", "init"]);
+
+        let project = test
+            .glue
+            .create_project(minos_protocol::CreateProjectRequest {
+                name: "Repo Project".into(),
+                workspace_slug: "repo-project".into(),
+                workspace_path: Some(repo.to_string_lossy().into_owned()),
+            })
+            .await
+            .expect("create project");
+
+        let created = test
+            .glue
+            .create_conversation(minos_protocol::CreateConversationParams {
+                project_id: project.project.project_id.clone(),
+                title: "Auth Fix".into(),
+                priority: None,
+                agents: vec!["codex".into()],
+                git_mode: Some("worktree".into()),
+            })
+            .await
+            .expect("create conversation");
+
+        let conv = created.conversation;
+        assert_eq!(conv.git_mode.as_deref(), Some("worktree"));
+        let worktree = conv
+            .worktree_path
+            .as_deref()
+            .expect("worktree_path must be set");
+        let worktree_path = PathBuf::from(worktree);
+        assert!(
+            worktree_path.is_dir(),
+            "worktree dir missing: {}",
+            worktree_path.display()
+        );
+        assert!(
+            worktree_path.join(".git").is_file(),
+            "expected linked worktree (.git file)"
+        );
+        let branch = conv.branch.as_deref().expect("branch");
+        assert!(
+            branch.starts_with("minos/"),
+            "unexpected branch name: {branch}"
+        );
+
+        // Same resolution order as start_agent_in_conversation when req.workspace is empty.
+        let agent_cwd = if let Some(wt) = conv
+            .worktree_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir())
+        {
+            wt
+        } else {
+            repo.clone()
+        };
+        assert_eq!(
+            agent_cwd.canonicalize().unwrap(),
+            worktree_path.canonicalize().unwrap(),
+            "agent cwd must be the conversation worktree"
+        );
+
+        // Dirty a file in the worktree and refresh via GitService.
+        std::fs::write(worktree_path.join("README"), "dirty").unwrap();
+        let status = test
+            .glue
+            .git_get_status(minos_protocol::GitStatusParams {
+                conversation_id: Some(conv.conversation_id.clone()),
+                project_id: None,
+                path: None,
+                refresh_conversation: true,
+            })
+            .await
+            .expect("git status");
+        assert!(status.dirty, "expected dirty after edit");
+        assert_eq!(status.branch.as_deref(), Some(branch));
+        assert!(status.is_linked_worktree);
+
+        let refreshed = status
+            .conversation
+            .expect("refresh_conversation should return summary");
+        assert_eq!(refreshed.git_dirty, Some(true));
+        assert_eq!(refreshed.branch.as_deref(), Some(branch));
+        assert_eq!(
+            refreshed.worktree_path.as_deref(),
+            Some(worktree_path.to_string_lossy().as_ref())
+        );
+
+        // Timeline should include worktree_created activity from create.
+        let messages = test
+            .glue
+            .list_conversation_messages(minos_protocol::ListConversationMessagesParams {
+                conversation_id: conv.conversation_id.clone(),
+                before_seq: None,
+                limit: Some(20),
+            })
+            .await
+            .expect("list messages");
+        let has_worktree_activity = messages.messages.iter().any(|m| {
+            matches!(
+                m.git_activity,
+                Some(minos_protocol::GitActivity::WorktreeCreated { .. })
+            )
+        });
+        assert!(
+            has_worktree_activity,
+            "expected worktree_created activity in timeline"
+        );
+
+        // inherit mode must not create a new worktree.
+        let inherited = test
+            .glue
+            .create_conversation(minos_protocol::CreateConversationParams {
+                project_id: project.project.project_id,
+                title: "Shared tree".into(),
+                priority: None,
+                agents: vec!["codex".into()],
+                git_mode: Some("inherit".into()),
+            })
+            .await
+            .expect("create inherit conversation")
+            .conversation;
+        assert_eq!(inherited.git_mode.as_deref(), Some("inherit"));
+        assert!(
+            inherited.worktree_path.is_none(),
+            "inherit mode should not bind a linked worktree"
         );
     }
 }

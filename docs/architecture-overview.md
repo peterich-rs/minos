@@ -95,6 +95,7 @@ Minos/
 | macOS 应用 | [docs/architecture-macos.md](architecture-macos.md) |
 | Web 应用 | [docs/architecture-web.md](architecture-web.md) |
 | Desktop 应用 | [docs/architecture-desktop.md](architecture-desktop.md) |
+| Desktop 自动更新 | [docs/desktop-auto-update.md](desktop-auto-update.md) |
 | Grok ACP 投影 | [docs/architecture-grok-acp-projection.md](architecture-grok-acp-projection.md) |
 | 共享 Crate | [docs/architecture-shared-crates.md](architecture-shared-crates.md) |
 | 业务流程 | [docs/architecture-business-flow.md](architecture-business-flow.md) |

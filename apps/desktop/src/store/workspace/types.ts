@@ -238,8 +238,15 @@ export type WorkspaceState = {
       priority?: ConversationPriority | null;
       /** Runtime agent ids to start after create (opt-in). */
       agents?: string[];
+      /** inherit | worktree; default worktree when project is a git repo. */
+      gitMode?: "worktree" | "inherit";
     },
   ) => Promise<string | null>;
+  /**
+   * Refresh live git status for a conversation work unit and patch list fields
+   * (branch / dirty / head / worktree).
+   */
+  refreshConversationGitStatus: (conversationId: string) => Promise<void>;
   updateConversationTitle: (
     conversationId: string,
     title: string,

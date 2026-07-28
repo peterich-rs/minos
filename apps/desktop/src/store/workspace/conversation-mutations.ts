@@ -26,6 +26,7 @@ export function createConversationMutationActions(
 ): Pick<
   WorkspaceState,
   | "createConversation"
+  | "refreshConversationGitStatus"
   | "updateConversationTitle"
   | "cycleConversationPriority"
   | "cycleConversationProgress"
@@ -40,6 +41,10 @@ export function createConversationMutationActions(
         throw new Error("title cannot be empty");
       }
       const priority = input.priority ?? null;
+      const gitMode =
+        input.gitMode === "inherit" || input.gitMode === "worktree"
+          ? input.gitMode
+          : "worktree";
       // Membership roster — who may be @mentioned / started. No eager session start.
       const agents = (input.agents ?? [])
         .map((a) => a.trim().toLowerCase())
@@ -63,6 +68,11 @@ export function createConversationMutationActions(
           approvalCount: 0,
           progress: "todo",
           priority: priority ?? undefined,
+          gitMode,
+          gitDirty: false,
+          branch: gitMode === "worktree" ? "minos/mock-branch" : "main",
+          worktree:
+            gitMode === "worktree" ? "/tmp/.minos-worktrees/mock" : undefined,
         };
         set((s) => ({ conversations: [conv, ...s.conversations] }));
         return id;
@@ -71,6 +81,7 @@ export function createConversationMutationActions(
       const created = await daemonApi.createConversation(projectId, title, {
         priority: priority ?? null,
         agents,
+        gitMode,
       });
       set({ actionError: null });
 
@@ -79,6 +90,41 @@ export function createConversationMutationActions(
       });
       await get().loadConversations(projectId);
       return created.id;
+    },
+
+    refreshConversationGitStatus: async (conversationId) => {
+      if (get().source !== "daemon" || !conversationId) return;
+      try {
+        const status = await daemonApi.gitGetStatus(conversationId, {
+          refreshConversation: true,
+        });
+        const fromDaemon = status.conversation;
+        set((s) => ({
+          conversations: patchLocalConversation(
+            s.conversations,
+            conversationId,
+            {
+              branch:
+                fromDaemon?.branch ?? status.branch ?? undefined,
+              worktree:
+                fromDaemon?.worktree ??
+                (status.isLinkedWorktree
+                  ? status.path
+                  : s.conversations.find((c) => c.id === conversationId)
+                      ?.worktree),
+              gitMode: fromDaemon?.gitMode ?? undefined,
+              gitDirty: fromDaemon?.gitDirty ?? status.dirty,
+              gitHead:
+                fromDaemon?.gitHead ??
+                status.shortHead ??
+                status.head ??
+                undefined,
+            },
+          ),
+        }));
+      } catch {
+        // Best-effort: non-git workspaces or offline git should not block open.
+      }
     },
 
     updateConversationTitle: async (conversationId, title) => {

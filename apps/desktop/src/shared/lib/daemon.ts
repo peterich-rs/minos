@@ -42,6 +42,9 @@ export type DaemonConversation = {
   progress?: string;
   branch?: string | null;
   worktree?: string | null;
+  gitMode?: string | null;
+  gitDirty?: boolean | null;
+  gitHead?: string | null;
   runningCount?: number;
   approvalCount?: number;
 };
@@ -65,6 +68,31 @@ export type DaemonReactionGroup = {
   actors?: DaemonReactionActor[];
 };
 
+/**
+ * Structured git milestone embedded in a conversation message.
+ * Canonical shape matches `minos_protocol::GitActivity` (snake_case wire JSON).
+ */
+export type DaemonGitActivity = {
+  kind:
+    | "worktree_created"
+    | "commits_made"
+    | "pr_opened"
+    | "checks_failed"
+    | "ready_for_review"
+    | "merged";
+  branch?: string;
+  worktree_path?: string;
+  base_branch?: string;
+  count?: number;
+  subjects?: string[];
+  head?: string;
+  url?: string;
+  number?: number;
+  title?: string;
+  summary?: string;
+  merge_commit?: string;
+};
+
 export type DaemonMessage = {
   id: string;
   /** Durable timeline sort key; always display ASC by this field. */
@@ -81,6 +109,22 @@ export type DaemonMessage = {
   mentions?: DaemonMention[];
   /** Aggregated reactions from local daemon (empty when none). */
   reactions?: DaemonReactionGroup[];
+  /** Structured git milestone when kind is git_activity. */
+  gitActivity?: DaemonGitActivity | null;
+};
+
+export type DaemonGitStatus = {
+  path: string;
+  branch?: string | null;
+  head?: string | null;
+  shortHead?: string | null;
+  dirty: boolean;
+  hasUntracked: boolean;
+  aheadCount: number;
+  behindCount: number;
+  upstream?: string | null;
+  isLinkedWorktree: boolean;
+  conversation?: DaemonConversation | null;
 };
 
 export type DaemonToggleReactionResult = {
@@ -236,13 +280,27 @@ export const daemonApi = {
   createConversation: (
     projectId: string,
     title: string,
-    opts?: { priority?: string | null; agents?: string[] },
+    opts?: {
+      priority?: string | null;
+      agents?: string[];
+      /** inherit | worktree; omit for daemon default (worktree when repo). */
+      gitMode?: string | null;
+    },
   ) =>
     call<DaemonConversation>("daemon_create_conversation", {
       projectId,
       title,
       priority: opts?.priority ?? null,
       agents: opts?.agents ?? [],
+      gitMode: opts?.gitMode ?? null,
+    }),
+  gitGetStatus: (
+    conversationId: string,
+    opts?: { refreshConversation?: boolean },
+  ) =>
+    call<DaemonGitStatus>("daemon_git_get_status", {
+      conversationId,
+      refreshConversation: opts?.refreshConversation ?? true,
     }),
   updateConversation: (
     conversationId: string,
