@@ -1638,12 +1638,21 @@ impl AgentGlue {
             .await
             .map_err(|e| map_store_error("add_conversation_agent.add", e))?;
 
-        let brief_for_msg = req
+        let mut brief_for_msg = req
             .brief
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_owned);
+        if brief_for_msg.is_none() {
+            if let Ok(Some(desc)) = self
+                .store
+                .latest_profile_description_for_runtime(&agent_label)
+                .await
+            {
+                brief_for_msg = Some(desc);
+            }
+        }
         let system_body = crate::roster::format_roster_joined_system_message(
             &agent_label,
             brief_for_msg.as_deref(),
@@ -1877,6 +1886,11 @@ impl AgentGlue {
             .list_conversation_roster(&req.conversation_id)
             .await
             .map_err(|e| map_store_error("list_conversation_roster", e))?;
+        let rows = self
+            .store
+            .enrich_roster_with_profile_briefs(rows)
+            .await
+            .map_err(|e| map_store_error("list_conversation_roster.enrich", e))?;
         Ok(minos_protocol::ListConversationRosterResponse {
             conversation_id: req.conversation_id,
             members: roster_members_from_rows(&rows)?,
@@ -2738,11 +2752,28 @@ impl AgentGlue {
             .await?;
         // Inject conversation roster briefing into session-start instructions
         // (developer / append-system-prompt / rules — not a conversation user row).
+        // Empty member briefs fall back to newest host profile description.
         if let Ok(rows) = self
             .store
             .list_conversation_roster(&req.conversation_id)
             .await
         {
+            let rows = match self.store.enrich_roster_with_profile_briefs(rows).await {
+                Ok(enriched) => enriched,
+                Err(e) => {
+                    tracing::warn!(
+                        target: "minos_daemon::agent",
+                        error = %e,
+                        conversation_id = %req.conversation_id,
+                        "roster briefing: profile brief enrich failed; using raw roster",
+                    );
+                    // Re-fetch raw roster (previous vec was moved into enrich).
+                    self.store
+                        .list_conversation_roster(&req.conversation_id)
+                        .await
+                        .unwrap_or_default()
+                }
+            };
             let briefing = crate::roster::format_roster_briefing(agent_name, &rows);
             if let Some(merged) = crate::roster::merge_launch_instructions(
                 launch.as_ref().and_then(|l| l.instructions.clone()),
@@ -2831,12 +2862,16 @@ impl AgentGlue {
         }
         let id = format!("profile-{}", uuid::Uuid::new_v4());
         let now = current_unix_ms();
+        // Profile description is the durable peer-facing role brief (same cap
+        // as conversation roster briefs). Empty is allowed; teammates then see
+        // "(no brief…)" until a description or per-conversation brief is set.
+        let description = crate::store::normalize_roster_brief(Some(req.description.as_str()));
         let row = self
             .store
             .create_agent_profile(
                 &id,
                 name,
-                req.description.trim(),
+                &description,
                 req.runtime_agent.bin_name(),
                 model,
                 req.reasoning_effort.trim(),
@@ -2856,12 +2891,13 @@ impl AgentGlue {
         req: minos_protocol::UpdateAgentProfileRequest,
     ) -> Result<minos_protocol::AgentProfileSummary, MinosError> {
         let name = validate_agent_profile_name(&req.name, "update_agent_profile")?;
+        let description = crate::store::normalize_roster_brief(Some(req.description.as_str()));
         let row = self
             .store
             .update_agent_profile(
                 &req.id,
                 name,
-                req.description.trim(),
+                &description,
                 req.instructions.trim(),
                 current_unix_ms(),
             )
@@ -3117,6 +3153,11 @@ impl AgentGlue {
             .list_conversation_roster(&cid)
             .await
             .map_err(|e| map_store_error("conversation_summary.roster", e))?;
+        let members = self
+            .store
+            .enrich_roster_with_profile_briefs(members)
+            .await
+            .map_err(|e| map_store_error("conversation_summary.roster_enrich", e))?;
         conversation_summary_from_row(row, roster_members_from_rows(&members)?)
     }
 
@@ -3192,7 +3233,21 @@ impl AgentGlue {
         exclude_agents: &[&str],
     ) {
         let members = match self.store.list_conversation_roster(conversation_id).await {
-            Ok(m) => m,
+            Ok(m) => match self.store.enrich_roster_with_profile_briefs(m).await {
+                Ok(enriched) => enriched,
+                Err(e) => {
+                    tracing::warn!(
+                        target: "minos_daemon::agent",
+                        error = %e,
+                        conversation_id = %conversation_id,
+                        "idle roster inject: profile brief enrich failed; using raw roster",
+                    );
+                    self.store
+                        .list_conversation_roster(conversation_id)
+                        .await
+                        .unwrap_or_default()
+                }
+            },
             Err(e) => {
                 tracing::warn!(
                     target: "minos_daemon::agent",

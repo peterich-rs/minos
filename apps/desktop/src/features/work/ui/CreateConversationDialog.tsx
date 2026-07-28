@@ -15,11 +15,13 @@ import {
   canSubmitCreateConversation,
   CREATE_CONVERSATION_GIT_MODES,
   CREATE_CONVERSATION_PRIORITIES,
+  defaultBriefsFromProfiles,
   defaultCreateConversationForm,
   MAX_AGENT_BRIEF_CHARS,
   toggleSelectedAgent,
   type ConversationGitMode,
   type CreateConversationFormInput,
+  type ProfileBriefSource,
 } from "@/features/work/lib/create-conversation-form";
 import { agentMeta, type AgentRuntime } from "@/shared/lib/mock-data";
 import { cn } from "@/shared/lib/utils";
@@ -43,6 +45,8 @@ type Props = {
   isCreating: boolean;
   projectName: string;
   clis: RuntimeCliDescriptor[];
+  /** Host agent profiles — description seeds peer-facing roster briefs. */
+  profiles?: ProfileBriefSource[];
   onOpenChange: (open: boolean) => void;
   onCreate: (input: CreateConversationFormInput) => Promise<void>;
 };
@@ -52,6 +56,7 @@ export function CreateConversationDialog({
   isCreating,
   projectName,
   clis,
+  profiles = [],
   onOpenChange,
   onCreate,
 }: Props) {
@@ -76,6 +81,11 @@ export function CreateConversationDialog({
     }));
   }, [clis]);
 
+  const profileBriefDefaults = useMemo(
+    () => defaultBriefsFromProfiles(profiles),
+    [profiles],
+  );
+
   useEffect(() => {
     if (!open) return;
     const defaults = defaultCreateConversationForm();
@@ -83,7 +93,8 @@ export function CreateConversationDialog({
     setPriority(defaults.priority);
     setGitMode(defaults.gitMode);
     setSelectedAgents(defaults.selectedAgents);
-    setAgentBriefs(defaults.agentBriefs);
+    // Prefill empty selection briefs from Host profiles (role descriptions).
+    setAgentBriefs({ ...defaults.agentBriefs, ...profileBriefDefaults });
     setErrorMessage(null);
     submitInFlightRef.current = false;
     const timerId = window.setTimeout(() => {
@@ -91,7 +102,7 @@ export function CreateConversationDialog({
       titleInputRef.current?.select();
     }, 50);
     return () => window.clearTimeout(timerId);
-  }, [open]);
+  }, [open, profileBriefDefaults]);
 
   const canSubmit =
     canSubmitCreateConversation(title, selectedAgents) && !isCreating;
@@ -306,6 +317,17 @@ export function CreateConversationDialog({
                                 const { [agent.id]: _, ...rest } = briefs;
                                 return rest;
                               });
+                            } else {
+                              // Selecting: seed brief from profile when unset.
+                              setAgentBriefs((briefs) => {
+                                if ((briefs[agent.id] ?? "").trim()) {
+                                  return briefs;
+                                }
+                                const fromProfile =
+                                  profileBriefDefaults[agent.id];
+                                if (!fromProfile) return briefs;
+                                return { ...briefs, [agent.id]: fromProfile };
+                              });
                             }
                             return next;
                           });
@@ -354,7 +376,10 @@ export function CreateConversationDialog({
                             className="mb-1 block text-2xs font-medium text-ink-muted"
                             htmlFor={briefId}
                           >
-                            Role brief for teammates (optional)
+                            Role brief for teammates
+                            {profileBriefDefaults[agent.id]
+                              ? " (from agent profile; editable)"
+                              : " (optional)"}
                           </label>
                           <input
                             id={briefId}
@@ -363,7 +388,10 @@ export function CreateConversationDialog({
                             value={agentBriefs[agent.id] ?? ""}
                             disabled={isCreating}
                             maxLength={MAX_AGENT_BRIEF_CHARS}
-                            placeholder="e.g. implements features in the worktree"
+                            placeholder={
+                              profileBriefDefaults[agent.id] ||
+                              "e.g. implements features in the worktree"
+                            }
                             onChange={(e) => {
                               const value = e.target.value;
                               setAgentBriefs((prev) => ({

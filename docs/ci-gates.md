@@ -49,7 +49,7 @@ naming hit fails before clippy/xcodebuild/the suite.
 |-----|--------|-----------------|------|
 | `rust` | ubuntu | sqlx prepare --check → `cargo xtask check-rust` | Rust quality, daemon integration tests, backend schema |
 | `windows-host` | windows | host crate tests + daemon `test-support` + bin builds | Windows portability only |
-| `dart` | ubuntu | format `lib`+`test`, analyze, test `--exclude-tags ffi`, frb drift | Mobile logic + **sole** frb drift owner |
+| `dart` | ubuntu | format `lib`+`test`, analyze (`timeout-minutes: 5`, analysis_server plugins like `riverpod_lint` stripped for the step to avoid hang), test `--exclude-tags ffi`, frb drift | Mobile logic + **sole** frb drift owner |
 | `frontend` | ubuntu | `apps/web` `pnpm check` + `apps/desktop` `pnpm check:all` | Web admin + desktop JS/TS |
 | `macos` | macos-15 | `needs: [rust]` → bootstrap → `cargo xtask check-macos` | Apple native, `minos-desktop` Rust check, Flutter ffi |
 

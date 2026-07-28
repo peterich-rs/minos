@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   buildCreateConversationInput,
   canSubmitCreateConversation,
+  defaultBriefsFromProfiles,
   defaultCreateConversationForm,
   MAX_AGENT_BRIEF_CHARS,
   normalizeAgentBrief,
@@ -61,6 +62,35 @@ describe("create-conversation-form", () => {
     assert.equal(normalizeGitMode("inherit"), "inherit");
     assert.equal(normalizeGitMode(null), "worktree");
     assert.equal(normalizeGitMode("nope"), "worktree");
+  });
+
+  it("defaults briefs from newest profile description per runtime", () => {
+    const briefs = defaultBriefsFromProfiles([
+      {
+        runtime_agent: "codex",
+        description: "stale",
+        updated_at_ms: 1,
+      },
+      {
+        runtime_agent: "codex",
+        description: "implements features",
+        updated_at_ms: 99,
+      },
+      {
+        runtime_agent: "claude",
+        description: "  reviews PRs  ",
+        updated_at_ms: 10,
+      },
+      {
+        runtime_agent: "gemini",
+        description: "   ",
+        updated_at_ms: 10,
+      },
+    ]);
+    assert.deepEqual(briefs, {
+      codex: "implements features",
+      claude: "reviews PRs",
+    });
   });
 
   it("caps agent briefs", () => {

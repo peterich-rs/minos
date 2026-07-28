@@ -94,6 +94,42 @@ export function normalizeAgentBrief(brief: string | null | undefined): string {
   return trimmed.slice(0, MAX_AGENT_BRIEF_CHARS);
 }
 
+/** Minimal profile fields used to default roster briefs. */
+export type ProfileBriefSource = {
+  runtime_agent: string;
+  description?: string | null;
+  /** Prefer higher when multiple profiles share a runtime. */
+  updated_at_ms?: number | null;
+};
+
+/**
+ * Map runtime agent id → newest non-empty profile description.
+ * Profile description is the Host-level peer-facing role brief.
+ */
+export function defaultBriefsFromProfiles(
+  profiles: readonly ProfileBriefSource[],
+): Record<string, string> {
+  const best = new Map<string, { brief: string; updated: number }>();
+  for (const p of profiles) {
+    const runtime = (p.runtime_agent ?? "").trim().toLowerCase();
+    const brief = normalizeAgentBrief(p.description);
+    if (!runtime || !brief) continue;
+    const updated =
+      typeof p.updated_at_ms === "number" && Number.isFinite(p.updated_at_ms)
+        ? p.updated_at_ms
+        : 0;
+    const prev = best.get(runtime);
+    if (!prev || updated >= prev.updated) {
+      best.set(runtime, { brief, updated });
+    }
+  }
+  const out: Record<string, string> = {};
+  for (const [runtime, v] of best) {
+    out[runtime] = v.brief;
+  }
+  return out;
+}
+
 export function canSubmitCreateConversation(
   title: string,
   selectedAgents: readonly string[] = [],

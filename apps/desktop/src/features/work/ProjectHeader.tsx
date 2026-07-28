@@ -10,6 +10,7 @@ import {
 } from "@/shared/lib/host-status";
 import { cn } from "@/shared/lib/utils";
 import { toast } from "@/shared/lib/toast";
+import { useAgentProfilesQuery } from "@/shared/api/hooks";
 
 const views: { id: ProjectView; label: string; icon: typeof List }[] = [
   { id: "conversations", label: "Conversations", icon: List },
@@ -36,6 +37,8 @@ export function ProjectHeader({ projectId }: { projectId?: string }) {
   );
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  const profilesQuery = useAgentProfilesQuery();
+  const profiles = profilesQuery.data ?? [];
 
   const project = projects.find((p) => p.id === resolvedProjectId);
   const hostLabel = projectHostLabel(project?.hostName);
@@ -176,6 +179,7 @@ export function ProjectHeader({ projectId }: { projectId?: string }) {
         isCreating={creating}
         projectName={project.name}
         clis={clis}
+        profiles={profiles}
         onOpenChange={setCreateOpen}
         onCreate={handleCreate}
       />

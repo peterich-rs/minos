@@ -1444,6 +1444,62 @@ impl LocalStore {
             .rows_affected();
         Ok(n > 0)
     }
+
+    /// Newest non-empty profile `description` for a runtime (peer role-brief fallback).
+    ///
+    /// Profile description is the durable Host-level role brief; conversation
+    /// roster `brief` overrides it when set. Used when listing roster / building
+    /// session-start briefings so teammates see configured intros even if the
+    /// conversation member row left brief empty.
+    pub async fn latest_profile_description_for_runtime(
+        &self,
+        runtime_agent: &str,
+    ) -> anyhow::Result<Option<String>> {
+        let runtime = runtime_agent.trim().to_ascii_lowercase();
+        if runtime.is_empty() {
+            return Ok(None);
+        }
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT description FROM agent_profiles \
+             WHERE lower(runtime_agent) = ? AND trim(description) != '' \
+             ORDER BY updated_at_ms DESC LIMIT 1",
+        )
+        .bind(runtime)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row
+            .map(|(d,)| normalize_roster_brief(Some(d.as_str())))
+            .filter(|s| !s.is_empty()))
+    }
+
+    /// Fill empty roster briefs from the newest host profile description per runtime.
+    pub async fn enrich_roster_with_profile_briefs(
+        &self,
+        members: Vec<ConversationAgentMemberRow>,
+    ) -> anyhow::Result<Vec<ConversationAgentMemberRow>> {
+        let mut out = Vec::with_capacity(members.len());
+        for mut m in members {
+            let has_brief = m
+                .brief
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .is_some();
+            if !has_brief {
+                if let Some(desc) = self
+                    .latest_profile_description_for_runtime(&m.agent)
+                    .await?
+                {
+                    m.brief = Some(desc);
+                }
+            } else if let Some(b) = m.brief.take() {
+                let n = normalize_roster_brief(Some(b.as_str()));
+                m.brief = if n.is_empty() { None } else { Some(n) };
+            }
+            out.push(m);
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -1629,6 +1685,91 @@ mod tests {
             .remove_conversation_agent_member("c1", "grok")
             .await
             .unwrap());
+    }
+
+    #[tokio::test]
+    async fn roster_brief_falls_back_to_newest_profile_description() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = LocalStore::open(&tmp.path().join("profile-brief.sqlite"))
+            .await
+            .unwrap();
+        store
+            .create_project("p", "Project", "project", Some("/w"), 0)
+            .await
+            .unwrap();
+        store
+            .create_conversation("c1", "p", "Team", 10)
+            .await
+            .unwrap();
+        store
+            .set_conversation_agent_members(
+                "c1",
+                &[
+                    ConversationAgentMemberInput {
+                        agent: "codex".into(),
+                        brief: None,
+                    },
+                    ConversationAgentMemberInput {
+                        agent: "claude".into(),
+                        brief: Some("conversation override".into()),
+                    },
+                ],
+                11,
+            )
+            .await
+            .unwrap();
+        store
+            .create_agent_profile(
+                "profile-old",
+                "Old Codex",
+                "stale brief",
+                "codex",
+                "gpt-5",
+                "",
+                "",
+                100,
+            )
+            .await
+            .unwrap();
+        store
+            .create_agent_profile(
+                "profile-new",
+                "Feature Codex",
+                "implements features in the worktree",
+                "codex",
+                "gpt-5",
+                "",
+                "",
+                200,
+            )
+            .await
+            .unwrap();
+        store
+            .create_agent_profile(
+                "profile-claude",
+                "Reviewer",
+                "from profile — should not win over roster brief",
+                "claude",
+                "opus",
+                "",
+                "",
+                200,
+            )
+            .await
+            .unwrap();
+
+        let raw = store.list_conversation_roster("c1").await.unwrap();
+        let enriched = store.enrich_roster_with_profile_briefs(raw).await.unwrap();
+        let by_agent: std::collections::HashMap<_, _> =
+            enriched.into_iter().map(|m| (m.agent, m.brief)).collect();
+        assert_eq!(
+            by_agent.get("codex").and_then(|b| b.as_deref()),
+            Some("implements features in the worktree")
+        );
+        assert_eq!(
+            by_agent.get("claude").and_then(|b| b.as_deref()),
+            Some("conversation override")
+        );
     }
 
     #[tokio::test]
