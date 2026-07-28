@@ -206,6 +206,22 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
         self.agent.update_conversation(req).await.map_err(rpc_err)
     }
 
+    async fn add_conversation_agent(
+        &self,
+        req: minos_protocol::AddConversationAgentParams,
+    ) -> jsonrpsee::core::RpcResult<minos_protocol::AddConversationAgentResponse> {
+        tracing::info!(
+            target: "minos_daemon::local_rpc",
+            conversation_id = %req.conversation_id,
+            agent = %req.agent,
+            "local RPC add_conversation_agent",
+        );
+        self.agent
+            .add_conversation_agent(req)
+            .await
+            .map_err(rpc_err)
+    }
+
     async fn remove_conversation_agent(
         &self,
         req: RemoveConversationAgentParams,

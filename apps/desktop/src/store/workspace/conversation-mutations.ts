@@ -47,8 +47,21 @@ export function createConversationMutationActions(
           : "worktree";
       // Membership roster — who may be @mentioned / started. No eager session start.
       const agents = (input.agents ?? [])
-        .map((a) => a.trim().toLowerCase())
-        .filter((a, i, arr) => a.length > 0 && arr.indexOf(a) === i);
+        .map((spec) => {
+          const agent =
+            typeof spec === "string"
+              ? spec.trim().toLowerCase()
+              : (spec.agent ?? "").trim().toLowerCase();
+          const brief =
+            typeof spec === "string"
+              ? undefined
+              : (spec.brief?.trim() || undefined);
+          return agent ? { agent, brief } : null;
+        })
+        .filter((a): a is { agent: string; brief?: string } => a != null)
+        .filter(
+          (a, i, arr) => arr.findIndex((b) => b.agent === a.agent) === i,
+        );
 
       if (get().source !== "daemon") {
         // Mock: append a local conversation for browser-only preview.
@@ -63,7 +76,7 @@ export function createConversationMutationActions(
           messageCount: 0,
           boardColumn: "backlog",
           agentSessionCount: 0,
-          participatingAgents: agents,
+          participatingAgents: agents.map((a) => a.agent),
           runningCount: 0,
           approvalCount: 0,
           progress: "todo",

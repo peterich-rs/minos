@@ -4,6 +4,8 @@ import {
   buildCreateConversationInput,
   canSubmitCreateConversation,
   defaultCreateConversationForm,
+  MAX_AGENT_BRIEF_CHARS,
+  normalizeAgentBrief,
   normalizeCreateConversationTitle,
   normalizeGitMode,
   sanitizeSelectedAgents,
@@ -16,6 +18,7 @@ describe("create-conversation-form", () => {
       title: "",
       priority: null,
       selectedAgents: [],
+      agentBriefs: {},
       gitMode: "worktree",
     });
   });
@@ -60,7 +63,12 @@ describe("create-conversation-form", () => {
     assert.equal(normalizeGitMode("nope"), "worktree");
   });
 
-  it("builds submit payload or null when title empty", () => {
+  it("caps agent briefs", () => {
+    assert.equal(normalizeAgentBrief("  review  "), "review");
+    assert.equal(normalizeAgentBrief("x".repeat(MAX_AGENT_BRIEF_CHARS + 10)).length, MAX_AGENT_BRIEF_CHARS);
+  });
+
+  it("builds submit payload with agent briefs or null when title empty", () => {
     assert.equal(
       buildCreateConversationInput({
         title: "  ",
@@ -75,12 +83,19 @@ describe("create-conversation-form", () => {
         title: "  Ship board  ",
         priority: "medium",
         selectedAgents: ["codex", "codex", " claude "],
+        agentBriefs: {
+          codex: "implements features",
+          claude: "  reviews PRs  ",
+        },
         gitMode: "inherit",
       }),
       {
         title: "Ship board",
         priority: "medium",
-        agents: ["codex", "claude"],
+        agents: [
+          { agent: "codex", brief: "implements features" },
+          { agent: "claude", brief: "reviews PRs" },
+        ],
         gitMode: "inherit",
       },
     );
@@ -88,12 +103,13 @@ describe("create-conversation-form", () => {
       buildCreateConversationInput({
         title: "Solo",
         priority: null,
-        selectedAgents: [],
+        selectedAgents: ["codex"],
+        agentBriefs: { codex: "   " },
       }),
       {
         title: "Solo",
         priority: null,
-        agents: [],
+        agents: [{ agent: "codex" }],
         gitMode: "worktree",
       },
     );

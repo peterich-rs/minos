@@ -282,7 +282,7 @@ export const daemonApi = {
     title: string,
     opts?: {
       priority?: string | null;
-      agents?: string[];
+      agents?: Array<{ agent: string; brief?: string | null }>;
       /** inherit | worktree; omit for daemon default (worktree when repo). */
       gitMode?: string | null;
     },

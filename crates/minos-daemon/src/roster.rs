@@ -102,6 +102,21 @@ pub fn format_roster_host_session_inject(
     lines.join("\n")
 }
 
+/// Conversation-timeline system message when a member joins.
+pub fn format_roster_joined_system_message(agent: &str, brief: Option<&str>) -> String {
+    let agent = agent.trim();
+    match brief.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(brief) => format!(
+            "[minos:system] Roster updated: **{agent}** joined ({brief}). \
+             Call `list_conversation_roster` for structured membership."
+        ),
+        None => format!(
+            "[minos:system] Roster updated: **{agent}** joined this conversation. \
+             Call `list_conversation_roster` for structured membership."
+        ),
+    }
+}
+
 /// Conversation-timeline system message when the initial roster is set.
 pub fn format_roster_established_system_message(members: &[ConversationAgentMemberRow]) -> String {
     if members.is_empty() {

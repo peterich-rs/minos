@@ -1349,6 +1349,22 @@ pub struct UpdateConversationResponse {
     pub conversation: LocalConversationSummary,
 }
 
+/// Add a runtime agent to a conversation roster (idempotent on agent label).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AddConversationAgentParams {
+    pub conversation_id: String,
+    /// Runtime agent label (`codex` / `claude` / …).
+    pub agent: String,
+    /// Optional peer-facing role brief (≤500 chars).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AddConversationAgentResponse {
+    pub conversation: LocalConversationSummary,
+}
+
 /// Remove a runtime agent from a conversation roster.
 /// Existing sessions for that agent are closed with reason `roster_removed`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

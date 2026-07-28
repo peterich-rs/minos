@@ -17,24 +17,31 @@ pub async fn daemon_list_conversations(
         .map_err(|e| e.to_string())
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateConversationAgentArg {
+    pub agent: String,
+    #[serde(default)]
+    pub brief: Option<String>,
+}
+
 #[tauri::command]
 pub async fn daemon_create_conversation(
     state: State<'_, AppState>,
     project_id: String,
     title: String,
     priority: Option<String>,
-    agents: Option<Vec<String>>,
+    agents: Option<Vec<CreateConversationAgentArg>>,
     git_mode: Option<String>,
 ) -> Result<ConversationDto, String> {
+    let agents = agents
+        .unwrap_or_default()
+        .into_iter()
+        .map(|a| (a.agent, a.brief))
+        .collect();
     state
         .daemon
-        .create_conversation(
-            project_id,
-            title,
-            priority,
-            agents.unwrap_or_default(),
-            git_mode,
-        )
+        .create_conversation(project_id, title, priority, agents, git_mode)
         .await
         .map_err(|e| e.to_string())
 }

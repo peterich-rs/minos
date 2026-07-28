@@ -1603,6 +1603,81 @@ impl AgentGlue {
         })
     }
 
+    /// Add a runtime agent to the conversation roster (idempotent).
+    /// Posts a conversation system message and injects host notices into idle
+    /// top-level sessions already in the conversation.
+    pub async fn add_conversation_agent(
+        &self,
+        req: minos_protocol::AddConversationAgentParams,
+    ) -> Result<minos_protocol::AddConversationAgentResponse, MinosError> {
+        let _existing = self
+            .store
+            .get_conversation(&req.conversation_id)
+            .await
+            .map_err(|e| map_store_error("add_conversation_agent.get", e))?
+            .ok_or_else(|| MinosError::CodexProtocolError {
+                method: "add_conversation_agent".into(),
+                message: format!("conversation not found: {}", req.conversation_id),
+            })?;
+
+        let agent =
+            parse_agent_label(req.agent.trim()).map_err(|e| MinosError::CodexProtocolError {
+                method: "add_conversation_agent".into(),
+                message: format!("invalid agent '{}': {e}", req.agent),
+            })?;
+        let agent_label = agent_label(agent).to_owned();
+        let now_ms = current_unix_ms();
+
+        self.store
+            .add_conversation_agent_member(
+                &req.conversation_id,
+                &agent_label,
+                now_ms,
+                req.brief.as_deref(),
+            )
+            .await
+            .map_err(|e| map_store_error("add_conversation_agent.add", e))?;
+
+        let brief_for_msg = req
+            .brief
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        let system_body = crate::roster::format_roster_joined_system_message(
+            &agent_label,
+            brief_for_msg.as_deref(),
+        );
+        let _ = self
+            .post_roster_system_message(&req.conversation_id, &system_body, now_ms)
+            .await;
+        self.publish_roster_changed(&req.conversation_id).await;
+        let change_summary = match brief_for_msg.as_deref() {
+            Some(brief) => format!("Member **{agent_label}** joined ({brief})."),
+            None => format!("Member **{agent_label}** joined the conversation."),
+        };
+        // Notify existing teammates (not the newcomer — they have no session yet).
+        self.inject_roster_update_to_idle_sessions(&req.conversation_id, &change_summary, &[])
+            .await;
+
+        tracing::info!(
+            target: "minos_daemon::agent",
+            conversation_id = %req.conversation_id,
+            agent = %agent_label,
+            "added conversation agent to roster",
+        );
+
+        let row = self
+            .store
+            .get_conversation(&req.conversation_id)
+            .await
+            .map_err(|e| map_store_error("add_conversation_agent.reload", e))?
+            .expect("conversation exists above");
+        Ok(minos_protocol::AddConversationAgentResponse {
+            conversation: self.conversation_summary_loaded(row).await?,
+        })
+    }
+
     /// Remove a runtime agent from the conversation roster and tear down its
     /// live work: close open sessions and cancel running teamwork delegations
     /// that involve the agent as source or target.
@@ -3155,9 +3230,11 @@ impl AgentGlue {
             {
                 continue;
             }
-            let Some(state) = self.manager.session_state(&row.session_id).await else {
+            // Production path: use watch receiver (session_state is test-only).
+            let Some(rx) = self.manager.session_state_stream(&row.session_id).await else {
                 continue;
             };
+            let state = rx.borrow().clone();
             if !matches!(state, SessionState::Idle) {
                 tracing::debug!(
                     target: "minos_daemon::agent",

@@ -905,7 +905,7 @@ impl DaemonBridge {
         project_id: String,
         title: String,
         priority: Option<String>,
-        agents: Vec<String>,
+        agents: Vec<(String, Option<String>)>,
         git_mode: Option<String>,
     ) -> Result<ConversationDto> {
         let client = self.client().await?;
@@ -915,7 +915,10 @@ impl DaemonBridge {
             priority,
             agents: agents
                 .into_iter()
-                .map(|agent| minos_protocol::ConversationAgentSpec { agent, brief: None })
+                .map(|(agent, brief)| minos_protocol::ConversationAgentSpec {
+                    agent,
+                    brief: brief.filter(|b| !b.trim().is_empty()),
+                })
                 .collect(),
             git_mode,
         };
