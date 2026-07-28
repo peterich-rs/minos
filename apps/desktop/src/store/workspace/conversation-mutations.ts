@@ -46,22 +46,15 @@ export function createConversationMutationActions(
           ? input.gitMode
           : "worktree";
       // Membership roster — who may be @mentioned / started. No eager session start.
-      const agents = (input.agents ?? [])
-        .map((spec) => {
-          const agent =
-            typeof spec === "string"
-              ? spec.trim().toLowerCase()
-              : (spec.agent ?? "").trim().toLowerCase();
-          const brief =
-            typeof spec === "string"
-              ? undefined
-              : (spec.brief?.trim() || undefined);
-          return agent ? { agent, brief } : null;
-        })
-        .filter((a): a is { agent: string; brief?: string } => a != null)
-        .filter(
-          (a, i, arr) => arr.findIndex((b) => b.agent === a.agent) === i,
-        );
+      const agents: Array<{ agent: string; brief?: string }> = [];
+      const seen = new Set<string>();
+      for (const spec of input.agents ?? []) {
+        const agent = (spec.agent ?? "").trim().toLowerCase();
+        if (!agent || seen.has(agent)) continue;
+        seen.add(agent);
+        const brief = spec.brief?.trim() || undefined;
+        agents.push(brief ? { agent, brief } : { agent });
+      }
 
       if (get().source !== "daemon") {
         // Mock: append a local conversation for browser-only preview.
