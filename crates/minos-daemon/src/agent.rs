@@ -1742,15 +1742,18 @@ impl AgentGlue {
             "removed conversation agent from roster",
         );
 
-        // Conversation-visible system coordination (not a user message).
+        // Conversation system row (timeline) + idle-session host inject (session wire).
+        let change = crate::roster::format_roster_removed_system_message(&agent_label);
         let _ = self
-            .post_roster_system_message(
-                &req.conversation_id,
-                &crate::roster::format_roster_removed_system_message(&agent_label),
-                now_ms,
-            )
+            .post_roster_system_message(&req.conversation_id, &change, now_ms)
             .await;
         self.publish_roster_changed(&req.conversation_id).await;
+        self.inject_roster_update_to_idle_sessions(
+            &req.conversation_id,
+            &format!("Member **{agent_label}** left the conversation."),
+            &[agent_label.as_str()],
+        )
+        .await;
 
         let row = self
             .store
@@ -3099,6 +3102,96 @@ impl AgentGlue {
                 conversation_id: conversation_id.to_owned(),
                 members,
             });
+    }
+
+    /// Push a host coordination notice into **idle** live sessions only.
+    ///
+    /// - Does **not** write a conversation user message (timeline already has
+    ///   `sender_role=system` via [`Self::post_roster_system_message`]).
+    /// - Skips running/suspended/closed/subagent sessions to avoid mid-turn noise.
+    /// - Uses provider user-input channel with `[minos:host]` envelope.
+    async fn inject_roster_update_to_idle_sessions(
+        &self,
+        conversation_id: &str,
+        change_summary: &str,
+        exclude_agents: &[&str],
+    ) {
+        let members = match self.store.list_conversation_roster(conversation_id).await {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(
+                    target: "minos_daemon::agent",
+                    error = %e,
+                    conversation_id = %conversation_id,
+                    "idle roster inject skipped: list roster failed",
+                );
+                return;
+            }
+        };
+        let sessions = match self
+            .store
+            .list_sessions_by_conversation(conversation_id)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(
+                    target: "minos_daemon::agent",
+                    error = %e,
+                    conversation_id = %conversation_id,
+                    "idle roster inject skipped: list sessions failed",
+                );
+                return;
+            }
+        };
+
+        for row in sessions {
+            if row.status == "closed" || row.parent_session_id.is_some() {
+                continue;
+            }
+            if exclude_agents
+                .iter()
+                .any(|a| a.eq_ignore_ascii_case(row.agent.as_str()))
+            {
+                continue;
+            }
+            let Some(state) = self.manager.session_state(&row.session_id).await else {
+                continue;
+            };
+            if !matches!(state, SessionState::Idle) {
+                tracing::debug!(
+                    target: "minos_daemon::agent",
+                    session_id = %row.session_id,
+                    agent = %row.agent,
+                    ?state,
+                    "skip roster host inject: session not idle",
+                );
+                continue;
+            }
+            let body = crate::roster::format_roster_host_session_inject(
+                &row.agent,
+                &members,
+                change_summary,
+            );
+            if let Err(e) = self.manager.send_user_message(&row.session_id, body).await {
+                tracing::warn!(
+                    target: "minos_daemon::agent",
+                    error = %e,
+                    session_id = %row.session_id,
+                    agent = %row.agent,
+                    conversation_id = %conversation_id,
+                    "roster host inject to idle session failed",
+                );
+            } else {
+                tracing::info!(
+                    target: "minos_daemon::agent",
+                    session_id = %row.session_id,
+                    agent = %row.agent,
+                    conversation_id = %conversation_id,
+                    "injected roster host notice into idle session",
+                );
+            }
+        }
     }
 }
 

@@ -64,6 +64,44 @@ pub fn format_roster_removed_system_message(agent: &str) -> String {
     )
 }
 
+/// Host → **agent session** inject body when roster changes mid-flight.
+///
+/// Wire shape uses the provider "user input" channel (CLI limitation) but is
+/// **not** a conversation user message and must not be written to `chat_messages`
+/// as `sender_role=user`. Prefix identifies host coordination.
+pub fn format_roster_host_session_inject(
+    self_agent: &str,
+    members: &[ConversationAgentMemberRow],
+    change_summary: &str,
+) -> String {
+    let self_agent = self_agent.trim();
+    let mut lines = vec![
+        "[minos:host] kind=roster_changed".to_string(),
+        String::new(),
+        "Host coordination notice (not a user chat message).".to_string(),
+        change_summary.trim().to_owned(),
+        format!("You remain **{self_agent}** in this conversation."),
+        "Current roster:".to_string(),
+    ];
+    if members.is_empty() {
+        lines.push("- (empty roster)".to_string());
+    } else {
+        for m in members {
+            match m.brief.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                Some(brief) => lines.push(format!("- **{}**: {brief}", m.agent)),
+                None => lines.push(format!("- **{}**", m.agent)),
+            }
+        }
+    }
+    lines.push(String::new());
+    lines.push(
+        "Use `list_conversation_roster` for structured membership. \
+         Do not treat this as a user task; only adjust plans if they depended on a removed teammate."
+            .to_string(),
+    );
+    lines.join("\n")
+}
+
 /// Conversation-timeline system message when the initial roster is set.
 pub fn format_roster_established_system_message(members: &[ConversationAgentMemberRow]) -> String {
     if members.is_empty() {
@@ -144,5 +182,24 @@ mod tests {
                 .unwrap();
         assert!(merged.starts_with("Be concise."));
         assert!(merged.contains("Conversation roster"));
+    }
+
+    #[test]
+    fn host_session_inject_is_marked_and_lists_roster() {
+        let members = vec![ConversationAgentMemberRow {
+            agent: "claude".into(),
+            brief: Some("reviews PRs".into()),
+            joined_at_ms: 1,
+        }];
+        let text = format_roster_host_session_inject(
+            "codex",
+            &members,
+            "Member **gemini** left the conversation.",
+        );
+        assert!(text.starts_with("[minos:host] kind=roster_changed"));
+        assert!(text.contains("not a user chat message"));
+        assert!(text.contains("You remain **codex**"));
+        assert!(text.contains("**claude**: reviews PRs"));
+        assert!(!text.contains("[minos:system]"));
     }
 }

@@ -32,6 +32,10 @@ Do not assume the prompt contains the current conversation state if MCP is avail
   is on the conversation, and each member's role brief). Prefer this over memory
   or the session-start roster snapshot after membership may have changed.
   Match `delegate_to_agent` targets to the teammate whose brief fits the work.
+- Host may inject a direct-session notice prefixed with `[minos:host] kind=roster_changed`
+  when the roster changes while you are idle. That is **not** a user request: do
+  not treat it as a new task unless your plan depended on a removed teammate.
+  Conversation timeline uses `[minos:system]` for the same event (visible to humans).
 - Call `delegate_to_agent` when another Minos agent is better positioned to
   provide focused help. Keep the prompt specific and include the exact context
   needed. Save the returned `delegation_id`.
