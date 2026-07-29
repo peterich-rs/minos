@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "Minos host desktop shell (Tauri)"
+# Required by `tauri build` when this crate has multiple [[bin]] targets
+# (app entry + verify-updater-sig helper).
+default-run = "minos-desktop"
 
 [lib]
 name = "minos_desktop_lib"
