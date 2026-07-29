@@ -4,6 +4,11 @@ include: package:flutter_lints/flutter.yaml
 # configured here rather than via the legacy `custom_lint` analyzer plugin.
 # `dart analyze` / `flutter analyze` picks this up automatically after
 # `flutter pub get`.
+#
+# CI strips this `plugins:` block for the `dart analyze` step only: native
+# analysis_server plugins have hung indefinitely on ubuntu-latest runners.
+# See `.github/workflows/ci.yml` (dart job). Local IDE / `flutter analyze`
+# keep riverpod_lint enabled.
 plugins:
   riverpod_lint: ^3.1.0
 

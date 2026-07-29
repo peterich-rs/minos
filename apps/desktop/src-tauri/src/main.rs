@@ -49,6 +49,9 @@ struct McpSidecarArgs {
     disable_list_conversation_messages: bool,
 
     #[arg(long)]
+    disable_list_conversation_roster: bool,
+
+    #[arg(long)]
     disable_delegate_to_agent: bool,
 
     #[arg(long)]
@@ -62,6 +65,8 @@ struct McpSidecarArgs {
 
     #[arg(long)]
     disable_post_conversation_update: bool,
+
+    #[arg(long)]
     disable_post_git_update: bool,
 }
 
@@ -79,6 +84,7 @@ impl McpSidecarArgs {
             source_session_id: self.source_session_id,
             permissions: minos_chat_store::mcp_server::McpToolPermissions {
                 list_conversation_messages: !self.disable_list_conversation_messages,
+                list_conversation_roster: !self.disable_list_conversation_roster,
                 delegate_to_agent: !self.disable_delegate_to_agent,
                 get_delegation_status: !self.disable_get_delegation_status,
                 wait_delegation: !self.disable_wait_delegation,

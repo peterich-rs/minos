@@ -15,10 +15,13 @@ import {
   canSubmitCreateConversation,
   CREATE_CONVERSATION_GIT_MODES,
   CREATE_CONVERSATION_PRIORITIES,
+  defaultBriefsFromProfiles,
   defaultCreateConversationForm,
+  MAX_AGENT_BRIEF_CHARS,
   toggleSelectedAgent,
   type ConversationGitMode,
   type CreateConversationFormInput,
+  type ProfileBriefSource,
 } from "@/features/work/lib/create-conversation-form";
 import { agentMeta, type AgentRuntime } from "@/shared/lib/mock-data";
 import { cn } from "@/shared/lib/utils";
@@ -42,6 +45,8 @@ type Props = {
   isCreating: boolean;
   projectName: string;
   clis: RuntimeCliDescriptor[];
+  /** Host agent profiles — description seeds peer-facing roster briefs. */
+  profiles?: ProfileBriefSource[];
   onOpenChange: (open: boolean) => void;
   onCreate: (input: CreateConversationFormInput) => Promise<void>;
 };
@@ -51,6 +56,7 @@ export function CreateConversationDialog({
   isCreating,
   projectName,
   clis,
+  profiles = [],
   onOpenChange,
   onCreate,
 }: Props) {
@@ -60,6 +66,7 @@ export function CreateConversationDialog({
   >(null);
   const [gitMode, setGitMode] = useState<ConversationGitMode>("worktree");
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
+  const [agentBriefs, setAgentBriefs] = useState<Record<string, string>>({});
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const submitInFlightRef = useRef(false);
@@ -74,6 +81,11 @@ export function CreateConversationDialog({
     }));
   }, [clis]);
 
+  const profileBriefDefaults = useMemo(
+    () => defaultBriefsFromProfiles(profiles),
+    [profiles],
+  );
+
   useEffect(() => {
     if (!open) return;
     const defaults = defaultCreateConversationForm();
@@ -81,6 +93,8 @@ export function CreateConversationDialog({
     setPriority(defaults.priority);
     setGitMode(defaults.gitMode);
     setSelectedAgents(defaults.selectedAgents);
+    // Prefill empty selection briefs from Host profiles (role descriptions).
+    setAgentBriefs({ ...defaults.agentBriefs, ...profileBriefDefaults });
     setErrorMessage(null);
     submitInFlightRef.current = false;
     const timerId = window.setTimeout(() => {
@@ -88,7 +102,7 @@ export function CreateConversationDialog({
       titleInputRef.current?.select();
     }, 50);
     return () => window.clearTimeout(timerId);
-  }, [open]);
+  }, [open, profileBriefDefaults]);
 
   const canSubmit =
     canSubmitCreateConversation(title, selectedAgents) && !isCreating;
@@ -100,6 +114,7 @@ export function CreateConversationDialog({
       title,
       priority,
       selectedAgents,
+      agentBriefs,
       gitMode,
     });
     if (!input) return;
@@ -266,7 +281,7 @@ export function CreateConversationDialog({
               </p>
             ) : (
               <div
-                className="grid gap-1.5"
+                className="grid gap-2"
                 data-testid="create-conversation-agents"
               >
                 {agentOptions.map((agent) => {
@@ -277,59 +292,119 @@ export function CreateConversationDialog({
                       label: agent.displayName,
                       color: "bg-ink/10 text-ink-secondary",
                     } as const);
+                  const briefId = `create-conversation-brief-${agent.id}`;
                   return (
-                    <button
+                    <div
                       key={agent.id}
-                      type="button"
-                      disabled={isCreating || !agent.installed}
-                      aria-pressed={selected}
-                      onClick={() => {
-                        if (!agent.installed) return;
-                        setSelectedAgents((prev) =>
-                          toggleSelectedAgent(prev, agent.id),
-                        );
-                        setErrorMessage(null);
-                      }}
                       className={cn(
-                        "flex min-h-11 items-center gap-3 rounded-xl border px-3 text-left transition-colors duration-150",
+                        "rounded-xl border transition-colors duration-150",
                         selected
                           ? "border-ink/25 bg-surface-raised shadow-sm"
-                          : "border-ink/10 bg-surface-muted/40 hover:border-ink/20 hover:bg-surface-hover",
-                        (!agent.installed || isCreating) &&
-                          "cursor-not-allowed opacity-50",
+                          : "border-ink/10 bg-surface-muted/40",
+                        !agent.installed && "opacity-50",
                       )}
                     >
-                      <span
+                      <button
+                        type="button"
+                        disabled={isCreating || !agent.installed}
+                        aria-pressed={selected}
+                        onClick={() => {
+                          if (!agent.installed) return;
+                          setSelectedAgents((prev) => {
+                            const next = toggleSelectedAgent(prev, agent.id);
+                            if (!next.includes(agent.id)) {
+                              setAgentBriefs((briefs) => {
+                                const { [agent.id]: _, ...rest } = briefs;
+                                return rest;
+                              });
+                            } else {
+                              // Selecting: seed brief from profile when unset.
+                              setAgentBriefs((briefs) => {
+                                if ((briefs[agent.id] ?? "").trim()) {
+                                  return briefs;
+                                }
+                                const fromProfile =
+                                  profileBriefDefaults[agent.id];
+                                if (!fromProfile) return briefs;
+                                return { ...briefs, [agent.id]: fromProfile };
+                              });
+                            }
+                            return next;
+                          });
+                          setErrorMessage(null);
+                        }}
                         className={cn(
-                          "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-2xs font-semibold",
-                          meta.color,
+                          "flex min-h-11 w-full items-center gap-3 px-3 text-left",
+                          (!agent.installed || isCreating) &&
+                            "cursor-not-allowed",
                         )}
                       >
-                        {agent.displayName.slice(0, 2).toUpperCase()}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium text-ink">
-                          {agent.displayName}
+                        <span
+                          className={cn(
+                            "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-2xs font-semibold",
+                            meta.color,
+                          )}
+                        >
+                          {agent.displayName.slice(0, 2).toUpperCase()}
                         </span>
-                        <span className="block truncate text-2xs text-ink-muted">
-                          {agent.installed
-                            ? selected
-                              ? "Member · can be @mentioned"
-                              : "Installed · tap to add to roster"
-                            : "Not installed"}
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-ink">
+                            {agent.displayName}
+                          </span>
+                          <span className="block truncate text-2xs text-ink-muted">
+                            {agent.installed
+                              ? selected
+                                ? "Member · can be @mentioned"
+                                : "Installed · tap to add to roster"
+                              : "Not installed"}
+                          </span>
                         </span>
-                      </span>
-                      <span
-                        className={cn(
-                          "flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-colors",
-                          selected
-                            ? "border-ink bg-ink text-surface"
-                            : "border-ink/15 bg-surface text-transparent",
-                        )}
-                      >
-                        <Check className="h-3 w-3" strokeWidth={2.5} />
-                      </span>
-                    </button>
+                        <span
+                          className={cn(
+                            "flex h-5 w-5 shrink-0 items-center justify-center rounded-md border transition-colors",
+                            selected
+                              ? "border-ink bg-ink text-surface"
+                              : "border-ink/15 bg-surface text-transparent",
+                          )}
+                        >
+                          <Check className="h-3 w-3" strokeWidth={2.5} />
+                        </span>
+                      </button>
+                      {selected ? (
+                        <div className="border-t border-ink/8 px-3 py-2">
+                          <label
+                            className="mb-1 block text-2xs font-medium text-ink-muted"
+                            htmlFor={briefId}
+                          >
+                            Role brief for teammates
+                            {profileBriefDefaults[agent.id]
+                              ? " (from agent profile; editable)"
+                              : " (optional)"}
+                          </label>
+                          <input
+                            id={briefId}
+                            data-testid={`create-conversation-brief-${agent.id}`}
+                            type="text"
+                            value={agentBriefs[agent.id] ?? ""}
+                            disabled={isCreating}
+                            maxLength={MAX_AGENT_BRIEF_CHARS}
+                            placeholder={
+                              profileBriefDefaults[agent.id] ||
+                              "e.g. implements features in the worktree"
+                            }
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              setAgentBriefs((prev) => ({
+                                ...prev,
+                                [agent.id]: value,
+                              }));
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="h-8 w-full rounded-lg border border-ink/10 bg-surface px-2 text-xs text-ink outline-none placeholder:text-ink-muted/70 focus:border-ink/25 disabled:opacity-60"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
                   );
                 })}
               </div>

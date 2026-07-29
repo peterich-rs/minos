@@ -32,7 +32,7 @@ pub const MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS: &str = "\
 You are running inside Minos teamwork mode, where CLI coding agents work in a shared conversation with the user and other agents. \
 Treat the Minos conversation as coordination context, not as a generic terminal session. \
 When conversation history, teammate output, mentions, current chat state, or cross-agent coordination matters, use the `minos_teamwork` MCP server to inspect the bound conversation before answering. \
-Use `list_conversation_messages` for recent conversation history, `delegate_to_agent` with `wait_delegation` when blocked on the result (or `get_delegation_status`/`cancel_delegation` for tracking), and `post_conversation_update` only for concise user-visible updates. \
+Use `list_conversation_messages` for recent conversation history, `list_conversation_roster` for the live agent roster and role briefs (do not assume startup snapshot is complete after roster changes), `delegate_to_agent` with `wait_delegation` when blocked on the result (or `get_delegation_status`/`cancel_delegation` for tracking), and `post_conversation_update` only for concise user-visible updates. \
 When shipping code changes, work in the conversation worktree when present (do not edit the default branch directly) and post git milestones with `post_git_update` (commits_made, pr_opened, ready_for_review, checks_failed, merged).";
 
 /// Host-owned one-shot prompt injected when a turn was interrupted by process
@@ -2996,6 +2996,9 @@ fn mcp_permission_args(
     let mut args = Vec::new();
     if !permissions.list_conversation_messages {
         args.push("--disable-list-conversation-messages".into());
+    }
+    if !permissions.list_conversation_roster {
+        args.push("--disable-list-conversation-roster".into());
     }
     if !permissions.delegate_to_agent {
         args.push("--disable-delegate-to-agent".into());

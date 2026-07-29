@@ -26,6 +26,16 @@ impl App {
                     data: Some(serde_json::to_value(page)?),
                 })
             }
+            SocketRequest::ListConversationRoster { conversation_id } => {
+                self.ensure_mcp_conversation(&conversation_id)?;
+                // Production path is daemon-owned; unit tests get an empty roster.
+                Ok(SocketResponse::Ok {
+                    data: Some(serde_json::json!({
+                        "conversation_id": conversation_id,
+                        "members": [],
+                    })),
+                })
+            }
             SocketRequest::DelegateToAgent {
                 conversation_id,
                 source_agent,

@@ -14,6 +14,9 @@ pub enum SocketRequest {
         before_seq: Option<u64>,
         limit: Option<u32>,
     },
+    ListConversationRoster {
+        conversation_id: String,
+    },
     DelegateToAgent {
         conversation_id: String,
         source_agent: Option<String>,

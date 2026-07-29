@@ -236,8 +236,8 @@ export type WorkspaceState = {
     input: {
       title: string;
       priority?: ConversationPriority | null;
-      /** Runtime agent ids to start after create (opt-in). */
-      agents?: string[];
+      /** Roster members with optional peer-facing briefs. */
+      agents?: Array<{ agent: string; brief?: string | null }>;
       /** inherit | worktree; default worktree when project is a git repo. */
       gitMode?: "worktree" | "inherit";
     },

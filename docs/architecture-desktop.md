@@ -73,7 +73,7 @@ Work → Project
 | Sessions 树 | 含 subagent | `list_conversation_agent_sessions` |
 | Board | 四列派生状态 | 非独立任务系统 |
 | Attention | needs_approval | approvals |
-| Agents | CLI inventory + personalized profiles | `list_clis` (runtime set + capability flags from Rust SSOT), `list_models` (honest per-model efforts), agent profile CRUD; start session accepts optional `profile_id` (daemon resolves model/effort/instructions; explicit fields override) |
+| Agents | CLI inventory + personalized profiles | `list_clis` (runtime set + capability flags from Rust SSOT), `list_models` (honest per-model efforts), agent profile CRUD; **profile `description` = peer-facing role brief** (≤500, seeds conversation roster when member brief empty); start session accepts optional `profile_id` (daemon resolves model/effort/instructions; explicit fields override) |
 | Host | Ready / Local only / Linked + 诊断 | status + pairing |
 
 ### Agents capability SSOT

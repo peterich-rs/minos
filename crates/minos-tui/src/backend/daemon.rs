@@ -222,6 +222,7 @@ impl DaemonBackend {
                     }
                     // Reactions are desktop-only for now; TUI has no reaction UI.
                     Ok(LocalConversationEvent::ConversationReactionToggled { .. }) => {}
+                    Ok(LocalConversationEvent::RosterChanged { .. }) => {}
                     Err(e) => {
                         warn!("conversation event subscription error: {e}");
                         Self::mark_disconnected(&state, &endpoint, Some(e.to_string()));
@@ -272,7 +273,10 @@ fn create_conversation_request(
         project_id: project_id.to_owned(),
         title: title.to_owned(),
         priority: None,
-        agents,
+        agents: agents
+            .into_iter()
+            .map(|agent| minos_protocol::ConversationAgentSpec { agent, brief: None })
+            .collect(),
         git_mode: None,
     }
 }

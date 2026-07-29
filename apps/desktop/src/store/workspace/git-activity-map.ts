@@ -42,8 +42,10 @@ export function normalizeGitActivity(
 export function timelineKindForMessage(
   kind: string,
   gitActivity: TimelineGitActivity | undefined,
-): "text" | "tool_summary" | "approval" | "git_activity" {
+): "text" | "tool_summary" | "approval" | "git_activity" | "system" {
   if (gitActivity || kind === "git_activity") return "git_activity";
-  if (kind === "approval" || kind === "tool_summary") return kind;
+  if (kind === "approval" || kind === "tool_summary" || kind === "system") {
+    return kind;
+  }
   return "text";
 }

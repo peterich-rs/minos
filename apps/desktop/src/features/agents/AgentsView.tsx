@@ -95,8 +95,10 @@ export function AgentsView() {
           </h1>
           <p className="mt-1 max-w-xl text-sm text-ink-muted">
             Local CLI runtimes on this Host, plus personalized agents with a
-            fixed model and optional instructions. Chat always happens inside a
-            Project conversation.
+            fixed model, peer-facing role brief, and optional system
+            instructions. Role briefs seed conversation roster intros so
+            teammates know each agent&apos;s boundaries. Chat always happens
+            inside a Project conversation.
           </p>
         </div>
         <button
@@ -218,7 +220,8 @@ export function AgentsView() {
             <p className="rounded-2xl border border-dashed border-ink/10 bg-surface-raised/70 px-4 py-10 text-center text-sm leading-relaxed text-ink-muted">
               No personalized agents yet.
               <br />
-              Create one to pin runtime, model, effort, and system instructions.
+              Create one to pin runtime, model, role brief for teammates, and
+              system instructions.
             </p>
           ) : (
             <div className="grid content-start gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -273,10 +276,18 @@ export function AgentsView() {
                       </button>
                     </div>
                     {p.description ? (
-                      <p className="mt-2 line-clamp-2 text-xs text-ink-muted">
+                      <p
+                        className="mt-2 line-clamp-2 text-xs text-ink-muted"
+                        title="Role brief shown to teammate agents"
+                      >
                         {p.description}
                       </p>
-                    ) : null}
+                    ) : (
+                      <p className="mt-2 text-xs text-amber-700/80">
+                        No role brief — teammates won&apos;t know this agent&apos;s
+                        boundaries until you add one.
+                      </p>
+                    )}
                     <dl className="mt-3 space-y-1 text-xs">
                       {p.reasoning_effort ? (
                         <div className="flex justify-between gap-2">
@@ -465,15 +476,22 @@ function CreateAgentDialog({
             />
           </Field>
 
-          <Field label="Description" hint="optional">
+          <Field
+            label="Role brief for teammates"
+            hint="peer-facing · ≤500 chars · recommended"
+          >
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={2}
-              maxLength={3000}
-              placeholder="Short label for this agent…"
+              maxLength={500}
+              placeholder="e.g. implements features in the worktree; prefers small PRs"
               className={cn(fieldClass, "resize-none")}
             />
+            <p className="mt-1 text-2xs leading-snug text-ink-muted">
+              Other agents see this via conversation roster and session
+              briefing. Conversation create can override it per chat.
+            </p>
           </Field>
 
           <Field label="Runtime">

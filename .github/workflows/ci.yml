@@ -143,9 +143,41 @@ jobs:
 
       - name: dart analyze
         working-directory: apps/mobile
+        # Hard cap: native analysis_server plugins (riverpod_lint) have hung
+        # `dart analyze` indefinitely on ubuntu-latest with no output (30m+).
+        # Fail cheaply rather than burn the runner quota.
+        timeout-minutes: 5
         # Warnings/errors fatal; info-level lints stay advisory (prefer_shorthands
         # and similar can spike on SDK bumps without blocking unrelated PRs).
-        run: dart analyze
+        # Disable analysis_server plugins for this step only — core analyzer +
+        # flutter_lints still run; riverpod_lint remains for local IDE via the
+        # committed analysis_options.yaml when developers analyze with plugins.
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("analysis_options.yaml")
+          lines = path.read_text().splitlines(keepends=True)
+          out = []
+          skipping = False
+          for line in lines:
+              if not skipping and line.startswith("plugins:"):
+                  skipping = True
+                  out.append(
+                      "# [ci] analysis_server plugins disabled for hang safety "
+                      "(see .github/workflows/ci.yml dart analyze)\n"
+                  )
+                  continue
+              if skipping:
+                  stripped = line.lstrip()
+                  if stripped and not stripped.startswith("#") and line[:1] not in (" ", "\t"):
+                      skipping = False
+                      out.append(line)
+                  continue
+              out.append(line)
+          path.write_text("".join(out))
+          PY
+          dart analyze --fatal-warnings
 
       - name: flutter test (exclude ffi-coupled tests)
         working-directory: apps/mobile

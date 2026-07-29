@@ -134,7 +134,7 @@ export type TimelineMessage = {
   body: string;
   time: string;
   createdAtMs?: number;
-  kind?: "text" | "tool_summary" | "approval" | "git_activity";
+  kind?: "text" | "tool_summary" | "approval" | "git_activity" | "system";
   replyToMessageId?: string;
   delegationId?: string;
   mentions?: TimelineMention[];
