@@ -2,7 +2,7 @@
  * L6 use-cases — send, approvals, conversation/project mutations.
  */
 import type { WorkspaceGet, WorkspaceSet, WorkspaceState } from "./types";
-import { patchLocalConversation } from "./helpers";
+import { patchLocalConversation, patchProjectAggregates } from "./helpers";
 import { commitSessionEntity, findSessionRow } from "./projection";
 import { patchSessionEntity } from "@/shared/lib/session-entity";
 import { daemonApi } from "@/shared/lib/daemon";
@@ -20,6 +20,11 @@ import {
   quietRefreshConversationSlices,
   startNewAgentSession,
 } from "./shared";
+import {
+  advanceReadCursor,
+  latestMessageFrontier,
+  unreadCountFromCursor,
+} from "@/features/read-state/lib/read-state";
 
 /** Load host profiles for @ProfileName / @p/id parse (best-effort). */
 async function loadMentionProfiles(): Promise<MentionProfile[]> {
@@ -45,6 +50,7 @@ export function createUseCasesActions(
   | "respondOpencodePermission"
   | "respondOpencodeQuestion"
   | "markConversationRead"
+  | "clearUnreadDivider"
   | "sendMessage"
   | "retryFailedMessage"
 > {
@@ -244,19 +250,64 @@ export function createUseCasesActions(
     });
   },
 
-  markConversationRead: (conversationId) => {
+  markConversationRead: (conversationId, opts) => {
     const conv = get().conversations.find((c) => c.id === conversationId);
-    const count = conv?.messageCount ?? 0;
-    set((s) => ({
-      focusedConversationId: conversationId,
-      readMessageCountById: {
-        ...s.readMessageCountById,
-        [conversationId]: count,
-      },
-      conversations: s.conversations.map((c) =>
-        c.id === conversationId ? { ...c, unread: undefined } : c,
-      ),
-    }));
+    const messages = get().messagesByConversation[conversationId] ?? [];
+    const frontier =
+      opts?.lastReadMessageId || opts?.lastReadSeq != null
+        ? {
+            lastReadMessageId: opts.lastReadMessageId,
+            lastReadSeq: opts.lastReadSeq,
+          }
+        : latestMessageFrontier(messages);
+    const count = opts?.messageCount ?? conv?.messageCount ?? 0;
+    set((s) => {
+      const prevCursor = s.readCursorsByConversation[conversationId];
+      const hadUnread =
+        unreadCountFromCursor(count, prevCursor, false) > 0 ||
+        (conv?.unread ?? 0) > 0;
+      const nextCursor = advanceReadCursor(prevCursor, {
+        messageCount: count,
+        lastReadMessageId: frontier.lastReadMessageId,
+        lastReadSeq: frontier.lastReadSeq,
+      });
+      const readCursorsByConversation = {
+        ...s.readCursorsByConversation,
+        [conversationId]: nextCursor,
+      };
+      // Keep prior frontier for the open-session divider when there was backlog.
+      let unreadDividerCursorsByConversation =
+        s.unreadDividerCursorsByConversation;
+      if (hadUnread && prevCursor) {
+        unreadDividerCursorsByConversation = {
+          ...unreadDividerCursorsByConversation,
+          [conversationId]: prevCursor,
+        };
+      }
+      const conversations = s.conversations.map((c) => {
+        if (c.id !== conversationId) return c;
+        return { ...c, unread: undefined };
+      });
+      const projectId = conv?.projectId;
+      return {
+        focusedConversationId: conversationId,
+        readCursorsByConversation,
+        unreadDividerCursorsByConversation,
+        conversations,
+        projects: projectId
+          ? patchProjectAggregates(s.projects, projectId, conversations)
+          : s.projects,
+      };
+    });
+  },
+
+  clearUnreadDivider: (conversationId) => {
+    set((s) => {
+      if (!s.unreadDividerCursorsByConversation[conversationId]) return s;
+      const { [conversationId]: _drop, ...rest } =
+        s.unreadDividerCursorsByConversation;
+      return { unreadDividerCursorsByConversation: rest };
+    });
   },
 
   sendMessage: async (conversationId, body, messageId, options) => {

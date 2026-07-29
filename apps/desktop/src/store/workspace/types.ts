@@ -24,6 +24,7 @@ import type { SessionEntity } from "@/shared/lib/session-entity";
 import type { ApprovalStatusPolicy } from "@/shared/lib/session-status";
 import type { MessageHistoryMeta } from "@/shared/lib/message-history";
 import type { TranscriptHistoryMeta } from "@/shared/lib/transcript-history";
+import type { ReadCursorMap } from "@/features/read-state/lib/read-state";
 
 export type { SessionEntity };
 
@@ -129,11 +130,16 @@ export type WorkspaceState = {
   }[];
   clisStatus: ResourceFetchStatus;
   /**
-   * ReadReceipt baseline: messageCount when user last opened a conversation.
-   * Persistable (localStorage); not a business ConversationList cache.
-   * unread = max(0, messageCount - baseline). Survives bootEpoch.
+   * Client-side conversation read cursors (viewer progress).
+   * Persistable localStorage; survives bootEpoch. Not a daemon concern.
+   * See `features/read-state` — unread + optional id/seq frontier for divider.
    */
-  readMessageCountById: Record<string, number>;
+  readCursorsByConversation: ReadCursorMap;
+  /**
+   * Ephemeral (not persisted): previous read frontier kept while a conversation
+   * is open so the timeline can draw an unread divider after badge is cleared.
+   */
+  unreadDividerCursorsByConversation: ReadCursorMap;
   /** Conversation currently open in the timeline (unread forced to 0). */
   focusedConversationId: string | null;
 
@@ -213,8 +219,22 @@ export type WorkspaceState = {
     questionId: string,
     answers: string[][],
   ) => Promise<void>;
-  /** Mark conversation messages as read (clears unread badge). */
-  markConversationRead: (conversationId: string) => void;
+  /**
+   * Mark conversation messages as read (clears unread badge).
+   * Optionally stamps last-read message id/seq for the unread divider.
+   * When there were unread messages, the previous cursor is kept in
+   * `unreadDividerCursorsByConversation` for the open-session divider.
+   */
+  markConversationRead: (
+    conversationId: string,
+    opts?: {
+      messageCount?: number;
+      lastReadMessageId?: string;
+      lastReadSeq?: number;
+    },
+  ) => void;
+  /** Drop the open-session unread divider (e.g. jump to latest / leave). */
+  clearUnreadDivider: (conversationId: string) => void;
   clearActionError: () => void;
   sendMessage: (
     conversationId: string,

@@ -59,6 +59,10 @@ export function MessageList({ conversationId }: { conversationId: string }) {
       s.messageHistoryByConversation[conversationId]?.firstLoadedSeq ??
       EMPTY_MESSAGE_HISTORY.firstLoadedSeq,
   );
+  const dividerCursor = useWorkspaceStore(
+    (s) => s.unreadDividerCursorsByConversation[conversationId],
+  );
+  const clearUnreadDivider = useWorkspaceStore((s) => s.clearUnreadDivider);
 
   // Stable refs: sort/build often allocate equal content after quiet polls;
   // keep identity so MessageRow memo + virtua children can bail.
@@ -72,8 +76,16 @@ export function MessageList({ conversationId }: { conversationId: string }) {
       return map;
     }, [messages]),
   );
+  // Open-session divider: previous read frontier kept when markConversationRead
+  // cleared the badge so the user can still see "new messages below".
   const virtualItems = useStableArrayShallow(
-    useMemo(() => buildVirtualTimelineItems(messages), [messages]),
+    useMemo(
+      () =>
+        buildVirtualTimelineItems(messages, {
+          readCursor: dividerCursor,
+        }),
+      [messages, dividerCursor],
+    ),
   );
   const phase = timelineStatus?.phase ?? "idle";
   const detailError = timelineStatus?.error;
@@ -212,12 +224,29 @@ export function MessageList({ conversationId }: { conversationId: string }) {
 
   const jumpToLatest = useCallback(() => {
     setFollowingState(true);
+    clearUnreadDivider(conversationId);
     if (virtualItems.length > 0) {
       listRef.current?.scrollToIndex(virtualItems.length - 1, {
         align: "end",
       });
     }
-  }, [setFollowingState, virtualItems.length]);
+  }, [
+    setFollowingState,
+    virtualItems.length,
+    clearUnreadDivider,
+    conversationId,
+  ]);
+
+  // Clear open-session divider when the user re-follows the live tail after
+  // scrolling away (not on the initial stick-to-bottom open).
+  const wasFollowingRef = useRef(true);
+  useEffect(() => {
+    const was = wasFollowingRef.current;
+    wasFollowingRef.current = following;
+    if (!was && following && dividerCursor) {
+      clearUnreadDivider(conversationId);
+    }
+  }, [following, dividerCursor, clearUnreadDivider, conversationId]);
 
   const showJumpToLatest = !following && messages.length > 0;
 
@@ -227,6 +256,9 @@ export function MessageList({ conversationId }: { conversationId: string }) {
     (item: VirtualTimelineItem) => {
       if (item.type === "day") {
         return <DayDivider key={item.id} ms={item.ms} />;
+      }
+      if (item.type === "unread") {
+        return <UnreadDivider key={item.id} />;
       }
       return (
         <div key={item.id} data-scroll-id={item.id}>
@@ -333,6 +365,22 @@ function DayDivider({ ms }: { ms: number }) {
         {label}
       </time>
       <div className="h-px flex-1 bg-ink/8" aria-hidden />
+    </div>
+  );
+}
+
+function UnreadDivider() {
+  return (
+    <div
+      className="flex items-center gap-3 py-2"
+      role="separator"
+      aria-label="New messages"
+    >
+      <div className="h-px flex-1 bg-accent/40" aria-hidden />
+      <span className="shrink-0 text-2xs font-semibold uppercase tracking-wide text-accent">
+        New messages
+      </span>
+      <div className="h-px flex-1 bg-accent/40" aria-hidden />
     </div>
   );
 }

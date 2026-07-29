@@ -12,6 +12,10 @@ import { daemonApi } from "@/shared/lib/daemon";
 import { singleFlightLoad } from "@/shared/lib/desktop-inflight";
 import { minosQueryClient } from "@/shared/api/queryClient";
 import { queryKeys } from "@/shared/api/queryKeys";
+import {
+  advanceReadCursor,
+  seedReadCursorIfAbsent,
+} from "@/features/read-state/lib/read-state";
 
 
 export function createConversationListActions(
@@ -55,18 +59,23 @@ export function createConversationListActions(
           const normalized = rows.map((row) =>
             normalizeDaemonConversation(row, projectId),
           );
-          const read = { ...get().readMessageCountById };
+          let read = { ...get().readCursorsByConversation };
           // Baseline first sight so the list doesn't scream "unread" for history.
           for (const row of normalized) {
-            if (row.id && read[row.id] === undefined) {
-              read[row.id] = row.messageCount;
+            if (row.id) {
+              read = seedReadCursorIfAbsent(read, row.id, row.messageCount);
             }
           }
           const focused = get().focusedConversationId;
           if (focused) {
             const focusedRow = normalized.find((r) => r.id === focused);
             if (focusedRow) {
-              read[focused] = focusedRow.messageCount;
+              read = {
+                ...read,
+                [focused]: advanceReadCursor(read[focused], {
+                  messageCount: focusedRow.messageCount,
+                }),
+              };
             }
           }
           // Stamp query projectId so UI filters never drop rows after wire mapping.
@@ -79,7 +88,7 @@ export function createConversationListActions(
           const conversations = [...others, ...list];
           set((s) => ({
             conversations,
-            readMessageCountById: read,
+            readCursorsByConversation: read,
             conversationsStatusByProject: {
               ...s.conversationsStatusByProject,
               [projectId]: { phase: "ready", generation },

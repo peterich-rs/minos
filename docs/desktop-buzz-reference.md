@@ -238,7 +238,7 @@ Minos 现状：壳子在、chat 基础在、zustand 偏重、UI primitive 偏少
 6. **AuxiliaryPanel** 承载 SessionInspector / Approval / Diff
 7. **PageHeader + 统一空态/加载态**
 8. **Composer 深化**：draft、reply banner、快捷键发送、附件
-9. **Attention/read-state 子系统**（独立 storage + hook）
+9. **Attention/read-state 子系统**（独立 storage + hook）— **partial done**（Desktop 端侧：`features/read-state` + `attention-inbox` 投影 + Attention 筛选；非 daemon；跨端 sync 待 server）
 10. **Command palette 数据化**（注册表驱动，而不是写死）
 
 ### P2 — 规模化时再上
