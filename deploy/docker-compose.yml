@@ -1,7 +1,11 @@
-# Docker Compose for local development and testing.
+# Docker Compose for **local development and testing only**.
 #
 # Usage:
 #   cd deploy && docker compose up
+#
+# Production VPS uses `deploy/prod/` (image pull + loopback binds + mem limits).
+# Do not point a public host at this file: it publishes 5432/6379/8787 and uses
+# weak dev credentials.
 #
 # Services:
 #   - postgres: Postgres 16 for production-grade storage

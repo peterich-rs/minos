@@ -1,8 +1,11 @@
-# Cloudflare Tunnel + Access Setup for `minos-backend`
+# Cloudflare Tunnel + Access Setup for `minos-backend` (optional)
 
-Operational runbook for bringing up the public ingress in front of `minos-backend`. Source of truth for the architectural choices is ADR 0010 (tunnel topology) plus ADR 0014 (CF Access tokens now live in the backend's env vars and are distributed to mobile via the pairing QR, not the mac app's keychain). This document captures the concrete commands to reproduce the tunnel on a fresh machine.
+> **Primary production path** is a public VPS with Caddy TLS on **`minos.ainexc.com`**.  
+> See [vps-deploy.md](./vps-deploy.md). This tunnel runbook is an **optional alternate** when you cannot expose :443 on the origin host.
 
-**Scope:** one named tunnel (`minos`) bound to one hostname (`minos.fan-nn.top`), forwarding to `http://127.0.0.1:8787` (the backend). A Cloudflare Access application gates the hostname for both interactive browser access and Service-Token-authenticated clients (the iOS app — agent-host talks to backend over loopback and never crosses the CF edge).
+Operational runbook for bringing up Cloudflare Tunnel in front of `minos-backend`. Architectural history: ADR 0010 (tunnel topology) plus ADR 0014 (CF Access tokens historically living in backend env / pairing QR).
+
+**Scope (legacy example):** one named tunnel (`minos`) bound to one hostname (historically `minos.fan-nn.top`), forwarding to `http://127.0.0.1:8787`. A Cloudflare Access application can gate the hostname for browser and Service-Token clients.
 
 **Prerequisites:**
 

@@ -1673,6 +1673,10 @@ struct ReconnectContext {
 ///   but keeps the loop free of `&self`).
 /// - On success, records success and waits for the connection to drop;
 ///   on failure, records the failure and goes back to sleep.
+/// - If a session is already `Connected` (e.g. `resume_persisted_session`
+///   just dialed successfully), wait for drop instead of immediately
+///   re-dialing compile-time `BACKEND_URL` — re-dial would clobber state
+///   (and CI envelope tests inject a non-default port via `*_at`).
 async fn reconnect_loop(ctx: ReconnectContext) {
     loop {
         // Pause on background. We poll because the lifecycle hooks set
@@ -1716,41 +1720,30 @@ async fn reconnect_loop(ctx: ReconnectContext) {
             continue;
         };
 
+        // Resume/pair may already own a live socket. Stay on it until drop
+        // rather than forcing Reconnecting + a second dial.
+        if matches!(*ctx.state_tx.borrow(), ConnectionState::Connected) {
+            if !wait_while_connected(&ctx, backend_url).await {
+                return;
+            }
+            let delay = ctx.reconnect.next_delay().await;
+            tokio::time::sleep(delay).await;
+            continue;
+        }
+
         let _ = ctx
             .state_tx
             .send(ConnectionState::Reconnecting { attempt: 1 });
 
         match connect_with_handles(&ctx, backend_url, Some(&access)).await {
             Ok(()) => {
-                // Subscribe BEFORE publishing `Connected` so the
-                // RealtimeSession can't fire `Disconnected` between the
-                // send and the subscribe and leave us hanging.
-                // The borrow_and_update() right after subscribe handles the
-                // case where Disconnected lands inside the very-narrow
-                // window between subscribe and Connected publishing.
-                let mut state_rx = ctx.state_tx.subscribe();
+                // Publish Connected before waiting so observers see the
+                // live rail. RealtimeSession may still race a Disconnected
+                // into the watch; wait_while_connected observes that.
                 let _ = ctx.state_tx.send(ConnectionState::Connected);
                 ctx.reconnect.record_success().await;
-                loop {
-                    if matches!(*state_rx.borrow_and_update(), ConnectionState::Disconnected) {
-                        break;
-                    }
-                    tokio::select! {
-                        changed = state_rx.changed() => {
-                            if changed.is_err() {
-                                return;
-                            }
-                        }
-                        () = tokio::time::sleep(connected_refresh_delay(&ctx).await) => {
-                            let needs_refresh = {
-                                let guard = ctx.auth_session.read().await;
-                                guard.as_ref().is_some_and(access_token_needs_refresh)
-                            };
-                            if needs_refresh && !refresh_inline(&ctx, backend_url).await {
-                                return;
-                            }
-                        }
-                    }
+                if !wait_while_connected(&ctx, backend_url).await {
+                    return;
                 }
             }
             Err(e) => {
@@ -1766,6 +1759,36 @@ async fn reconnect_loop(ctx: ReconnectContext) {
 
         let delay = ctx.reconnect.next_delay().await;
         tokio::time::sleep(delay).await;
+    }
+}
+
+/// Watch the connection until it drops, refreshing the bearer while up.
+///
+/// Returns `false` when the loop should exit (watch closed or refresh failed).
+/// Returns `true` when the socket reached `Disconnected` and a re-dial is
+/// warranted.
+async fn wait_while_connected(ctx: &ReconnectContext, backend_url: &str) -> bool {
+    let mut state_rx = ctx.state_tx.subscribe();
+    loop {
+        if matches!(*state_rx.borrow_and_update(), ConnectionState::Disconnected) {
+            return true;
+        }
+        tokio::select! {
+            changed = state_rx.changed() => {
+                if changed.is_err() {
+                    return false;
+                }
+            }
+            () = tokio::time::sleep(connected_refresh_delay(ctx).await) => {
+                let needs_refresh = {
+                    let guard = ctx.auth_session.read().await;
+                    guard.as_ref().is_some_and(access_token_needs_refresh)
+                };
+                if needs_refresh && !refresh_inline(ctx, backend_url).await {
+                    return false;
+                }
+            }
+        }
     }
 }
 

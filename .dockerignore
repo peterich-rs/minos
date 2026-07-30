@@ -1,0 +1,62 @@
+# Keep the backend image build lean. VPS never builds — only GHCR pulls.
+
+.git
+.github
+.grok
+.agents
+.claude
+.cursor
+.vscode
+.idea
+
+# Local env / secrets
+.env
+.env.local
+**/.env
+**/.env.local
+
+# Build artifacts
+target
+**/target
+**/*.xlog
+
+# Client apps not required to link minos-backend (workspace still needs src-tauri)
+apps/mobile
+apps/web
+apps/macos
+apps/desktop/dist
+apps/desktop/node_modules
+apps/desktop/src
+apps/desktop/public
+apps/desktop/*.json
+apps/desktop/*.ts
+apps/desktop/*.js
+apps/desktop/*.mjs
+apps/desktop/*.cjs
+apps/desktop/*.html
+apps/desktop/*.css
+apps/desktop/*.md
+!apps/desktop/src-tauri/
+
+# Docs / media
+docs
+**/*.md
+!README.md
+**/*.png
+**/*.jpg
+**/*.jpeg
+**/*.gif
+**/*.mp4
+**/*.pdf
+
+# Flutter / Dart / Node
+**/.dart_tool
+**/node_modules
+**/.flutter-plugins*
+
+# Vendored trees not required for minos-backend link
+third_party
+
+# Never bake host secrets / dumps
+deploy/prod/.env
+**/*.sql.gz

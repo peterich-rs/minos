@@ -8,6 +8,18 @@
 
 **源码路径**: `crates/minos-backend/`
 
+### 生产部署形态（单 VPS）
+
+| 组件 | 说明 |
+|------|------|
+| 公网域名 | `https://minos.ainexc.com`（Caddy 终止 TLS） |
+| 进程 | 一个 monolith 容器（`MINOS_ENV=prod`） |
+| 存储 | PostgreSQL 16 + Redis 7（本机 Docker，仅 loopback） |
+| 镜像 | GHCR 预构建，VPS 只 `docker pull`（见 `deploy/prod/`） |
+| 运维手册 | [ops/vps-deploy.md](ops/vps-deploy.md) |
+
+生产强制：`MINOS_STORAGE_MODE=external-sql`、`MINOS_CACHE_BACKEND=redis`、`MINOS_MESSAGE_BUS_BACKEND=redis`、非通配 `MINOS_CORS_ORIGINS`。Agent 不在 VPS 上执行。
+
 ## 启动流程 (`src/main.rs`)
 
 1. 解析 CLI 配置（`Config::parse()`，基于 clap）
