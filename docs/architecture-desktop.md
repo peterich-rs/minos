@@ -158,7 +158,9 @@ apps/desktop/
           session-view-resolve.ts  # project-scoped deep-link session resolve
           user-action.ts           # approval/question decision routing
         # imports Timeline from features/chat (no local copy)
-      attention/                 # AttentionView.tsx
+      attention/                 # AttentionView + lib/attention-inbox (Home Feed 投影)
+      read-state/                # Client read cursors (viewer progress; localStorage)
+        lib/read-state.ts        # pure: migrate / unread / advance / firstUnreadIndex
       agents/                    # AgentsView.tsx · AGENTS.md (capability SSOT rule)
         lib/agentConfigProjection.ts  # pure map: list_clis/list_models → UI options
       host/                      # HostView.tsx
@@ -264,6 +266,8 @@ apps/desktop/
 | Session 状态 | **L4 `sessionsById`（SessionEntity）为 status / hasPendingApproval 唯一真相**；`sessionsByConversation` / `projectSessionsByProject` / Attention 经 `projectEntityIntoLists` 投影。hydrate：RQ 缓存 list 索引 → upsert Entity → `rowsFromEntities` 同步兄弟 list。无 `projectSessions` 全局镜像。SessionList **只** `listProjectSessions(projectId)`（`queryKeys.projectSessions`）；Inspector **只** `listSessions(conversationId)`（`queryKeys.inspectorSessions`）；Attention 打开再跨 project hydrate（**不**驱动侧栏 badge） |
 | Live status | Manager / ingest 经 Entity 写入；`hasPendingApproval` 抬 `needs_approval`，manager 不得在 pending 时降级。Transcript 淘汰后审批 fallback 看 Entity。**`livePush===true` 时不 setInterval 盲刷**；pump 结束 emit `daemon://push-status` → `livePush=false` 恢复 Timeline/Sessions 降级 quiet poll |
 | Attention badge | Σ `project.needsAttention`；bootstrap / refreshProjects 后 **quiet** `loadConversations` 全 known projects（有界并发），用 DTO `approvalCount`+unread 聚合；**不**常驻 Attention 队列 |
+| Read-state（端侧） | **Viewer progress** 在 Desktop，不进 daemon。`features/read-state`：`ConversationReadCursor`（`readMessageCount` + 可选 `lastReadMessageId`/`lastReadSeq`）经 Zustand `persist` v2 落 localStorage；首次见到 conversation 按当前 `messageCount` seed 为已读。打开 Timeline 时 `markConversationRead` 推进水位并（若曾有未读）把**旧** frontier 暂存到 `unreadDividerCursorsByConversation` 供「New messages」分隔线；跳到底/重新 follow 清除。未读数 = `messageCount - readMessageCount`（focused=0） |
+| Attention 收件箱 | `features/attention/lib/attention-inbox` 纯投影：session（approval/failed/suspended）+ conversation unread 行；`AttentionView` 分类筛选（All / Approvals / Unread / Failed / Paused）。打开条目 → Work 导航。多端同步待 server 接 `read_markers` 后再上 |
 | ensureLoaded | per-key single-flight（`shared/lib/desktop-inflight.ts`）；Timeline hardMax 500 / Transcript hardMax 2000；resume 去重用模块 Set（禁止 `window.__minos*`） |
 | Ghost Running 根因 | Daemon SQLite + `list_conversation_agent_sessions` 已是 `idle`，UI 缓存仍 `running`：漏推/ sticky elevation 后无对账。以 manager 事件 + Inspector 可见时的 `listSessions` 覆盖；禁止 live 下周期双 RPC |
 | @agent / @profile 路由 | `@agent`：复用最近未关闭 session，新建时 convenience 绑定该 runtime **最新** host profile（`profile_id`）。`@agent#short`：续写。`@ProfileName` / `@p/<id>`：**始终新建**并传显式 `profile_id`。补全：runtime + profiles（hint: `profile · runtime`）+ continue sessions。解析：runtime 名优先；重名或非 clean token（含空白/`#`/`@`）profile 用 `@p/<id>`。Create form + daemon 拒绝非法 profile 名。Daemon `resolve_launch_options`：`agent` 必须匹配 profile runtime；explicit model/effort/instructions > profile > None。 |

@@ -48,11 +48,48 @@ describe("buildVirtualTimelineItems", () => {
   });
 });
 
+describe("buildVirtualTimelineItems unread divider", () => {
+  it("inserts unread divider after the read frontier", () => {
+    const t0 = Date.UTC(2026, 6, 22, 12, 0);
+    const items = buildVirtualTimelineItems(
+      [
+        msg({ id: "a", body: "one", messageSeq: 1, createdAtMs: t0 }),
+        msg({ id: "b", body: "two", messageSeq: 2, createdAtMs: t0 + 1000 }),
+        msg({ id: "c", body: "three", messageSeq: 3, createdAtMs: t0 + 2000 }),
+      ],
+      {
+        readCursor: {
+          readMessageCount: 1,
+          lastReadSeq: 1,
+          lastReadMessageId: "a",
+          updatedAtMs: 1,
+        },
+      },
+    );
+    const types = items.map((i) => i.type);
+    assert.ok(types.includes("unread"));
+    const unreadIdx = types.indexOf("unread");
+    // After day divider for first msg, message a, then unread, then b/c
+    assert.equal(items[unreadIdx + 1]?.type, "message");
+    assert.equal(
+      items[unreadIdx + 1]?.type === "message" && items[unreadIdx + 1].id,
+      "b",
+    );
+  });
+});
+
 describe("estimateVirtualTimelineItemSize", () => {
   it("returns a small size for day rows", () => {
     assert.equal(
       estimateVirtualTimelineItemSize({ type: "day", id: "d", ms: 1 }),
       36,
+    );
+  });
+
+  it("returns a size for unread divider", () => {
+    assert.equal(
+      estimateVirtualTimelineItemSize({ type: "unread", id: "u" }),
+      40,
     );
   });
 });

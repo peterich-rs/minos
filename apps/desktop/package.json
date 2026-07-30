@@ -9,7 +9,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "check": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test src/shared/lib/*.test.ts src/shared/api/*.test.ts src/shared/hooks/*.test.ts src/shared/ui/*.test.ts src/shared/theme/*.test.ts src/store/workspace/*.test.ts src/features/chat/lib/*.test.ts src/features/agents/lib/*.test.ts src/features/work/lib/*.test.ts src/features/settings/*.test.ts src/features/settings/hooks/*.test.ts",
+    "test": "node --experimental-strip-types --test src/shared/lib/*.test.ts src/shared/api/*.test.ts src/shared/hooks/*.test.ts src/shared/ui/*.test.ts src/shared/theme/*.test.ts src/store/workspace/*.test.ts src/features/chat/lib/*.test.ts src/features/agents/lib/*.test.ts src/features/work/lib/*.test.ts src/features/settings/*.test.ts src/features/settings/hooks/*.test.ts src/features/read-state/lib/*.test.ts src/features/attention/lib/*.test.ts",
     "lint": "biome lint .",
     "format": "biome format --write .",
     "check:biome": "biome lint .",

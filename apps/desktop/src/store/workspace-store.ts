@@ -30,6 +30,7 @@ import {
   mergeTranscriptItems,
 } from "./workspace/helpers";
 import { createWorkspaceActions } from "./workspace/create-actions";
+import { migrateReadCursors } from "@/features/read-state/lib/read-state";
 
 export type {
   DataSource,
@@ -58,7 +59,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       error: null,
       actionError: null,
       clis: KNOWN_AGENTS_FALLBACK,
-      readMessageCountById: {},
+      readCursorsByConversation: {},
       focusedConversationId: null,
       ...emptyWorkspace,
       ...createWorkspaceActions(set, get),
@@ -66,8 +67,25 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     {
       name: "minos.workspace-store.v1",
       storage: createJSONStorage(() => localStorage),
+      version: 2,
+      migrate: (persisted, fromVersion) => {
+        const p = (persisted ?? {}) as Record<string, unknown>;
+        // v1: { readMessageCountById: Record<string, number> }
+        // v2: { readCursorsByConversation: ReadCursorMap }
+        if (fromVersion < 2) {
+          const legacy = p.readMessageCountById ?? p.readCursorsByConversation;
+          return {
+            readCursorsByConversation: migrateReadCursors(legacy),
+          };
+        }
+        return {
+          readCursorsByConversation: migrateReadCursors(
+            p.readCursorsByConversation,
+          ),
+        };
+      },
       partialize: (s) => ({
-        readMessageCountById: s.readMessageCountById,
+        readCursorsByConversation: s.readCursorsByConversation,
       }),
     },
   ),

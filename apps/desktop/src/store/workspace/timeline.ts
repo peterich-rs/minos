@@ -16,6 +16,7 @@ import {
   trimMessagesHardMax,
 } from "@/shared/lib/message-history";
 import { useReactionStore } from "@/features/chat/reaction-store";
+import { latestMessageFrontier } from "@/features/read-state/lib/read-state";
 
 
 export function createTimelineActions(
@@ -109,9 +110,19 @@ export function createTimelineActions(
             };
           });
 
-          // Opening the conversation clears unread message attention.
+          // Opening the conversation clears unread and stamps the read frontier
+          // (message id/seq) for the unread divider on next reopen.
           if (!quiet) {
-            get().markConversationRead(conversationId);
+            const msgs =
+              get().messagesByConversation[conversationId] ?? [];
+            const frontier = latestMessageFrontier(msgs);
+            const count =
+              get().conversations.find((c) => c.id === conversationId)
+                ?.messageCount ?? msgs.length;
+            get().markConversationRead(conversationId, {
+              messageCount: count,
+              ...frontier,
+            });
           }
         } catch (e) {
           if (isStale()) return;

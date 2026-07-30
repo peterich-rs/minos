@@ -29,6 +29,10 @@ import {
   normalizeGitActivity,
   timelineKindForMessage,
 } from "./git-activity-map";
+import {
+  type ReadCursorMap,
+  unreadCountFromCursor,
+} from "@/features/read-state/lib/read-state";
 
 export function coerceUiSessionStatus(status: string): SessionStatus {
   if (
@@ -102,7 +106,7 @@ export function normalizeDaemonConversation(
 
 export function toUiConversation(
   c: DaemonConversation,
-  readMessageCountById: Record<string, number>,
+  readCursors: ReadCursorMap,
   activeConversationId: string | null,
   fallbackProjectId?: string,
 ): Conversation {
@@ -111,15 +115,13 @@ export function toUiConversation(
   const priority = parsePriority(row.priority);
   const runningCount = row.runningCount ?? 0;
   const approvalCount = row.approvalCount ?? 0;
-  // First time we see a conversation: baseline as read. Later growth = unread.
+  // First sight is seeded as fully-read by list hydrate (see conversation-list).
   // Active conversation never shows unread for its own messages.
-  const baseline = readMessageCountById[row.id];
-  const unread =
-    row.id === activeConversationId
-      ? 0
-      : baseline === undefined
-        ? 0
-        : Math.max(0, row.messageCount - baseline);
+  const unread = unreadCountFromCursor(
+    row.messageCount,
+    readCursors[row.id],
+    row.id === activeConversationId,
+  );
   return {
     id: row.id,
     projectId: row.projectId,
@@ -189,6 +191,11 @@ export function toUiMessage(m: DaemonMessage): TimelineMessage {
     kind: timelineKindForMessage(m.kind, gitActivity),
     replyToMessageId: m.replyToMessageId ?? undefined,
     delegationId: m.delegationId ?? undefined,
+    mentions: m.mentions?.map((mention) => ({
+      agent: mention.agent,
+      sessionId: mention.sessionId ?? undefined,
+      sessionShortId: mention.sessionShortId ?? undefined,
+    })),
     gitActivity,
   };
 }

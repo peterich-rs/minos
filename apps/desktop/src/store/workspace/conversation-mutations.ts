@@ -157,7 +157,7 @@ export function createConversationMutationActions(
         conversations: patchLocalConversation(s.conversations, conversationId, {
           ...toUiConversation(
             updated,
-            s.readMessageCountById,
+            s.readCursorsByConversation,
             s.focusedConversationId,
           ),
           // Preserve local attention fields that RPC may not recompute yet.

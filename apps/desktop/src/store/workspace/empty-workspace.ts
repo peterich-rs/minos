@@ -60,5 +60,10 @@ export const emptyWorkspace = {
   attentionSessions: [] as ProjectSession[],
   attentionStatus: idleStatus(),
   clisStatus: idleStatus(),
+  /** Ephemeral open-session dividers — clear on workspace wipe. */
+  unreadDividerCursorsByConversation: {} as Record<
+    string,
+    import("@/features/read-state/lib/read-state").ConversationReadCursor
+  >,
 };
 
