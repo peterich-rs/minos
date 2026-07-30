@@ -1,0 +1,86 @@
+# Build and publish minos-backend container image to GHCR.
+# VPS hosts pull only — they never build from source.
+
+name: backend-image
+
+on:
+  # Branch pushes: only when backend-relevant paths change.
+  # Semver tags / ad-hoc rebuilds: use workflow_dispatch (or tag after a backend commit).
+  push:
+    branches: [main]
+    paths:
+      - "crates/minos-backend/**"
+      - "crates/minos-domain/**"
+      - "crates/minos-protocol/**"
+      - "crates/minos-ui-protocol/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "Dockerfile"
+      - ".dockerignore"
+      - ".github/workflows/backend-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: backend-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: minos-backend
+
+jobs:
+  build-and-push:
+    name: Build and push (linux/amd64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Image metadata
+        id: meta
+        run: |
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/${OWNER_LC}/${IMAGE_NAME}"
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-12)
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<EOF"
+            echo "${IMAGE}:sha-${SHORT_SHA}"
+            if [ "${{ github.ref }}" = "refs/heads/main" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              echo "${IMAGE}:latest"
+            fi
+            if [[ "${{ github.ref }}" == refs/tags/backend-v* ]]; then
+              TAG_NAME="${{ github.ref_name }}"
+              echo "${IMAGE}:${TAG_NAME}"
+              echo "${IMAGE}:${TAG_NAME#backend-}"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}

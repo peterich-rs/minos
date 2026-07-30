@@ -11,17 +11,20 @@ Minos 是一个远程 AI 编码控制系统：在 Mac 上运行 host 端，通�
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │                           客户端层 (Clients)                           │
-│  macOS (SwiftUI) · Mobile (Flutter) · Web · TUI · Desktop (Tauri)     │
-│       UniFFI            FRB          WS/REST  local RPC → daemon      │
+│  Mobile (Flutter) · Web · Desktop Account Client                      │
+│       REST + /ws/client  →  public origin (prod: minos.ainexc.com)    │
+│  macOS / Desktop Host Console / TUI  →  local RPC → minos-daemon      │
 ├──────────────────────────────────────────────────────────────────────┤
-│                     后端服务 (minos-backend)                          │
+│                     后端服务 (minos-backend)  [VPS hub]                │
 │  HTTP /v1/*  ·  WebSocket Gateway  ·  Domain/UC  ·  Worker Plane      │
-│              PostgreSQL/SQLite  ·  Redis (prod)                       │
+│  Prod: Caddy TLS · PostgreSQL · Redis · monolith container (GHCR)     │
 ├──────────────────────────────────────────────────────────────────────┤
-│                     Host 端 (minos-daemon)                            │
-│  Agent Runtime · Relay Client · Local RPC (TUI / Desktop)             │
+│                     Host 端 (minos-daemon)  [user Mac/Linux]           │
+│  Agent Runtime · /ws/host → backend · Local RPC (TUI / Desktop)       │
 └──────────────────────────────────────────────────────────────────────┘
 ```
+
+生产部署（runtime-only VPS，不在机器上 clone 源码）：[ops/vps-deploy.md](ops/vps-deploy.md)。
 
 ## 仓库结构
 
@@ -53,6 +56,8 @@ Minos/
 ├── docs/                            # 架构文档 + ADR + 运维手册
 ├── schemas/                         # JSON Schema（Codex 协议）
 ├── deploy/                          # 部署配置
+│   ├── docker-compose.yml           # 本地 dev（勿用于公网）
+│   └── prod/                        # VPS 生产清单（compose / Caddy / backup）
 └── scripts/                         # 辅助脚本
 ```
 

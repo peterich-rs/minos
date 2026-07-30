@@ -1,0 +1,45 @@
+# Minos API — public origin for VPS (TLS via Let's Encrypt HTTP-01 on :80/:443)
+#
+# 1) DNS: A minos.ainexc.com → VPS public IP (prefer DNS-only / grey cloud for LE)
+# 2) sudo cp deploy/prod/Caddyfile /etc/caddy/Caddyfile
+# 3) sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+#
+# Backend must listen on 127.0.0.1:8787 (see docker-compose.yml). Do not expose 8787 publicly.
+
+minos.ainexc.com {
+	encode gzip zstd
+
+	# Public control + realtime surface. Keep /metrics and /openapi.json off the internet.
+	@public path /health/live /health/ready /v1/* /ws/*
+	handle @public {
+		reverse_proxy 127.0.0.1:8787 {
+			transport http {
+				read_timeout 0
+				write_timeout 0
+			}
+			flush_interval -1
+			header_up Host {host}
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	handle {
+		respond 404
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	log {
+		output file /opt/minos/logs/caddy-access.log {
+			roll_size 20mb
+			roll_keep 5
+		}
+	}
+}

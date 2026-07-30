@@ -1,0 +1,118 @@
+# Minos backend — production (image pull only; host Caddy terminates TLS)
+#
+# VPS layout (runtime-only, no monorepo clone):
+#   /opt/minos/deploy          this compose + .env
+#   /opt/minos/data/postgres   PG volume
+#   /opt/minos/data/redis      Redis volume
+#   /opt/minos/logs            Caddy access logs
+#   /opt/minos/backups         pg_dump artifacts
+#
+# Traffic:
+#   Internet → :443 Caddy → 127.0.0.1:8787 minos-backend
+#   Postgres/Redis: loopback only
+#
+#   cd /opt/minos/deploy
+#   # set MINOS_BACKEND_IMAGE + secrets in .env
+#   docker compose pull && docker compose up -d
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-minos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-minos}
+    volumes:
+      - /opt/minos/data/postgres:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    command:
+      - postgres
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - effective_cache_size=512MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - max_connections=50
+      - -c
+      - wal_buffers=4MB
+      - -c
+      - checkpoint_completion_target=0.9
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 768m
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 128mb
+      - --maxmemory-policy
+      - allkeys-lru
+    volumes:
+      - /opt/minos/data/redis:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 160m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  minos-backend:
+    image: ${MINOS_BACKEND_IMAGE:?set MINOS_BACKEND_IMAGE to a prebuilt image}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      MINOS_BACKEND_LISTEN: "0.0.0.0:8787"
+      MINOS_STORAGE_MODE: external-sql
+      MINOS_DATABASE_URL: postgres://${POSTGRES_USER:-minos}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-minos}
+      MINOS_CACHE_BACKEND: redis
+      MINOS_MESSAGE_BUS_BACKEND: redis
+      MINOS_REDIS_URL: redis://redis:6379/
+      MINOS_ENV: ${MINOS_ENV:-prod}
+      MINOS_CORS_ORIGINS: ${MINOS_CORS_ORIGINS:?set MINOS_CORS_ORIGINS}
+      MINOS_JWT_SECRET: ${MINOS_JWT_SECRET:?set MINOS_JWT_SECRET}
+      RUST_LOG: ${RUST_LOG:-info,minos_backend=info}
+      MINOS_SHUTDOWN_TIMEOUT_SECS: "30"
+    ports:
+      - "127.0.0.1:8787:8787"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
