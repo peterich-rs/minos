@@ -313,8 +313,11 @@ async fn resume_persisted_session_reconnects_with_formal_ticket_flow() {
         .resume_persisted_session_at(&backend_url)
         .await
         .unwrap();
-    // Resume may resolve slightly before the watch state settles on Connected
-    // (brief Reconnecting { attempt: 1 } during WS arm). Poll for Connected.
+
+    // Resume sets Connected before arming the reconnect loop. The loop must
+    // not clobber that with a re-dial of compile-time BACKEND_URL (which would
+    // race to Disconnected when tests inject a random port via `*_at`).
+    // Allow a brief Reconnecting only if an observer is mid-transition.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     loop {
         match client.current_state() {
@@ -325,6 +328,14 @@ async fn resume_persisted_session_reconnects_with_formal_ticket_flow() {
             other => panic!("expected Connected after resume, got {other:?}"),
         }
     }
+    // Hold briefly so a buggy reconnect loop would still have time to stomp
+    // Connected → Disconnected before we assert stability.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        client.current_state(),
+        ConnectionState::Connected,
+        "Connected must remain stable after resume (reconnect loop must not re-dial)"
+    );
 
     let _ = client.logout().await;
 }
