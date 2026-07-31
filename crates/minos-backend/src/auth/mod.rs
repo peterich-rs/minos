@@ -8,4 +8,5 @@ pub mod jwt;
 pub mod passwords;
 pub mod rate_limit;
 pub mod realtime_ticket;
+pub mod supabase;
 pub mod use_case;

@@ -26,6 +26,11 @@ Minos 是一个远程 AI 编码控制系统：在 Mac 上运行 host 端，通�
 
 生产部署（runtime-only VPS，不在机器上 clone 源码）：[ops/vps-deploy.md](ops/vps-deploy.md)。
 
+长期产品与身份方向（Supabase exchange、Host 同账号链接、Web 对齐 Desktop UI、Mobile 云端查看）：
+
+- L0 纲领：[superpowers/specs/2026-07-30-cloud-identity-clients-long-term.md](superpowers/specs/2026-07-30-cloud-identity-clients-long-term.md)
+- L1/L2 执行与依赖图：[superpowers/specs/2026-07-30-program/](superpowers/specs/2026-07-30-program/README.md)
+
 ## 仓库结构
 
 ```

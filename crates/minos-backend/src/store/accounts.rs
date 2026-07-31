@@ -4,11 +4,8 @@
 //! Uses runtime `sqlx::query` / `sqlx::query_as` rather than the macro
 //! form deliberately. The macro variants need a populated dev DB during
 //! `cargo build` and add a `cargo sqlx prepare` step to every CI run per
-//! migration. The schema here is small (one table, four columns) and is
-//! exercised by integration tests in `tests/auth_endpoints.rs`. If this
-//! file ever grows complex queries that benefit from compile-time
-//! checking, migrate to the macro form alongside the existing
-//! `devices.rs` / `tokens.rs` / `pairings.rs` callers.
+//! migration. The schema here is small and is exercised by integration
+//! tests in `tests/auth_endpoints.rs`.
 
 use chrono::Utc;
 use sqlx::{error::DatabaseError, PgPool, SqlitePool};
@@ -24,14 +21,56 @@ pub struct AccountRow {
     pub minos_id: String,
     pub display_name: Option<String>,
     pub password_hash: String,
+    pub supabase_sub: Option<String>,
     pub created_at: i64,
     pub last_login_at: Option<i64>,
 }
+
+const ACCOUNT_SELECT_SQLITE: &str = "SELECT account_id, email, minos_id, display_name, password_hash, supabase_sub, created_at, last_login_at
+                   FROM accounts";
+
+const ACCOUNT_SELECT_POSTGRES: &str = "SELECT account_id, email, minos_id, display_name,
+                   COALESCE(
+                       (SELECT password_hash FROM account_credentials c WHERE c.account_id = accounts.account_id),
+                       '!'
+                   ) AS password_hash,
+                   supabase_sub,
+                   created_at_ms AS created_at,
+                   last_login_at_ms AS last_login_at
+                   FROM accounts";
 
 pub async fn create<S>(
     store: &S,
     email: &str,
     password_hash: &str,
+) -> Result<AccountRow, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    create_inner(store, email, password_hash, None).await
+}
+
+/// Create an account bound to a Supabase Auth subject.
+///
+/// `password_hash` should be an unusable Argon2 hash for OAuth-only
+/// accounts (password login will fail verification).
+pub async fn create_with_supabase_sub<S>(
+    store: &S,
+    email: &str,
+    password_hash: &str,
+    supabase_sub: &str,
+) -> Result<AccountRow, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    create_inner(store, email, password_hash, Some(supabase_sub)).await
+}
+
+async fn create_inner<S>(
+    store: &S,
+    email: &str,
+    password_hash: &str,
+    supabase_sub: Option<&str>,
 ) -> Result<AccountRow, BackendError>
 where
     S: AsStorePool + ?Sized,
@@ -49,6 +88,7 @@ where
                     &email_norm,
                     &minos_id,
                     password_hash,
+                    supabase_sub,
                     now,
                 )
                 .await
@@ -60,6 +100,7 @@ where
                     &email_norm,
                     &minos_id,
                     password_hash,
+                    supabase_sub,
                     now,
                 )
                 .await
@@ -74,6 +115,7 @@ where
                     minos_id,
                     display_name: None,
                     password_hash: password_hash.into(),
+                    supabase_sub: supabase_sub.map(str::to_owned),
                     created_at: now,
                     last_login_at: None,
                 });
@@ -81,6 +123,12 @@ where
             Err(sqlx::Error::Database(db)) if db.is_unique_violation() => {
                 if is_email_unique_violation(db.as_ref()) {
                     return Err(BackendError::EmailTaken);
+                }
+                if is_supabase_sub_unique_violation(db.as_ref()) {
+                    return Err(BackendError::StoreQuery {
+                        operation: "accounts::create".into(),
+                        message: "supabase_sub already bound".into(),
+                    });
                 }
                 // minos_id collision — retry with a new random id.
             }
@@ -106,22 +154,16 @@ where
     let email_norm = email.to_lowercase();
     let row = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
-            sqlx::query_as::<_, AccountRow>(
-                "SELECT account_id, email, minos_id, display_name, password_hash, created_at, last_login_at
-                   FROM accounts WHERE email = ?",
-            )
-            .bind(&email_norm)
-            .fetch_optional(pool)
-            .await
+            sqlx::query_as::<_, AccountRow>(&format!("{ACCOUNT_SELECT_SQLITE} WHERE email = ?"))
+                .bind(&email_norm)
+                .fetch_optional(pool)
+                .await
         }
         StorePoolRef::Postgres(pool) => {
-            sqlx::query_as::<_, AccountRow>(
-                "SELECT account_id, email, minos_id, display_name, password_hash, created_at, last_login_at
-                   FROM accounts WHERE email = $1",
-            )
-            .bind(&email_norm)
-            .fetch_optional(pool)
-            .await
+            sqlx::query_as::<_, AccountRow>(&format!("{ACCOUNT_SELECT_POSTGRES} WHERE email = $1"))
+                .bind(&email_norm)
+                .fetch_optional(pool)
+                .await
         }
     }
     .map_err(|e| BackendError::StoreQuery {
@@ -137,19 +179,17 @@ where
 {
     let row = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
-            sqlx::query_as::<_, AccountRow>(
-                "SELECT account_id, email, minos_id, display_name, password_hash, created_at, last_login_at
-                   FROM accounts WHERE account_id = ?",
-            )
+            sqlx::query_as::<_, AccountRow>(&format!(
+                "{ACCOUNT_SELECT_SQLITE} WHERE account_id = ?"
+            ))
             .bind(account_id)
             .fetch_optional(pool)
             .await
         }
         StorePoolRef::Postgres(pool) => {
-            sqlx::query_as::<_, AccountRow>(
-                "SELECT account_id, email, minos_id, display_name, password_hash, created_at, last_login_at
-                   FROM accounts WHERE account_id = $1",
-            )
+            sqlx::query_as::<_, AccountRow>(&format!(
+                "{ACCOUNT_SELECT_POSTGRES} WHERE account_id = $1"
+            ))
             .bind(account_id)
             .fetch_optional(pool)
             .await
@@ -160,6 +200,92 @@ where
         message: e.to_string(),
     })?;
     Ok(row)
+}
+
+pub async fn find_by_supabase_sub<S>(
+    store: &S,
+    supabase_sub: &str,
+) -> Result<Option<AccountRow>, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    let row = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, AccountRow>(&format!(
+                "{ACCOUNT_SELECT_SQLITE} WHERE supabase_sub = ?"
+            ))
+            .bind(supabase_sub)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, AccountRow>(&format!(
+                "{ACCOUNT_SELECT_POSTGRES} WHERE supabase_sub = $1"
+            ))
+            .bind(supabase_sub)
+            .fetch_optional(pool)
+            .await
+        }
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "accounts::find_by_supabase_sub".into(),
+        message: e.to_string(),
+    })?;
+    Ok(row)
+}
+
+/// Bind a Supabase subject to an existing account. Fails if the account
+/// already has a different sub, or if the sub is already bound elsewhere
+/// (unique constraint).
+pub async fn bind_supabase_sub<S>(
+    store: &S,
+    account_id: &str,
+    supabase_sub: &str,
+) -> Result<(), BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    let rows_affected = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "UPDATE accounts SET supabase_sub = ?
+                   WHERE account_id = ?
+                     AND (supabase_sub IS NULL OR supabase_sub = ?)",
+        )
+        .bind(supabase_sub)
+        .bind(account_id)
+        .bind(supabase_sub)
+        .execute(pool)
+        .await
+        .map(|done| done.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "UPDATE accounts SET supabase_sub = $1
+                   WHERE account_id = $2
+                     AND (supabase_sub IS NULL OR supabase_sub = $1)",
+        )
+        .bind(supabase_sub)
+        .bind(account_id)
+        .execute(pool)
+        .await
+        .map(|done| done.rows_affected()),
+    };
+
+    match rows_affected {
+        Ok(1) => Ok(()),
+        Ok(_) => Err(BackendError::StoreQuery {
+            operation: "accounts::bind_supabase_sub".into(),
+            message: "account missing or already bound to a different supabase_sub".into(),
+        }),
+        Err(sqlx::Error::Database(db)) if is_supabase_sub_unique_violation(db.as_ref()) => {
+            Err(BackendError::StoreQuery {
+                operation: "accounts::bind_supabase_sub".into(),
+                message: "supabase_sub already bound".into(),
+            })
+        }
+        Err(e) => Err(BackendError::StoreQuery {
+            operation: "accounts::bind_supabase_sub".into(),
+            message: e.to_string(),
+        }),
+    }
 }
 
 pub async fn touch_last_login<S>(store: &S, account_id: &str) -> Result<(), BackendError>
@@ -177,7 +303,7 @@ where
                 .map(|_| ())
         }
         StorePoolRef::Postgres(pool) => {
-            sqlx::query("UPDATE accounts SET last_login_at = $1 WHERE account_id = $2")
+            sqlx::query("UPDATE accounts SET last_login_at_ms = $1 WHERE account_id = $2")
                 .bind(now)
                 .bind(account_id)
                 .execute(pool)
@@ -210,12 +336,20 @@ where
                 .map(|_| ())
         }
         StorePoolRef::Postgres(pool) => {
-            sqlx::query("UPDATE accounts SET password_hash = $1 WHERE account_id = $2")
-                .bind(password_hash)
-                .bind(account_id)
-                .execute(pool)
-                .await
-                .map(|_| ())
+            let now = Utc::now().timestamp_millis();
+            sqlx::query(
+                "INSERT INTO account_credentials (account_id, password_hash, updated_at_ms)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT (account_id) DO UPDATE
+                 SET password_hash = EXCLUDED.password_hash,
+                     updated_at_ms = EXCLUDED.updated_at_ms",
+            )
+            .bind(account_id)
+            .bind(password_hash)
+            .bind(now)
+            .execute(pool)
+            .await
+            .map(|_| ())
         }
     }
     .map_err(|e| BackendError::StoreQuery {
@@ -234,19 +368,17 @@ where
 {
     let row = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
-            sqlx::query_as::<_, AccountRow>(
-                "SELECT account_id, email, minos_id, display_name, password_hash, created_at, last_login_at
-                   FROM accounts WHERE minos_id = ? COLLATE BINARY",
-            )
+            sqlx::query_as::<_, AccountRow>(&format!(
+                "{ACCOUNT_SELECT_SQLITE} WHERE minos_id = ? COLLATE BINARY"
+            ))
             .bind(minos_id)
             .fetch_optional(pool)
             .await
         }
         StorePoolRef::Postgres(pool) => {
-            sqlx::query_as::<_, AccountRow>(
-                "SELECT account_id, email, minos_id, display_name, password_hash, created_at, last_login_at
-                   FROM accounts WHERE minos_id = $1",
-            )
+            sqlx::query_as::<_, AccountRow>(&format!(
+                "{ACCOUNT_SELECT_POSTGRES} WHERE minos_id = $1"
+            ))
             .bind(minos_id)
             .fetch_optional(pool)
             .await
@@ -265,16 +397,18 @@ async fn create_sqlite(
     email_norm: &str,
     minos_id: &str,
     password_hash: &str,
+    supabase_sub: Option<&str>,
     now: i64,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO accounts (account_id, email, minos_id, display_name, password_hash, created_at)
-           VALUES (?, ?, ?, NULL, ?, ?)",
+        "INSERT INTO accounts (account_id, email, minos_id, display_name, password_hash, supabase_sub, created_at)
+           VALUES (?, ?, ?, NULL, ?, ?, ?)",
     )
     .bind(account_id)
     .bind(email_norm)
     .bind(minos_id)
     .bind(password_hash)
+    .bind(supabase_sub)
     .bind(now)
     .execute(pool)
     .await
@@ -287,20 +421,34 @@ async fn create_postgres(
     email_norm: &str,
     minos_id: &str,
     password_hash: &str,
+    supabase_sub: Option<&str>,
     now: i64,
 ) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
     sqlx::query(
-        "INSERT INTO accounts (account_id, email, minos_id, display_name, password_hash, created_at)
+        "INSERT INTO accounts (account_id, email, minos_id, display_name, supabase_sub, created_at_ms)
            VALUES ($1, $2, $3, NULL, $4, $5)",
     )
     .bind(account_id)
     .bind(email_norm)
     .bind(minos_id)
+    .bind(supabase_sub)
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
+    // OAuth-only accounts still get a credentials row with an unusable hash so
+    // password login paths fail cleanly rather than 500 on missing rows.
+    sqlx::query(
+        "INSERT INTO account_credentials (account_id, password_hash, updated_at_ms)
+           VALUES ($1, $2, $3)",
+    )
+    .bind(account_id)
     .bind(password_hash)
     .bind(now)
-    .execute(pool)
-    .await
-    .map(|_| ())
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 fn is_email_unique_violation(db: &dyn DatabaseError) -> bool {
@@ -310,6 +458,14 @@ fn is_email_unique_violation(db: &dyn DatabaseError) -> bool {
         || db.message().contains("accounts.email")
         || db.message().contains("idx_accounts_email")
         || db.message().contains("accounts_email_key")
+}
+
+fn is_supabase_sub_unique_violation(db: &dyn DatabaseError) -> bool {
+    matches!(db.constraint(), Some(name) if name.eq_ignore_ascii_case("idx_accounts_supabase_sub")
+        || name.eq_ignore_ascii_case("accounts_supabase_sub_key")
+        || name.eq_ignore_ascii_case("accounts_supabase_sub"))
+        || db.message().contains("supabase_sub")
+        || db.message().contains("idx_accounts_supabase_sub")
 }
 
 #[cfg(test)]
@@ -326,6 +482,7 @@ mod tests {
             .unwrap();
         assert_eq!(row.email, "alice@example.com");
         assert_eq!(row.password_hash, "phc-string");
+        assert!(row.supabase_sub.is_none());
         assert!(row.last_login_at.is_none());
 
         let got = find_by_email(&pool, "ALICE@example.com")
@@ -363,5 +520,33 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(got.last_login_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn create_with_supabase_sub_and_find() {
+        let pool = memory_pool().await;
+        let row = create_with_supabase_sub(&pool, "oidc@example.com", "phc", "sub-abc")
+            .await
+            .unwrap();
+        assert_eq!(row.supabase_sub.as_deref(), Some("sub-abc"));
+        let got = find_by_supabase_sub(&pool, "sub-abc")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.account_id, row.account_id);
+    }
+
+    #[tokio::test]
+    async fn bind_supabase_sub_links_password_account() {
+        let pool = memory_pool().await;
+        let row = create(&pool, "merge@example.com", "phc").await.unwrap();
+        bind_supabase_sub(&pool, &row.account_id, "sub-merge")
+            .await
+            .unwrap();
+        let got = find_by_supabase_sub(&pool, "sub-merge")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.account_id, row.account_id);
     }
 }

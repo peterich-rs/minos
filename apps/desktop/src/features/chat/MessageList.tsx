@@ -249,33 +249,37 @@ export function MessageList({ conversationId }: { conversationId: string }) {
 
   const emptyOrStatus =
     phase === "loading" && !hasCachedMessages ? (
-      <div className="py-12 text-center text-sm text-ink-muted">
-        Loading messages…
+      <div className="flex flex-col items-center gap-3 py-16 text-center">
+        <Loader2 className="h-5 w-5 animate-spin text-primary/70" />
+        <p className="text-sm text-ink-muted">Loading messages…</p>
       </div>
     ) : phase === "error" && !hasCachedMessages ? (
-      <div className="flex flex-col items-center gap-3 py-12 text-center">
-        <p className="text-sm text-rose-600">
+      <div className="flex flex-col items-center gap-3 py-16 text-center">
+        <p className="text-sm text-status-failed">
           {detailError || "Failed to load messages"}
         </p>
         <button
           type="button"
           onClick={() => void loadTimeline(conversationId)}
-          className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-surface hover:opacity-90"
+          className="rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:opacity-90"
         >
           Retry
         </button>
       </div>
     ) : messages.length === 0 ? (
-      <div className="py-12 text-center text-sm text-ink-muted">
-        No messages yet. Type{" "}
-        <kbd className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-xs">
-          @grok
-        </kbd>{" "}
-        or{" "}
-        <kbd className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-xs">
-          @codex
-        </kbd>{" "}
-        to start an agent.
+      <div className="mx-auto max-w-sm py-16 text-center text-sm text-ink-muted">
+        <p className="font-medium text-ink-secondary">No messages yet</p>
+        <p className="mt-2 leading-relaxed">
+          Type{" "}
+          <kbd className="rounded-md border border-ink/10 bg-surface px-1.5 py-0.5 font-mono text-xs text-ink shadow-sm">
+            @grok
+          </kbd>{" "}
+          or{" "}
+          <kbd className="rounded-md border border-ink/10 bg-surface px-1.5 py-0.5 font-mono text-xs text-ink shadow-sm">
+            @codex
+          </kbd>{" "}
+          to start an agent.
+        </p>
       </div>
     ) : null;
 
@@ -287,36 +291,51 @@ export function MessageList({ conversationId }: { conversationId: string }) {
         ) : (
           <VList
             ref={listRef}
-            className="scrollbar-thin h-full px-5 py-5"
+            className="scrollbar-thin h-full px-3 py-4 sm:px-5"
             shift={shift}
             onScroll={handleScroll}
+            // Extra buffer so day dividers + tall agent turns stay smooth (px).
+            bufferSize={480}
           >
             {hasOlder || loadingOlder ? (
-              <div className="flex justify-center py-2" key="__older-head">
+              <div
+                className="flex items-center justify-center gap-2 py-3"
+                key="__older-head"
+              >
                 {loadingOlder ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-ink-muted/50" />
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-primary/60" />
+                    <span className="text-2xs font-medium text-ink-muted">
+                      Loading earlier messages…
+                    </span>
+                  </>
                 ) : (
-                  <span className="h-px w-full" aria-hidden />
+                  <span
+                    className="h-px w-16 rounded-full bg-ink/10"
+                    aria-hidden
+                  />
                 )}
               </div>
             ) : null}
             {virtualItems.map((item) => renderVirtualItem(item))}
+            {/* Bottom spacer so last bubble clears jump FAB + composer shadow */}
+            <div className="h-2 shrink-0" aria-hidden key="__tail-pad" />
           </VList>
         )}
-      </div>
 
-      {showJumpToLatest ? (
-        <div className="pointer-events-none absolute inset-x-0 bottom-[7.5rem] z-10 flex justify-center sm:bottom-36">
-          <button
-            type="button"
-            onClick={jumpToLatest}
-            className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-ink/10 bg-surface px-3.5 py-1.5 text-xs font-medium text-ink shadow-lg hover:bg-surface-muted"
-          >
-            <ArrowDown className="h-3.5 w-3.5" />
-            Jump to latest
-          </button>
-        </div>
-      ) : null}
+        {showJumpToLatest ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center">
+            <button
+              type="button"
+              onClick={jumpToLatest}
+              className="pointer-events-auto inline-flex animate-message-in items-center gap-1.5 rounded-full border border-ink/10 bg-surface/95 px-3.5 py-2 text-xs font-semibold text-ink shadow-lg backdrop-blur-md transition-colors hover:bg-primary hover:text-white hover:border-primary motion-reduce:animate-none"
+            >
+              <ArrowDown className="h-3.5 w-3.5" />
+              Jump to latest
+            </button>
+          </div>
+        ) : null}
+      </div>
     </>
   );
 }
@@ -324,15 +343,15 @@ export function MessageList({ conversationId }: { conversationId: string }) {
 function DayDivider({ ms }: { ms: number }) {
   const label = formatDayDividerLabel(ms);
   return (
-    <div className="flex items-center gap-3 py-2">
-      <div className="h-px flex-1 bg-ink/8" aria-hidden />
+    <div className="flex items-center gap-3 py-3">
+      <div className="h-px flex-1 bg-ink/8" aria-hidden="true" />
       <time
         dateTime={new Date(ms).toISOString().slice(0, 10)}
-        className="shrink-0 text-2xs font-medium text-ink-muted"
+        className="shrink-0 rounded-full border border-ink/8 bg-surface/90 px-2.5 py-0.5 text-2xs font-semibold tabular-nums text-ink-muted shadow-sm backdrop-blur-sm"
       >
         {label}
       </time>
-      <div className="h-px flex-1 bg-ink/8" aria-hidden />
+      <div className="h-px flex-1 bg-ink/8" aria-hidden="true" />
     </div>
   );
 }

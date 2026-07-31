@@ -70,7 +70,7 @@ export function TimelineHeader({
   };
 
   return (
-    <header className="flex shrink-0 items-center justify-between gap-3 border-b border-ink/5 px-4 py-3 sm:px-5">
+    <header className="flex shrink-0 items-center justify-between gap-3 border-b border-ink/6 bg-surface/90 px-4 py-3.5 backdrop-blur-sm sm:px-5">
       <div className="min-w-0 flex-1">
         {editingTitle ? (
           <input
@@ -89,12 +89,12 @@ export function TimelineHeader({
                 cancelTitle();
               }
             }}
-            className="w-full min-w-0 rounded-md border border-ink/10 bg-surface-muted px-2 py-0.5 text-sm font-semibold tracking-tight text-ink outline-none ring-accent/30 focus:ring-2"
+            className="w-full min-w-0 rounded-md border border-ink/10 bg-surface-muted px-2 py-0.5 text-base font-semibold tracking-tight text-ink outline-none ring-primary/30 focus:ring-2"
             aria-label="Conversation title"
           />
         ) : (
           <h2
-            className="cursor-text truncate rounded-md text-sm font-semibold tracking-tight text-ink hover:bg-surface-muted/80"
+            className="cursor-text truncate rounded-md text-base font-semibold tracking-tight text-ink hover:bg-ink/[0.04]"
             title={`${conversation.title} — double-click to rename`}
             onDoubleClick={beginEditTitle}
           >

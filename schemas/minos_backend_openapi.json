@@ -688,6 +688,37 @@
         "x-minos-surface": "account_api"
       }
     },
+    "/v1/auth/supabase": {
+      "post": {
+        "description": "Generated from the mounted route inventory for the `account_api` surface with `public` auth semantics.",
+        "operationId": "post_v1_auth_supabase",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": true
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": true
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "POST /v1/auth/supabase",
+        "tags": [
+          "account_api"
+        ],
+        "x-minos-auth": "public",
+        "x-minos-probe-path": "/v1/auth/supabase",
+        "x-minos-surface": "account_api"
+      }
+    },
     "/v1/conversations/direct": {
       "post": {
         "description": "Generated from the mounted route inventory for the `account_api` surface with `account_bearer` auth semantics.",

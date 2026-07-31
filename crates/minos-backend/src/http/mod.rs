@@ -242,6 +242,13 @@ const ROUTE_INVENTORY: &[RouteContract] = &[
     ),
     RouteContract::new(
         "POST",
+        "/v1/auth/supabase",
+        "/v1/auth/supabase",
+        "account_api",
+        "public",
+    ),
+    RouteContract::new(
+        "POST",
         "/v1/host/bootstrap/nonce",
         "/v1/host/bootstrap/nonce",
         "host_api",
@@ -728,6 +735,7 @@ impl BackendState {
             message_bus,
             peer_target_cache,
             Arc::new(crate::auth::realtime_ticket::RealtimeTicketStore::default()),
+            None,
         );
         Self::from_app_context(app, cors_origins, env!("CARGO_PKG_VERSION"))
     }
@@ -937,7 +945,11 @@ fn cors_layer(origins: Option<Vec<HeaderValue>>) -> CorsLayer {
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support {
     use super::BackendState;
+    use crate::auth::realtime_ticket::RealtimeTicketStore;
+    use crate::auth::supabase::SupabaseTokenVerifier;
     use crate::pairing::PairingService;
+    use crate::realtime::{MessageBusBackend, PeerTargetCacheBackend};
+    use crate::runtime::{AppContext, AppRuntimeConfig};
     use crate::session::SessionRegistry;
     use crate::store::test_support::memory_pool;
     use std::sync::Arc;
@@ -948,6 +960,11 @@ pub mod test_support {
     /// `Config::validate`; the literal is fine because tests never hit a
     /// real network.
     pub const TEST_JWT_SECRET: &str = "test-jwt-secret-32-bytes-padding";
+
+    /// HS256 secret for minting synthetic Supabase tokens in tests.
+    pub const TEST_SUPABASE_HMAC: &[u8] = b"test-supabase-hmac-secret-32b!";
+    pub const TEST_SUPABASE_ISS: &str = "https://example.supabase.co/auth/v1";
+    pub const TEST_SUPABASE_AUD: &str = "authenticated";
 
     /// Build a `BackendState` against a fresh in-memory pool, with a
     /// 5-minute pairing-token TTL and the deterministic test JWT secret.
@@ -964,6 +981,42 @@ pub mod test_support {
             None,
             "test-instance".to_string(),
         )
+    }
+
+    /// Like [`backend_state`] but with an HS256 Supabase verifier so
+    /// `/v1/auth/supabase` can be exercised without network JWKS.
+    pub async fn backend_state_with_supabase() -> BackendState {
+        let pool = memory_pool().await;
+        let registry = Arc::new(SessionRegistry::new());
+        let pairing = Arc::new(PairingService::new(pool.clone()));
+        let verifier = SupabaseTokenVerifier::for_tests(
+            TEST_SUPABASE_ISS,
+            TEST_SUPABASE_AUD,
+            TEST_SUPABASE_HMAC,
+        );
+        let app = AppContext::compose(
+            AppRuntimeConfig {
+                environment: crate::config::Environment::Dev,
+                storage_mode: crate::config::StorageMode::Sqlite,
+                runtime_mode: crate::config::RuntimeMode::Monolith,
+                cache_backend: crate::realtime::CacheBackendKind::InMemory,
+                message_bus_backend: crate::realtime::MessageBusBackendKind::Inline,
+                db_max_connections: 1,
+                token_ttl_secs: 300,
+                cluster_channel: crate::config::DEFAULT_CLUSTER_CHANNEL.to_string(),
+            },
+            registry,
+            pairing,
+            pool.into(),
+            Duration::from_mins(5),
+            TEST_JWT_SECRET.to_string(),
+            "test-instance-supabase".to_string(),
+            MessageBusBackend::inline(),
+            PeerTargetCacheBackend::in_memory(Duration::from_secs(5)),
+            Arc::new(RealtimeTicketStore::default()),
+            Some(verifier),
+        );
+        BackendState::from_app_context(app, None, "test")
     }
 }
 
@@ -1052,6 +1105,7 @@ mod tests {
             MessageBusBackend::inline(),
             PeerTargetCacheBackend::in_memory(Duration::from_secs(5)),
             Arc::new(crate::auth::realtime_ticket::RealtimeTicketStore::default()),
+            None,
         );
         let app = router(super::BackendState::from_app_context(app, None, "test"));
 
@@ -1238,6 +1292,7 @@ mod tests {
             MessageBusBackend::inline(),
             PeerTargetCacheBackend::in_memory(Duration::from_secs(5)),
             Arc::new(crate::auth::realtime_ticket::RealtimeTicketStore::default()),
+            None,
         );
         let app = router(super::BackendState::from_app_context(app, None, "test"));
 

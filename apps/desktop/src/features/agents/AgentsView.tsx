@@ -35,6 +35,10 @@ import {
   type RuntimeCliDescriptor,
 } from "./lib/agentConfigProjection";
 import { MODAL_BACKDROP_CLASS } from "@/shared/ui/modalBackdrop";
+import {
+  PageHeader,
+  PageHeaderPrimaryButton,
+} from "@/shared/ui/PageHeader";
 
 type AgentProfile = {
   id: string;
@@ -47,7 +51,7 @@ type AgentProfile = {
 };
 
 const fieldClass =
-  "w-full rounded-xl border border-ink/10 bg-surface-raised px-3.5 py-2.5 text-sm text-ink shadow-sm outline-none transition placeholder:text-ink-muted/70 focus:border-ink/25 focus:ring-2 focus:ring-ink/10";
+  "w-full rounded-xl border border-ink/10 bg-surface-raised px-3.5 py-2.5 text-sm text-ink shadow-sm outline-none transition placeholder:text-ink-muted/70 focus:border-primary/30 focus:ring-2 focus:ring-primary/20";
 
 export function AgentsView() {
   const clis = useWorkspaceStore((s) => s.clis);
@@ -87,35 +91,23 @@ export function AgentsView() {
   const phase = clisStatus.phase;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-surface">
-      <header className="flex shrink-0 items-start justify-between gap-3 border-b border-ink/5 px-6 py-5">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-ink">
-            Agents
-          </h1>
-          <p className="mt-1 max-w-xl text-sm text-ink-muted">
-            Local CLI runtimes on this Host, plus personalized agents with a
-            fixed model, peer-facing role brief, and optional system
-            instructions. Role briefs seed conversation roster intros so
-            teammates know each agent&apos;s boundaries. Chat always happens
-            inside a Project conversation.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setCreateOpen(true)}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-ink px-3.5 py-2 text-xs font-semibold text-surface shadow-sm hover:bg-ink/90"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Create agent
-        </button>
-      </header>
+    <div className="flex min-h-0 flex-1 flex-col bg-canvas-soft/40">
+      <PageHeader
+        title="Agents"
+        description="Local CLI runtimes on this Host, plus personalized agents with a fixed model, peer-facing role brief, and optional system instructions. Chat always happens inside a Project conversation."
+        action={
+          <PageHeaderPrimaryButton onClick={() => setCreateOpen(true)}>
+            <Plus className="h-3.5 w-3.5" />
+            Create agent
+          </PageHeaderPrimaryButton>
+        }
+      />
 
       {error ? (
-        <p className="px-6 pt-3 text-xs text-rose-600">{error}</p>
+        <p className="px-6 pt-3 text-xs text-status-failed">{error}</p>
       ) : null}
 
-      <div className="scrollbar-thin min-h-0 flex-1 space-y-8 overflow-y-auto p-5">
+      <div className="scrollbar-thin min-h-0 flex-1 space-y-8 overflow-y-auto p-5 sm:p-6">
         <section>
           <div className="mb-3 flex items-center justify-between px-0.5">
             <h2 className="text-2xs font-semibold uppercase tracking-[0.08em] text-ink-muted">

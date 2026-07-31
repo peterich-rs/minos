@@ -1,11 +1,5 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import { AtSign, Bold, Paperclip, Send, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AtSign, Bold, Paperclip, X } from "lucide-react";
 import {
   buildAgentMentionOptions,
   mentionQueryAtCursor,
@@ -16,6 +10,10 @@ import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
 import { cn } from "@/shared/lib/utils";
 import { toast } from "@/shared/lib/toast";
 import { daemonApi, isTauriRuntime } from "@/shared/lib/daemon";
+import {
+  ComposerChrome,
+  ComposerToolBtn,
+} from "@/shared/ui/ComposerChrome";
 import { useUiStore } from "@/store/ui-store";
 import {
   useWorkspaceStore,
@@ -193,11 +191,25 @@ export function Composer({ conversationId }: { conversationId: string }) {
     }
   };
 
+  const hint = (
+    <>
+      {source === "daemon"
+        ? "Connected · @member agent · @agent#id continue · ⌘/Ctrl+Enter send"
+        : "Mock mode"}
+      {phase === "loading" && hasCachedMessages ? " · refreshing…" : ""}
+      {sendError || (phase === "error" && detailError) ? (
+        <span className="mt-1 block text-xs text-status-failed">
+          {sendError || detailError}
+        </span>
+      ) : null}
+    </>
+  );
+
   return (
     // Composer stays outside the scrollport — always visible at the bottom.
-    <div className="relative shrink-0 border-t border-ink/5 bg-surface px-5 py-4">
+    <div className="relative shrink-0">
       {mention && mentionOptions.length > 0 ? (
-        <div className="absolute bottom-full left-5 right-5 mb-2 max-h-52 overflow-y-auto rounded-xl border border-ink/10 bg-surface py-1 shadow-lg">
+        <div className="absolute bottom-full left-5 right-5 z-20 mb-2 max-h-52 overflow-y-auto rounded-xl border border-ink/10 bg-surface py-1 shadow-lg">
           <div className="px-3 py-1.5 text-2xs font-semibold uppercase tracking-wide text-ink-muted">
             Agents & profiles
           </div>
@@ -226,7 +238,7 @@ export function Composer({ conversationId }: { conversationId: string }) {
       ) : null}
 
       {replyToMessageId ? (
-        <div className="mb-2 flex items-start gap-2 rounded-xl border border-ink/10 bg-surface-muted/50 px-3 py-2">
+        <div className="absolute bottom-full left-5 right-5 z-10 mb-2 flex items-start gap-2 rounded-xl border border-ink/10 bg-surface-muted/95 px-3 py-2 shadow-sm backdrop-blur-sm">
           <div className="min-w-0 flex-1">
             <div className="text-2xs font-semibold text-ink">
               Replying to{" "}
@@ -249,21 +261,19 @@ export function Composer({ conversationId }: { conversationId: string }) {
         </div>
       ) : null}
 
-      <div className="rounded-2xl border border-ink/10 bg-surface-muted/40 shadow-sm">
-        <textarea
-          ref={textareaRef}
-          value={draft}
-          onChange={(e) => {
+      <ComposerChrome
+        textareaProps={{
+          ref: textareaRef,
+          value: draft,
+          onChange: (e) => {
             setDraft(e.target.value);
             setCursor(e.target.selectionStart);
-          }}
-          onSelect={(e) =>
-            setCursor((e.target as HTMLTextAreaElement).selectionStart)
-          }
-          onClick={(e) =>
-            setCursor((e.target as HTMLTextAreaElement).selectionStart)
-          }
-          onKeyDown={(e) => {
+          },
+          onSelect: (e) =>
+            setCursor((e.target as HTMLTextAreaElement).selectionStart),
+          onClick: (e) =>
+            setCursor((e.target as HTMLTextAreaElement).selectionStart),
+          onKeyDown: (e) => {
             if (mention && mentionOptions.length > 0) {
               if (e.key === "ArrowDown") {
                 e.preventDefault();
@@ -300,23 +310,24 @@ export function Composer({ conversationId }: { conversationId: string }) {
               e.preventDefault();
               void onSend();
             }
-          }}
-          rows={3}
-          placeholder="Message… type @ to mention an agent (e.g. @grok hello)"
-          className="w-full resize-none rounded-t-2xl bg-transparent px-4 pt-3 text-sm text-ink outline-none placeholder:text-ink-muted"
-        />
-        <div className="flex items-center justify-between px-3 pb-3">
-          <div className="flex items-center gap-0.5 text-ink-muted">
-            <ToolBtn
+          },
+          rows: 3,
+          placeholder:
+            "Message… type @ to mention an agent (e.g. @grok hello)",
+        }}
+        toolbarStart={
+          <>
+            <ComposerToolBtn
+              title="@ mention"
               onClick={() => {
                 insertAtCursor("@");
               }}
             >
               <AtSign className="h-3.5 w-3.5" />
-            </ToolBtn>
-            <ToolBtn>
+            </ComposerToolBtn>
+            <ComposerToolBtn title="Bold">
               <Bold className="h-3.5 w-3.5" />
-            </ToolBtn>
+            </ComposerToolBtn>
             <EmojiPicker
               onSelect={(emoji) => insertAtCursor(emoji)}
               showQuickStrip={false}
@@ -324,50 +335,16 @@ export function Composer({ conversationId }: { conversationId: string }) {
               align="start"
               ariaLabel="Insert emoji"
             />
-            <ToolBtn>
+            <ComposerToolBtn title="Attach">
               <Paperclip className="h-3.5 w-3.5" />
-            </ToolBtn>
-          </div>
-          <button
-            type="button"
-            disabled={sending || !draft.trim()}
-            onClick={() => void onSend()}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-ink px-3.5 py-2 text-xs font-semibold text-surface hover:opacity-90 disabled:opacity-40"
-          >
-            {sending ? "Sending…" : "Send"}
-            <Send className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      </div>
-      <p className="mt-2 px-1 text-2xs text-ink-muted">
-        {source === "daemon"
-          ? "Connected · @member agent · @agent#id continue · ⌘/Ctrl+Enter send"
-          : "Mock mode"}
-        {phase === "loading" && hasCachedMessages ? " · refreshing…" : ""}
-      </p>
-      {sendError || (phase === "error" && detailError) ? (
-        <p className="mt-1 px-1 text-xs text-rose-600">
-          {sendError || detailError}
-        </p>
-      ) : null}
+            </ComposerToolBtn>
+          </>
+        }
+        sendLabel={sending ? "Sending…" : "Send"}
+        sendDisabled={sending || !draft.trim()}
+        onSend={() => void onSend()}
+        hint={hint}
+      />
     </div>
-  );
-}
-
-function ToolBtn({
-  children,
-  onClick,
-}: {
-  children: ReactNode;
-  onClick?: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-surface-hover hover:text-ink"
-    >
-      {children}
-    </button>
   );
 }

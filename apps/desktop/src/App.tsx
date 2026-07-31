@@ -49,7 +49,7 @@ export default function App() {
     // Full-viewport boot — no canvas margin / shell chrome (those peek as a
     // "background frame" behind loading).
     return (
-      <div className="fixed inset-0 z-[100] h-full w-full bg-surface">
+      <div className="fixed inset-0 z-[100] h-full w-full">
         <BootScreen phase={bootPhase} progress={bootProgress} />
       </div>
     );

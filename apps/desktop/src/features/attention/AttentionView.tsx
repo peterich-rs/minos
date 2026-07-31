@@ -1,6 +1,15 @@
 import { useEffect } from "react";
-import { ShieldAlert, XCircle, PauseCircle } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import { agentMeta } from "@/shared/lib/mock-data";
+import {
+  AttentionListCard,
+  AttentionPrimaryButton,
+  AttentionSecondaryButton,
+} from "@/shared/ui/AttentionChrome";
+import {
+  PageHeader,
+  PageHeaderPrimaryButton,
+} from "@/shared/ui/PageHeader";
 import { useUiStore } from "@/store/ui-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { cn } from "@/shared/lib/utils";
@@ -27,16 +36,24 @@ export function AttentionView() {
   const phase = status.phase;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-surface">
-      <header className="border-b border-ink/5 px-6 py-5">
-        <h1 className="text-xl font-semibold tracking-tight text-ink">
-          Attention
-        </h1>
-        <p className="mt-1 text-sm text-ink-muted">
-          Approvals, failures, and suspended agent sessions that need follow-up.
-        </p>
-      </header>
-      <div className="scrollbar-thin flex-1 space-y-2 overflow-y-auto p-4">
+    <div className="flex min-h-0 flex-1 flex-col bg-canvas-soft/40">
+      <PageHeader
+        title={
+          <span className="inline-flex items-center gap-2">
+            <AlertTriangle className="h-6 w-6 text-status-approval" />
+            Attention
+          </span>
+        }
+        description="Approvals, failures, and suspended agent sessions that need follow-up."
+        badge={
+          items.length > 0 ? (
+            <span className="rounded-full bg-status-approval/15 px-2 py-0.5 text-2xs font-semibold tabular-nums text-status-approval">
+              {items.length}
+            </span>
+          ) : null
+        }
+      />
+      <div className="scrollbar-thin flex-1 space-y-3 overflow-y-auto p-5 sm:p-6">
         {phase === "loading" && items.length === 0 ? (
           <p className="py-12 text-center text-sm text-ink-muted">
             Scanning sessions…
@@ -44,16 +61,14 @@ export function AttentionView() {
         ) : null}
         {phase === "error" && items.length === 0 ? (
           <div className="flex flex-col items-center gap-3 py-12 text-center">
-            <p className="text-sm text-rose-600">
+            <p className="text-sm text-status-failed">
               {status.error ?? "Failed to load attention queue"}
             </p>
-            <button
-              type="button"
+            <PageHeaderPrimaryButton
               onClick={() => void loadAttentionSessions()}
-              className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-surface"
             >
               Retry
-            </button>
+            </PageHeaderPrimaryButton>
           </div>
         ) : null}
         {phase === "ready" && items.length === 0 ? (
@@ -67,85 +82,61 @@ export function AttentionView() {
           const meta = agentMeta[session.agent as keyof typeof agentMeta];
           const isApproval = session.status === "needs_approval";
           const isFailed = session.status === "failed";
+          const tone = isApproval
+            ? "approval"
+            : isFailed
+              ? "failed"
+              : "suspended";
           return (
-            <div
+            <AttentionListCard
               key={session.id}
-              className="rounded-2xl border border-ink/5 bg-surface-raised p-4 shadow-sm"
-            >
-              <div className="flex items-start gap-3">
-                <div
+              tone={tone}
+              title={
+                isApproval
+                  ? "Approval required"
+                  : isFailed
+                    ? "Session failed"
+                    : "Session paused"
+              }
+              badge={
+                <span
                   className={cn(
-                    "flex h-9 w-9 items-center justify-center rounded-xl",
-                    isApproval
-                      ? "bg-rose-100 text-rose-700"
-                      : isFailed
-                        ? "bg-red-100 text-red-700"
-                        : "bg-status-suspended/15 text-status-suspended",
+                    "rounded-md px-1.5 py-0.5 text-2xs font-medium",
+                    meta?.color ?? "bg-ink/10 text-ink-secondary",
                   )}
                 >
-                  {isApproval ? (
-                    <ShieldAlert className="h-4 w-4" />
-                  ) : isFailed ? (
-                    <XCircle className="h-4 w-4" />
-                  ) : (
-                    <PauseCircle className="h-4 w-4" />
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-semibold text-ink">
-                      {isApproval
-                        ? "Approval required"
-                        : isFailed
-                          ? "Session failed"
-                          : "Session paused"}
-                    </span>
-                    <span
-                      className={cn(
-                        "rounded-md px-1.5 py-0.5 text-2xs font-medium",
-                        meta?.color ?? "bg-ink/10 text-ink-secondary",
-                      )}
-                    >
-                      {meta?.label ?? session.agent} #{session.shortId}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-sm text-ink-secondary">
-                    {session.summary}
-                  </p>
-                  <p className="mt-1 text-xs text-ink-muted">
-                    {project?.name ?? "—"} / {conv?.title ?? session.conversationTitle ?? "—"}
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {conv && project ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          selectProject(project.id);
-                          selectConversation(conv.id);
-                        }}
-                        className="rounded-lg border border-ink/10 bg-surface-raised px-3 py-1.5 text-xs font-medium text-ink hover:bg-surface-muted"
-                      >
-                        Open conversation
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
+                  {meta?.label ?? session.agent} #{session.shortId}
+                </span>
+              }
+              body={session.summary}
+              meta={`${project?.name ?? "—"} / ${conv?.title ?? session.conversationTitle ?? "—"}`}
+              actions={
+                <>
+                  {conv && project ? (
+                    <AttentionSecondaryButton
                       onClick={() => {
-                        if (project) selectProject(project.id);
-                        selectSession(session.id);
-                        openSessionTranscript(
-                          session.id,
-                          session.conversationId,
-                        );
+                        selectProject(project.id);
+                        selectConversation(conv.id);
                       }}
-                      className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-surface hover:opacity-90"
                     >
-                      {isApproval ? "Review / approve" : "Open transcript"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
+                      Open conversation
+                    </AttentionSecondaryButton>
+                  ) : null}
+                  <AttentionPrimaryButton
+                    onClick={() => {
+                      if (project) selectProject(project.id);
+                      selectSession(session.id);
+                      openSessionTranscript(
+                        session.id,
+                        session.conversationId,
+                      );
+                    }}
+                  >
+                    {isApproval ? "Review / approve" : "Open transcript"}
+                  </AttentionPrimaryButton>
+                </>
+              }
+            />
           );
         })}
       </div>

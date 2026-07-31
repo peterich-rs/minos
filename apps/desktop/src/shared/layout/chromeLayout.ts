@@ -7,7 +7,7 @@
  * ready when we switch to hidden titlebar.
  */
 
-export const SIDEBAR_WIDTH_DEFAULT = "240px";
+export const SIDEBAR_WIDTH_DEFAULT = "248px";
 export const TOP_CHROME_HEIGHT_DEFAULT = "0px";
 export const AUXILIARY_PANEL_DEFAULT_WIDTH_PX = 280;
 export const AUXILIARY_PANEL_MIN_WIDTH_PX = 220;

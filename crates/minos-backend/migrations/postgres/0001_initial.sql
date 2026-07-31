@@ -9,6 +9,9 @@ CREATE TABLE accounts (
     email             CITEXT NOT NULL UNIQUE,
     minos_id          TEXT UNIQUE,
     display_name      TEXT,
+    -- Supabase Auth subject (JWT `sub`). NULL for password-only accounts
+    -- that have not yet been linked via OIDC exchange.
+    supabase_sub      TEXT UNIQUE,
     created_at_ms     BIGINT NOT NULL,
     last_login_at_ms  BIGINT
 );

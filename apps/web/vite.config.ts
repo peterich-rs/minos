@@ -17,6 +17,9 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
+      // More specific first: desktop shared must not resolve via web `@`.
+      '@/shared': path.resolve(__dirname, '../desktop/src/shared'),
+      '@shared': path.resolve(__dirname, '../desktop/src/shared'),
       '@': path.resolve(__dirname, './src'),
     },
   },

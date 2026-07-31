@@ -1,0 +1,231 @@
+/*
+ * Minos React design system — Desktop + Web SSOT.
+ *
+ * Buzz-inspired shell language:
+ * - outer gradient chrome (#e6e6b6 → #c4d0da)
+ * - soft grain veil
+ * - floating content surface (rounded-2xl + content-edge shadow)
+ * - mauve primary for nav emphasis
+ *
+ * RGB triplets enable Tailwind alpha utilities (bg-ink/5).
+ * Imported by apps/desktop/src/index.css and apps/web/src/index.css.
+ */
+
+:root {
+  color-scheme: light;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  /* ── Buzz outer chrome (ThemeProvider overrides on dark) ── */
+  --buzz-gradient-light-top: #e6e6b6;
+  --buzz-gradient-light-bottom: #c4d0da;
+  --buzz-gradient-dark-top: #4a4616;
+  --buzz-gradient-dark-bottom: #0a1423;
+
+  /* ── Surfaces (paper content card) ── */
+  --color-canvas: 235 228 216;
+  --color-canvas-soft: 244 239 230;
+  --color-surface: 251 248 243;
+  --color-surface-raised: 255 255 255;
+  --color-surface-muted: 243 238 229;
+  --color-surface-hover: 239 232 220;
+
+  /* ── Ink ── */
+  --color-ink: 28 25 23;
+  --color-ink-secondary: 87 83 78;
+  --color-ink-muted: 120 113 108;
+  --color-ink-faint: 214 211 209;
+
+  /* ── Primary (Buzz / Catppuccin mauve) ── */
+  --color-primary: 147 51 234;
+  --color-primary-strong: 126 34 206;
+  --color-primary-soft: 243 232 255;
+
+  /* ── Accent (soft pink, secondary) ── */
+  --color-accent: 244 114 182;
+  --color-accent-strong: 236 72 153;
+  --color-accent-soft: 252 231 243;
+
+  /* ── Chat bubbles ── */
+  --color-bubble-out: 28 25 23;
+  --color-bubble-in: 255 255 255;
+
+  /* ── Semantic status ── */
+  --color-status-idle: 168 162 158;
+  --color-status-running: 245 158 11;
+  --color-status-approval: 244 63 94;
+  --color-status-suspended: 14 165 233;
+  --color-status-failed: 220 38 38;
+  --color-status-done: 16 185 129;
+
+  /* ── Radius ── */
+  --radius: 0.625rem;
+  --radius-shell: 18px;
+  --radius-panel: 14px;
+  --radius-code: 10px;
+
+  /* ── Shadows ── */
+  --shadow-shell:
+    0 24px 80px rgb(var(--color-ink) / 0.14), 0 2px 8px rgb(var(--color-ink) / 0.06);
+  --shadow-panel: 0 1px 0 rgb(var(--color-ink) / 0.06);
+  --shadow-content-edge:
+    -1px -1px 0 0 rgb(var(--color-ink) / 0.08), 0 1px 2px rgb(var(--color-ink) / 0.04);
+
+  /* ── Motion ── */
+  --duration-fast: 150ms;
+  --duration-normal: 200ms;
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+
+  /* ── Shell chrome geometry ── */
+  --minos-sidebar-width: 248px;
+  --minos-top-chrome-height: 0px;
+  --minos-auxiliary-panel-width: 280px;
+
+  /* ── Markdown defaults ── */
+  --md-link: #92400e;
+  --md-link-underline: rgb(146 64 14 / 0.3);
+  --md-code-bg: rgb(28 25 23 / 0.07);
+  --md-code-fg: #44403c;
+  --md-pre-bg: rgb(28 25 23 / 0.05);
+  --md-pre-border: rgb(28 25 23 / 0.1);
+  --md-pre-fg: #3f3a36;
+  --md-quote-border: rgb(28 25 23 / 0.18);
+  --md-quote-fg: #57534e;
+  --md-hr: rgb(28 25 23 / 0.12);
+  --md-table-border: rgb(28 25 23 / 0.12);
+  --md-th-bg: rgb(28 25 23 / 0.04);
+  --md-marker: rgb(28 25 23 / 0.45);
+}
+
+/* ── Static dark defaults (ThemeProvider / adaptive-theme override at runtime) ── */
+html.dark {
+  color-scheme: dark;
+  --buzz-gradient-light-top: #4a4616;
+  --buzz-gradient-light-bottom: #0a1423;
+  --color-canvas: 18 18 24;
+  --color-canvas-soft: 24 24 32;
+  --color-surface: 30 30 40;
+  --color-surface-raised: 40 40 52;
+  --color-surface-muted: 36 36 48;
+  --color-surface-hover: 44 44 58;
+  --color-ink: 232 230 238;
+  --color-ink-secondary: 180 176 192;
+  --color-ink-muted: 140 136 152;
+  --color-ink-faint: 80 78 92;
+  --color-primary: 203 166 247;
+  --color-primary-strong: 224 176 255;
+  --color-primary-soft: 58 48 78;
+  --color-accent: 244 114 182;
+  --color-accent-strong: 251 146 200;
+  --color-accent-soft: 58 40 52;
+  --color-bubble-out: 232 230 238;
+  --color-bubble-in: 40 40 52;
+  --shadow-content-edge:
+    -1px -1px 0 0 rgb(255 255 255 / 0.06), 0 1px 2px rgb(0 0 0 / 0.35);
+  --md-link: #fcd34d;
+  --md-code-bg: rgb(255 255 255 / 0.08);
+  --md-code-fg: #e7e5e4;
+  --md-pre-bg: rgb(255 255 255 / 0.05);
+  --md-pre-fg: #d6d3d1;
+}
+
+/* ── Buzz gradient outer layer ── */
+.minos-theme-gradient {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-image: linear-gradient(
+    to bottom,
+    var(--buzz-gradient-light-top),
+    var(--buzz-gradient-light-bottom)
+  );
+  background-size: 100vw 100vh;
+  background-repeat: no-repeat;
+}
+
+.minos-theme-grain {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  opacity: 0.35;
+  background-image:
+    radial-gradient(
+      circle at 85% 80%,
+      rgb(var(--color-primary) / 0.12) 0%,
+      transparent 45%
+    ),
+    radial-gradient(
+      circle at 15% 20%,
+      rgb(var(--color-accent) / 0.1) 0%,
+      transparent 40%
+    ),
+    radial-gradient(
+      circle at 60% 40%,
+      rgb(196 208 218 / 0.5) 0%,
+      transparent 50%
+    );
+  mix-blend-mode: multiply;
+}
+
+html.dark .minos-theme-grain {
+  opacity: 0.45;
+  mix-blend-mode: screen;
+  background-image:
+    radial-gradient(
+      circle at 85% 80%,
+      rgb(var(--color-primary) / 0.18) 0%,
+      transparent 45%
+    ),
+    radial-gradient(
+      circle at 15% 20%,
+      rgb(var(--color-accent) / 0.12) 0%,
+      transparent 40%
+    ),
+    radial-gradient(
+      circle at 60% 40%,
+      rgb(10 20 35 / 0.6) 0%,
+      transparent 50%
+    );
+}
+
+/* Floating main content surface (Buzz ContentSurface) */
+.minos-content-surface {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 1rem;
+  background: rgb(var(--color-surface));
+  box-shadow: var(--shadow-content-edge);
+}
+
+/* Thin scrollbars */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--color-ink-muted) / 0.45) transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgb(var(--color-ink-muted) / 0.4);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--color-ink-secondary) / 0.5);
+  background-clip: content-box;
+}

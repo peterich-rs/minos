@@ -9,6 +9,8 @@
 
     "baseUrl": ".",
     "paths": {
+      "@/shared/*": ["../desktop/src/shared/*"],
+      "@shared/*": ["../desktop/src/shared/*"],
       "@/*": ["./src/*"]
     },
     "ignoreDeprecations": "6.0",

@@ -34,4 +34,30 @@ describe("nextEnterAnimationIds", () => {
     assert.ok(!animateIds.has("b"));
     assert.ok(!animateIds.has("c"));
   });
+
+  it("bulk first paint of long history animates none", () => {
+    const ids = Array.from({ length: 40 }, (_, i) => `m${i}`);
+    const { animateIds, nextSeen } = nextEnterAnimationIds(new Set(), ids);
+    assert.equal(animateIds.size, 0);
+    assert.equal(nextSeen.size, 40);
+  });
+
+  it("streaming multi-append only animates the new tail ids", () => {
+    const prev = new Set(["a", "b", "c"]);
+    const { animateIds } = nextEnterAnimationIds(prev, [
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+    ]);
+    assert.deepEqual([...animateIds].sort(), ["d", "e"]);
+  });
+
+  it("re-render with identical ids animates none", () => {
+    const prev = new Set(["a", "b"]);
+    const { animateIds, nextSeen } = nextEnterAnimationIds(prev, ["a", "b"]);
+    assert.equal(animateIds.size, 0);
+    assert.equal(nextSeen.size, 2);
+  });
 });

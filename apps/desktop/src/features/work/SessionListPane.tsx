@@ -56,10 +56,12 @@ export function SessionListPane({
   const liveTotal = groups.reduce((n, g) => n + g.runningCount, 0);
 
   return (
-    <aside className="flex w-[min(300px,36vw)] min-w-[240px] max-w-[360px] shrink-0 flex-col overflow-hidden border-r border-ink/5 bg-surface">
-      <div className="flex shrink-0 items-center justify-between border-b border-ink/5 px-3 py-2.5">
+    <aside className="flex w-[min(300px,36vw)] min-w-[240px] max-w-[360px] shrink-0 flex-col overflow-hidden border-r border-ink/6 bg-surface">
+      <div className="flex shrink-0 items-center justify-between border-b border-ink/6 px-3 py-3">
         <div className="min-w-0 pl-1">
-          <div className="text-sm font-semibold text-ink">Sessions</div>
+          <div className="text-sm font-semibold tracking-tight text-ink">
+            Sessions
+          </div>
           <div className="text-2xs text-ink-muted">
             {phase === "loading" && projectSessionCount === 0
               ? "Loading…"
@@ -87,7 +89,7 @@ export function SessionListPane({
             <button
               type="button"
               onClick={onRetry}
-              className="rounded-lg bg-ink px-3 py-1.5 text-2xs font-semibold text-surface"
+              className="rounded-lg bg-primary px-3 py-1.5 text-2xs font-semibold text-white shadow-sm"
             >
               Retry
             </button>
@@ -245,7 +247,7 @@ const SessionTreeRow = memo(function SessionTreeRow({
       className={cn(
         "flex w-full gap-2 rounded-lg py-2 pr-2 text-left transition-colors",
         selected
-          ? "bg-surface-muted shadow-panel ring-1 ring-ink/5"
+          ? "bg-primary/10 shadow-sm ring-1 ring-primary/25"
           : "hover:bg-surface-hover",
       )}
     >

@@ -232,6 +232,23 @@ pub struct Config {
     /// before forcibly terminating.
     #[arg(long, env = "MINOS_SHUTDOWN_TIMEOUT_SECS", default_value_t = 30)]
     pub shutdown_timeout_secs: u64,
+
+    /// Supabase project URL (`https://<ref>.supabase.co`). When set, enables
+    /// `POST /v1/auth/supabase` token exchange. Optional in dev so local
+    /// password-only flows still boot without an IdP.
+    #[arg(long, env = "SUPABASE_URL")]
+    pub supabase_url: Option<String>,
+
+    /// Expected JWT `aud` for Supabase access tokens. Defaults to
+    /// `"authenticated"` when unset (Supabase default for user sessions).
+    #[arg(long, env = "SUPABASE_JWT_AUD")]
+    pub supabase_jwt_aud: Option<String>,
+
+    /// Optional legacy HS256 JWT secret (Supabase Dashboard → Settings → API
+    /// → JWT Secret). Needed when access tokens are still signed with the
+    /// shared secret rather than the ES256 JWKS key.
+    #[arg(long, env = "SUPABASE_JWT_SECRET")]
+    pub supabase_jwt_secret: Option<String>,
 }
 
 impl Config {
@@ -358,7 +375,41 @@ impl Config {
                 );
             }
         }
+        if let Some(url) = self
+            .supabase_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            crate::auth::supabase::SupabaseConfig::from_url(
+                url,
+                self.supabase_jwt_aud.as_deref(),
+                self.supabase_jwt_secret.as_deref(),
+            )
+            .map_err(|e| format!("SUPABASE_URL invalid: {e}"))?;
+        }
         Ok(())
+    }
+
+    /// Build a Supabase token verifier when `SUPABASE_URL` is configured.
+    #[must_use]
+    pub fn supabase_verifier(
+        &self,
+    ) -> Option<std::sync::Arc<crate::auth::supabase::SupabaseTokenVerifier>> {
+        let url = self
+            .supabase_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())?;
+        let cfg = crate::auth::supabase::SupabaseConfig::from_url(
+            url,
+            self.supabase_jwt_aud.as_deref(),
+            self.supabase_jwt_secret.as_deref(),
+        )
+        .ok()?;
+        Some(crate::auth::supabase::SupabaseTokenVerifier::from_config(
+            cfg,
+        ))
     }
 }
 

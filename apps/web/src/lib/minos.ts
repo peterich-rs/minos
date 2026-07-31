@@ -564,6 +564,22 @@ export async function loginBrowserAccount(
   })
 }
 
+/** Exchange a Supabase access token for Minos access/refresh tokens. */
+export async function exchangeSupabaseSession(
+  deviceId: string,
+  supabaseAccessToken: string,
+  deviceName?: string,
+): Promise<AuthResponse> {
+  return requestJson<AuthResponse>('/v1/auth/supabase', {
+    method: 'POST',
+    headers: deviceHeaders(deviceId),
+    body: JSON.stringify({
+      access_token: supabaseAccessToken,
+      ...(deviceName ? { device_name: deviceName } : {}),
+    }),
+  })
+}
+
 export async function refreshBrowserSession(
   deviceId: string,
   refreshToken: string,

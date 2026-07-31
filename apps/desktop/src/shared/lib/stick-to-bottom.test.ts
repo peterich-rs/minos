@@ -261,3 +261,101 @@ describe("follow state vs content growth (reading history)", () => {
     );
   });
 });
+
+/**
+ * Boundary contract used by MessageList virtualizer:
+ * - pin when following + contentKey changes (append / stream)
+ * - jump chip visibility vs FOLLOW_THRESHOLD
+ * - suppress-window refollow must not re-arm mid rubber-band
+ */
+describe("virtual list stick-to-bottom boundaries", () => {
+  it("exact threshold is still near-bottom (inclusive band)", () => {
+    assert.equal(isNearBottom(FOLLOW_THRESHOLD_PX), true);
+    assert.equal(isNearBottom(FOLLOW_THRESHOLD_PX + 0.5), false);
+    assert.equal(
+      followAfterUserScroll(FOLLOW_THRESHOLD_PX, true),
+      true,
+    );
+    assert.equal(
+      followAfterUserScroll(FOLLOW_THRESHOLD_PX + 1, true),
+      false,
+    );
+  });
+
+  it("jump chip hides exactly at unfollow band edge", () => {
+    assert.equal(shouldShowJumpToLatest(false, FOLLOW_THRESHOLD_PX), false);
+    assert.equal(
+      shouldShowJumpToLatest(false, FOLLOW_THRESHOLD_PX + 1),
+      true,
+    );
+    // Following always wins over distance.
+    assert.equal(shouldShowJumpToLatest(true, 10_000), false);
+  });
+
+  it("suppress-window tight refollow: mid-band rubber-band does not re-follow", () => {
+    const rubberBandSettle = REFOLLOW_THRESHOLD_PX + 1;
+    assert.ok(rubberBandSettle < FOLLOW_THRESHOLD_PX);
+    assert.equal(
+      followAfterUserScroll(rubberBandSettle, false, {
+        unfollow: FOLLOW_THRESHOLD_PX,
+        refollow: REFOLLOW_THRESHOLD_PX,
+      }),
+      false,
+    );
+    // Once truly docked, suppress still allows re-follow.
+    assert.equal(
+      followAfterUserScroll(0, false, {
+        unfollow: FOLLOW_THRESHOLD_PX,
+        refollow: REFOLLOW_THRESHOLD_PX,
+      }),
+      true,
+    );
+  });
+
+  it("append while following: content key changes but distance-at-bottom stays follow", () => {
+    const before = [{ id: "1", seq: 1, text: "a" }];
+    const after = [
+      { id: "1", seq: 1, text: "a" },
+      { id: "2", seq: 2, text: "b" },
+    ];
+    assert.notEqual(followContentKey(before), followContentKey(after));
+    // After pin, distance is 0 → still following; jump stays hidden.
+    assert.equal(followAfterUserScroll(0, true), true);
+    assert.equal(shouldShowJumpToLatest(true, 0), false);
+  });
+
+  it("stream in-place growth changes content key without unfollowing at bottom", () => {
+    const a = [{ id: "m", seq: 1, kind: "assistant", text: "hel" }];
+    const b = [{ id: "m", seq: 2, kind: "assistant", text: "hello world" }];
+    assert.notEqual(followContentKey(a), followContentKey(b));
+    assert.equal(isNearBottom(0), true);
+    assert.equal(followAfterUserScroll(0, true), true);
+  });
+
+  it("short list is not scrollable so wheel-up must not unfollow", () => {
+    assert.equal(
+      isVerticallyScrollable({ scrollHeight: 120, clientHeight: 400 }),
+      false,
+    );
+    assert.equal(
+      shouldUnfollowOnWheelUp({
+        deltaY: -80,
+        following: true,
+        scrollable: false,
+      }),
+      false,
+    );
+    // Jump chip should not appear just because following flipped wrongly.
+    assert.equal(shouldShowJumpToLatest(true, 0), false);
+  });
+
+  it("distanceFromBottom uses scroll metrics consistently with isNearBottom", () => {
+    const el = { scrollHeight: 2000, scrollTop: 1500, clientHeight: 400 };
+    // 2000 - 1500 - 400 = 100 → outside 80px band
+    const d = distanceFromBottom(el);
+    assert.equal(d, 100);
+    assert.equal(isNearBottom(d), false);
+    assert.equal(followAfterUserScroll(d, true), false);
+    assert.equal(shouldShowJumpToLatest(false, d), true);
+  });
+});

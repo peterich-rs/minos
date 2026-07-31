@@ -19,6 +19,8 @@ Minos 是一个远程 AI 编码控制系统：Mac 运行 host 端，通过手机
 | [docs/architecture-business-flow.md](docs/architecture-business-flow.md) | 完整业务流程：注册 → 配对 → 实时连接 → Agent 会话 → 流式交互 → 审批 → 重连恢复 |
 | [docs/ci-gates.md](docs/ci-gates.md) | CI / 本地质量门禁矩阵：rust、dart、frontend、macos、windows 职责划分与 just/xtask 入口 |
 | [docs/ops/vps-deploy.md](docs/ops/vps-deploy.md) | 生产 VPS 部署：Caddy + GHCR 镜像 + Postgres/Redis，runtime-only（不 clone 源码） |
+| [docs/superpowers/specs/2026-07-30-cloud-identity-clients-long-term.md](docs/superpowers/specs/2026-07-30-cloud-identity-clients-long-term.md) | 长期方案 L0：Supabase exchange、Host 链接、Desktop/Web UI SSOT、Mobile 云端角色 |
+| [docs/superpowers/specs/2026-07-30-program/](docs/superpowers/specs/2026-07-30-program/README.md) | 执行体系 L1/L2：分域设计 + 任务依赖图 TASKS.md |
 
 # Development-State Compatibility Policy
 

@@ -5,6 +5,7 @@ import { useUiStore } from "@/store/ui-store";
 import { planConnectionCardVisibility } from "@/shared/lib/connection-card-policy";
 import { DISCONNECT_TOAST_DEBOUNCE_MS } from "@/shared/lib/connection-toast-policy";
 import { SidebarActionCard } from "@/shared/ui/sidebar-action-card";
+import { SidebarGlassCard } from "@/shared/ui/SidebarGlassCard";
 
 /**
  * Persistent sidebar card when the local daemon is down.
@@ -24,7 +25,6 @@ export function SidebarConnectionCard() {
   const [stableDisconnected, setStableDisconnected] = useState(false);
   const disconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Debounce "show card" the same way toasts debounce disconnect.
   useEffect(() => {
     if (booting || source !== "daemon") {
       setStableDisconnected(false);
@@ -42,7 +42,6 @@ export function SidebarConnectionCard() {
       return;
     }
 
-    // disconnected
     if (disconnectTimer.current) clearTimeout(disconnectTimer.current);
     disconnectTimer.current = setTimeout(() => {
       setStableDisconnected(true);
@@ -68,16 +67,15 @@ export function SidebarConnectionCard() {
     return null;
   }
 
-  const detail =
-    connection?.error || error || "Local runtime is unavailable";
+  const detail = connection?.error || error || "Local runtime is unavailable";
 
   return (
-    <div className="border-t border-ink/5 px-2 py-2">
+    <SidebarGlassCard tone="danger">
       <SidebarActionCard
         testId="sidebar-connection-card"
         role="alert"
         tone="danger"
-        icon={<Unplug className="h-4 w-4 text-rose-600" />}
+        icon={<Unplug className="h-4 w-4 text-status-failed" />}
         title="Daemon offline"
         description={detail}
         actionLabel="Retry"
@@ -88,7 +86,8 @@ export function SidebarConnectionCard() {
         onSecondary={() => setPrimaryNav("host")}
         onDismiss={() => setDismissed(true)}
         dismissLabel="Dismiss connection warning"
+        className="border-0 bg-transparent shadow-none"
       />
-    </div>
+    </SidebarGlassCard>
   );
 }

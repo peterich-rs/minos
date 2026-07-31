@@ -1,38 +1,43 @@
-import { useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { useEffect, useState } from 'react'
 import {
   ArrowRight,
   Bot,
-  CheckCircle2,
   Cpu,
   Shield,
   Sparkles,
   TriangleAlert,
 } from 'lucide-react'
 
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Badge } from '@/components/ui/badge'
+import { cn } from '@/shared/lib/utils'
 import { useAppStore } from '@/lib/store'
-import { loginBrowserAccount, registerBrowserAccount } from '@/lib/minos'
+import {
+  exchangeSupabaseSession,
+  loginBrowserAccount,
+  registerBrowserAccount,
+} from '@/lib/minos'
+import {
+  getSupabaseAccessToken,
+  isSupabaseConfigured,
+  signInWithGoogle,
+  signInWithSupabasePassword,
+  signUpWithSupabasePassword,
+} from '@/lib/supabase'
 
 const HIGHLIGHTS = [
   {
     icon: Cpu,
     title: '多主机统一控制面',
-    copy: '把所有配对的 Mac 集中管理,切换 Runtime 只需一次点击。',
+    copy: '远程查看会话与审批，与 Desktop 同一账号体系。',
   },
   {
     icon: Bot,
-    title: '一次发起,全程可观测',
-    copy: '实时查看工具调用、推理过程与输出,随时中断重来。',
+    title: 'Buzz 级壳层体验',
+    copy: '渐变 chrome、悬浮 content 面、mauve 导航高亮。',
   },
   {
     icon: Shield,
-    title: '端到端账号体系',
-    copy: '刷新令牌自动续签,修改密码会撤销其他设备的会话。',
+    title: 'Supabase → Minos',
+    copy: 'IdP 只负责身份；业务 JWT 仍由 Minos 签发。',
   },
 ]
 
@@ -43,6 +48,7 @@ export function AuthScreen() {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState<string | null>(null)
+  const supabaseReady = isSupabaseConfigured()
 
   const passwordReady = password.length >= 8
   const confirmReady = password === confirmPassword && passwordReady
@@ -52,21 +58,73 @@ export function AuthScreen() {
     !passwordReady ||
     (authMode === 'register' && !confirmReady)
 
+  useEffect(() => {
+    if (!supabaseReady) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const token = await getSupabaseAccessToken()
+        if (!token || cancelled) return
+        setAuthBusy(true)
+        setAuthError(null)
+        const response = await exchangeSupabaseSession(deviceId, token, 'Minos Web')
+        if (cancelled) return
+        setSession({
+          accountId: response.account.account_id,
+          email: response.account.email,
+          accessToken: response.access_token,
+          refreshToken: response.refresh_token,
+        })
+      } catch (error) {
+        if (!cancelled) {
+          setAuthError(error instanceof Error ? error.message : String(error))
+        }
+      } finally {
+        if (!cancelled) setAuthBusy(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [deviceId, setSession, supabaseReady])
+
+  async function applyMinosSessionFromSupabaseToken(supabaseAccessToken: string) {
+    const response = await exchangeSupabaseSession(
+      deviceId,
+      supabaseAccessToken,
+      'Minos Web',
+    )
+    setSession({
+      accountId: response.account.account_id,
+      email: response.account.email,
+      accessToken: response.access_token,
+      refreshToken: response.refresh_token,
+    })
+  }
+
   async function handleSubmit() {
     if (disabled) return
     setAuthBusy(true)
     setAuthError(null)
     try {
-      const response =
-        authMode === 'register'
-          ? await registerBrowserAccount(deviceId, email, password)
-          : await loginBrowserAccount(deviceId, email, password)
-      setSession({
-        accountId: response.account.account_id,
-        email: response.account.email,
-        accessToken: response.access_token,
-        refreshToken: response.refresh_token,
-      })
+      if (supabaseReady) {
+        const supabaseToken =
+          authMode === 'register'
+            ? await signUpWithSupabasePassword(email, password)
+            : await signInWithSupabasePassword(email, password)
+        await applyMinosSessionFromSupabaseToken(supabaseToken)
+      } else {
+        const response =
+          authMode === 'register'
+            ? await registerBrowserAccount(deviceId, email, password)
+            : await loginBrowserAccount(deviceId, email, password)
+        setSession({
+          accountId: response.account.account_id,
+          email: response.account.email,
+          accessToken: response.access_token,
+          refreshToken: response.refresh_token,
+        })
+      }
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -74,190 +132,186 @@ export function AuthScreen() {
     }
   }
 
-  return (
-    <div className="relative grid min-h-screen grid-cols-1 bg-background lg:grid-cols-[1fr_440px]">
-      {/* Left — hero */}
-      <motion.section
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.45, ease: [0.2, 0.8, 0.2, 1] }}
-        className="relative flex flex-col justify-between overflow-hidden gradient-surface p-10 lg:p-16"
-      >
-        <div className="pointer-events-none absolute -right-[20%] top-[5%] size-[60%] rounded-full bg-primary/20 blur-[140px]" />
-        <div className="pointer-events-none absolute -left-[10%] bottom-[5%] size-[40%] rounded-full bg-primary/10 blur-[140px]" />
+  async function handleGoogle() {
+    if (!supabaseReady || authBusy) return
+    setAuthBusy(true)
+    setAuthError(null)
+    try {
+      await signInWithGoogle()
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : String(error))
+      setAuthBusy(false)
+    }
+  }
 
-        <div className="relative z-10">
-          <Badge variant="outline" className="mono">
-            <Sparkles size={12} />
-            Minos web console
-          </Badge>
-          <h1 className="mt-6 max-w-2xl text-4xl font-bold leading-[1.05] tracking-tight lg:text-6xl">
-            在浏览器里驾驭你的每一台
-            <span className="bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
-              {' '}
-              AI 开发主机。
-            </span>
+  return (
+    <div className="relative grid min-h-full grid-cols-1 overflow-hidden lg:grid-cols-[1fr_440px]">
+      <div className="minos-theme-gradient" aria-hidden />
+      <div className="minos-theme-grain" aria-hidden />
+
+      <section className="relative z-10 flex flex-col justify-between p-10 lg:p-16">
+        <div>
+          <div className="inline-flex items-center gap-1.5 rounded-full border border-ink/10 bg-surface/80 px-3 py-1 text-2xs font-semibold text-ink-secondary shadow-sm backdrop-blur-md">
+            <Sparkles className="h-3 w-3 text-primary" />
+            Minos cloud
+          </div>
+          <h1 className="mt-6 max-w-xl text-4xl font-semibold leading-[1.08] tracking-tight text-ink lg:text-[2.75rem]">
+            在浏览器里查看你的
+            <span className="text-primary"> AI 主机与会话。</span>
           </h1>
-          <p className="mt-5 max-w-md text-base text-muted-foreground">
-            配对 Mac、发起 Agent 回合、跟进工具调用。不把工作流压成仪表盘表格,保留编码的直觉。
+          <p className="mt-4 max-w-md text-sm leading-relaxed text-ink-secondary">
+            壳层对标 Buzz：渐变 chrome、悬浮内容面。功能层逐步接 CloudPort。
           </p>
         </div>
-
-        <div className="relative z-10 mt-12 grid max-w-xl grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="mt-12 grid max-w-xl grid-cols-1 gap-3 sm:grid-cols-3">
           {HIGHLIGHTS.map((item) => {
             const Icon = item.icon
             return (
-              <motion.div
+              <div
                 key={item.title}
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.15, duration: 0.3 }}
-                className="rounded-xl border border-border/60 bg-card/60 p-4 backdrop-blur-md"
+                className="rounded-2xl border border-ink/8 bg-surface/75 p-4 shadow-panel backdrop-blur-md"
               >
-                <Icon size={18} className="mb-3 text-primary" />
-                <h3 className="text-sm font-semibold">{item.title}</h3>
-                <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
+                <Icon className="mb-2 h-4 w-4 text-primary" />
+                <h3 className="text-sm font-semibold text-ink">{item.title}</h3>
+                <p className="mt-1 text-2xs leading-relaxed text-ink-muted">
                   {item.copy}
                 </p>
-              </motion.div>
+              </div>
             )
           })}
         </div>
-      </motion.section>
+      </section>
 
-      {/* Right — form */}
-      <motion.section
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.08, duration: 0.45, ease: [0.2, 0.8, 0.2, 1] }}
-        className="flex items-center justify-center border-l border-border/60 bg-card p-8 lg:p-12"
-      >
-        <div className="w-full max-w-sm space-y-8">
-          <div>
-            <div className="mb-3 flex size-11 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-lg">
-              <Sparkles size={20} />
+      <section className="relative z-10 flex items-center justify-center p-6 lg:p-10">
+        <div className="w-full max-w-sm rounded-2xl border border-ink/8 bg-surface p-8 shadow-shell">
+          <div className="mb-6">
+            <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-2xl bg-ink text-surface shadow-sm">
+              <Sparkles className="h-5 w-5" />
             </div>
-            <h2 className="text-2xl font-bold tracking-tight">
-              {authMode === 'login' ? '登录到 Minos' : '创建 Minos 账户'}
+            <h2 className="text-xl font-semibold tracking-tight text-ink">
+              {authMode === 'login' ? '登录到 Minos' : '创建账户'}
             </h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {authMode === 'login'
-                ? '使用你的邮箱和密码继续操作。'
-                : '邮箱会成为账户标识,密码至少 8 位。'}
+            <p className="mt-1 text-sm text-ink-muted">
+              {supabaseReady
+                ? 'Supabase 身份 → Minos 业务会话'
+                : '本地密码登录'}
             </p>
           </div>
 
-          <Tabs
-            value={authMode}
-            onValueChange={(v) => {
-              setAuthMode(v as 'login' | 'register')
-              setAuthError(null)
-            }}
-          >
-            <TabsList className="grid w-full grid-cols-2 rounded-full bg-muted p-1">
-              <TabsTrigger
-                value="login"
-                className="rounded-full data-[state=active]:bg-background data-[state=active]:shadow-sm"
+          {supabaseReady ? (
+            <div className="mb-5 space-y-3">
+              <button
+                type="button"
+                disabled={authBusy}
+                onClick={() => void handleGoogle()}
+                className="flex h-10 w-full items-center justify-center rounded-lg border border-ink/10 bg-surface text-sm font-medium text-ink shadow-sm transition-colors hover:bg-surface-hover disabled:opacity-50"
               >
-                登录
-              </TabsTrigger>
-              <TabsTrigger
-                value="register"
-                className="rounded-full data-[state=active]:bg-background data-[state=active]:shadow-sm"
+                使用 Google 登录
+              </button>
+              <div className="flex items-center gap-3 text-2xs text-ink-muted">
+                <div className="h-px flex-1 bg-ink/8" />
+                或使用邮箱
+                <div className="h-px flex-1 bg-ink/8" />
+              </div>
+            </div>
+          ) : null}
+
+          <div className="mb-4 grid grid-cols-2 gap-1 rounded-lg bg-surface-muted p-1">
+            {(['login', 'register'] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => {
+                  setAuthMode(mode)
+                  setAuthError(null)
+                }}
+                className={cn(
+                  'rounded-md py-2 text-sm font-medium transition-colors',
+                  authMode === mode
+                    ? 'bg-surface text-ink shadow-sm'
+                    : 'text-ink-muted hover:text-ink',
+                )}
               >
-                注册
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
+                {mode === 'login' ? '登录' : '注册'}
+              </button>
+            ))}
+          </div>
 
           <form
-            className="space-y-4"
+            className="space-y-3"
             onSubmit={(e) => {
               e.preventDefault()
               void handleSubmit()
             }}
           >
-            <div className="space-y-1.5">
-              <Label>邮箱</Label>
-              <Input
+            <label className="block space-y-1.5">
+              <span className="text-2xs font-medium text-ink-secondary">邮箱</span>
+              <input
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
                 type="email"
                 autoComplete="email"
                 required
-                className="h-11"
+                className="h-10 w-full rounded-lg border border-ink/10 bg-surface px-3 text-sm text-ink outline-none ring-primary/30 placeholder:text-ink-muted focus:ring-2"
+                placeholder="you@example.com"
               />
-            </div>
-            <div className="space-y-1.5">
-              <Label>密码</Label>
-              <Input
+            </label>
+            <label className="block space-y-1.5">
+              <span className="text-2xs font-medium text-ink-secondary">密码</span>
+              <input
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="至少 8 个字符"
                 type="password"
-                autoComplete={authMode === 'login' ? 'current-password' : 'new-password'}
+                autoComplete={
+                  authMode === 'login' ? 'current-password' : 'new-password'
+                }
                 required
-                className="h-11"
+                className="h-10 w-full rounded-lg border border-ink/10 bg-surface px-3 text-sm text-ink outline-none ring-primary/30 placeholder:text-ink-muted focus:ring-2"
+                placeholder="至少 8 个字符"
               />
-            </div>
-            <AnimatePresence initial={false}>
-              {authMode === 'register' ? (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="overflow-hidden space-y-1.5"
-                >
-                  <Label>确认密码</Label>
-                  <Input
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="再次输入"
-                    type="password"
-                    required
-                    className="h-11"
-                  />
-                </motion.div>
-              ) : null}
-            </AnimatePresence>
-
+            </label>
             {authMode === 'register' ? (
-              <div className="flex flex-wrap gap-2 pt-1">
-                <Badge variant={passwordReady ? 'success' : 'secondary'}>
-                  {passwordReady ? <CheckCircle2 size={12} /> : null}8+ 字符
-                </Badge>
-                <Badge variant={confirmReady ? 'success' : 'secondary'}>
-                  {confirmReady ? <CheckCircle2 size={12} /> : null}两次一致
-                </Badge>
+              <label className="block space-y-1.5">
+                <span className="text-2xs font-medium text-ink-secondary">
+                  确认密码
+                </span>
+                <input
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  type="password"
+                  required
+                  className="h-10 w-full rounded-lg border border-ink/10 bg-surface px-3 text-sm text-ink outline-none ring-primary/30 focus:ring-2"
+                  placeholder="再次输入"
+                />
+              </label>
+            ) : null}
+
+            {authError ? (
+              <div className="flex items-start gap-2 rounded-lg border border-status-failed/25 bg-status-failed/5 px-3 py-2.5 text-sm text-status-failed">
+                <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{authError}</span>
               </div>
             ) : null}
 
-            <AnimatePresence>
-              {authError ? (
-                <motion.div
-                  initial={{ opacity: 0, y: -4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive"
-                >
-                  <TriangleAlert size={16} />
-                  <span>{authError}</span>
-                </motion.div>
-              ) : null}
-            </AnimatePresence>
-
-            <Button type="submit" disabled={disabled} className="h-11 w-full text-sm font-semibold">
-              {authBusy ? '处理中…' : authMode === 'login' ? '登录' : '创建账户'}
-              <ArrowRight size={16} className="ml-1" />
-            </Button>
+            <button
+              type="submit"
+              disabled={disabled}
+              className="flex h-10 w-full items-center justify-center gap-1.5 rounded-lg bg-primary text-sm font-semibold text-white shadow-sm transition-opacity hover:opacity-90 disabled:opacity-40"
+            >
+              {authBusy
+                ? '处理中…'
+                : authMode === 'login'
+                  ? '登录'
+                  : '创建账户'}
+              <ArrowRight className="h-4 w-4" />
+            </button>
           </form>
 
-          <p className="text-center text-xs text-muted-foreground">
-            device {deviceId.slice(0, 8)} · role browser-admin
+          <p className="mt-5 text-center text-2xs text-ink-muted">
+            device {deviceId.slice(0, 8)} · browser-admin
           </p>
         </div>
-      </motion.section>
+      </section>
     </div>
   )
 }

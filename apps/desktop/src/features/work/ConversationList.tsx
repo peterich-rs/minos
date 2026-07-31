@@ -18,6 +18,10 @@ import {
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
 import { VirtualizedList } from "@/shared/ui/VirtualizedList";
+import {
+  WorkConversationRail,
+  WorkConversationRow,
+} from "@/shared/ui/WorkChrome";
 import { useUiStore } from "@/store/ui-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { cn } from "@/shared/lib/utils";
@@ -99,19 +103,10 @@ export function ConversationList({
   })();
 
   return (
-    <section
-      className={cn(
-        "flex h-full min-h-0 flex-col overflow-hidden border-r border-ink/5 bg-surface",
-        fill
-          ? "w-full min-w-0"
-          : "w-[min(280px,34vw)] min-w-[220px] max-w-[340px] shrink-0",
-      )}
-    >
-      <div className="flex shrink-0 items-center justify-between gap-1 border-b border-ink/5 px-3 py-2.5">
-        <div className="min-w-0 pl-1">
-          <div className="text-sm font-semibold text-ink">Conversations</div>
-          <div className="truncate text-2xs text-ink-muted">{countLabel}</div>
-        </div>
+    <WorkConversationRail
+      fill={fill}
+      subtitle={countLabel}
+      actions={
         <div className="flex shrink-0 items-center gap-0.5">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -155,66 +150,65 @@ export function ConversationList({
             <PanelLeftClose className="h-4 w-4" strokeWidth={1.8} />
           </button>
         </div>
-      </div>
-      <div className="flex min-h-0 flex-1 flex-col p-2">
-        {phase === "error" && projectCount === 0 ? (
-          <div className="flex flex-col items-center gap-2 px-2 py-8 text-center">
-            <p className="text-xs text-rose-600">
-              {listStatus?.error ?? "Failed to load conversations"}
-            </p>
-            <button
-              type="button"
-              onClick={() => void loadConversations(projectId)}
-              className="rounded-lg bg-ink px-3 py-1.5 text-2xs font-semibold text-surface"
-            >
-              Retry
-            </button>
-          </div>
-        ) : null}
-        {phase === "ready" && projectCount === 0 ? (
-          <p className="px-2 py-6 text-center text-xs text-ink-muted">
-            No conversations in this project.
+      }
+    >
+      {phase === "error" && projectCount === 0 ? (
+        <div className="flex flex-col items-center gap-2 px-2 py-8 text-center">
+          <p className="text-xs text-rose-600">
+            {listStatus?.error ?? "Failed to load conversations"}
           </p>
-        ) : null}
-        {phase === "ready" && projectCount > 0 && items.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 px-2 py-6 text-center">
-            <p className="text-xs text-ink-muted">
-              No {filterLabel.toLowerCase()} conversations.
-            </p>
-            <button
-              type="button"
-              onClick={() => setProgressFilter("all")}
-              className="rounded-lg bg-surface-muted px-3 py-1.5 text-2xs font-semibold text-ink ring-1 ring-ink/10 transition-colors hover:bg-surface-hover"
-            >
-              Show all
-            </button>
-          </div>
-        ) : null}
-        {(phase === "loading" || phase === "idle") && projectCount === 0 ? (
-          <p className="px-2 py-6 text-center text-xs text-ink-muted">
-            Loading conversations…
+          <button
+            type="button"
+            onClick={() => void loadConversations(projectId)}
+            className="rounded-lg bg-primary px-3 py-1.5 text-2xs font-semibold text-white shadow-sm"
+          >
+            Retry
+          </button>
+        </div>
+      ) : null}
+      {phase === "ready" && projectCount === 0 ? (
+        <p className="px-2 py-6 text-center text-xs text-ink-muted">
+          No conversations in this project.
+        </p>
+      ) : null}
+      {phase === "ready" && projectCount > 0 && items.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 px-2 py-6 text-center">
+          <p className="text-xs text-ink-muted">
+            No {filterLabel.toLowerCase()} conversations.
           </p>
-        ) : null}
-        {items.length > 0 ? (
-          <VirtualizedList
-            className="min-h-0 flex-1"
-            items={items}
-            getItemKey={(item) => item.id}
-            estimateSize={88}
-            overscan={6}
-            renderItem={(item) => (
-              <div className="pb-0.5">
-                <ConversationRow
-                  item={item}
-                  selected={item.id === conversationId}
-                  onSelect={handleSelectConversation}
-                />
-              </div>
-            )}
-          />
-        ) : null}
-      </div>
-    </section>
+          <button
+            type="button"
+            onClick={() => setProgressFilter("all")}
+            className="rounded-lg bg-surface-muted px-3 py-1.5 text-2xs font-semibold text-ink ring-1 ring-ink/10 transition-colors hover:bg-surface-hover"
+          >
+            Show all
+          </button>
+        </div>
+      ) : null}
+      {(phase === "loading" || phase === "idle") && projectCount === 0 ? (
+        <p className="px-2 py-6 text-center text-xs text-ink-muted">
+          Loading conversations…
+        </p>
+      ) : null}
+      {items.length > 0 ? (
+        <VirtualizedList
+          className="min-h-0 flex-1"
+          items={items}
+          getItemKey={(item) => item.id}
+          estimateSize={88}
+          overscan={6}
+          renderItem={(item) => (
+            <div className="pb-0.5">
+              <ConversationRow
+                item={item}
+                selected={item.id === conversationId}
+                onSelect={handleSelectConversation}
+              />
+            </div>
+          )}
+        />
+      ) : null}
+    </WorkConversationRail>
   );
 }
 
@@ -256,39 +250,19 @@ const ConversationRow = memo(function ConversationRow({
   const hasCounts = attention > 0;
 
   return (
-    <button
-      type="button"
-      onClick={() => onSelect(item.id)}
-      className={cn(
-        "flex w-full gap-2.5 rounded-xl px-3 py-2.5 text-left transition-colors",
-        selected
-          ? "bg-surface-muted shadow-panel ring-1 ring-ink/5"
-          : "hover:bg-surface-hover",
-      )}
-    >
-      <MessageSquare className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-muted" />
-      <div className="min-w-0 flex-1">
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-2">
-          <span
-            className="truncate text-sm font-semibold leading-snug text-ink"
-            title={item.title}
-          >
-            {item.title}
-          </span>
-          <span className="shrink-0 text-2xs tabular-nums text-ink-muted">
-            {item.updatedAt}
-          </span>
-        </div>
-
-        <p
-          className="mt-0.5 line-clamp-2 text-xs leading-snug text-ink-muted"
-          title={item.preview}
-        >
-          {item.preview}
-        </p>
-
-        {(hasTags || hasCounts) && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-1">
+    <WorkConversationRow
+      title={item.title}
+      preview={item.preview}
+      selected={selected}
+      onSelect={() => onSelect(item.id)}
+      titleTrailing={
+        <span className="shrink-0 text-2xs tabular-nums text-ink-muted">
+          {item.updatedAt}
+        </span>
+      }
+      meta={
+        hasTags || hasCounts ? (
+          <>
             {item.priority ? (
               <PriorityTag priority={item.priority} size="sm" />
             ) : null}
@@ -300,9 +274,9 @@ const ConversationRow = memo(function ConversationRow({
                 {attention}
               </span>
             ) : null}
-          </div>
-        )}
-      </div>
-    </button>
+          </>
+        ) : undefined
+      }
+    />
   );
 });

@@ -60,7 +60,7 @@
 /openapi.json         GET    OpenAPI 规范
 /ws/client            GET    WebSocket 升级（移动端/Web）
 /ws/host              GET    WebSocket 升级（Host 守护进程）
-/v1/auth/*            POST   认证（注册/登录/刷新/登出/改密）
+/v1/auth/*            POST   认证（注册/登录/刷新/登出/改密/Supabase exchange）
 /v1/pairing/*         POST   配对确认/撤销/列表
 /v1/host/*            POST   Host 引导/配对码/安装令牌
 /v1/agent-sessions/*  POST   Agent 会话管理
@@ -106,7 +106,8 @@
 
 1. **注册** (`POST /v1/auth/register`): Argon2id 哈希密码 → 插入 account → 返回 JWT + refresh token
 2. **登录** (`POST /v1/auth/login`): 验证密码 → 签发 JWT
-3. **刷新** (`POST /v1/auth/refresh`): 验证 refresh token → 轮转签发新 JWT + refresh token
+3. **Supabase 交换** (`POST /v1/auth/supabase`): 校验 Supabase access JWT（JWKS）→ 按 `sub`/verified email 合并或创建 account → 签发 **Minos** JWT + refresh（不经 device-secret `authenticate()`）
+4. **刷新** (`POST /v1/auth/refresh`): 验证 refresh token → 轮转签发新 JWT + refresh token
 4. **Bearer 认证**: `Authorization: Bearer <jwt>` → `jwt::verify()` → 提取 account_id/device_id
 5. **WS 票据**: Bearer 认证后签发 60s 一次性 JWT → WS 升级时消费
 
