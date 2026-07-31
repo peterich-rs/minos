@@ -70,23 +70,15 @@ apps/desktop/src/shared/
 }
 ```
 
-**`apps/web/vite.config.ts`**：
+**`apps/web/vite.config.ts`**（实现见仓库；要点）：
 
-```ts
-import { resolve } from 'path';
+- `@/shared` / `@shared` → `../desktop/src/shared`
+- `dedupe: ['react', 'react-dom']`
+- shared peer 钉到 **web** `node_modules`：`react`、`react/jsx-runtime`、`clsx`、`tailwind-merge`、`lucide-react`（`createRequire` + `pkgRoot`）
 
-export default defineConfig({
-  resolve: {
-    alias: {
-      '@shared/ui': resolve(__dirname, '../desktop/src/shared/ui'),
-      '@shared/theme': resolve(__dirname, '../desktop/src/shared/theme'),
-      '@shared/lib': resolve(__dirname, '../desktop/src/shared/lib'),
-      '@shared/types': resolve(__dirname, '../desktop/src/shared/types'),
-      '@shared/presenters': resolve(__dirname, '../desktop/src/shared/presenters'),
-    },
-  },
-});
-```
+**`apps/web/tsconfig.app.json` paths** 同步映射上述 peer → `./node_modules/...`。
+
+**Module resolution note**：`apps/desktop/src/shared` 被 typecheck/bundle 时，bare import 默认从 **desktop** 向上找 `node_modules`。CI `apps/web pnpm check` 只装 web 依赖，因此必须 pin 到 web。新增 shared 依赖时：web `package.json` 声明 + paths/alias 同步。
 
 ### 3.3 Presenter purity gate（`T-ui-08`）
 

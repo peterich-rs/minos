@@ -16,7 +16,7 @@ Minos Web 应用是一个基于 React + TypeScript 的浏览器管理控制台�
 | TypeScript | 6 | 类型系统 |
 | Vite | 8 | 构建工具 |
 | Zustand | 5 | 状态管理 |
-| Desktop UI chrome | SSOT | Vite alias `@/shared` → `apps/desktop/src/shared`；与 Desktop **同一套** React chrome |
+| Desktop UI chrome | SSOT | Vite/tsconfig alias `@/shared` → `apps/desktop/src/shared`；shared peer 钉到 web `node_modules`（CI 只装 web） |
 | Desktop tokens | SSOT | `@import` `design-system.css`；ink/surface/primary CSS 变量与 Desktop 相同 |
 | Tailwind CSS | 3.4 | 主题 map 与 Desktop 对齐；content 含 `../desktop/src/shared/**` |
 | Lucide React | - | 图标 |
