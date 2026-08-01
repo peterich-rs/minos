@@ -172,7 +172,7 @@ which drives the relay end-to-end without an iPhone.
 
 The current account-based login + agent session flow is:
 
-1. **Register or log in** — the iOS client (or `fake-peer`) calls `POST /v1/auth/register` or `/v1/auth/login` against the backend, which returns an access + refresh token tuple plus an `account_id`.
+1. **Sign in via Supabase** — clients authenticate with Supabase Auth, then call `POST /v1/auth/supabase` to obtain Minos access + refresh tokens plus an `account_id`.
 2. **Pair** — once authenticated, the iPhone scans the Mac's QR (v2 payload), POSTs `/v1/pairing/consume` with the bearer, and persists the freshly minted `DeviceSecret`. Same-device subsequent runs re-use the secret; switching accounts on a previously-paired device drops the pairing automatically (`MinosCore._onAuthLanded`).
 3. **`start_agent`** — the iPhone opens an authenticated `/devices` WebSocket, then forwards `minos_start_agent` (and follow-up `minos_send_user_message`) to the Mac via `Envelope::Forward`. The daemon replies with a `session_id`; live `EventKind::UiEventMessage` frames stream back over the same socket.
 

@@ -26,8 +26,8 @@ part 'auth_provider.g.dart';
 /// so the chat surface lights up without a separate trigger.
 ///
 /// Phase 11.3 + ADR-0020 — cross-account migration sequence:
-///   1. `register` / `login` go through [MinosCore.register] /
-///      [MinosCore.login], which compare the freshly minted
+///   1. `register` / `login` go through Supabase IdP then
+///      [MinosCore.loginWithSupabase], which adopt the freshly minted
 ///      `account_id` against the prior persisted snapshot.
 ///   2. If the prior `account_id` differs, `MinosCore` clears the
 ///      cached peer display name so a stale label from the previous

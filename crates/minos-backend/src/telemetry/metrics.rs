@@ -41,8 +41,7 @@ const INGEST_EVENTS_TOTAL: &str = "minos_backend_ingest_events_total";
 const INGEST_OUTBOX_DROPPED_TOTAL: &str = "minos_backend_ingest_outbox_dropped_total";
 const HTTP_REQUEST_DURATION_SECONDS: &str = "minos_backend_http_request_duration_seconds";
 const FORWARD_RPC_LATENCY_SECONDS: &str = "minos_backend_forward_rpc_latency_seconds";
-const AUTH_REGISTER_TOTAL: &str = "minos_backend_auth_register_total";
-const AUTH_LOGIN_TOTAL: &str = "minos_backend_auth_login_total";
+const AUTH_SUPABASE_EXCHANGE_TOTAL: &str = "minos_backend_auth_supabase_exchange_total";
 const AUTH_REFRESH_TOTAL: &str = "minos_backend_auth_refresh_total";
 const AUTH_LOGOUT_TOTAL: &str = "minos_backend_auth_logout_total";
 const AUTH_REFRESH_REUSE_TOTAL: &str = "minos_backend_auth_refresh_reuse_total";
@@ -144,10 +143,9 @@ fn prometheus_handle() -> &'static PrometheusHandle {
             "Number of ingest fan-out frames dropped because the peer outbox rejected them."
         );
         metrics::describe_counter!(
-            AUTH_REGISTER_TOTAL,
-            "Account registration attempts, labeled by outcome."
+            AUTH_SUPABASE_EXCHANGE_TOTAL,
+            "Supabase token exchange attempts (account create/login), labeled by outcome."
         );
-        metrics::describe_counter!(AUTH_LOGIN_TOTAL, "Login attempts, labeled by outcome.");
         metrics::describe_counter!(
             AUTH_REFRESH_TOTAL,
             "Refresh-token rotations, labeled by outcome."
@@ -335,14 +333,9 @@ pub fn increment_ingest_outbox_dropped() {
     metrics::counter!(INGEST_OUTBOX_DROPPED_TOTAL).increment(1);
 }
 
-pub fn record_auth_register(outcome: &str) {
+pub fn record_auth_supabase_exchange(outcome: &str) {
     init();
-    metrics::counter!(AUTH_REGISTER_TOTAL, "outcome" => outcome.to_string()).increment(1);
-}
-
-pub fn record_auth_login(outcome: &str) {
-    init();
-    metrics::counter!(AUTH_LOGIN_TOTAL, "outcome" => outcome.to_string()).increment(1);
+    metrics::counter!(AUTH_SUPABASE_EXCHANGE_TOTAL, "outcome" => outcome.to_string()).increment(1);
 }
 
 pub fn record_auth_refresh(outcome: &str) {
@@ -519,7 +512,7 @@ mod tests {
     fn render_after_initial_describes_emits_metric_lines() {
         // Touch a few helpers so the snapshot has something concrete.
         record_envelope_in(KIND_FORWARD, 1);
-        record_auth_login(OUTCOME_OK);
+        record_auth_supabase_exchange(OUTCOME_OK);
         set_session_registry_size(3);
 
         let body = render();
@@ -528,8 +521,8 @@ mod tests {
             "envelope_in_total must show up in /metrics: {body}"
         );
         assert!(
-            body.contains("minos_backend_auth_login_total"),
-            "auth_login_total must show up: {body}"
+            body.contains("minos_backend_auth_supabase_exchange_total"),
+            "auth_supabase_exchange_total must show up: {body}"
         );
         assert!(
             body.contains("minos_backend_session_registry_size"),

@@ -647,10 +647,10 @@ mod tests {
         // installation carries that account_id are returned. Hosts keep
         // account_id NULL; use client installations as owners here.
         let pool = memory_pool().await;
-        let acct_a = crate::store::accounts::create(&pool, "alice@example.com", "phc")
+        let acct_a = crate::store::accounts::create(&pool, "alice@example.com")
             .await
             .unwrap();
-        let acct_b = crate::store::accounts::create(&pool, "bob@example.com", "phc")
+        let acct_b = crate::store::accounts::create(&pool, "bob@example.com")
             .await
             .unwrap();
         sqlx::query(

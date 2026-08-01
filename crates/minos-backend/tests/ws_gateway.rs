@@ -144,7 +144,7 @@ async fn send_client_frame(ws: &mut WsClient, frame: &ClientFrame) -> anyhow::Re
 }
 
 async fn seed_client_account(relay: &Relay, email: &str) -> anyhow::Result<(String, DeviceId)> {
-    let account_id = store::accounts::create(&relay.pool, email, "phc")
+    let account_id = store::accounts::create(&relay.pool, email)
         .await?
         .account_id;
     let device_id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
@@ -835,7 +835,7 @@ async fn raw_host_stream_event_updates_formal_turn_cold_replay() -> anyhow::Resu
     let relay = spawn_relay().await?;
     let (account_id, phone_id) =
         seed_client_account(&relay, "ws-raw-formal-replay@example.com").await?;
-    let bob = store::accounts::create(&relay.pool, "ws-raw-formal-replay-bob@example.com", "phc")
+    let bob = store::accounts::create(&relay.pool, "ws-raw-formal-replay-bob@example.com")
         .await?
         .account_id;
     let host_id = seed_host(&relay).await?;

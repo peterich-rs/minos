@@ -291,7 +291,7 @@ async fn register_formal_host(
         0,
     )
     .await?;
-    let account = store::accounts::create(&relay.pool, email, "phc").await?;
+    let account = store::accounts::create(&relay.pool, email).await?;
     let mobile_id = DeviceId::new();
     store::device_installations::insert_device(
         &relay.pool,

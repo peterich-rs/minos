@@ -5,23 +5,29 @@
 //! authenticates as a mobile client and drives sessions against already-linked
 //! hosts.
 //!
+//! Human accounts are **Supabase IdP only**. Minos password register/login is
+//! gone. Provide a Supabase access token (from the IdP / dashboard / SDK) and
+//! this tool exchanges it via `POST /v1/auth/supabase`.
+//!
 //! Subcommands:
 //!
-//! - `register` — create an account (no host bind)
-//! - `login` — login and print account id
-//! - `list-hosts` — login + `GET /v1/hosts`
-//! - `smoke-session` — login → pick linked host → resume WS → send message
+//! - `exchange` — Supabase JWT → Minos session; print account id
+//! - `list-hosts` — exchange + `GET /v1/hosts`
+//! - `smoke-session` — exchange → pick linked host → resume WS → send message
 //!
 //! ```text
 //! cargo run -p minos-mobile --bin fake-peer --features cli -- list-hosts \
 //!     --backend http://127.0.0.1:8787 \
-//!     --email you@example.com --password secret
+//!     --supabase-access-token "$SUPABASE_ACCESS_TOKEN"
 //!
 //! cargo run -p minos-mobile --bin fake-peer --features cli -- smoke-session \
 //!     --backend http://127.0.0.1:8787 \
-//!     --email you@example.com --password secret \
+//!     --supabase-access-token "$SUPABASE_ACCESS_TOKEN" \
 //!     --prompt "Hello from fake-peer"
 //! ```
+//!
+//! Account creation (email/password/OAuth) is IdP-side only (Supabase Auth).
+//! Backend integration tests mint synthetic Supabase JWTs with a test HMAC.
 
 use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
@@ -35,7 +41,7 @@ use tokio::time::sleep;
 #[derive(Parser, Debug)]
 #[command(
     name = "fake-peer",
-    about = "Smoke-test mobile auth + linked hosts without QR pairing."
+    about = "Smoke-test mobile auth + linked hosts without QR pairing (Supabase exchange)."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -44,47 +50,30 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Cmd {
-    /// Create a fresh account (Host Link still happens on Desktop).
-    Register {
+    /// Exchange a Supabase access token for a Minos session and print account metadata.
+    Exchange {
         #[arg(long, default_value_t = DEV_BACKEND_URL.to_string())]
         backend: String,
-        #[arg(long)]
-        email: String,
-        #[arg(long)]
-        password: String,
+        #[arg(long, env = "SUPABASE_ACCESS_TOKEN")]
+        supabase_access_token: String,
         #[arg(long, default_value = "fake-peer")]
         device_name: String,
     },
-    /// Login and print account metadata.
-    Login {
-        #[arg(long, default_value_t = DEV_BACKEND_URL.to_string())]
-        backend: String,
-        #[arg(long)]
-        email: String,
-        #[arg(long)]
-        password: String,
-        #[arg(long, default_value = "fake-peer")]
-        device_name: String,
-    },
-    /// Login and list linked hosts (`GET /v1/hosts`).
+    /// Exchange and list linked hosts (`GET /v1/hosts`).
     ListHosts {
         #[arg(long, default_value_t = DEV_BACKEND_URL.to_string())]
         backend: String,
-        #[arg(long)]
-        email: String,
-        #[arg(long)]
-        password: String,
+        #[arg(long, env = "SUPABASE_ACCESS_TOKEN")]
+        supabase_access_token: String,
         #[arg(long, default_value = "fake-peer")]
         device_name: String,
     },
-    /// Login, select a linked host, open WS, send a prompt, tail UI events.
+    /// Exchange, select a linked host, open WS, send a prompt, tail UI events.
     SmokeSession {
         #[arg(long, default_value_t = DEV_BACKEND_URL.to_string())]
         backend: String,
-        #[arg(long)]
-        email: String,
-        #[arg(long)]
-        password: String,
+        #[arg(long, env = "SUPABASE_ACCESS_TOKEN")]
+        supabase_access_token: String,
         #[arg(long)]
         prompt: String,
         #[arg(long, default_value = "fake-peer")]
@@ -101,39 +90,24 @@ enum Cmd {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Register {
+        Cmd::Exchange {
             backend,
-            email,
-            password,
+            supabase_access_token,
             device_name,
         } => {
-            let auth = register_account(&backend, &email, &password, &device_name).await?;
+            let auth = exchange_account(&backend, &supabase_access_token, &device_name).await?;
             eprintln!(
-                "registered account_id={} email={}",
-                auth.account_id, auth.account_email
-            );
-            Ok(())
-        }
-        Cmd::Login {
-            backend,
-            email,
-            password,
-            device_name,
-        } => {
-            let auth = login_or_register(&backend, &email, &password, &device_name).await?;
-            eprintln!(
-                "login ok account_id={} email={}",
+                "exchange ok account_id={} email={}",
                 auth.account_id, auth.account_email
             );
             Ok(())
         }
         Cmd::ListHosts {
             backend,
-            email,
-            password,
+            supabase_access_token,
             device_name,
         } => {
-            let auth = login_or_register(&backend, &email, &password, &device_name).await?;
+            let auth = exchange_account(&backend, &supabase_access_token, &device_name).await?;
             let http = MobileHttpClient::new(&backend, auth.device_id, device_name)
                 .context("build MobileHttpClient")?;
             let hosts = http
@@ -153,8 +127,7 @@ async fn main() -> Result<()> {
         }
         Cmd::SmokeSession {
             backend,
-            email,
-            password,
+            supabase_access_token,
             prompt,
             device_name,
             agent,
@@ -163,8 +136,7 @@ async fn main() -> Result<()> {
             let _agent = parse_agent(&agent)?;
             run_smoke_session(
                 &backend,
-                &email,
-                &password,
+                &supabase_access_token,
                 &prompt,
                 &device_name,
                 host_installation_id.as_deref(),
@@ -195,20 +167,19 @@ struct RegisteredAuth {
     account_email: String,
 }
 
-async fn register_account(
+async fn exchange_account(
     backend: &str,
-    email: &str,
-    password: &str,
+    supabase_access_token: &str,
     device_name: &str,
 ) -> Result<RegisteredAuth> {
     let device_id = DeviceId::new();
     let http =
         MobileHttpClient::new(backend, device_id, device_name).context("build MobileHttpClient")?;
-    eprintln!("→ POST /v1/auth/register email={email}");
+    eprintln!("→ POST /v1/auth/supabase (exchange)");
     let resp = http
-        .register(email, password)
+        .exchange_supabase(supabase_access_token, Some(device_name))
         .await
-        .context("POST /v1/auth/register")?;
+        .context("POST /v1/auth/supabase")?;
     Ok(RegisteredAuth {
         device_id,
         access_token: resp.access_token,
@@ -218,40 +189,14 @@ async fn register_account(
     })
 }
 
-async fn login_or_register(
-    backend: &str,
-    email: &str,
-    password: &str,
-    device_name: &str,
-) -> Result<RegisteredAuth> {
-    let device_id = DeviceId::new();
-    let http =
-        MobileHttpClient::new(backend, device_id, device_name).context("build MobileHttpClient")?;
-    eprintln!("→ POST /v1/auth/login email={email}");
-    match http.login(email, password).await {
-        Ok(resp) => Ok(RegisteredAuth {
-            device_id,
-            access_token: resp.access_token,
-            refresh_token: resp.refresh_token,
-            account_id: resp.account.account_id,
-            account_email: resp.account.email,
-        }),
-        Err(e) => {
-            eprintln!("← login failed ({e:?}); falling back to register");
-            register_account(backend, email, password, device_name).await
-        }
-    }
-}
-
 async fn run_smoke_session(
     backend: &str,
-    email: &str,
-    password: &str,
+    supabase_access_token: &str,
     prompt: &str,
     device_name: &str,
     host_installation_id: Option<&str>,
 ) -> Result<()> {
-    let auth = login_or_register(backend, email, password, device_name).await?;
+    let auth = exchange_account(backend, supabase_access_token, device_name).await?;
     let http = MobileHttpClient::new(backend, auth.device_id, device_name)
         .context("build MobileHttpClient")?;
     let hosts = http

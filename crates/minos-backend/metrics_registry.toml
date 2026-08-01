@@ -64,14 +64,9 @@ type = "counter"
 help = "Number of ingest fan-out frames dropped because the peer outbox rejected them."
 labels = []
 
-[metrics.auth_register_total]
+[metrics.auth_supabase_exchange_total]
 type = "counter"
-help = "Account registration attempts, labeled by outcome."
-labels = ["outcome"]
-
-[metrics.auth_login_total]
-type = "counter"
-help = "Login attempts, labeled by outcome."
+help = "Supabase token exchange attempts (account create/login), labeled by outcome."
 labels = ["outcome"]
 
 [metrics.auth_refresh_total]

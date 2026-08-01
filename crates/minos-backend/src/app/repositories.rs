@@ -38,13 +38,6 @@ pub struct AccountRow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CredentialRow {
-    pub account_id: String,
-    pub password_hash: String,
-    pub updated_at_ms: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallationRow {
     pub installation_id: String,
     pub kind: String,
@@ -287,7 +280,6 @@ pub trait AccountsRepository: Send + Sync {
     async fn create(
         &self,
         email: &str,
-        password_hash: &str,
         display_name: Option<&str>,
         at_ms: i64,
     ) -> Result<AccountRow, BackendError>;
@@ -297,28 +289,6 @@ pub trait AccountsRepository: Send + Sync {
     async fn find_by_id(&self, account_id: &str) -> Result<Option<AccountRow>, BackendError>;
 
     async fn touch_last_login(&self, account_id: &str, at_ms: i64) -> Result<(), BackendError>;
-
-    async fn update_password_hash(
-        &self,
-        account_id: &str,
-        hash: &str,
-        at_ms: i64,
-    ) -> Result<(), BackendError>;
-}
-
-#[async_trait]
-pub trait AccountCredentialsRepository: Send + Sync {
-    async fn upsert(
-        &self,
-        account_id: &str,
-        password_hash: &str,
-        at_ms: i64,
-    ) -> Result<CredentialRow, BackendError>;
-
-    async fn find_by_account(
-        &self,
-        account_id: &str,
-    ) -> Result<Option<CredentialRow>, BackendError>;
 }
 
 #[async_trait]
@@ -617,7 +587,6 @@ pub struct RepositorySet {
 
     // -- P0.S2 placeholders (stub impls, real store-backed impls in P1-P4) --
     pub accounts: Arc<dyn AccountsRepository>,
-    pub account_credentials: Arc<dyn AccountCredentialsRepository>,
     pub installations: Arc<dyn InstallationsRepository>,
     pub refresh_tokens: Arc<dyn RefreshTokensRepository>,
     pub host_installation_tokens: Arc<dyn HostInstallationTokensRepository>,
@@ -652,9 +621,6 @@ impl RepositorySet {
                 store: store.clone(),
             }),
             accounts: Arc::new(StoreBackedAccountsRepository {
-                store: store.clone(),
-            }),
-            account_credentials: Arc::new(StoreBackedAccountCredentialsRepository {
                 store: store.clone(),
             }),
             installations: Arc::new(StoreBackedInstallationsRepository {
@@ -873,11 +839,10 @@ impl AccountsRepository for StoreBackedAccountsRepository {
     async fn create(
         &self,
         email: &str,
-        password_hash: &str,
         _display_name: Option<&str>,
         _at_ms: i64,
     ) -> Result<AccountRow, BackendError> {
-        let row = store::accounts::create(&self.store, email, password_hash).await?;
+        let row = store::accounts::create(&self.store, email).await?;
         Ok(convert_account_row(row))
     }
 
@@ -895,54 +860,6 @@ impl AccountsRepository for StoreBackedAccountsRepository {
 
     async fn touch_last_login(&self, account_id: &str, _at_ms: i64) -> Result<(), BackendError> {
         store::accounts::touch_last_login(&self.store, account_id).await
-    }
-
-    async fn update_password_hash(
-        &self,
-        account_id: &str,
-        hash: &str,
-        _at_ms: i64,
-    ) -> Result<(), BackendError> {
-        store::accounts::set_password_hash(&self.store, account_id, hash).await
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Store-backed implementations — AccountCredentialsRepository
-// ---------------------------------------------------------------------------
-
-struct StoreBackedAccountCredentialsRepository {
-    store: StoreHandle,
-}
-
-#[async_trait]
-impl AccountCredentialsRepository for StoreBackedAccountCredentialsRepository {
-    async fn upsert(
-        &self,
-        account_id: &str,
-        password_hash: &str,
-        _at_ms: i64,
-    ) -> Result<CredentialRow, BackendError> {
-        store::accounts::set_password_hash(&self.store, account_id, password_hash).await?;
-        Ok(CredentialRow {
-            account_id: account_id.to_string(),
-            password_hash: password_hash.to_string(),
-            updated_at_ms: chrono::Utc::now().timestamp_millis(),
-        })
-    }
-
-    async fn find_by_account(
-        &self,
-        account_id: &str,
-    ) -> Result<Option<CredentialRow>, BackendError> {
-        match store::accounts::find_by_id(&self.store, account_id).await? {
-            Some(row) => Ok(Some(CredentialRow {
-                account_id: row.account_id,
-                password_hash: row.password_hash,
-                updated_at_ms: row.created_at,
-            })),
-            None => Ok(None),
-        }
     }
 }
 

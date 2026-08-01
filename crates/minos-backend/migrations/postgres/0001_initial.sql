@@ -1,6 +1,7 @@
 -- Canonical Postgres schema (latest-only).
 -- Incremental migration history has been collapsed; wipe local DBs on upgrade.
 
+-- Human accounts are IdP-bound via supabase_sub (no local password / no account_credentials).
 CREATE EXTENSION IF NOT EXISTS citext;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -9,17 +10,11 @@ CREATE TABLE accounts (
     email             CITEXT NOT NULL UNIQUE,
     minos_id          TEXT UNIQUE,
     display_name      TEXT,
-    -- Supabase Auth subject (JWT `sub`). NULL for password-only accounts
-    -- that have not yet been linked via OIDC exchange.
+    -- Supabase Auth subject (JWT `sub`). Required for new users via
+    -- POST /v1/auth/supabase exchange. NULL only for rare unbound fixtures.
     supabase_sub      TEXT UNIQUE,
     created_at_ms     BIGINT NOT NULL,
     last_login_at_ms  BIGINT
-);
-
-CREATE TABLE account_credentials (
-    account_id      TEXT PRIMARY KEY REFERENCES accounts(account_id) ON DELETE CASCADE,
-    password_hash   TEXT NOT NULL,
-    updated_at_ms   BIGINT NOT NULL
 );
 
 CREATE TYPE installation_kind AS ENUM ('mobile', 'browser', 'desktop', 'host');

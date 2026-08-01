@@ -35,26 +35,31 @@ async fn formal_realtime_ws_ticket_uses_account_bearer_without_device_headers() 
     let state = backend_state().await;
     let mut app = http::router(state.clone());
     let installation_id = uuid::Uuid::new_v4().to_string();
-
-    let (status, body) = post_json(
-        &mut app,
-        "/v1/auth/register",
-        &[
-            ("x-device-id", &installation_id),
-            ("x-device-role", "browser-admin"),
-        ],
-        json!({"email": "formal-ticket@example.com", "password": "testpass1"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "body={body}");
-    let access = body["access_token"].as_str().unwrap().to_string();
-    let account_id = body["account"]["account_id"].as_str().unwrap().to_string();
     let device_id = uuid::Uuid::parse_str(&installation_id)
         .map(DeviceId)
         .unwrap();
+
+    let account = minos_backend::store::accounts::create(
+        &state.store,
+        "formal-ticket@example.com",
+    )
+    .await
+    .unwrap();
+    let account_id = account.account_id.clone();
+    device_installations::insert_client_for_account(
+        &state.store,
+        device_id,
+        "browser",
+        DeviceRole::BrowserAdmin,
+        &account_id,
+        0,
+    )
+    .await
+    .unwrap();
     device_installations::touch_last_seen(&state.store, &device_id, 100)
         .await
         .unwrap();
+    let access = jwt::sign(TEST_JWT_SECRET.as_bytes(), &account_id, &installation_id).unwrap();
 
     let auth_header = format!("Bearer {access}");
     let (status, body) = post_json(
@@ -87,7 +92,7 @@ async fn formal_realtime_ws_ticket_uses_account_bearer_without_device_headers() 
 async fn formal_hosts_list_uses_account_bearer_without_device_headers() {
     let state = backend_state().await;
     let account =
-        minos_backend::store::accounts::create(&state.store, "formal-hosts@example.com", "phc")
+        minos_backend::store::accounts::create(&state.store, "formal-hosts@example.com")
             .await
             .unwrap();
     let host = DeviceId::new();

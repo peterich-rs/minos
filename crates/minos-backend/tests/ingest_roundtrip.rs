@@ -216,7 +216,7 @@ async fn ingest_translates_and_fans_out_to_paired_mobile() -> anyhow::Result<()>
     )
     .await?;
 
-    let account_id = store::accounts::create(&relay.pool, "ingest@example.com", "phc")
+    let account_id = store::accounts::create(&relay.pool, "ingest@example.com")
         .await?
         .account_id;
     let phone_id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
@@ -347,7 +347,7 @@ async fn ingest_derives_title_from_first_user_message_and_fans_out_synthetic_upd
     )
     .await?;
 
-    let account_id = store::accounts::create(&relay.pool, "title@example.com", "phc")
+    let account_id = store::accounts::create(&relay.pool, "title@example.com")
         .await?
         .account_id;
     let phone_id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;

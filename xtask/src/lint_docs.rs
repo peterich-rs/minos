@@ -21,8 +21,7 @@ const EXPECTED_DOCS: &[&str] = &[
 const CRITICAL_PATHS: &[&str] = &[
     "/health/live",
     "/health/ready",
-    "/v1/auth/register",
-    "/v1/auth/login",
+    "/v1/auth/supabase",
     "/v1/agent-sessions",
 ];
 

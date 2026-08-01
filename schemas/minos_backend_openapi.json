@@ -517,76 +517,6 @@
         "x-minos-surface": "account_api"
       }
     },
-    "/v1/auth/change-password": {
-      "post": {
-        "description": "Generated from the mounted route inventory for the `account_api` surface with `account_bearer` auth semantics.",
-        "operationId": "post_v1_auth_change_password",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": true
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": true
-              }
-            },
-            "description": "Success"
-          },
-          "401": {
-            "description": "Authentication required or rejected"
-          }
-        },
-        "security": [
-          {
-            "AccountBearer": []
-          }
-        ],
-        "summary": "POST /v1/auth/change-password",
-        "tags": [
-          "account_api"
-        ],
-        "x-minos-auth": "account_bearer",
-        "x-minos-probe-path": "/v1/auth/change-password",
-        "x-minos-surface": "account_api"
-      }
-    },
-    "/v1/auth/login": {
-      "post": {
-        "description": "Generated from the mounted route inventory for the `account_api` surface with `public` auth semantics.",
-        "operationId": "post_v1_auth_login",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": true
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": true
-              }
-            },
-            "description": "Success"
-          }
-        },
-        "summary": "POST /v1/auth/login",
-        "tags": [
-          "account_api"
-        ],
-        "x-minos-auth": "public",
-        "x-minos-probe-path": "/v1/auth/login",
-        "x-minos-surface": "account_api"
-      }
-    },
     "/v1/auth/logout": {
       "post": {
         "description": "Generated from the mounted route inventory for the `account_api` surface with `account_bearer` auth semantics.",
@@ -654,37 +584,6 @@
         ],
         "x-minos-auth": "public",
         "x-minos-probe-path": "/v1/auth/refresh",
-        "x-minos-surface": "account_api"
-      }
-    },
-    "/v1/auth/register": {
-      "post": {
-        "description": "Generated from the mounted route inventory for the `account_api` surface with `public` auth semantics.",
-        "operationId": "post_v1_auth_register",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": true
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": true
-              }
-            },
-            "description": "Success"
-          }
-        },
-        "summary": "POST /v1/auth/register",
-        "tags": [
-          "account_api"
-        ],
-        "x-minos-auth": "public",
-        "x-minos-probe-path": "/v1/auth/register",
         "x-minos-surface": "account_api"
       }
     },

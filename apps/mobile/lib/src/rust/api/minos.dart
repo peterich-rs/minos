@@ -168,12 +168,8 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// Request a page of thread summaries.
   Future<ListSessionsResponse> listSessions({required ListSessionsParams req});
 
-  /// Log into an existing account on the backend. Same shape as
-  /// `register` modulo the create-vs-find behaviour on the server.
-  Future<AuthSummary> login({required String email, required String password});
-
   /// Exchange a Supabase access token for Minos access/refresh tokens and
-  /// adopt the resulting session (same local effects as [`Self::login`]).
+  /// adopt the resulting session.
   Future<AuthSummary> loginWithSupabase({required String supabaseAccessToken});
 
   /// Log out of the current session. Best-effort `stop_agent`, then
@@ -225,14 +221,6 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// `Authenticated` / `RefreshFailed` transitions on the auth-state
   /// stream.
   Future<void> refreshSession();
-
-  /// Register a new account on the backend. On success the bearer +
-  /// refresh tokens are held in memory and surfaced via the auth-state
-  /// stream; the reconnect loop then drives the WS back to `Connected`.
-  Future<AuthSummary> register({
-    required String email,
-    required String password,
-  });
 
   Future<AgentSummary> registerAgent({
     required String name,

@@ -4,7 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 /// Thin wrapper around `supabase_flutter` for the mobile IdP path.
 ///
 /// When [CloudConfig.isSupabaseConfigured] is false, methods throw
-/// [StateError] so callers can fall back to Minos password auth.
+/// [StateError] — Minos password auth has been removed; Supabase is required.
 class SupabaseAuthService {
   SupabaseAuthService({required CloudConfig config}) : _config = config;
 

@@ -489,7 +489,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     async fn setup_account_and_device(pool: &SqlitePool) -> (String, String) {
-        let account = accounts::create(pool, "alice@example.com", "phc")
+        let account = accounts::create(pool, "alice@example.com")
             .await
             .unwrap();
         let device_id = DeviceId::new();

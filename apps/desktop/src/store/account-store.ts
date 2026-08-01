@@ -23,9 +23,7 @@ import {
   backendHttpBase,
   exchangeSupabaseSession,
   linkHost as cloudLinkHost,
-  loginPassword,
   logoutSession,
-  registerPassword,
   unlinkHost as cloudUnlinkHost,
   type AuthResponse,
 } from "@/shared/lib/minos-cloud";
@@ -96,14 +94,14 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
   signIn: async (email, password) => {
     set({ busy: true, error: null });
     try {
-      const deviceId = get().deviceId;
-      let auth: AuthResponse;
-      if (isSupabaseConfigured()) {
-        const supabaseToken = await signInWithSupabasePassword(email, password);
-        auth = await exchangeSupabaseSession(deviceId, supabaseToken);
-      } else {
-        auth = await loginPassword(deviceId, email, password);
+      if (!isSupabaseConfigured()) {
+        throw new Error(
+          "Supabase is required (set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY).",
+        );
       }
+      const deviceId = get().deviceId;
+      const supabaseToken = await signInWithSupabasePassword(email, password);
+      const auth = await exchangeSupabaseSession(deviceId, supabaseToken);
       const session = sessionFromAuthResponse(auth);
       saveStoredSession(session);
       set({ session, busy: false, error: null });
@@ -118,14 +116,14 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
   signUp: async (email, password) => {
     set({ busy: true, error: null });
     try {
-      const deviceId = get().deviceId;
-      let auth: AuthResponse;
-      if (isSupabaseConfigured()) {
-        const supabaseToken = await signUpWithSupabasePassword(email, password);
-        auth = await exchangeSupabaseSession(deviceId, supabaseToken);
-      } else {
-        auth = await registerPassword(deviceId, email, password);
+      if (!isSupabaseConfigured()) {
+        throw new Error(
+          "Supabase is required (set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY).",
+        );
       }
+      const deviceId = get().deviceId;
+      const supabaseToken = await signUpWithSupabasePassword(email, password);
+      const auth = await exchangeSupabaseSession(deviceId, supabaseToken);
       const session = sessionFromAuthResponse(auth);
       saveStoredSession(session);
       set({ session, busy: false, error: null });

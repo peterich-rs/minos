@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart' show immutable;
 
-/// Minos account session tokens after password login or Supabase exchange.
+/// Minos account session tokens after Supabase exchange.
 ///
 /// Mirrors Desktop `MinosSession` / Web `AuthResponse` shape so pure-Dart
 /// cloud clients can unit-test exchange without FRB.

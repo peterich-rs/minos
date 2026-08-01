@@ -99,7 +99,7 @@ async fn formally_paired_host(relay: &Relay) -> anyhow::Result<FormalHostFixture
     const LINK_PATH: &str = "v1/hosts/link";
 
     let mut app = router(relay.state.clone());
-    let account_id = store::accounts::create(&relay.pool, "ws-formal-host@example.com", "phc")
+    let account_id = store::accounts::create(&relay.pool, "ws-formal-host@example.com")
         .await?
         .account_id;
     let mobile = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
@@ -447,7 +447,7 @@ async fn ws_client_emits_only_hello_for_mobile_client() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
     // Seed an authenticated mobile client (account-bound, no secret hash).
-    let account_id = store::accounts::create(&relay.pool, "ws-devices@example.com", "phc")
+    let account_id = store::accounts::create(&relay.pool, "ws-devices@example.com")
         .await?
         .account_id;
     let phone_id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
@@ -473,7 +473,7 @@ async fn ws_client_emits_only_hello_for_mobile_client() -> anyhow::Result<()> {
 async fn ws_client_accepts_browser_admin_legacy_ws_ticket_query_auth() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
-    let account_id = store::accounts::create(&relay.pool, "browser-ws@example.com", "phc")
+    let account_id = store::accounts::create(&relay.pool, "browser-ws@example.com")
         .await?
         .account_id;
     let browser_id = DeviceId::new();
@@ -503,7 +503,7 @@ async fn ws_client_accepts_browser_admin_legacy_ws_ticket_query_auth() -> anyhow
 async fn ws_client_accepts_formal_ticket_query_auth() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
-    let account_id = store::accounts::create(&relay.pool, "formal-client-ws@example.com", "phc")
+    let account_id = store::accounts::create(&relay.pool, "formal-client-ws@example.com")
         .await?
         .account_id;
     let browser_id = DeviceId::new();
@@ -533,7 +533,7 @@ async fn ws_client_accepts_formal_ticket_query_auth() -> anyhow::Result<()> {
 async fn ws_client_rejects_reused_formal_ticket() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
-    let account_id = store::accounts::create(&relay.pool, "formal-client-reuse@example.com", "phc")
+    let account_id = store::accounts::create(&relay.pool, "formal-client-reuse@example.com")
         .await?
         .account_id;
     let browser_id = DeviceId::new();
@@ -583,7 +583,7 @@ async fn ws_host_accepts_formal_host_ticket_query_auth() -> anyhow::Result<()> {
 async fn ws_client_reconnect_supersedes_prior_socket_with_auth_close() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
-    let account_id = store::accounts::create(&relay.pool, "reconnect-ws@example.com", "phc")
+    let account_id = store::accounts::create(&relay.pool, "reconnect-ws@example.com")
         .await?
         .account_id;
     let phone_id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
@@ -671,10 +671,10 @@ async fn ws_host_last_link_revoke_closes_live_socket_with_auth_revoked() -> anyh
 async fn ws_client_rejects_legacy_ws_ticket_after_device_account_changes() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
-    let account_a = store::accounts::create(&relay.pool, "browser-a@example.com", "phc")
+    let account_a = store::accounts::create(&relay.pool, "browser-a@example.com")
         .await?
         .account_id;
-    let account_b = store::accounts::create(&relay.pool, "browser-b@example.com", "phc")
+    let account_b = store::accounts::create(&relay.pool, "browser-b@example.com")
         .await?
         .account_id;
     let browser_id = DeviceId::new();

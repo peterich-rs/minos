@@ -1,11 +1,9 @@
-//! `/v1/auth/{register,login,refresh,logout,supabase}` HTTP handlers (spec §5.2).
+//! `/v1/auth/{supabase,refresh,logout}` HTTP handlers.
 //!
-//! Password endpoints share dual-rail authentication: every request must
-//! carry the `X-Device-Id` / `X-Device-Role` (+ `X-Device-Secret` once
-//! paired) header bundle so the device-secret rail (`crate::http::auth`)
-//! can resolve a `DeviceId` before the account-rail does its own work.
+//! Human account create/login is **Supabase-only** via `POST /v1/auth/supabase`.
+//! Password register/login/change-password endpoints have been removed.
 //!
-//! Supabase exchange **does not** call `authenticate()` / device-secret;
+//! Supabase exchange does **not** call `authenticate()` / device-secret;
 //! it only requires `X-Device-Id` (+ optional role/name) and a Supabase
 //! access token body.
 //!
@@ -30,39 +28,6 @@ use crate::http::auth::{
 };
 use crate::http::error_response::{err_json, ErrorEnvelope};
 use crate::http::BackendState;
-
-#[derive(Deserialize, utoipa::ToSchema)]
-pub struct RegisterReq {
-    pub email: String,
-    pub password: String,
-}
-
-// Hand-rolled `Debug` so a future maintainer adding `tracing::debug!(?req)`
-// doesn't leak passwords into xlog. Email is fine to surface; the
-// password field is replaced with the literal string `"<redacted>"`.
-impl std::fmt::Debug for RegisterReq {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RegisterReq")
-            .field("email", &self.email)
-            .field("password", &"<redacted>")
-            .finish()
-    }
-}
-
-#[derive(Deserialize, utoipa::ToSchema)]
-pub struct LoginReq {
-    pub email: String,
-    pub password: String,
-}
-
-impl std::fmt::Debug for LoginReq {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LoginReq")
-            .field("email", &self.email)
-            .field("password", &"<redacted>")
-            .finish()
-    }
-}
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct RefreshReq {
@@ -127,13 +92,7 @@ fn rate_limited_response(retry: u32) -> Response {
 
 fn auth_error_response(error: AuthUseCaseError) -> Response {
     match error {
-        AuthUseCaseError::AccountNotFound => {
-            (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response()
-        }
         AuthUseCaseError::EmailTaken => (StatusCode::CONFLICT, err("email_taken")).into_response(),
-        AuthUseCaseError::InvalidCredentials => {
-            (StatusCode::UNAUTHORIZED, err("invalid_credentials")).into_response()
-        }
         AuthUseCaseError::InvalidRefresh => {
             (StatusCode::UNAUTHORIZED, err("invalid_refresh")).into_response()
         }
@@ -148,9 +107,6 @@ fn auth_error_response(error: AuthUseCaseError) -> Response {
         }
         AuthUseCaseError::UnsupportedWsTicketRole => {
             (StatusCode::BAD_REQUEST, err("ws_ticket_unsupported_role")).into_response()
-        }
-        AuthUseCaseError::WeakPassword => {
-            (StatusCode::BAD_REQUEST, err("weak_password")).into_response()
         }
         AuthUseCaseError::SupabaseNotConfigured => (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -198,86 +154,6 @@ fn refresh_session_response(session: RefreshSession) -> Response {
         expires_in: session.expires_in,
     })
     .into_response()
-}
-
-/// Register a new account.
-#[utoipa::path(
-    post,
-    path = "/v1/auth/register",
-    request_body = RegisterReq,
-    responses(
-        (status = 200, description = "Account created", body = AuthResp),
-        (status = 400, description = "Validation error", body = ErrorEnvelope),
-        (status = 401, description = "Unauthorized", body = ErrorEnvelope),
-        (status = 409, description = "Email already taken", body = ErrorEnvelope),
-        (status = 429, description = "Rate limited"),
-    ),
-    tag = "auth"
-)]
-#[tracing::instrument(skip_all, fields(email = %req.email))]
-pub async fn post_register(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-    Json(req): Json<RegisterReq>,
-) -> Response {
-    let Ok(outcome) = authenticate(&state.store, &headers).await else {
-        return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
-    };
-    let device_name = extract_device_name(&headers);
-    match state
-        .auth
-        .register(
-            outcome.device_id,
-            outcome.role,
-            device_name.as_deref(),
-            &req.email,
-            &req.password,
-            &client_ip(&headers),
-        )
-        .await
-    {
-        Ok(session) => auth_session_response(session),
-        Err(error) => auth_error_response(error),
-    }
-}
-
-/// Login with email and password.
-#[utoipa::path(
-    post,
-    path = "/v1/auth/login",
-    request_body = LoginReq,
-    responses(
-        (status = 200, description = "Login successful", body = AuthResp),
-        (status = 401, description = "Invalid credentials", body = ErrorEnvelope),
-        (status = 429, description = "Rate limited"),
-    ),
-    tag = "auth"
-)]
-#[tracing::instrument(skip_all, fields(email = %req.email))]
-pub async fn post_login(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-    Json(req): Json<LoginReq>,
-) -> Response {
-    let Ok(outcome) = authenticate(&state.store, &headers).await else {
-        return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
-    };
-    let device_name = extract_device_name(&headers);
-    match state
-        .auth
-        .login(
-            outcome.device_id,
-            outcome.role,
-            device_name.as_deref(),
-            &req.email,
-            &req.password,
-            &client_ip(&headers),
-        )
-        .await
-    {
-        Ok(session) => auth_session_response(session),
-        Err(error) => auth_error_response(error),
-    }
 }
 
 /// Refresh an access token using a refresh token.
@@ -355,6 +231,7 @@ pub struct SupabaseExchangeReq {
 /// Exchange a Supabase access token for Minos access/refresh tokens.
 ///
 /// Does **not** require `X-Device-Secret`. Requires `X-Device-Id` (UUID).
+/// This is the only human account create/login path.
 #[utoipa::path(
     post,
     path = "/v1/auth/supabase",
@@ -408,81 +285,11 @@ pub async fn post_supabase_exchange(
     }
 }
 
-/// Change account password. Requires bearer auth.
-#[utoipa::path(
-    post,
-    path = "/v1/auth/change-password",
-    request_body(content = String, description = "JSON with current_password and new_password fields"),
-    responses(
-        (status = 204, description = "Password changed"),
-        (status = 401, description = "Unauthorized", body = ErrorEnvelope),
-        (status = 400, description = "Weak password", body = ErrorEnvelope),
-    ),
-    tag = "auth"
-)]
-#[tracing::instrument(skip_all)]
-pub async fn post_change_password(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-    Json(req): Json<minos_protocol::ChangePasswordRequest>,
-) -> Response {
-    if authenticate(&state.store, &headers).await.is_err() {
-        return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
-    }
-    let Ok(bearer_outcome) = bearer::require(&state, &headers) else {
-        return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
-    };
-    match state
-        .auth
-        .change_password(
-            &bearer_outcome.account_id,
-            &req.current_password,
-            &req.new_password,
-        )
-        .await
-    {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) => auth_error_response(error),
-    }
-}
-
 pub fn router() -> Router<BackendState> {
     // Routes are mounted under `/v1` by `crate::http::v1::router`, so the
     // path prefixes here are relative to `/v1`.
     Router::new()
-        .route("/auth/register", post(post_register))
-        .route("/auth/login", post(post_login))
         .route("/auth/refresh", post(post_refresh))
         .route("/auth/logout", post(post_logout))
-        .route("/auth/change-password", post(post_change_password))
         .route("/auth/supabase", post(post_supabase_exchange))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn register_req_debug_redacts_password() {
-        let req = RegisterReq {
-            email: "alice@example.com".into(),
-            password: "supersecret".into(),
-        };
-        let s = format!("{req:?}");
-        assert!(s.contains("alice@example.com"));
-        assert!(s.contains("<redacted>"));
-        assert!(!s.contains("supersecret"));
-    }
-
-    #[test]
-    fn login_req_debug_redacts_password() {
-        let req = LoginReq {
-            email: "bob@example.com".into(),
-            password: "anothersecret".into(),
-        };
-        let s = format!("{req:?}");
-        assert!(s.contains("bob@example.com"));
-        assert!(s.contains("<redacted>"));
-        assert!(!s.contains("anothersecret"));
-    }
 }

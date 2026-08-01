@@ -1,11 +1,11 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use minos_domain::{DeviceId, DeviceRole};
 
 use crate::auth::{
-    jwt, passwords,
+    jwt,
     rate_limit::RateLimiter,
     realtime_ticket::{RealtimeTicketConsumeError, RealtimeTicketStore},
     supabase::{SupabaseAuthError, SupabaseTokenVerifier},
@@ -18,34 +18,23 @@ const REFRESH_TOKEN_REPO_METRIC_LABEL: &str = "refresh_token_repo";
 
 #[derive(Clone)]
 pub struct AuthRateLimits {
-    login_per_email: Arc<RateLimiter>,
-    login_per_ip: Arc<RateLimiter>,
-    register_per_ip: Arc<RateLimiter>,
+    /// Shared bucket for Supabase exchange (account create / login via IdP).
+    exchange_per_ip: Arc<RateLimiter>,
     refresh_per_acc: Arc<RateLimiter>,
 }
 
 impl Default for AuthRateLimits {
     fn default() -> Self {
         Self {
-            login_per_email: Arc::new(RateLimiter::new(10, Duration::from_mins(1))),
-            login_per_ip: Arc::new(RateLimiter::new(5, Duration::from_mins(1))),
-            register_per_ip: Arc::new(RateLimiter::new(3, Duration::from_hours(1))),
+            exchange_per_ip: Arc::new(RateLimiter::new(3, Duration::from_hours(1))),
             refresh_per_acc: Arc::new(RateLimiter::new(60, Duration::from_hours(1))),
         }
     }
 }
 
 impl AuthRateLimits {
-    fn check_register_per_ip(&self, client_ip: &str) -> Result<(), AuthUseCaseError> {
-        Self::check(&self.register_per_ip, client_ip)
-    }
-
-    fn check_login_per_ip(&self, client_ip: &str) -> Result<(), AuthUseCaseError> {
-        Self::check(&self.login_per_ip, client_ip)
-    }
-
-    fn check_login_per_email(&self, email: &str) -> Result<(), AuthUseCaseError> {
-        Self::check(&self.login_per_email, email)
+    fn check_exchange_per_ip(&self, client_ip: &str) -> Result<(), AuthUseCaseError> {
+        Self::check(&self.exchange_per_ip, client_ip)
     }
 
     fn check_refresh_per_account(&self, account_id: &str) -> Result<(), AuthUseCaseError> {
@@ -61,9 +50,7 @@ impl AuthRateLimits {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthUseCaseError {
-    AccountNotFound,
     EmailTaken,
-    InvalidCredentials,
     InvalidRefresh,
     Internal,
     RateLimited {
@@ -71,7 +58,6 @@ pub enum AuthUseCaseError {
     },
     WsTicketAccountMismatch,
     UnsupportedWsTicketRole,
-    WeakPassword,
     /// Supabase exchange is not configured on this process.
     SupabaseNotConfigured,
     InvalidSupabaseToken,
@@ -142,29 +128,12 @@ trait RefreshTokenRepo: Send + Sync {
 
 #[async_trait]
 trait AccountsRepo: Send + Sync {
-    async fn create(
-        &self,
-        email: &str,
-        password_hash: &str,
-    ) -> Result<accounts::AccountRow, BackendError>;
-
     async fn find_by_email(
         &self,
         email: &str,
     ) -> Result<Option<accounts::AccountRow>, BackendError>;
 
-    async fn find_by_id(
-        &self,
-        account_id: &str,
-    ) -> Result<Option<accounts::AccountRow>, BackendError>;
-
     async fn touch_last_login(&self, account_id: &str) -> Result<(), BackendError>;
-
-    async fn set_password_hash(
-        &self,
-        account_id: &str,
-        password_hash: &str,
-    ) -> Result<(), BackendError>;
 }
 
 struct SqlAccountsRepo {
@@ -179,15 +148,6 @@ impl SqlAccountsRepo {
 
 #[async_trait]
 impl AccountsRepo for SqlAccountsRepo {
-    async fn create(
-        &self,
-        email: &str,
-        password_hash: &str,
-    ) -> Result<accounts::AccountRow, BackendError> {
-        let _db_timer = crate::telemetry::DbTimer::new(ACCOUNTS_REPO_METRIC_LABEL, "create");
-        accounts::create(&self.store, email, password_hash).await
-    }
-
     async fn find_by_email(
         &self,
         email: &str,
@@ -196,28 +156,10 @@ impl AccountsRepo for SqlAccountsRepo {
         accounts::find_by_email(&self.store, email).await
     }
 
-    async fn find_by_id(
-        &self,
-        account_id: &str,
-    ) -> Result<Option<accounts::AccountRow>, BackendError> {
-        let _db_timer = crate::telemetry::DbTimer::new(ACCOUNTS_REPO_METRIC_LABEL, "find_by_id");
-        accounts::find_by_id(&self.store, account_id).await
-    }
-
     async fn touch_last_login(&self, account_id: &str) -> Result<(), BackendError> {
         let _db_timer =
             crate::telemetry::DbTimer::new(ACCOUNTS_REPO_METRIC_LABEL, "touch_last_login");
         accounts::touch_last_login(&self.store, account_id).await
-    }
-
-    async fn set_password_hash(
-        &self,
-        account_id: &str,
-        password_hash: &str,
-    ) -> Result<(), BackendError> {
-        let _db_timer =
-            crate::telemetry::DbTimer::new(ACCOUNTS_REPO_METRIC_LABEL, "set_password_hash");
-        accounts::set_password_hash(&self.store, account_id, password_hash).await
     }
 }
 
@@ -379,82 +321,6 @@ impl AuthUseCase {
             .await
     }
 
-    pub async fn register(
-        &self,
-        device_id: DeviceId,
-        device_role: DeviceRole,
-        device_name: Option<&str>,
-        email: &str,
-        password: &str,
-        client_ip: &str,
-    ) -> Result<AuthSession, AuthUseCaseError> {
-        let result = self
-            .register_inner(
-                device_id,
-                device_role,
-                device_name,
-                email,
-                password,
-                client_ip,
-            )
-            .await;
-        crate::telemetry::record_auth_register(auth_outcome_label(&result));
-        result
-    }
-
-    async fn register_inner(
-        &self,
-        device_id: DeviceId,
-        device_role: DeviceRole,
-        device_name: Option<&str>,
-        email: &str,
-        password: &str,
-        client_ip: &str,
-    ) -> Result<AuthSession, AuthUseCaseError> {
-        self.limits.check_register_per_ip(client_ip)?;
-        validate_password(password)?;
-        if !device_role.is_account_client() {
-            return Err(AuthUseCaseError::UnsupportedWsTicketRole);
-        }
-
-        let hash = passwords::hash(password)
-            .map_err(|error| Self::log_internal("register.hash_password", error))?;
-        let account = match self.accounts.create(email, &hash).await {
-            Ok(account) => account,
-            Err(BackendError::EmailTaken) => return Err(AuthUseCaseError::EmailTaken),
-            Err(error) => return Err(Self::log_internal("register.create_account", error)),
-        };
-
-        // Postgres CHECK requires client rows to carry account_id at insert.
-        self.ensure_device_for_account(&device_id, device_role, device_name, &account.account_id)
-            .await?;
-        self.issue_auth_session(&account.account_id, &account.email, &device_id)
-            .await
-    }
-
-    pub async fn login(
-        &self,
-        device_id: DeviceId,
-        device_role: DeviceRole,
-        device_name: Option<&str>,
-        email: &str,
-        password: &str,
-        client_ip: &str,
-    ) -> Result<AuthSession, AuthUseCaseError> {
-        let result = self
-            .login_inner(
-                device_id,
-                device_role,
-                device_name,
-                email,
-                password,
-                client_ip,
-            )
-            .await;
-        crate::telemetry::record_auth_login(auth_outcome_label(&result));
-        result
-    }
-
     /// Exchange a Supabase access token for a Minos session.
     ///
     /// Does **not** go through device-secret `authenticate()`; the caller
@@ -471,7 +337,7 @@ impl AuthUseCase {
         let result = self
             .supabase_exchange_inner(device_id, device_role, device_name, supabase_jwt, client_ip)
             .await;
-        crate::telemetry::record_auth_login(auth_outcome_label(&result));
+        crate::telemetry::record_auth_supabase_exchange(auth_outcome_label(&result));
         result
     }
 
@@ -487,7 +353,7 @@ impl AuthUseCase {
             return Err(AuthUseCaseError::UnsupportedWsTicketRole);
         }
         // Same bucket as register: limit account-creation style abuse.
-        self.limits.check_register_per_ip(client_ip)?;
+        self.limits.check_exchange_per_ip(client_ip)?;
 
         let verifier = self
             .supabase
@@ -556,7 +422,7 @@ impl AuthUseCase {
             }
         }
 
-        // 2) Verified email match → bind sub to existing password account.
+        // 2) Verified email match → bind sub to existing unbound account.
         if claims.email_verified {
             if let Some(email) = claims.email.as_deref() {
                 match self.accounts.find_by_email(email).await {
@@ -593,10 +459,7 @@ impl AuthUseCase {
             // the IdP omitted email (rare for Google / magic link).
             format!("{}@oauth.minos.local", claims.sub)
         });
-        let unusable_hash = oauth_only_password_hash();
-        match accounts::create_with_supabase_sub(&self.store, &email, unusable_hash, &claims.sub)
-            .await
-        {
+        match accounts::create_with_supabase_sub(&self.store, &email, &claims.sub).await {
             Ok(account) => Ok(account),
             Err(BackendError::EmailTaken) => {
                 // Race: email taken between find and create. If verified, try bind.
@@ -704,58 +567,6 @@ impl AuthUseCase {
                 self.bind_device_to_account(device_id, account_id).await
             }
         }
-    }
-
-    async fn login_inner(
-        &self,
-        device_id: DeviceId,
-        device_role: DeviceRole,
-        device_name: Option<&str>,
-        email: &str,
-        password: &str,
-        client_ip: &str,
-    ) -> Result<AuthSession, AuthUseCaseError> {
-        self.limits.check_login_per_ip(client_ip)?;
-        self.limits.check_login_per_email(&email.to_lowercase())?;
-        if !device_role.is_account_client() {
-            return Err(AuthUseCaseError::UnsupportedWsTicketRole);
-        }
-
-        let account = match self.accounts.find_by_email(email).await {
-            Ok(Some(account)) => account,
-            Ok(None) => {
-                let _ = passwords::verify(password, dummy_password_hash());
-                return Err(AuthUseCaseError::InvalidCredentials);
-            }
-            Err(error) => return Err(Self::log_internal("login.find_by_email", error)),
-        };
-        let password_matches = passwords::verify(password, &account.password_hash)
-            .map_err(|error| Self::log_internal("login.verify_password", error))?;
-        if !password_matches {
-            return Err(AuthUseCaseError::InvalidCredentials);
-        }
-
-        let device_id_string = device_id.to_string();
-        if let Err(error) = self
-            .refresh_tokens
-            .revoke_all_for_device(&device_id_string)
-            .await
-        {
-            tracing::warn!(
-                target: "minos_backend::auth",
-                error = %error,
-                device_id = %device_id,
-                "failed to revoke stale refresh tokens for device before login"
-            );
-        }
-        self.accounts
-            .touch_last_login(&account.account_id)
-            .await
-            .map_err(|error| Self::log_internal("login.touch_last_login", error))?;
-        self.ensure_device_for_account(&device_id, device_role, device_name, &account.account_id)
-            .await?;
-        self.issue_auth_session(&account.account_id, &account.email, &device_id)
-            .await
     }
 
     pub async fn refresh(
@@ -942,48 +753,6 @@ impl AuthUseCase {
         })
     }
 
-    pub async fn change_password(
-        &self,
-        account_id: &str,
-        current_password: &str,
-        new_password: &str,
-    ) -> Result<(), AuthUseCaseError> {
-        validate_password(new_password)?;
-        self.limits.check_refresh_per_account(account_id)?;
-
-        let account = match self.accounts.find_by_id(account_id).await {
-            Ok(Some(account)) => account,
-            Ok(None) => return Err(AuthUseCaseError::AccountNotFound),
-            Err(error) => return Err(Self::log_internal("change_password.find_by_id", error)),
-        };
-        let current_password_matches = passwords::verify(current_password, &account.password_hash)
-            .map_err(|error| Self::log_internal("change_password.verify_current", error))?;
-        if !current_password_matches {
-            return Err(AuthUseCaseError::InvalidCredentials);
-        }
-
-        let next_hash = passwords::hash(new_password)
-            .map_err(|error| Self::log_internal("change_password.hash_new", error))?;
-        self.accounts
-            .set_password_hash(&account.account_id, &next_hash)
-            .await
-            .map_err(|error| Self::log_internal("change_password.set_hash", error))?;
-
-        if let Err(error) = self
-            .refresh_tokens
-            .revoke_all_for_account(&account.account_id)
-            .await
-        {
-            tracing::warn!(
-                target: "minos_backend::auth",
-                error = %error,
-                account_id = %account.account_id,
-                "failed to revoke active refresh tokens after password change"
-            );
-        }
-        Ok(())
-    }
-
     async fn bind_device_to_account(
         &self,
         device_id: &DeviceId,
@@ -1048,31 +817,6 @@ impl AuthUseCase {
     }
 }
 
-fn validate_password(password: &str) -> Result<(), AuthUseCaseError> {
-    if password.len() < 8 || password.chars().count() < 8 {
-        return Err(AuthUseCaseError::WeakPassword);
-    }
-    Ok(())
-}
-
-fn dummy_password_hash() -> &'static str {
-    static DUMMY_HASH: OnceLock<String> = OnceLock::new();
-    DUMMY_HASH.get_or_init(|| {
-        passwords::hash("dummy_for_constant_time_check_xxxxxxx")
-            .expect("argon2id default params must hash a static string")
-    })
-}
-
-/// Unusable Argon2 hash stored for OAuth-only accounts so password login
-/// fails verification rather than panicking on a missing/malformed hash.
-fn oauth_only_password_hash() -> &'static str {
-    static OAUTH_HASH: OnceLock<String> = OnceLock::new();
-    OAUTH_HASH.get_or_init(|| {
-        passwords::hash("oauth-only-no-password-login-xxxxxxxx")
-            .expect("argon2id default params must hash a static string")
-    })
-}
-
 /// Map an `AuthUseCase` result onto a stable counter label.
 ///
 /// Mirrors the `outcome` convention in [`crate::telemetry`]: every
@@ -1083,9 +827,7 @@ fn auth_outcome_label<T>(result: &Result<T, AuthUseCaseError>) -> &'static str {
     match result {
         Ok(_) => t::OUTCOME_OK,
         Err(
-            AuthUseCaseError::AccountNotFound
-            | AuthUseCaseError::InvalidCredentials
-            | AuthUseCaseError::InvalidRefresh
+            AuthUseCaseError::InvalidRefresh
             | AuthUseCaseError::WsTicketAccountMismatch
             | AuthUseCaseError::InvalidSupabaseToken
             | AuthUseCaseError::SupabaseTokenExpired
@@ -1094,9 +836,7 @@ fn auth_outcome_label<T>(result: &Result<T, AuthUseCaseError>) -> &'static str {
         ) => t::OUTCOME_UNAUTHORIZED,
         Err(AuthUseCaseError::EmailTaken | AuthUseCaseError::MergeConflict) => t::OUTCOME_CONFLICT,
         Err(AuthUseCaseError::RateLimited { .. }) => t::OUTCOME_RATE_LIMITED,
-        Err(AuthUseCaseError::WeakPassword | AuthUseCaseError::UnsupportedWsTicketRole) => {
-            t::OUTCOME_INVALID
-        }
+        Err(AuthUseCaseError::UnsupportedWsTicketRole) => t::OUTCOME_INVALID,
         Err(AuthUseCaseError::IdpUnavailable | AuthUseCaseError::Internal) => t::OUTCOME_ERROR,
     }
 }

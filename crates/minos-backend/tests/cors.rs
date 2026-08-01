@@ -12,7 +12,7 @@ async fn preflight_allows_browser_admin_headers() {
 
     let request = Request::builder()
         .method("OPTIONS")
-        .uri("/v1/auth/login")
+        .uri("/v1/auth/supabase")
         .header("origin", "http://127.0.0.1:4173")
         .header("access-control-request-method", "POST")
         .header(

@@ -974,42 +974,10 @@ impl MobileClient {
 
     // ─────────────────────────── auth surface ──────────────────────────────
 
-    /// Register a new account on the backend. On success the bearer +
-    /// refresh tokens are stored both in memory (via `auth_session`) and
-    /// in the durable store. The auth-state watch transitions to
-    /// `Authenticated` and the reconnect loop starts. Spec §5.4 / §6.1.
-    pub async fn register(
-        &self,
-        email: String,
-        password: String,
-    ) -> Result<AuthSummary, MinosError> {
-        let http = self.http_client_no_secret()?;
-        let resp = http.register(&email, &password).await?;
-        // Persist the device id pre-pair so cold-launch resumes against
-        // the same JWT-bound id.
-        self.store.save_device(&self.device_id).await?;
-        let summary = self.adopt_auth_response(resp).await;
-        self.ensure_reconnect_loop().await;
-        Ok(summary)
-    }
-
-    /// Log into an existing account on the backend. Same shape as
-    /// `register` modulo the create-vs-find behaviour on the server. Spec
-    /// §5.4.
-    pub async fn login(&self, email: String, password: String) -> Result<AuthSummary, MinosError> {
-        let http = self.http_client_no_secret()?;
-        let resp = http.login(&email, &password).await?;
-        self.store.save_device(&self.device_id).await?;
-        let summary = self.adopt_auth_response(resp).await;
-        self.ensure_reconnect_loop().await;
-        Ok(summary)
-    }
-
     /// Exchange a Supabase Auth access token for a Minos session.
     ///
-    /// Same local effects as [`Self::login`]: durable auth tuple, auth-state
-    /// `Authenticated` frame, and reconnect loop. Used by the cloud identity
-    /// path (D01 / T-auth-07 / T-mob-02).
+    /// Durable auth tuple, auth-state `Authenticated` frame, and reconnect
+    /// loop. Only human account create/login path (Supabase IdP).
     pub async fn login_with_supabase(
         &self,
         supabase_access_token: String,

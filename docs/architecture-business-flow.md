@@ -19,7 +19,7 @@
 
 ### 流程
 
-1. 客户端调用 `POST /v1/auth/register`，携带 `email` + `password`
+1. 客户端经 Supabase Auth 注册/登录，再调用 `POST /v1/auth/supabase` 交换 Minos session
 2. 后端:
    - Argon2id 哈希密码
    - 创建 `accounts` 行
@@ -31,7 +31,7 @@
 
 ### 登录流程
 
-类似注册，但验证已有密码而非创建账户。`POST /v1/auth/login`。
+同一交换路径：已绑定 `supabase_sub` 的账户再次 exchange 即登录。
 
 ---
 

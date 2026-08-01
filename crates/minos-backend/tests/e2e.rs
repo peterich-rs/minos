@@ -355,7 +355,7 @@ async fn e2e_reconnect_with_invalid_ticket_returns_401() -> anyhow::Result<()> {
 async fn e2e_reconnect_supersedes_old_socket_records_close_reason_metric() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
-    let account_id = store::accounts::create(&relay.pool, "reconnect-e2e@example.com", "phc")
+    let account_id = store::accounts::create(&relay.pool, "reconnect-e2e@example.com")
         .await?
         .account_id;
     let id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
@@ -391,7 +391,7 @@ async fn e2e_reconnect_supersedes_old_socket_records_close_reason_metric() -> an
 async fn e2e_legacy_envelope_frame_returns_validation_error() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
-    let account_id = store::accounts::create(&relay.pool, "server-frame@example.com", "phc")
+    let account_id = store::accounts::create(&relay.pool, "server-frame@example.com")
         .await?
         .account_id;
     let phone_id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
@@ -453,7 +453,7 @@ async fn e2e_presence_tracks_live_peer_membership() -> anyhow::Result<()> {
     // ADR-0020: insert via account_host_pairings instead of legacy device-keyed
     // pairings. The body of this test still asserts presence semantics that
     // were removed in Phase G; #[ignore]'d at the test attribute.
-    let account_id = store::accounts::create(&relay.pool, "presence@example.com", "phc")
+    let account_id = store::accounts::create(&relay.pool, "presence@example.com")
         .await?
         .account_id;
     let ios_id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;

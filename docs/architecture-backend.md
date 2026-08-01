@@ -96,7 +96,7 @@
 | `jwt.rs` | JWT 签发/验证 | `Claims`, `sign()`, `verify()`, `sign_ws_ticket()`, `verify_ws_ticket()` |
 | `bearer.rs` | Bearer token 提取 | `require()`, `require_account()` |
 | `passwords.rs` | Argon2id 密码哈希 | hash/verify |
-| `use_case.rs` | 认证业务逻辑 | `AuthUseCase` — register, login, refresh, logout, change_password |
+| `use_case.rs` | 认证业务逻辑 | `AuthUseCase` — supabase_exchange, refresh, logout, ws-ticket |
 | `host_bootstrap.rs` | Host Ed25519 初始证明 | `BootstrapNonceStore`（Redis 或 in-memory；`GETDEL` 单次消费） |
 | `host_installation.rs` | Host 安装令牌 | `hit_*` 令牌验证 |
 | `realtime_ticket.rs` | WS 票据存储 | `RealtimeTicketStore` — 一次性票据 |
@@ -104,8 +104,7 @@
 
 ### 认证流程
 
-1. **注册** (`POST /v1/auth/register`): Argon2id 哈希密码 → 插入 account → 返回 JWT + refresh token
-2. **登录** (`POST /v1/auth/login`): 验证密码 → 签发 JWT
+1. **Supabase 交换** (`POST /v1/auth/supabase`): 校验 IdP JWT → upsert account by `supabase_sub` → 签发 Minos JWT + refresh
 3. **Supabase 交换** (`POST /v1/auth/supabase`): 校验 Supabase access JWT（JWKS）→ 按 `sub`/verified email 合并或创建 account → 签发 **Minos** JWT + refresh（不经 device-secret `authenticate()`）
 4. **刷新** (`POST /v1/auth/refresh`): 验证 refresh token → 轮转签发新 JWT + refresh token
 5. **Bearer 认证**: `Authorization: Bearer <jwt>` → `jwt::verify()` → 提取 account_id/device_id
@@ -194,7 +193,7 @@ Migrations 为 latest-only 单一初始 schema（`sqlx::migrate!`）：
 
 | 表 | 用途 |
 |----|------|
-| `accounts` | 账户（email, password_hash, minos_id, display_name） |
+| `accounts` | 账户（email, supabase_sub, minos_id, display_name）— 无本地密码 |
 | `device_installations` | 安装（kind: mobile/browser/desktop/host, public_key, account_id） |
 | `pairing_tokens` | 配对令牌（token_hash, issuer_device_id, expires_at） |
 | `host_links` | 配对码（code_hash, host_installation_id, status） |

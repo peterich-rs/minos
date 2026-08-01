@@ -161,7 +161,7 @@ async fn register_formal_host(
         0,
     )
     .await?;
-    let account = store::accounts::create(pool, "relay-smoke@example.com", "phc").await?;
+    let account = store::accounts::create(pool, "relay-smoke@example.com").await?;
     let mobile_id = DeviceId::new();
     store::device_installations::insert_device(
         pool,
@@ -248,7 +248,7 @@ async fn apply_link_token_persists_and_connects() -> anyhow::Result<()> {
         0,
     )
     .await?;
-    let account = store::accounts::create(&relay.pool, "host-link-smoke@example.com", "phc").await?;
+    let account = store::accounts::create(&relay.pool, "host-link-smoke@example.com").await?;
     let mobile_id = DeviceId::new();
     store::device_installations::insert_device(
         &relay.pool,

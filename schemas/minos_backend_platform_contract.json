@@ -155,20 +155,6 @@
     },
     {
       "method": "POST",
-      "path": "/v1/auth/register",
-      "probe_path": "/v1/auth/register",
-      "surface": "account_api",
-      "auth": "public"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/auth/login",
-      "probe_path": "/v1/auth/login",
-      "surface": "account_api",
-      "auth": "public"
-    },
-    {
-      "method": "POST",
       "path": "/v1/auth/refresh",
       "probe_path": "/v1/auth/refresh",
       "surface": "account_api",
@@ -178,13 +164,6 @@
       "method": "POST",
       "path": "/v1/auth/logout",
       "probe_path": "/v1/auth/logout",
-      "surface": "account_api",
-      "auth": "account_bearer"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/auth/change-password",
-      "probe_path": "/v1/auth/change-password",
       "surface": "account_api",
       "auth": "account_bearer"
     },

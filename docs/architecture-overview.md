@@ -118,8 +118,7 @@ minos-protocol ----> minos-transport
 |------|------|
 | `/health/live` | 进程存活探针 |
 | `/health/ready` | 依赖就绪探针 |
-| `/v1/auth/register` | 用户注册 |
-| `/v1/auth/login` | 用户登录 |
+| `/v1/auth/supabase` | Supabase JWT → Minos session（唯一人类账户入口） |
 | `/v1/agent-sessions` | Agent 会话列表/创建 |
 
 ## 技术栈

@@ -229,7 +229,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 | lane | desktop |
 | depends_on | T-auth-04 |
 | exit | 系统浏览器打开 Supabase OAuth → `minos://auth-callback#access_token=...` → exchange → Tauri secure store；account session 可用于 host link |
-| notes | Phase C ships Supabase email/password → `/v1/auth/supabase` (or Minos password fallback) + localStorage session. OAuth + `minos://` deep link still open for a follow-up when deep-link plugin is wired. |
+| notes | Phase C ships Supabase email/password → `/v1/auth/supabase` only (Minos password removed) + localStorage session. OAuth + `minos://` deep link still open for a follow-up when deep-link plugin is wired. |
 
 ### T-auth-09 · Dual-session logout/refresh contract
 | Field | Value |

@@ -5,7 +5,8 @@ use axum::http::{Request, StatusCode};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ed25519_dalek::{Signer, SigningKey};
 use minos_backend::http;
-use minos_backend::http::test_support::backend_state;
+use minos_backend::auth::jwt;
+use minos_backend::http::test_support::{backend_state, TEST_JWT_SECRET};
 use minos_backend::http::v1::hosts::LINK_PATH;
 use minos_backend::session::SessionHandle;
 use minos_backend::store::{device_installations, host_installation_tokens, host_links};
@@ -75,23 +76,28 @@ async fn get_json(
 }
 
 async fn register_desktop(
-    app: &mut axum::Router,
+    state: &http::BackendState,
     email: &str,
 ) -> (String, String, String) {
     let installation_id = uuid::Uuid::new_v4().to_string();
-    let (status, body) = post_json(
-        app,
-        "/v1/auth/register",
-        &[
-            ("x-device-id", &installation_id),
-            ("x-device-role", "desktop-console"),
-        ],
-        json!({"email": email, "password": "testpass1"}),
+    let device_id = uuid::Uuid::parse_str(&installation_id)
+        .map(DeviceId)
+        .unwrap();
+    let account = minos_backend::store::accounts::create(&state.store, email)
+        .await
+        .unwrap();
+    let account_id = account.account_id.clone();
+    device_installations::insert_client_for_account(
+        &state.store,
+        device_id,
+        "desktop",
+        DeviceRole::DesktopConsole,
+        &account_id,
+        0,
     )
-    .await;
-    assert_eq!(status, StatusCode::OK, "body={body}");
-    let access = body["access_token"].as_str().unwrap().to_string();
-    let account_id = body["account"]["account_id"].as_str().unwrap().to_string();
+    .await
+    .unwrap();
+    let access = jwt::sign(TEST_JWT_SECRET.as_bytes(), &account_id, &installation_id).unwrap();
     (access, account_id, installation_id)
 }
 
@@ -112,7 +118,7 @@ async fn host_link_unlink_list_round_trip() {
     let state = backend_state().await;
     let mut app = http::router(state.clone());
     let (access, account_id, desktop_id) =
-        register_desktop(&mut app, "host-link-roundtrip@example.com").await;
+        register_desktop(&state, "host-link-roundtrip@example.com").await;
     let auth = format!("Bearer {access}");
 
     let host = DeviceId::new();
@@ -208,7 +214,7 @@ async fn multi_host_list_for_account() {
     let state = backend_state().await;
     let mut app = http::router(state.clone());
     let (access, account_id, _) =
-        register_desktop(&mut app, "multi-host-list@example.com").await;
+        register_desktop(&state, "multi-host-list@example.com").await;
     let auth = format!("Bearer {access}");
 
     for (seed, name) in [(31_u8, "Mac A"), (32, "Mac B")] {
@@ -245,8 +251,8 @@ async fn multi_host_list_for_account() {
 #[tokio::test]
 async fn bad_proof_is_rejected() {
     let state = backend_state().await;
-    let mut app = http::router(state);
-    let (access, _, _) = register_desktop(&mut app, "bad-proof@example.com").await;
+    let mut app = http::router(state.clone());
+    let (access, _, _) = register_desktop(&state, "bad-proof@example.com").await;
     let auth = format!("Bearer {access}");
 
     let host_id = DeviceId::new().to_string();
@@ -276,8 +282,8 @@ async fn bad_proof_is_rejected() {
 async fn host_already_linked_elsewhere_returns_409() {
     let state = backend_state().await;
     let mut app = http::router(state.clone());
-    let (access_a, _, _) = register_desktop(&mut app, "elsewhere-a@example.com").await;
-    let (access_b, _, _) = register_desktop(&mut app, "elsewhere-b@example.com").await;
+    let (access_a, _, _) = register_desktop(&state, "elsewhere-a@example.com").await;
+    let (access_b, _, _) = register_desktop(&state, "elsewhere-b@example.com").await;
     let auth_a = format!("Bearer {access_a}");
     let auth_b = format!("Bearer {access_b}");
 
@@ -325,7 +331,7 @@ async fn same_account_re_link_rotates_token() {
     let state = backend_state().await;
     let mut app = http::router(state.clone());
     let (access, account_id, _) =
-        register_desktop(&mut app, "re-link-rotate@example.com").await;
+        register_desktop(&state, "re-link-rotate@example.com").await;
     let auth = format!("Bearer {access}");
 
     let host = DeviceId::new();
@@ -403,8 +409,8 @@ async fn same_account_re_link_rotates_token() {
 #[tokio::test]
 async fn invalid_nonce_is_rejected() {
     let state = backend_state().await;
-    let mut app = http::router(state);
-    let (access, _, _) = register_desktop(&mut app, "bad-nonce@example.com").await;
+    let mut app = http::router(state.clone());
+    let (access, _, _) = register_desktop(&state, "bad-nonce@example.com").await;
     let auth = format!("Bearer {access}");
 
     let host_id = DeviceId::new().to_string();

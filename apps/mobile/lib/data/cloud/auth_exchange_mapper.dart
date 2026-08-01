@@ -3,8 +3,6 @@ import 'package:minos/domain/minos_session.dart';
 /// Pure JSON → [MinosSession] mapping for auth endpoints that return the
 /// standard Minos token payload:
 /// - `POST /v1/auth/supabase`
-/// - `POST /v1/auth/login`
-/// - `POST /v1/auth/register`
 MinosSession mapAuthResponse(Object? json, {int? nowMs}) {
   if (json is! Map) {
     throw FormatException(

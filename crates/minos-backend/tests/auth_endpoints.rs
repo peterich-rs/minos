@@ -1,14 +1,18 @@
-//! Integration tests for `/v1/auth/{register,login,refresh,logout}`.
+//! Integration tests for `/v1/auth/{supabase,refresh,logout}`.
 //!
-//! Each test runs against a fresh in-memory SQLite via the
-//! `test_support::backend_state` helper. The helper seeds a deterministic
-//! `MINOS_JWT_SECRET` so token-binding assertions are stable.
+//! Password register/login endpoints are retired (404). Account creation
+//! goes through Supabase exchange with a synthetic HS256 JWT against
+//! `backend_state_with_supabase`.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use minos_backend::auth::jwt;
 use minos_backend::http;
-use minos_backend::http::test_support::{backend_state, TEST_JWT_SECRET};
+use minos_backend::http::test_support::{
+    backend_state, backend_state_with_supabase, TEST_JWT_SECRET, TEST_SUPABASE_AUD,
+    TEST_SUPABASE_HMAC, TEST_SUPABASE_ISS,
+};
 use serde_json::json;
 
 mod common;
@@ -48,41 +52,100 @@ fn browser_headers(device_id: &str) -> Vec<(&str, &str)> {
     ]
 }
 
-#[tokio::test]
-async fn auth_register_returns_access_and_refresh_tokens() {
-    let state = backend_state().await;
-    let mut app = http::router(state);
-    let device_id = uuid::Uuid::new_v4().to_string();
+fn mint_supabase_token(
+    sub: &str,
+    email: Option<&str>,
+    email_verified: bool,
+    exp_offset_secs: i64,
+) -> String {
+    let now = chrono::Utc::now().timestamp();
+    let mut claims = serde_json::json!({
+        "sub": sub,
+        "iss": TEST_SUPABASE_ISS,
+        "aud": TEST_SUPABASE_AUD,
+        "exp": now + exp_offset_secs,
+        "iat": now,
+        "email_verified": email_verified,
+    });
+    if let Some(email) = email {
+        claims["email"] = serde_json::json!(email);
+    }
+    encode(
+        &Header::new(Algorithm::HS256),
+        &claims,
+        &EncodingKey::from_secret(TEST_SUPABASE_HMAC),
+    )
+    .unwrap()
+}
+
+/// Create a Minos session via Supabase exchange; returns (access, refresh, account_id, email).
+async fn exchange_session(
+    app: &mut axum::Router,
+    headers: &[(&str, &str)],
+    sub: &str,
+    email: &str,
+) -> (String, String, String, String) {
+    let token = mint_supabase_token(sub, Some(email), true, 3600);
     let (status, body) = post_json(
-        &mut app,
-        "/v1/auth/register",
-        &ios_headers(&device_id),
-        json!({"email": "alice@example.com", "password": "testpass1"}),
+        app,
+        "/v1/auth/supabase",
+        headers,
+        json!({ "access_token": token }),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body={body}");
-    assert!(!body["access_token"].as_str().unwrap().is_empty());
-    assert!(!body["refresh_token"].as_str().unwrap().is_empty());
-    assert_eq!(body["account"]["email"], "alice@example.com");
-    assert!(body["expires_in"].as_i64().unwrap() > 0);
+    (
+        body["access_token"].as_str().unwrap().to_string(),
+        body["refresh_token"].as_str().unwrap().to_string(),
+        body["account"]["account_id"].as_str().unwrap().to_string(),
+        body["account"]["email"].as_str().unwrap().to_string(),
+    )
+}
+
+#[tokio::test]
+async fn retired_password_register_and_login_return_404() {
+    let state = backend_state().await;
+    let mut app = http::router(state);
+    let device_id = uuid::Uuid::new_v4().to_string();
+
+    for path in ["/v1/auth/register", "/v1/auth/login", "/v1/auth/change-password"] {
+        let (status, body) = post_json(
+            &mut app,
+            path,
+            &ios_headers(&device_id),
+            json!({"email": "a@example.com", "password": "testpass1"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "path={path} body={body}");
+    }
+}
+
+#[tokio::test]
+async fn auth_supabase_exchange_returns_access_and_refresh_tokens() {
+    let state = backend_state_with_supabase().await;
+    let mut app = http::router(state);
+    let device_id = uuid::Uuid::new_v4().to_string();
+    let (access, refresh, _account_id, email) =
+        exchange_session(&mut app, &ios_headers(&device_id), "sub-ios-1", "alice@example.com")
+            .await;
+    assert!(!access.is_empty());
+    assert!(!refresh.is_empty());
+    assert_eq!(email, "alice@example.com");
 }
 
 #[tokio::test]
 async fn auth_realtime_ws_ticket_returns_short_lived_browser_upgrade_token() {
-    let state = backend_state().await;
+    let state = backend_state_with_supabase().await;
     let mut app = http::router(state);
     let device_id = uuid::Uuid::new_v4().to_string();
 
-    let (status, body) = post_json(
+    let (access, _refresh, account_id, _) = exchange_session(
         &mut app,
-        "/v1/auth/register",
         &browser_headers(&device_id),
-        json!({"email": "browser@example.com", "password": "testpass1"}),
+        "sub-browser-1",
+        "browser@example.com",
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "body={body}");
-    let access = body["access_token"].as_str().unwrap().to_string();
-    let account_id = body["account"]["account_id"].as_str().unwrap().to_string();
 
     let auth_hdr = format!("Bearer {access}");
     let (status, body) = post_json(
@@ -107,29 +170,26 @@ async fn auth_realtime_ws_ticket_returns_short_lived_browser_upgrade_token() {
 
 #[tokio::test]
 async fn auth_realtime_ws_ticket_rejects_cross_account_device_rebind() {
-    let state = backend_state().await;
+    let state = backend_state_with_supabase().await;
     let mut app = http::router(state);
     let browser_device_id = uuid::Uuid::new_v4().to_string();
     let second_device_id = uuid::Uuid::new_v4().to_string();
 
-    let (status, body) = post_json(
+    let _ = exchange_session(
         &mut app,
-        "/v1/auth/register",
         &browser_headers(&browser_device_id),
-        json!({"email": "browser-a@example.com", "password": "testpass1"}),
+        "sub-browser-a",
+        "browser-a@example.com",
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "body={body}");
 
-    let (status, body) = post_json(
+    let (_access, _refresh, account_b, _) = exchange_session(
         &mut app,
-        "/v1/auth/register",
         &ios_headers(&second_device_id),
-        json!({"email": "browser-b@example.com", "password": "testpass1"}),
+        "sub-browser-b",
+        "browser-b@example.com",
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "body={body}");
-    let account_b = body["account"]["account_id"].as_str().unwrap().to_string();
 
     let cross_account_token =
         jwt::sign(TEST_JWT_SECRET.as_bytes(), &account_b, &browser_device_id).unwrap();
@@ -146,32 +206,28 @@ async fn auth_realtime_ws_ticket_rejects_cross_account_device_rebind() {
 }
 
 #[tokio::test]
-async fn auth_register_login_refresh_logout_happy_path() {
-    let state = backend_state().await;
+async fn auth_exchange_refresh_logout_happy_path() {
+    let state = backend_state_with_supabase().await;
     let mut app = http::router(state);
     let device_id = uuid::Uuid::new_v4().to_string();
 
-    let (status, body) = post_json(
+    let (_access, refresh, _, _) = exchange_session(
         &mut app,
-        "/v1/auth/register",
         &ios_headers(&device_id),
-        json!({"email": "happy@example.com", "password": "testpass1"}),
+        "sub-happy",
+        "happy@example.com",
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "body={body}");
-    let refresh = body["refresh_token"].as_str().unwrap().to_string();
-    assert!(!refresh.is_empty());
 
-    let (status, body) = post_json(
+    // Re-exchange (login again) mints a fresh refresh for this device.
+    let (_access2, new_refresh, _, _) = exchange_session(
         &mut app,
-        "/v1/auth/login",
         &ios_headers(&device_id),
-        json!({"email": "happy@example.com", "password": "testpass1"}),
+        "sub-happy",
+        "happy@example.com",
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "body={body}");
-    let new_refresh = body["refresh_token"].as_str().unwrap().to_string();
-    assert_ne!(new_refresh, refresh, "login mints a fresh refresh token");
+    assert_ne!(new_refresh, refresh, "re-exchange mints a fresh refresh token");
 
     let (status, body) = post_json(
         &mut app,
@@ -200,103 +256,69 @@ async fn auth_register_login_refresh_logout_happy_path() {
 }
 
 #[tokio::test]
-async fn auth_register_weak_password_returns_400() {
-    let state = backend_state().await;
-    let mut app = http::router(state);
+async fn auth_exchange_merges_verified_email_with_unbound_account() {
+    let state = backend_state_with_supabase().await;
+    let mut app = http::router(state.clone());
     let device_id = uuid::Uuid::new_v4().to_string();
+
+    let unbound = minos_backend::store::accounts::create(&state.store, "merge-me@example.com")
+        .await
+        .unwrap();
+
+    let token = mint_supabase_token("sub-merge-1", Some("merge-me@example.com"), true, 3600);
     let (status, body) = post_json(
         &mut app,
-        "/v1/auth/register",
-        &ios_headers(&device_id),
-        json!({"email": "bob@example.com", "password": "short"}),
+        "/v1/auth/supabase",
+        &browser_headers(&device_id),
+        json!({ "access_token": token }),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["error"]["code"], "weak_password");
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    assert_eq!(body["account"]["account_id"], unbound.account_id);
 }
 
 #[tokio::test]
-async fn auth_register_duplicate_email_returns_409() {
-    let state = backend_state().await;
+async fn auth_exchange_reuses_existing_sub() {
+    let state = backend_state_with_supabase().await;
     let mut app = http::router(state);
-    let device_id = uuid::Uuid::new_v4().to_string();
-    let _ = post_json(
+    let device_a = uuid::Uuid::new_v4().to_string();
+    let device_b = uuid::Uuid::new_v4().to_string();
+
+    let (_, _, account_a, _) = exchange_session(
         &mut app,
-        "/v1/auth/register",
-        &ios_headers(&device_id),
-        json!({"email": "dup@example.com", "password": "testpass1"}),
+        &ios_headers(&device_a),
+        "sub-reuse",
+        "reuse@example.com",
     )
     .await;
-    let device_id_b = uuid::Uuid::new_v4().to_string();
-    let (status, body) = post_json(
+    let (_, _, account_b, _) = exchange_session(
         &mut app,
-        "/v1/auth/register",
-        &ios_headers(&device_id_b),
-        json!({"email": "DUP@example.com", "password": "testpass1"}),
+        &ios_headers(&device_b),
+        "sub-reuse",
+        "reuse@example.com",
     )
     .await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(body["error"]["code"], "email_taken");
+    assert_eq!(account_a, account_b);
 }
 
 #[tokio::test]
-async fn auth_login_wrong_password_returns_401() {
-    let state = backend_state().await;
+async fn auth_exchange_revokes_existing_refresh_tokens_for_device() {
+    let state = backend_state_with_supabase().await;
     let mut app = http::router(state);
     let device_id = uuid::Uuid::new_v4().to_string();
-    let _ = post_json(
+    let (_, first_refresh, _, _) = exchange_session(
         &mut app,
-        "/v1/auth/register",
         &ios_headers(&device_id),
-        json!({"email": "wrong@example.com", "password": "testpass1"}),
+        "sub-rev",
+        "rev@example.com",
     )
     .await;
-    let (status, body) = post_json(
-        &mut app,
-        "/v1/auth/login",
-        &ios_headers(&device_id),
-        json!({"email": "wrong@example.com", "password": "different"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(body["error"]["code"], "invalid_credentials");
-}
 
-#[tokio::test]
-async fn auth_login_unknown_email_returns_401() {
-    let state = backend_state().await;
-    let mut app = http::router(state);
-    let device_id = uuid::Uuid::new_v4().to_string();
-    let (status, body) = post_json(
+    let _ = exchange_session(
         &mut app,
-        "/v1/auth/login",
         &ios_headers(&device_id),
-        json!({"email": "ghost@example.com", "password": "testpass1"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(body["error"]["code"], "invalid_credentials");
-}
-
-#[tokio::test]
-async fn auth_login_revokes_existing_refresh_tokens() {
-    let state = backend_state().await;
-    let mut app = http::router(state);
-    let device_id = uuid::Uuid::new_v4().to_string();
-    let (_, body) = post_json(
-        &mut app,
-        "/v1/auth/register",
-        &ios_headers(&device_id),
-        json!({"email": "rev@example.com", "password": "testpass1"}),
-    )
-    .await;
-    let first_refresh = body["refresh_token"].as_str().unwrap().to_string();
-
-    let _ = post_json(
-        &mut app,
-        "/v1/auth/login",
-        &ios_headers(&device_id),
-        json!({"email": "rev@example.com", "password": "testpass1"}),
+        "sub-rev",
+        "rev@example.com",
     )
     .await;
 
@@ -312,14 +334,11 @@ async fn auth_login_revokes_existing_refresh_tokens() {
 }
 
 #[tokio::test]
-async fn auth_login_keeps_other_iphone_ws_sessions_for_same_account() {
-    // Multi-device mode: when device B logs into the same account that
-    // device A is already logged into, A's live iOS WS session and refresh
-    // token remain valid.
+async fn auth_exchange_keeps_other_iphone_ws_sessions_for_same_account() {
     use minos_backend::session::SessionHandle;
     use minos_domain::{DeviceId, DeviceRole};
 
-    let state = backend_state().await;
+    let state = backend_state_with_supabase().await;
     let device_a_uuid = uuid::Uuid::new_v4();
     let device_b_uuid = uuid::Uuid::new_v4();
     let device_a_str = device_a_uuid.to_string();
@@ -328,41 +347,38 @@ async fn auth_login_keeps_other_iphone_ws_sessions_for_same_account() {
 
     let mut app = http::router(state.clone());
 
-    // Device A registers + acquires a session. Register also seeds
-    // accounts row + sets device_a.account_id.
-    let (status, body) = post_json(
+    let (_, device_a_refresh, account_id, _) = exchange_session(
         &mut app,
-        "/v1/auth/register",
         &ios_headers(&device_a_str),
-        json!({"email": "logout-displace@example.com", "password": "testpass1"}),
+        "sub-multi",
+        "logout-displace@example.com",
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "body={body}");
-    let account_id = body["account"]["account_id"].as_str().unwrap().to_string();
-    let device_a_refresh = body["refresh_token"].as_str().unwrap().to_string();
 
-    // Simulate device A's live WS by directly inserting a SessionHandle
-    // bound to the account. (The HTTP-only test app doesn't go through
-    // /ws/client, so we model the post-upgrade state manually.)
     let (handle_a, mut rx_a) = SessionHandle::new(device_a_id, DeviceRole::MobileClient);
     handle_a.set_account_id(account_id.clone());
     state.registry.insert(handle_a.clone());
     let a_revoked = handle_a.subscribe_revocation();
 
-    // Device B logs in with the same credentials. This should rotate only
-    // device B's own tokens and leave device A connected.
     let (status, _body) = post_json(
         &mut app,
-        "/v1/auth/login",
+        "/v1/auth/supabase",
         &ios_headers(&device_b_str),
-        json!({"email": "logout-displace@example.com", "password": "testpass1"}),
+        json!({
+            "access_token": mint_supabase_token(
+                "sub-multi",
+                Some("logout-displace@example.com"),
+                true,
+                3600,
+            )
+        }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
 
     assert!(
         state.registry.get(device_a_id).is_some(),
-        "device A's session must remain live after device B logs in",
+        "device A's session must remain live after device B exchanges",
     );
     assert_eq!(*a_revoked.borrow(), None, "device A must not be revoked");
     assert!(
@@ -384,20 +400,17 @@ async fn auth_login_keeps_other_iphone_ws_sessions_for_same_account() {
 
 #[tokio::test]
 async fn auth_refresh_with_revoked_token_returns_401() {
-    let state = backend_state().await;
+    let state = backend_state_with_supabase().await;
     let mut app = http::router(state);
     let device_id = uuid::Uuid::new_v4().to_string();
-    let (_, body) = post_json(
+    let (access, refresh, _, _) = exchange_session(
         &mut app,
-        "/v1/auth/register",
         &ios_headers(&device_id),
-        json!({"email": "rev2@example.com", "password": "testpass1"}),
+        "sub-rev2",
+        "rev2@example.com",
     )
     .await;
-    let access = body["access_token"].as_str().unwrap().to_string();
-    let refresh = body["refresh_token"].as_str().unwrap().to_string();
 
-    // Logout revokes the refresh token.
     let auth_hdr = format!("Bearer {access}");
     let _ = post_json(
         &mut app,
@@ -411,7 +424,6 @@ async fn auth_refresh_with_revoked_token_returns_401() {
     )
     .await;
 
-    // Subsequent refresh must fail.
     let (status, body) = post_json(
         &mut app,
         "/v1/auth/refresh",
@@ -425,19 +437,17 @@ async fn auth_refresh_with_revoked_token_returns_401() {
 
 #[tokio::test]
 async fn auth_refresh_rotation_old_token_invalidated() {
-    let state = backend_state().await;
+    let state = backend_state_with_supabase().await;
     let mut app = http::router(state);
     let device_id = uuid::Uuid::new_v4().to_string();
-    let (_, body) = post_json(
+    let (_, original_refresh, _, _) = exchange_session(
         &mut app,
-        "/v1/auth/register",
         &ios_headers(&device_id),
-        json!({"email": "rot@example.com", "password": "testpass1"}),
+        "sub-rot",
+        "rot@example.com",
     )
     .await;
-    let original_refresh = body["refresh_token"].as_str().unwrap().to_string();
 
-    // Rotate.
     let (status, body) = post_json(
         &mut app,
         "/v1/auth/refresh",
@@ -446,9 +456,7 @@ async fn auth_refresh_rotation_old_token_invalidated() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body={body}");
-    let _new_refresh = body["refresh_token"].as_str().unwrap().to_string();
 
-    // Reusing the original token must fail.
     let (status, body) = post_json(
         &mut app,
         "/v1/auth/refresh",
@@ -462,28 +470,26 @@ async fn auth_refresh_rotation_old_token_invalidated() {
 
 #[tokio::test]
 async fn auth_refresh_reuse_revokes_all_account_tokens_and_records_metric() {
-    let state = backend_state().await;
+    let state = backend_state_with_supabase().await;
     let mut app = http::router(state);
     let device_a = uuid::Uuid::new_v4().to_string();
     let device_b = uuid::Uuid::new_v4().to_string();
 
-    let (_, register_body) = post_json(
+    let (_, original_refresh, _, _) = exchange_session(
         &mut app,
-        "/v1/auth/register",
         &ios_headers(&device_a),
-        json!({"email": "reuse@example.com", "password": "testpass1"}),
+        "sub-reuse-refresh",
+        "reuse@example.com",
     )
     .await;
-    let original_refresh = register_body["refresh_token"].as_str().unwrap().to_string();
 
-    let (_, login_body) = post_json(
+    let (_, device_b_refresh, _, _) = exchange_session(
         &mut app,
-        "/v1/auth/login",
         &ios_headers(&device_b),
-        json!({"email": "reuse@example.com", "password": "testpass1"}),
+        "sub-reuse-refresh",
+        "reuse@example.com",
     )
     .await;
-    let device_b_refresh = login_body["refresh_token"].as_str().unwrap().to_string();
 
     let (status, refresh_body) = post_json(
         &mut app,
@@ -520,20 +526,17 @@ async fn auth_refresh_reuse_revokes_all_account_tokens_and_records_metric() {
 
 #[tokio::test]
 async fn auth_logout_revokes_only_current_refresh_token() {
-    let state = backend_state().await;
+    let state = backend_state_with_supabase().await;
     let mut app = http::router(state);
     let device_id = uuid::Uuid::new_v4().to_string();
-    let (_, reg) = post_json(
+    let (access, r1, _, _) = exchange_session(
         &mut app,
-        "/v1/auth/register",
         &ios_headers(&device_id),
-        json!({"email": "logout@example.com", "password": "testpass1"}),
+        "sub-logout",
+        "logout@example.com",
     )
     .await;
-    let r1 = reg["refresh_token"].as_str().unwrap().to_string();
-    let access = reg["access_token"].as_str().unwrap().to_string();
 
-    // Rotate to get a second active refresh token.
     let (_, rot) = post_json(
         &mut app,
         "/v1/auth/refresh",
@@ -543,7 +546,6 @@ async fn auth_logout_revokes_only_current_refresh_token() {
     .await;
     let r2 = rot["refresh_token"].as_str().unwrap().to_string();
 
-    // Refresh r1 again to confirm rotation already revoked it.
     let (status, _) = post_json(
         &mut app,
         "/v1/auth/refresh",
@@ -553,7 +555,6 @@ async fn auth_logout_revokes_only_current_refresh_token() {
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
-    // Logout revokes the current (r2) — but does not touch other accounts.
     let auth_hdr = format!("Bearer {access}");
     let (status, _body) = post_json(
         &mut app,
@@ -568,7 +569,6 @@ async fn auth_logout_revokes_only_current_refresh_token() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    // r2 must now also be invalid.
     let (status, body) = post_json(
         &mut app,
         "/v1/auth/refresh",
@@ -597,40 +597,28 @@ async fn auth_logout_without_bearer_returns_401() {
 }
 
 #[tokio::test]
-async fn auth_rate_limit_login_returns_429_with_retry_after() {
+async fn auth_rate_limit_exchange_returns_429_with_retry_after() {
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
 
-    let state = backend_state().await;
-    let mut app = http::router(state);
+    let state = backend_state_with_supabase().await;
+    let app = http::router(state);
     let device_id = uuid::Uuid::new_v4().to_string();
+    let token = mint_supabase_token("sub-rl", Some("rl@example.com"), true, 3600);
 
-    // Pre-register so the credentials check itself doesn't 401 fast.
-    let _ = post_json(
-        &mut app,
-        "/v1/auth/register",
-        &ios_headers(&device_id),
-        json!({"email": "rl@example.com", "password": "testpass1"}),
-    )
-    .await;
-
-    // Fire login 5 times: all should be allowed by the bucket. The 6th
-    // hits the per-IP limit and must return 429 with Retry-After.
+    // exchange_per_ip default is 3 / hour — 4th should 429.
     let ip = "203.0.113.7";
     let mut last_status: Option<StatusCode> = None;
     let mut last_retry_after: Option<String> = None;
-    for _ in 0..6 {
+    for i in 0..4 {
         let req = Request::builder()
             .method("POST")
-            .uri("/v1/auth/login")
+            .uri("/v1/auth/supabase")
             .header("content-type", "application/json")
             .header("x-device-id", &device_id)
             .header("x-device-role", "mobile-client")
             .header("x-forwarded-for", ip)
-            .body(json_body(json!({
-                "email": "rl@example.com",
-                "password": "testpass1"
-            })))
+            .body(json_body(json!({ "access_token": token })))
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
         last_status = Some(resp.status());
@@ -639,8 +627,11 @@ async fn auth_rate_limit_login_returns_429_with_retry_after() {
             .get("Retry-After")
             .and_then(|v| v.to_str().ok())
             .map(std::string::ToString::to_string);
-        // Drain body so the connection is reusable.
         let _ = resp.into_body().collect().await.unwrap().to_bytes();
+        // First three should succeed (same sub reuses account).
+        if i < 3 {
+            assert_eq!(last_status, Some(StatusCode::OK), "attempt {i}");
+        }
     }
 
     assert_eq!(last_status, Some(StatusCode::TOO_MANY_REQUESTS));
@@ -649,39 +640,6 @@ async fn auth_rate_limit_login_returns_429_with_retry_after() {
         .parse()
         .unwrap();
     assert!(retry >= 1, "retry-after must be >= 1");
-}
-
-// ── Supabase exchange ────────────────────────────────────────────────
-
-use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
-use minos_backend::http::test_support::{
-    backend_state_with_supabase, TEST_SUPABASE_AUD, TEST_SUPABASE_HMAC, TEST_SUPABASE_ISS,
-};
-
-fn mint_supabase_token(
-    sub: &str,
-    email: Option<&str>,
-    email_verified: bool,
-    exp_offset_secs: i64,
-) -> String {
-    let now = chrono::Utc::now().timestamp();
-    let mut claims = serde_json::json!({
-        "sub": sub,
-        "iss": TEST_SUPABASE_ISS,
-        "aud": TEST_SUPABASE_AUD,
-        "exp": now + exp_offset_secs,
-        "iat": now,
-        "email_verified": email_verified,
-    });
-    if let Some(email) = email {
-        claims["email"] = serde_json::json!(email);
-    }
-    encode(
-        &Header::new(Algorithm::HS256),
-        &claims,
-        &EncodingKey::from_secret(TEST_SUPABASE_HMAC),
-    )
-    .unwrap()
 }
 
 #[tokio::test]
@@ -702,35 +660,6 @@ async fn auth_supabase_exchange_creates_account_and_returns_minos_session() {
     assert_eq!(body["account"]["email"], "oidc@example.com");
     assert!(!body["access_token"].as_str().unwrap().is_empty());
     assert!(!body["refresh_token"].as_str().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn auth_supabase_exchange_merges_verified_email_with_password_account() {
-    let state = backend_state_with_supabase().await;
-    let mut app = http::router(state);
-    let device_id = uuid::Uuid::new_v4().to_string();
-
-    let (status, reg) = post_json(
-        &mut app,
-        "/v1/auth/register",
-        &browser_headers(&device_id),
-        json!({"email": "merge-me@example.com", "password": "testpass1"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "body={reg}");
-    let password_account_id = reg["account"]["account_id"].as_str().unwrap().to_string();
-
-    let other_device = uuid::Uuid::new_v4().to_string();
-    let token = mint_supabase_token("sub-merge-1", Some("merge-me@example.com"), true, 3600);
-    let (status, body) = post_json(
-        &mut app,
-        "/v1/auth/supabase",
-        &browser_headers(&other_device),
-        json!({ "access_token": token }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "body={body}");
-    assert_eq!(body["account"]["account_id"], password_account_id);
 }
 
 #[tokio::test]

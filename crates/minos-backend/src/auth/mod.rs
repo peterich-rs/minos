@@ -5,7 +5,6 @@ pub mod bearer;
 pub mod host_bootstrap;
 pub mod host_installation;
 pub mod jwt;
-pub mod passwords;
 pub mod rate_limit;
 pub mod realtime_ticket;
 pub mod supabase;

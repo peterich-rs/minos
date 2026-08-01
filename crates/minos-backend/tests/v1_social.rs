@@ -93,7 +93,7 @@ async fn register_and_update_agent_persist_workspace_path() {
     let state = backend_state().await;
     let mut app = router(state.clone());
 
-    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
         .await
         .unwrap();
     let alice_device = DeviceId::new();
@@ -301,10 +301,10 @@ async fn social_friend_and_chat_flow_round_trips() {
     let state = backend_state().await;
     let mut app = router(state.clone());
 
-    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
         .await
         .unwrap();
-    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com", "phc")
+    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com")
         .await
         .unwrap();
     let alice_device = DeviceId::new();
@@ -474,7 +474,7 @@ async fn conversation_command_aliases_list_and_send_message() {
     let state = backend_state().await;
     let mut app = router(state.clone());
 
-    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
         .await
         .unwrap();
     let alice_device = DeviceId::new();
@@ -538,10 +538,10 @@ async fn send_message_publishes_account_realtime_event_with_full_message() {
     let state = backend_state().await;
     let mut app = router(state.clone());
 
-    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
         .await
         .unwrap();
-    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com", "phc")
+    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com")
         .await
         .unwrap();
     let alice_device = DeviceId::new();
@@ -599,7 +599,7 @@ async fn delete_conversation_stops_running_agent_session_and_hides_for_caller() 
     let state = backend_state().await;
     let mut app = router(state.clone());
 
-    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
         .await
         .unwrap();
     let alice_device = DeviceId::new();
@@ -696,10 +696,10 @@ async fn delete_direct_conversation_hides_only_for_requesting_account() {
     let state = backend_state().await;
     let mut app = router(state.clone());
 
-    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
         .await
         .unwrap();
-    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com", "phc")
+    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com")
         .await
         .unwrap();
     let alice_device = DeviceId::new();
@@ -777,10 +777,10 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
     let state = backend_state().await;
     let mut app = router(state.clone());
 
-    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
         .await
         .unwrap();
-    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com", "phc")
+    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com")
         .await
         .unwrap();
     let alice_device = DeviceId::new();
@@ -1002,10 +1002,10 @@ async fn group_member_can_be_removed_by_existing_member() {
     let state = backend_state().await;
     let mut app = router(state.clone());
 
-    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
         .await
         .unwrap();
-    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com", "phc")
+    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com")
         .await
         .unwrap();
     let alice_device = DeviceId::new();
@@ -1053,7 +1053,7 @@ async fn direct_agent_conversation_auto_routes_and_reuses_reply_session() {
     let state = backend_state().await;
     let mut app = router(state.clone());
 
-    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
         .await
         .unwrap();
     let alice_device = DeviceId::new();
@@ -1200,10 +1200,10 @@ async fn group_reply_to_agent_message_reuses_session() {
     let mut app = router(state.clone());
 
     // Setup: alice owns the host, bob is a group member
-    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com", "phc")
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
         .await
         .unwrap();
-    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com", "phc")
+    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com")
         .await
         .unwrap();
     let alice_device = DeviceId::new();

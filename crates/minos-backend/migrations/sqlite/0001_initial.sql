@@ -1,14 +1,14 @@
 -- Canonical SQLite schema (latest-only).
 -- Incremental migration history has been collapsed; wipe local DBs on upgrade.
 
+-- Human accounts are IdP-bound via supabase_sub (no local password).
 CREATE TABLE accounts (
     account_id     TEXT PRIMARY KEY,
     email          TEXT NOT NULL UNIQUE COLLATE NOCASE,
     minos_id       TEXT,
     display_name   TEXT,
-    password_hash  TEXT NOT NULL,
-    -- Supabase Auth subject (JWT `sub`). NULL for password-only accounts
-    -- that have not yet been linked via OIDC exchange.
+    -- Supabase Auth subject (JWT `sub`). Required for new users via
+    -- POST /v1/auth/supabase exchange. NULL only for rare unbound fixtures.
     supabase_sub   TEXT,
     created_at     INTEGER NOT NULL,
     last_login_at  INTEGER

@@ -106,12 +106,6 @@ pub struct SetDisplayNameRequest {
     pub display_name: Option<String>,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct ChangePasswordRequest {
-    pub current_password: String,
-    pub new_password: String,
-}
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

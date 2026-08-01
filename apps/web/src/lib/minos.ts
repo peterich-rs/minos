@@ -524,30 +524,6 @@ async function requestJson<T>(
   return response.json() as Promise<T>
 }
 
-export async function registerBrowserAccount(
-  deviceId: string,
-  email: string,
-  password: string,
-): Promise<AuthResponse> {
-  return requestJson<AuthResponse>('/v1/auth/register', {
-    method: 'POST',
-    headers: deviceHeaders(deviceId),
-    body: JSON.stringify({ email, password }),
-  })
-}
-
-export async function loginBrowserAccount(
-  deviceId: string,
-  email: string,
-  password: string,
-): Promise<AuthResponse> {
-  return requestJson<AuthResponse>('/v1/auth/login', {
-    method: 'POST',
-    headers: deviceHeaders(deviceId),
-    body: JSON.stringify({ email, password }),
-  })
-}
-
 /** Exchange a Supabase access token for Minos access/refresh tokens. */
 export async function exchangeSupabaseSession(
   deviceId: string,

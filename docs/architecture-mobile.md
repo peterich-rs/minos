@@ -168,7 +168,7 @@ AuthBootstrapping → AuthUnauthenticated → AuthAuthenticated
 2. **优先路径（Supabase 已配置）**:
    - `supabase_flutter` email/password → Supabase access token
    - `MobileClient.loginWithSupabase` → `POST /v1/auth/supabase`（`X-Device-Id` + JWT body）
-3. **过渡路径（未配置 Supabase）**: `MinosCore.login/register` → `POST /v1/auth/login|register`
+3. **无过渡密码路径**: 未配置 Supabase 时 AuthRepository 直接失败（`SUPABASE_URL` / `ANON_KEY` 必填）
 4. 成功后存储 `AuthSession`（access_token, refresh_token, account info）到 Rust + Keychain
 5. Rust 发布 `AuthStateFrame::Authenticated`；Dart 映射为 `AuthAuthenticated`
 6. 首次 `Authenticated` 后 `resumePersistedSession()` 启动 `/ws/client`
@@ -179,7 +179,7 @@ AuthBootstrapping → AuthUnauthenticated → AuthAuthenticated
 | Define | 用途 |
 |--------|------|
 | `MINOS_BACKEND_URL` | ws(s)/http(s) hub；纯 Dart cloud client 归一化为 HTTP origin |
-| `SUPABASE_URL` | Supabase project URL（空 = 走 Minos password） |
+| `SUPABASE_URL` | Supabase project URL（必填；空则 AuthRepository 失败） |
 | `SUPABASE_ANON_KEY` | Supabase anon key |
 
 ### 持久化（iOS Keychain）

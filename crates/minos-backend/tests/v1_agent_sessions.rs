@@ -23,7 +23,7 @@ async fn paired_pair_with_account(
 
     let secret = minos_domain::DeviceSecret::generate();
 
-    let account = minos_backend::store::accounts::create(&state.store, email, "phc")
+    let account = minos_backend::store::accounts::create(&state.store, email)
         .await
         .unwrap();
     // host account_id stays NULL (kind=host CHECK)

@@ -72,12 +72,6 @@ pub enum BackendError {
     #[error("host already linked to another account")]
     HostLinkedElsewhere { host_installation_id: String },
 
-    /// An argon2id password hash / verify operation failed.
-    ///
-    /// Distinct from `PairingHash` so the auth rail and the pairing rail
-    /// can surface independent log/metric labels.
-    #[error("password hash error: {message}")]
-    PasswordHash { message: String },
 
     /// HS256 JWT signing failed (e.g. malformed key).
     #[error("jwt sign error: {message}")]

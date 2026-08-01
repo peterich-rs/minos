@@ -1,7 +1,6 @@
 //! HTTP client for the backend's `/v1/*` control plane.
 //!
-//! The mobile client uses this for account auth (password + Supabase
-//! exchange), linked-host discovery (`GET /v1/hosts`), host unlink
+//! The mobile client uses this for account auth (Supabase exchange), linked-host discovery (`GET /v1/hosts`), host unlink
 //! (`POST /v1/hosts/unlink`), and agent-session control-plane calls.
 //! Live event push still flows over the WebSocket.
 //!
@@ -16,7 +15,7 @@ use http::{Method, Request, Response, StatusCode};
 use minos_domain::{AgentName, DeviceId, MinosError};
 use minos_protocol::{
     AddAgentToGroupRequest, AddGroupMemberRequest, AgentSummary, ApprovalDecisionRequest,
-    AssignProjectThreadRequest, AuthRequest, AuthResponse, ConversationAgentMembersResponse,
+    AssignProjectThreadRequest, AuthResponse, ConversationAgentMembersResponse,
     ConversationMembersResponse, ConversationReadResponse, ConversationResponse,
     ConversationsResponse, CreateFriendRequestRequest, CreateGroupConversationRequest,
     CreateProjectRequest, CreateProjectResponse, DeleteProjectRequest,
@@ -1930,48 +1929,9 @@ impl MobileHttpClient {
 
     // ─────────────────────────── auth endpoints ───────────────────────────
 
-    /// `POST /v1/auth/register` — create an account on the backend.
-    /// Bearer-only post ADR-0020; the iOS rail no longer carries
-    /// `X-Device-Secret`. Spec §5.2.
-    pub async fn register(&self, email: &str, password: &str) -> Result<AuthResponse, MinosError> {
-        let url = format!("{}/v1/auth/register", self.base);
-        let trace_id = start_http_trace(
-            Method::POST.as_str(),
-            "/v1/auth/register",
-            None,
-            Some(format!("email={email}")),
-        );
-        let body = AuthRequest {
-            email: email.into(),
-            password: password.into(),
-        };
-        let request = self.request_with_json(Method::POST, &url, None, &body)?;
-        let resp = self.execute_with_trace(trace_id, &url, request).await?;
-        decode_auth_response(resp, trace_id).await
-    }
-
-    /// `POST /v1/auth/login` — authenticate an existing account.
-    /// Bearer-only post ADR-0020. Spec §5.2.
-    pub async fn login(&self, email: &str, password: &str) -> Result<AuthResponse, MinosError> {
-        let url = format!("{}/v1/auth/login", self.base);
-        let trace_id = start_http_trace(
-            Method::POST.as_str(),
-            "/v1/auth/login",
-            None,
-            Some(format!("email={email}")),
-        );
-        let body = AuthRequest {
-            email: email.into(),
-            password: password.into(),
-        };
-        let request = self.request_with_json(Method::POST, &url, None, &body)?;
-        let resp = self.execute_with_trace(trace_id, &url, request).await?;
-        decode_auth_response(resp, trace_id).await
-    }
-
     /// `POST /v1/auth/supabase` — exchange a Supabase access token for Minos
     /// access/refresh tokens. Requires `X-Device-Id` (always stamped by this
-    /// client); does not require a prior password account.
+    /// client).
     pub async fn exchange_supabase(
         &self,
         supabase_access_token: &str,
@@ -2529,7 +2489,6 @@ async fn decode_kind_error(resp: Response<ResponseBody>) -> MinosError {
         .unwrap_or("unknown")
         .to_string();
     match (parts.status.as_u16(), kind.as_str()) {
-        (400, "weak_password") => MinosError::WeakPassword,
         (401, "invalid_credentials") => MinosError::InvalidCredentials,
         (401, "invalid_refresh") => MinosError::AuthRefreshFailed {
             message: "invalid refresh token".into(),

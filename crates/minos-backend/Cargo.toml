@@ -20,7 +20,6 @@ tokio-tungstenite = { workspace = true }
 sqlx = { workspace = true }
 
 # auth
-argon2 = { workspace = true }
 jsonwebtoken = { workspace = true }
 sha2 = { workspace = true }
 subtle = { workspace = true }

@@ -181,19 +181,9 @@ abstract class MinosCoreProtocol {
 
   // ---- Auth (Phase 8) ----
 
-  /// Register a new account on the backend. On success the Rust core
-  /// surfaces `Authenticated` on [authStates] and starts the WS reconnect
-  /// loop.
-  Future<AuthSummary> register({
-    required String email,
-    required String password,
-  });
-
-  /// Log into an existing account. Same effect on [authStates] as
-  /// [register].
-  Future<AuthSummary> login({required String email, required String password});
-
-  /// Exchange a Supabase Auth access token for a Minos session (cloud IdP).
+  /// Exchange a Supabase Auth access token for a Minos session (only human
+  /// account create/login path). Surfaces `Authenticated` on [authStates]
+  /// and starts the WS reconnect loop.
   Future<AuthSummary> loginWithSupabase({required String supabaseAccessToken});
 
   /// Rotate the bearer + refresh tokens. Surfaces `Refreshing` /

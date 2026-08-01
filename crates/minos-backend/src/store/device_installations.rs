@@ -592,7 +592,7 @@ mod tests {
     #[tokio::test]
     async fn set_account_id_links_existing_device_to_account() {
         let pool = memory_pool().await;
-        let account = crate::store::accounts::create(&pool, "alice@example.com", "phc")
+        let account = crate::store::accounts::create(&pool, "alice@example.com")
             .await
             .unwrap();
         let id = DeviceId::new();
@@ -644,7 +644,7 @@ mod tests {
     #[tokio::test]
     async fn latest_mobile_for_account_ignores_browser_admin() {
         let pool = memory_pool().await;
-        let account = crate::store::accounts::create(&pool, "mobile-latest@example.com", "phc")
+        let account = crate::store::accounts::create(&pool, "mobile-latest@example.com")
             .await
             .unwrap();
         let older_mobile = DeviceId::new();
@@ -711,7 +711,7 @@ mod tests {
     #[tokio::test]
     async fn host_row_rejects_account_id_by_check() {
         let pool = memory_pool().await;
-        let account = crate::store::accounts::create(&pool, "host-bind@example.com", "phc")
+        let account = crate::store::accounts::create(&pool, "host-bind@example.com")
             .await
             .unwrap();
         let id = DeviceId::new();
@@ -736,7 +736,7 @@ mod tests {
     #[tokio::test]
     async fn insert_client_for_account_binds_account_atomically() {
         let pool = memory_pool().await;
-        let account = crate::store::accounts::create(&pool, "client-insert@example.com", "phc")
+        let account = crate::store::accounts::create(&pool, "client-insert@example.com")
             .await
             .unwrap();
         let id = DeviceId::new();
@@ -759,7 +759,7 @@ mod tests {
     #[tokio::test]
     async fn insert_client_for_account_rejects_host_role() {
         let pool = memory_pool().await;
-        let account = crate::store::accounts::create(&pool, "host-as-client@example.com", "phc")
+        let account = crate::store::accounts::create(&pool, "host-as-client@example.com")
             .await
             .unwrap();
         let err = insert_client_for_account(
@@ -802,7 +802,7 @@ mod tests {
         // account_id (Postgres CHECK). This asserts the CHECK-compliant
         // helper writes account_id in the same INSERT.
         let pool = memory_pool().await;
-        let account = crate::store::accounts::create(&pool, "exchange-shape@example.com", "phc")
+        let account = crate::store::accounts::create(&pool, "exchange-shape@example.com")
             .await
             .unwrap();
         let id = DeviceId::new();

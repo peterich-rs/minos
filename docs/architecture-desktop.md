@@ -8,7 +8,7 @@
 |----|-----|
 | 源码路径 | `apps/desktop/` |
 | 产品定位 | Host 本机指挥台（对标 TUI；可选云端账户 + Host Link 供手机/Web 远程） |
-| 当前阶段 | **Daemon-backed**：Tauri 宿主嵌 daemon；bootstrap 经 `daemonApi` 拉 projects / CLIs / live push。浏览器 `vite` 直开时 fallback mock 数据。**Account session**（Supabase email/password → `/v1/auth/supabase` exchange，或过渡期 Minos password）+ **Link this Mac**（daemon prepare/sign/apply + `POST /v1/hosts/link`）在 Host 页 |
+| 当前阶段 | **Daemon-backed**：Tauri 宿主嵌 daemon；bootstrap 经 `daemonApi` 拉 projects / CLIs / live push。浏览器 `vite` 直开时 fallback mock 数据。**Account session**（Supabase IdP → `/v1/auth/supabase` exchange；Supabase 必填）+ **Link this Mac**（daemon prepare/sign/apply + `POST /v1/hosts/link`）在 Host 页 |
 | 视觉 | 暖色多栏（参考 `res/desktop.jpeg` 气质，非客服 Inbox 语义） |
 | 产品 spec | [2026-07-18-desktop-product-experience.md](superpowers/specs/2026-07-18-desktop-product-experience.md) |
 | 状态拆分 spec | [2026-07-21-desktop-state-by-consumption.md](superpowers/specs/2026-07-21-desktop-state-by-consumption.md)（**P0–P4 done**；P5 cleanup reviewed；编码入口 §18） |

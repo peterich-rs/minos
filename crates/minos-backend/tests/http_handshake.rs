@@ -202,7 +202,7 @@ async fn ws_client_ticket_connect_emits_hello_frame() {
     use futures::StreamExt;
 
     let (base, _task, pool, auth) = spawn_relay().await;
-    let account_id = store::accounts::create(&pool, "handshake-client@example.com", "phc")
+    let account_id = store::accounts::create(&pool, "handshake-client@example.com")
         .await
         .unwrap()
         .account_id;
@@ -253,7 +253,7 @@ async fn devices_authenticated_connect_emits_hello_frame_when_peer_is_not_live()
     store::device_installations::insert_device(&pool, mac_id, "mac", DeviceRole::AgentHost, 0)
         .await
         .unwrap();
-    let account_id = store::accounts::create(&pool, "presence@example.com", "phc")
+    let account_id = store::accounts::create(&pool, "presence@example.com")
         .await
         .unwrap()
         .account_id;
@@ -303,7 +303,7 @@ async fn ws_client_rejects_host_ticket_with_401() {
 async fn ws_host_rejects_client_ticket_with_401() {
     let (base, _task, pool, auth) = spawn_relay().await;
 
-    let account_id = store::accounts::create(&pool, "wrong-rail@example.com", "phc")
+    let account_id = store::accounts::create(&pool, "wrong-rail@example.com")
         .await
         .unwrap()
         .account_id;
@@ -351,7 +351,7 @@ async fn ws_client_invalid_ticket_rejects_with_401() {
 async fn ws_client_reused_ticket_rejects_with_401() {
     let (base, _task, pool, auth) = spawn_relay().await;
 
-    let account_id = store::accounts::create(&pool, "reuse-ticket@example.com", "phc")
+    let account_id = store::accounts::create(&pool, "reuse-ticket@example.com")
         .await
         .unwrap()
         .account_id;

@@ -462,10 +462,9 @@ pub mod test_support {
     }
 
     /// Insert an account row via `store::accounts::create` and return the
-    /// generated `account_id`. Uses a stub PHC string so callers don't have
-    /// to thread argon2 through every store-test fixture.
+    /// generated `account_id`.
     pub async fn insert_account(pool: &SqlitePool, email: &str) -> String {
-        crate::store::accounts::create(pool, email, "phc-test")
+        crate::store::accounts::create(pool, email)
             .await
             .unwrap()
             .account_id

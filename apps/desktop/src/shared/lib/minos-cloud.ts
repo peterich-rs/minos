@@ -135,31 +135,6 @@ export async function exchangeSupabaseSession(
   });
 }
 
-/** Transitional Minos password login when Supabase env is unset. */
-export async function loginPassword(
-  deviceId: string,
-  email: string,
-  password: string,
-): Promise<AuthResponse> {
-  return requestJson<AuthResponse>("/v1/auth/login", {
-    method: "POST",
-    headers: deviceHeaders(deviceId),
-    body: JSON.stringify({ email, password }),
-  });
-}
-
-export async function registerPassword(
-  deviceId: string,
-  email: string,
-  password: string,
-): Promise<AuthResponse> {
-  return requestJson<AuthResponse>("/v1/auth/register", {
-    method: "POST",
-    headers: deviceHeaders(deviceId),
-    body: JSON.stringify({ email, password }),
-  });
-}
-
 export async function refreshSession(
   deviceId: string,
   refreshToken: string,

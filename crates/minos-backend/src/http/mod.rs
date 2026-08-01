@@ -207,20 +207,6 @@ const ROUTE_INVENTORY: &[RouteContract] = &[
     ),
     RouteContract::new(
         "POST",
-        "/v1/auth/register",
-        "/v1/auth/register",
-        "account_api",
-        "public",
-    ),
-    RouteContract::new(
-        "POST",
-        "/v1/auth/login",
-        "/v1/auth/login",
-        "account_api",
-        "public",
-    ),
-    RouteContract::new(
-        "POST",
         "/v1/auth/refresh",
         "/v1/auth/refresh",
         "account_api",
@@ -230,13 +216,6 @@ const ROUTE_INVENTORY: &[RouteContract] = &[
         "POST",
         "/v1/auth/logout",
         "/v1/auth/logout",
-        "account_api",
-        "account_bearer",
-    ),
-    RouteContract::new(
-        "POST",
-        "/v1/auth/change-password",
-        "/v1/auth/change-password",
         "account_api",
         "account_bearer",
     ),
@@ -1109,16 +1088,16 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
-                    .uri("/v1/auth/register")
+                    .uri("/v1/auth/supabase")
                     .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"email":"alice@example.com","password":"testpass1"}"#,
-                    ))
+                    .header("x-device-id", "00000000-0000-0000-0000-0000000000aa")
+                    .body(Body::from(r#"{"access_token":"not-a-jwt"}"#))
                     .expect("request builder"),
             )
             .await
             .unwrap();
-        assert_eq!(auth_route.status(), StatusCode::UNAUTHORIZED);
+        // No Supabase verifier in this fixture → not configured.
+        assert_eq!(auth_route.status(), StatusCode::SERVICE_UNAVAILABLE);
 
         let host_nonce_route = app
             .clone()

@@ -35,7 +35,7 @@ async fn formal_project_routes_expose_canonical_conversation_and_agent_session_f
     let mut app = router(state.clone());
 
     let account =
-        minos_backend::store::accounts::create(&state.store, "projects-formal@example.com", "phc")
+        minos_backend::store::accounts::create(&state.store, "projects-formal@example.com")
             .await
             .unwrap();
     let device_id = DeviceId::new();

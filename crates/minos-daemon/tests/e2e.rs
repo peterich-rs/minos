@@ -217,7 +217,7 @@ async fn register_formal_host(relay: &Relay, host_id: DeviceId) -> anyhow::Resul
     )
     .await?;
     let account =
-        store::accounts::create(&relay.state.store, "relay-e2e@example.com", "phc").await?;
+        store::accounts::create(&relay.state.store, "relay-e2e@example.com").await?;
     let mobile_id = DeviceId::new();
     store::device_installations::insert_device(
         &relay.state.store,

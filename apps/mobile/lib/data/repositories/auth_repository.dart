@@ -40,36 +40,38 @@ class AuthRepository {
     return _core.resumePersistedSession();
   }
 
-  /// Prefer Supabase IdP → Minos exchange when configured; otherwise Minos
-  /// password register (transitional).
+  void _requireSupabase() {
+    if (!isSupabaseConfigured) {
+      throw StateError(
+        'Supabase is required for Minos account auth. '
+        'Set SUPABASE_URL and SUPABASE_ANON_KEY (dart-defines) before login/register.',
+      );
+    }
+  }
+
+  /// Supabase IdP sign-up → Minos `POST /v1/auth/supabase` exchange.
   Future<void> register(String email, String password) async {
-    if (isSupabaseConfigured) {
-      final token = await _supabase.signUpWithPassword(
-        email: email,
-        password: password,
-      );
-      await _core.loginWithSupabase(supabaseAccessToken: token);
-      return;
-    }
-    await _core.register(email: email, password: password);
+    _requireSupabase();
+    final token = await _supabase.signUpWithPassword(
+      email: email,
+      password: password,
+    );
+    await _core.loginWithSupabase(supabaseAccessToken: token);
   }
 
-  /// Prefer Supabase IdP → Minos exchange when configured; otherwise Minos
-  /// password login (transitional).
+  /// Supabase IdP sign-in → Minos exchange.
   Future<void> login(String email, String password) async {
-    if (isSupabaseConfigured) {
-      final token = await _supabase.signInWithPassword(
-        email: email,
-        password: password,
-      );
-      await _core.loginWithSupabase(supabaseAccessToken: token);
-      return;
-    }
-    await _core.login(email: email, password: password);
+    _requireSupabase();
+    final token = await _supabase.signInWithPassword(
+      email: email,
+      password: password,
+    );
+    await _core.loginWithSupabase(supabaseAccessToken: token);
   }
 
-  /// Explicit Supabase-token exchange (for future OAuth deep-link path).
+  /// Explicit Supabase-token exchange (OAuth deep-link path).
   Future<void> loginWithSupabaseToken(String supabaseAccessToken) {
+    _requireSupabase();
     return _core.loginWithSupabase(supabaseAccessToken: supabaseAccessToken);
   }
 

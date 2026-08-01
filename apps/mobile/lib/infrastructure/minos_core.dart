@@ -58,7 +58,7 @@ class MinosCore implements MinosCoreProtocol {
   /// AuthController's stream listener will trigger the WS resume after
   /// the user logs in (`AuthAuthenticated`).
   ///
-  /// Auth-only snapshots are valid too: login/register happens before QR
+  /// Auth-only snapshots are valid too: exchange happens before QR
   /// pairing, so cold launch must keep the bearer tuple and stable device id.
   @visibleForTesting
   static Future<MobileClient> resolveClient({
@@ -375,25 +375,7 @@ class MinosCore implements MinosCoreProtocol {
   // ---- Auth forwarders ----
 
   @override
-  Future<AuthSummary> register({
-    required String email,
-    required String password,
-  }) async {
-    final summary = await _client.register(email: email, password: password);
-    await _onAuthLanded(summary.accountId);
-    return summary;
-  }
-
   @override
-  Future<AuthSummary> login({
-    required String email,
-    required String password,
-  }) async {
-    final summary = await _client.login(email: email, password: password);
-    await _onAuthLanded(summary.accountId);
-    return summary;
-  }
-
   @override
   Future<AuthSummary> loginWithSupabase({
     required String supabaseAccessToken,
@@ -422,7 +404,7 @@ class MinosCore implements MinosCoreProtocol {
 
   /// Post-auth persistence (Phase 11.3 + ADR-0020).
   ///
-  /// After a successful `register` / `login` we mirror the freshly minted
+  /// After a successful Supabase exchange we mirror the freshly minted
   /// auth tuple from the Rust core into the Dart keychain so a cold
   /// relaunch can rehydrate `auth_session` synchronously and the
   /// AuthController's first frame is already `Authenticated`.

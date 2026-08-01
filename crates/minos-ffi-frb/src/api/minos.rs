@@ -585,25 +585,8 @@ impl MobileClient {
 
     // ─────────────────────────── account auth ──────────────────────────────
 
-    /// Register a new account on the backend. On success the bearer +
-    /// refresh tokens are held in memory and surfaced via the auth-state
-    /// stream; the reconnect loop then drives the WS back to `Connected`.
-    pub async fn register(
-        &self,
-        email: String,
-        password: String,
-    ) -> Result<AuthSummary, MinosError> {
-        self.0.register(email, password).await
-    }
-
-    /// Log into an existing account on the backend. Same shape as
-    /// `register` modulo the create-vs-find behaviour on the server.
-    pub async fn login(&self, email: String, password: String) -> Result<AuthSummary, MinosError> {
-        self.0.login(email, password).await
-    }
-
     /// Exchange a Supabase access token for Minos access/refresh tokens and
-    /// adopt the resulting session (same local effects as [`Self::login`]).
+    /// adopt the resulting session.
     pub async fn login_with_supabase(
         &self,
         supabase_access_token: String,
