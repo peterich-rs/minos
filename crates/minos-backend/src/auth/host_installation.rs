@@ -8,7 +8,7 @@ use axum::http::{HeaderMap, StatusCode};
 use minos_domain::{DeviceId, DeviceRole};
 
 use crate::http::BackendState;
-use crate::store::{devices, host_installation_tokens};
+use crate::store::{device_installations, host_installation_tokens};
 
 #[derive(Debug, Clone)]
 pub struct HostInstallationPrincipal {
@@ -53,7 +53,7 @@ pub async fn require(
     .map_err(|error| HostInstallationAuthError::Internal(error.to_string()))?
     .ok_or(HostInstallationAuthError::Invalid)?;
 
-    let host = devices::get_device(&state.store, row.host_installation_id)
+    let host = device_installations::get_device(&state.store, row.host_installation_id)
         .await
         .map_err(|error| HostInstallationAuthError::Internal(error.to_string()))?
         .ok_or(HostInstallationAuthError::Invalid)?;

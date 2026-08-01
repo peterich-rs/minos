@@ -379,9 +379,7 @@ async fn select_live_host_for_account(
     state: &BackendState,
     account_id: &str,
 ) -> Result<minos_domain::DeviceId, crate::error::BackendError> {
-    let hosts =
-        crate::store::account_host_pairings::list_hosts_for_account(&state.store, account_id)
-            .await?;
+    let hosts = crate::store::host_links::list_hosts_for_account(&state.store, account_id).await?;
     for host in hosts {
         if state.registry.get(host.host_device_id).is_some() {
             return Ok(host.host_device_id);

@@ -63,7 +63,7 @@ async fn formal_project_routes_expose_canonical_conversation_and_agent_session_f
     .await
     .unwrap();
     let host_device_id = DeviceId::new();
-    minos_backend::store::devices::insert_device(
+    minos_backend::store::device_installations::insert_device(
         &state.store,
         host_device_id,
         "Mac",
@@ -72,10 +72,30 @@ async fn formal_project_routes_expose_canonical_conversation_and_agent_session_f
     )
     .await
     .unwrap();
-    minos_backend::store::devices::set_account_id(
+    // Host keeps account_id NULL; link via host_links (account ↔ host).
+    let mobile = DeviceId::new();
+    minos_backend::store::device_installations::insert_device(
         &state.store,
-        &host_device_id,
+        mobile,
+        "iPhone",
+        DeviceRole::MobileClient,
+        999,
+    )
+    .await
+    .unwrap();
+    minos_backend::store::device_installations::set_account_id(
+        &state.store,
+        &mobile,
         &account.account_id,
+    )
+    .await
+    .unwrap();
+    minos_backend::store::host_links::insert_pair(
+        &state.store,
+        host_device_id,
+        &account.account_id,
+        mobile,
+        999,
     )
     .await
     .unwrap();

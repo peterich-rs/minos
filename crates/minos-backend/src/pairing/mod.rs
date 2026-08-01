@@ -1,6 +1,6 @@
 //! Backend-side pairing service: token issuance and token consumption.
 //!
-//! Sits on top of `store::{devices, tokens}` and layers the business
+//! Sits on top of `store::{device_installations, tokens}` and layers the business
 //! rules of spec §6.1 / §7 onto the CRUD:
 //!
 //! 1. Request — the Mac host asks for a fresh 5-minute token, which is
@@ -46,7 +46,7 @@ use crate::{
     error::BackendError,
     session::{SessionRegistry, SessionRevocation},
     store::{
-        account_host_pairings, devices, host_installation_tokens, pairing_codes, tokens,
+        device_installations, host_installation_tokens, host_links, pairing_codes, tokens,
         AsStorePool, StoreHandle, StorePoolRef,
     },
 };
@@ -140,7 +140,7 @@ impl PairingService {
     ///   example an FK violation if `issuer` has not been inserted yet).
     pub async fn request_token(
         &self,
-        issuer: DeviceId,
+        issuer: DeviceId, // host no longer bound via account_id
         ttl: Duration,
     ) -> Result<(PairingToken, DateTime<Utc>), BackendError> {
         let result = self.request_token_inner(issuer, ttl).await;
@@ -150,7 +150,7 @@ impl PairingService {
 
     async fn request_token_inner(
         &self,
-        issuer: DeviceId,
+        issuer: DeviceId, // host no longer bound via account_id
         ttl: Duration,
     ) -> Result<(PairingToken, DateTime<Utc>), BackendError> {
         let now = Utc::now();
@@ -273,7 +273,7 @@ impl PairingService {
                     if updated != 1 {
                         return Err(FormalPairingError::PairingCodeInvalid);
                     }
-                    account_host_pairings::insert_pair_with_executor(
+                    host_links::insert_pair_with_executor(
                         &mut *tx,
                         row.host_installation_id,
                         account_id,
@@ -293,7 +293,7 @@ impl PairingService {
                             actual: "confirmed_by_different_account".to_string(),
                         });
                     }
-                    account_host_pairings::insert_pair_with_executor(
+                    host_links::insert_pair_with_executor(
                         &mut *tx,
                         row.host_installation_id,
                         account_id,
@@ -379,7 +379,7 @@ impl PairingService {
                     if updated != 1 {
                         return Err(FormalPairingError::PairingCodeInvalid);
                     }
-                    account_host_pairings::insert_pair_with_postgres_executor(
+                    host_links::insert_pair_with_postgres_executor(
                         &mut *tx,
                         row.host_installation_id,
                         account_id,
@@ -399,7 +399,7 @@ impl PairingService {
                             actual: "confirmed_by_different_account".to_string(),
                         });
                     }
-                    account_host_pairings::insert_pair_with_postgres_executor(
+                    host_links::insert_pair_with_postgres_executor(
                         &mut *tx,
                         row.host_installation_id,
                         account_id,
@@ -663,24 +663,18 @@ impl PairingService {
         })?;
 
         let result: Result<Option<FormalRevokeOutcome>, FormalPairingError> = async {
-            let deleted = account_host_pairings::delete_pair_with_executor(
-                &mut *tx,
-                host_installation_id,
-                account_id,
-            )
-            .await
-            .map_err(FormalPairingError::Internal)?;
+            let deleted =
+                host_links::delete_pair_with_executor(&mut *tx, host_installation_id, account_id)
+                    .await
+                    .map_err(FormalPairingError::Internal)?;
             if deleted == 0 {
                 return Ok(None);
             }
 
             let remaining_link_count =
-                account_host_pairings::count_accounts_for_host_with_executor(
-                    &mut *tx,
-                    host_installation_id,
-                )
-                .await
-                .map_err(FormalPairingError::Internal)?;
+                host_links::count_accounts_for_host_with_executor(&mut *tx, host_installation_id)
+                    .await
+                    .map_err(FormalPairingError::Internal)?;
             let revoked_token_count = if remaining_link_count == 0 {
                 host_installation_tokens::revoke_all_for_host_with_executor(
                     &mut *tx,
@@ -753,7 +747,7 @@ impl PairingService {
             .map_err(FormalPairingError::Internal)?;
 
         let result: Result<Option<FormalRevokeOutcome>, FormalPairingError> = async {
-            let deleted = account_host_pairings::delete_pair_with_postgres_executor(
+            let deleted = host_links::delete_pair_with_postgres_executor(
                 &mut *tx,
                 host_installation_id,
                 account_id,
@@ -764,13 +758,12 @@ impl PairingService {
                 return Ok(None);
             }
 
-            let remaining_link_count =
-                account_host_pairings::count_accounts_for_host_with_postgres_executor(
-                    &mut *tx,
-                    host_installation_id,
-                )
-                .await
-                .map_err(FormalPairingError::Internal)?;
+            let remaining_link_count = host_links::count_accounts_for_host_with_postgres_executor(
+                &mut *tx,
+                host_installation_id,
+            )
+            .await
+            .map_err(FormalPairingError::Internal)?;
             let revoked_token_count = if remaining_link_count == 0 {
                 host_installation_tokens::revoke_all_for_host_with_postgres_executor(
                     &mut *tx,
@@ -887,17 +880,16 @@ impl PairingService {
             }
 
             let issuer_secret = DeviceSecret::generate();
-            let issuer_hash = secret::hash_secret(&issuer_secret)?;
 
             tokens::consume_token_with_executor(&mut *tx, &digest, now)
                 .await?
                 .ok_or(BackendError::PairingTokenInvalid)?;
 
-            if devices::get_device_with_executor(&mut *tx, consumer)
+            if device_installations::get_device_with_executor(&mut *tx, consumer)
                 .await?
                 .is_none()
             {
-                devices::insert_device_with_executor(
+                device_installations::insert_device_with_executor(
                     &mut *tx,
                     consumer,
                     &consumer_name,
@@ -906,9 +898,6 @@ impl PairingService {
                 )
                 .await?;
             }
-
-            // iOS row stays at secret_hash = NULL per ADR-0020.
-            devices::upsert_secret_hash_with_executor(&mut *tx, issuer, &issuer_hash).await?;
 
             Ok(PairingOutcome {
                 issuer_device_id: issuer,
@@ -973,7 +962,7 @@ impl PairingService {
         };
 
         let issuer_id = pairing_outcome.issuer_device_id;
-        if let Err(error) = account_host_pairings::insert_pair(
+        if let Err(error) = host_links::insert_pair(
             &self.pool,
             issuer_id,
             account_id,
@@ -994,7 +983,7 @@ impl PairingService {
             return Err(ConsumePairingError::Internal(error));
         }
 
-        let mac_name = match devices::get_device(&self.pool, issuer_id).await {
+        let mac_name = match device_installations::get_device(&self.pool, issuer_id).await {
             Ok(Some(row)) => row.display_name,
             _ => "Mac".to_string(),
         };
@@ -1050,8 +1039,7 @@ impl PairingService {
         host_device_id: DeviceId,
         account_id: &str,
     ) -> Result<bool, BackendError> {
-        let deleted =
-            account_host_pairings::delete_pair(&self.pool, host_device_id, account_id).await?;
+        let deleted = host_links::delete_pair(&self.pool, host_device_id, account_id).await?;
         let _ = crate::ingest::invalidate_peer_targets_for_host(host_device_id).await;
 
         if deleted == 0 {
@@ -1074,16 +1062,16 @@ impl PairingService {
     async fn link_account_to_pair_devices(
         &self,
         consumer: DeviceId,
-        issuer: DeviceId,
+        _issuer: DeviceId,
         account_id: &str,
     ) -> Result<(), BackendError> {
-        devices::set_account_id(&self.pool, &consumer, account_id).await?;
-        devices::set_account_id(&self.pool, &issuer, account_id).await?;
+        // Host stays account_id NULL (installation_kind CHECK); link via host_links.
+        device_installations::set_account_id(&self.pool, &consumer, account_id).await?;
         Ok(())
     }
 
     async fn compensate_pairing(&self, issuer_id: DeviceId, account_id: &str) {
-        let _ = account_host_pairings::delete_pair(&self.pool, issuer_id, account_id).await;
+        let _ = host_links::delete_pair(&self.pool, issuer_id, account_id).await;
         let _ = crate::ingest::invalidate_peer_targets_for_host(issuer_id).await;
     }
 }
@@ -1173,7 +1161,7 @@ mod tests {
 
     async fn mac_issuer(pool: &SqlitePool) -> DeviceId {
         let id = DeviceId::new();
-        devices::insert_device(
+        device_installations::insert_device(
             pool,
             id,
             "alice's mac",
@@ -1231,19 +1219,16 @@ mod tests {
         // Issuer secret is non-empty (Base64URL of 32 bytes → 43 chars).
         assert_eq!(outcome.issuer_secret.as_str().len(), 43);
 
-        // Mac-side: secret_hash IS Some(_) and round-trips through verify.
-        let issuer_hash = devices::get_secret_hash(&pool, issuer).await.unwrap();
-        assert!(issuer_hash.is_some(), "Mac issuer must have secret_hash");
-        assert!(
-            secret::verify_secret(outcome.issuer_secret.as_str(), &issuer_hash.unwrap()).unwrap()
-        );
-
-        // iOS-side: secret_hash IS NULL per ADR-0020 (bearer-only rail).
-        let consumer_hash = devices::get_secret_hash(&pool, consumer).await.unwrap();
-        assert!(
-            consumer_hash.is_none(),
-            "iOS row must keep secret_hash NULL per ADR-0020"
-        );
+        // secret_hash column removed; still mint issuer_secret for legacy event payload.
+        assert!(device_installations::get_device(&pool, issuer)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(device_installations::get_device(&pool, consumer)
+            .await
+            .unwrap()
+            .is_some());
+        let _ = outcome.issuer_secret;
     }
 
     // ── integration: token invalid cases ───────────────────────────────
@@ -1320,8 +1305,10 @@ mod tests {
             other => panic!("expected PairingStateMismatch, got {other:?}"),
         }
 
-        // Token still usable; issuer's secret_hash still NULL.
-        assert_eq!(devices::get_secret_hash(&pool, issuer).await.unwrap(), None);
+        // Token still usable; secret_hash rail removed (issuer row may or may not exist yet).
+        let _ = device_installations::get_device(&pool, issuer)
+            .await
+            .unwrap();
 
         let consumer = DeviceId::new();
         let outcome = svc
@@ -1329,7 +1316,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(outcome.issuer_device_id, issuer);
-        assert!(devices::get_secret_hash(&pool, issuer)
+        assert!(device_installations::get_device(&pool, issuer)
             .await
             .unwrap()
             .is_some());

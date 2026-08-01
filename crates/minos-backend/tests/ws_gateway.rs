@@ -153,7 +153,14 @@ async fn seed_client_account(relay: &Relay, email: &str) -> anyhow::Result<(Stri
 
 async fn seed_host(relay: &Relay) -> anyhow::Result<DeviceId> {
     let host_id = DeviceId::new();
-    store::devices::insert_device(&relay.pool, host_id, "Mac", DeviceRole::AgentHost, 0).await?;
+    store::device_installations::insert_device(
+        &relay.pool,
+        host_id,
+        "Mac",
+        DeviceRole::AgentHost,
+        0,
+    )
+    .await?;
     Ok(host_id)
 }
 
@@ -266,8 +273,7 @@ async fn client_subscribe_replays_agent_session_durable_events() -> anyhow::Resu
         100,
     )
     .await?;
-    store::account_host_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
-        .await?;
+    store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
 
     let output = seed_session(
         &relay,
@@ -491,8 +497,7 @@ async fn host_replays_durable_command_and_accepts_ack_result() -> anyhow::Result
         100,
     )
     .await?;
-    store::account_host_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
-        .await?;
+    store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
 
     let output = seed_session(
         &relay,
@@ -696,8 +701,7 @@ async fn host_stream_event_persists_slice_and_fanouts_to_subscribed_client() -> 
         100,
     )
     .await?;
-    store::account_host_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
-        .await?;
+    store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
 
     let output = seed_session(
         &relay,
@@ -790,8 +794,7 @@ async fn orphan_raw_host_stream_event_does_not_create_legacy_conversation() -> a
     let relay = spawn_relay().await?;
     let (account_id, phone_id) = seed_client_account(&relay, "ws-raw-orphan@example.com").await?;
     let host_id = seed_host(&relay).await?;
-    store::account_host_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
-        .await?;
+    store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
 
     let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
     let mut host_ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
@@ -836,8 +839,7 @@ async fn raw_host_stream_event_updates_formal_turn_cold_replay() -> anyhow::Resu
         .await?
         .account_id;
     let host_id = seed_host(&relay).await?;
-    store::account_host_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
-        .await?;
+    store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
     let members = vec![bob];
     let conversation = store::social::create_group_conversation(
         &relay.pool,
@@ -1007,8 +1009,7 @@ async fn live_durable_events_flow_from_outbox_to_subscribed_host_and_client() ->
         100,
     )
     .await?;
-    store::account_host_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
-        .await?;
+    store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
 
     let output = seed_session(
         &relay,

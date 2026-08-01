@@ -14,7 +14,7 @@ use minos_mobile::http::MobileHttpClient;
 async fn pair_confirm_round_trips_against_real_backend() {
     let state = backend_state().await;
     let mac_id = DeviceId::new();
-    minos_backend::store::devices::insert_device(
+    minos_backend::store::device_installations::insert_device(
         &state.store,
         mac_id,
         "Mac",
@@ -91,7 +91,7 @@ async fn auth_register_round_trips_against_real_backend() {
     assert!(!resp.refresh_token.is_empty());
     assert!(resp.expires_in > 0);
 
-    let row = minos_backend::store::devices::get_device(&state.store, device_id)
+    let row = minos_backend::store::device_installations::get_device(&state.store, device_id)
         .await
         .unwrap()
         .unwrap();

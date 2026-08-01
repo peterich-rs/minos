@@ -620,14 +620,14 @@ impl AuthUseCase {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .unwrap_or("unnamed");
-        let existing = crate::store::devices::get_device(&self.store, *device_id)
+        let existing = crate::store::device_installations::get_device(&self.store, *device_id)
             .await
             .map_err(|error| Self::log_internal("supabase.get_device", error))?;
 
         match existing {
             None => {
                 let now = chrono::Utc::now().timestamp_millis();
-                crate::store::devices::insert_device(
+                crate::store::device_installations::insert_device(
                     &self.store,
                     *device_id,
                     display_name,
@@ -815,10 +815,11 @@ impl AuthUseCase {
             return Err(AuthUseCaseError::UnsupportedWsTicketRole);
         }
 
-        let existing_account_id = crate::store::devices::get_device(&self.store, device_id)
-            .await
-            .map_err(|error| Self::log_internal("ws_ticket.get_device", error))?
-            .and_then(|row| row.account_id);
+        let existing_account_id =
+            crate::store::device_installations::get_device(&self.store, device_id)
+                .await
+                .map_err(|error| Self::log_internal("ws_ticket.get_device", error))?
+                .and_then(|row| row.account_id);
         match existing_account_id.as_deref() {
             Some(bound_account_id) if bound_account_id != account_id => {
                 tracing::warn!(
@@ -922,12 +923,13 @@ impl AuthUseCase {
         device_id: &DeviceId,
         account_id: &str,
     ) -> Result<(), AuthUseCaseError> {
-        let previous_account_id = crate::store::devices::get_device(&self.store, *device_id)
-            .await
-            .map_err(|error| Self::log_internal("bind_device.get_device", error))?
-            .and_then(|device| device.account_id);
+        let previous_account_id =
+            crate::store::device_installations::get_device(&self.store, *device_id)
+                .await
+                .map_err(|error| Self::log_internal("bind_device.get_device", error))?
+                .and_then(|device| device.account_id);
 
-        crate::store::devices::set_account_id(&self.store, device_id, account_id)
+        crate::store::device_installations::set_account_id(&self.store, device_id, account_id)
             .await
             .map_err(|error| Self::log_internal("bind_device.set_account_id", error))?;
 

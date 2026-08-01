@@ -3,7 +3,7 @@ use axum::http::{Request, StatusCode};
 use minos_backend::auth::jwt;
 use minos_backend::http;
 use minos_backend::http::test_support::{backend_state, TEST_JWT_SECRET};
-use minos_backend::store::{account_host_pairings, devices};
+use minos_backend::store::{device_installations, host_links};
 use minos_domain::{DeviceId, DeviceRole};
 use serde_json::json;
 
@@ -52,7 +52,7 @@ async fn formal_realtime_ws_ticket_uses_account_bearer_without_device_headers() 
     let device_id = uuid::Uuid::parse_str(&installation_id)
         .map(DeviceId)
         .unwrap();
-    devices::touch_last_seen(&state.store, &device_id, 100)
+    device_installations::touch_last_seen(&state.store, &device_id, 100)
         .await
         .unwrap();
 
@@ -76,7 +76,7 @@ async fn formal_realtime_ws_ticket_uses_account_bearer_without_device_headers() 
     let claims = jwt::verify_ws_ticket(TEST_JWT_SECRET.as_bytes(), ticket).unwrap();
     assert_eq!(claims.sub, account_id);
     assert_eq!(claims.did, installation_id);
-    let row = devices::get_device(&state.store, device_id)
+    let row = device_installations::get_device(&state.store, device_id)
         .await
         .unwrap()
         .unwrap();
@@ -93,10 +93,16 @@ async fn formal_pairing_list_hosts_uses_account_bearer_without_device_headers() 
     let host = DeviceId::new();
     let mobile = DeviceId::new();
 
-    devices::insert_device(&state.store, host, "Mac Studio", DeviceRole::AgentHost, 100)
-        .await
-        .unwrap();
-    devices::insert_device(
+    device_installations::insert_device(
+        &state.store,
+        host,
+        "Mac Studio",
+        DeviceRole::AgentHost,
+        100,
+    )
+    .await
+    .unwrap();
+    device_installations::insert_device(
         &state.store,
         mobile,
         "iPhone",
@@ -105,10 +111,10 @@ async fn formal_pairing_list_hosts_uses_account_bearer_without_device_headers() 
     )
     .await
     .unwrap();
-    devices::set_account_id(&state.store, &mobile, &account.account_id)
+    device_installations::set_account_id(&state.store, &mobile, &account.account_id)
         .await
         .unwrap();
-    account_host_pairings::insert_pair(&state.store, host, &account.account_id, mobile, 123)
+    host_links::insert_pair(&state.store, host, &account.account_id, mobile, 123)
         .await
         .unwrap();
 

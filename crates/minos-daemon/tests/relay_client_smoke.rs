@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use minos_backend::{
     http::{router, BackendState},
-    pairing::{secret::hash_secret, PairingService},
+    pairing::PairingService,
     session::SessionRegistry,
     store,
 };
@@ -155,11 +155,25 @@ async fn register_formal_host(
     pool: &SqlitePool,
     host_id: DeviceId,
 ) -> anyhow::Result<DeviceSecret> {
-    store::devices::insert_device(pool, host_id, "Fan's Mac", DeviceRole::AgentHost, 0).await?;
+    store::device_installations::insert_device(
+        pool,
+        host_id,
+        "Fan's Mac",
+        DeviceRole::AgentHost,
+        0,
+    )
+    .await?;
     let account = store::accounts::create(pool, "relay-smoke@example.com", "phc").await?;
     let mobile_id = DeviceId::new();
-    store::devices::insert_device(pool, mobile_id, "iPhone", DeviceRole::MobileClient, 0).await?;
-    store::devices::set_account_id(pool, &mobile_id, &account.account_id).await?;
+    store::device_installations::insert_device(
+        pool,
+        mobile_id,
+        "iPhone",
+        DeviceRole::MobileClient,
+        0,
+    )
+    .await?;
+    store::device_installations::set_account_id(pool, &mobile_id, &account.account_id).await?;
 
     let pairing = PairingService::new(pool.clone());
     let (code, _) = pairing.request_code(host_id, TOKEN_TTL).await?;
@@ -181,8 +195,6 @@ async fn register_formal_host(
     // `/v1/me/peers` is still the legacy host snapshot route and checks
     // X-Device-Secret. Mirror the formal token into the legacy hash slot
     // until that route is retired from the daemon refresh path.
-    let hash = hash_secret(&secret)?;
-    store::devices::upsert_secret_hash(pool, host_id, &hash).await?;
     Ok(secret)
 }
 
@@ -311,7 +323,7 @@ async fn qr_confirm_redeem_persists_token_and_connects() -> anyhow::Result<()> {
 
     let account = store::accounts::create(&relay.pool, "redeem-smoke@example.com", "phc").await?;
     let mobile_id = DeviceId::new();
-    store::devices::insert_device(
+    store::device_installations::insert_device(
         &relay.pool,
         mobile_id,
         "iPhone",
@@ -319,7 +331,8 @@ async fn qr_confirm_redeem_persists_token_and_connects() -> anyhow::Result<()> {
         0,
     )
     .await?;
-    store::devices::set_account_id(&relay.pool, &mobile_id, &account.account_id).await?;
+    store::device_installations::set_account_id(&relay.pool, &mobile_id, &account.account_id)
+        .await?;
 
     PairingService::new(relay.pool.clone())
         .confirm_pairing_code(

@@ -50,8 +50,7 @@ pub async fn invalidate_peer_targets_for_account<S>(
 where
     S: AsStorePool,
 {
-    let pairs =
-        crate::store::account_host_pairings::list_hosts_for_account(store, account_id).await?;
+    let pairs = crate::store::host_links::list_hosts_for_account(store, account_id).await?;
     for pair in pairs {
         invalidate_peer_targets_for_host(pair.host_device_id).await?;
     }
@@ -66,11 +65,9 @@ async fn peer_targets_for_host(
         return Ok(device_ids);
     }
 
-    let targets = crate::store::account_host_pairings::list_account_client_targets_for_host(
-        store,
-        host_device_id,
-    )
-    .await?;
+    let targets =
+        crate::store::host_links::list_account_client_targets_for_host(store, host_device_id)
+            .await?;
     peer_target_cache_backend()
         .set(host_device_id, &targets)
         .await?;
@@ -676,8 +673,8 @@ async fn broadcast_to_peers_of(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::account_host_pairings;
-    use crate::store::devices::{insert_device, set_account_id};
+    use crate::store::device_installations::{insert_device, set_account_id};
+    use crate::store::host_links;
     use crate::store::test_support::{insert_account, insert_ios_device, memory_pool, T0};
     use minos_domain::{DeviceId, DeviceRole};
 
@@ -691,7 +688,7 @@ mod tests {
 
         let account_a = insert_account(&pool, "a@example.com").await;
         let ios_a = insert_ios_device(&pool, &account_a).await;
-        account_host_pairings::insert_pair(&pool, host, &account_a, ios_a, T0)
+        host_links::insert_pair(&pool, host, &account_a, ios_a, T0)
             .await
             .unwrap();
 
@@ -700,7 +697,7 @@ mod tests {
 
         let account_b = insert_account(&pool, "b@example.com").await;
         let ios_b = insert_ios_device(&pool, &account_b).await;
-        account_host_pairings::insert_pair(&pool, host, &account_b, ios_b, T0 + 1)
+        host_links::insert_pair(&pool, host, &account_b, ios_b, T0 + 1)
             .await
             .unwrap();
 
@@ -735,10 +732,10 @@ mod tests {
         let ios_a = insert_ios_device(&pool, &account_a).await;
         let ios_b = insert_ios_device(&pool, &account_b).await;
 
-        account_host_pairings::insert_pair(&pool, host_a, &account_a, ios_a, T0)
+        host_links::insert_pair(&pool, host_a, &account_a, ios_a, T0)
             .await
             .unwrap();
-        account_host_pairings::insert_pair(&pool, host_b, &account_b, ios_b, T0 + 1)
+        host_links::insert_pair(&pool, host_b, &account_b, ios_b, T0 + 1)
             .await
             .unwrap();
 

@@ -656,21 +656,19 @@ pub async fn handle_forward(
         return Some(synth_peer_offline_forwarded(session.device_id, &payload));
     };
 
-    let paired =
-        match crate::store::account_host_pairings::exists(store, target_device_id, &account_id)
-            .await
-        {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::warn!(
-                    target: "minos_backend::envelope",
-                    error = %e,
-                    target = %target_device_id,
-                    "account_host_pairings::exists failed; synthesising peer_offline"
-                );
-                return Some(synth_peer_offline_forwarded(session.device_id, &payload));
-            }
-        };
+    let paired = match crate::store::host_links::exists(store, target_device_id, &account_id).await
+    {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(
+                target: "minos_backend::envelope",
+                error = %e,
+                target = %target_device_id,
+                "host_links::exists failed; synthesising peer_offline"
+            );
+            return Some(synth_peer_offline_forwarded(session.device_id, &payload));
+        }
+    };
     if !paired {
         tracing::warn!(
             target: "minos_backend::envelope",
@@ -794,6 +792,7 @@ pub(crate) fn role_metric_label(role: minos_domain::DeviceRole) -> &'static str 
         minos_domain::DeviceRole::AgentHost => "agent-host",
         minos_domain::DeviceRole::MobileClient => "mobile-client",
         minos_domain::DeviceRole::BrowserAdmin => "browser-admin",
+        minos_domain::DeviceRole::DesktopConsole => "desktop-console",
     }
 }
 
@@ -801,8 +800,8 @@ pub(crate) fn role_metric_label(role: minos_domain::DeviceRole) -> &'static str 
 mod tests {
     use super::*;
     use crate::session::registry::OUTBOX_CAPACITY;
-    use crate::store::account_host_pairings;
-    use crate::store::devices::insert_device;
+    use crate::store::device_installations::insert_device;
+    use crate::store::host_links;
     use crate::store::test_support::{insert_account, insert_ios_device, memory_pool, T0};
     use minos_domain::{DeviceId, DeviceRole};
     use pretty_assertions::assert_eq;
@@ -818,7 +817,7 @@ mod tests {
             .await
             .unwrap();
         let ios = insert_ios_device(&pool, &account).await;
-        account_host_pairings::insert_pair(&pool, mac, &account, ios, T0)
+        host_links::insert_pair(&pool, mac, &account, ios, T0)
             .await
             .unwrap();
         (pool, account, mac, ios)
@@ -953,7 +952,7 @@ mod tests {
             .unwrap();
         let ios_a = insert_ios_device(&pool, &account).await;
         let ios_b = insert_ios_device(&pool, &account).await;
-        account_host_pairings::insert_pair(&pool, mac_id, &account, ios_b, T0)
+        host_links::insert_pair(&pool, mac_id, &account, ios_b, T0)
             .await
             .unwrap();
 

@@ -884,7 +884,7 @@ impl AccountHostPairingsRepository for StoreBackedAccountHostPairingsRepository 
         host_device_id: DeviceId,
         account_id: &str,
     ) -> Result<bool, BackendError> {
-        store::account_host_pairings::exists(&self.store, host_device_id, account_id).await
+        store::host_links::exists(&self.store, host_device_id, account_id).await
     }
 }
 
@@ -989,7 +989,7 @@ impl AccountCredentialsRepository for StoreBackedAccountCredentialsRepository {
 // Store-backed implementations — InstallationsRepository
 // ---------------------------------------------------------------------------
 
-fn convert_installation_row(row: store::devices::DeviceRow) -> InstallationRow {
+fn convert_installation_row(row: store::device_installations::DeviceRow) -> InstallationRow {
     InstallationRow {
         installation_id: row.device_id.to_string(),
         kind: row.role.to_string(),
@@ -1030,19 +1030,24 @@ impl InstallationsRepository for StoreBackedInstallationsRepository {
         let name = display_name.unwrap_or("device");
 
         // Attempt insert; ignore if already exists (upsert semantics).
-        let _ = store::devices::insert_device(&self.store, device_id, name, role, at_ms).await;
+        let _ =
+            store::device_installations::insert_device(&self.store, device_id, name, role, at_ms)
+                .await;
 
         if let Some(pk) = public_key {
-            let _ = store::devices::set_public_key_if_absent(&self.store, &device_id, pk).await;
+            let _ =
+                store::device_installations::set_public_key_if_absent(&self.store, &device_id, pk)
+                    .await;
         }
         if let Some(aid) = account_id {
-            let _ = store::devices::set_account_id(&self.store, &device_id, aid).await;
+            let _ = store::device_installations::set_account_id(&self.store, &device_id, aid).await;
         }
         if let Some(dn) = display_name {
-            let _ = store::devices::set_display_name(&self.store, &device_id, dn).await;
+            let _ =
+                store::device_installations::set_display_name(&self.store, &device_id, dn).await;
         }
 
-        match store::devices::get_device(&self.store, device_id).await? {
+        match store::device_installations::get_device(&self.store, device_id).await? {
             Some(row) => Ok(convert_installation_row(row)),
             None => Err(BackendError::StoreQuery {
                 operation: "installations.upsert".into(),
@@ -1058,34 +1063,40 @@ impl InstallationsRepository for StoreBackedInstallationsRepository {
                 column: "installation_id".into(),
                 message: e.to_string(),
             })?;
-        Ok(store::devices::get_device(&self.store, device_id)
-            .await?
-            .map(convert_installation_row))
+        Ok(
+            store::device_installations::get_device(&self.store, device_id)
+                .await?
+                .map(convert_installation_row),
+        )
     }
 
     async fn touch_last_seen(&self, installation_id: &str, at_ms: i64) -> Result<(), BackendError> {
         match self.store.as_store_pool() {
             StorePoolRef::Sqlite(pool) => {
-                sqlx::query("UPDATE devices SET last_seen_at = ? WHERE device_id = ?")
-                    .bind(at_ms)
-                    .bind(installation_id)
-                    .execute(pool)
-                    .await
-                    .map_err(|e| BackendError::StoreQuery {
-                        operation: "installations.touch_last_seen".into(),
-                        message: e.to_string(),
-                    })?;
+                sqlx::query(
+                    "UPDATE device_installations SET last_seen_at_ms = ? WHERE installation_id = ?",
+                )
+                .bind(at_ms)
+                .bind(installation_id)
+                .execute(pool)
+                .await
+                .map_err(|e| BackendError::StoreQuery {
+                    operation: "installations.touch_last_seen".into(),
+                    message: e.to_string(),
+                })?;
             }
             StorePoolRef::Postgres(pool) => {
-                sqlx::query("UPDATE devices SET last_seen_at = $1 WHERE device_id = $2")
-                    .bind(at_ms)
-                    .bind(installation_id)
-                    .execute(pool)
-                    .await
-                    .map_err(|e| BackendError::StoreQuery {
-                        operation: "installations.touch_last_seen".into(),
-                        message: e.to_string(),
-                    })?;
+                sqlx::query(
+                    "UPDATE device_installations SET last_seen_at_ms = $1 WHERE installation_id = $2",
+                )
+                .bind(at_ms)
+                .bind(installation_id)
+                .execute(pool)
+                .await
+                .map_err(|e| BackendError::StoreQuery {
+                    operation: "installations.touch_last_seen".into(),
+                    message: e.to_string(),
+                })?;
             }
         }
         Ok(())
@@ -1420,10 +1431,7 @@ impl PairingCodesRepository for StoreBackedPairingCodesRepository {
 // Store-backed implementations — HostLinksRepository
 // ---------------------------------------------------------------------------
 
-fn convert_pair_row_to_host_link(
-    row: store::account_host_pairings::PairRow,
-    acl_json: &str,
-) -> HostLinkRow {
+fn convert_pair_row_to_host_link(row: store::host_links::PairRow, acl_json: &str) -> HostLinkRow {
     HostLinkRow {
         pair_id: row.pair_id,
         account_id: row.mobile_account_id,
@@ -1463,8 +1471,7 @@ impl HostLinksRepository for StoreBackedHostLinksRepository {
                     column: "linked_via".into(),
                     message: e.to_string(),
                 })?;
-        store::account_host_pairings::insert_pair(&self.store, host_id, account_id, via_id, at_ms)
-            .await?;
+        store::host_links::insert_pair(&self.store, host_id, account_id, via_id, at_ms).await?;
         Ok(HostLinkRow {
             pair_id: Uuid::new_v4().to_string(),
             account_id: account_id.to_string(),
@@ -1487,12 +1494,11 @@ impl HostLinksRepository for StoreBackedHostLinksRepository {
                 column: "host_installation_id".into(),
                 message: e.to_string(),
             })?;
-        store::account_host_pairings::exists(&self.store, host_id, account_id).await
+        store::host_links::exists(&self.store, host_id, account_id).await
     }
 
     async fn list_for_account(&self, account_id: &str) -> Result<Vec<HostLinkRow>, BackendError> {
-        let rows =
-            store::account_host_pairings::list_hosts_for_account(&self.store, account_id).await?;
+        let rows = store::host_links::list_hosts_for_account(&self.store, account_id).await?;
         Ok(rows
             .into_iter()
             .map(|r| convert_pair_row_to_host_link(r, "{}"))
@@ -1509,8 +1515,7 @@ impl HostLinksRepository for StoreBackedHostLinksRepository {
                 column: "host_installation_id".into(),
                 message: e.to_string(),
             })?;
-        let rows =
-            store::account_host_pairings::list_accounts_for_host(&self.store, host_id).await?;
+        let rows = store::host_links::list_accounts_for_host(&self.store, host_id).await?;
         Ok(rows
             .into_iter()
             .map(|r| convert_pair_row_to_host_link(r, "{}"))
@@ -1518,8 +1523,7 @@ impl HostLinksRepository for StoreBackedHostLinksRepository {
     }
 
     async fn pick_default_host(&self, account_id: &str) -> Result<Option<String>, BackendError> {
-        let rows =
-            store::account_host_pairings::list_hosts_for_account(&self.store, account_id).await?;
+        let rows = store::host_links::list_hosts_for_account(&self.store, account_id).await?;
         Ok(rows.first().map(|r| r.host_device_id.to_string()))
     }
 
@@ -1534,8 +1538,7 @@ impl HostLinksRepository for StoreBackedHostLinksRepository {
                 column: "host_installation_id".into(),
                 message: e.to_string(),
             })?;
-        let deleted =
-            store::account_host_pairings::delete_pair(&self.store, host_id, account_id).await?;
+        let deleted = store::host_links::delete_pair(&self.store, host_id, account_id).await?;
         Ok(deleted == 1)
     }
 }

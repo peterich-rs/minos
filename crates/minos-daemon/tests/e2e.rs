@@ -16,7 +16,7 @@ use http_body_util::BodyExt as _;
 use minos_backend::{
     auth::jwt,
     http::{router, BackendState},
-    pairing::{secret::hash_secret, PairingService},
+    pairing::PairingService,
     session::SessionRegistry,
     store,
 };
@@ -208,7 +208,7 @@ async fn wait_for_host_command_roundtrip(relay: &Relay, host_id: DeviceId) -> an
 }
 
 async fn register_formal_host(relay: &Relay, host_id: DeviceId) -> anyhow::Result<PairedHost> {
-    store::devices::insert_device(
+    store::device_installations::insert_device(
         &relay.state.store,
         host_id,
         "Test Mac",
@@ -219,7 +219,7 @@ async fn register_formal_host(relay: &Relay, host_id: DeviceId) -> anyhow::Resul
     let account =
         store::accounts::create(&relay.state.store, "relay-e2e@example.com", "phc").await?;
     let mobile_id = DeviceId::new();
-    store::devices::insert_device(
+    store::device_installations::insert_device(
         &relay.state.store,
         mobile_id,
         "Test iPhone",
@@ -227,7 +227,12 @@ async fn register_formal_host(relay: &Relay, host_id: DeviceId) -> anyhow::Resul
         0,
     )
     .await?;
-    store::devices::set_account_id(&relay.state.store, &mobile_id, &account.account_id).await?;
+    store::device_installations::set_account_id(
+        &relay.state.store,
+        &mobile_id,
+        &account.account_id,
+    )
+    .await?;
 
     let (code, _) = relay
         .state
@@ -252,8 +257,6 @@ async fn register_formal_host(relay: &Relay, host_id: DeviceId) -> anyhow::Resul
         .await
         .map_err(|error| anyhow::anyhow!("redeem formal host token failed: {error:?}"))?;
     let host_secret = DeviceSecret(redeemed.token);
-    let hash = hash_secret(&host_secret)?;
-    store::devices::upsert_secret_hash(&relay.state.store, host_id, &hash).await?;
     let bearer = jwt::sign(
         TEST_JWT_SECRET.as_bytes(),
         &account.account_id,

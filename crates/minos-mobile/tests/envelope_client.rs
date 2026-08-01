@@ -71,7 +71,7 @@ async fn spawn_backend_with_paired_mac() -> RealBackend {
     // Seed host device row + pairing code so account-side pairing confirm
     // can create the account-host link.
     let mac_id = DeviceId::new();
-    minos_backend::store::devices::insert_device(
+    minos_backend::store::device_installations::insert_device(
         &state.store,
         mac_id,
         "FakeMac",

@@ -6,7 +6,7 @@ use minos_backend::auth::jwt;
 use minos_backend::http;
 use minos_backend::http::test_support::{backend_state, TEST_JWT_SECRET};
 use minos_backend::session::SessionHandle;
-use minos_backend::store::{account_host_pairings, devices};
+use minos_backend::store::{device_installations, host_links};
 use minos_domain::{DeviceId, DeviceRole};
 use serde_json::json;
 
@@ -116,7 +116,7 @@ async fn host_pairing_request_code_requires_ed25519_bootstrap_proof() {
         .as_str()
         .unwrap()
         .is_empty());
-    let stored = devices::get_device(
+    let stored = device_installations::get_device(
         &state.store,
         uuid::Uuid::parse_str(&installation_id)
             .map(DeviceId)
@@ -349,7 +349,7 @@ async fn formally_paired_host(
     let signing_key = signing_key(21);
     let host_public_key = public_key(&signing_key);
 
-    devices::insert_device(
+    device_installations::insert_device(
         &state.store,
         mobile,
         "Owner Phone",
@@ -358,7 +358,7 @@ async fn formally_paired_host(
     )
     .await
     .unwrap();
-    devices::set_account_id(&state.store, &mobile, &account.account_id)
+    device_installations::set_account_id(&state.store, &mobile, &account.account_id)
         .await
         .unwrap();
 
@@ -456,12 +456,10 @@ async fn formally_paired_host(
         .to_string();
     assert!(token.starts_with("hit_"));
 
-    assert!(
-        account_host_pairings::exists(&state.store, host, &account.account_id,)
-            .await
-            .unwrap()
-    );
-    devices::touch_last_seen(&state.store, &mobile, 100)
+    assert!(host_links::exists(&state.store, host, &account.account_id,)
+        .await
+        .unwrap());
+    device_installations::touch_last_seen(&state.store, &mobile, 100)
         .await
         .unwrap();
 
@@ -527,7 +525,7 @@ async fn host_installations_self_uses_account_presence_not_paired_via_device_pre
     let mut app = http::router(state.clone());
     let fixture = formally_paired_host(&state, &mut app).await;
     let current_mobile = DeviceId::new();
-    devices::insert_device(
+    device_installations::insert_device(
         &state.store,
         current_mobile,
         "Current iPhone",
@@ -536,7 +534,7 @@ async fn host_installations_self_uses_account_presence_not_paired_via_device_pre
     )
     .await
     .unwrap();
-    devices::set_account_id(&state.store, &current_mobile, &fixture.account_id)
+    device_installations::set_account_id(&state.store, &current_mobile, &fixture.account_id)
         .await
         .unwrap();
     let (mobile_session, _mobile_outbox) =
@@ -704,7 +702,7 @@ async fn pairing_revoke_keeps_host_token_when_other_account_link_remains() {
     .await
     .unwrap();
     let second_mobile = DeviceId::new();
-    devices::insert_device(
+    device_installations::insert_device(
         &state.store,
         second_mobile,
         "Second Owner Phone",
@@ -713,7 +711,7 @@ async fn pairing_revoke_keeps_host_token_when_other_account_link_remains() {
     )
     .await
     .unwrap();
-    devices::set_account_id(&state.store, &second_mobile, &second_account.account_id)
+    device_installations::set_account_id(&state.store, &second_mobile, &second_account.account_id)
         .await
         .unwrap();
 

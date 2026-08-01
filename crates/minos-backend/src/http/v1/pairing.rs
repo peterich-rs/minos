@@ -175,27 +175,25 @@ async fn post_list_hosts(
         (s, err_body("unauthorized", m))
     })?;
 
-    let pairs = crate::store::account_host_pairings::list_hosts_for_account(
-        &state.store,
-        &bearer_outcome.account_id,
-    )
-    .await
-    .map_err(|e| {
-        tracing::warn!(
-            target: "minos_backend::v1::pairing",
-            error = %e,
-            account_id = %bearer_outcome.account_id,
-            "list_hosts_for_account failed",
-        );
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            err_body("internal", e.to_string()),
-        )
-    })?;
+    let pairs =
+        crate::store::host_links::list_hosts_for_account(&state.store, &bearer_outcome.account_id)
+            .await
+            .map_err(|e| {
+                tracing::warn!(
+                    target: "minos_backend::v1::pairing",
+                    error = %e,
+                    account_id = %bearer_outcome.account_id,
+                    "list_hosts_for_account failed",
+                );
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    err_body("internal", e.to_string()),
+                )
+            })?;
 
     let mut hosts = Vec::with_capacity(pairs.len());
     for pair in pairs {
-        let row = crate::store::devices::get_device(&state.store, pair.host_device_id)
+        let row = crate::store::device_installations::get_device(&state.store, pair.host_device_id)
             .await
             .map_err(|e| {
                 tracing::warn!(
@@ -229,7 +227,7 @@ async fn ensure_account_client(
     installation_id: DeviceId,
     account_id: &str,
 ) -> Result<(), (StatusCode, Json<ErrorEnvelope>)> {
-    let row = crate::store::devices::get_device(&state.store, installation_id)
+    let row = crate::store::device_installations::get_device(&state.store, installation_id)
         .await
         .map_err(|e| {
             tracing::warn!(

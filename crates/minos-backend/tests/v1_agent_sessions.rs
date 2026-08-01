@@ -3,7 +3,7 @@ use axum::http::{Method, Request, StatusCode};
 use minos_backend::auth::jwt;
 use minos_backend::http::test_support::TEST_JWT_SECRET;
 use minos_backend::http::{router, test_support::backend_state};
-use minos_backend::store::{account_host_pairings, devices::insert_device, social};
+use minos_backend::store::{device_installations::insert_device, host_links, social};
 use minos_domain::{DeviceId, DeviceRole};
 
 mod common;
@@ -22,21 +22,19 @@ async fn paired_pair_with_account(
         .unwrap();
 
     let secret = minos_domain::DeviceSecret::generate();
-    let hash = minos_backend::pairing::secret::hash_secret(&secret).unwrap();
-    minos_backend::store::devices::upsert_secret_hash(&state.store, host, &hash)
-        .await
-        .unwrap();
 
     let account = minos_backend::store::accounts::create(&state.store, email, "phc")
         .await
         .unwrap();
-    minos_backend::store::devices::set_account_id(&state.store, &host, &account.account_id)
-        .await
-        .unwrap();
-    minos_backend::store::devices::set_account_id(&state.store, &ios, &account.account_id)
-        .await
-        .unwrap();
-    account_host_pairings::insert_pair(&state.store, host, &account.account_id, ios, 0)
+    // host account_id stays NULL (kind=host CHECK)
+    minos_backend::store::device_installations::set_account_id(
+        &state.store,
+        &ios,
+        &account.account_id,
+    )
+    .await
+    .unwrap();
+    host_links::insert_pair(&state.store, host, &account.account_id, ios, 0)
         .await
         .unwrap();
 
@@ -369,7 +367,6 @@ async fn start_session_dispatches_host_command_and_persists_session() {
         }),
     );
     let (status, body) = common::send(&mut app, req).await;
-
     assert_eq!(status, StatusCode::OK);
     let session_id = body["session_id"].as_str().unwrap().to_string();
     let host_command_id = body["host_command_id"].as_str().unwrap().to_string();

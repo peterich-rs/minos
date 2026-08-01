@@ -225,7 +225,7 @@ async fn revalidate_ws_ticket_auth(
     let device_id = Uuid::parse_str(&claims.did)
         .map(DeviceId)
         .map_err(|_| ActivationAuthError::Unauthorized("invalid ws_ticket device_id".into()))?;
-    let row = crate::store::devices::get_device(store, device_id)
+    let row = crate::store::device_installations::get_device(store, device_id)
         .await
         .map_err(|error| ActivationAuthError::Internal(error.to_string()))?
         .ok_or_else(|| {
@@ -485,7 +485,7 @@ async fn touch_connection_last_seen(
     device_id: &DeviceId,
     operation: &'static str,
 ) {
-    if let Err(error) = crate::store::devices::touch_last_seen(
+    if let Err(error) = crate::store::device_installations::touch_last_seen(
         &state.store,
         device_id,
         chrono::Utc::now().timestamp_millis(),

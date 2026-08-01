@@ -15,11 +15,11 @@ use futures::{SinkExt, StreamExt};
 use minos_backend::{
     auth::{jwt, use_case::AuthUseCase},
     http::{router, BackendState},
-    pairing::{secret::hash_secret, PairingService},
+    pairing::PairingService,
     session::SessionRegistry,
     store,
 };
-use minos_domain::{AgentName, DeviceId, DeviceRole, DeviceSecret};
+use minos_domain::{AgentName, DeviceId, DeviceRole};
 use minos_protocol::realtime::ServerFrame;
 use serde_json::json;
 use sqlx::SqlitePool;
@@ -390,24 +390,19 @@ fn assert_unauthorized_upgrade(error: WsError) {
     }
 }
 
-/// Pre-seed an authenticated agent-host row + return its `(DeviceId, secret)`.
-async fn register_agent_host(pool: &SqlitePool) -> (DeviceId, DeviceSecret) {
+/// Pre-seed an agent-host installation row.
+async fn register_agent_host(pool: &SqlitePool) -> DeviceId {
     let host_id = DeviceId::new();
-    let secret = DeviceSecret::generate();
-    let hash = hash_secret(&secret).unwrap();
-    store::devices::insert_device(pool, host_id, "mac", DeviceRole::AgentHost, 0)
+    store::device_installations::insert_device(pool, host_id, "mac", DeviceRole::AgentHost, 0)
         .await
         .unwrap();
-    store::devices::upsert_secret_hash(pool, host_id, &hash)
-        .await
-        .unwrap();
-    (host_id, secret)
+    host_id
 }
 
 #[tokio::test]
 async fn ws_host_connects_with_hello_for_agent_host() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
-    let (host_id, _host_secret) = register_agent_host(&relay.pool).await;
+    let host_id = register_agent_host(&relay.pool).await;
 
     // Seed two sessions owned by `host_id` and a few raw events on each so
     // `last_seq_per_owner` returns `{thr_1: 7, thr_2: 3}`.
@@ -463,7 +458,7 @@ async fn ws_host_connects_with_hello_for_agent_host() -> anyhow::Result<()> {
 #[tokio::test]
 async fn ws_host_stays_idle_when_no_host_durable_events() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
-    let (host_id, _host_secret) = register_agent_host(&relay.pool).await;
+    let host_id = register_agent_host(&relay.pool).await;
 
     let mut ws = connect_formal_gateway_ws(&relay, host_id, DeviceRole::AgentHost, None).await?;
 
@@ -511,9 +506,15 @@ async fn ws_client_accepts_browser_admin_legacy_ws_ticket_query_auth() -> anyhow
         .await?
         .account_id;
     let browser_id = DeviceId::new();
-    store::devices::insert_device(&relay.pool, browser_id, "web", DeviceRole::BrowserAdmin, 0)
-        .await?;
-    store::devices::set_account_id(&relay.pool, &browser_id, &account_id).await?;
+    store::device_installations::insert_device(
+        &relay.pool,
+        browser_id,
+        "web",
+        DeviceRole::BrowserAdmin,
+        0,
+    )
+    .await?;
+    store::device_installations::set_account_id(&relay.pool, &browser_id, &account_id).await?;
 
     let ticket =
         issue_client_ws_ticket(&relay, &account_id, browser_id, DeviceRole::BrowserAdmin).await?;
@@ -535,9 +536,15 @@ async fn ws_client_accepts_formal_ticket_query_auth() -> anyhow::Result<()> {
         .await?
         .account_id;
     let browser_id = DeviceId::new();
-    store::devices::insert_device(&relay.pool, browser_id, "web", DeviceRole::BrowserAdmin, 0)
-        .await?;
-    store::devices::set_account_id(&relay.pool, &browser_id, &account_id).await?;
+    store::device_installations::insert_device(
+        &relay.pool,
+        browser_id,
+        "web",
+        DeviceRole::BrowserAdmin,
+        0,
+    )
+    .await?;
+    store::device_installations::set_account_id(&relay.pool, &browser_id, &account_id).await?;
 
     let ticket =
         issue_client_ws_ticket(&relay, &account_id, browser_id, DeviceRole::BrowserAdmin).await?;
@@ -559,9 +566,15 @@ async fn ws_client_rejects_reused_formal_ticket() -> anyhow::Result<()> {
         .await?
         .account_id;
     let browser_id = DeviceId::new();
-    store::devices::insert_device(&relay.pool, browser_id, "web", DeviceRole::BrowserAdmin, 0)
-        .await?;
-    store::devices::set_account_id(&relay.pool, &browser_id, &account_id).await?;
+    store::device_installations::insert_device(
+        &relay.pool,
+        browser_id,
+        "web",
+        DeviceRole::BrowserAdmin,
+        0,
+    )
+    .await?;
+    store::device_installations::set_account_id(&relay.pool, &browser_id, &account_id).await?;
 
     let ticket =
         issue_client_ws_ticket(&relay, &account_id, browser_id, DeviceRole::BrowserAdmin).await?;
@@ -582,7 +595,7 @@ async fn ws_client_rejects_reused_formal_ticket() -> anyhow::Result<()> {
 #[tokio::test]
 async fn ws_host_accepts_formal_host_ticket_query_auth() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
-    let (host_id, _host_secret) = register_agent_host(&relay.pool).await;
+    let host_id = register_agent_host(&relay.pool).await;
     let ticket = issue_host_ws_ticket(&relay, host_id).await?;
     let mut ws = connect_gateway_ws_with_ticket(&relay, "/ws/host", &ticket).await?;
 
@@ -696,14 +709,20 @@ async fn ws_client_rejects_legacy_ws_ticket_after_device_account_changes() -> an
         .await?
         .account_id;
     let browser_id = DeviceId::new();
-    store::devices::insert_device(&relay.pool, browser_id, "web", DeviceRole::BrowserAdmin, 0)
-        .await?;
-    store::devices::set_account_id(&relay.pool, &browser_id, &account_a).await?;
+    store::device_installations::insert_device(
+        &relay.pool,
+        browser_id,
+        "web",
+        DeviceRole::BrowserAdmin,
+        0,
+    )
+    .await?;
+    store::device_installations::set_account_id(&relay.pool, &browser_id, &account_a).await?;
 
     let ticket =
         issue_client_ws_ticket(&relay, &account_a, browser_id, DeviceRole::BrowserAdmin).await?;
 
-    store::devices::set_account_id(&relay.pool, &browser_id, &account_b).await?;
+    store::device_installations::set_account_id(&relay.pool, &browser_id, &account_b).await?;
 
     let mut ws = connect_gateway_ws_with_legacy_ticket_query(&relay, "/ws/client", &ticket).await?;
     expect_close_code(&mut ws, 4401, "auth_revoked").await?;

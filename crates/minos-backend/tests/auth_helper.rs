@@ -1,6 +1,6 @@
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use minos_backend::http::auth::{authenticate, AuthError, AuthOutcome};
-use minos_backend::store::{devices::insert_device, test_support::memory_pool};
+use minos_backend::store::{device_installations::insert_device, test_support::memory_pool};
 use minos_domain::{DeviceId, DeviceRole};
 
 fn header_map(pairs: &[(&str, &str)]) -> HeaderMap {
@@ -27,13 +27,12 @@ async fn first_connect_inserts_row_and_returns_authenticated() {
         matches!(outcome, AuthOutcome { device_id, role: DeviceRole::AgentHost, .. } if device_id == id)
     );
 
-    let row = minos_backend::store::devices::get_device(&pool, id)
+    let row = minos_backend::store::device_installations::get_device(&pool, id)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(row.role, DeviceRole::AgentHost);
     assert_eq!(row.display_name, "Mac");
-    assert!(row.secret_hash.is_none());
 }
 
 #[tokio::test]

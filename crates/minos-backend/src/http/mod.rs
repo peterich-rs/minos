@@ -897,7 +897,7 @@ async fn touch_device_last_seen(
     device_id: minos_domain::DeviceId,
     operation: &'static str,
 ) {
-    if let Err(error) = crate::store::devices::touch_last_seen(
+    if let Err(error) = crate::store::device_installations::touch_last_seen(
         &state.store,
         &device_id,
         chrono::Utc::now().timestamp_millis(),

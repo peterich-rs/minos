@@ -14,9 +14,9 @@ async fn connect_creates_tables_and_migrates() {
     // device column) to the host-prefixed names. Smoke-test the
     // post-rename schema.
     for table in [
-        "devices",
+        "device_installations",
         "accounts",
-        "account_host_pairings",
+        "host_links",
         "agent_sessions",
         "agent_turns",
         "agent_turn_events",
@@ -41,7 +41,7 @@ async fn connect_creates_tables_and_migrates() {
     // CHECK constraints embedded in STRICT rejections are exercised by
     // store submodule tests.
     for index in [
-        "idx_account_host_pairings_account",
+        "idx_host_links_account",
         "idx_agent_sessions_conversation_status",
         "idx_agent_turns_session_seq",
         "idx_host_commands_host_status_deadline",

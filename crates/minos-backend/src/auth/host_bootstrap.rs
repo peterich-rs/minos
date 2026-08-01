@@ -7,7 +7,7 @@ use minos_domain::{DeviceId, DeviceRole};
 use uuid::Uuid;
 
 use crate::error::BackendError;
-use crate::store::{devices, AsStorePool};
+use crate::store::{device_installations, AsStorePool};
 
 pub const BOOTSTRAP_NONCE_TTL: Duration = Duration::from_secs(60);
 const PUBLIC_KEY_PREFIX: &str = "ed25519:";
@@ -99,7 +99,7 @@ where
         .map_err(|_| HostBootstrapError::ProofInvalid)?;
     nonce_store.consume(proof.installation_id, proof.nonce, now_ms)?;
 
-    let existing = devices::get_device(store, installation_id).await?;
+    let existing = device_installations::get_device(store, installation_id).await?;
     if let Some(row) = existing.as_ref() {
         if row.role != DeviceRole::AgentHost {
             return Err(HostBootstrapError::ProofInvalid);
@@ -125,7 +125,7 @@ where
     )?;
 
     if existing.is_none() {
-        devices::insert_device(
+        device_installations::insert_device(
             store,
             installation_id,
             display_name,
@@ -135,7 +135,8 @@ where
         .await?;
     }
     if stored_public_key.is_none() {
-        devices::set_public_key_if_absent(store, &installation_id, public_key_text).await?;
+        device_installations::set_public_key_if_absent(store, &installation_id, public_key_text)
+            .await?;
     }
 
     Ok(installation_id)
@@ -239,7 +240,10 @@ mod tests {
         .await
         .unwrap();
 
-        let row = devices::get_device(&pool, id).await.unwrap().unwrap();
+        let row = device_installations::get_device(&pool, id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(row.public_key.as_deref(), Some(host_public_key.as_str()));
         assert_eq!(row.role, DeviceRole::AgentHost);
     }

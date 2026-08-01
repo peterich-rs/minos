@@ -10,7 +10,7 @@ use axum::http::{header, Method, Request, StatusCode};
 use minos_backend::auth::jwt;
 use minos_backend::http::test_support::TEST_JWT_SECRET;
 use minos_backend::http::{router, test_support::backend_state};
-use minos_backend::store::devices::insert_device;
+use minos_backend::store::device_installations::insert_device;
 use minos_domain::{DeviceId, DeviceRole};
 use minos_protocol::{Envelope, EventKind};
 
@@ -96,10 +96,14 @@ async fn delete_pairing_route_removes_host_pairing() {
     )
     .await
     .unwrap();
-    minos_backend::store::devices::set_account_id(&state.store, &mobile_id, &account.account_id)
-        .await
-        .unwrap();
-    minos_backend::store::account_host_pairings::insert_pair(
+    minos_backend::store::device_installations::set_account_id(
+        &state.store,
+        &mobile_id,
+        &account.account_id,
+    )
+    .await
+    .unwrap();
+    minos_backend::store::host_links::insert_pair(
         &state.store,
         host_id,
         &account.account_id,
@@ -123,13 +127,11 @@ async fn delete_pairing_route_removes_host_pairing() {
     let (status, body) = common::send(&mut app, req).await;
     assert_eq!(status, StatusCode::NO_CONTENT, "body={body}");
     assert_eq!(body, serde_json::Value::Null);
-    assert!(!minos_backend::store::account_host_pairings::exists(
-        &state.store,
-        host_id,
-        &account.account_id
-    )
-    .await
-    .unwrap());
+    assert!(
+        !minos_backend::store::host_links::exists(&state.store, host_id, &account.account_id)
+            .await
+            .unwrap()
+    );
 
     let frame = host_outbox
         .recv()

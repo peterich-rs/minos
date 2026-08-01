@@ -4,7 +4,7 @@ use minos_backend::auth::jwt;
 use minos_backend::http::{router, test_support::backend_state, test_support::TEST_JWT_SECRET};
 use minos_backend::session::SessionHandle;
 use minos_backend::store::{
-    account_host_pairings, agent_sessions, devices, durable_event_log, host_commands, raw_events,
+    agent_sessions, device_installations, durable_event_log, host_commands, host_links, raw_events,
     sessions, social,
 };
 use minos_domain::{AgentName, DeviceId, DeviceRole};
@@ -43,7 +43,7 @@ async fn seed_host_pair_for_account(
     mobile_device_id: DeviceId,
 ) -> DeviceId {
     let host_device_id = DeviceId::new();
-    devices::insert_device(
+    device_installations::insert_device(
         &state.store,
         host_device_id,
         "Mac",
@@ -52,7 +52,7 @@ async fn seed_host_pair_for_account(
     )
     .await
     .unwrap();
-    devices::insert_device(
+    device_installations::insert_device(
         &state.store,
         mobile_device_id,
         "iPhone",
@@ -61,13 +61,11 @@ async fn seed_host_pair_for_account(
     )
     .await
     .unwrap();
-    devices::set_account_id(&state.store, &host_device_id, account_id)
+    // host account_id stays NULL (kind=host CHECK)
+    device_installations::set_account_id(&state.store, &mobile_device_id, account_id)
         .await
         .unwrap();
-    devices::set_account_id(&state.store, &mobile_device_id, account_id)
-        .await
-        .unwrap();
-    account_host_pairings::insert_pair(
+    host_links::insert_pair(
         &state.store,
         host_device_id,
         account_id,

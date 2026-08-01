@@ -30,11 +30,11 @@ use futures::{SinkExt, StreamExt};
 use minos_backend::{
     auth::use_case::AuthUseCase,
     http::{router, BackendState},
-    pairing::{secret::hash_secret, PairingService},
+    pairing::PairingService,
     session::SessionRegistry,
     store,
 };
-use minos_domain::{DeviceId, DeviceRole, DeviceSecret};
+use minos_domain::{DeviceId, DeviceRole};
 use minos_protocol::realtime::{ClientFrame, ServerFrame};
 use minos_protocol::{Envelope, EventKind};
 use sqlx::SqlitePool;
@@ -441,11 +441,15 @@ async fn e2e_presence_tracks_live_peer_membership() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
     let mac_id = DeviceId::new();
-    let mac_secret = DeviceSecret::generate();
-    let mac_hash = hash_secret(&mac_secret)?;
 
-    store::devices::insert_device(&relay.pool, mac_id, "mac", DeviceRole::AgentHost, 0).await?;
-    store::devices::upsert_secret_hash(&relay.pool, mac_id, &mac_hash).await?;
+    store::device_installations::insert_device(
+        &relay.pool,
+        mac_id,
+        "mac",
+        DeviceRole::AgentHost,
+        0,
+    )
+    .await?;
     // ADR-0020: insert via account_host_pairings instead of legacy device-keyed
     // pairings. The body of this test still asserts presence semantics that
     // were removed in Phase G; #[ignore]'d at the test attribute.
@@ -453,7 +457,7 @@ async fn e2e_presence_tracks_live_peer_membership() -> anyhow::Result<()> {
         .await?
         .account_id;
     let ios_id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
-    store::account_host_pairings::insert_pair(&relay.pool, mac_id, &account_id, ios_id, 0).await?;
+    store::host_links::insert_pair(&relay.pool, mac_id, &account_id, ios_id, 0).await?;
 
     let mut host = connect_client(&relay, mac_id, DeviceRole::AgentHost, None).await?;
     match recv_envelope(&mut host).await? {
