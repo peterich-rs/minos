@@ -1,16 +1,19 @@
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   Check,
   ChevronDown,
   Circle,
   Download,
   Link2,
+  LogOut,
   Palette,
-  QrCode,
   RefreshCw,
   Server,
+  Unlink,
+  UserRound,
 } from "lucide-react";
 import { useWorkspaceStore } from "@/store/workspace-store";
+import { useAccountStore } from "@/store/account-store";
 import {
   PROJECT_HOST_THIS_MAC,
   deriveHostPresence,
@@ -28,6 +31,8 @@ import {
   PageHeader,
   PageHeaderPrimaryButton,
 } from "@/shared/ui/PageHeader";
+import { presentHostAccount } from "@/features/host/lib/host-account-presenter";
+import { backendHttpBase } from "@/shared/lib/minos-cloud";
 
 /**
  * Shared Host settings card.
@@ -57,12 +62,65 @@ export function HostView() {
     isLoading: themeLoading,
   } = useTheme();
 
-  // v1: local daemon only; wire relayLinked when daemon exposes relay status.
+  const session = useAccountStore((s) => s.session);
+  const hostLink = useAccountStore((s) => s.hostLink);
+  const authMode = useAccountStore((s) => s.authMode);
+  const setAuthMode = useAccountStore((s) => s.setAuthMode);
+  const accountBusy = useAccountStore((s) => s.busy);
+  const accountError = useAccountStore((s) => s.error);
+  const clearError = useAccountStore((s) => s.clearError);
+  const signIn = useAccountStore((s) => s.signIn);
+  const signUp = useAccountStore((s) => s.signUp);
+  const signOut = useAccountStore((s) => s.signOut);
+  const linkThisMac = useAccountStore((s) => s.linkThisMac);
+  const unlinkThisMac = useAccountStore((s) => s.unlinkThisMac);
+  const isSupabaseReady = useAccountStore((s) => s.isSupabaseReady);
+  const isCloudConfigured = useAccountStore((s) => s.isCloudConfigured);
+
+  const daemonReady =
+    source === "daemon" && connection?.connected === true;
+  const relayLinked = hostLink.linked === true;
+
   const presence = deriveHostPresence({
     source,
-    daemonConnected: source === "daemon" && connection?.connected === true,
-    relayLinked: false,
+    daemonConnected: daemonReady,
+    relayLinked,
   });
+
+  const accountVm = useMemo(
+    () =>
+      presentHostAccount({
+        signedIn: session != null,
+        email: session?.email ?? null,
+        daemonReady,
+        relayLinked,
+        hostDisplayName: hostLink.hostDisplayName,
+        busy: accountBusy,
+        error: accountError,
+        cloudConfigured: isCloudConfigured(),
+      }),
+    [
+      session,
+      daemonReady,
+      relayLinked,
+      hostLink.hostDisplayName,
+      accountBusy,
+      accountError,
+      isCloudConfigured,
+    ],
+  );
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  const passwordReady = password.length >= 8;
+  const confirmReady = password === confirmPassword && passwordReady;
+  const formDisabled =
+    accountBusy ||
+    !email.includes("@") ||
+    !passwordReady ||
+    (authMode === "register" && !confirmReady);
 
   const lastError = connection?.error || error || actionError || null;
   const processLabel = !presence.runtimeReady
@@ -148,6 +206,227 @@ export function HostView() {
                 mono={presence.runtimeReady}
               />
             </dl>
+          </section>
+
+          <section className={hostCardClass}>
+            <div className={cn(hostCardHeaderClass, "justify-between")}>
+              <div className="flex min-w-0 items-center gap-2">
+                <UserRound
+                  className="h-3.5 w-3.5 shrink-0 text-ink-muted"
+                  strokeWidth={1.8}
+                />
+                <h2 className="text-xs font-semibold text-ink">
+                  Account &amp; remote
+                </h2>
+              </div>
+              <span
+                className={cn(
+                  "shrink-0 rounded-md px-1.5 py-0.5 text-3xs font-medium uppercase tracking-wide",
+                  accountVm.statusKind === "linked" &&
+                    "bg-status-done/15 text-status-done",
+                  accountVm.statusKind === "local_only" &&
+                    "bg-surface-muted text-ink-muted",
+                  accountVm.statusKind === "signed_out" &&
+                    "bg-surface-muted text-ink-muted",
+                  accountVm.statusKind === "error" &&
+                    "bg-status-failed/15 text-status-failed",
+                )}
+              >
+                {accountVm.statusLabel}
+              </span>
+            </div>
+
+            <div className="space-y-3 px-3.5 py-3">
+              <p className="text-2xs leading-snug text-ink-muted">
+                {accountVm.statusHint}
+              </p>
+
+              {accountVm.emailLabel ? (
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-2xs font-medium text-ink-muted">
+                      Signed in
+                    </p>
+                    <p className="truncate text-sm font-medium text-ink">
+                      {accountVm.emailLabel}
+                    </p>
+                  </div>
+                  {accountVm.showSignOut ? (
+                    <button
+                      type="button"
+                      disabled={accountBusy}
+                      onClick={() => void signOut()}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-surface-muted px-2.5 py-1.5 text-2xs font-semibold text-ink-secondary transition-colors hover:bg-surface-hover hover:text-ink disabled:opacity-50"
+                    >
+                      <LogOut className="h-3 w-3" strokeWidth={2} />
+                      Sign out
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {accountVm.showSignInForm ? (
+                <div className="space-y-2.5">
+                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-surface-muted p-1">
+                    {(["login", "register"] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => {
+                          setAuthMode(mode);
+                          clearError();
+                        }}
+                        className={cn(
+                          "rounded-md py-1.5 text-2xs font-medium transition-colors",
+                          authMode === mode
+                            ? "bg-surface text-ink shadow-sm"
+                            : "text-ink-muted hover:text-ink",
+                        )}
+                      >
+                        {mode === "login" ? "Sign in" : "Register"}
+                      </button>
+                    ))}
+                  </div>
+                  <form
+                    className="space-y-2"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (formDisabled) return;
+                      if (authMode === "register") {
+                        void signUp(email.trim(), password);
+                      } else {
+                        void signIn(email.trim(), password);
+                      }
+                    }}
+                  >
+                    <label className="block space-y-1">
+                      <span className="text-3xs font-medium text-ink-muted">
+                        Email
+                      </span>
+                      <input
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        type="email"
+                        autoComplete="email"
+                        required
+                        className="h-9 w-full rounded-lg border border-ink/10 bg-surface px-2.5 text-sm text-ink outline-none ring-accent/30 placeholder:text-ink-muted focus:ring-2"
+                        placeholder="you@example.com"
+                      />
+                    </label>
+                    <label className="block space-y-1">
+                      <span className="text-3xs font-medium text-ink-muted">
+                        Password
+                      </span>
+                      <input
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        type="password"
+                        autoComplete={
+                          authMode === "login"
+                            ? "current-password"
+                            : "new-password"
+                        }
+                        required
+                        className="h-9 w-full rounded-lg border border-ink/10 bg-surface px-2.5 text-sm text-ink outline-none ring-accent/30 placeholder:text-ink-muted focus:ring-2"
+                        placeholder="At least 8 characters"
+                      />
+                    </label>
+                    {authMode === "register" ? (
+                      <label className="block space-y-1">
+                        <span className="text-3xs font-medium text-ink-muted">
+                          Confirm password
+                        </span>
+                        <input
+                          value={confirmPassword}
+                          onChange={(e) => setConfirmPassword(e.target.value)}
+                          type="password"
+                          required
+                          className="h-9 w-full rounded-lg border border-ink/10 bg-surface px-2.5 text-sm text-ink outline-none ring-accent/30 focus:ring-2"
+                          placeholder="Again"
+                        />
+                      </label>
+                    ) : null}
+                    <button
+                      type="submit"
+                      disabled={formDisabled}
+                      className="flex h-9 w-full items-center justify-center rounded-lg bg-accent text-2xs font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+                    >
+                      {accountBusy
+                        ? "Working…"
+                        : authMode === "login"
+                          ? isSupabaseReady()
+                            ? "Sign in (Supabase → Minos)"
+                            : "Sign in"
+                          : isSupabaseReady()
+                            ? "Create account (Supabase → Minos)"
+                            : "Create account"}
+                    </button>
+                    <p className="text-3xs text-ink-muted">
+                      {isSupabaseReady()
+                        ? "IdP via Supabase; product session is Minos JWT."
+                        : "Minos password login (set Supabase env for IdP)."}
+                    </p>
+                  </form>
+                </div>
+              ) : null}
+
+              {accountVm.showLinkCta ? (
+                <div className="flex flex-col gap-2 border-t border-ink/[0.06] pt-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-ink">Link this Mac</p>
+                    <p className="mt-0.5 text-2xs leading-snug text-ink-muted">
+                      Proves local daemon control and binds this host to your
+                      account. No QR code.
+                    </p>
+                    {accountVm.linkCtaDisabledReason ? (
+                      <p className="mt-1 text-3xs text-ink-muted">
+                        {accountVm.linkCtaDisabledReason}
+                      </p>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={accountVm.linkCtaDisabled}
+                    onClick={() => void linkThisMac(PROJECT_HOST_THIS_MAC)}
+                    className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-2xs font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+                  >
+                    <Link2 className="h-3.5 w-3.5" strokeWidth={2} />
+                    {accountVm.linkCtaLabel}
+                  </button>
+                </div>
+              ) : null}
+
+              {accountVm.showUnlink ? (
+                <div className="flex flex-col gap-2 border-t border-ink/[0.06] pt-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-ink">
+                      {hostLink.hostDisplayName ?? PROJECT_HOST_THIS_MAC}
+                    </p>
+                    <p className="mt-0.5 text-2xs leading-snug text-ink-muted">
+                      Linked to your account
+                      {hostLink.linkedAtMs
+                        ? ` · ${new Date(hostLink.linkedAtMs).toLocaleString()}`
+                        : ""}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={accountVm.unlinkDisabled}
+                    onClick={() => void unlinkThisMac()}
+                    className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-surface-muted px-3 py-2 text-2xs font-semibold text-ink-secondary transition-colors hover:bg-surface-hover hover:text-ink disabled:opacity-40"
+                  >
+                    <Unlink className="h-3.5 w-3.5" strokeWidth={2} />
+                    Unlink
+                  </button>
+                </div>
+              ) : null}
+
+              {accountVm.errorMessage ? (
+                <div className="rounded-lg bg-status-failed/10 px-3 py-2 text-2xs text-status-failed ring-1 ring-inset ring-status-failed/25">
+                  {accountVm.errorMessage}
+                </div>
+              ) : null}
+            </div>
           </section>
 
           <section className={hostCardClass}>
@@ -251,38 +530,6 @@ export function HostView() {
             </div>
           </section>
 
-          <section className={hostCardClass}>
-            <div className={cn(hostCardHeaderClass, "justify-between")}>
-              <div className="flex min-w-0 items-center gap-2">
-                <QrCode
-                  className="h-3.5 w-3.5 shrink-0 text-ink-muted"
-                  strokeWidth={1.8}
-                />
-                <h2 className="text-xs font-semibold text-ink">Pairing</h2>
-              </div>
-              <span className="shrink-0 rounded-md bg-surface-muted px-1.5 py-0.5 text-3xs font-medium uppercase tracking-wide text-ink-muted">
-                Soon
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-ink">Remote control</p>
-                <p className="mt-0.5 text-2xs leading-snug text-ink-muted">
-                  Pair a phone or another client when link is available. Not
-                  required for local projects.
-                </p>
-              </div>
-              <button
-                type="button"
-                disabled
-                className="shrink-0 rounded-lg bg-surface-muted px-2.5 py-1.5 text-2xs font-semibold text-ink-muted opacity-70"
-                title="Pairing lands with relay link"
-              >
-                Show QR
-              </button>
-            </div>
-          </section>
-
           {lastError ? (
             <div className="rounded-xl bg-status-failed/10 px-3.5 py-2.5 text-xs text-status-failed ring-1 ring-inset ring-status-failed/25">
               <div className="font-semibold">Last error</div>
@@ -326,6 +573,25 @@ export function HostView() {
                 <Row
                   label="Managed"
                   value={connection?.managed ? "yes" : "no"}
+                  mono
+                />
+                <Row
+                  label="Backend"
+                  value={backendHttpBase()}
+                  mono
+                />
+                <Row
+                  label="Account"
+                  value={session?.email || "signed out"}
+                  mono
+                />
+                <Row
+                  label="Host link"
+                  value={
+                    hostLink.linked
+                      ? hostLink.hostInstallationId ?? "linked"
+                      : "local only"
+                  }
                   mono
                 />
                 <Row label="Last error" value={lastError ?? "—"} mono />

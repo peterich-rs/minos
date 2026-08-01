@@ -40,7 +40,7 @@ export type HostPresenceInput = {
   /**
    * Relay / backend linked for remote collaboration.
    * `true` → Linked; `false` / omit → Local only when runtime is ready.
-   * v1 desktop only wires local daemon; leave false until relay status is exposed.
+   * Desktop: driven by account-store Host Link state after same-account link.
    */
   relayLinked?: boolean;
 };

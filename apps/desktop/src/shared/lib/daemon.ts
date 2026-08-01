@@ -277,6 +277,23 @@ export const daemonApi = {
     }),
   listSessions: (conversationId: string) =>
     call<DaemonSession[]>("daemon_list_sessions", { conversationId }),
+
+  /** Host Link (D02): prepare identity + bootstrap nonce. */
+  hostPrepareLink: () =>
+    call<{
+      installationId: string;
+      publicKey: string;
+      nonce: string;
+    }>("daemon_host_prepare_link"),
+  hostSignLinkProof: (installationId: string, nonce: string) =>
+    call<{ signature: string }>("daemon_host_sign_link_proof", {
+      installationId,
+      nonce,
+    }),
+  hostApplyLinkToken: (hostInstallationToken: string) =>
+    call<{ linked: boolean }>("daemon_host_apply_link_token", {
+      hostInstallationToken,
+    }),
   createConversation: (
     projectId: string,
     title: string,

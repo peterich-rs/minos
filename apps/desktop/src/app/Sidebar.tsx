@@ -11,6 +11,7 @@ import { CreateProjectEmpty } from "@/features/work/CreateProjectEmpty";
 import { SidebarUpdateCard } from "@/features/settings/SidebarUpdateCard";
 import { useUiStore, type PrimaryNav } from "@/store/ui-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
+import { useAccountStore } from "@/store/account-store";
 import {
   deriveHostPresence,
   presenceDotClass,
@@ -50,12 +51,13 @@ export function Sidebar() {
   const projects = useWorkspaceStore((s) => s.projects);
   const connection = useWorkspaceStore((s) => s.connection);
   const source = useWorkspaceStore((s) => s.source);
+  const relayLinked = useAccountStore((s) => s.hostLink.linked === true);
   const [updateDismissed, setUpdateDismissed] = useState(false);
   const attention = projects.reduce((sum, p) => sum + p.needsAttention, 0);
   const presence = deriveHostPresence({
     source,
     daemonConnected: source === "daemon" && connection?.connected === true,
-    relayLinked: false,
+    relayLinked,
   });
 
   return (
