@@ -79,9 +79,20 @@ pnpm tauri dev
 
 ### Tab 3 — Mobile simulator
 
+Xcode only builds for simulators whose **runtime matches the Simulator SDK**
+(e.g. SDK 26.2 cannot use a stale **iOS 26.0** “iPhone 17 Pro Max”).  
+If you see `Unable to find a destination matching … id:…`, shut down old sims and boot a **26.2+** device:
+
 ```bash
+open -a Simulator
+# Simulator menu: Device → iOS 26.2 → iPhone 17 Pro Max
+# or:
+xcrun simctl boot 61C15592-641E-450C-8B3C-EA71D01B2E7F   # example UUID; list with: xcrun simctl list devices available
+
 cd /Users/zhangfan/develop/github.com/minos
+unset MINOS_BACKEND_URL MINOS_BACKEND_PUBLIC_URL
 just dev-mobile-ios
+# pin: FLUTTER_IOS_DEVICE=61C15592-641E-450C-8B3C-EA71D01B2E7F just dev-mobile-ios
 # or: just dev-mobile-android
 ```
 
