@@ -655,53 +655,6 @@ where
     Ok(res.rows_affected())
 }
 
-pub(crate) async fn count_accounts_for_host_with_executor<'e, E>(
-    executor: E,
-    host_device_id: DeviceId,
-) -> Result<i64, BackendError>
-where
-    E: Executor<'e, Database = Sqlite>,
-{
-    let host_s = host_device_id.to_string();
-    sqlx::query_scalar::<_, i64>(
-        r#"
-        SELECT COUNT(*)
-        FROM host_links
-        WHERE host_installation_id = ?
-        "#,
-    )
-    .bind(&host_s)
-    .fetch_one(executor)
-    .await
-    .map_err(|e| BackendError::StoreQuery {
-        operation: "host_links::count_accounts_for_host".into(),
-        message: e.to_string(),
-    })
-}
-
-pub(crate) async fn count_accounts_for_host_with_postgres_executor<'e, E>(
-    executor: E,
-    host_device_id: DeviceId,
-) -> Result<i64, BackendError>
-where
-    E: Executor<'e, Database = Postgres>,
-{
-    let host_s = host_device_id.to_string();
-    sqlx::query_scalar::<_, i64>(
-        r#"
-        SELECT COUNT(*)
-        FROM host_links
-        WHERE host_installation_id = $1
-        "#,
-    )
-    .bind(&host_s)
-    .fetch_one(executor)
-    .await
-    .map_err(|e| BackendError::StoreQuery {
-        operation: "host_links::count_accounts_for_host".into(),
-        message: e.to_string(),
-    })
-}
 
 fn decode_pair_row(row: PairRowTuple) -> Result<PairRow, BackendError> {
     let (

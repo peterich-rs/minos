@@ -84,7 +84,7 @@ async fn formal_realtime_ws_ticket_uses_account_bearer_without_device_headers() 
 }
 
 #[tokio::test]
-async fn formal_pairing_list_hosts_uses_account_bearer_without_device_headers() {
+async fn formal_hosts_list_uses_account_bearer_without_device_headers() {
     let state = backend_state().await;
     let account =
         minos_backend::store::accounts::create(&state.store, "formal-hosts@example.com", "phc")
@@ -127,11 +127,15 @@ async fn formal_pairing_list_hosts_uses_account_bearer_without_device_headers() 
     let auth_header = format!("Bearer {token}");
     let mut app = http::router(state);
 
-    let (status, body) = post_json(
+    let (status, body) = common::send(
         &mut app,
-        "/v1/pairing/list-hosts",
-        &[("authorization", &auth_header)],
-        json!({}),
+        Request::builder()
+            .method("GET")
+            .uri("/v1/hosts")
+            .header("authorization", &auth_header)
+            .header("x-request-id", "req_contract_test")
+            .body(Body::empty())
+            .unwrap(),
     )
     .await;
 
@@ -141,7 +145,6 @@ async fn formal_pairing_list_hosts_uses_account_bearer_without_device_headers() 
     assert_eq!(hosts.len(), 1);
     assert_eq!(hosts[0]["host_installation_id"], host.to_string());
     assert_eq!(hosts[0]["host_display_name"], "Mac Studio");
-    assert_eq!(hosts[0]["paired_at_ms"], 123);
-    assert_eq!(hosts[0]["linked_via_installation_id"], mobile.to_string());
+    assert_eq!(hosts[0]["linked_at_ms"], 123);
     assert_eq!(hosts[0]["online"], false);
 }

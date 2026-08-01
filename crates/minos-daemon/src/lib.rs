@@ -31,7 +31,7 @@ pub use handle::*;
 pub use local_state::LocalState;
 pub use minos_agent_runtime::SessionState;
 pub use relay_client::RelayClient;
-pub use relay_pairing::{PeerRecord, RelayQrPayload};
+pub use relay_pairing::PeerRecord;
 pub use subscription::{
     AgentStateObserver, ConnectionStateObserver, PeerStateObserver, RelayLinkStateObserver,
     Subscription,
@@ -40,25 +40,20 @@ pub use subscription::{
 #[cfg(feature = "uniffi")]
 uniffi::setup_scaffolding!();
 
-// `DeviceId` is now registered in its home crate `minos-domain` with blanket
-// `impl<UT>` coverage, which already applies to this crate's tag — no local
-// registration needed here. If the daemon later exposes APIs that need a
-// `Uuid` crossing UniFFI, reintroduce a dedicated bridge (and see the
-// `minos-pairing` crate for the `remote custom_type!` pattern).
+// `DeviceId` / `DeviceSecret` are registered in `minos-domain` with blanket
+// `impl<UT>` coverage under this crate's UniFFI tag.
 //
-// `PairingToken` and `DateTime<Utc>` have their UniFFI custom_type!
-// registrations in `minos-pairing` (under the `remote` keyword, which ties
-// them to that crate's `UniFfiTag`). The relay-flow types in
-// `relay_pairing.rs` use them inside `uniffi::Record` fields and therefore
-// need the trait impls under this crate's own tag — pull them in with
-// `use_remote_type!` rather than re-registering, to keep the single source
-// of truth in `minos-pairing`.
+// `DateTime<Utc>` is used by `PeerRecord` and is registered locally.
 #[cfg(feature = "uniffi")]
 mod uniffi_reexports {
-    uniffi::use_remote_type!(minos_pairing::minos_domain::PairingToken);
-    uniffi::use_remote_type!(minos_pairing::chrono::DateTime<chrono::Utc>);
-    // `DeviceSecret`'s home registration in `minos-domain` uses the
-    // `impl<UT>` blanket coverage, so it is already available under this
-    // crate's `UniFfiTag` with no extra re-registration needed — same
-    // pattern as `DeviceId`.
+    use chrono::{DateTime, Utc};
+    use std::time::SystemTime;
+
+    type DateTimeUtc = DateTime<Utc>;
+
+    uniffi::custom_type!(DateTimeUtc, SystemTime, {
+        remote,
+        lower: |dt| dt.into(),
+        try_lift: |st| Ok(st.into()),
+    });
 }

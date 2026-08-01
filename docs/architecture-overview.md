@@ -35,19 +35,18 @@ Minos 是一个远程 AI 编码控制系统：在 Mac 上运行 host 端，通�
 
 ```
 Minos/
-├── crates/                          # Rust workspace (12 个 crate)
+├── crates/                          # Rust workspace crates
 │   ├── minos-domain/                # 核心域类型（ID、错误、枚举）
 │   ├── minos-protocol/              # 线协议（JSON-RPC、Envelope、Realtime）
 │   ├── minos-transport/             # 传输层（WS client、backoff）
-│   ├── minos-pairing/               # 配对状态机
 │   ├── minos-cli-detect/            # CLI agent 检测
 │   ├── minos-agent-runtime/         # Agent 运行时（多进程管理）
 │   ├── minos-chat-store/            # 聊天持久化（SQLite）
 │   ├── minos-acp-protocol/          # ACP 协议类型（Gemini）
 │   ├── minos-codex-protocol/        # Codex app-server 协议类型
 │   ├── minos-ui-protocol/           # UI 事件协议（统一事件形状）
-│   ├── minos-backend/               # 后端服务（HTTP + WS + Worker）
-│   ├── minos-daemon/                # Host 守护进程
+│   ├── minos-backend/               # 后端服务（HTTP + WS + Worker；含 host_link）
+│   ├── minos-daemon/                # Host 守护进程（Host Link RPC）
 │   ├── minos-mobile/                # 移动端 Rust 核心
 │   ├── minos-tui/                   # 终端 UI
 │   ├── minos-ffi-uniffi/            # UniFFI 绑定（→ Swift）
@@ -72,16 +71,16 @@ Minos/
                     minos-domain  (叶节点: ID、错误、Agent枚举、角色)
                    /     |     \     \      \        \
                   /      |      \     \      \        \
-    minos-pairing   minos-cli-detect  minos-ui-protocol  minos-chat-store
-         |                    |              |                   |
-         |                    |              |                   |
-         |              minos-agent-runtime <--------------------+
-         |              /      |       \
-    minos-ffi-uniffi <-+-- minos-codex-protocol
-         |             \-- minos-acp-protocol
-         |
-    minos-protocol ----> minos-transport
-         |                    |
+    minos-cli-detect  minos-ui-protocol  minos-chat-store
+            |              |                   |
+            |              |                   |
+      minos-agent-runtime <--------------------+
+      /      |       \
+minos-ffi-uniffi <-+-- minos-codex-protocol
+      |             \-- minos-acp-protocol
+      |
+minos-protocol ----> minos-transport
+      |                    |
          +--> minos-ffi-frb --> minos-mobile
          |
     minos-backend

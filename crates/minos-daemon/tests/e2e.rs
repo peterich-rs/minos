@@ -16,7 +16,7 @@ use http_body_util::BodyExt as _;
 use minos_backend::{
     auth::jwt,
     http::{router, BackendState},
-    pairing::PairingService,
+    host_link::HostLinkService,
     session::SessionRegistry,
     store,
 };
@@ -81,7 +81,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
 
     let mut state = BackendState::new(
         Arc::new(SessionRegistry::new()),
-        Arc::new(PairingService::new(pool.clone())),
+        Arc::new(HostLinkService::new(pool.clone())),
         pool.clone(),
         Duration::from_mins(5),
         TEST_JWT_SECRET.to_string(),
@@ -234,29 +234,18 @@ async fn register_formal_host(relay: &Relay, host_id: DeviceId) -> anyhow::Resul
     )
     .await?;
 
-    let (code, _) = relay
+    let linked = relay
         .state
-        .pairing
-        .request_code(host_id, Duration::from_secs(300))
-        .await?;
-    relay
-        .state
-        .pairing
-        .confirm_pairing_code(
-            &code,
+        .host_link
+        .link_host(
+            host_id,
             &account.account_id,
             mobile_id,
-            Some("daemon-e2e-confirm"),
+            Some("Test Mac"),
         )
         .await
-        .map_err(|error| anyhow::anyhow!("confirm formal pairing code failed: {error:?}"))?;
-    let redeemed = relay
-        .state
-        .pairing
-        .redeem_host_installation(&code, host_id, Some("daemon-e2e-redeem"))
-        .await
-        .map_err(|error| anyhow::anyhow!("redeem formal host token failed: {error:?}"))?;
-    let host_secret = DeviceSecret(redeemed.token);
+        .map_err(|error| anyhow::anyhow!("host link failed: {error:?}"))?;
+    let host_secret = DeviceSecret(linked.host_installation_token);
     let bearer = jwt::sign(
         TEST_JWT_SECRET.as_bytes(),
         &account.account_id,

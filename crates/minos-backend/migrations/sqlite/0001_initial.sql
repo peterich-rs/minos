@@ -46,36 +46,6 @@ CREATE INDEX idx_installations_account
     ON device_installations(account_id)
     WHERE account_id IS NOT NULL;
 
-CREATE TABLE pairing_tokens (
-    token_hash        TEXT PRIMARY KEY,
-    issuer_device_id  TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
-    created_at        INTEGER NOT NULL,
-    expires_at        INTEGER NOT NULL,
-    consumed_at       INTEGER
-) STRICT;
-
-CREATE INDEX idx_pairing_tokens_expires
-    ON pairing_tokens(expires_at)
-    WHERE consumed_at IS NULL;
-
-CREATE TABLE pairing_codes (
-    code_hash                   TEXT PRIMARY KEY,
-    host_installation_id        TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
-    account_id                  TEXT REFERENCES accounts(account_id) ON DELETE CASCADE,
-    linked_via_installation_id  TEXT REFERENCES device_installations(installation_id) ON DELETE SET NULL,
-    status                      TEXT NOT NULL CHECK (status IN ('pending', 'confirmed', 'redeemed', 'expired')),
-    client_request_id           TEXT,
-    created_at_ms               INTEGER NOT NULL,
-    expires_at_ms               INTEGER NOT NULL,
-    confirmed_at_ms             INTEGER,
-    redeemed_at_ms              INTEGER
-) STRICT;
-
-CREATE UNIQUE INDEX idx_pairing_codes_code_hash
-    ON pairing_codes(code_hash);
-CREATE INDEX idx_pairing_codes_host_status_created
-    ON pairing_codes(host_installation_id, status, created_at_ms DESC);
-
 CREATE TABLE host_installation_tokens (
     token_hash            TEXT PRIMARY KEY,
     host_installation_id  TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
@@ -108,7 +78,7 @@ CREATE INDEX idx_refresh_tokens_device
 CREATE TABLE host_links (
     pair_id                    TEXT NOT NULL PRIMARY KEY,
     account_id                 TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    -- Exclusive host ownership: one account per host installation (Host Link + QR).
+    -- Exclusive host ownership: one account per host installation (Host Link).
     host_installation_id       TEXT NOT NULL UNIQUE REFERENCES device_installations(installation_id) ON DELETE CASCADE,
     linked_via_installation_id TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
     link_display_name          TEXT,

@@ -71,31 +71,11 @@ CREATE INDEX idx_host_token_active
     ON host_installation_tokens(host_installation_id)
     WHERE revoked_at_ms IS NULL;
 
-CREATE TYPE pairing_status AS ENUM ('pending', 'confirmed', 'redeemed', 'expired');
-
-CREATE TABLE pairing_codes (
-    code_hash                  TEXT PRIMARY KEY,
-    host_installation_id       TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
-    account_id                 TEXT REFERENCES accounts(account_id) ON DELETE CASCADE,
-    linked_via_installation_id TEXT REFERENCES device_installations(installation_id) ON DELETE SET NULL,
-    status                     pairing_status NOT NULL,
-    client_request_id          TEXT,
-    created_at_ms              BIGINT NOT NULL,
-    expires_at_ms              BIGINT NOT NULL,
-    confirmed_at_ms            BIGINT,
-    redeemed_at_ms             BIGINT
-);
-
-CREATE INDEX idx_pairing_codes_host_status_created
-    ON pairing_codes(host_installation_id, status, created_at_ms DESC);
-CREATE INDEX idx_pairing_codes_expires
-    ON pairing_codes(expires_at_ms)
-    WHERE status IN ('pending', 'confirmed');
 
 CREATE TABLE host_links (
     pair_id                    TEXT PRIMARY KEY,
     account_id                 TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    -- Exclusive host ownership: one account per host installation (Host Link + QR).
+    -- Exclusive host ownership: one account per host installation (Host Link).
     host_installation_id       TEXT NOT NULL UNIQUE REFERENCES device_installations(installation_id) ON DELETE CASCADE,
     linked_via_installation_id TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
     link_display_name          TEXT,

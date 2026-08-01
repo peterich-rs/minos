@@ -28,11 +28,6 @@ extension AppState {
         self.peers = peers
         trustedDevice = peers.first.map(Self.peerRecord)
 
-        if peers.isEmpty, !isShowingQr {
-            currentQr = nil
-            currentQrGeneratedAt = nil
-            isShowingQr = false
-        }
     }
 
     @MainActor
@@ -67,11 +62,6 @@ extension AppState {
             }
         case .unpaired:
             trustedDevice = nil
-            if !isShowingQr {
-                currentQr = nil
-                currentQrGeneratedAt = nil
-                isShowingQr = false
-            }
         case .pairing:
             break
         }

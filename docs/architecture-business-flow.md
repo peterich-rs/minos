@@ -51,7 +51,7 @@
 
 ### Step 2: Host 请求配对码
 
-1. daemon 调用 `POST /v1/host/pairing/request-code`（签名请求）
+1. daemon 调用 `POST /v1/hosts/link`（签名请求）
 2. 后端:
    - 验证 Ed25519 签名（TOFU — 首次信任公钥注册）
    - 创建 `pairing_codes` 行（status=pending）
@@ -62,7 +62,7 @@
 ### Step 3: 手机确认
 
 1. 用户用手机扫描 QR 码
-2. 移动端调用 `POST /v1/pairing/confirm`，携带配对码 + Bearer token
+2. 移动端调用 `POST /v1/hosts/link`，携带配对码 + Bearer token
 3. 后端:
    - 验证配对码状态和有效期
    - 创建 `account_host_pairings` 行
@@ -71,7 +71,7 @@
 
 ### Step 4: Host 赎回
 
-1. daemon 每 2s 轮询 `POST /v1/host/pairing/redeem`
+1. daemon 每 2s 轮询 `POST /v1/hosts/link`
 2. 后端:
    - 验证所有条件（bootstrap proof + 配对码状态 + 有效期）
    - 原子转换 `pairing_codes.status` → `redeemed`

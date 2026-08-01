@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Menubar popover content. Walks the AppState.phase ladder
 /// (booting → running → bootFailed) and within `.running` renders the
-/// dual-axis status + action items gated by canShowQr / canForgetPeer.
+/// dual-axis status + peer/forget actions.
 ///
 /// Plan 05 Phase J.2.
 struct MenuBarView: View {
@@ -60,11 +60,7 @@ struct MenuBarView: View {
 
             Divider()
 
-            if appState.isShowingQr {
-                PairingQRView(appState: appState)
-            } else {
-                runningActions
-            }
+            runningActions
         }
     }
 
@@ -111,11 +107,6 @@ struct MenuBarView: View {
         VStack(alignment: .leading, spacing: 12) {
             pairedDevicesSection
 
-            if appState.canShowQr {
-                actionButton("显示配对二维码…") {
-                    Task { await appState.showQr() }
-                }
-            }
 
             if appState.canReconnectBackend {
                 actionButton("重新连接后端") {

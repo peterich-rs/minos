@@ -138,7 +138,7 @@ Rust crate (minos-mobile::MobileClient)
 `MobileClient` 暴露约 80 个异步方法:
 
 - **认证**: `register`, `login`, `refreshSession`, `logout`, `subscribeAuthState`
-- **配对**: `pairWithQrJson`, `forgetHost`, `listPairedHosts`, `activeHost`, `setActiveHost`
+- **配对**: `reconnectUsingPersistedState / Host Link`, `forgetHost`, `listPairedHosts`, `activeHost`, `setActiveHost`
 - **社交**: `conversations`, `sendChatMessage`, `friends`, `friendRequests`, `searchUsers`
 - **项目**: `createProject`, `listProjects`, `updateProject`, `deleteProject`
 - **线程**: `listThreads`, `readThread`, `sendUserMessage`, `interruptThread`, `closeThread`
@@ -185,7 +185,7 @@ AuthBootstrapping → AuthUnauthenticated → AuthAuthenticated
 3. QR 扫描器（`mobile_scanner`）读取 QR payload
 4. 解析 v2 JSON（`host_display_name`, `pairing_token`, `expires_at_ms`）
 5. 确认界面显示检测到的信息
-6. 用户确认 → `MobileClient.pairWithQrJson()` → HTTP POST `/v1/pairing/confirm`
+6. 用户确认 → `MobileClient.reconnectUsingPersistedState / Host Link()` → HTTP POST `/v1/pairing/confirm`
 7. 后端创建 `account_host_pairings` 行
 8. 保存设备 ID + 活跃 host → 打开认证 WebSocket
 9. 发布 `ConnectionState::Connected`

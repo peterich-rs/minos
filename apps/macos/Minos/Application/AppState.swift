@@ -44,11 +44,6 @@ final class AppState: @unchecked Sendable {
     var trustedDevice: PeerRecord?
     var peers: [HostPeerSummary] = []
 
-    // ── Pairing UX ──
-    var currentQr: RelayQrPayload?
-    var currentQrGeneratedAt: Date?
-    var isShowingQr: Bool = false
-
     // ── Agent runtime ──
     var agentState: SessionState = .idle
     var currentSession: StartAgentResponse?
@@ -89,9 +84,6 @@ final class AppState: @unchecked Sendable {
     /// - regardless of realtime link state. Pairing QR minting uses the
     ///   HTTP control plane, while `relayLink` only describes the host
     ///   realtime socket after a host installation token exists.
-    var canShowQr: Bool {
-        phase == .running && daemon != nil
-    }
 
     /// Show the "忘记已配对设备" item only when:
     /// - the daemon is running,
@@ -127,9 +119,6 @@ final class AppState: @unchecked Sendable {
         bootError = nil
         agentState = .idle
         currentSession = nil
-        currentQr = nil
-        currentQrGeneratedAt = nil
-        isShowingQr = false
         trustedDevice = nil
         peers = []
         relayLink = .disconnected
@@ -220,9 +209,6 @@ final class AppState: @unchecked Sendable {
         currentSession = nil
         trustedDevice = nil
         peers = []
-        currentQr = nil
-        currentQrGeneratedAt = nil
-        isShowingQr = false
         agentError = nil
         bootError = error
         phase = .bootFailed

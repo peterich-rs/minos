@@ -102,11 +102,9 @@ DaemonInner {
 | 端点 | 用途 |
 |------|------|
 | `POST /v1/host/bootstrap/nonce` | 获取请求签名 nonce |
-| `POST /v1/host/pairing/request-code` | 请求配对 QR 码 |
 | `POST /v1/host/pairing/redeem` | 赎回配对码 |
 | `POST /v1/host/realtime/ws-ticket` | 获取 WS ticket |
 | `POST /v1/host/installations/self` | 验证安装令牌 + 获取 peers |
-| `DELETE /v1/pairing` | 忘记配对 |
 | `POST /v1/me/peers/query` | 查询配对设备 |
 
 ### 请求签名
@@ -268,8 +266,8 @@ Starting → Idle → Running { turn_started_at_ms }
 ### 流程
 
 1. CLI 或 Swift 调用 `DaemonHandle::pairing_qr()`
-2. HTTP 客户端获取 bootstrap nonce，Ed25519 签名，POST `/v1/host/pairing/request-code`
-3. 返回 `RelayQrPayload`（v, host_display_name, pairing_token, expires_at_ms）
+2. Host Link：Desktop 登录同一账户后调用 `host.prepare_link` / `host.sign_link_proof` / `POST /v1/hosts/link` / `host.apply_link_token`
+3. Daemon 持久化 `host_installation_token` 并连接 `/ws/host`
 4. 启动赎回循环：每 2s 轮询 `/v1/host/pairing/redeem` 直到手机确认
 5. 成功后持久化 `DeviceSecret`，通知 dispatch 任务进行 WS 连接
 
@@ -334,7 +332,7 @@ main.rs
         ├── device_secret_store.rs — Host 令牌持久化（`hit_*`）
         ├── host_bootstrap_key_store.rs — Ed25519 密钥持久化
         ├── local_state.rs — DeviceId + PeerRecord JSON
-        ├── relay_pairing.rs — RelayQrPayload, PeerRecord（QR 遗留）
+        ├── relay_pairing.rs — PeerRecord（linked viewer snapshot）
         └── jsonl_recover.rs — Codex JSONL 恢复
 ```
 

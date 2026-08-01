@@ -119,7 +119,7 @@
 
 ## Host Link（同账户绑定，主路径）
 
-**Primary path** for account↔host binding (D02). QR pairing coexists until Phase D cleanup.
+**Primary path** for account↔host binding (D02). Host Link coexists until Phase D cleanup.
 
 | Endpoint | Auth | 作用 |
 |----------|------|------|
@@ -131,17 +131,17 @@ Link proof 签名载荷：`"{installation_id}:{nonce}:v1/hosts/link"`（无 lead
 
 `host already linked elsewhere` → **409** `host_linked_elsewhere`（Host Link 路径单 account↔host）。
 
-实现：`http/v1/hosts.rs` + `PairingService::link_host` / `unlink_host`。
+实现：`http/v1/hosts.rs` + `HostLinkService::link_host` / `unlink_host`。
 
 ## 配对模块 (`src/pairing/`) — QR（遗留，Phase D 删除）
 
-### 核心类型: `PairingService`
+### 核心类型: `HostLinkService`
 
 ### QR 配对流程（仍挂载）
 
-1. **Mac 请求配对码**: `POST /v1/host/pairing/request-code` → 返回配对码
-2. **手机确认**: `POST /v1/pairing/confirm` 带配对码 → 创建 `host_links` 关联
-3. **Mac 赎回**: `POST /v1/host/pairing/redeem` → 获得 `hit_*` host 安装令牌
+1. **Mac 请求配对码**: `POST /v1/hosts/link` → 返回配对码
+2. **手机确认**: `POST /v1/hosts/link` 带配对码 → 创建 `host_links` 关联
+3. **Mac 赎回**: `POST /v1/hosts/link` → 获得 `hit_*` host 安装令牌
 4. **Mac 连接**: 用安装令牌签发 WS ticket → 连接 `/ws/host`
 
 ### 安全措施
@@ -197,7 +197,7 @@ Migrations 为 latest-only 单一初始 schema（`sqlx::migrate!`）：
 | `accounts` | 账户（email, password_hash, minos_id, display_name） |
 | `device_installations` | 安装（kind: mobile/browser/desktop/host, public_key, account_id） |
 | `pairing_tokens` | 配对令牌（token_hash, issuer_device_id, expires_at） |
-| `pairing_codes` | 配对码（code_hash, host_installation_id, status） |
+| `host_links` | 配对码（code_hash, host_installation_id, status） |
 | `host_installation_tokens` | Host 安装令牌 |
 | `refresh_tokens` | 刷新令牌 |
 | `host_links` | 账户-Host 关联 |
@@ -219,7 +219,7 @@ Migrations 为 latest-only 单一初始 schema（`sqlx::migrate!`）：
 
 ### 30 个 Store 子模块
 
-涵盖: accounts, device_installations, tokens, pairing_codes, host_installation_tokens, refresh_tokens, host_links, agent_sessions, agent_turns, agent_turn_events, approval_requests, host_commands, durable_event_log, outbox_events, sessions, raw_events, thread_sync_state, projects, push_tokens, notification_preferences, notification_cooldowns 等。
+涵盖: accounts, device_installations, tokens, host_links, host_installation_tokens, refresh_tokens, host_links, agent_sessions, agent_turns, agent_turn_events, approval_requests, host_commands, durable_event_log, outbox_events, sessions, raw_events, thread_sync_state, projects, push_tokens, notification_preferences, notification_cooldowns 等。
 
 ## Agent 会话管理 (`src/agent_sessions/`)
 
@@ -255,7 +255,7 @@ RuntimeShell           -- 拥有 AppContext、后台任务、集群监听
   └── AppContext       -- 组合所有服务
         ├── SessionRegistry           -- 内存中的活跃 WS 会话
         ├── SubscriptionManager       -- topic 订阅管理
-        ├── PairingService            -- 配对业务逻辑
+        ├── HostLinkService            -- 配对业务逻辑
         ├── AuthUseCase               -- 认证业务逻辑
         ├── IngestUseCase             -- 原始事件摄取
         ├── RealtimeFanout            -- 事件扇出引擎

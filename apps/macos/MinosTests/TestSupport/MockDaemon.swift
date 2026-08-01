@@ -29,7 +29,6 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
     var currentTrustedDeviceError: MinosError?
     var currentPeersValue: [HostPeerSummary]
     var currentPeersError: MinosError?
-    var pairingQrResult: Result<RelayQrPayload, MinosError>
     var forgetPeerError: MinosError?
     var forgetPeerDeviceError: MinosError?
     var startAgentResult: Result<StartAgentResponse, MinosError>
@@ -45,7 +44,6 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
 
     private(set) var forgetPeerCallCount = 0
     private(set) var forgetPeerDeviceCalls: [DeviceId] = []
-    private(set) var pairingQrCallCount = 0
     private(set) var currentAgentThreadCallCount = 0
     private(set) var startAgentCalls: [StartAgentRequest] = []
     private(set) var sendUserMessageCalls: [SendUserMessageRequest] = []
@@ -66,7 +64,6 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         currentAgentSession: AgentSessionSnapshot? = nil,
         currentTrustedDevice: PeerRecord? = nil,
         currentPeers: [HostPeerSummary]? = nil,
-        pairingQrResult: Result<RelayQrPayload, MinosError> = .success(MockDaemon.makeQrPayload()),
         startAgentResult: Result<StartAgentResponse, MinosError> = .success(
             MockDaemon.makeStartAgentResponse()
         ),
@@ -83,7 +80,6 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
             trustedDevice: currentTrustedDevice,
             peer: currentPeer
         )
-        self.pairingQrResult = pairingQrResult
         self.startAgentResult = startAgentResult
         self.relayLinkSubscription = relayLinkSubscription
         self.peerSubscription = peerSubscription
@@ -118,10 +114,6 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         return currentPeersValue
     }
 
-    func pairingQr() async throws -> RelayQrPayload {
-        pairingQrCallCount += 1
-        return try pairingQrResult.get()
-    }
 
     func forgetPeer() async throws {
         forgetPeerCallCount += 1
@@ -225,38 +217,6 @@ extension MockDaemon {
         }
     }
 
-    static func makeQrPayload(
-        pairingToken: PairingToken = "pairing-token",
-        hostDisplayName: String = "Minos Mac",
-        expiresAtMs: Int64 = 1_700_000_000_000
-    ) -> RelayQrPayload {
-        RelayQrPayload(
-            v: 2,
-            hostDisplayName: hostDisplayName,
-            pairingToken: pairingToken,
-            expiresAtMs: expiresAtMs
-        )
-    }
-
-    static func makeStartAgentRequest(
-        agent: AgentName = .codex,
-        workspace: String = "",
-        mode: AgentLaunchMode? = .jsonl,
-        profileId: String? = nil,
-        model: String? = nil,
-        reasoningEffort: String? = nil,
-        instructions: String? = nil
-    ) -> StartAgentRequest {
-        StartAgentRequest(
-            agent: agent,
-            workspace: workspace,
-            mode: mode,
-            profileId: profileId,
-            model: model,
-            reasoningEffort: reasoningEffort,
-            instructions: instructions
-        )
-    }
 
     static func makeStartAgentResponse(
         sessionId: String = "thread-abc12",

@@ -38,15 +38,15 @@ struct StatusIcon: View {
         case .connected:
             switch peer {
             case .unpaired: return "bolt.circle"
-            case .pairing: return "qrcode"
+            case .pairing: return "laptopcomputer"
             case let .paired(_, _, online):
                 return online ? "bolt.circle.fill" : "bolt.circle"
             }
         case .connecting:
             return "bolt.circle"
         case .disconnected:
-            if case .unpaired = peer { return "qrcode" }
-            if case .pairing = peer { return "qrcode" }
+            if case .unpaired = peer { return "laptopcomputer" }
+            if case .pairing = peer { return "laptopcomputer" }
             return "bolt.slash"
         }
     }

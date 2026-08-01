@@ -120,7 +120,7 @@ pub struct SessionHandle {
     /// promising async borrow semantics — stays sync because no caller
     /// `.await`s while holding the guard.
     pub account_id: Arc<Mutex<Option<String>>>,
-    /// For multi-iOS pairing, Mac replies cannot be routed by deriving
+    /// For multi-iOS host_link, Mac replies cannot be routed by deriving
     /// the original requester from a single per-session slot. When an
     /// iOS request is forwarded to this Mac, the backend records
     /// JSON-RPC id -> requester here so the response with the same id is

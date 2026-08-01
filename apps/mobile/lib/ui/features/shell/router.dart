@@ -10,7 +10,6 @@ import 'package:minos/ui/features/agents/views/agents_hub_page.dart';
 import 'package:minos/ui/features/auth/views/login_page.dart';
 import 'package:minos/ui/features/chat/views/thread_view_page.dart';
 import 'package:minos/ui/features/debug/views/log_viewer_page.dart';
-import 'package:minos/ui/features/pairing/views/pairing_page.dart';
 import 'package:minos/ui/features/projects/views/project_detail_page.dart';
 import 'package:minos/ui/features/shell/views/app_shell_page.dart';
 import 'package:minos/ui/features/social/views/group_members_page.dart';
@@ -26,7 +25,6 @@ abstract final class AppRoutes {
   static const String newThread = '/thread/new';
   static const String agentStart = '/agent-start';
   static const String agentProfile = '/agent-profile/:profileId';
-  static const String pairing = '/pairing';
   static const String logViewer = '/log-viewer';
   static const String socialHub = '/social';
   static const String socialChat = '/social/chat/:conversationId';
@@ -115,10 +113,6 @@ GoRouter createAppRouter(Ref ref) {
           final profileId = state.pathParameters['profileId']!;
           return AgentProfilePage(profileId: profileId);
         },
-      ),
-      GoRoute(
-        path: AppRoutes.pairing,
-        builder: (context, state) => const PairingPage(),
       ),
       GoRoute(
         path: AppRoutes.logViewer,

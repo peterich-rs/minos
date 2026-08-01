@@ -15,8 +15,7 @@
 /// │       ├── projects/      Project CRUD + sessions         │
 /// │       ├── agents/        Agent profile management       │
 /// │       ├── social/        Friends & conversations        │
-/// │       ├── pairing/       QR device pairing              │
-/// │       ├── debug/         Log viewer & traces            │
+/// /// │       ├── debug/         Log viewer & traces            │
 /// │       └── shell/         Root navigation shell          │
 /// ├─────────────────────────────────────────────────────────┤
 /// │  Application Layer (lib/application/)                   │

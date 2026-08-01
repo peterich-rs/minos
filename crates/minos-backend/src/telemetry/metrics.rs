@@ -46,9 +46,6 @@ const AUTH_LOGIN_TOTAL: &str = "minos_backend_auth_login_total";
 const AUTH_REFRESH_TOTAL: &str = "minos_backend_auth_refresh_total";
 const AUTH_LOGOUT_TOTAL: &str = "minos_backend_auth_logout_total";
 const AUTH_REFRESH_REUSE_TOTAL: &str = "minos_backend_auth_refresh_reuse_total";
-const PAIRING_TOKEN_ISSUE_TOTAL: &str = "minos_backend_pairing_token_issue_total";
-const PAIRING_CONSUME_TOTAL: &str = "minos_backend_pairing_consume_total";
-const PAIRING_FORGET_TOTAL: &str = "minos_backend_pairing_forget_total";
 const APPROVAL_DECISION_TOTAL: &str = "minos_backend_approval_decision_total";
 const DB_QUERY_DURATION_SECONDS: &str = "minos_backend_db_query_duration_seconds";
 
@@ -159,18 +156,6 @@ fn prometheus_handle() -> &'static PrometheusHandle {
         metrics::describe_counter!(
             AUTH_REFRESH_REUSE_TOTAL,
             "Detected refresh-token reuse incidents (security alert)."
-        );
-        metrics::describe_counter!(
-            PAIRING_TOKEN_ISSUE_TOTAL,
-            "Pairing token mints, labeled by outcome."
-        );
-        metrics::describe_counter!(
-            PAIRING_CONSUME_TOTAL,
-            "Pairing token consumes, labeled by outcome."
-        );
-        metrics::describe_counter!(
-            PAIRING_FORGET_TOTAL,
-            "Pairing tear-downs, labeled by outcome."
         );
         metrics::describe_counter!(
             APPROVAL_DECISION_TOTAL,
@@ -375,20 +360,8 @@ pub fn record_auth_refresh_reuse() {
     metrics::counter!(AUTH_REFRESH_REUSE_TOTAL).increment(1);
 }
 
-pub fn record_pairing_token_issue(outcome: &str) {
-    init();
-    metrics::counter!(PAIRING_TOKEN_ISSUE_TOTAL, "outcome" => outcome.to_string()).increment(1);
-}
 
-pub fn record_pairing_consume(outcome: &str) {
-    init();
-    metrics::counter!(PAIRING_CONSUME_TOTAL, "outcome" => outcome.to_string()).increment(1);
-}
 
-pub fn record_pairing_forget(outcome: &str) {
-    init();
-    metrics::counter!(PAIRING_FORGET_TOTAL, "outcome" => outcome.to_string()).increment(1);
-}
 
 pub fn record_approval_decision(outcome: &str) {
     init();

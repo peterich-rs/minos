@@ -47,8 +47,8 @@ use utoipa::OpenApi;
         (name = "auth", description = "Account registration, login, token refresh, logout"),
         (name = "agent-sessions", description = "Agent session lifecycle management"),
         (name = "health", description = "Health and readiness probes"),
-        (name = "host", description = "Host (Mac) bootstrap and pairing"),
-        (name = "pairing", description = "Account-host pairing management"),
+        (name = "host", description = "Host (Mac) bootstrap and installation tokens"),
+        (name = "hosts", description = "Same-account host link management"),
         (name = "projects", description = "Project CRUD and agent-session linking"),
         (name = "social", description = "Conversations, friends, and messaging"),
     )

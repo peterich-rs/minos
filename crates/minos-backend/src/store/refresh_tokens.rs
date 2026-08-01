@@ -266,7 +266,7 @@ pub async fn revoke_all_for_account(
 /// Revoke every active refresh token for a single device.
 ///
 /// Login mints a fresh token for the current device, but it must not evict
-/// other devices on the same account now that multi-mobile pairing is
+/// other devices on the same account now that multi-device sessions are
 /// supported.
 pub async fn revoke_all_for_device(
     store: &impl AsStorePool,
@@ -293,6 +293,31 @@ pub async fn revoke_all_for_device(
     }
     .map_err(|e| BackendError::StoreQuery {
         operation: "refresh_tokens::revoke_all_for_device".into(),
+        message: e.to_string(),
+    })?;
+    Ok(result)
+}
+
+/// Delete expired or already-revoked refresh token rows.
+pub async fn gc_expired(store: &impl AsStorePool, now_ms: i64) -> Result<u64, BackendError> {
+    let result = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "DELETE FROM refresh_tokens WHERE expires_at <= ? OR revoked_at IS NOT NULL",
+        )
+        .bind(now_ms)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "DELETE FROM refresh_tokens WHERE expires_at <= $1 OR revoked_at IS NOT NULL",
+        )
+        .bind(now_ms)
+        .execute(pool)
+        .await
+        .map(|result| result.rows_affected()),
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "refresh_tokens::gc_expired".into(),
         message: e.to_string(),
     })?;
     Ok(result)

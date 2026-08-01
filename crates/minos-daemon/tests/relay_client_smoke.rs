@@ -8,9 +8,8 @@
 //!
 //! 1. `connect_becomes_connected` — link transitions
 //!    `Connecting{0}` → `Connected` within a bounded window.
-//! 2. `request_pairing_token_returns_qr_with_mac_name` — issues
-//!    `RequestPairingToken`, wraps into `RelayQrPayload`, and cross-checks
-//!    the backend URL and mac display name.
+//! 2. `apply_link_token_persists_and_connects` — Host Link token apply
+//!    wakes the host dialer and reaches Connected.
 //!
 //! The harness lives inline here (rather than a shared crate) so the
 //! daemon's test tree does not take a production dep on the backend; the
@@ -23,14 +22,13 @@ use std::time::Duration;
 
 use minos_backend::{
     http::{router, BackendState},
-    pairing::PairingService,
+    host_link::HostLinkService,
     session::SessionRegistry,
     store,
 };
 use minos_daemon::config::RelayConfig;
 use minos_daemon::relay_client::{PersistenceCtx, RelayClient};
-use minos_domain::{DeviceId, DeviceRole, DeviceSecret, MinosError, PeerState, RelayLinkState};
-use pretty_assertions::assert_eq;
+use minos_domain::{DeviceId, DeviceRole, DeviceSecret, MinosError, RelayLinkState};
 use sqlx::SqlitePool;
 use tempfile::{NamedTempFile, TempDir};
 use tokio::task::JoinHandle;
@@ -106,7 +104,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
 
     let mut state = BackendState::new(
         Arc::new(SessionRegistry::new()),
-        Arc::new(PairingService::new(pool.clone())),
+        Arc::new(HostLinkService::new(pool.clone())),
         pool.clone(),
         TOKEN_TTL,
         "daemon-smoke-test-jwt-secret-32b".to_string(),
@@ -175,22 +173,11 @@ async fn register_formal_host(
     .await?;
     store::device_installations::set_account_id(pool, &mobile_id, &account.account_id).await?;
 
-    let pairing = PairingService::new(pool.clone());
-    let (code, _) = pairing.request_code(host_id, TOKEN_TTL).await?;
-    pairing
-        .confirm_pairing_code(
-            &code,
-            &account.account_id,
-            mobile_id,
-            Some("relay-smoke-confirm"),
-        )
+    let linked = HostLinkService::new(pool.clone())
+        .link_host(host_id, &account.account_id, mobile_id, Some("Fan's Mac"))
         .await
-        .map_err(|error| anyhow::anyhow!("confirm formal pairing code failed: {error:?}"))?;
-    let redeemed = pairing
-        .redeem_host_installation(&code, host_id, Some("relay-smoke-redeem"))
-        .await
-        .map_err(|error| anyhow::anyhow!("redeem formal host token failed: {error:?}"))?;
-    let secret = DeviceSecret(redeemed.token);
+        .map_err(|error| anyhow::anyhow!("host link failed: {error:?}"))?;
+    let secret = DeviceSecret(linked.host_installation_token);
 
     // `/v1/me/peers` is still the legacy host snapshot route and checks
     // X-Device-Secret. Mirror the formal token into the legacy hash slot
@@ -245,7 +232,7 @@ async fn connect_becomes_connected() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn request_pairing_token_returns_qr_with_mac_name() -> anyhow::Result<()> {
+async fn apply_link_token_persists_and_connects() -> anyhow::Result<()> {
     let _home = MinosHomeGuard::new()?;
     let relay = spawn_relay().await?;
     let backend_url = relay_url(&relay);
@@ -253,75 +240,15 @@ async fn request_pairing_token_returns_qr_with_mac_name() -> anyhow::Result<()> 
 
     let mac_name = "Fan's MacBook Pro".to_string();
     let host_id = DeviceId::new();
-    let (client, _link_rx, _peer_rx) = RelayClient::spawn(
-        test_config(),
+    store::device_installations::insert_device(
+        &relay.pool,
         host_id,
-        None,
-        None,
-        mac_name.clone(),
-        backend_url.clone(),
-        None,
-        persistence,
-    );
-
-    let qr = timeout(STEP_TIMEOUT, client.request_pairing_token())
-        .await
-        .expect("request_pairing_token did not complete within timeout")?;
-
-    // QR payload v2: backend assembles the full payload (ADR 0014). v=1 was
-    // the legacy host-assembled shape; the new flow returns v=2.
-    assert_eq!(qr.v, 2);
-    assert_eq!(qr.host_display_name, mac_name);
-    assert!(qr.expires_at_ms > 0, "expected epoch-ms expiry");
-    assert!(
-        !qr.pairing_token.as_str().is_empty(),
-        "expected non-empty pairing token, got {:?}",
-        qr.pairing_token
-    );
-
-    client.stop().await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn qr_confirm_redeem_persists_token_and_connects() -> anyhow::Result<()> {
-    let _home = MinosHomeGuard::new()?;
-    let relay = spawn_relay().await?;
-    let backend_url = relay_url(&relay);
-    let persistence = test_persistence();
-
-    let mac_name = "Fan's MacBook Pro".to_string();
-    let host_id = DeviceId::new();
-    let (client, mut link_rx, mut peer_rx) = RelayClient::spawn(
-        test_config(),
-        host_id,
-        None,
-        None,
-        mac_name,
-        backend_url,
-        None,
-        persistence,
-    );
-
-    let qr = timeout(STEP_TIMEOUT, client.request_pairing_token())
-        .await
-        .expect("request_pairing_token did not complete within timeout")?;
-
-    timeout(STEP_TIMEOUT, async {
-        loop {
-            if matches!(*peer_rx.borrow_and_update(), PeerState::Pairing) {
-                return;
-            }
-            peer_rx
-                .changed()
-                .await
-                .expect("peer sender must stay alive");
-        }
-    })
-    .await
-    .expect("peer state did not enter Pairing");
-
-    let account = store::accounts::create(&relay.pool, "redeem-smoke@example.com", "phc").await?;
+        &mac_name,
+        DeviceRole::AgentHost,
+        0,
+    )
+    .await?;
+    let account = store::accounts::create(&relay.pool, "host-link-smoke@example.com", "phc").await?;
     let mobile_id = DeviceId::new();
     store::device_installations::insert_device(
         &relay.pool,
@@ -333,16 +260,25 @@ async fn qr_confirm_redeem_persists_token_and_connects() -> anyhow::Result<()> {
     .await?;
     store::device_installations::set_account_id(&relay.pool, &mobile_id, &account.account_id)
         .await?;
-
-    PairingService::new(relay.pool.clone())
-        .confirm_pairing_code(
-            qr.pairing_token.as_str(),
-            &account.account_id,
-            mobile_id,
-            Some("relay-smoke-auto-redeem-confirm"),
-        )
+    let linked = HostLinkService::new(relay.pool.clone())
+        .link_host(host_id, &account.account_id, mobile_id, Some(&mac_name))
         .await
-        .map_err(|error| anyhow::anyhow!("confirm formal pairing code failed: {error:?}"))?;
+        .map_err(|error| anyhow::anyhow!("host link failed: {error:?}"))?;
+
+    let (client, mut link_rx, _peer_rx) = RelayClient::spawn(
+        test_config(),
+        host_id,
+        None,
+        None,
+        mac_name,
+        backend_url,
+        None,
+        persistence,
+    );
+
+    client
+        .apply_link_token(&linked.host_installation_token)
+        .map_err(|error| anyhow::anyhow!("apply_link_token failed: {error:?}"))?;
 
     timeout(STEP_TIMEOUT, async {
         loop {
@@ -356,28 +292,11 @@ async fn qr_confirm_redeem_persists_token_and_connects() -> anyhow::Result<()> {
         }
     })
     .await
-    .expect("relay link did not reach Connected after redeem");
-
-    timeout(STEP_TIMEOUT, async {
-        loop {
-            if matches!(
-                peer_rx.borrow_and_update().clone(),
-                PeerState::Paired { peer_id, .. } if peer_id == mobile_id
-            ) {
-                return;
-            }
-            peer_rx
-                .changed()
-                .await
-                .expect("peer sender must stay alive");
-        }
-    })
-    .await
-    .expect("peer state did not become Paired after redeem");
+    .expect("relay link did not reach Connected after apply_link_token");
 
     assert!(
         minos_daemon::device_secret_store::read()?.is_some(),
-        "expected redeemed host installation token to be persisted"
+        "expected host installation token to be persisted"
     );
 
     client.stop().await;

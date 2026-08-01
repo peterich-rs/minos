@@ -14,7 +14,7 @@ use crate::auth::host_bootstrap::{self, HostBootstrapError, HostBootstrapProof};
 use crate::http::error_response::{err_json as err_body, ErrorEnvelope};
 use crate::http::v1::contract::{request_id, ResponseEnvelope};
 use crate::http::BackendState;
-use crate::pairing::HostLinkError;
+use crate::host_link::HostLinkError;
 
 pub const LINK_PATH: &str = "v1/hosts/link";
 
@@ -111,7 +111,7 @@ async fn post_link(
     .map_err(host_bootstrap_error)?;
 
     let outcome = state
-        .pairing
+        .host_link
         .link_host(
             installation_id,
             &bearer_outcome.account_id,
@@ -159,7 +159,7 @@ async fn post_unlink(
         })?;
 
     state
-        .pairing
+        .host_link
         .unlink_host(
             state.registry.as_ref(),
             host_installation_id,

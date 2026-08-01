@@ -30,7 +30,7 @@ use futures::{SinkExt, StreamExt};
 use minos_backend::{
     auth::use_case::AuthUseCase,
     http::{router, BackendState},
-    pairing::PairingService,
+    host_link::HostLinkService,
     session::SessionRegistry,
     store,
 };
@@ -80,7 +80,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
     let registry = Arc::new(SessionRegistry::new());
     let mut state = BackendState::new(
         registry,
-        Arc::new(PairingService::new(pool.clone())),
+        Arc::new(HostLinkService::new(pool.clone())),
         pool.clone(),
         DEFAULT_TOKEN_TTL,
         TEST_JWT_SECRET.to_string(),

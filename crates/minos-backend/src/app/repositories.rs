@@ -76,19 +76,6 @@ pub struct HostTokenRow {
     pub revoked_at_ms: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PairingCodeRow {
-    pub code_hash: String,
-    pub host_installation_id: String,
-    pub account_id: Option<String>,
-    pub linked_via_installation_id: Option<String>,
-    pub status: String,
-    pub client_request_id: Option<String>,
-    pub created_at_ms: i64,
-    pub expires_at_ms: i64,
-    pub confirmed_at_ms: Option<i64>,
-    pub redeemed_at_ms: Option<i64>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostLinkRow {
@@ -389,28 +376,6 @@ pub trait HostInstallationTokensRepository: Send + Sync {
     async fn revoke(&self, token_hash: &str, at_ms: i64) -> Result<bool, BackendError>;
 }
 
-#[async_trait]
-pub trait PairingCodesRepository: Send + Sync {
-    async fn insert(
-        &self,
-        code_hash: &str,
-        host_installation_id: &str,
-        ttl_ms: i64,
-        client_request_id: Option<&str>,
-        at_ms: i64,
-    ) -> Result<PairingCodeRow, BackendError>;
-
-    async fn find_by_code(&self, code_hash: &str) -> Result<Option<PairingCodeRow>, BackendError>;
-
-    async fn update_status(
-        &self,
-        code_hash: &str,
-        new_status: &str,
-        at_ms: i64,
-    ) -> Result<bool, BackendError>;
-
-    async fn expire_stale(&self, now_ms: i64) -> Result<u64, BackendError>;
-}
 
 #[async_trait]
 pub trait HostLinksRepository: Send + Sync {
@@ -656,7 +621,6 @@ pub struct RepositorySet {
     pub installations: Arc<dyn InstallationsRepository>,
     pub refresh_tokens: Arc<dyn RefreshTokensRepository>,
     pub host_installation_tokens: Arc<dyn HostInstallationTokensRepository>,
-    pub pairing_codes: Arc<dyn PairingCodesRepository>,
     pub host_links: Arc<dyn HostLinksRepository>,
     pub agents: Arc<dyn AgentsRepository>,
     pub projects: Arc<dyn ProjectsRepository>,
@@ -700,9 +664,6 @@ impl RepositorySet {
                 store: store.clone(),
             }),
             host_installation_tokens: Arc::new(StoreBackedHostInstallationTokensRepository {
-                store: store.clone(),
-            }),
-            pairing_codes: Arc::new(StoreBackedPairingCodesRepository {
                 store: store.clone(),
             }),
             host_links: Arc::new(StoreBackedHostLinksRepository {
@@ -1329,148 +1290,6 @@ impl HostInstallationTokensRepository for StoreBackedHostInstallationTokensRepos
                 message: e.to_string(),
             })
             .map(|n| n == 1)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Store-backed implementations — PairingCodesRepository
-// ---------------------------------------------------------------------------
-
-fn convert_pairing_code_row(row: store::pairing_codes::PairingCodeRow) -> PairingCodeRow {
-    PairingCodeRow {
-        code_hash: row.code_hash,
-        host_installation_id: row.host_installation_id.to_string(),
-        account_id: row.account_id,
-        linked_via_installation_id: row.linked_via_installation_id.map(|id| id.to_string()),
-        status: row.status.as_str().to_string(),
-        client_request_id: row.client_request_id,
-        created_at_ms: row.created_at_ms,
-        expires_at_ms: row.expires_at_ms,
-        confirmed_at_ms: row.confirmed_at_ms,
-        redeemed_at_ms: row.redeemed_at_ms,
-    }
-}
-
-struct StoreBackedPairingCodesRepository {
-    store: StoreHandle,
-}
-
-#[async_trait]
-impl PairingCodesRepository for StoreBackedPairingCodesRepository {
-    async fn insert(
-        &self,
-        code_hash: &str,
-        host_installation_id: &str,
-        ttl_ms: i64,
-        client_request_id: Option<&str>,
-        at_ms: i64,
-    ) -> Result<PairingCodeRow, BackendError> {
-        let device_id = Uuid::parse_str(host_installation_id)
-            .map(DeviceId)
-            .map_err(|e| BackendError::StoreDecode {
-                column: "host_installation_id".into(),
-                message: e.to_string(),
-            })?;
-        let expires_at_ms = at_ms + ttl_ms;
-        store::pairing_codes::insert_code(&self.store, code_hash, device_id, at_ms, expires_at_ms)
-            .await?;
-        // Return the constructed row; client_request_id is set later during confirm.
-        Ok(PairingCodeRow {
-            code_hash: code_hash.to_string(),
-            host_installation_id: host_installation_id.to_string(),
-            account_id: None,
-            linked_via_installation_id: None,
-            status: "pending".to_string(),
-            client_request_id: client_request_id.map(str::to_string),
-            created_at_ms: at_ms,
-            expires_at_ms,
-            confirmed_at_ms: None,
-            redeemed_at_ms: None,
-        })
-    }
-
-    async fn find_by_code(&self, code_hash: &str) -> Result<Option<PairingCodeRow>, BackendError> {
-        let row = match self.store.as_store_pool() {
-            StorePoolRef::Sqlite(pool) => {
-                store::pairing_codes::get_code_with_executor(pool, code_hash).await
-            }
-            StorePoolRef::Postgres(pool) => {
-                store::pairing_codes::get_code_with_postgres_executor(pool, code_hash).await
-            }
-        }?;
-        Ok(row.map(convert_pairing_code_row))
-    }
-
-    async fn update_status(
-        &self,
-        code_hash: &str,
-        new_status: &str,
-        at_ms: i64,
-    ) -> Result<bool, BackendError> {
-        let result = match self.store.as_store_pool() {
-            StorePoolRef::Sqlite(pool) => {
-                sqlx::query(
-                    "UPDATE pairing_codes SET status = ?, \
-                     confirmed_at_ms = CASE WHEN ? = 'confirmed' THEN COALESCE(confirmed_at_ms, ?) ELSE confirmed_at_ms END, \
-                     redeemed_at_ms = CASE WHEN ? = 'redeemed' THEN COALESCE(redeemed_at_ms, ?) ELSE redeemed_at_ms END \
-                     WHERE code_hash = ?",
-                )
-                .bind(new_status)
-                .bind(new_status)
-                .bind(at_ms)
-                .bind(new_status)
-                .bind(at_ms)
-                .bind(code_hash)
-                .execute(pool)
-                .await
-                .map(|r| r.rows_affected())
-            }
-            StorePoolRef::Postgres(pool) => {
-                sqlx::query(
-                    "UPDATE pairing_codes SET status = $1, \
-                     confirmed_at_ms = CASE WHEN $1 = 'confirmed' THEN COALESCE(confirmed_at_ms, $2) ELSE confirmed_at_ms END, \
-                     redeemed_at_ms = CASE WHEN $1 = 'redeemed' THEN COALESCE(redeemed_at_ms, $2) ELSE redeemed_at_ms END \
-                     WHERE code_hash = $3",
-                )
-                .bind(new_status)
-                .bind(at_ms)
-                .bind(code_hash)
-                .execute(pool)
-                .await
-                .map(|r| r.rows_affected())
-            }
-        }
-        .map_err(|e| BackendError::StoreQuery {
-            operation: "pairing_codes.update_status".into(),
-            message: e.to_string(),
-        })?;
-        Ok(result == 1)
-    }
-
-    async fn expire_stale(&self, now_ms: i64) -> Result<u64, BackendError> {
-        let result = match self.store.as_store_pool() {
-            StorePoolRef::Sqlite(pool) => sqlx::query(
-                "UPDATE pairing_codes SET status = 'expired' \
-                     WHERE status = 'pending' AND expires_at_ms < ?",
-            )
-            .bind(now_ms)
-            .execute(pool)
-            .await
-            .map(|r| r.rows_affected()),
-            StorePoolRef::Postgres(pool) => sqlx::query(
-                "UPDATE pairing_codes SET status = 'expired' \
-                     WHERE status = 'pending' AND expires_at_ms < $1",
-            )
-            .bind(now_ms)
-            .execute(pool)
-            .await
-            .map(|r| r.rows_affected()),
-        }
-        .map_err(|e| BackendError::StoreQuery {
-            operation: "pairing_codes.expire_stale".into(),
-            message: e.to_string(),
-        })?;
-        Ok(result)
     }
 }
 

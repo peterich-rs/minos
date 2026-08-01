@@ -6,7 +6,7 @@ use minos_backend::{
     auth::use_case::AuthUseCase,
     conversations::{ConversationService, DefaultConversationService},
     http::{router, BackendState},
-    pairing::PairingService,
+    host_link::HostLinkService,
     realtime::wire::{ClientFrame, ServerFrame},
     session::SessionRegistry,
     store,
@@ -51,7 +51,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
     let registry = Arc::new(SessionRegistry::new());
     let mut state = BackendState::new(
         registry,
-        Arc::new(PairingService::new(pool.clone())),
+        Arc::new(HostLinkService::new(pool.clone())),
         pool.clone(),
         Duration::from_mins(5),
         TEST_JWT_SECRET.to_string(),

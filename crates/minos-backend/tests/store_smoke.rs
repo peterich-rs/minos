@@ -8,11 +8,7 @@ async fn connect_creates_tables_and_migrates() {
 
     let pool = minos_backend::store::connect(&url).await.unwrap();
 
-    // ADR-0020 / Phase F+H1: legacy device-keyed `pairings` table was
-    // dropped in migration 0011 and replaced by `account_mac_pairings`
-    // (migration 0012). Migration 0013 renamed that table (and its
-    // device column) to the host-prefixed names. Smoke-test the
-    // post-rename schema.
+    // Latest-only schema: host link tables without QR pairing_codes/tokens.
     for table in [
         "device_installations",
         "accounts",
@@ -20,8 +16,6 @@ async fn connect_creates_tables_and_migrates() {
         "agent_sessions",
         "agent_turns",
         "agent_turn_events",
-        "pairing_tokens",
-        "pairing_codes",
         "host_installation_tokens",
         "host_commands",
         "durable_event_log",

@@ -3982,7 +3982,6 @@ dependencies = [
  "minos-cli-detect",
  "minos-codex-protocol",
  "minos-domain",
- "minos-pairing",
  "minos-protocol",
  "minos-transport",
  "minos-ui-protocol",
@@ -4076,7 +4075,6 @@ dependencies = [
  "minos-agent-runtime",
  "minos-daemon",
  "minos-domain",
- "minos-pairing",
  "minos-protocol",
  "minos-ui-protocol",
  "tracing",
@@ -4099,7 +4097,6 @@ dependencies = [
  "mars-xlog",
  "minos-backend",
  "minos-domain",
- "minos-pairing",
  "minos-protocol",
  "minos-ui-protocol",
  "openwire",
@@ -4117,22 +4114,6 @@ dependencies = [
  "url",
  "uuid",
  "webpki-roots 0.26.11",
-]
-
-[[package]]
-name = "minos-pairing"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "minos-domain",
- "pretty_assertions",
- "proptest",
- "rstest",
- "serde",
- "serde_json",
- "uniffi",
- "url",
- "uuid",
 ]
 
 [[package]]

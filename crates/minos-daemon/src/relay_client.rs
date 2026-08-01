@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{TimeZone, Utc};
 use futures_util::{SinkExt, StreamExt};
-use minos_domain::{DeviceId, DeviceSecret, MinosError, PairingToken, PeerState, RelayLinkState};
+use minos_domain::{DeviceId, DeviceSecret, MinosError, PeerState, RelayLinkState};
 use minos_protocol::realtime::{ClientFrame, ServerFrame};
 use minos_protocol::HostPeerSummary;
 use minos_transport::backoff::delay_for_attempt;
@@ -46,8 +46,8 @@ use tokio_tungstenite::tungstenite::Error as WsError;
 
 use crate::config::RelayConfig;
 use crate::ingest_sync::IngestSyncHandle;
-use crate::relay_http::{PairingRedeemOutcome, RelayHttpClient};
-use crate::relay_pairing::{PeerRecord, RelayQrPayload};
+use crate::relay_http::RelayHttpClient;
+use crate::relay_pairing::PeerRecord;
 use crate::rpc_server::{invoke_host_command, RpcServerImpl};
 
 /// Bounded queue for outbound client frames — deep enough to absorb a brief
@@ -60,7 +60,6 @@ const RELAY_PING_INTERVAL: Duration = Duration::from_secs(30);
 const RELAY_PONG_TIMEOUT: Duration = Duration::from_secs(45);
 const HOST_COMMAND_RESULT_CACHE_CAPACITY: usize = 512;
 const TOKEN_WAIT_POLL_INTERVAL: Duration = Duration::from_secs(5);
-const PAIRING_REDEEM_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const PEER_PRESENCE_REFRESH_INTERVAL: Duration = Duration::from_secs(15);
 
 type HostCommandCache = Arc<Mutex<HashMap<String, HostCommandCacheEntry>>>;
@@ -85,6 +84,7 @@ enum HostCommandRouteAction {
     Replay(HostCommandResultSnapshot),
 }
 
+#[allow(dead_code)]
 struct Inner {
     /// Shutdown signal — one-shot, captured behind a `Mutex` so a repeat
     /// `stop()` after the first call is a benign no-op.
@@ -109,7 +109,6 @@ struct Inner {
     peer_store: Arc<StdMutex<Option<PeerRecord>>>,
     peers_store: Arc<StdMutex<Vec<HostPeerSummary>>>,
     last_error: Arc<StdMutex<Option<MinosError>>>,
-    pairing_task: Mutex<Option<JoinHandle<()>>>,
     /// Cloneable producer side of the dispatcher's control outbound queue.
     out_tx: mpsc::Sender<ClientFrame>,
     live_tx: mpsc::Sender<ClientFrame>,
@@ -217,7 +216,6 @@ impl RelayClient {
             peer_store,
             peers_store,
             last_error,
-            pairing_task: Mutex::new(None),
             out_tx,
             live_tx,
             backfill_tx,
@@ -277,57 +275,6 @@ impl RelayClient {
         Ok(minos_protocol::HostApplyLinkTokenResponse { linked: true })
     }
 
-    /// Issue `request_pairing_qr` against the backend's HTTP control plane
-    /// and wrap the response into the Mac-side QR payload shape.
-    pub async fn request_pairing_token(&self) -> Result<RelayQrPayload, MinosError> {
-        let qr = self
-            .inner
-            .http
-            .request_pairing_qr(self.inner.mac_name.clone())
-            .await?;
-
-        let payload = RelayQrPayload {
-            v: qr.v,
-            host_display_name: qr.host_display_name,
-            pairing_token: minos_domain::PairingToken(qr.pairing_token),
-            expires_at_ms: qr.expires_at_ms,
-        };
-        self.start_pairing_redeem_loop(payload.pairing_token.clone(), payload.expires_at_ms)
-            .await;
-        Ok(payload)
-    }
-
-    async fn start_pairing_redeem_loop(&self, pairing_code: PairingToken, expires_at_ms: i64) {
-        let _ = self.inner.peer_tx.send(PeerState::Pairing);
-
-        let mut task = self.inner.pairing_task.lock().await;
-        if let Some(existing) = task.take() {
-            existing.abort();
-        }
-
-        let http = self.inner.http.clone();
-        let secret = self.inner.secret.clone();
-        let secret_notify = self.inner.secret_notify.clone();
-        let peer_tx = self.inner.peer_tx.clone();
-        let peer_store = self.inner.peer_store.clone();
-        let peers_store = self.inner.peers_store.clone();
-        let last_error = self.inner.last_error.clone();
-
-        *task = Some(tokio::spawn(async move {
-            run_pairing_redeem_loop(
-                http,
-                pairing_code,
-                expires_at_ms,
-                secret,
-                secret_notify,
-                peer_tx,
-                peer_store,
-                peers_store,
-                last_error,
-            )
-            .await;
-        }));
-    }
 
     /// Back-compat helper for callers that still think in terms of a
     /// single paired device. Deletes the first currently paired row, if
@@ -399,9 +346,6 @@ impl RelayClient {
     /// Signal the dispatch task to exit and await its join. Idempotent:
     /// calling twice is a benign no-op after the first success.
     pub async fn stop(&self) {
-        if let Some(task) = self.inner.pairing_task.lock().await.take() {
-            task.abort();
-        }
         if let Some(tx) = self.inner.shutdown_tx.lock().await.take() {
             let _ = tx.send(());
         }
@@ -437,101 +381,6 @@ struct DispatchCtx {
     peers_store: Arc<StdMutex<Vec<HostPeerSummary>>>,
     last_error: Arc<StdMutex<Option<MinosError>>>,
     ingest_sync: Arc<StdMutex<Option<IngestSyncHandle>>>,
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn run_pairing_redeem_loop(
-    http: Arc<RelayHttpClient>,
-    pairing_code: PairingToken,
-    expires_at_ms: i64,
-    secret: Arc<StdMutex<Option<DeviceSecret>>>,
-    secret_notify: Arc<Notify>,
-    peer_tx: watch::Sender<PeerState>,
-    peer_store: Arc<StdMutex<Option<PeerRecord>>>,
-    peers_store: Arc<StdMutex<Vec<HostPeerSummary>>>,
-    last_error: Arc<StdMutex<Option<MinosError>>>,
-) {
-    tracing::info!(
-        target: "minos_daemon::relay_client",
-        expires_at_ms,
-        "host pairing redeem polling started"
-    );
-
-    loop {
-        let now_ms = Utc::now().timestamp_millis();
-        if now_ms >= expires_at_ms {
-            let error = MinosError::PairingTokenExpired;
-            tracing::warn!(
-                target: "minos_daemon::relay_client",
-                "host pairing redeem expired before mobile confirmation"
-            );
-            store_last_error(&last_error, error);
-            clear_peer_snapshot(&peer_store, &peers_store, &peer_tx);
-            return;
-        }
-
-        match http.redeem_pairing_code(&pairing_code).await {
-            Ok(PairingRedeemOutcome::Pending) => {
-                tracing::debug!(
-                    target: "minos_daemon::relay_client",
-                    "host pairing redeem pending mobile confirmation"
-                );
-            }
-            Ok(PairingRedeemOutcome::Redeemed {
-                host_installation_id,
-                token,
-                issued_at_ms,
-            }) => {
-                if let Err(error) = crate::device_secret_store::write(&token) {
-                    tracing::error!(
-                        target: "minos_daemon::relay_client",
-                        error = %error,
-                        "failed to persist host installation token"
-                    );
-                    store_last_error(&last_error, error);
-                    clear_peer_snapshot(&peer_store, &peers_store, &peer_tx);
-                    return;
-                }
-                if let Ok(mut guard) = secret.lock() {
-                    *guard = Some(token);
-                }
-                clear_last_error(&last_error);
-                tracing::info!(
-                    target: "minos_daemon::relay_client",
-                    host_installation_id,
-                    issued_at_ms,
-                    "host installation token redeemed and persisted"
-                );
-                secret_notify.notify_waiters();
-                return;
-            }
-            Err(error @ MinosError::PairingTokenInvalid)
-            | Err(error @ MinosError::PairingTokenExpired)
-            | Err(error @ MinosError::Unauthorized { .. }) => {
-                tracing::warn!(
-                    target: "minos_daemon::relay_client",
-                    error = %error,
-                    "host pairing redeem failed permanently"
-                );
-                store_last_error(&last_error, error);
-                clear_peer_snapshot(&peer_store, &peers_store, &peer_tx);
-                return;
-            }
-            Err(error) => {
-                tracing::warn!(
-                    target: "minos_daemon::relay_client",
-                    error = %error,
-                    "host pairing redeem failed transiently; will retry until QR expiry"
-                );
-            }
-        }
-
-        let remaining_ms = expires_at_ms.saturating_sub(Utc::now().timestamp_millis());
-        let sleep_for = PAIRING_REDEEM_POLL_INTERVAL.min(Duration::from_millis(
-            u64::try_from(remaining_ms).unwrap_or(0),
-        ));
-        tokio::time::sleep(sleep_for).await;
-    }
 }
 
 fn clear_peer_snapshot(
@@ -1301,11 +1150,6 @@ fn store_last_error(slot: &Arc<StdMutex<Option<MinosError>>>, err: MinosError) {
     }
 }
 
-fn clear_last_error(slot: &Arc<StdMutex<Option<MinosError>>>) {
-    if let Ok(mut guard) = slot.lock() {
-        *guard = None;
-    }
-}
 
 fn is_auth_error(error: &MinosError) -> bool {
     matches!(

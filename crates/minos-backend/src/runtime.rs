@@ -22,7 +22,7 @@ use crate::ingest::{translate::SessionTranslators, use_case::IngestUseCase};
 use crate::notifications::channels::composite::CompositeChannel;
 use crate::notifications::use_case::DefaultNotificationService;
 use crate::notifications::NotificationService;
-use crate::pairing::PairingService;
+use crate::host_link::HostLinkService;
 use crate::project::ProjectService;
 use crate::realtime::{
     configure_peer_target_cache, CacheBackendKind, MessageBusBackend, MessageBusBackendKind,
@@ -30,8 +30,6 @@ use crate::realtime::{
 };
 use crate::session::SessionRegistry;
 use crate::store::{self, StoreHandle};
-
-const TOKEN_GC_INTERVAL: Duration = Duration::from_mins(1);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AppRuntimeConfig {
@@ -98,7 +96,7 @@ pub struct AppContext {
     pub data: AppDataContext,
     pub registry: Arc<SessionRegistry>,
     pub subscription_mgr: Arc<SubscriptionManager>,
-    pub pairing: Arc<PairingService>,
+    pub host_link: Arc<HostLinkService>,
     pub agent_sessions: Arc<dyn AgentSessionService>,
     pub approvals: Arc<dyn ApprovalService>,
     pub auth: Arc<AuthUseCase>,
@@ -118,7 +116,7 @@ impl AppContext {
     pub fn compose(
         runtime_config: AppRuntimeConfig,
         registry: Arc<SessionRegistry>,
-        pairing: Arc<PairingService>,
+        host_link: Arc<HostLinkService>,
         store: StoreHandle,
         token_ttl: Duration,
         jwt_secret: String,
@@ -188,7 +186,7 @@ impl AppContext {
             data,
             registry,
             subscription_mgr,
-            pairing,
+            host_link,
             agent_sessions,
             approvals,
             auth,
@@ -209,7 +207,6 @@ pub struct RuntimeShell {
     pub app: Arc<AppContext>,
     cors_origins: Option<Vec<HeaderValue>>,
     cluster_listener: Option<JoinHandle<()>>,
-    token_gc_task: Option<JoinHandle<()>>,
     job_supervisor: Option<crate::jobs::JobSupervisor>,
 }
 
@@ -221,7 +218,7 @@ impl RuntimeShell {
         cors_origins: Option<Vec<HeaderValue>>,
     ) -> Result<Self, crate::error::BackendError> {
         let registry = Arc::new(SessionRegistry::new());
-        let pairing = Arc::new(PairingService::new(store.clone()));
+        let host_link = Arc::new(HostLinkService::new(store.clone()));
         let instance_id = uuid::Uuid::new_v4().to_string();
         let redis_url = cfg.redis_url.as_deref().unwrap_or_default();
         let message_bus = match cfg.message_bus_backend {
@@ -252,7 +249,7 @@ impl RuntimeShell {
         let app = AppContext::compose(
             AppRuntimeConfig::from(cfg),
             registry,
-            pairing,
+            host_link,
             store,
             cfg.token_ttl(),
             jwt_secret,
@@ -265,11 +262,6 @@ impl RuntimeShell {
         );
         let cluster_listener = if cfg.runtime_mode.serves_http() {
             app.realtime.spawn_listener()
-        } else {
-            None
-        };
-        let token_gc_task = if run_workers {
-            Some(spawn_token_gc(app.store.clone()))
         } else {
             None
         };
@@ -291,7 +283,6 @@ impl RuntimeShell {
             app,
             cors_origins,
             cluster_listener,
-            token_gc_task,
             job_supervisor,
         })
     }
@@ -308,9 +299,6 @@ impl RuntimeShell {
     pub async fn shutdown(mut self) {
         if let Some(supervisor) = self.job_supervisor.take() {
             supervisor.abort_all();
-        }
-        if let Some(task) = self.token_gc_task.take() {
-            task.abort();
         }
         if let Some(task) = self.cluster_listener.take() {
             task.abort();
@@ -377,22 +365,3 @@ fn enum_names<T: clap::ValueEnum>() -> Vec<String> {
         .collect()
 }
 
-fn spawn_token_gc(store: StoreHandle) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(TOKEN_GC_INTERVAL);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            interval.tick().await;
-            let now = chrono::Utc::now().timestamp_millis();
-            match crate::store::tokens::gc_expired(&store, now).await {
-                Ok(rows) if rows > 0 => {
-                    tracing::info!(rows, "token GC removed expired rows");
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    tracing::warn!(error = %error, "token GC failed");
-                }
-            }
-        }
-    })
-}

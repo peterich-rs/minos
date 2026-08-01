@@ -15,7 +15,7 @@ use futures::{SinkExt, StreamExt};
 use minos_backend::{
     auth::{jwt, use_case::AuthUseCase},
     http::{router, BackendState},
-    pairing::PairingService,
+    host_link::HostLinkService,
     session::SessionRegistry,
     store,
 };
@@ -96,14 +96,25 @@ fn host_headers(fixture: &FormalHostFixture) -> Vec<(&'static str, String)> {
 }
 
 async fn formally_paired_host(relay: &Relay) -> anyhow::Result<FormalHostFixture> {
-    const REQUEST_CODE_PATH: &str = "/v1/host/pairing/request-code";
-    const REDEEM_PATH: &str = "/v1/host/pairing/redeem";
+    const LINK_PATH: &str = "v1/hosts/link";
 
     let mut app = router(relay.state.clone());
     let account_id = store::accounts::create(&relay.pool, "ws-formal-host@example.com", "phc")
         .await?
         .account_id;
     let mobile = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
+    // Desktop installation that performs Host Link on behalf of the account.
+    let desktop = DeviceId::new();
+    store::device_installations::insert_device(
+        &relay.pool,
+        desktop,
+        "desktop",
+        DeviceRole::DesktopConsole,
+        0,
+    )
+    .await?;
+    store::device_installations::set_account_id(&relay.pool, &desktop, &account_id).await?;
+
     let host = DeviceId::new();
     let installation_id = host.to_string();
     let signing_key = signing_key(31);
@@ -118,12 +129,15 @@ async fn formally_paired_host(relay: &Relay) -> anyhow::Result<FormalHostFixture
     .await;
     anyhow::ensure!(status == StatusCode::OK, "nonce body={body}");
     let nonce = body["data"]["nonce"].as_str().unwrap().to_string();
-    let signature = signature_for_path(&signing_key, &installation_id, &nonce, REQUEST_CODE_PATH);
+    let signature = signature_for_path(&signing_key, &installation_id, &nonce, LINK_PATH);
 
+    let bearer = jwt::sign(TEST_JWT_SECRET.as_bytes(), &account_id, &desktop.to_string())
+        .expect("test bearer signs cleanly");
+    let account_auth_header = format!("Bearer {bearer}");
     let (status, body) = post_json(
         &mut app,
-        REQUEST_CODE_PATH,
-        &[],
+        "/v1/hosts/link",
+        &[("authorization", &account_auth_header)],
         json!({
             "installation_id": installation_id,
             "nonce": nonce,
@@ -133,51 +147,8 @@ async fn formally_paired_host(relay: &Relay) -> anyhow::Result<FormalHostFixture
         }),
     )
     .await;
-    anyhow::ensure!(status == StatusCode::OK, "request-code body={body}");
-    let pairing_code = body["data"]["qr_payload"]["pairing_token"]
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    let bearer = jwt::sign(TEST_JWT_SECRET.as_bytes(), &account_id, &mobile.to_string())
-        .expect("test bearer signs cleanly");
-    let account_auth_header = format!("Bearer {bearer}");
-    let (status, body) = post_json(
-        &mut app,
-        "/v1/pairing/confirm",
-        &[("authorization", &account_auth_header)],
-        json!({
-            "pairing_code": pairing_code,
-            "client_request_id": "confirm-ws-formal-host"
-        }),
-    )
-    .await;
-    anyhow::ensure!(status == StatusCode::OK, "confirm body={body}");
-
-    let (status, body) = post_json(
-        &mut app,
-        "/v1/host/bootstrap/nonce",
-        &[],
-        json!({"installation_id": installation_id}),
-    )
-    .await;
-    anyhow::ensure!(status == StatusCode::OK, "redeem nonce body={body}");
-    let nonce = body["data"]["nonce"].as_str().unwrap().to_string();
-    let signature = signature_for_path(&signing_key, &installation_id, &nonce, REDEEM_PATH);
-    let (status, body) = post_json(
-        &mut app,
-        REDEEM_PATH,
-        &[],
-        json!({
-            "installation_id": installation_id,
-            "nonce": nonce,
-            "signature": signature,
-            "pairing_code": pairing_code,
-            "client_request_id": "redeem-ws-formal-host"
-        }),
-    )
-    .await;
-    anyhow::ensure!(status == StatusCode::OK, "redeem body={body}");
+    anyhow::ensure!(status == StatusCode::OK, "host link body={body}");
+    let _ = mobile;
 
     Ok(FormalHostFixture {
         host,
@@ -213,7 +184,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
     let registry = Arc::new(SessionRegistry::new());
     let mut state = BackendState::new(
         registry,
-        Arc::new(PairingService::new(pool.clone())),
+        Arc::new(HostLinkService::new(pool.clone())),
         pool.clone(),
         Duration::from_mins(5),
         TEST_JWT_SECRET.to_string(),
@@ -675,16 +646,14 @@ async fn ws_host_last_link_revoke_closes_live_socket_with_auth_revoked() -> anyh
 
     let (status, body) = post_json(
         &mut app,
-        "/v1/pairing/revoke",
+        "/v1/hosts/unlink",
         &[("authorization", fixture.account_auth_header.as_str())],
         json!({
-            "host_installation_id": fixture.host.to_string(),
-            "client_request_id": "revoke-live-host"
+            "host_installation_id": fixture.host.to_string()
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "body={body}");
-    assert_eq!(body["data"]["host_installation_token_revoked"], true);
+    assert_eq!(status, StatusCode::NO_CONTENT, "body={body}");
 
     match recv_server_frame(&mut ws).await? {
         ServerFrame::HostForceClose { reason, close_code } => {

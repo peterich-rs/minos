@@ -225,20 +225,6 @@
     },
     {
       "method": "POST",
-      "path": "/v1/host/pairing/request-code",
-      "probe_path": "/v1/host/pairing/request-code",
-      "surface": "host_api",
-      "auth": "host_bootstrap"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/host/pairing/redeem",
-      "probe_path": "/v1/host/pairing/redeem",
-      "surface": "host_api",
-      "auth": "host_bootstrap"
-    },
-    {
-      "method": "POST",
       "path": "/v1/host/installations/self",
       "probe_path": "/v1/host/installations/self",
       "surface": "host_api",
@@ -278,34 +264,6 @@
       "probe_path": "/v1/host/realtime/ws-ticket",
       "surface": "host_api",
       "auth": "host_installation"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/pairing/confirm",
-      "probe_path": "/v1/pairing/confirm",
-      "surface": "account_api",
-      "auth": "account_bearer"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/pairing/revoke",
-      "probe_path": "/v1/pairing/revoke",
-      "surface": "account_api",
-      "auth": "account_bearer"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/pairing/list-hosts",
-      "probe_path": "/v1/pairing/list-hosts",
-      "surface": "account_api",
-      "auth": "account_bearer"
-    },
-    {
-      "method": "DELETE",
-      "path": "/v1/pairings/:host_device_id",
-      "probe_path": "/v1/pairings/00000000-0000-0000-0000-000000000001",
-      "surface": "account_api",
-      "auth": "account_bearer"
     },
     {
       "method": "POST",

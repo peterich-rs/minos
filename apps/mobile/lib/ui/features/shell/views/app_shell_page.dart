@@ -1447,7 +1447,7 @@ class _ProfileTab extends ConsumerWidget {
                         icon: CupertinoIcons.qrcode_viewfinder,
                         title: '添加伙伴',
                         subtitle: '扫描二维码添加 runtime 设备',
-                        onTap: () => context.push(AppRoutes.pairing),
+                        onTap: () {},
                       ),
                     ],
                   ),

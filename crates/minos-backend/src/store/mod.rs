@@ -9,7 +9,6 @@
 //! - [`durable_event_log`] — replayable durable event history by topic.
 //! - [`host_commands`] — durable host command queue + results.
 //! - [`outbox_events`] — durable event dispatcher work queue.
-//! - [`tokens`] — one-shot pairing tokens with atomic consume + GC.
 
 use std::ops::Deref;
 use std::str::FromStr;
@@ -221,7 +220,6 @@ pub mod host_links;
 pub mod notification_cooldowns;
 pub mod notification_preferences;
 pub mod outbox_events;
-pub mod pairing_codes;
 pub mod projects;
 pub mod push_tokens;
 pub mod raw_events;
@@ -229,10 +227,8 @@ pub mod refresh_tokens;
 pub mod sessions;
 pub mod social;
 pub mod thread_sync_state;
-pub mod tokens;
 
 pub use device_installations::{get_device, insert_device, DeviceRow};
-pub use tokens::{consume_token, gc_expired, issue_token, ConsumedToken};
 
 #[must_use]
 pub const fn sqlite_backend_enabled() -> bool {

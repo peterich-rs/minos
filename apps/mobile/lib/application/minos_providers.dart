@@ -2,7 +2,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart'
     show AsyncNotifier, AsyncNotifierProvider, FutureProvider;
 import 'package:minos/data/repositories/runtime_repository.dart';
 import 'package:minos/src/rust/api/minos.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'minos_providers.g.dart';
@@ -127,67 +126,3 @@ class ActiveMac extends _$ActiveMac {
   }
 }
 
-/// Camera permission status + action helpers. The notifier is the single
-/// source of truth for the permission state driving the pairing UI.
-@riverpod
-class CameraPermission extends _$CameraPermission {
-  @override
-  Future<PermissionStatus> build() => check();
-
-  /// Re-read the current permission status from the OS.
-  Future<PermissionStatus> check() async {
-    final status = await Permission.camera.status;
-    state = AsyncValue.data(status);
-    return status;
-  }
-
-  /// Trigger the OS permission prompt.
-  Future<PermissionStatus> request() async {
-    state = const AsyncValue.loading();
-    final status = await Permission.camera.request();
-    state = AsyncValue.data(status);
-    return status;
-  }
-
-  /// Open the iOS Settings app so the user can grant a permanently-denied
-  /// permission.
-  Future<bool> openSettings() => openAppSettings();
-}
-
-/// Owns the pairing submission lifecycle. The outcome is a plain
-/// `AsyncValue<bool>` (true on successful pair) — v2 pairing does not
-/// return a typed response body to the caller.
-@riverpod
-class PairingController extends _$PairingController {
-  @override
-  FutureOr<bool> build() => false;
-
-  /// Submit a raw QR JSON payload to the Rust core, updating [state] with
-  /// loading / data / error as the call resolves. `displayName` is the
-  /// `host_display_name` already extracted from the QR by the scanner UI;
-  /// it is mirrored into the Dart secure store on success so the partners
-  /// list can show the peer name instead of a generic "Agent Runtime".
-  Future<void> submit(String qrJson, {String? displayName}) async {
-    state = const AsyncValue.loading();
-    try {
-      final repository = ref.read(runtimeRepositoryProvider);
-      await repository.pairWithQrJson(qrJson);
-      try {
-        await repository.setPeerDisplayName(displayName);
-      } catch (_) {
-        // Best-effort: a keychain write failure here should not undo the
-        // successful pair — the partner row will fall back to a generic
-        // label until the name can be resolved another way.
-      }
-      ref.invalidate(hasPersistedPairingProvider);
-      ref.invalidate(peerDisplayNameProvider);
-      state = const AsyncValue.data(true);
-    } on MinosError catch (e, st) {
-      state = AsyncValue.error(e, st);
-    } catch (e, st) {
-      // Non-MinosError (e.g. frb PanicException, raw StateError on missing
-      // RustLib.init). Keep the UI out of the stuck-loading state.
-      state = AsyncValue.error(e, st);
-    }
-  }
-}

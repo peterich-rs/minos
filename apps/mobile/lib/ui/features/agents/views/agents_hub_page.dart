@@ -19,7 +19,6 @@ import 'package:minos/src/rust/api/minos.dart'
 import 'package:minos/src/rust/api/minos.dart' hide ConnectionState;
 import 'package:minos/ui/core/widgets/error_feedback.dart';
 import 'package:minos/ui/core/widgets/shimmer_box.dart';
-import 'package:minos/ui/features/pairing/views/pairing_page.dart';
 import 'package:minos/ui/features/shell/router.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 
@@ -1839,7 +1838,7 @@ class _HostRuntimeCard extends ConsumerWidget {
                   ),
                   const SizedBox(height: 12),
                   ShadButton(
-                    onPressed: () => context.push(AppRoutes.pairing),
+                    onPressed: () {},
                     child: const Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [

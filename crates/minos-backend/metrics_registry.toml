@@ -89,20 +89,8 @@ type = "counter"
 help = "Detected refresh-token reuse incidents (security alert)."
 labels = []
 
-[metrics.pairing_token_issue_total]
-type = "counter"
-help = "Pairing token mints, labeled by outcome."
-labels = ["outcome"]
 
-[metrics.pairing_consume_total]
-type = "counter"
-help = "Pairing token consumes, labeled by outcome."
-labels = ["outcome"]
 
-[metrics.pairing_forget_total]
-type = "counter"
-help = "Pairing tear-downs, labeled by outcome."
-labels = ["outcome"]
 
 [metrics.approval_decision_total]
 type = "counter"

@@ -1,8 +1,7 @@
 //! HTTP client for the backend's `/v1/*` control plane.
 //!
-//! Built on `openwire`. Used by `RelayClient` to issue formal host pairing
-//! codes, fetch short-lived realtime tickets, run POST-first control-plane
-//! queries, and forget pairings without going through the realtime socket.
+//! Built on `openwire`. Used by `RelayClient` for host bootstrap, Host Link
+//! proof material, realtime tickets, and host self queries.
 
 use std::sync::Once;
 use std::time::Duration;
@@ -13,11 +12,8 @@ use http::{
     header::{AUTHORIZATION, CONTENT_TYPE},
     Method, Request, Response, StatusCode,
 };
-use minos_domain::{DeviceId, DeviceSecret, MinosError, PairingToken};
-use minos_protocol::{
-    HostPeerSummary, HostWsTicketResponse, MePeerResponse, MePeersResponse, PairingQrPayload,
-    RequestPairingQrResponse,
-};
+use minos_domain::{DeviceId, DeviceSecret, MinosError};
+use minos_protocol::{HostPeerSummary, HostWsTicketResponse, MePeerResponse, MePeersResponse};
 use openwire::{Client, RequestBody, ResponseBody, WireError};
 use serde::Deserialize;
 
@@ -26,8 +22,6 @@ use crate::openwire_trace::{logger_interceptor, OpenwireTraceFactory};
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 static INSTALL_RUSTLS_PROVIDER: Once = Once::new();
 const BOOTSTRAP_NONCE_PATH: &str = "/v1/host/bootstrap/nonce";
-const REQUEST_CODE_PATH: &str = "/v1/host/pairing/request-code";
-const REDEEM_PATH: &str = "/v1/host/pairing/redeem";
 /// Signed path segment for same-account Host Link (D02); no leading slash.
 pub const HOST_LINK_PROOF_PATH: &str = "v1/hosts/link";
 const HOST_WS_TICKET_PATH: &str = "/v1/host/realtime/ws-ticket";
@@ -43,36 +37,13 @@ struct BootstrapNonceData {
     nonce: String,
 }
 
-#[derive(Debug, serde::Serialize)]
-struct HostPairingRequestCodeRequest {
-    installation_id: String,
-    nonce: String,
-    public_key: Option<String>,
-    signature: String,
-    host_display_name: Option<String>,
-}
 
-#[derive(Debug, serde::Serialize)]
-struct HostPairingRedeemRequest {
-    installation_id: String,
-    nonce: String,
-    public_key: Option<String>,
-    signature: String,
-    pairing_code: String,
-    client_request_id: Option<String>,
-}
 
 #[derive(Debug, Deserialize)]
 struct ResponseEnvelope<T> {
     data: T,
 }
 
-#[derive(Debug, Deserialize)]
-struct HostPairingRedeemData {
-    host_installation_id: String,
-    host_installation_token: String,
-    issued_at_ms: i64,
-}
 
 #[derive(Debug, Deserialize)]
 struct HostSelfData {
@@ -101,14 +72,6 @@ struct ErrorBody {
     message: String,
 }
 
-pub enum PairingRedeemOutcome {
-    Pending,
-    Redeemed {
-        host_installation_id: String,
-        token: DeviceSecret,
-        issued_at_ms: i64,
-    },
-}
 
 pub struct RelayHttpClient {
     client: Client,
@@ -167,97 +130,8 @@ impl RelayHttpClient {
         })
     }
 
-    pub async fn request_pairing_qr(
-        &self,
-        host_display_name: String,
-    ) -> Result<PairingQrPayload, MinosError> {
-        let nonce = self.fetch_bootstrap_nonce().await?;
-        let url = format!("{}{}", self.base, REQUEST_CODE_PATH);
-        let request = self.request_with_json(
-            Method::POST,
-            &url,
-            None,
-            true,
-            &HostPairingRequestCodeRequest {
-                installation_id: self.device_id.to_string(),
-                nonce: nonce.clone(),
-                public_key: Some(self.host_public_key()),
-                signature: self.host_signature(REQUEST_CODE_PATH, &nonce),
-                host_display_name: Some(host_display_name),
-            },
-        )?;
-        let resp = self.execute(&url, request).await?;
-        let status = resp.status();
-        if status.is_success() {
-            let envelope: ResponseEnvelope<RequestPairingQrResponse> =
-                decode_success_json(resp, "RequestPairingQrResponse").await?;
-            Ok(envelope.data.qr_payload)
-        } else {
-            Err(decode_error(resp).await)
-        }
-    }
 
-    pub async fn redeem_pairing_code(
-        &self,
-        pairing_code: &PairingToken,
-    ) -> Result<PairingRedeemOutcome, MinosError> {
-        let nonce = self.fetch_bootstrap_nonce().await?;
-        let url = format!("{}{}", self.base, REDEEM_PATH);
-        let request = self.request_with_json(
-            Method::POST,
-            &url,
-            None,
-            false,
-            &HostPairingRedeemRequest {
-                installation_id: self.device_id.to_string(),
-                nonce: nonce.clone(),
-                public_key: Some(self.host_public_key()),
-                signature: self.host_signature(REDEEM_PATH, &nonce),
-                pairing_code: pairing_code.as_str().to_string(),
-                client_request_id: Some(format!("host-redeem-{}", uuid::Uuid::new_v4())),
-            },
-        )?;
-        let resp = self.execute(&url, request).await?;
-        let status = resp.status();
-        if status.is_success() {
-            let envelope: ResponseEnvelope<HostPairingRedeemData> =
-                decode_success_json(resp, "HostPairingRedeemData").await?;
-            return Ok(PairingRedeemOutcome::Redeemed {
-                host_installation_id: envelope.data.host_installation_id,
-                token: DeviceSecret(envelope.data.host_installation_token),
-                issued_at_ms: envelope.data.issued_at_ms,
-            });
-        }
 
-        let error = decode_error_envelope(resp).await;
-        if status == StatusCode::CONFLICT {
-            if let Some(env) = &error {
-                if env.error.code == "pairing_not_confirmed"
-                    || (env.error.code == "pairing_state_mismatch"
-                        && env.error.message == "pending")
-                {
-                    return Ok(PairingRedeemOutcome::Pending);
-                }
-                if env.error.code == "pairing_code_invalid" {
-                    return Err(MinosError::PairingTokenInvalid);
-                }
-            }
-        }
-        Err(error_to_minos(status, error))
-    }
-
-    pub async fn forget_pairing(&self, secret: &DeviceSecret) -> Result<(), MinosError> {
-        let url = format!("{}/v1/pairing", self.base);
-        let request = self.request_without_body(Method::DELETE, &url, Some(secret), false)?;
-        let resp = self.execute(&url, request).await?;
-        let status = resp.status();
-        if status == StatusCode::NO_CONTENT || status == StatusCode::NOT_FOUND {
-            // Idempotent: nothing to forget is fine.
-            Ok(())
-        } else {
-            Err(decode_error(resp).await)
-        }
-    }
 
     pub async fn forget_peer_device(
         &self,
@@ -651,16 +525,12 @@ mod tests {
         let request = client
             .request_with_json(
                 Method::POST,
-                "https://example.com/v1/host/pairing/request-code",
+                "https://example.com/v1/host/bootstrap/nonce",
                 None,
                 true,
-                &HostPairingRequestCodeRequest {
-                    installation_id: client.device_id.to_string(),
-                    nonce: "test-nonce".into(),
-                    public_key: Some(client.host_public_key()),
-                    signature: client.host_signature(REQUEST_CODE_PATH, "test-nonce"),
-                    host_display_name: Some("Minos Mac".into()),
-                },
+                &serde_json::json!({
+                    "installation_id": client.device_id.to_string(),
+                }),
             )
             .unwrap();
 

@@ -23,7 +23,7 @@ use crate::ingest_sync::IngestSyncHandle;
 use crate::local_rpc::{start_local_rpc_server_with_relay, LocalRpcConfig};
 use crate::paths;
 use crate::relay_client::{PersistenceCtx, RelayClient};
-use crate::relay_pairing::{PeerRecord, RelayQrPayload};
+use crate::relay_pairing::PeerRecord;
 
 struct DaemonInner {
     relay: Arc<RelayClient>,
@@ -330,13 +330,6 @@ impl DaemonHandle {
         Ok(self.inner.peers.lock().unwrap().clone())
     }
 
-    /// Mint a pairing QR by round-tripping `request_pairing_token` to
-    /// the relay and packaging the token with the baked-in mac name and
-    /// backend URL.
-    #[allow(clippy::missing_errors_doc)]
-    pub async fn pairing_qr(&self) -> Result<RelayQrPayload, MinosError> {
-        self.inner.relay.request_pairing_token().await
-    }
 
     /// Forget the currently paired peer. Calls the relay first and, on
     /// success, clears the in-memory mirror. The relay will still echo an

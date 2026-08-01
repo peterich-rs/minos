@@ -192,7 +192,7 @@ async fn host_link_unlink_list_round_trip() {
     assert!(state.registry.get(host).is_none());
 
     // Token must be revoked (verify_active_token returns None)
-    let token_hash = minos_backend::pairing::sha256_hex(&token);
+    let token_hash = minos_backend::host_link::sha256_hex(&token);
     let active = host_installation_tokens::verify_active_token(
         &state.store,
         &token_hash,
@@ -253,7 +253,7 @@ async fn bad_proof_is_rejected() {
     let key = signing_key(41);
     let nonce = issue_nonce(&mut app, &host_id).await;
     // Sign with wrong path → proof_invalid
-    let bad_sig = signature(&key, &host_id, &nonce, "/v1/host/pairing/request-code");
+    let bad_sig = signature(&key, &host_id, &nonce, "/v1/host/bootstrap/nonce");
 
     let (status, body) = post_json(
         &mut app,
@@ -379,7 +379,7 @@ async fn same_account_re_link_rotates_token() {
             .unwrap()
     );
 
-    let old_hash = minos_backend::pairing::sha256_hex(&token1);
+    let old_hash = minos_backend::host_link::sha256_hex(&token1);
     let active_old = host_installation_tokens::verify_active_token(
         &state.store,
         &old_hash,
@@ -389,7 +389,7 @@ async fn same_account_re_link_rotates_token() {
     .unwrap();
     assert!(active_old.is_none(), "prior token must be revoked on re-link");
 
-    let new_hash = minos_backend::pairing::sha256_hex(&token2);
+    let new_hash = minos_backend::host_link::sha256_hex(&token2);
     let active_new = host_installation_tokens::verify_active_token(
         &state.store,
         &new_hash,

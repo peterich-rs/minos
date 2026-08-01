@@ -43,7 +43,7 @@ pub async fn require(
     headers: &HeaderMap,
 ) -> Result<HostInstallationPrincipal, HostInstallationAuthError> {
     let token = bearer_token(headers)?;
-    let token_hash = crate::pairing::sha256_hex(token);
+    let token_hash = crate::host_link::sha256_hex(token);
     let row = host_installation_tokens::verify_active_token(
         &state.store,
         &token_hash,
