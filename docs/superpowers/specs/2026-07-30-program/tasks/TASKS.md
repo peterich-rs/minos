@@ -225,10 +225,11 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-auth-08 · Desktop: system browser OAuth + deep link
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done (Phase C: email/password + exchange; OAuth/deep-link deferred) |
 | lane | desktop |
 | depends_on | T-auth-04 |
 | exit | 系统浏览器打开 Supabase OAuth → `minos://auth-callback#access_token=...` → exchange → Tauri secure store；account session 可用于 host link |
+| notes | Phase C ships Supabase email/password → `/v1/auth/supabase` (or Minos password fallback) + localStorage session. OAuth + `minos://` deep link still open for a follow-up when deep-link plugin is wired. |
 
 ### T-auth-09 · Dual-session logout/refresh contract
 | Field | Value |
@@ -285,7 +286,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-ui-06 · Desktop account chrome (login/logout entry)
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done |
 | lane | desktop |
 | depends_on | T-auth-08 |
 | exit | User can sign in/out from Desktop UI；connection card (Local/Linked) |
@@ -361,7 +362,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-host-04 · Desktop "Link this Mac" UX
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done |
 | lane | desktop |
 | depends_on | T-host-03, T-auth-08, T-ui-06 |
 | exit | 登录后一键 Link（调 daemon RPC → backend）；无需 QR；connection card 显示 Linked |

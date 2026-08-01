@@ -297,7 +297,7 @@ Mobile 端：
 
 - [x] `POST /v1/hosts/link` + tests（link / unlink / multi-host list / host proof 验证） — Phase B
 - [x] Daemon link RPC（prepare_link / sign_link_proof / apply_link_token） — Phase B
-- [ ] Desktop "Link this Mac" UX（登录后一键 link，无需 QR） — Phase C
+- [x] Desktop "Link this Mac" UX（登录后一键 link，无需 QR） — Phase C
 - [x] Bootstrap nonce 迁移 Redis — Phase B
 - [ ] 旧 QR 配对代码全部移除（backend + daemon + minos-pairing crate + macOS QR） — Phase D
 - [ ] Unlink E2E：撤销后 remote 无法路由，Desktop 显示 Local only

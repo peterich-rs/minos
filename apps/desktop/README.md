@@ -17,6 +17,24 @@ Host-side desktop shell that will replace the TUI as the primary local control s
 │ + Projects       │                                                  │
 ```
 
+## Cloud account + Host Link
+
+Optional remote collaboration (phone / web). Local coding works without any of this.
+
+```bash
+# apps/desktop/.env.local (see .env.example)
+VITE_MINOS_BACKEND_URL=http://127.0.0.1:8787
+# Optional Supabase IdP:
+# VITE_SUPABASE_URL=https://<project>.supabase.co
+# VITE_SUPABASE_ANON_KEY=<anon-key>
+```
+
+On **Host → Account & remote**:
+
+1. Sign in (Supabase email/password → Minos exchange, or Minos password if Supabase unset)
+2. With daemon online: **Link this Mac** (daemon proof → `POST /v1/hosts/link` → apply `hit_*`)
+3. Sidebar shows `Ready · Linked` when `account-store.hostLink.linked`
+
 ## Develop
 
 ```bash

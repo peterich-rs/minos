@@ -259,7 +259,7 @@ export const supabase = createClient(
 - [ ] CloudPort 拥有 Web 所有 golden path 网络 I/O
 - [ ] ESLint 规则阻止 `shared/` import `@tauri-apps/*`
 - [ ] Web Auth → Hosts → 一个 timeline 端到端可用
-- [ ] Desktop account session + connection card 可用
+- [x] Desktop account session + connection card 可用（Phase C: email/password + Link this Mac）
 - [ ] `pnpm check` Web + Desktop 均绿
 - [ ] 旧 demo components 移除
 

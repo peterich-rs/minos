@@ -7,8 +7,8 @@
 | 项 | 值 |
 |----|-----|
 | 源码路径 | `apps/desktop/` |
-| 产品定位 | Host 本机指挥台（对标 TUI，不做登录/移动端） |
-| 当前阶段 | **Daemon-backed**：Tauri 宿主嵌 daemon；bootstrap 经 `daemonApi` 拉 projects / CLIs / live push。浏览器 `vite` 直开时 fallback mock 数据 |
+| 产品定位 | Host 本机指挥台（对标 TUI；可选云端账户 + Host Link 供手机/Web 远程） |
+| 当前阶段 | **Daemon-backed**：Tauri 宿主嵌 daemon；bootstrap 经 `daemonApi` 拉 projects / CLIs / live push。浏览器 `vite` 直开时 fallback mock 数据。**Account session**（Supabase email/password → `/v1/auth/supabase` exchange，或过渡期 Minos password）+ **Link this Mac**（daemon prepare/sign/apply + `POST /v1/hosts/link`）在 Host 页 |
 | 视觉 | 暖色多栏（参考 `res/desktop.jpeg` 气质，非客服 Inbox 语义） |
 | 产品 spec | [2026-07-18-desktop-product-experience.md](superpowers/specs/2026-07-18-desktop-product-experience.md) |
 | 状态拆分 spec | [2026-07-21-desktop-state-by-consumption.md](superpowers/specs/2026-07-21-desktop-state-by-consumption.md)（**P0–P4 done**；P5 cleanup reviewed；编码入口 §18） |
@@ -74,7 +74,7 @@ Work → Project
 | Board | 四列派生状态 | 非独立任务系统 |
 | Attention | needs_approval | approvals |
 | Agents | CLI inventory + personalized profiles | `list_clis` (runtime set + capability flags from Rust SSOT), `list_models` (honest per-model efforts), agent profile CRUD; **profile `description` = peer-facing role brief** (≤500, seeds conversation roster when member brief empty); start session accepts optional `profile_id` (daemon resolves model/effort/instructions; explicit fields override) |
-| Host | Ready / Local only / Linked + 诊断 | status + pairing |
+| Host | Ready / Local only / Linked + 诊断；Account & remote（登录 / Link this Mac / Unlink） | `deriveHostPresence` + `account-store.hostLink.linked`；daemon `host_prepare_link` / `sign` / `apply` |
 
 ### Agents capability SSOT
 
@@ -95,7 +95,7 @@ Feature-slice 布局（Wave 1 Phase 1–2）：按 **app 壳 / features / shared
 | 命令 | 作用 |
 |------|------|
 | `pnpm check` | `tsc --noEmit` |
-| `pnpm test` | `src/shared/{lib,api,hooks,ui}/*.test.ts` + `src/store/workspace/*.test.ts` + `src/features/{chat,agents,work}/lib/*.test.ts` |
+| `pnpm test` | `src/shared/{lib,api,hooks,ui}/*.test.ts` + `src/store/workspace/*.test.ts` + `src/features/{chat,agents,work,host}/lib/*.test.ts` |
 | `pnpm check:biome` | Biome **lint errors only**（format 不进 gate；warnings 可残留） |
 | `pnpm check:file-sizes` | `src/**/*.{ts,tsx}` 行数：warn `>400` / hard `>800`（ALLOWLIST 当前为空） |
 | `pnpm check:px-text` | 禁止 `text-[Npx]` / `font-size: Npx`；**allowlist 已清空**，新增即失败 |
@@ -161,7 +161,9 @@ apps/desktop/
       attention/                 # AttentionView.tsx
       agents/                    # AgentsView.tsx · AGENTS.md (capability SSOT rule)
         lib/agentConfigProjection.ts  # pure map: list_clis/list_models → UI options
-      host/                      # HostView.tsx
+      host/                      # HostView.tsx · Account & remote + Link this Mac
+        lib/host-link-flow.ts    # pure prepare→sign→cloud→apply orchestration
+        lib/host-account-presenter.ts  # Signed out / Local only / Linked / Error
       chat/                      # Conversation chat UI (Wave 1–2)
         Timeline.tsx             # thin container: load/poll + compose children
         TimelineEmpty.tsx        # no-conversation selected shell
@@ -197,6 +199,9 @@ apps/desktop/
         platform.ts              # hasPrimaryShortcutModifier (⌘/Ctrl)
         connection-card-policy.ts # when to show sidebar daemon offline card
         host-status.ts           # Ready · Local only / Linked / This Mac
+        account-session.ts       # MinosSession + HostLinkState localStorage
+        minos-cloud.ts           # /v1/auth/* + /v1/hosts/* HTTP (desktop-console)
+        supabase.ts              # optional Supabase email/password IdP
         mock-data.ts
         toast.ts                 # sonner wrappers
         use-stick-to-bottom.ts
@@ -213,6 +218,7 @@ apps/desktop/
         daemon.ts · agent-route.ts · …
     store/                       # L0–L6 工作区契约不变；chat reactions 不进 workspace
       ui-store.ts                # nav + drafts + replyTo + commandPaletteOpen
+      account-store.ts           # Minos session + Host Link actions (sign-in / link / unlink)
       workspace-store.ts         # thin create() + re-export useWorkspaceStore
       workspace/
         types.ts                 # WorkspaceState / ResourceFetchStatus / ProjectSession
