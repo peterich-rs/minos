@@ -236,6 +236,13 @@ Migrations 为 latest-only 单一初始 schema（`sqlx::migrate!`）：
 
 - `/ws/host` 接收 `HostIngestLiveBatch`、`HostGapManifest`、`HostIngestPullResponse`。
 - live 和 pull chunk 共用严格幂等写入：同 `(host_device_id, session_id, seq)` 且同 checksum 视为重复；同 key 不同 checksum 报不变量错误，不重新分配 backend seq。
+- **未知 formal session**：若 `agent_sessions` 无对应 `session_id`，chunk 被丢弃（不自动从 Desktop-local-only 会话创建 hub 投影）。云端可见 session 必须先经 start API（或等价注册）落库。
+- **首次成功 insert 副作用**（golden path）：
+  1. `agent_sessions.status` 若为 `pending` 则提升为 `running`
+  2. 从 payload 识别 `approval/request` / `approval/timeout`，写入/解决 `approval_requests`（支撑远程 `POST /v1/approvals/respond`）
+  3. 用 host 自带 `projection` 同步 formal turn/session 状态
+  4. 向 `agent_session:{id}` 的 `/ws/client` 订阅者 fanout `StreamEvent{kind: ui_event}`
+- 旧 envelope 路径的 peer-target 解析：`host_links` → 同 account 下 mobile/browser/desktop installations（带缓存；Host Link/unlink 时 invalidate）
 - `HostGapManifest` 落 `thread_sync_state` 后，backend 立即按 manifest range 通过同一条 host WS 发 `PullIngestRange`。
 - host 从本地 SQLite 读取 range 并回 `HostIngestPullResponse`；backend 持久化后只按连续 raw event 前缀发送 `PullAck`。
 - `agent_sessions.host_device_id` 为空时，新 handler 允许当前 host 认领该 session，避免 session 创建与 host 绑定之间的流式事件窗口丢失。

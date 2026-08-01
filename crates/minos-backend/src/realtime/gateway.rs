@@ -1116,6 +1116,51 @@ async fn persist_host_ingest_chunk(
     .await?;
 
     if inserted == raw_events::HostIngestInsert::Inserted {
+        // Side effects that must land before clients can act on the stream:
+        // 1) promote pending formal sessions so list APIs show live activity
+        // 2) formal session/turn status from host-projected UI events
+        // 3) approval_requests rows so /v1/approvals/respond works remotely
+        if session.status == "pending" {
+            let _ = agent_sessions::update_status(
+                &state.store,
+                &chunk.session_id,
+                "running",
+                None,
+            )
+            .await?;
+        }
+        ensure_raw_approval_turn(state, &chunk.session_id, &chunk.payload, chunk.last_ts_ms)
+            .await?;
+        if let Err(error) = crate::ingest::apply_approval_side_effects_from_payload(
+            state.approvals.as_ref(),
+            &chunk.session_id,
+            &chunk.payload,
+            chunk.last_ts_ms,
+        )
+        .await
+        {
+            tracing::warn!(
+                target: "minos_backend::realtime::gateway",
+                error = %error,
+                session_id = %chunk.session_id,
+                "failed to apply approval side effects from host ingest chunk",
+            );
+        }
+        if let Err(error) = crate::ingest::sync_formal_agent_session_from_ui_events(
+            &state.store,
+            &chunk.session_id,
+            &chunk.projection,
+            chunk.last_ts_ms,
+        )
+        .await
+        {
+            tracing::warn!(
+                target: "minos_backend::realtime::gateway",
+                error = %error,
+                session_id = %chunk.session_id,
+                "failed to sync formal agent session from host ingest projection",
+            );
+        }
         fanout_host_ingest_projection(state, &chunk);
     }
     Ok(true)
@@ -1222,6 +1267,38 @@ async fn handle_projected_ingest_host_stream_event(
     else {
         return Ok(());
     };
+
+    ensure_raw_approval_turn(state, session_id, &payload, ts_ms).await?;
+    if let Err(error) = crate::ingest::apply_approval_side_effects_from_payload(
+        state.approvals.as_ref(),
+        session_id,
+        &payload,
+        ts_ms,
+    )
+    .await
+    {
+        tracing::warn!(
+            target: "minos_backend::realtime::gateway",
+            error = %error,
+            session_id,
+            "failed to apply approval side effects from projected host stream event",
+        );
+    }
+    if let Err(error) = crate::ingest::sync_formal_agent_session_from_ui_events(
+        &state.store,
+        session_id,
+        &projection,
+        ts_ms,
+    )
+    .await
+    {
+        tracing::warn!(
+            target: "minos_backend::realtime::gateway",
+            error = %error,
+            session_id,
+            "failed to sync formal agent session from projected host stream event",
+        );
+    }
 
     for ui in projection {
         let payload = match serde_json::to_value(&ui) {

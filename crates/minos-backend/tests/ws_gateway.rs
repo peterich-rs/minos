@@ -1126,3 +1126,266 @@ async fn live_durable_events_flow_from_outbox_to_subscribed_host_and_client() ->
 
     Ok(())
 }
+
+/// Golden path: host live ingest batch → StreamEvent fanout on /ws/client.
+#[tokio::test]
+async fn host_ingest_live_batch_fans_out_projection_to_subscribed_client() -> anyhow::Result<()> {
+    let relay = spawn_relay().await?;
+    let (account_id, phone_id) =
+        seed_client_account(&relay, "ws-host-ingest-live@example.com").await?;
+    let host_id = seed_host(&relay).await?;
+    let members = vec![account_id.clone()];
+    let conversation = store::social::create_group_conversation(
+        &relay.pool,
+        &account_id,
+        "Host Ingest Live",
+        &members,
+        100,
+    )
+    .await?;
+    store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
+
+    let output = seed_session(
+        &relay,
+        &account_id,
+        host_id,
+        &conversation.conversation_id,
+        "host-ingest-live-seed",
+        Some("seed"),
+    )
+    .await?;
+
+    let client_ticket =
+        issue_client_ws_ticket(&relay, &account_id, phone_id, DeviceRole::MobileClient).await?;
+    let mut client_ws = connect_client(&relay, "/ws/client", &client_ticket).await?;
+    match recv_server_frame(&mut client_ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
+    }
+    send_client_frame(
+        &mut client_ws,
+        &ClientFrame::Subscribe {
+            topics: vec![format!("agent_session:{}", output.session_id)],
+            resume_after: None,
+            client_request_id: Some("host-ingest-live-sub".into()),
+        },
+    )
+    .await?;
+    match recv_server_frame(&mut client_ws).await? {
+        ServerFrame::SubscribeAck { .. } => {}
+        other => panic!("expected SubscribeAck, got {other:?}"),
+    }
+    // Drain durable replay of agent_session_started.
+    match recv_server_frame(&mut client_ws).await? {
+        ServerFrame::DurableEvent { .. } => {}
+        other => panic!("expected DurableEvent replay, got {other:?}"),
+    }
+
+    let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
+    let mut host_ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
+    match recv_server_frame(&mut host_ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
+    }
+    // Drain host command durable replay.
+    match recv_server_frame(&mut host_ws).await? {
+        ServerFrame::DurableEvent { .. } => {}
+        other => panic!("expected host DurableEvent replay, got {other:?}"),
+    }
+
+    let projection = vec![
+        UiEventMessage::MessageStarted {
+            message_id: "msg-live-1".into(),
+            role: minos_ui_protocol::MessageRole::Assistant,
+            started_at_ms: 2_000,
+        },
+        UiEventMessage::TextDelta {
+            message_id: "msg-live-1".into(),
+            text: minos_ui_protocol::DisplayPayload::inline("hello remote"),
+        },
+    ];
+    send_client_frame(
+        &mut host_ws,
+        &ClientFrame::HostIngestLiveBatch {
+            batch: minos_protocol::realtime::HostIngestLiveBatch {
+                batch_id: "batch-live-1".into(),
+                host_id,
+                chunks: vec![minos_protocol::realtime::HostIngestChunk {
+                    event_id: format!("{host_id}:{}:1", output.session_id),
+                    session_id: output.session_id.clone(),
+                    seq: 1,
+                    agent: minos_domain::AgentName::Codex,
+                    kind: "agent_event".into(),
+                    payload: serde_json::json!({
+                        "method": "item/agentMessage/delta",
+                        "params": { "delta": "hello remote" }
+                    }),
+                    projection: projection.clone(),
+                    first_ts_ms: 2_000,
+                    last_ts_ms: 2_000,
+                    byte_len: 32,
+                    checksum_sha256: "a".repeat(64),
+                }],
+            },
+        },
+    )
+    .await?;
+
+    match recv_server_frame(&mut host_ws).await? {
+        ServerFrame::HostIngestAck {
+            session_id,
+            accepted_to_seq,
+            batch_id,
+        } => {
+            assert_eq!(session_id, output.session_id);
+            assert_eq!(accepted_to_seq, 1);
+            assert_eq!(batch_id.as_deref(), Some("batch-live-1"));
+        }
+        other => panic!("expected HostIngestAck, got {other:?}"),
+    }
+
+    // Client should receive both projected UI events as StreamEvent.
+    let mut kinds = Vec::new();
+    for _ in 0..2 {
+        match recv_server_frame(&mut client_ws).await? {
+            ServerFrame::StreamEvent {
+                topic,
+                kind,
+                seq,
+                payload,
+            } => {
+                assert_eq!(topic, format!("agent_session:{}", output.session_id));
+                assert_eq!(kind, "ui_event");
+                assert_eq!(seq, Some(1));
+                kinds.push(payload["kind"].as_str().unwrap_or_default().to_string());
+            }
+            other => panic!("expected StreamEvent fanout, got {other:?}"),
+        }
+    }
+    assert!(kinds.iter().any(|k| k == "message_started"));
+    assert!(kinds.iter().any(|k| k == "text_delta"));
+
+    let session = store::agent_sessions::get(&relay.pool, &output.session_id)
+        .await?
+        .expect("session row");
+    assert_eq!(session.status, "running");
+
+    Ok(())
+}
+
+/// Golden path: approval/request inside HostIngestLiveBatch is recorded so
+/// remote `/v1/approvals/respond` can resolve it.
+#[tokio::test]
+async fn host_ingest_live_batch_records_approval_request() -> anyhow::Result<()> {
+    let relay = spawn_relay().await?;
+    let (account_id, phone_id) =
+        seed_client_account(&relay, "ws-host-ingest-approval@example.com").await?;
+    let host_id = seed_host(&relay).await?;
+    let members = vec![account_id.clone()];
+    let conversation = store::social::create_group_conversation(
+        &relay.pool,
+        &account_id,
+        "Host Ingest Approval",
+        &members,
+        100,
+    )
+    .await?;
+    store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
+
+    let output = seed_session(
+        &relay,
+        &account_id,
+        host_id,
+        &conversation.conversation_id,
+        "host-ingest-approval-seed",
+        Some("seed"),
+    )
+    .await?;
+
+    let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
+    let mut host_ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
+    match recv_server_frame(&mut host_ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
+    }
+    match recv_server_frame(&mut host_ws).await? {
+        ServerFrame::DurableEvent { .. } => {}
+        other => panic!("expected host DurableEvent replay, got {other:?}"),
+    }
+
+    let request_id = "perm-live-1";
+    // Use wall-clock ts so the approval timeout poller does not immediately
+    // expire a synthetic epoch timestamp.
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    send_client_frame(
+        &mut host_ws,
+        &ClientFrame::HostIngestLiveBatch {
+            batch: minos_protocol::realtime::HostIngestLiveBatch {
+                batch_id: "batch-approval-1".into(),
+                host_id,
+                chunks: vec![minos_protocol::realtime::HostIngestChunk {
+                    event_id: format!("{host_id}:{}:1", output.session_id),
+                    session_id: output.session_id.clone(),
+                    seq: 1,
+                    agent: minos_domain::AgentName::Codex,
+                    kind: "agent_event".into(),
+                    payload: serde_json::json!({
+                        "method": "approval/request",
+                        "params": {
+                            "request_id": request_id,
+                            "turn_id": "turn-approve-1",
+                            "method": "session/request_permission",
+                            "params": { "toolCall": { "title": "ls" } },
+                            // 0 = no host/backend auto-timeout (wait for user).
+                            "timeout_ms": 0
+                        }
+                    }),
+                    projection: vec![UiEventMessage::Raw {
+                        kind: "approval/request".into(),
+                        payload_json: serde_json::json!({
+                            "request_id": request_id,
+                            "method": "session/request_permission"
+                        })
+                        .to_string(),
+                    }],
+                    first_ts_ms: now_ms,
+                    last_ts_ms: now_ms,
+                    byte_len: 64,
+                    checksum_sha256: "b".repeat(64),
+                }],
+            },
+        },
+    )
+    .await?;
+
+    match recv_server_frame(&mut host_ws).await? {
+        ServerFrame::HostIngestAck { accepted_to_seq, .. } => {
+            assert_eq!(accepted_to_seq, 1);
+        }
+        other => panic!("expected HostIngestAck, got {other:?}"),
+    }
+
+    // Allow async approval side effects to settle.
+    let row = wait_for_approval_row(&relay, request_id).await?;
+    assert_eq!(row.agent_session_id, output.session_id);
+    assert_eq!(row.state, store::approval_requests::ApprovalRequestState::Pending);
+    assert_eq!(row.host_device_id, host_id);
+
+    Ok(())
+}
+
+async fn wait_for_approval_row(
+    relay: &Relay,
+    request_id: &str,
+) -> anyhow::Result<store::approval_requests::ApprovalRequestRow> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Some(row) = store::approval_requests::get(&relay.pool, request_id).await? {
+            return Ok(row);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for approval_requests row {request_id}");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}

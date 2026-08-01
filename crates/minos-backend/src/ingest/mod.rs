@@ -10,11 +10,16 @@
 //!    synthetic `UiEventMessage::Error` so mobile sees something deterministic
 //!    rather than a silent drop.
 //! 4. For each produced UI event, wraps it in an `Envelope::Event` /
-//!    `EventKind::UiEventMessage` and fans it out to every iOS device
-//!    on every account paired to the ingesting Mac (`owner_device_id`).
-//!    See [`broadcast_to_peers_of`] for the
-//!    `account_host_pairings → devices` walk introduced in ADR-0020 /
-//!    Phase G.
+//!    `EventKind::UiEventMessage` and fans it out to every client
+//!    installation under every account linked to the ingesting host
+//!    (`owner_device_id`). See [`broadcast_to_peers_of`] for the
+//!    `host_links → device_installations` walk (ADR-0020 / Phase G).
+//!
+//! The formal host gateway path (`HostIngestLiveBatch`) persists and fans out
+//! host-projected UI events separately in `realtime::gateway`, and reuses
+//! [`apply_approval_side_effects_from_payload`] +
+//! [`sync_formal_agent_session_from_ui_events`] for approval recording and
+//! formal session status.
 //!
 //! Fan-out is bounded: the SessionHandle's outbox is a fixed-size
 //! `mpsc::channel(256)`; full channels drop the one frame with a warn log
@@ -111,17 +116,8 @@ pub async fn dispatch(
         return Ok(());
     };
 
-    if should_skip_external_sql_approval_event(store, payload) {
-        tracing::info!(
-            target: "minos_backend::ingest",
-            session_id,
-            "skipping approval realtime event because external-sql approval runtime is still unavailable"
-        );
-        return Ok(());
-    }
-
     if let Some(event) =
-        special_event_from_payload(approvals, session_id, payload, ts_ms, owner_device_id).await?
+        apply_approval_side_effects_from_payload(approvals, session_id, payload, ts_ms).await?
     {
         let env = Envelope::Event { version: 1, event };
         broadcast_to_peers_of(store, registry, realtime, owner_device_id, &env).await;
@@ -166,7 +162,7 @@ pub async fn dispatch(
 
     sync_formal_agent_session_from_ui_events(store, session_id, &translated, ts_ms).await?;
 
-    // 4. Fan out each UI event to every live peer paired with owner_device_id.
+    // 4. Fan out each UI event to every live client installation linked to owner_device_id.
     let suppress_social_fanout =
         match crate::store::social::suppress_live_ui_fanout_for_session(store, session_id).await {
             Ok(value) => value,
@@ -233,7 +229,12 @@ pub async fn dispatch(
     Ok(())
 }
 
-async fn sync_formal_agent_session_from_ui_events(
+/// Apply formal `agent_sessions` / `agent_turns` mutations implied by projected
+/// UI events (running / failed / ended + assistant turn summaries).
+///
+/// Shared by the legacy `Envelope::Ingest` path and the formal
+/// `HostIngestLiveBatch` gateway path so cloud session status stays honest.
+pub async fn sync_formal_agent_session_from_ui_events(
     store: &impl AsStorePool,
     session_id: &str,
     events: &[UiEventMessage],
@@ -435,22 +436,18 @@ async fn replace_assistant_turn_summary(
     Ok(())
 }
 
-fn should_skip_external_sql_approval_event(store: &impl AsStorePool, payload: &Value) -> bool {
-    if !matches!(store.as_store_pool(), StorePoolRef::Postgres(_)) {
-        return false;
-    }
-    matches!(
-        payload.get("method").and_then(Value::as_str),
-        Some("approval/request" | "approval/timeout")
-    )
-}
-
-async fn special_event_from_payload(
+/// Persist approval request / timeout side effects from a host ingest payload.
+///
+/// Returns the legacy `EventKind` envelope payload when the method is an
+/// approval control plane event; `Ok(None)` for ordinary agent events.
+///
+/// Used by both the legacy envelope ingest path and the formal
+/// `HostIngestLiveBatch` gateway so remote `/v1/approvals/respond` has a row.
+pub async fn apply_approval_side_effects_from_payload(
     approvals: &dyn ApprovalService,
     session_id: &str,
     payload: &Value,
     ts_ms: i64,
-    _owner_device_id: minos_domain::DeviceId,
 ) -> Result<Option<EventKind>, BackendError> {
     let Some(method) = payload.get("method").and_then(Value::as_str) else {
         return Ok(None);
@@ -464,6 +461,14 @@ async fn special_event_from_payload(
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
+            if request_id.is_empty() {
+                tracing::warn!(
+                    target: "minos_backend::ingest",
+                    session_id,
+                    "approval/request missing request_id; skipping record"
+                );
+                return Ok(None);
+            }
             let turn_id = params
                 .get("turn_id")
                 .and_then(Value::as_str)
@@ -507,6 +512,14 @@ async fn special_event_from_payload(
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
+            if request_id.is_empty() {
+                tracing::warn!(
+                    target: "minos_backend::ingest",
+                    session_id,
+                    "approval/timeout missing request_id; skipping resolve"
+                );
+                return Ok(None);
+            }
             let reason = params
                 .get("reason")
                 .and_then(Value::as_str)
@@ -628,16 +641,15 @@ fn sanitize_title(text: &str) -> Option<String> {
     Some(trimmed.chars().take(80).collect())
 }
 
-/// Look up every account paired to `host_device_id` (the ingesting Mac),
-/// resolve every iOS device under each account, and try-send `env` on
-/// each live session's outbox. Misses (no paired accounts, peer offline,
-/// full outbox) are logged at debug/warn and swallowed — ingest must
-/// stay crash-safe.
+/// Look up every account linked to `host_device_id` (the ingesting Mac),
+/// resolve every client installation under each account, and try-send
+/// `env` on each live session's outbox. Misses (no linked accounts, peer
+/// offline, full outbox) are logged at debug/warn and swallowed — ingest
+/// must stay crash-safe.
 ///
-/// ADR-0020 / Phase G: replaces the legacy device-keyed
-/// `pairings::get_peers` lookup. Pair table is now keyed on
-/// `(host_device_id, mobile_account_id)`, so we walk
-/// account_host_pairings → devices(account_id) → live registry.
+/// ADR-0020 / Phase G: pair table is `host_links` keyed on
+/// `(host_installation_id, account_id)`. Fan-out targets come from
+/// `host_links::list_account_client_targets_for_host`.
 async fn broadcast_to_peers_of(
     store: &impl AsStorePool,
     registry: &SessionRegistry,

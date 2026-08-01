@@ -474,18 +474,20 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-proj-01 · Gap audit document
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done (2026-08-01) |
 | lane | daemon / backend |
 | depends_on | — (soft: T-p0-03) |
 | exit | Markdown table: local action → cloud path → gap Y/N |
+| artifact | [projection-gap-audit.md](../projection-gap-audit.md) |
 
 ### T-proj-02 · Fix golden-path ingest/fanout gaps
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done (2026-08-01) |
 | lane | daemon / backend |
 | depends_on | T-proj-01, T-host-04, T-schema-02 |
 | exit | Start/stream/send/stop projected for Linked host；ingest peer target lookup 使用 `host_links` |
+| notes | Live-batch approval recording + formal status promote; peer targets already on host_links |
 
 ### T-proj-03 · Three-client viewer E2E
 | Field | Value |
@@ -514,10 +516,11 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-proj-06 · Regression test for projection invariant
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done (2026-08-01) |
 | lane | backend |
 | depends_on | T-proj-02 |
 | exit | Automated test would fail if fanout broken |
+| notes | `ws_gateway`: `host_ingest_live_batch_fans_out_projection_to_subscribed_client`, `host_ingest_live_batch_records_approval_request` |
 
 ### T-proj-07 · Job/schema WARN triage
 | Field | Value |
