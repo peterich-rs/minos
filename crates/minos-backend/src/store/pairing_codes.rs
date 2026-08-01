@@ -391,7 +391,7 @@ fn parse_device_id(raw: &str, column: &str) -> Result<DeviceId, BackendError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::devices;
+    use crate::store::device_installations;
     use crate::store::test_support::{memory_pool, T0};
     use minos_domain::DeviceRole;
     use pretty_assertions::assert_eq;
@@ -400,7 +400,7 @@ mod tests {
     async fn insert_and_confirm_round_trip() {
         let pool = memory_pool().await;
         let host = DeviceId::new();
-        devices::insert_device(&pool, host, "host", DeviceRole::AgentHost, T0)
+        device_installations::insert_device(&pool, host, "host", DeviceRole::AgentHost, T0)
             .await
             .unwrap();
         let account = crate::store::accounts::create(&pool, "pairing-code@example.com", "phc")

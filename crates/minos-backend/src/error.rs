@@ -19,18 +19,16 @@ pub enum BackendError {
     #[error("store migrate failed: {message}")]
     StoreMigrate { message: String },
 
-    /// A store operation targeted a device that does not exist.
+    /// A store operation targeted a device/installation that does not exist.
     ///
-    /// Emitted by `upsert_secret_hash` when no row matches the given
-    /// `device_id`. Callers can distinguish this from generic store errors
-    /// to render the user-facing "device not found" path.
+    /// Emitted by touch/update helpers when no row matches the given id.
     #[error("device not found: {device_id}")]
     DeviceNotFound { device_id: String },
 
     /// A row returned by the store failed to parse back into a domain type.
     ///
-    /// The store writes `DeviceId` / `DeviceRole` as TEXT and parses on read
-    /// (see `store/devices.rs` strategy note). Corrupt rows — or schema drift
+    /// The store writes ids/kinds as TEXT and parses on read
+    /// (see `store/device_installations.rs`). Corrupt rows — or schema drift
     /// between migrations and domain types — surface here.
     #[error("store decode failed for column `{column}`: {message}")]
     StoreDecode { column: String, message: String },

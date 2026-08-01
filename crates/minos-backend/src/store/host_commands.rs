@@ -483,7 +483,7 @@ fn store_err(operation: &'static str) -> impl FnOnce(sqlx::Error) -> BackendErro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::devices::insert_device;
+    use crate::store::device_installations::insert_device;
     use crate::store::test_support::{memory_pool, T0};
     use minos_domain::DeviceRole;
 

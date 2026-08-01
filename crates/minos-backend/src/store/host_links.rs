@@ -1,19 +1,15 @@
-//! Persistence for `account_host_pairings`. Pair model is
-//! `(host_device_id, mobile_account_id)` post ADR-0020. The mobile
-//! `device_id` that performed the scan is recorded as
-//! `paired_via_device_id` for audit only — it does not participate in
+//! Persistence for `host_links` (account ↔ host installation).
+//!
+//! Pair model is `(account_id, host_installation_id)`. The client
+//! installation that performed the link is recorded as
+//! `linked_via_installation_id` for audit only — it does not participate in
 //! routing.
 //!
-//! ## Type strategy
-//!
-//! Same as `store::devices` and `store::accounts`: we store
-//! `DeviceId` as `TEXT` (UUID-string form) and parse on the way back
-//! using `Uuid::parse_str`. `mobile_account_id` rides as a plain
-//! `String` because the codebase treats account ids as opaque UUID
-//! strings (see `accounts::AccountRow::account_id: String`); there is
-//! no `AccountId` newtype yet.
+//! Field names on [`PairRow`] keep historical `host_device_id` /
+//! `mobile_account_id` vocabulary for call-site stability; SQL uses the
+//! Postgres-aligned column names on both backends.
 
-use minos_domain::DeviceId;
+use minos_domain::{DeviceId, DeviceRole};
 use sqlx::{Executor, Postgres, Sqlite};
 use uuid::Uuid;
 
@@ -22,27 +18,19 @@ use crate::store::{AsStorePool, StorePoolRef};
 
 type PairRowTuple = (String, String, String, String, i64);
 
-/// A single row of the `account_host_pairings` table after decoding the
-/// stringly-typed columns back into the domain `DeviceId` newtypes.
+/// A single host-link row after decoding stringly columns into domain ids.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairRow {
     pub pair_id: String,
     pub host_device_id: DeviceId,
     pub mobile_account_id: String,
-    /// The mobile device that scanned the pairing QR. Recorded for
-    /// audit only; routing keys off `host_device_id` and account.
+    /// Client installation that established the link (audit only).
     pub paired_via_device_id: DeviceId,
     pub paired_at_ms: i64,
 }
 
-/// Insert a new pair. Returns `Ok(false)` on UNIQUE conflict
-/// (account already paired to this Mac); `Ok(true)` on insert.
-///
-/// The `ON CONFLICT DO NOTHING` clause makes the call idempotent for
-/// the (host, account) couple while still letting the caller
-/// distinguish "newly created" from "already present" via the bool
-/// return — used by the pairing handler to decide whether to emit the
-/// `Paired` event.
+/// Insert a new host link. Returns `Ok(false)` on UNIQUE conflict
+/// (account already linked to this host); `Ok(true)` on insert.
 pub async fn insert_pair(
     store: &impl AsStorePool,
     host_device_id: DeviceId,
@@ -89,21 +77,22 @@ where
     let via_s = paired_via_device_id.to_string();
     let res = sqlx::query(
         r#"
-        INSERT INTO account_host_pairings
-            (pair_id, host_device_id, mobile_account_id, paired_via_device_id, paired_at_ms)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT (host_device_id, mobile_account_id) DO NOTHING
+        INSERT INTO host_links
+            (pair_id, account_id, host_installation_id, linked_via_installation_id,
+             link_display_name, acl_json, paired_at_ms)
+        VALUES (?, ?, ?, ?, NULL, '{}', ?)
+        ON CONFLICT (account_id, host_installation_id) DO NOTHING
         "#,
     )
     .bind(&pair_id)
-    .bind(&host_s)
     .bind(mobile_account_id)
+    .bind(&host_s)
     .bind(&via_s)
     .bind(now_ms)
     .execute(executor)
     .await
     .map_err(|e| BackendError::StoreQuery {
-        operation: "account_host_pairings::insert_pair".into(),
+        operation: "host_links::insert_pair".into(),
         message: e.to_string(),
     })?;
     Ok(res.rows_affected() == 1)
@@ -124,28 +113,28 @@ where
     let via_s = paired_via_device_id.to_string();
     let res = sqlx::query(
         r#"
-        INSERT INTO account_host_pairings
-            (pair_id, host_device_id, mobile_account_id, paired_via_device_id, paired_at_ms)
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (host_device_id, mobile_account_id) DO NOTHING
+        INSERT INTO host_links
+            (pair_id, account_id, host_installation_id, linked_via_installation_id,
+             link_display_name, acl_json, paired_at_ms)
+        VALUES ($1, $2, $3, $4, NULL, '{}'::jsonb, $5)
+        ON CONFLICT (account_id, host_installation_id) DO NOTHING
         "#,
     )
     .bind(&pair_id)
-    .bind(&host_s)
     .bind(mobile_account_id)
+    .bind(&host_s)
     .bind(&via_s)
     .bind(now_ms)
     .execute(executor)
     .await
     .map_err(|e| BackendError::StoreQuery {
-        operation: "account_host_pairings::insert_pair".into(),
+        operation: "host_links::insert_pair".into(),
         message: e.to_string(),
     })?;
     Ok(res.rows_affected() == 1)
 }
 
-/// Return every Mac paired to the given account, ordered most-recent
-/// first by `paired_at_ms`.
+/// Return every host linked to the given account, most-recent first.
 pub async fn list_hosts_for_account(
     store: &impl AsStorePool,
     mobile_account_id: &str,
@@ -154,9 +143,10 @@ pub async fn list_hosts_for_account(
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, PairRowTuple>(
                 r#"
-                SELECT pair_id, host_device_id, mobile_account_id, paired_via_device_id, paired_at_ms
-                FROM account_host_pairings
-                WHERE mobile_account_id = ?
+                SELECT pair_id, host_installation_id, account_id,
+                       linked_via_installation_id, paired_at_ms
+                FROM host_links
+                WHERE account_id = ?
                 ORDER BY paired_at_ms DESC
                 "#,
             )
@@ -167,9 +157,10 @@ pub async fn list_hosts_for_account(
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, PairRowTuple>(
                 r#"
-                SELECT pair_id, host_device_id, mobile_account_id, paired_via_device_id, paired_at_ms
-                FROM account_host_pairings
-                WHERE mobile_account_id = $1
+                SELECT pair_id, host_installation_id, account_id,
+                       linked_via_installation_id, paired_at_ms
+                FROM host_links
+                WHERE account_id = $1
                 ORDER BY paired_at_ms DESC
                 "#,
             )
@@ -179,14 +170,13 @@ pub async fn list_hosts_for_account(
         }
     }
     .map_err(|e| BackendError::StoreQuery {
-        operation: "account_host_pairings::list_hosts_for_account".into(),
+        operation: "host_links::list_hosts_for_account".into(),
         message: e.to_string(),
     })?;
     rows.into_iter().map(decode_pair_row).collect()
 }
 
-/// Return every account paired to the given Mac, ordered most-recent
-/// first by `paired_at_ms`.
+/// Return every account linked to the given host, most-recent first.
 pub async fn list_accounts_for_host(
     store: &impl AsStorePool,
     host_device_id: DeviceId,
@@ -196,9 +186,10 @@ pub async fn list_accounts_for_host(
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, PairRowTuple>(
                 r#"
-                SELECT pair_id, host_device_id, mobile_account_id, paired_via_device_id, paired_at_ms
-                FROM account_host_pairings
-                WHERE host_device_id = ?
+                SELECT pair_id, host_installation_id, account_id,
+                       linked_via_installation_id, paired_at_ms
+                FROM host_links
+                WHERE host_installation_id = ?
                 ORDER BY paired_at_ms DESC
                 "#,
             )
@@ -209,9 +200,10 @@ pub async fn list_accounts_for_host(
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, PairRowTuple>(
                 r#"
-                SELECT pair_id, host_device_id, mobile_account_id, paired_via_device_id, paired_at_ms
-                FROM account_host_pairings
-                WHERE host_device_id = $1
+                SELECT pair_id, host_installation_id, account_id,
+                       linked_via_installation_id, paired_at_ms
+                FROM host_links
+                WHERE host_installation_id = $1
                 ORDER BY paired_at_ms DESC
                 "#,
             )
@@ -221,61 +213,75 @@ pub async fn list_accounts_for_host(
         }
     }
     .map_err(|e| BackendError::StoreQuery {
-        operation: "account_host_pairings::list_accounts_for_host".into(),
+        operation: "host_links::list_accounts_for_host".into(),
         message: e.to_string(),
     })?;
     rows.into_iter().map(decode_pair_row).collect()
 }
 
+/// Flatten linked accounts → client installations for host fan-out.
 pub async fn list_account_client_targets_for_host(
     store: &impl AsStorePool,
     host_device_id: DeviceId,
 ) -> Result<Vec<DeviceId>, BackendError> {
     let host_s = host_device_id.to_string();
+    let mobile = DeviceRole::MobileClient.to_installation_kind();
+    let browser = DeviceRole::BrowserAdmin.to_installation_kind();
+    let desktop = DeviceRole::DesktopConsole.to_installation_kind();
     let rows = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_scalar::<_, String>(
                 r#"
-                SELECT DISTINCT d.device_id
-                FROM account_host_pairings ahp
-                JOIN devices d
-                  ON d.account_id = ahp.mobile_account_id
-                WHERE ahp.host_device_id = ?
-                  AND d.role IN ('mobile-client', 'browser-admin')
-                ORDER BY d.device_id ASC
+                SELECT DISTINCT d.installation_id
+                FROM host_links hl
+                JOIN device_installations d
+                  ON d.account_id = hl.account_id
+                WHERE hl.host_installation_id = ?
+                  AND d.kind IN (?, ?, ?)
+                ORDER BY d.installation_id ASC
                 "#,
             )
             .bind(&host_s)
+            .bind(mobile)
+            .bind(browser)
+            .bind(desktop)
             .fetch_all(pool)
             .await
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_scalar::<_, String>(
                 r#"
-                SELECT DISTINCT d.device_id
-                FROM account_host_pairings ahp
-                JOIN devices d
-                  ON d.account_id = ahp.mobile_account_id
-                WHERE ahp.host_device_id = $1
-                  AND d.role IN ('mobile-client', 'browser-admin')
-                ORDER BY d.device_id ASC
+                SELECT DISTINCT d.installation_id
+                FROM host_links hl
+                JOIN device_installations d
+                  ON d.account_id = hl.account_id
+                WHERE hl.host_installation_id = $1
+                  AND d.kind IN (
+                      $2::installation_kind,
+                      $3::installation_kind,
+                      $4::installation_kind
+                  )
+                ORDER BY d.installation_id ASC
                 "#,
             )
             .bind(&host_s)
+            .bind(mobile)
+            .bind(browser)
+            .bind(desktop)
             .fetch_all(pool)
             .await
         }
     }
     .map_err(|e| BackendError::StoreQuery {
-        operation: "account_host_pairings::list_account_client_targets_for_host".into(),
+        operation: "host_links::list_account_client_targets_for_host".into(),
         message: e.to_string(),
     })?;
     rows.into_iter()
-        .map(|raw| parse_device_id(&raw, "device_id"))
+        .map(|raw| parse_device_id(&raw, "installation_id"))
         .collect()
 }
 
-/// Does the (host, account) pair exist?
+/// Does the (host, account) link exist?
 pub async fn exists(
     store: &impl AsStorePool,
     host_device_id: DeviceId,
@@ -287,8 +293,8 @@ pub async fn exists(
             sqlx::query_scalar::<_, String>(
                 r#"
                 SELECT pair_id
-                FROM account_host_pairings
-                WHERE host_device_id = ? AND mobile_account_id = ?
+                FROM host_links
+                WHERE host_installation_id = ? AND account_id = ?
                 LIMIT 1
                 "#,
             )
@@ -301,8 +307,8 @@ pub async fn exists(
             sqlx::query_scalar::<_, String>(
                 r#"
                 SELECT pair_id
-                FROM account_host_pairings
-                WHERE host_device_id = $1 AND mobile_account_id = $2
+                FROM host_links
+                WHERE host_installation_id = $1 AND account_id = $2
                 LIMIT 1
                 "#,
             )
@@ -313,13 +319,13 @@ pub async fn exists(
         }
     }
     .map_err(|e| BackendError::StoreQuery {
-        operation: "account_host_pairings::exists".into(),
+        operation: "host_links::exists".into(),
         message: e.to_string(),
     })?;
     Ok(row.is_some())
 }
 
-/// Delete a specific (host, account) pair. Returns rows-deleted (0 or 1).
+/// Delete a specific (host, account) link. Returns rows-deleted (0 or 1).
 pub async fn delete_pair(
     store: &impl AsStorePool,
     host_device_id: DeviceId,
@@ -346,8 +352,8 @@ where
     let host_s = host_device_id.to_string();
     let res = sqlx::query(
         r#"
-        DELETE FROM account_host_pairings
-        WHERE host_device_id = ? AND mobile_account_id = ?
+        DELETE FROM host_links
+        WHERE host_installation_id = ? AND account_id = ?
         "#,
     )
     .bind(&host_s)
@@ -355,7 +361,7 @@ where
     .execute(executor)
     .await
     .map_err(|e| BackendError::StoreQuery {
-        operation: "account_host_pairings::delete_pair".into(),
+        operation: "host_links::delete_pair".into(),
         message: e.to_string(),
     })?;
     Ok(res.rows_affected())
@@ -372,8 +378,8 @@ where
     let host_s = host_device_id.to_string();
     let res = sqlx::query(
         r#"
-        DELETE FROM account_host_pairings
-        WHERE host_device_id = $1 AND mobile_account_id = $2
+        DELETE FROM host_links
+        WHERE host_installation_id = $1 AND account_id = $2
         "#,
     )
     .bind(&host_s)
@@ -381,7 +387,7 @@ where
     .execute(executor)
     .await
     .map_err(|e| BackendError::StoreQuery {
-        operation: "account_host_pairings::delete_pair".into(),
+        operation: "host_links::delete_pair".into(),
         message: e.to_string(),
     })?;
     Ok(res.rows_affected())
@@ -398,15 +404,15 @@ where
     sqlx::query_scalar::<_, i64>(
         r#"
         SELECT COUNT(*)
-        FROM account_host_pairings
-        WHERE host_device_id = ?
+        FROM host_links
+        WHERE host_installation_id = ?
         "#,
     )
     .bind(&host_s)
     .fetch_one(executor)
     .await
     .map_err(|e| BackendError::StoreQuery {
-        operation: "account_host_pairings::count_accounts_for_host".into(),
+        operation: "host_links::count_accounts_for_host".into(),
         message: e.to_string(),
     })
 }
@@ -422,15 +428,15 @@ where
     sqlx::query_scalar::<_, i64>(
         r#"
         SELECT COUNT(*)
-        FROM account_host_pairings
-        WHERE host_device_id = $1
+        FROM host_links
+        WHERE host_installation_id = $1
         "#,
     )
     .bind(&host_s)
     .fetch_one(executor)
     .await
     .map_err(|e| BackendError::StoreQuery {
-        operation: "account_host_pairings::count_accounts_for_host".into(),
+        operation: "host_links::count_accounts_for_host".into(),
         message: e.to_string(),
     })
 }
@@ -439,9 +445,9 @@ fn decode_pair_row(row: PairRowTuple) -> Result<PairRow, BackendError> {
     let (pair_id, host_device_id, mobile_account_id, paired_via_device_id, paired_at_ms) = row;
     Ok(PairRow {
         pair_id,
-        host_device_id: parse_device_id(&host_device_id, "host_device_id")?,
+        host_device_id: parse_device_id(&host_device_id, "host_installation_id")?,
         mobile_account_id,
-        paired_via_device_id: parse_device_id(&paired_via_device_id, "paired_via_device_id")?,
+        paired_via_device_id: parse_device_id(&paired_via_device_id, "linked_via_installation_id")?,
         paired_at_ms,
     })
 }
@@ -450,7 +456,7 @@ fn parse_device_id(raw: &str, column: &str) -> Result<DeviceId, BackendError> {
     Uuid::parse_str(raw)
         .map(DeviceId)
         .map_err(|e| BackendError::StoreDecode {
-            column: format!("account_host_pairings.{column}"),
+            column: format!("host_links.{column}"),
             message: e.to_string(),
         })
 }
@@ -458,16 +464,10 @@ fn parse_device_id(raw: &str, column: &str) -> Result<DeviceId, BackendError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::devices::{insert_device, set_account_id};
+    use crate::store::device_installations::{insert_device, set_account_id};
     use crate::store::test_support::{insert_account, insert_ios_device, memory_pool, T0};
-    use minos_domain::DeviceRole;
     use pretty_assertions::assert_eq;
 
-    /// Set up a Mac, a mobile account + iOS device, and return the ids.
-    /// Mac is inserted via `insert_device` directly (no account_id link
-    /// pre-pair); iOS is inserted via `insert_ios_device` which sets
-    /// `account_id` during creation. `secret_hash` stays NULL on iOS as
-    /// required by the new ADR-0020 rail.
     async fn setup_one_host_one_account() -> (
         sqlx::SqlitePool,
         String,   // account_id
@@ -541,7 +541,6 @@ mod tests {
             .unwrap();
         let accounts = list_accounts_for_host(&pool, host).await.unwrap();
         assert_eq!(accounts.len(), 2);
-        // ordered most-recent first
         assert_eq!(accounts[0].mobile_account_id, account_b);
         assert_eq!(accounts[1].mobile_account_id, account_a);
     }

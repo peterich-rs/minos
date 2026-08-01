@@ -274,7 +274,7 @@ pub async fn gc_expired(store: &impl AsStorePool, now: i64) -> Result<u64, Backe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::devices::insert_device;
+    use crate::store::device_installations::insert_device;
     use crate::store::test_support::{memory_pool, T0};
     use minos_domain::DeviceRole;
     use pretty_assertions::assert_eq;

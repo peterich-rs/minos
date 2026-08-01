@@ -216,7 +216,7 @@ fn decode_host_installation_token_row(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::devices;
+    use crate::store::device_installations;
     use crate::store::test_support::{memory_pool, T0};
     use minos_domain::DeviceRole;
 
@@ -224,7 +224,7 @@ mod tests {
     async fn verify_active_token_updates_last_used() {
         let pool = memory_pool().await;
         let host = DeviceId::new();
-        devices::insert_device(&pool, host, "host", DeviceRole::AgentHost, T0)
+        device_installations::insert_device(&pool, host, "host", DeviceRole::AgentHost, T0)
             .await
             .unwrap();
         let mut tx = pool.begin().await.unwrap();

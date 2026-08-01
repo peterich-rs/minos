@@ -1,9 +1,8 @@
 //! SQLite connection pool, schema migrations, and typed CRUD helpers.
 //!
 //! Submodules:
-//! - [`devices`] — device rows + per-device secret hashes.
-//! - [`account_host_pairings`] — account ↔ Mac pair table (ADR-0020).
-//!   Replaces the legacy device-keyed `pairings` module.
+//! - [`device_installations`] — client/host installation rows (`kind` enum).
+//! - [`host_links`] — account ↔ host installation links (ADR-0020 / D02).
 //! - [`agent_sessions`] — additive agent session metadata scoped to conversations.
 //! - [`agent_turns`] — durable turn metadata for agent sessions.
 //! - [`agent_turn_events`] — per-turn cold-replay stream slices.
@@ -209,16 +208,16 @@ pub struct ExternalSqlPreflight {
     pub max_connections: u32,
 }
 
-pub mod account_host_pairings;
 pub mod accounts;
 pub mod agent_sessions;
 pub mod agent_turn_events;
 pub mod agent_turns;
 pub mod approval_requests;
-pub mod devices;
+pub mod device_installations;
 pub mod durable_event_log;
 pub mod host_commands;
 pub mod host_installation_tokens;
+pub mod host_links;
 pub mod notification_cooldowns;
 pub mod notification_preferences;
 pub mod outbox_events;
@@ -232,7 +231,7 @@ pub mod social;
 pub mod thread_sync_state;
 pub mod tokens;
 
-pub use devices::{get_device, get_secret_hash, insert_device, upsert_secret_hash, DeviceRow};
+pub use device_installations::{get_device, insert_device, DeviceRow};
 pub use tokens::{consume_token, gc_expired, issue_token, ConsumedToken};
 
 #[must_use]
@@ -476,24 +475,20 @@ pub mod test_support {
             .account_id
     }
 
-    /// Insert an iOS device row linked to `account_id` and return its
-    /// `DeviceId`. Post ADR-0020 the iOS rail keeps `secret_hash NULL`
-    /// (the server authenticates the iOS side via the bearer access
-    /// token, not a per-device secret) — this helper preserves that
-    /// invariant. Uses a runtime `sqlx::query` so the `account_id`
-    /// column can be set in a single insert without a follow-up
-    /// `UPDATE`.
+    /// Insert a mobile installation linked to `account_id` and return its
+    /// `DeviceId`. Client auth is bearer-only (no device secret).
     pub async fn insert_ios_device(pool: &SqlitePool, account_id: &str) -> DeviceId {
         let id = DeviceId::new();
         let id_str = id.to_string();
-        let role_str = DeviceRole::MobileClient.to_string();
+        let kind = DeviceRole::MobileClient.to_installation_kind();
         sqlx::query(
-            "INSERT INTO devices (device_id, display_name, role, secret_hash, created_at, last_seen_at, account_id)
+            "INSERT INTO device_installations
+                (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
              VALUES (?, ?, ?, NULL, ?, ?, ?)",
         )
         .bind(&id_str)
+        .bind(kind)
         .bind("iPhone")
-        .bind(&role_str)
         .bind(T0)
         .bind(T0)
         .bind(account_id)

@@ -525,8 +525,8 @@ mod tests {
 
     async fn seed_host_and_thread(pool: &SqlitePool) {
         sqlx::query(
-            r"INSERT INTO devices (device_id, display_name, role, created_at, last_seen_at)
-               VALUES ('dev1','Dev','agent-host',0,0)",
+            r"INSERT INTO device_installations (installation_id, kind, display_name, created_at_ms, last_seen_at_ms)
+               VALUES ('dev1','host','Dev',0,0)",
         )
         .execute(pool)
         .await
@@ -734,9 +734,9 @@ mod tests {
     async fn last_seq_per_owner_groups_by_thread() {
         let pool = memory_pool().await;
         sqlx::query(
-            r"INSERT INTO devices (device_id, display_name, role, created_at, last_seen_at)
-               VALUES ('host_a','HostA','agent-host',0,0),
-                      ('host_b','HostB','agent-host',0,0)",
+            r"INSERT INTO device_installations (installation_id, kind, display_name, created_at_ms, last_seen_at_ms)
+               VALUES ('host_a','host','HostA',0,0),
+                      ('host_b','host','HostB',0,0)",
         )
         .execute(&pool)
         .await
