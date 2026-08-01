@@ -32,8 +32,14 @@ pub struct PairRow {
 
 /// Upsert a host link and return the resulting row.
 ///
-/// On conflict `(account_id, host_installation_id)` refreshes
-/// `paired_at_ms`, `linked_via_installation_id`, and `link_display_name`.
+/// On conflict `host_installation_id` (exclusive ownership) refreshes
+/// metadata **only** when the existing row belongs to the same account.
+/// Returns [`BackendError::HostLinkedElsewhere`] when the host is already
+/// bound to a different account (empty RETURNING after conflict WHERE).
+///
+/// Callers that need exclusivity under concurrency must run
+/// [`assert_host_available_or_same_account_*`] in the **same** write
+/// transaction before this upsert.
 pub async fn upsert_link(
     store: &impl AsStorePool,
     host_device_id: DeviceId,
@@ -88,10 +94,11 @@ where
             (pair_id, account_id, host_installation_id, linked_via_installation_id,
              link_display_name, acl_json, paired_at_ms)
         VALUES (?, ?, ?, ?, ?, '{}', ?)
-        ON CONFLICT (account_id, host_installation_id) DO UPDATE SET
+        ON CONFLICT (host_installation_id) DO UPDATE SET
             linked_via_installation_id = excluded.linked_via_installation_id,
             link_display_name = excluded.link_display_name,
             paired_at_ms = excluded.paired_at_ms
+        WHERE host_links.account_id = excluded.account_id
         RETURNING pair_id, host_installation_id, account_id,
                   linked_via_installation_id, link_display_name, paired_at_ms
         "#,
@@ -102,12 +109,14 @@ where
     .bind(&via_s)
     .bind(link_display_name)
     .bind(now_ms)
-    .fetch_one(executor)
+    .fetch_optional(executor)
     .await
-    .map_err(|e| BackendError::StoreQuery {
-        operation: "host_links::upsert_link".into(),
-        message: e.to_string(),
-    })?;
+    .map_err(|e| map_host_link_write_error("host_links::upsert_link", e))?;
+    let Some(row) = row else {
+        return Err(BackendError::HostLinkedElsewhere {
+            host_installation_id: host_s,
+        });
+    };
     decode_pair_row(row)
 }
 
@@ -131,10 +140,11 @@ where
             (pair_id, account_id, host_installation_id, linked_via_installation_id,
              link_display_name, acl_json, paired_at_ms)
         VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, $6)
-        ON CONFLICT (account_id, host_installation_id) DO UPDATE SET
+        ON CONFLICT (host_installation_id) DO UPDATE SET
             linked_via_installation_id = EXCLUDED.linked_via_installation_id,
             link_display_name = EXCLUDED.link_display_name,
             paired_at_ms = EXCLUDED.paired_at_ms
+        WHERE host_links.account_id = EXCLUDED.account_id
         RETURNING pair_id, host_installation_id, account_id,
                   linked_via_installation_id, link_display_name, paired_at_ms
         "#,
@@ -145,17 +155,107 @@ where
     .bind(&via_s)
     .bind(link_display_name)
     .bind(now_ms)
-    .fetch_one(executor)
+    .fetch_optional(executor)
     .await
-    .map_err(|e| BackendError::StoreQuery {
-        operation: "host_links::upsert_link".into(),
-        message: e.to_string(),
-    })?;
+    .map_err(|e| map_host_link_write_error("host_links::upsert_link", e))?;
+    let Some(row) = row else {
+        return Err(BackendError::HostLinkedElsewhere {
+            host_installation_id: host_s,
+        });
+    };
     decode_pair_row(row)
 }
 
-/// Insert a new host link. Returns `Ok(false)` on UNIQUE conflict
-/// (account already linked to this host); `Ok(true)` on insert.
+/// Inside a write transaction: host free or already owned by `account_id`.
+pub(crate) async fn assert_host_available_or_same_account_sqlite<'e, E>(
+    executor: E,
+    host_device_id: DeviceId,
+    account_id: &str,
+) -> Result<(), BackendError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
+    let host_s = host_device_id.to_string();
+    let existing: Option<String> = sqlx::query_scalar(
+        r#"
+        SELECT account_id
+        FROM host_links
+        WHERE host_installation_id = ?
+        LIMIT 1
+        "#,
+    )
+    .bind(&host_s)
+    .fetch_optional(executor)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "host_links::assert_host_available".into(),
+        message: e.to_string(),
+    })?;
+    if let Some(owner) = existing {
+        if owner != account_id {
+            return Err(BackendError::HostLinkedElsewhere {
+                host_installation_id: host_s,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Inside a write transaction: host free or already owned by `account_id`.
+pub(crate) async fn assert_host_available_or_same_account_postgres<'e, E>(
+    executor: E,
+    host_device_id: DeviceId,
+    account_id: &str,
+) -> Result<(), BackendError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let host_s = host_device_id.to_string();
+    let existing: Option<String> = sqlx::query_scalar(
+        r#"
+        SELECT account_id
+        FROM host_links
+        WHERE host_installation_id = $1
+        LIMIT 1
+        FOR UPDATE
+        "#,
+    )
+    .bind(&host_s)
+    .fetch_optional(executor)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "host_links::assert_host_available".into(),
+        message: e.to_string(),
+    })?;
+    if let Some(owner) = existing {
+        if owner != account_id {
+            return Err(BackendError::HostLinkedElsewhere {
+                host_installation_id: host_s,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn map_host_link_write_error(operation: &str, error: sqlx::Error) -> BackendError {
+    if let sqlx::Error::Database(db) = &error {
+        if db.is_unique_violation() {
+            return BackendError::HostLinkedElsewhere {
+                host_installation_id: String::new(),
+            };
+        }
+    }
+    BackendError::StoreQuery {
+        operation: operation.into(),
+        message: error.to_string(),
+    }
+}
+
+/// Insert a new host link. Returns `Ok(false)` when the same account already
+/// owns the host; `Ok(true)` on insert. Different-account ownership →
+/// [`BackendError::HostLinkedElsewhere`].
+///
+/// Runs assert + insert under a write transaction so exclusivity is race-safe.
 pub async fn insert_pair(
     store: &impl AsStorePool,
     host_device_id: DeviceId,
@@ -165,28 +265,71 @@ pub async fn insert_pair(
 ) -> Result<bool, BackendError> {
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
-            insert_pair_with_executor(
-                pool,
+            let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| {
+                BackendError::StoreQuery {
+                    operation: "host_links::insert_pair.begin".into(),
+                    message: e.to_string(),
+                }
+            })?;
+            assert_host_available_or_same_account_sqlite(
+                &mut *tx,
+                host_device_id,
+                mobile_account_id,
+            )
+            .await?;
+            let inserted = insert_pair_with_executor(
+                &mut *tx,
                 host_device_id,
                 mobile_account_id,
                 paired_via_device_id,
                 now_ms,
             )
-            .await
+            .await?;
+            tx.commit().await.map_err(|e| BackendError::StoreQuery {
+                operation: "host_links::insert_pair.commit".into(),
+                message: e.to_string(),
+            })?;
+            Ok(inserted)
         }
         StorePoolRef::Postgres(pool) => {
-            insert_pair_with_postgres_executor(
-                pool,
+            let mut tx = pool.begin().await.map_err(|e| BackendError::StoreQuery {
+                operation: "host_links::insert_pair.begin".into(),
+                message: e.to_string(),
+            })?;
+            sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| BackendError::StoreQuery {
+                    operation: "host_links::insert_pair.set_isolation".into(),
+                    message: e.to_string(),
+                })?;
+            assert_host_available_or_same_account_postgres(
+                &mut *tx,
+                host_device_id,
+                mobile_account_id,
+            )
+            .await?;
+            let inserted = insert_pair_with_postgres_executor(
+                &mut *tx,
                 host_device_id,
                 mobile_account_id,
                 paired_via_device_id,
                 now_ms,
             )
-            .await
+            .await?;
+            tx.commit().await.map_err(|e| BackendError::StoreQuery {
+                operation: "host_links::insert_pair.commit".into(),
+                message: e.to_string(),
+            })?;
+            Ok(inserted)
         }
     }
 }
 
+/// Insert after exclusivity assert in the **same** write transaction.
+///
+/// Same-account re-insert → `Ok(false)`. Caller must have already run
+/// [`assert_host_available_or_same_account_*`].
 pub(crate) async fn insert_pair_with_executor<'e, E>(
     executor: E,
     host_device_id: DeviceId,
@@ -206,7 +349,7 @@ where
             (pair_id, account_id, host_installation_id, linked_via_installation_id,
              link_display_name, acl_json, paired_at_ms)
         VALUES (?, ?, ?, ?, NULL, '{}', ?)
-        ON CONFLICT (account_id, host_installation_id) DO NOTHING
+        ON CONFLICT (host_installation_id) DO NOTHING
         "#,
     )
     .bind(&pair_id)
@@ -216,10 +359,7 @@ where
     .bind(now_ms)
     .execute(executor)
     .await
-    .map_err(|e| BackendError::StoreQuery {
-        operation: "host_links::insert_pair".into(),
-        message: e.to_string(),
-    })?;
+    .map_err(|e| map_host_link_write_error("host_links::insert_pair", e))?;
     Ok(res.rows_affected() == 1)
 }
 
@@ -242,7 +382,7 @@ where
             (pair_id, account_id, host_installation_id, linked_via_installation_id,
              link_display_name, acl_json, paired_at_ms)
         VALUES ($1, $2, $3, $4, NULL, '{}'::jsonb, $5)
-        ON CONFLICT (account_id, host_installation_id) DO NOTHING
+        ON CONFLICT (host_installation_id) DO NOTHING
         "#,
     )
     .bind(&pair_id)
@@ -252,10 +392,7 @@ where
     .bind(now_ms)
     .execute(executor)
     .await
-    .map_err(|e| BackendError::StoreQuery {
-        operation: "host_links::insert_pair".into(),
-        message: e.to_string(),
-    })?;
+    .map_err(|e| map_host_link_write_error("host_links::insert_pair", e))?;
     Ok(res.rows_affected() == 1)
 }
 
@@ -662,20 +799,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn one_mac_to_many_accounts() {
+    async fn one_mac_rejects_second_account() {
         let (pool, account_a, host, mobile_a) = setup_one_host_one_account().await;
         let account_b = insert_account(&pool, "b@example.com").await;
         let mobile_b = insert_ios_device(&pool, &account_b).await;
         insert_pair(&pool, host, &account_a, mobile_a, 100)
             .await
             .unwrap();
-        insert_pair(&pool, host, &account_b, mobile_b, 200)
+        let err = insert_pair(&pool, host, &account_b, mobile_b, 200)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BackendError::HostLinkedElsewhere { .. }));
+        let accounts = list_accounts_for_host(&pool, host).await.unwrap();
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].mobile_account_id, account_a);
+    }
+
+    #[tokio::test]
+    async fn exclusivity_assert_inside_tx_blocks_elsewhere() {
+        let (pool, account_a, host, mobile_a) = setup_one_host_one_account().await;
+        let account_b = insert_account(&pool, "tx-b@example.com").await;
+        insert_pair(&pool, host, &account_a, mobile_a, 100)
             .await
             .unwrap();
-        let accounts = list_accounts_for_host(&pool, host).await.unwrap();
-        assert_eq!(accounts.len(), 2);
-        assert_eq!(accounts[0].mobile_account_id, account_b);
-        assert_eq!(accounts[1].mobile_account_id, account_a);
+
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        let err = assert_host_available_or_same_account_sqlite(&mut *tx, host, &account_b)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BackendError::HostLinkedElsewhere { .. }));
+        // Same account is fine inside the TX.
+        assert_host_available_or_same_account_sqlite(&mut *tx, host, &account_a)
+            .await
+            .unwrap();
+        tx.rollback().await.unwrap();
     }
 
     #[tokio::test]

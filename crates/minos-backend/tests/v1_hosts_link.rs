@@ -321,6 +321,86 @@ async fn host_already_linked_elsewhere_returns_409() {
 }
 
 #[tokio::test]
+async fn same_account_re_link_rotates_token() {
+    let state = backend_state().await;
+    let mut app = http::router(state.clone());
+    let (access, account_id, _) =
+        register_desktop(&mut app, "re-link-rotate@example.com").await;
+    let auth = format!("Bearer {access}");
+
+    let host = DeviceId::new();
+    let host_id = host.to_string();
+    let key = signing_key(71);
+    let pubkey = public_key(&key);
+
+    let nonce = issue_nonce(&mut app, &host_id).await;
+    let (status, body) = post_json(
+        &mut app,
+        "/v1/hosts/link",
+        &[("authorization", &auth)],
+        json!({
+            "installation_id": host_id,
+            "nonce": nonce,
+            "public_key": pubkey,
+            "signature": signature(&key, &host_id, &nonce, LINK_PATH),
+            "host_display_name": "Rotate Mac"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    let token1 = body["data"]["host_installation_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let nonce = issue_nonce(&mut app, &host_id).await;
+    let (status, body) = post_json(
+        &mut app,
+        "/v1/hosts/link",
+        &[("authorization", &auth)],
+        json!({
+            "installation_id": host_id,
+            "nonce": nonce,
+            "public_key": pubkey,
+            "signature": signature(&key, &host_id, &nonce, LINK_PATH),
+            "host_display_name": "Rotate Mac"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    let token2 = body["data"]["host_installation_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(token1, token2);
+    assert!(
+        host_links::exists(&state.store, host, &account_id)
+            .await
+            .unwrap()
+    );
+
+    let old_hash = minos_backend::pairing::sha256_hex(&token1);
+    let active_old = host_installation_tokens::verify_active_token(
+        &state.store,
+        &old_hash,
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    .unwrap();
+    assert!(active_old.is_none(), "prior token must be revoked on re-link");
+
+    let new_hash = minos_backend::pairing::sha256_hex(&token2);
+    let active_new = host_installation_tokens::verify_active_token(
+        &state.store,
+        &new_hash,
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await
+    .unwrap();
+    assert!(active_new.is_some());
+}
+
+#[tokio::test]
 async fn invalid_nonce_is_rejected() {
     let state = backend_state().await;
     let mut app = http::router(state);

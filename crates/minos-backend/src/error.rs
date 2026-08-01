@@ -65,6 +65,13 @@ pub enum BackendError {
     #[error("email already registered")]
     EmailTaken,
 
+    /// Host installation is already linked to a different account.
+    ///
+    /// Enforced by `UNIQUE (host_installation_id)` on `host_links` and by
+    /// in-transaction exclusivity checks (Host Link + QR confirm).
+    #[error("host already linked to another account")]
+    HostLinkedElsewhere { host_installation_id: String },
+
     /// An argon2id password hash / verify operation failed.
     ///
     /// Distinct from `PairingHash` so the auth rail and the pairing rail

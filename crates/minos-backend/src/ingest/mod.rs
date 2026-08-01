@@ -695,11 +695,12 @@ mod tests {
         let initial = peer_targets_for_host(&pool, host).await.unwrap();
         assert_eq!(initial, vec![ios_a]);
 
-        let account_b = insert_account(&pool, "b@example.com").await;
-        let ios_b = insert_ios_device(&pool, &account_b).await;
-        host_links::insert_pair(&pool, host, &account_b, ios_b, T0 + 1)
+        // Host is exclusive to one account; add another client on the same account.
+        let browser_a = DeviceId::new();
+        insert_device(&pool, browser_a, "browser-a", DeviceRole::BrowserAdmin, T0)
             .await
             .unwrap();
+        set_account_id(&pool, &browser_a, &account_a).await.unwrap();
 
         let cached = peer_targets_for_host(&pool, host).await.unwrap();
         assert_eq!(
@@ -712,7 +713,7 @@ mod tests {
         let refreshed = peer_targets_for_host(&pool, host).await.unwrap();
         assert_eq!(refreshed.len(), 2);
         assert!(refreshed.contains(&ios_a));
-        assert!(refreshed.contains(&ios_b));
+        assert!(refreshed.contains(&browser_a));
     }
 
     #[tokio::test]

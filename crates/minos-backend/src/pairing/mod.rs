@@ -125,6 +125,24 @@ pub enum HostLinkError {
     Internal(BackendError),
 }
 
+fn map_host_link_store_err(error: BackendError) -> HostLinkError {
+    match error {
+        BackendError::HostLinkedElsewhere { .. } => HostLinkError::HostLinkedElsewhere {
+            account_id: String::new(),
+        },
+        other => HostLinkError::Internal(other),
+    }
+}
+
+fn map_formal_host_link_err(error: BackendError) -> FormalPairingError {
+    match error {
+        BackendError::HostLinkedElsewhere { .. } => FormalPairingError::PairingStateMismatch {
+            actual: "host_linked_elsewhere".into(),
+        },
+        other => FormalPairingError::Internal(other),
+    }
+}
+
 /// Stateless facade around the pairing-related store helpers.
 ///
 /// Cheap to clone — just holds a `SqlitePool` handle. Usually instantiated
@@ -287,6 +305,13 @@ impl PairingService {
                     if updated != 1 {
                         return Err(FormalPairingError::PairingCodeInvalid);
                     }
+                    host_links::assert_host_available_or_same_account_sqlite(
+                        &mut *tx,
+                        row.host_installation_id,
+                        account_id,
+                    )
+                    .await
+                    .map_err(map_formal_host_link_err)?;
                     host_links::insert_pair_with_executor(
                         &mut *tx,
                         row.host_installation_id,
@@ -295,7 +320,7 @@ impl PairingService {
                         now,
                     )
                     .await
-                    .map_err(FormalPairingError::Internal)?;
+                    .map_err(map_formal_host_link_err)?;
                     Ok(FormalPairingConfirm {
                         host_installation_id: row.host_installation_id,
                         already_confirmed: false,
@@ -307,6 +332,13 @@ impl PairingService {
                             actual: "confirmed_by_different_account".to_string(),
                         });
                     }
+                    host_links::assert_host_available_or_same_account_sqlite(
+                        &mut *tx,
+                        row.host_installation_id,
+                        account_id,
+                    )
+                    .await
+                    .map_err(map_formal_host_link_err)?;
                     host_links::insert_pair_with_executor(
                         &mut *tx,
                         row.host_installation_id,
@@ -315,7 +347,7 @@ impl PairingService {
                         now,
                     )
                     .await
-                    .map_err(FormalPairingError::Internal)?;
+                    .map_err(map_formal_host_link_err)?;
                     Ok(FormalPairingConfirm {
                         host_installation_id: row.host_installation_id,
                         already_confirmed: true,
@@ -393,6 +425,13 @@ impl PairingService {
                     if updated != 1 {
                         return Err(FormalPairingError::PairingCodeInvalid);
                     }
+                    host_links::assert_host_available_or_same_account_postgres(
+                        &mut *tx,
+                        row.host_installation_id,
+                        account_id,
+                    )
+                    .await
+                    .map_err(map_formal_host_link_err)?;
                     host_links::insert_pair_with_postgres_executor(
                         &mut *tx,
                         row.host_installation_id,
@@ -401,7 +440,7 @@ impl PairingService {
                         now,
                     )
                     .await
-                    .map_err(FormalPairingError::Internal)?;
+                    .map_err(map_formal_host_link_err)?;
                     Ok(FormalPairingConfirm {
                         host_installation_id: row.host_installation_id,
                         already_confirmed: false,
@@ -413,6 +452,13 @@ impl PairingService {
                             actual: "confirmed_by_different_account".to_string(),
                         });
                     }
+                    host_links::assert_host_available_or_same_account_postgres(
+                        &mut *tx,
+                        row.host_installation_id,
+                        account_id,
+                    )
+                    .await
+                    .map_err(map_formal_host_link_err)?;
                     host_links::insert_pair_with_postgres_executor(
                         &mut *tx,
                         row.host_installation_id,
@@ -421,7 +467,7 @@ impl PairingService {
                         now,
                     )
                     .await
-                    .map_err(FormalPairingError::Internal)?;
+                    .map_err(map_formal_host_link_err)?;
                     Ok(FormalPairingConfirm {
                         host_installation_id: row.host_installation_id,
                         already_confirmed: true,
@@ -646,7 +692,9 @@ impl PairingService {
     /// Same-account host link: upsert `host_links` + mint a host installation token.
     ///
     /// Rejects hosts already linked to a different account (`HostLinkedElsewhere`).
-    /// Re-linking the same account is idempotent and re-issues a fresh token.
+    /// Exclusivity is checked **inside** the write transaction (with
+    /// `UNIQUE (host_installation_id)` as belt-and-suspenders). Re-linking the
+    /// same account rotates tokens (revoke all then issue a fresh `hit_*`).
     pub async fn link_host(
         &self,
         host_installation_id: DeviceId,
@@ -655,18 +703,6 @@ impl PairingService {
         host_display_name: Option<&str>,
     ) -> Result<HostLinkOutcome, HostLinkError> {
         let now = Utc::now().timestamp_millis();
-        let existing = host_links::list_accounts_for_host(&self.pool, host_installation_id)
-            .await
-            .map_err(HostLinkError::Internal)?;
-        if let Some(other) = existing
-            .iter()
-            .find(|row| row.mobile_account_id != account_id)
-        {
-            return Err(HostLinkError::HostLinkedElsewhere {
-                account_id: other.mobile_account_id.clone(),
-            });
-        }
-
         let token = generate_host_installation_token();
         let token_hash = sha256_hex(&token);
         let link = match self.pool.as_store_pool() {
@@ -678,12 +714,27 @@ impl PairingService {
                     })
                 })?;
                 let result: Result<host_links::PairRow, HostLinkError> = async {
+                    host_links::assert_host_available_or_same_account_sqlite(
+                        &mut *tx,
+                        host_installation_id,
+                        account_id,
+                    )
+                    .await
+                    .map_err(map_host_link_store_err)?;
                     let link = host_links::upsert_link_with_executor(
                         &mut *tx,
                         host_installation_id,
                         account_id,
                         linked_via_installation_id,
                         host_display_name,
+                        now,
+                    )
+                    .await
+                    .map_err(map_host_link_store_err)?;
+                    // Rotate: revoke prior host tokens then mint a fresh one.
+                    host_installation_tokens::revoke_all_for_host_with_executor(
+                        &mut *tx,
+                        host_installation_id,
                         now,
                     )
                     .await
@@ -725,12 +776,26 @@ impl PairingService {
                     .await
                     .map_err(HostLinkError::Internal)?;
                 let result: Result<host_links::PairRow, HostLinkError> = async {
+                    host_links::assert_host_available_or_same_account_postgres(
+                        &mut *tx,
+                        host_installation_id,
+                        account_id,
+                    )
+                    .await
+                    .map_err(map_host_link_store_err)?;
                     let link = host_links::upsert_link_with_postgres_executor(
                         &mut *tx,
                         host_installation_id,
                         account_id,
                         linked_via_installation_id,
                         host_display_name,
+                        now,
+                    )
+                    .await
+                    .map_err(map_host_link_store_err)?;
+                    host_installation_tokens::revoke_all_for_host_with_postgres_executor(
+                        &mut *tx,
+                        host_installation_id,
                         now,
                     )
                     .await

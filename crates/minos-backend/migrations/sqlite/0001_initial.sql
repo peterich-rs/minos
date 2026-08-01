@@ -108,16 +108,15 @@ CREATE INDEX idx_refresh_tokens_device
 CREATE TABLE host_links (
     pair_id                    TEXT NOT NULL PRIMARY KEY,
     account_id                 TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    host_installation_id       TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
+    -- Exclusive host ownership: one account per host installation (Host Link + QR).
+    host_installation_id       TEXT NOT NULL UNIQUE REFERENCES device_installations(installation_id) ON DELETE CASCADE,
     linked_via_installation_id TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
     link_display_name          TEXT,
     acl_json                   TEXT NOT NULL DEFAULT '{}',
-    paired_at_ms               INTEGER NOT NULL,
-    UNIQUE (account_id, host_installation_id)
+    paired_at_ms               INTEGER NOT NULL
 ) STRICT;
 
 CREATE INDEX idx_host_links_account ON host_links(account_id);
-CREATE INDEX idx_host_links_host ON host_links(host_installation_id);
 
 CREATE TABLE friend_requests (
     request_id        TEXT PRIMARY KEY,

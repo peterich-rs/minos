@@ -689,7 +689,9 @@ async fn pairing_revoke_revokes_last_host_installation_token() {
 }
 
 #[tokio::test]
-async fn pairing_revoke_keeps_host_token_when_other_account_link_remains() {
+async fn pairing_confirm_rejects_second_account_for_same_host() {
+    // Host ownership is exclusive (UNIQUE host_installation_id). QR confirm
+    // must not multi-link a host that is already bound to another account.
     let state = backend_state().await;
     let mut app = http::router(state.clone());
     let fixture = formally_paired_host(&state, &mut app).await;
@@ -765,40 +767,19 @@ async fn pairing_revoke_keeps_host_token_when_other_account_link_remains() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "body={body}");
-    assert_eq!(
-        body["data"]["host_installation_id"],
-        fixture.host.to_string()
+    assert_eq!(status, StatusCode::CONFLICT, "body={body}");
+    assert_eq!(body["error"]["code"], "pairing_state_mismatch");
+    assert_eq!(body["error"]["message"], "host_linked_elsewhere");
+
+    // Original owner link remains the sole owner.
+    assert!(
+        host_links::exists(&state.store, fixture.host, &fixture.account_id)
+            .await
+            .unwrap()
     );
-    assert_eq!(body["data"]["already_confirmed"], false);
-
-    let (status, body) = post_json(
-        &mut app,
-        "/v1/pairing/revoke",
-        &[("authorization", fixture.account_auth_header.as_str())],
-        json!({
-            "host_installation_id": fixture.host.to_string(),
-            "client_request_id": "revoke-formal-host-first-owner"
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK, "body={body}");
-    assert_eq!(body["data"]["remaining_link_count"], 1);
-    assert_eq!(body["data"]["host_installation_token_revoked"], false);
-
-    let headers = host_headers(&fixture);
-    let header_refs: Vec<(&str, &str)> = headers
-        .iter()
-        .map(|(key, value)| (*key, value.as_str()))
-        .collect();
-    let (status, body) = post_json(
-        &mut app,
-        "/v1/host/installations/self",
-        &header_refs,
-        json!({}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "body={body}");
-    assert_eq!(body["data"]["link_count"], 1);
+    assert!(
+        !host_links::exists(&state.store, fixture.host, &second_account.account_id)
+            .await
+            .unwrap()
+    );
 }
