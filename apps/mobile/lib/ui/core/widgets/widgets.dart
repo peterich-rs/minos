@@ -1,10 +1,8 @@
-/// UI Core — Shared Widgets
-///
-/// Reusable widgets that are not tied to any specific feature. These
-/// include loading indicators, error states, layout helpers, and other
-/// building blocks used across multiple features.
-library;
-
-export 'package:minos/ui/core/widgets/approval_sheet.dart';
-export 'package:minos/ui/core/widgets/error_feedback.dart';
-export 'package:minos/ui/core/widgets/shimmer_box.dart';
+export 'agent_question_sheet.dart';
+export 'approval_sheet.dart';
+export 'error_feedback.dart';
+export 'minos_empty_state.dart';
+export 'minos_page_header.dart';
+export 'minos_status_dot.dart';
+export 'minos_surface.dart';
+export 'shimmer_box.dart';

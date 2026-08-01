@@ -17,10 +17,20 @@ void showLoggedErrorToast(
     detail == source || source.isEmpty ? message : '$message (source: $source)',
   );
 
-  ShadToaster.maybeOf(context)?.show(
-    ShadToast.destructive(
-      title: Text(title),
-      description: detail.isEmpty ? null : Text(detail),
-    ),
+  final toaster = ShadToaster.maybeOf(context);
+  if (toaster != null) {
+    toaster.show(
+      ShadToast.destructive(
+        title: Text(title),
+        description: detail.isEmpty ? null : Text(detail),
+      ),
+    );
+    return;
+  }
+
+  if (!context.mounted) return;
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  messenger?.showSnackBar(
+    SnackBar(content: Text(detail.isEmpty ? title : '$title · $detail')),
   );
 }
