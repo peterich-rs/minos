@@ -241,24 +241,25 @@ dev-mobile-ios:
         exit 1; \
     fi
     @# Prefer FLUTTER_IOS_DEVICE, else first *booted* sim (must match Xcode Simulator SDK).
-    @device="$${FLUTTER_IOS_DEVICE:-}"; \
-    if [ -z "$$device" ]; then \
-      device="$$(xcrun simctl list devices booted 2>/dev/null | sed -n 's/.*(\([A-F0-9-]\{36\}\)).*/\1/p' | head -1)"; \
+    @# Use single-$ for shell (like check-env). Double-$$ becomes bash PID (e.g. 28704device).
+    @device="${FLUTTER_IOS_DEVICE:-}"; \
+    if [ -z "$device" ]; then \
+      device="$(xcrun simctl list devices booted 2>/dev/null | sed -n 's/.*(\([A-F0-9-]\{36\}\)).*/\1/p' | head -1)"; \
     fi; \
-    if [ -z "$$device" ]; then \
+    if [ -z "$device" ]; then \
       echo "error: no booted iOS simulator."; \
       echo "  open -a Simulator"; \
       echo "  # Device → pick iPhone on iOS 26.2+ (not a stale 26.0 runtime)"; \
       echo "  # or: FLUTTER_IOS_DEVICE=<uuid> just dev-mobile-ios"; \
       exit 1; \
     fi; \
-    echo "flutter run -d $$device"; \
+    echo "flutter run -d $device"; \
     cd apps/mobile && \
-    MINOS_BACKEND_URL="$$MINOS_BACKEND_URL" \
-    flutter run -d "$$device" \
-        --dart-define=MINOS_BACKEND_URL="$$MINOS_BACKEND_URL" \
-        --dart-define=SUPABASE_URL="$${SUPABASE_URL:-}" \
-        --dart-define=SUPABASE_ANON_KEY="$${SUPABASE_ANON_KEY:-}"
+    MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
+    flutter run -d "$device" \
+        --dart-define=MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
+        --dart-define=SUPABASE_URL="${SUPABASE_URL:-}" \
+        --dart-define=SUPABASE_ANON_KEY="${SUPABASE_ANON_KEY:-}"
 
 # Hot-reload Android workflow. Mirrors `dev-mobile-ios` so Android debug runs
 # stay on the same `.env.local` / cargokit path as release builds.
