@@ -295,7 +295,7 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
 
-    const REQUEST_CODE_PATH: &str = "/v1/host/pairing/request-code";
+    const LINK_PATH: &str = "v1/hosts/link";
 
     fn keypair() -> SigningKey {
         SigningKey::from_bytes(&[7_u8; 32])
@@ -309,7 +309,7 @@ mod tests {
     }
 
     fn signature(signing_key: &SigningKey, installation_id: &str, nonce: &str) -> String {
-        let payload = format!("{installation_id}:{nonce}:{REQUEST_CODE_PATH}");
+        let payload = format!("{installation_id}:{nonce}:{LINK_PATH}");
         format!(
             "{SIGNATURE_PREFIX}{}",
             URL_SAFE_NO_PAD.encode(signing_key.sign(payload.as_bytes()).to_bytes())
@@ -335,7 +335,7 @@ mod tests {
                 public_key: Some(&host_public_key),
                 signature: &host_signature,
             },
-            REQUEST_CODE_PATH,
+            LINK_PATH,
             "host",
             100,
         )
@@ -369,7 +369,7 @@ mod tests {
                 public_key: Some(&host_public_key),
                 signature: &host_signature,
             },
-            REQUEST_CODE_PATH,
+            LINK_PATH,
             "host",
             100,
         )
@@ -385,7 +385,7 @@ mod tests {
                 public_key: Some(&host_public_key),
                 signature: &host_signature,
             },
-            REQUEST_CODE_PATH,
+            LINK_PATH,
             "host",
             100,
         )
@@ -413,7 +413,7 @@ mod tests {
                 public_key: Some(&host_public_key),
                 signature: &host_signature,
             },
-            REQUEST_CODE_PATH,
+            LINK_PATH,
             "host",
             100,
         )
@@ -434,7 +434,7 @@ mod tests {
                 public_key: Some(&different_public_key),
                 signature: &signature,
             },
-            REQUEST_CODE_PATH,
+            LINK_PATH,
             "host",
             200,
         )
