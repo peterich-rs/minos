@@ -609,6 +609,15 @@ impl MobileClient {
         self.0.login(email, password).await
     }
 
+    /// Exchange a Supabase access token for Minos access/refresh tokens and
+    /// adopt the resulting session (same local effects as [`Self::login`]).
+    pub async fn login_with_supabase(
+        &self,
+        supabase_access_token: String,
+    ) -> Result<AuthSummary, MinosError> {
+        self.0.login_with_supabase(supabase_access_token).await
+    }
+
     /// Rotate the bearer + refresh tokens. Surfaces `Refreshing` /
     /// `Authenticated` / `RefreshFailed` transitions on the auth-state
     /// stream.

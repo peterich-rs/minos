@@ -1115,6 +1115,25 @@ impl MobileClient {
         Ok(summary)
     }
 
+    /// Exchange a Supabase Auth access token for a Minos session.
+    ///
+    /// Same local effects as [`Self::login`]: durable auth tuple, auth-state
+    /// `Authenticated` frame, and reconnect loop. Used by the cloud identity
+    /// path (D01 / T-auth-07 / T-mob-02).
+    pub async fn login_with_supabase(
+        &self,
+        supabase_access_token: String,
+    ) -> Result<AuthSummary, MinosError> {
+        let http = self.http_client_no_secret()?;
+        let resp = http
+            .exchange_supabase(&supabase_access_token, Some(self.self_name.as_str()))
+            .await?;
+        self.store.save_device(&self.device_id).await?;
+        let summary = self.adopt_auth_response(resp).await;
+        self.ensure_reconnect_loop().await;
+        Ok(summary)
+    }
+
     /// Rotate the bearer + refresh tokens. The auth-state watch
     /// transitions to `Refreshing` for the duration of the call; on
     /// success it returns to `Authenticated` (with the same account

@@ -173,6 +173,10 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// `register` modulo the create-vs-find behaviour on the server.
   Future<AuthSummary> login({required String email, required String password});
 
+  /// Exchange a Supabase access token for Minos access/refresh tokens and
+  /// adopt the resulting session (same local effects as [`Self::login`]).
+  Future<AuthSummary> loginWithSupabase({required String supabaseAccessToken});
+
   /// Log out of the current session. Best-effort `stop_agent`, then
   /// revoke the refresh token server-side, then wipe local state.
   Future<void> logout();

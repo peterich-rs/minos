@@ -406,6 +406,17 @@ class MinosCore implements MinosCoreProtocol {
   }
 
   @override
+  Future<AuthSummary> loginWithSupabase({
+    required String supabaseAccessToken,
+  }) async {
+    final summary = await _client.loginWithSupabase(
+      supabaseAccessToken: supabaseAccessToken,
+    );
+    await _onAuthLanded(summary.accountId);
+    return summary;
+  }
+
+  @override
   Future<void> refreshSession() async {
     await _client.refreshSession();
     await _saveClientStateBestEffort(_secure, _client);

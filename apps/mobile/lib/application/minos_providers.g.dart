@@ -105,4 +105,3 @@ abstract class _$ActiveMac extends $AsyncNotifier<String?> {
     element.handleCreate(ref, build);
   }
 }
-

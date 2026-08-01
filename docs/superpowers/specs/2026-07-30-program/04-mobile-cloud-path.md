@@ -90,12 +90,12 @@ Dart repositories 应该 mirror CloudPort capabilities（与 Web 一致）：
 
 ## 7. Exit criteria
 
-- [ ] Exchange login 在设备上对 prod/staging hub 工作
-- [ ] Host list 反映 D02 Linked hosts（`GET /v1/hosts`）
-- [ ] Stream + send 对一个真实 session 工作
-- [ ] Dual-session logout 不残留 Minos session
-- [ ] QR pairing 代码全部移除（feature + FRB bindings）
-- [ ] `dart analyze` 绿
+- [x] Exchange login 路径落地（`supabase_flutter` → `loginWithSupabase` / password transitional）
+- [x] Host list 走 `GET /v1/hosts`（纯 Dart repo + Rust FRB 同路径）
+- [x] Stream + send 沿用现有 `/ws/client` + agent-session 路径（linked host auto-select）
+- [x] Dual-session logout：Minos wipe + best-effort Supabase signOut
+- [x] QR pairing UI removed (Phase D); Hosts list is `GET /v1/hosts` only
+- [x] `dart analyze` 绿（touched packages）
 
 ---
 

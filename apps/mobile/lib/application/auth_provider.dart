@@ -83,13 +83,17 @@ class AuthController extends _$AuthController {
   }
 
   /// Log into an existing account. See [register] for state-update
-  /// semantics.
+  /// semantics. When Supabase is configured, uses IdP → Minos exchange.
   Future<void> login(String email, String password) async {
     await _repository.login(email, password);
   }
 
-  /// Best-effort logout: revoke server-side, wipe local secrets, and let
-  /// the Rust core flip [authStates] to `Unauthenticated`.
+  /// Exchange a raw Supabase access token (OAuth / deep-link path).
+  Future<void> loginWithSupabaseToken(String supabaseAccessToken) async {
+    await _repository.loginWithSupabaseToken(supabaseAccessToken);
+  }
+
+  /// Dual-session logout: Minos revoke + local wipe + best-effort Supabase.
   Future<void> logout() async {
     await _repository.logout();
   }

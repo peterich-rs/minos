@@ -217,7 +217,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-auth-07 · Mobile: Supabase + exchange
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done (Phase E) |
 | lane | mobile |
 | depends_on | T-auth-04 |
 | exit | `supabase_flutter` → exchange → Keychain session；cold start resumes |
@@ -406,7 +406,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-mob-01 · Supabase auth dependency + config
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done (Phase E) |
 | lane | mobile |
 | depends_on | — |
 | exit | `supabase_flutter` added；config slots in `pubspec.yaml` / dart-define |
@@ -414,7 +414,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-mob-02 · Exchange + session store
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done (Phase E) |
 | lane | mobile |
 | depends_on | T-mob-01, T-auth-07 |
 | exit | Cold start resumes Minos session；exchange path works；Keychain storage |
@@ -422,7 +422,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-mob-03 · Hosts list UI against account pairs
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done (Phase E) |
 | lane | mobile |
 | depends_on | T-mob-02, T-host-02 |
 | exit | `GET /v1/hosts`；shows hosts；empty/offline states clear |
@@ -430,7 +430,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-mob-04 · Session stream + send golden path
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done (Phase E: wire existing cloud path + auto-select linked host) |
 | lane | mobile |
 | depends_on | T-mob-03 |
 | exit | Matches T-p0 checklist remote half |

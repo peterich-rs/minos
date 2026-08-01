@@ -1078,19 +1078,9 @@ class _AgentEditorSheetState extends ConsumerState<AgentEditorSheet> {
                     ),
                     if (hosts.isEmpty) ...<Widget>[
                       const SizedBox(height: 12),
-                      _EditorHintCard(
-                        message: '还没有连接 runtime。创建后也可以稍后绑定，但推荐先扫码连接一台设备。',
-                        actionLabel: '去扫码连接',
-                        onPressed: () {
-                          navigator.pop();
-                          unawaited(
-                            navigator.push(
-                              MaterialPageRoute<void>(
-                                builder: (_) => const PairingPage(),
-                              ),
-                            ),
-                          );
-                        },
+                      const _EditorHintCard(
+                        message:
+                            '还没有 Linked Host。请在 Desktop 用同一账号 Link this Mac，然后下拉刷新。',
                       ),
                     ],
                     const SizedBox(height: 14),
@@ -1655,15 +1645,9 @@ class _EditorPickerTile extends StatelessWidget {
 }
 
 class _EditorHintCard extends StatelessWidget {
-  const _EditorHintCard({
-    required this.message,
-    required this.actionLabel,
-    required this.onPressed,
-  });
+  const _EditorHintCard({required this.message});
 
   final String message;
-  final String actionLabel;
-  final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -1673,24 +1657,7 @@ class _EditorHintCard extends StatelessWidget {
         color: Theme.of(context).colorScheme.surface,
         borderRadius: BorderRadius.circular(20),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Text(message),
-          const SizedBox(height: 12),
-          ShadButton.secondary(
-            onPressed: onPressed,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(CupertinoIcons.qrcode_viewfinder, size: 16),
-                const SizedBox(width: 8),
-                Text(actionLabel),
-              ],
-            ),
-          ),
-        ],
-      ),
+      child: Text(message),
     );
   }
 }
@@ -1799,19 +1766,26 @@ class _HostRuntimeCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     return _SectionCard(
-      title: 'DEVICES ${pairedHosts.asData?.value.length ?? 0}',
-      trailing: _SectionActionButton(
-        tooltip: '添加设备',
-        onPressed: () => Navigator.of(
-          context,
-        ).push(MaterialPageRoute<void>(builder: (_) => const PairingPage())),
+      title: 'HOSTS ${pairedHosts.asData?.value.length ?? 0}',
+      trailing: IconButton(
+        tooltip: '刷新',
+        icon: const Icon(CupertinoIcons.arrow_clockwise, size: 18),
+        onPressed: () async {
+          try {
+            await ref.read(pairedMacsProvider.notifier).refresh();
+          } catch (error) {
+            if (context.mounted) {
+              _showRefreshError(context, 'Hosts 刷新失败', error);
+            }
+          }
+        },
       ),
       child: pairedHosts.when(
         loading: () => const _DeviceListSkeleton(),
         error: (error, _) => Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 18),
           child: _CompactErrorPanel(
-            title: '设备暂时不可用',
+            title: 'Hosts 暂时不可用',
             description: error.toString(),
             actionLabel: '重试',
             onAction: () async {
@@ -1819,7 +1793,7 @@ class _HostRuntimeCard extends ConsumerWidget {
                 await ref.read(pairedMacsProvider.notifier).refresh();
               } catch (error) {
                 if (context.mounted) {
-                  _showRefreshError(context, '设备刷新失败', error);
+                  _showRefreshError(context, 'Hosts 刷新失败', error);
                 }
               }
             },
@@ -1829,26 +1803,10 @@ class _HostRuntimeCard extends ConsumerWidget {
           if (hosts.isEmpty) {
             return Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 18),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    '还没有连接任何 runtime。先扫码连接设备，再把 Agent 绑定到对应电脑。',
-                    style: theme.textTheme.bodyMedium,
-                  ),
-                  const SizedBox(height: 12),
-                  ShadButton(
-                    onPressed: () {},
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(CupertinoIcons.qrcode_viewfinder, size: 16),
-                        SizedBox(width: 8),
-                        Text('添加 Runtime'),
-                      ],
-                    ),
-                  ),
-                ],
+              child: Text(
+                '还没有 Linked Host。\n'
+                '在 Desktop 登录同一 Minos 账号并 Link this Mac 后，下拉或点刷新即可看到。',
+                style: theme.textTheme.bodyMedium,
               ),
             );
           }

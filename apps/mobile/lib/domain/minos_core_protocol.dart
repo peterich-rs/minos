@@ -205,6 +205,9 @@ abstract class MinosCoreProtocol {
   /// [register].
   Future<AuthSummary> login({required String email, required String password});
 
+  /// Exchange a Supabase Auth access token for a Minos session (cloud IdP).
+  Future<AuthSummary> loginWithSupabase({required String supabaseAccessToken});
+
   /// Rotate the bearer + refresh tokens. Surfaces `Refreshing` /
   /// `Authenticated` / `RefreshFailed` transitions on [authStates].
   Future<void> refreshSession();

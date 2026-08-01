@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart'
     show AsyncNotifier, AsyncNotifierProvider, FutureProvider;
+import 'package:minos/data/repositories/hosts_repository.dart';
 import 'package:minos/data/repositories/runtime_repository.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -54,31 +55,51 @@ final hostWorkspacesProvider =
           .listHostWorkspaces(hostDeviceId: hostDeviceId);
     });
 
-/// Paired Macs for the current account. Drives the Partners list. Refresh
-/// happens via `ref.invalidate(pairedMacsProvider)` after a forget /
-/// successful pair — there is no polling stream yet, the user can pull
-/// the partners tab to refresh.
+/// Linked hosts for the current account (`GET /v1/hosts` via
+/// [HostsRepository]). Drives the Partners / Hosts list. Refresh happens
+/// via `ref.invalidate(pairedMacsProvider)` or pull-to-refresh.
 final pairedMacsProvider =
     AsyncNotifierProvider<PairedMacs, List<HostSummaryDto>>(PairedMacs.new);
 
 class PairedMacs extends AsyncNotifier<List<HostSummaryDto>> {
   @override
-  Future<List<HostSummaryDto>> build() {
-    return ref.watch(runtimeRepositoryProvider).listPairedHosts();
+  Future<List<HostSummaryDto>> build() async {
+    final hosts = await ref.watch(hostsRepositoryProvider).listHostsAsDto();
+    await _ensureActiveHost(hosts);
+    return hosts;
   }
 
   Future<void> refresh() async {
     final previous = state;
     try {
-      state = AsyncValue.data(
-        await ref.read(runtimeRepositoryProvider).listPairedHosts(),
-      );
+      final hosts = await ref.read(hostsRepositoryProvider).listHostsAsDto();
+      await _ensureActiveHost(hosts);
+      state = AsyncValue.data(hosts);
     } catch (error, stackTrace) {
       if (previous.hasValue) {
         state = previous;
         Error.throwWithStackTrace(error, stackTrace);
       }
       state = AsyncValue.error(error, stackTrace);
+    }
+  }
+
+  /// Golden path: if no active routing target is set but the account has
+  /// linked hosts, prefer the first online host (else first listed).
+  Future<void> _ensureActiveHost(List<HostSummaryDto> hosts) async {
+    if (hosts.isEmpty) return;
+    final runtime = ref.read(runtimeRepositoryProvider);
+    final current = await runtime.activeHost();
+    if (current != null && hosts.any((h) => h.hostDeviceId == current)) {
+      return;
+    }
+    final online = hosts.where((h) => h.online);
+    final preferred = online.isNotEmpty ? online.first : hosts.first;
+    try {
+      await runtime.setActiveHost(preferred.hostDeviceId);
+      ref.invalidate(activeMacProvider);
+    } catch (_) {
+      // Best-effort: session list still works; forwards may need manual select.
     }
   }
 }
@@ -125,4 +146,3 @@ class ActiveMac extends _$ActiveMac {
     }
   }
 }
-

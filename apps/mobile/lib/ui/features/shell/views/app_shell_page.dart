@@ -1153,70 +1153,6 @@ class _MacRow extends StatelessWidget {
   }
 }
 
-/// Trailing row in the partners list: tap to enter [PairingPage]. Mirrors
-/// the iOS-flat "Add Account" affordance.
-class _AddPartnerRow extends StatelessWidget {
-  const _AddPartnerRow({required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        child: Row(
-          children: <Widget>[
-            Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                color: theme.colorScheme.primary.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              alignment: Alignment.center,
-              child: Icon(
-                CupertinoIcons.qrcode_viewfinder,
-                color: theme.colorScheme.primary,
-                size: 22,
-              ),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    '添加伙伴',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                      color: theme.colorScheme.primary,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    '扫描 runtime 二维码',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Icon(
-              CupertinoIcons.chevron_right,
-              size: 16,
-              color: theme.colorScheme.outline,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _RuntimeProfileHeader extends ConsumerWidget {
   const _RuntimeProfileHeader({required this.connection});
 
@@ -1441,13 +1377,6 @@ class _ProfileTab extends ConsumerWidget {
                         title: 'Devtool',
                         subtitle: '日志与请求追踪',
                         onTap: () => context.push(AppRoutes.logViewer),
-                      ),
-                      const _RowDivider(indent: 56),
-                      _SettingsRow(
-                        icon: CupertinoIcons.qrcode_viewfinder,
-                        title: '添加伙伴',
-                        subtitle: '扫描二维码添加 runtime 设备',
-                        onTap: () {},
                       ),
                     ],
                   ),
@@ -2057,7 +1986,7 @@ Future<void> _confirmForgetMac(
     context: context,
     builder: (ctx) => CupertinoAlertDialog(
       title: const Text('删除设备伙伴'),
-      content: Text('删除「$name」后再次使用需要重新扫码配对。'),
+      content: Text('删除「$name」后需在 Desktop 重新 Link this Mac。'),
       actions: <Widget>[
         CupertinoDialogAction(
           onPressed: () => Navigator.of(ctx).pop(false),
