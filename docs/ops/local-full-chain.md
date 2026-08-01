@@ -3,7 +3,10 @@
 **Config SSOT:** repo-root [`.env.local`](../../.env.local) (gitignored).  
 Schema / comments: [`.env.example`](../../.env.example).
 
-No public domain required for this profile: backend binds `127.0.0.1:8787`, Mobile simulator uses loopback, Desktop/Web use Vite on localhost.
+**Public product domain:** `https://minos.ainexc.com` (VPS + Caddy).  
+`minos.fan-nn.top` was only an old Cloudflare Tunnel experiment — do not use it for new work.
+
+No public domain required for **local** smoke: backend binds `127.0.0.1:8787`, Mobile simulator uses loopback, Desktop/Web use Vite on localhost.
 
 ## Prerequisites
 
@@ -107,9 +110,10 @@ pnpm dev       # usually http://localhost:5173
 
 | Goal | Change in `.env.local` |
 |------|-------------------------|
-| Local loopback | Keep section 2 as `127.0.0.1` (default) |
-| Prod hub | Use section 5 `MINOS_PROD_*` values for `MINOS_BACKEND_URL` / `VITE_*` |
-| Tunnel + Access | Point WS at `MINOS_TUNNEL_WS`; keep CF Access secrets |
+| Local loopback | Keep `127.0.0.1` (default) |
+| Prod hub | Set `MINOS_BACKEND_URL=wss://minos.ainexc.com/devices` and `VITE_MINOS_BACKEND_URL=https://minos.ainexc.com` |
+
+Do **not** point new clients at `minos.fan-nn.top`.
 
 VPS binary deploy (when ready):
 
