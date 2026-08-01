@@ -87,6 +87,41 @@ Minos 已有 ThemeProvider / button / dialog / tooltip。建议补齐：
 - **Grainient / theme surfaces**：背景氛围层，和内容层分离
 - **`motion-reduce:animate-none`**：无障碍默认就做对
 
+### 2.4 Desktop + Web UI SSOT（强制一致）
+
+**原则**：Desktop Host Console 与 Web Cloud Console **共用同一套 presentational chrome**。Web 经 Vite alias `@/shared` → `apps/desktop/src/shared`。禁止在 Web 再写平行 shell className。
+
+**SSOT 路径**：
+
+| 资源 | 路径 | Desktop | Web |
+|------|------|---------|-----|
+| Design tokens + gradient/grain | `shared/styles/design-system.css` | `index.css` import | 同上 |
+| `ShellFrame` | `shared/layout/ShellFrame.tsx` | `AppShell` | `CloudShell` |
+| `AppRail` + project row / account footer | `shared/ui/AppRail.tsx` | `Sidebar` | `CloudSidebar` |
+| `WorkSurface` / `WorkProjectHeader` / conversation rail+row / timeline shell | `shared/ui/WorkChrome.tsx` | `WorkView` / `ProjectHeader` / `ConversationList` / `Timeline` | `CloudWorkView` |
+| `ComposerChrome` | `shared/ui/ComposerChrome.tsx` | `Composer` | mock dock |
+| `MessageChrome` | `shared/ui/MessageChrome.tsx` | `MessageRow` | mock transcript |
+| `AttentionListCard` | `shared/ui/AttentionChrome.tsx` | `AttentionView` | `CloudAttentionView` |
+| `PageHeader` | `shared/ui/PageHeader.tsx` | Attention / Agents / Host | Attention / Hosts / Settings |
+
+对照 Buzz：
+
+| Buzz 模式 | Minos Desktop + Web |
+|-----------|---------------------|
+| 全窗渐变 chrome | `minos-theme-gradient` |
+| 软 grain | `minos-theme-grain`（静态） |
+| ContentSurface | `minos-content-surface` via `ShellFrame` |
+| 侧栏在渐变上 | 透明 sidebar + floating main |
+| mauve 导航高亮 | `bg-primary` active nav |
+
+**未抄**：CommunityRail、TipTap composer、完整 dark、EmojiBurst。
+
+**产品差异允许**（数据/能力，不是视觉语法）：Desktop footer（connection / update / ⌘K）、nav 项（Agents/Host vs Hosts/Settings）、真实 daemon 数据 vs Web mock。
+| Web | Attention / Hosts / Settings 同样 import `@/shared/ui/PageHeader` |
+| Sidebar connection / update | `SidebarGlassCard` 统一玻璃壳 + tone 描边 |
+| Dark tokens | `html.dark` 静态默认 + `adaptive-theme` 写入 primary/gradient/shadow |
+| Timeline 虚拟列表 | day pill、jump FAB、load-older 文案、`bufferSize`、empty/retry 态 |
+
 ---
 
 ## 3. 逻辑与状态设计（比 UI 更该学）

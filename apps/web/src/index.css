@@ -1,169 +1,88 @@
-@import '@fontsource/space-grotesk/400.css';
-@import '@fontsource/space-grotesk/500.css';
-@import '@fontsource/space-grotesk/600.css';
-@import '@fontsource/space-grotesk/700.css';
-@import '@fontsource/ibm-plex-mono/400.css';
-@import '@fontsource/ibm-plex-mono/500.css';
+/* SSOT: same design system as Desktop (Buzz-inspired shell). */
+@import "../../desktop/src/shared/styles/design-system.css";
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-@layer base {
-  :root {
-    /* Surface tones — warm-neutral, modern, and better than plain gray */
-    --background: 240 20% 99%;
-    --foreground: 240 18% 12%;
-    --card: 0 0% 100%;
-    --card-foreground: 240 18% 12%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 240 18% 12%;
-
-    /* Brand — indigo/violet gradient head-space, matches a modern AI console */
-    --primary: 252 78% 56%;
-    --primary-foreground: 0 0% 100%;
-    --primary-soft: 252 96% 97%;
-
-    --secondary: 240 10% 96%;
-    --secondary-foreground: 240 18% 18%;
-    --muted: 240 10% 96%;
-    --muted-foreground: 240 6% 46%;
-    --accent: 252 96% 97%;
-    --accent-foreground: 252 78% 40%;
-
-    --destructive: 0 78% 56%;
-    --destructive-foreground: 0 0% 100%;
-    --success: 152 58% 42%;
-    --success-foreground: 0 0% 100%;
-    --warning: 32 92% 52%;
-    --warning-foreground: 0 0% 100%;
-
-    --border: 240 12% 90%;
-    --input: 240 12% 88%;
-    --ring: 252 78% 56%;
-
-    --sidebar: 240 22% 98%;
-    --sidebar-foreground: 240 18% 20%;
-    --sidebar-border: 240 12% 92%;
-    --sidebar-accent: 240 16% 94%;
-    --sidebar-accent-foreground: 240 18% 12%;
-    --sidebar-primary: 252 78% 56%;
-    --sidebar-primary-foreground: 0 0% 100%;
-
-    --radius: 0.75rem;
-  }
-
-  .dark {
-    --background: 240 16% 6%;
-    --foreground: 240 10% 96%;
-    --card: 240 14% 10%;
-    --card-foreground: 240 10% 96%;
-    --popover: 240 14% 10%;
-    --popover-foreground: 240 10% 96%;
-
-    --primary: 258 92% 70%;
-    --primary-foreground: 240 16% 6%;
-    --primary-soft: 258 60% 18%;
-
-    --secondary: 240 10% 16%;
-    --secondary-foreground: 240 10% 92%;
-    --muted: 240 10% 16%;
-    --muted-foreground: 240 8% 62%;
-    --accent: 258 60% 20%;
-    --accent-foreground: 258 92% 78%;
-
-    --destructive: 0 74% 60%;
-    --destructive-foreground: 0 0% 100%;
-    --success: 152 52% 52%;
-    --success-foreground: 0 0% 100%;
-    --warning: 32 92% 62%;
-    --warning-foreground: 240 16% 6%;
-
-    --border: 240 10% 18%;
-    --input: 240 10% 18%;
-    --ring: 258 92% 70%;
-
-    --sidebar: 240 16% 8%;
-    --sidebar-foreground: 240 10% 92%;
-    --sidebar-border: 240 10% 16%;
-    --sidebar-accent: 240 10% 14%;
-    --sidebar-accent-foreground: 240 10% 96%;
-    --sidebar-primary: 258 92% 70%;
-    --sidebar-primary-foreground: 240 16% 6%;
-  }
+* {
+  box-sizing: border-box;
 }
 
-@layer base {
-  * {
-    @apply border-border;
-  }
-  html,
-  body,
-  #root {
-    height: 100%;
-  }
-  body {
-    @apply bg-background text-foreground antialiased;
-    font-family: 'Space Grotesk', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-      'Segoe UI', Roboto, sans-serif;
-    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
-  }
-  ::selection {
-    background: hsl(var(--primary) / 0.18);
-    color: hsl(var(--foreground));
-  }
-  /* Slim scrollbar */
-  *::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
-  }
-  *::-webkit-scrollbar-thumb {
-    background: hsl(var(--border));
-    border-radius: 9999px;
-    border: 2px solid transparent;
-    background-clip: padding-box;
-  }
-  *::-webkit-scrollbar-thumb:hover {
-    background: hsl(var(--muted-foreground) / 0.4);
-    background-clip: padding-box;
-    border: 2px solid transparent;
-  }
-  *::-webkit-scrollbar-track {
-    background: transparent;
-  }
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
 }
 
-@layer components {
-  .mono {
-    font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-feature-settings: 'ss01';
-  }
-
-  /* Soft glass surface */
-  .glass {
-    @apply bg-card/70 backdrop-blur-xl border border-border/60;
-  }
-
-  /* Subtle gradient panel used for hero-ish surfaces */
-  .gradient-surface {
-    background: linear-gradient(
-      135deg,
-      hsl(var(--primary) / 0.06) 0%,
-      hsl(var(--background)) 55%,
-      hsl(var(--primary) / 0.04) 100%
-    );
-  }
-
-  .is-spinning {
-    animation: spin 1s linear infinite;
-  }
+html,
+body {
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
-@keyframes spin {
+body {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    sans-serif;
+  background: var(--buzz-gradient-light-bottom);
+  color: rgb(var(--color-ink));
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+@keyframes message-in {
   from {
-    transform: rotate(0deg);
+    opacity: 0;
+    transform: translateY(4px);
   }
   to {
-    transform: rotate(360deg);
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes message-in-grouped {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-message-in {
+  animation: message-in var(--duration-fast) var(--ease-out) both;
+}
+
+.animate-message-in-grouped {
+  animation: message-in-grouped var(--duration-fast) var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-spin {
+    animation: spin 1s linear infinite !important;
+    animation-duration: 1s !important;
+    animation-iteration-count: infinite !important;
+  }
+
+  .animate-message-in,
+  .animate-message-in-grouped {
+    animation: none !important;
   }
 }

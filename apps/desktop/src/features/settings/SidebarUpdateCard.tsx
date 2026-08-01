@@ -4,6 +4,7 @@ import { CircleArrowUp, ExternalLink } from "lucide-react";
 import { useUpdaterContext } from "./hooks/UpdaterProvider";
 import { shouldShowSidebarUpdateCard } from "./sidebarUpdateCardVisibility";
 import { SidebarActionCard } from "@/shared/ui/sidebar-action-card";
+import { SidebarGlassCard } from "@/shared/ui/SidebarGlassCard";
 
 type Props = {
   onDismiss: () => void;
@@ -22,7 +23,7 @@ export function SidebarUpdateCard({ onDismiss }: Props) {
 
   if (status.state === "manual-required") {
     return (
-      <div className="border-t border-ink/5 px-2 py-2">
+      <SidebarGlassCard tone="success">
         <SidebarActionCard
           testId="sidebar-update-card"
           tone="success"
@@ -35,16 +36,16 @@ export function SidebarUpdateCard({ onDismiss }: Props) {
           }}
           onDismiss={onDismiss}
           dismissLabel="Dismiss update notification"
+          className="border-0 bg-transparent shadow-none"
         />
-      </div>
+      </SidebarGlassCard>
     );
   }
 
-  const version =
-    status.state === "available" ? status.version : undefined;
+  const version = status.state === "available" ? status.version : undefined;
 
   return (
-    <div className="border-t border-ink/5 px-2 py-2">
+    <SidebarGlassCard tone="success">
       <SidebarActionCard
         testId="sidebar-update-card"
         tone="success"
@@ -70,7 +71,8 @@ export function SidebarUpdateCard({ onDismiss }: Props) {
         }}
         onDismiss={installing ? undefined : onDismiss}
         dismissLabel="Dismiss update notification"
+        className="border-0 bg-transparent shadow-none"
       />
-    </div>
+    </SidebarGlassCard>
   );
 }

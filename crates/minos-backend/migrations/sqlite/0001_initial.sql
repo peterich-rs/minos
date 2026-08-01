@@ -7,12 +7,18 @@ CREATE TABLE accounts (
     minos_id       TEXT,
     display_name   TEXT,
     password_hash  TEXT NOT NULL,
+    -- Supabase Auth subject (JWT `sub`). NULL for password-only accounts
+    -- that have not yet been linked via OIDC exchange.
+    supabase_sub   TEXT,
     created_at     INTEGER NOT NULL,
     last_login_at  INTEGER
 ) STRICT;
 
 CREATE UNIQUE INDEX idx_accounts_email ON accounts(email);
 CREATE UNIQUE INDEX idx_accounts_minos_id ON accounts(minos_id COLLATE BINARY);
+CREATE UNIQUE INDEX idx_accounts_supabase_sub
+    ON accounts(supabase_sub)
+    WHERE supabase_sub IS NOT NULL;
 
 CREATE TABLE devices (
     device_id      TEXT PRIMARY KEY,

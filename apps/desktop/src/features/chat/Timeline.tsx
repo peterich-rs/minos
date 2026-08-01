@@ -3,6 +3,7 @@ import {
   useWorkspaceStore,
   type ProjectSession,
 } from "@/store/workspace-store";
+import { WorkTimelineShell } from "@/shared/ui/WorkChrome";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
 import { TimelineHeader } from "./TimelineHeader";
@@ -82,13 +83,13 @@ export function Timeline({ conversationId }: { conversationId: string }) {
 
   if (!conversation) {
     return (
-      <div className="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-3 bg-surface px-6 text-center text-sm text-ink-muted">
+      <div className="flex h-full min-h-0 flex-1 flex-col items-center justify-center gap-3 bg-canvas-soft/30 px-6 text-center text-sm text-ink-muted">
         <p>Conversation not found in the current project list.</p>
         {source === "daemon" ? (
           <button
             type="button"
             onClick={() => void loadTimeline(conversationId)}
-            className="rounded-lg bg-ink px-3 py-1.5 text-xs font-semibold text-surface"
+            className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white shadow-sm"
           >
             Retry load
           </button>
@@ -100,15 +101,19 @@ export function Timeline({ conversationId }: { conversationId: string }) {
   return (
     // Fill the resizable panel / flex parent so the composer stays docked at the
     // bottom (WeChat-style): only the message list scrolls, never the whole pane.
-    <section className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface">
-      <TimelineHeader
-        conversationId={conversationId}
-        conversation={conversation}
-        sessionCount={sessions.length}
-      />
+    // Shell classes live in WorkTimelineShell (Desktop + Web SSOT).
+    <WorkTimelineShell
+      header={
+        <TimelineHeader
+          conversationId={conversationId}
+          conversation={conversation}
+          sessionCount={sessions.length}
+        />
+      }
+      composer={<Composer conversationId={conversationId} />}
+    >
       <MessageList conversationId={conversationId} />
-      <Composer conversationId={conversationId} />
-    </section>
+    </WorkTimelineShell>
   );
 }
 

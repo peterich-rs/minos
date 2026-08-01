@@ -9,7 +9,20 @@
 
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      // Desktop shared chrome (SSOT). More specific than `@/*`.
+      "@/shared/*": ["../desktop/src/shared/*"],
+      "@shared/*": ["../desktop/src/shared/*"],
+      "@/*": ["./src/*"],
+      // Shared sources live under apps/desktop; bare imports would walk
+      // node_modules from that tree and miss web-only installs (CI).
+      // Pin peers used by shared chrome to this package (types for react;
+      // path maps bypass package.json "types", so point at .d.ts / package).
+      "react": ["./node_modules/@types/react/index.d.ts"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime.d.ts"],
+      "react/jsx-dev-runtime": ["./node_modules/@types/react/jsx-dev-runtime.d.ts"],
+      "clsx": ["./node_modules/clsx/clsx.d.ts"],
+      "tailwind-merge": ["./node_modules/tailwind-merge/dist/types.d.ts"],
+      "lucide-react": ["./node_modules/lucide-react/dist/lucide-react.d.ts"]
     },
     "ignoreDeprecations": "6.0",
 

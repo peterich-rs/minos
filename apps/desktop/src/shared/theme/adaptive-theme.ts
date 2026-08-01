@@ -109,6 +109,11 @@ export function createThemeVars(
   const accentStrong = mix(accent, isDark ? "#ffffff" : "#000000", 0.15);
   const accentSoft = mix(surface, accent, isDark ? 0.22 : 0.12);
 
+  // Mauve primary (Buzz / Catppuccin) — separate from pink accent.
+  const primary = isDark ? "#cba6f7" : "#9333ea";
+  const primaryStrong = isDark ? "#e0b0ff" : "#7e22ce";
+  const primarySoft = mix(surface, primary, isDark ? 0.28 : 0.14);
+
   const git = options?.gitColors;
   const statusRunning = git?.modified ?? (isDark ? "#d29922" : "#f59e0b");
   const statusFailed = git?.deleted ?? (isDark ? "#f85149" : "#dc2626");
@@ -130,6 +135,9 @@ export function createThemeVars(
       "--color-accent": toTriplet(accent),
       "--color-accent-strong": toTriplet(accentStrong),
       "--color-accent-soft": toTriplet(accentSoft),
+      "--color-primary": toTriplet(primary),
+      "--color-primary-strong": toTriplet(primaryStrong),
+      "--color-primary-soft": toTriplet(primarySoft),
       "--color-bubble-out": toTriplet(ink),
       "--color-bubble-in": toTriplet(surfaceRaised),
       "--color-status-idle": toTriplet(inkMuted),
@@ -138,6 +146,9 @@ export function createThemeVars(
       "--color-status-suspended": toTriplet(isDark ? "#38bdf8" : "#0ea5e9"),
       "--color-status-failed": toTriplet(statusFailed),
       "--color-status-done": toTriplet(statusDone),
+      // Shell gradient (Buzz dual-layer; CSS toggles via html.dark)
+      "--buzz-gradient-light-top": isDark ? "#4a4616" : "#e6e6b6",
+      "--buzz-gradient-light-bottom": isDark ? "#0a1423" : "#c4d0da",
       // Markdown tones
       "--md-link": isDark ? "#fcd34d" : "#92400e",
       "--md-code-bg": isDark
@@ -148,6 +159,9 @@ export function createThemeVars(
         ? "rgb(255 255 255 / 0.05)"
         : "rgb(28 25 23 / 0.05)",
       "--md-pre-fg": isDark ? "#d6d3d1" : "#3f3a36",
+      "--shadow-content-edge": isDark
+        ? "-1px -1px 0 0 rgb(255 255 255 / 0.06), 0 1px 2px rgb(0 0 0 / 0.35)"
+        : "-1px -1px 0 0 rgb(28 25 23 / 0.08), 0 1px 2px rgb(28 25 23 / 0.04)",
     },
   };
 }

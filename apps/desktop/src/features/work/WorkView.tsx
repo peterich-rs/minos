@@ -18,6 +18,7 @@ import { useUiStore } from "@/store/ui-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { sortByAttentionThenTime } from "@/shared/lib/list-sort";
 import { cn } from "@/shared/lib/utils";
+import { WorkSurface } from "@/shared/ui/WorkChrome";
 
 export function WorkView() {
   const projectView = useUiStore((s) => s.projectView);
@@ -102,7 +103,7 @@ export function WorkView() {
   // Keep Conversations / Sessions / Board mounted (CSS hide) so tab switches
   // do not remount transcript panes or re-fetch tails (avoids content flash).
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface">
+    <WorkSurface>
       <ProjectHeader projectId={resolvedProjectId} />
 
       <div
@@ -234,7 +235,7 @@ export function WorkView() {
       >
         <ProjectBoard key={resolvedProjectId} projectId={resolvedProjectId} />
       </div>
-    </div>
+    </WorkSurface>
   );
 }
 

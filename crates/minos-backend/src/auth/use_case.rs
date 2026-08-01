@@ -8,6 +8,7 @@ use crate::auth::{
     jwt, passwords,
     rate_limit::RateLimiter,
     realtime_ticket::{RealtimeTicketConsumeError, RealtimeTicketStore},
+    supabase::{SupabaseAuthError, SupabaseTokenVerifier},
 };
 use crate::error::BackendError;
 use crate::store::{accounts, refresh_tokens, StoreHandle};
@@ -65,10 +66,20 @@ pub enum AuthUseCaseError {
     InvalidCredentials,
     InvalidRefresh,
     Internal,
-    RateLimited { retry_after_secs: u32 },
+    RateLimited {
+        retry_after_secs: u32,
+    },
     WsTicketAccountMismatch,
     UnsupportedWsTicketRole,
     WeakPassword,
+    /// Supabase exchange is not configured on this process.
+    SupabaseNotConfigured,
+    InvalidSupabaseToken,
+    SupabaseTokenExpired,
+    SupabaseTokenInvalid,
+    IdpUnavailable,
+    /// Verified email matches an account that already has a different sub.
+    MergeConflict,
 }
 
 #[derive(Debug, Clone)]
@@ -297,6 +308,8 @@ pub struct AuthUseCase {
     realtime_tickets: Arc<RealtimeTicketStore>,
     jwt_secret: Arc<String>,
     limits: AuthRateLimits,
+    /// When `None`, `supabase_exchange` returns [`AuthUseCaseError::SupabaseNotConfigured`].
+    supabase: Option<Arc<SupabaseTokenVerifier>>,
 }
 
 impl AuthUseCase {
@@ -311,6 +324,16 @@ impl AuthUseCase {
         jwt_secret: String,
         realtime_tickets: Arc<RealtimeTicketStore>,
     ) -> Arc<Self> {
+        Self::new_with_realtime_tickets_and_supabase(store, jwt_secret, realtime_tickets, None)
+    }
+
+    #[must_use]
+    pub fn new_with_realtime_tickets_and_supabase(
+        store: impl Into<StoreHandle>,
+        jwt_secret: String,
+        realtime_tickets: Arc<RealtimeTicketStore>,
+        supabase: Option<Arc<SupabaseTokenVerifier>>,
+    ) -> Arc<Self> {
         let store = store.into();
         Self::with_repos(
             store.clone(),
@@ -318,6 +341,7 @@ impl AuthUseCase {
             Arc::new(SqlRefreshTokenRepo::new(store)),
             realtime_tickets,
             jwt_secret,
+            supabase,
         )
     }
 
@@ -328,6 +352,7 @@ impl AuthUseCase {
         refresh_tokens: Arc<dyn RefreshTokenRepo>,
         realtime_tickets: Arc<RealtimeTicketStore>,
         jwt_secret: String,
+        supabase: Option<Arc<SupabaseTokenVerifier>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             store,
@@ -336,6 +361,7 @@ impl AuthUseCase {
             realtime_tickets,
             jwt_secret: Arc::new(jwt_secret),
             limits: AuthRateLimits::default(),
+            supabase,
         })
     }
 
@@ -403,6 +429,222 @@ impl AuthUseCase {
             .await;
         crate::telemetry::record_auth_login(auth_outcome_label(&result));
         result
+    }
+
+    /// Exchange a Supabase access token for a Minos session.
+    ///
+    /// Does **not** go through device-secret `authenticate()`; the caller
+    /// supplies a validated `device_id` + account-client `role` and this
+    /// method ensures the device row is bound to the upserted account.
+    pub async fn supabase_exchange(
+        &self,
+        device_id: DeviceId,
+        device_role: DeviceRole,
+        device_name: Option<&str>,
+        supabase_jwt: &str,
+        client_ip: &str,
+    ) -> Result<AuthSession, AuthUseCaseError> {
+        let result = self
+            .supabase_exchange_inner(device_id, device_role, device_name, supabase_jwt, client_ip)
+            .await;
+        crate::telemetry::record_auth_login(auth_outcome_label(&result));
+        result
+    }
+
+    async fn supabase_exchange_inner(
+        &self,
+        device_id: DeviceId,
+        device_role: DeviceRole,
+        device_name: Option<&str>,
+        supabase_jwt: &str,
+        client_ip: &str,
+    ) -> Result<AuthSession, AuthUseCaseError> {
+        if !device_role.is_account_client() {
+            return Err(AuthUseCaseError::UnsupportedWsTicketRole);
+        }
+        // Same bucket as register: limit account-creation style abuse.
+        self.limits.check_register_per_ip(client_ip)?;
+
+        let verifier = self
+            .supabase
+            .as_ref()
+            .ok_or(AuthUseCaseError::SupabaseNotConfigured)?;
+
+        let claims = match verifier.verify(supabase_jwt).await {
+            Ok(claims) => claims,
+            Err(SupabaseAuthError::Expired) => {
+                return Err(AuthUseCaseError::SupabaseTokenExpired);
+            }
+            Err(SupabaseAuthError::InvalidClaims) => {
+                return Err(AuthUseCaseError::SupabaseTokenInvalid);
+            }
+            Err(SupabaseAuthError::InvalidToken) => {
+                return Err(AuthUseCaseError::InvalidSupabaseToken);
+            }
+            Err(SupabaseAuthError::IdpUnavailable(msg)) => {
+                tracing::warn!(
+                    target: "minos_backend::auth",
+                    error = %msg,
+                    "supabase JWKS unavailable"
+                );
+                return Err(AuthUseCaseError::IdpUnavailable);
+            }
+        };
+
+        let account = self.upsert_account_from_supabase(&claims).await?;
+
+        let device_id_string = device_id.to_string();
+        if let Err(error) = self
+            .refresh_tokens
+            .revoke_all_for_device(&device_id_string)
+            .await
+        {
+            tracing::warn!(
+                target: "minos_backend::auth",
+                error = %error,
+                device_id = %device_id,
+                "failed to revoke stale refresh tokens for device before supabase exchange"
+            );
+        }
+
+        self.accounts
+            .touch_last_login(&account.account_id)
+            .await
+            .map_err(|error| Self::log_internal("supabase.touch_last_login", error))?;
+
+        self.ensure_device_for_exchange(&device_id, device_role, device_name, &account.account_id)
+            .await?;
+
+        self.issue_auth_session(&account.account_id, &account.email, &device_id)
+            .await
+    }
+
+    async fn upsert_account_from_supabase(
+        &self,
+        claims: &crate::auth::supabase::SupabaseClaims,
+    ) -> Result<accounts::AccountRow, AuthUseCaseError> {
+        // 1) Already linked by sub.
+        match accounts::find_by_supabase_sub(&self.store, &claims.sub).await {
+            Ok(Some(account)) => return Ok(account),
+            Ok(None) => {}
+            Err(error) => {
+                return Err(Self::log_internal("supabase.find_by_sub", error));
+            }
+        }
+
+        // 2) Verified email match → bind sub to existing password account.
+        if claims.email_verified {
+            if let Some(email) = claims.email.as_deref() {
+                match self.accounts.find_by_email(email).await {
+                    Ok(Some(existing)) => match existing.supabase_sub.as_deref() {
+                        None => {
+                            accounts::bind_supabase_sub(
+                                &self.store,
+                                &existing.account_id,
+                                &claims.sub,
+                            )
+                            .await
+                            .map_err(|error| Self::log_internal("supabase.bind_sub", error))?;
+                            return accounts::find_by_id(&self.store, &existing.account_id)
+                                .await
+                                .map_err(|error| {
+                                    Self::log_internal("supabase.reload_bound", error)
+                                })?
+                                .ok_or(AuthUseCaseError::Internal);
+                        }
+                        Some(bound) if bound == claims.sub => return Ok(existing),
+                        Some(_) => return Err(AuthUseCaseError::MergeConflict),
+                    },
+                    Ok(None) => {}
+                    Err(error) => {
+                        return Err(Self::log_internal("supabase.find_by_email", error));
+                    }
+                }
+            }
+        }
+
+        // 3) Create a new OAuth-linked account.
+        let email = claims.email.clone().unwrap_or_else(|| {
+            // Email is NOT NULL in SQLite; use a stable synthetic address when
+            // the IdP omitted email (rare for Google / magic link).
+            format!("{}@oauth.minos.local", claims.sub)
+        });
+        let unusable_hash = oauth_only_password_hash();
+        match accounts::create_with_supabase_sub(&self.store, &email, unusable_hash, &claims.sub)
+            .await
+        {
+            Ok(account) => Ok(account),
+            Err(BackendError::EmailTaken) => {
+                // Race: email taken between find and create. If verified, try bind.
+                if claims.email_verified {
+                    if let Some(email) = claims.email.as_deref() {
+                        if let Ok(Some(existing)) = self.accounts.find_by_email(email).await {
+                            if existing.supabase_sub.is_none() {
+                                accounts::bind_supabase_sub(
+                                    &self.store,
+                                    &existing.account_id,
+                                    &claims.sub,
+                                )
+                                .await
+                                .map_err(|error| {
+                                    Self::log_internal("supabase.bind_sub_race", error)
+                                })?;
+                                return accounts::find_by_id(&self.store, &existing.account_id)
+                                    .await
+                                    .map_err(|error| {
+                                        Self::log_internal("supabase.reload_bound_race", error)
+                                    })?
+                                    .ok_or(AuthUseCaseError::Internal);
+                            }
+                            if existing.supabase_sub.as_deref() == Some(claims.sub.as_str()) {
+                                return Ok(existing);
+                            }
+                            return Err(AuthUseCaseError::MergeConflict);
+                        }
+                    }
+                }
+                Err(AuthUseCaseError::EmailTaken)
+            }
+            Err(error) => Err(Self::log_internal("supabase.create_account", error)),
+        }
+    }
+
+    async fn ensure_device_for_exchange(
+        &self,
+        device_id: &DeviceId,
+        device_role: DeviceRole,
+        device_name: Option<&str>,
+        account_id: &str,
+    ) -> Result<(), AuthUseCaseError> {
+        let display_name = device_name
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("unnamed");
+        let existing = crate::store::devices::get_device(&self.store, *device_id)
+            .await
+            .map_err(|error| Self::log_internal("supabase.get_device", error))?;
+
+        match existing {
+            None => {
+                let now = chrono::Utc::now().timestamp_millis();
+                crate::store::devices::insert_device(
+                    &self.store,
+                    *device_id,
+                    display_name,
+                    device_role,
+                    now,
+                )
+                .await
+                .map_err(|error| Self::log_internal("supabase.insert_device", error))?;
+            }
+            Some(row) => {
+                if row.role != device_role {
+                    return Err(AuthUseCaseError::UnsupportedWsTicketRole);
+                }
+            }
+        }
+
+        self.bind_device_to_account(device_id, account_id).await
     }
 
     async fn login_inner(
@@ -753,6 +995,16 @@ fn dummy_password_hash() -> &'static str {
     })
 }
 
+/// Unusable Argon2 hash stored for OAuth-only accounts so password login
+/// fails verification rather than panicking on a missing/malformed hash.
+fn oauth_only_password_hash() -> &'static str {
+    static OAUTH_HASH: OnceLock<String> = OnceLock::new();
+    OAUTH_HASH.get_or_init(|| {
+        passwords::hash("oauth-only-no-password-login-xxxxxxxx")
+            .expect("argon2id default params must hash a static string")
+    })
+}
+
 /// Map an `AuthUseCase` result onto a stable counter label.
 ///
 /// Mirrors the `outcome` convention in [`crate::telemetry`]: every
@@ -762,16 +1014,21 @@ fn auth_outcome_label<T>(result: &Result<T, AuthUseCaseError>) -> &'static str {
     use crate::telemetry as t;
     match result {
         Ok(_) => t::OUTCOME_OK,
-        Err(AuthUseCaseError::AccountNotFound | AuthUseCaseError::InvalidCredentials) => {
-            t::OUTCOME_UNAUTHORIZED
-        }
-        Err(AuthUseCaseError::InvalidRefresh) => t::OUTCOME_UNAUTHORIZED,
-        Err(AuthUseCaseError::WsTicketAccountMismatch) => t::OUTCOME_UNAUTHORIZED,
-        Err(AuthUseCaseError::EmailTaken) => t::OUTCOME_CONFLICT,
+        Err(
+            AuthUseCaseError::AccountNotFound
+            | AuthUseCaseError::InvalidCredentials
+            | AuthUseCaseError::InvalidRefresh
+            | AuthUseCaseError::WsTicketAccountMismatch
+            | AuthUseCaseError::InvalidSupabaseToken
+            | AuthUseCaseError::SupabaseTokenExpired
+            | AuthUseCaseError::SupabaseTokenInvalid
+            | AuthUseCaseError::SupabaseNotConfigured,
+        ) => t::OUTCOME_UNAUTHORIZED,
+        Err(AuthUseCaseError::EmailTaken | AuthUseCaseError::MergeConflict) => t::OUTCOME_CONFLICT,
         Err(AuthUseCaseError::RateLimited { .. }) => t::OUTCOME_RATE_LIMITED,
         Err(AuthUseCaseError::WeakPassword | AuthUseCaseError::UnsupportedWsTicketRole) => {
             t::OUTCOME_INVALID
         }
-        Err(AuthUseCaseError::Internal) => t::OUTCOME_ERROR,
+        Err(AuthUseCaseError::IdpUnavailable | AuthUseCaseError::Internal) => t::OUTCOME_ERROR,
     }
 }

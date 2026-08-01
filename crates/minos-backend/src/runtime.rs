@@ -10,6 +10,7 @@ use crate::app::context::AppDataContext;
 use crate::approvals::{ApprovalService, DefaultApprovalService};
 use crate::auth::host_bootstrap::BootstrapNonceStore;
 use crate::auth::realtime_ticket::RealtimeTicketStore;
+use crate::auth::supabase::SupabaseTokenVerifier;
 use crate::auth::use_case::AuthUseCase;
 use crate::config::{
     Config, Environment, RuntimeMode, StorageMode, DEFAULT_CLUSTER_CHANNEL,
@@ -125,6 +126,7 @@ impl AppContext {
         message_bus: MessageBusBackend,
         peer_target_cache: PeerTargetCacheBackend,
         realtime_tickets: Arc<RealtimeTicketStore>,
+        supabase: Option<Arc<SupabaseTokenVerifier>>,
     ) -> Arc<Self> {
         let translators = SessionTranslators::new();
         let data = AppDataContext::new(store.clone());
@@ -166,8 +168,12 @@ impl AppContext {
             Arc::clone(&approvals),
             Arc::clone(&realtime),
         );
-        let auth =
-            AuthUseCase::new_with_realtime_tickets(store.clone(), jwt_secret, realtime_tickets);
+        let auth = AuthUseCase::new_with_realtime_tickets_and_supabase(
+            store.clone(),
+            jwt_secret,
+            realtime_tickets,
+            supabase,
+        );
         let bootstrap_nonces = Arc::new(BootstrapNonceStore::default());
         let projects = ProjectService::new(store.clone());
         let agent_sessions: Arc<dyn AgentSessionService> = DefaultAgentSessionService::new(
@@ -246,6 +252,7 @@ impl RuntimeShell {
             message_bus,
             peer_target_cache,
             realtime_tickets,
+            cfg.supabase_verifier(),
         );
         let cluster_listener = if cfg.runtime_mode.serves_http() {
             app.realtime.spawn_listener()

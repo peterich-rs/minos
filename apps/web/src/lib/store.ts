@@ -19,8 +19,11 @@ import { RelaySocket, type RelayConnectionState } from './relay-socket'
 
 type AuthMode = 'login' | 'register'
 
-/** Sidebar routes — the single source of truth for the app layout. */
+/** Legacy demo routes (pre-Desktop chrome). Prefer `primaryNav`. */
 export type RouteKey = 'chat' | 'tasks' | 'friends' | 'devices' | 'profile' | 'settings'
+
+/** Desktop-family primary nav for CloudShell. */
+export type PrimaryNav = 'work' | 'attention' | 'hosts' | 'settings'
 
 export interface AppState {
   // Auth & Session
@@ -31,7 +34,15 @@ export interface AppState {
   setAuthMode: (mode: AuthMode) => void
   logout: () => void
 
-  // Navigation
+  // Navigation (Desktop-aligned cloud shell)
+  primaryNav: PrimaryNav
+  setPrimaryNav: (nav: PrimaryNav) => void
+  mockProjectId: string
+  setMockProjectId: (id: string) => void
+  mockSessionId: string | null
+  setMockSessionId: (id: string | null) => void
+
+  // Legacy Navigation
   route: RouteKey
   setRoute: (route: RouteKey) => void
 
@@ -79,6 +90,13 @@ export const useAppStore = create<AppState>()(
         clearStoredSession()
         set({ session: null })
       },
+
+      primaryNav: 'work',
+      setPrimaryNav: (primaryNav) => set({ primaryNav }),
+      mockProjectId: 'proj-minos',
+      setMockProjectId: (mockProjectId) => set({ mockProjectId }),
+      mockSessionId: 'sess-1',
+      setMockSessionId: (mockSessionId) => set({ mockSessionId }),
 
       route: 'chat',
       setRoute: (route) => set({ route }),

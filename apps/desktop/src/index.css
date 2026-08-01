@@ -1,86 +1,9 @@
+/* Design tokens + shell chrome must load before Tailwind utilities consume them. */
+@import "./shared/styles/design-system.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-/*
- * Design tokens (Wave 1 Phase 4)
- * Single source for the warm multi-column shell palette.
- * RGB triplets enable Tailwind alpha modifiers (e.g. bg-ink/5).
- * Tailwind theme in tailwind.config.js maps utilities → these vars.
- */
-:root {
-  color-scheme: light;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-
-  /* ── Surfaces ── */
-  --color-canvas: 235 228 216; /* #ebe4d8 */
-  --color-canvas-soft: 244 239 230; /* #f4efe6 */
-  --color-surface: 251 248 243; /* #fbf8f3 */
-  --color-surface-raised: 255 255 255;
-  --color-surface-muted: 243 238 229; /* #f3eee5 */
-  --color-surface-hover: 239 232 220; /* #efe8dc */
-
-  /* ── Ink ── */
-  --color-ink: 28 25 23; /* #1c1917 */
-  --color-ink-secondary: 87 83 78; /* #57534e */
-  --color-ink-muted: 168 162 158; /* #a8a29e */
-  --color-ink-faint: 214 211 209; /* #d6d3d1 */
-
-  /* ── Accent (soft pink) ── */
-  --color-accent: 244 114 182; /* #f472b6 */
-  --color-accent-strong: 236 72 153; /* #ec4899 */
-  --color-accent-soft: 252 231 243; /* #fce7f3 */
-
-  /* ── Chat bubbles ── */
-  --color-bubble-out: 28 25 23;
-  --color-bubble-in: 255 255 255;
-
-  /* ── Semantic status (pills / dots / alerts) ── */
-  --color-status-idle: 168 162 158;
-  --color-status-running: 245 158 11; /* amber-500 */
-  --color-status-approval: 244 63 94; /* rose-500 */
-  --color-status-suspended: 14 165 233; /* sky-500 */
-  --color-status-failed: 220 38 38; /* red-600 */
-  --color-status-done: 16 185 129; /* emerald-500 */
-
-  /* ── Radius (named tokens; default Tailwind rem scales unchanged) ── */
-  --radius-shell: 18px;
-  --radius-panel: 14px;
-  --radius-code: 10px;
-
-  /* ── Shadows (ink-tinted; stay readable when --color-ink flips for dark) ── */
-  --shadow-shell:
-    0 24px 80px rgb(var(--color-ink) / 0.14), 0 2px 8px rgb(var(--color-ink) / 0.06);
-  --shadow-panel: 0 1px 0 rgb(var(--color-ink) / 0.06);
-
-  /* ── Motion (prefer duration-150 / duration-200 utilities) ── */
-  --duration-fast: 150ms;
-  --duration-normal: 200ms;
-  --ease-out: cubic-bezier(0, 0, 0.2, 1);
-
-  /* ── Shell chrome geometry (see shared/layout/chromeLayout.ts) ── */
-  --minos-sidebar-width: 240px;
-  --minos-top-chrome-height: 0px;
-  --minos-auxiliary-panel-width: 280px;
-
-  /* ── Markdown tone defaults (light / agent bubbles) ── */
-  --md-link: #92400e;
-  --md-link-underline: rgb(146 64 14 / 0.3);
-  --md-code-bg: rgb(28 25 23 / 0.07);
-  --md-code-fg: #44403c;
-  --md-pre-bg: rgb(28 25 23 / 0.05);
-  --md-pre-border: rgb(28 25 23 / 0.1);
-  --md-pre-fg: #3f3a36;
-  --md-quote-border: rgb(28 25 23 / 0.18);
-  --md-quote-fg: #57534e;
-  --md-hr: rgb(28 25 23 / 0.12);
-  --md-table-border: rgb(28 25 23 / 0.12);
-  --md-th-bg: rgb(28 25 23 / 0.04);
-  --md-marker: rgb(28 25 23 / 0.45);
-}
 
 * {
   box-sizing: border-box;
@@ -93,12 +16,18 @@ body,
   margin: 0;
 }
 
+html,
+body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 body {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI",
     sans-serif;
-  background: rgb(var(--color-canvas));
+  /* Outer chrome peeks when windows resize; gradient paints over this. */
+  background: var(--buzz-gradient-light-bottom);
   color: rgb(var(--color-ink));
-  overflow: hidden;
 }
 
 button,
@@ -109,8 +38,7 @@ textarea {
 
 /*
  * Respect reduced motion globally.
- * Exception: `.animate-spin` is an essential progress cue
- * (session Running / loading) — keep it spinning under reduce.
+ * Exception: `.animate-spin` is an essential progress cue.
  */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -138,29 +66,6 @@ textarea {
 }
 [data-separator][data-separator-active] {
   background: rgb(var(--color-accent-strong) / 0.25);
-}
-
-/* Thin, subtle scrollbars for multi-pane layout */
-.scrollbar-thin {
-  scrollbar-width: thin;
-  scrollbar-color: rgb(var(--color-ink-muted) / 0.55) transparent;
-}
-
-.scrollbar-thin::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-.scrollbar-thin::-webkit-scrollbar-thumb {
-  background: rgb(var(--color-ink-muted) / 0.45);
-  border-radius: 999px;
-  border: 2px solid transparent;
-  background-clip: content-box;
-}
-
-.scrollbar-thin::-webkit-scrollbar-thumb:hover {
-  background: rgb(var(--color-ink-secondary) / 0.55);
-  background-clip: content-box;
 }
 
 /* ── Markdown bubble tones (MarkdownText + react-markdown) ── */
@@ -224,7 +129,6 @@ textarea {
   line-height: 1.55;
 }
 
-/* Nested <code> inside fenced blocks: no chip chrome */
 .markdown-body .md-pre code {
   background: transparent;
   color: inherit;
@@ -268,7 +172,6 @@ textarea {
   width: 100%;
 }
 
-/* Collapse double borders when cells + wrap both draw edges */
 .markdown-body .md-table-wrap .md-th,
 .markdown-body .md-table-wrap .md-td {
   border-width: 0 0 1px 0;
@@ -294,7 +197,6 @@ textarea {
   color: var(--md-marker);
 }
 
-/* Right auxiliary panel enter (rail / overlay) */
 @keyframes minos-side-panel-in {
   from {
     opacity: 0;
@@ -310,8 +212,28 @@ textarea {
   animation: minos-side-panel-in var(--duration-normal) var(--ease-out) both;
 }
 
+/* Continuation rows in a message group: shorter, subtler than group head. */
+@keyframes message-in-grouped {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-message-in-grouped {
+  animation: message-in-grouped var(--duration-fast) var(--ease-out) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .minos-side-panel-enter {
+    animation: none;
+  }
+
+  .animate-message-in-grouped {
     animation: none;
   }
 }

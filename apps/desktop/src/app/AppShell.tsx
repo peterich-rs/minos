@@ -1,4 +1,4 @@
-import { useEffect, type CSSProperties } from "react";
+import { useEffect } from "react";
 import { Sidebar } from "./Sidebar";
 import { WorkView } from "@/features/work/WorkView";
 import { AttentionView } from "@/features/attention/AttentionView";
@@ -6,8 +6,8 @@ import { AgentsView } from "@/features/agents/AgentsView";
 import { HostView } from "@/features/host/HostView";
 import { CommandPalette } from "./CommandPalette";
 import { ConnectionToasts } from "./ConnectionToasts";
-import { chromeCssVarDefaults } from "@/shared/layout/chromeLayout";
 import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
+import { ShellFrame } from "@/shared/layout/ShellFrame";
 import { Toaster } from "@/shared/ui/toaster";
 import { TooltipProvider } from "@/shared/ui/tooltip";
 import { useUiStore } from "@/store/ui-store";
@@ -30,23 +30,17 @@ export function AppShell() {
 
   return (
     <TooltipProvider delayDuration={280} skipDelayDuration={120}>
-      <div
-        className="flex h-full w-full min-h-0 bg-surface"
-        style={chromeCssVarDefaults as CSSProperties}
-      >
-        <div className="flex h-full w-full min-h-0 min-w-0 overflow-hidden">
-          <Sidebar />
-          <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-            {primaryNav === "work" ? <WorkView /> : null}
-            {primaryNav === "attention" ? <AttentionView /> : null}
-            {primaryNav === "agents" ? <AgentsView /> : null}
-            {primaryNav === "host" ? <HostView /> : null}
-          </main>
-        </div>
+      <ShellFrame sidebar={<Sidebar />}>
+        <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          {primaryNav === "work" ? <WorkView /> : null}
+          {primaryNav === "attention" ? <AttentionView /> : null}
+          {primaryNav === "agents" ? <AgentsView /> : null}
+          {primaryNav === "host" ? <HostView /> : null}
+        </main>
         <CommandPalette open={cmdOpen} onOpenChange={setCmdOpen} />
         <ConnectionToasts />
         <Toaster />
-      </div>
+      </ShellFrame>
     </TooltipProvider>
   );
 }

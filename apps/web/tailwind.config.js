@@ -1,104 +1,108 @@
 /** @type {import('tailwindcss').Config} */
-module.exports = {
-  darkMode: ['class'],
+/**
+ * Theme maps to CSS variables in src/index.css (Wave 1 Phase 4).
+ * Use rgb(... / <alpha-value>) so utilities like bg-ink/5 keep working.
+ */
+export default {
   content: [
-    './pages/**/*.{ts,tsx}',
-    './components/**/*.{ts,tsx}',
-    './app/**/*.{ts,tsx}',
-    './src/**/*.{ts,tsx}',
-    './index.html',
+    "./index.html",
+    "./src/**/*.{js,ts,jsx,tsx}",
+    // Desktop shared (ShellFrame, layout, pure UI) via workspace alias.
+    "../desktop/src/shared/**/*.{js,ts,jsx,tsx}",
   ],
-  prefix: '',
+  // ThemeProvider toggles `dark` on <html> when Shiki-derived luminance is dark.
+  darkMode: "class",
   theme: {
-    container: {
-      center: true,
-      padding: '2rem',
-      screens: {
-        '2xl': '1400px',
-      },
-    },
     extend: {
-      fontFamily: {
-        sans: ['Space Grotesk', 'ui-sans-serif', 'system-ui', 'sans-serif'],
-        mono: ['IBM Plex Mono', 'ui-monospace', 'SFMono-Regular', 'monospace'],
-      },
       colors: {
-        border: 'hsl(var(--border))',
-        input: 'hsl(var(--input))',
-        ring: 'hsl(var(--ring))',
-        background: 'hsl(var(--background))',
-        foreground: 'hsl(var(--foreground))',
-        primary: {
-          DEFAULT: 'hsl(var(--primary))',
-          foreground: 'hsl(var(--primary-foreground))',
-          soft: 'hsl(var(--primary-soft))',
+        canvas: {
+          DEFAULT: "rgb(var(--color-canvas) / <alpha-value>)",
+          soft: "rgb(var(--color-canvas-soft) / <alpha-value>)",
         },
-        secondary: {
-          DEFAULT: 'hsl(var(--secondary))',
-          foreground: 'hsl(var(--secondary-foreground))',
+        surface: {
+          DEFAULT: "rgb(var(--color-surface) / <alpha-value>)",
+          raised: "rgb(var(--color-surface-raised) / <alpha-value>)",
+          muted: "rgb(var(--color-surface-muted) / <alpha-value>)",
+          hover: "rgb(var(--color-surface-hover) / <alpha-value>)",
         },
-        destructive: {
-          DEFAULT: 'hsl(var(--destructive))',
-          foreground: 'hsl(var(--destructive-foreground))',
-        },
-        success: {
-          DEFAULT: 'hsl(var(--success))',
-          foreground: 'hsl(var(--success-foreground))',
-        },
-        warning: {
-          DEFAULT: 'hsl(var(--warning))',
-          foreground: 'hsl(var(--warning-foreground))',
-        },
-        muted: {
-          DEFAULT: 'hsl(var(--muted))',
-          foreground: 'hsl(var(--muted-foreground))',
+        ink: {
+          DEFAULT: "rgb(var(--color-ink) / <alpha-value>)",
+          secondary: "rgb(var(--color-ink-secondary) / <alpha-value>)",
+          muted: "rgb(var(--color-ink-muted) / <alpha-value>)",
+          faint: "rgb(var(--color-ink-faint) / <alpha-value>)",
         },
         accent: {
-          DEFAULT: 'hsl(var(--accent))',
-          foreground: 'hsl(var(--accent-foreground))',
+          DEFAULT: "rgb(var(--color-accent) / <alpha-value>)",
+          strong: "rgb(var(--color-accent-strong) / <alpha-value>)",
+          soft: "rgb(var(--color-accent-soft) / <alpha-value>)",
         },
-        popover: {
-          DEFAULT: 'hsl(var(--popover))',
-          foreground: 'hsl(var(--popover-foreground))',
+        primary: {
+          DEFAULT: "rgb(var(--color-primary) / <alpha-value>)",
+          strong: "rgb(var(--color-primary-strong) / <alpha-value>)",
+          soft: "rgb(var(--color-primary-soft) / <alpha-value>)",
         },
-        card: {
-          DEFAULT: 'hsl(var(--card))',
-          foreground: 'hsl(var(--card-foreground))',
+        bubble: {
+          out: "rgb(var(--color-bubble-out) / <alpha-value>)",
+          in: "rgb(var(--color-bubble-in) / <alpha-value>)",
         },
-        sidebar: {
-          DEFAULT: 'hsl(var(--sidebar))',
-          foreground: 'hsl(var(--sidebar-foreground))',
-          border: 'hsl(var(--sidebar-border))',
-          accent: 'hsl(var(--sidebar-accent))',
-          'accent-foreground': 'hsl(var(--sidebar-accent-foreground))',
-          primary: 'hsl(var(--sidebar-primary))',
-          'primary-foreground': 'hsl(var(--sidebar-primary-foreground))',
+        status: {
+          idle: "rgb(var(--color-status-idle) / <alpha-value>)",
+          running: "rgb(var(--color-status-running) / <alpha-value>)",
+          approval: "rgb(var(--color-status-approval) / <alpha-value>)",
+          suspended: "rgb(var(--color-status-suspended) / <alpha-value>)",
+          failed: "rgb(var(--color-status-failed) / <alpha-value>)",
+          done: "rgb(var(--color-status-done) / <alpha-value>)",
         },
+      },
+      fontFamily: {
+        sans: [
+          "Inter",
+          "ui-sans-serif",
+          "system-ui",
+          "-apple-system",
+          "Segoe UI",
+          "sans-serif",
+        ],
+      },
+      // Zoom-safe meta-text tokens (timestamps, badges, kbd hints).
+      // Scale with root font-size so Cmd± text zoom keeps hierarchy.
+      fontSize: {
+        "2xs": ["0.6875rem", { lineHeight: "1rem" }], // 11px @ 16
+        "3xs": ["0.625rem", { lineHeight: "0.875rem" }], // 10px @ 16
+      },
+      boxShadow: {
+        shell: "var(--shadow-shell)",
+        panel: "var(--shadow-panel)",
+        "content-edge": "var(--shadow-content-edge)",
       },
       borderRadius: {
-        lg: 'var(--radius)',
-        md: 'calc(var(--radius) - 2px)',
-        sm: 'calc(var(--radius) - 4px)',
+        shell: "var(--radius-shell)",
+        panel: "var(--radius-panel)",
+        code: "var(--radius-code)",
+      },
+      transitionDuration: {
+        150: "var(--duration-fast)",
+        200: "var(--duration-normal)",
+      },
+      transitionTimingFunction: {
+        out: "var(--ease-out)",
       },
       keyframes: {
-        'accordion-down': {
-          from: { height: '0' },
-          to: { height: 'var(--radix-accordion-content-height)' },
+        "message-in": {
+          from: { opacity: "0", transform: "translateY(4px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
         },
-        'accordion-up': {
-          from: { height: 'var(--radix-accordion-content-height)' },
-          to: { height: '0' },
-        },
-        shimmer: {
-          '100%': { transform: 'translateX(100%)' },
+        "message-in-grouped": {
+          from: { opacity: "0", transform: "translateY(2px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
         },
       },
       animation: {
-        'accordion-down': 'accordion-down 0.2s ease-out',
-        'accordion-up': 'accordion-up 0.2s ease-out',
-        shimmer: 'shimmer 1.4s infinite',
+        "message-in": "message-in var(--duration-fast) ease-out both",
+        "message-in-grouped":
+          "message-in-grouped var(--duration-fast) ease-out both",
       },
     },
   },
-  plugins: [require('tailwindcss-animate')],
-}
+  plugins: [require("tailwindcss-animate")],
+};

@@ -31,6 +31,11 @@ export default {
           strong: "rgb(var(--color-accent-strong) / <alpha-value>)",
           soft: "rgb(var(--color-accent-soft) / <alpha-value>)",
         },
+        primary: {
+          DEFAULT: "rgb(var(--color-primary) / <alpha-value>)",
+          strong: "rgb(var(--color-primary-strong) / <alpha-value>)",
+          soft: "rgb(var(--color-primary-soft) / <alpha-value>)",
+        },
         bubble: {
           out: "rgb(var(--color-bubble-out) / <alpha-value>)",
           in: "rgb(var(--color-bubble-in) / <alpha-value>)",
@@ -63,6 +68,7 @@ export default {
       boxShadow: {
         shell: "var(--shadow-shell)",
         panel: "var(--shadow-panel)",
+        "content-edge": "var(--shadow-content-edge)",
       },
       borderRadius: {
         shell: "var(--radius-shell)",
@@ -81,9 +87,15 @@ export default {
           from: { opacity: "0", transform: "translateY(4px)" },
           to: { opacity: "1", transform: "translateY(0)" },
         },
+        "message-in-grouped": {
+          from: { opacity: "0", transform: "translateY(2px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
+        },
       },
       animation: {
         "message-in": "message-in var(--duration-fast) ease-out both",
+        "message-in-grouped":
+          "message-in-grouped var(--duration-fast) ease-out both",
       },
     },
   },

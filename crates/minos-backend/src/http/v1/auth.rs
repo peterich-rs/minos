@@ -1,10 +1,13 @@
-//! `/v1/auth/{register,login,refresh,logout}` HTTP handlers (spec §5.2).
+//! `/v1/auth/{register,login,refresh,logout,supabase}` HTTP handlers (spec §5.2).
 //!
-//! All four endpoints share the same input/output JSON shapes and the
-//! same dual-rail authentication: every request must carry the
-//! `X-Device-Id` / `X-Device-Role` (+ `X-Device-Secret` once paired)
-//! header bundle so the device-secret rail (`crate::http::auth`) can
-//! resolve a `DeviceId` before the account-rail does its own work.
+//! Password endpoints share dual-rail authentication: every request must
+//! carry the `X-Device-Id` / `X-Device-Role` (+ `X-Device-Secret` once
+//! paired) header bundle so the device-secret rail (`crate::http::auth`)
+//! can resolve a `DeviceId` before the account-rail does its own work.
+//!
+//! Supabase exchange **does not** call `authenticate()` / device-secret;
+//! it only requires `X-Device-Id` (+ optional role/name) and a Supabase
+//! access token body.
 //!
 //! Logout additionally requires `Authorization: Bearer <jwt>` because
 //! the act of revoking a refresh token must be authenticated by the
@@ -17,11 +20,14 @@ use axum::{
     routing::post,
     Json, Router,
 };
+use minos_domain::DeviceRole;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::bearer;
 use crate::auth::use_case::{AuthSession, AuthUseCaseError, RefreshSession};
-use crate::http::auth::authenticate;
+use crate::http::auth::{
+    authenticate, extract_device_id, extract_device_name, extract_device_role,
+};
 use crate::http::error_response::{err_json, ErrorEnvelope};
 use crate::http::BackendState;
 
@@ -145,6 +151,26 @@ fn auth_error_response(error: AuthUseCaseError) -> Response {
         }
         AuthUseCaseError::WeakPassword => {
             (StatusCode::BAD_REQUEST, err("weak_password")).into_response()
+        }
+        AuthUseCaseError::SupabaseNotConfigured => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            err("supabase_not_configured"),
+        )
+            .into_response(),
+        AuthUseCaseError::InvalidSupabaseToken => {
+            (StatusCode::UNAUTHORIZED, err("invalid_supabase_token")).into_response()
+        }
+        AuthUseCaseError::SupabaseTokenExpired => {
+            (StatusCode::UNAUTHORIZED, err("supabase_token_expired")).into_response()
+        }
+        AuthUseCaseError::SupabaseTokenInvalid => {
+            (StatusCode::UNAUTHORIZED, err("supabase_token_invalid")).into_response()
+        }
+        AuthUseCaseError::IdpUnavailable => {
+            (StatusCode::SERVICE_UNAVAILABLE, err("idp_unavailable")).into_response()
+        }
+        AuthUseCaseError::MergeConflict => {
+            (StatusCode::CONFLICT, err("merge_conflict")).into_response()
         }
     }
 }
@@ -311,6 +337,71 @@ pub async fn post_logout(
     }
 }
 
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct SupabaseExchangeReq {
+    /// Supabase Auth access token (JWT) from the client SDK session.
+    pub access_token: String,
+    /// Optional human label; overrides `X-Device-Name` when set.
+    #[serde(default)]
+    pub device_name: Option<String>,
+}
+
+/// Exchange a Supabase access token for Minos access/refresh tokens.
+///
+/// Does **not** require `X-Device-Secret`. Requires `X-Device-Id` (UUID).
+#[utoipa::path(
+    post,
+    path = "/v1/auth/supabase",
+    request_body = SupabaseExchangeReq,
+    responses(
+        (status = 200, description = "Exchange successful", body = AuthResp),
+        (status = 401, description = "Invalid Supabase token", body = ErrorEnvelope),
+        (status = 409, description = "Merge conflict", body = ErrorEnvelope),
+        (status = 429, description = "Rate limited"),
+        (status = 503, description = "IdP unavailable or not configured", body = ErrorEnvelope),
+    ),
+    tag = "auth"
+)]
+#[tracing::instrument(skip_all)]
+pub async fn post_supabase_exchange(
+    State(state): State<BackendState>,
+    headers: HeaderMap,
+    Json(req): Json<SupabaseExchangeReq>,
+) -> Response {
+    let device_id = match extract_device_id(&headers) {
+        Ok(id) => id,
+        Err(_) => return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response(),
+    };
+    let device_role = match extract_device_role(&headers) {
+        Ok(Some(role)) => role,
+        Ok(None) => DeviceRole::BrowserAdmin,
+        Err(_) => return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response(),
+    };
+    let header_name = extract_device_name(&headers);
+    let device_name = req
+        .device_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .or(header_name);
+
+    match state
+        .auth
+        .supabase_exchange(
+            device_id,
+            device_role,
+            device_name.as_deref(),
+            &req.access_token,
+            &client_ip(&headers),
+        )
+        .await
+    {
+        Ok(session) => auth_session_response(session),
+        Err(error) => auth_error_response(error),
+    }
+}
+
 /// Change account password. Requires bearer auth.
 #[utoipa::path(
     post,
@@ -358,6 +449,7 @@ pub fn router() -> Router<BackendState> {
         .route("/auth/refresh", post(post_refresh))
         .route("/auth/logout", post(post_logout))
         .route("/auth/change-password", post(post_change_password))
+        .route("/auth/supabase", post(post_supabase_exchange))
 }
 
 #[cfg(test)]

@@ -650,3 +650,119 @@ async fn auth_rate_limit_login_returns_429_with_retry_after() {
         .unwrap();
     assert!(retry >= 1, "retry-after must be >= 1");
 }
+
+// ── Supabase exchange ────────────────────────────────────────────────
+
+use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use minos_backend::http::test_support::{
+    backend_state_with_supabase, TEST_SUPABASE_AUD, TEST_SUPABASE_HMAC, TEST_SUPABASE_ISS,
+};
+
+fn mint_supabase_token(
+    sub: &str,
+    email: Option<&str>,
+    email_verified: bool,
+    exp_offset_secs: i64,
+) -> String {
+    let now = chrono::Utc::now().timestamp();
+    let mut claims = serde_json::json!({
+        "sub": sub,
+        "iss": TEST_SUPABASE_ISS,
+        "aud": TEST_SUPABASE_AUD,
+        "exp": now + exp_offset_secs,
+        "iat": now,
+        "email_verified": email_verified,
+    });
+    if let Some(email) = email {
+        claims["email"] = serde_json::json!(email);
+    }
+    encode(
+        &Header::new(Algorithm::HS256),
+        &claims,
+        &EncodingKey::from_secret(TEST_SUPABASE_HMAC),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn auth_supabase_exchange_creates_account_and_returns_minos_session() {
+    let state = backend_state_with_supabase().await;
+    let mut app = http::router(state);
+    let device_id = uuid::Uuid::new_v4().to_string();
+    let token = mint_supabase_token("sub-new-1", Some("oidc@example.com"), true, 3600);
+
+    let (status, body) = post_json(
+        &mut app,
+        "/v1/auth/supabase",
+        &browser_headers(&device_id),
+        json!({ "access_token": token }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    assert_eq!(body["account"]["email"], "oidc@example.com");
+    assert!(!body["access_token"].as_str().unwrap().is_empty());
+    assert!(!body["refresh_token"].as_str().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn auth_supabase_exchange_merges_verified_email_with_password_account() {
+    let state = backend_state_with_supabase().await;
+    let mut app = http::router(state);
+    let device_id = uuid::Uuid::new_v4().to_string();
+
+    let (status, reg) = post_json(
+        &mut app,
+        "/v1/auth/register",
+        &browser_headers(&device_id),
+        json!({"email": "merge-me@example.com", "password": "testpass1"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={reg}");
+    let password_account_id = reg["account"]["account_id"].as_str().unwrap().to_string();
+
+    let other_device = uuid::Uuid::new_v4().to_string();
+    let token = mint_supabase_token("sub-merge-1", Some("merge-me@example.com"), true, 3600);
+    let (status, body) = post_json(
+        &mut app,
+        "/v1/auth/supabase",
+        &browser_headers(&other_device),
+        json!({ "access_token": token }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body={body}");
+    assert_eq!(body["account"]["account_id"], password_account_id);
+}
+
+#[tokio::test]
+async fn auth_supabase_exchange_rejects_expired_token() {
+    let state = backend_state_with_supabase().await;
+    let mut app = http::router(state);
+    let device_id = uuid::Uuid::new_v4().to_string();
+    let token = mint_supabase_token("sub-exp", Some("exp@example.com"), true, -120);
+
+    let (status, body) = post_json(
+        &mut app,
+        "/v1/auth/supabase",
+        &browser_headers(&device_id),
+        json!({ "access_token": token }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "body={body}");
+    assert_eq!(body["error"]["code"], "supabase_token_expired");
+}
+
+#[tokio::test]
+async fn auth_supabase_exchange_without_config_returns_503() {
+    let state = backend_state().await;
+    let mut app = http::router(state);
+    let device_id = uuid::Uuid::new_v4().to_string();
+    let (status, body) = post_json(
+        &mut app,
+        "/v1/auth/supabase",
+        &browser_headers(&device_id),
+        json!({ "access_token": "not-a-jwt" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "body={body}");
+    assert_eq!(body["error"]["code"], "supabase_not_configured");
+}

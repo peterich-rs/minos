@@ -190,6 +190,13 @@
     },
     {
       "method": "POST",
+      "path": "/v1/auth/supabase",
+      "probe_path": "/v1/auth/supabase",
+      "surface": "account_api",
+      "auth": "public"
+    },
+    {
+      "method": "POST",
       "path": "/v1/host/bootstrap/nonce",
       "probe_path": "/v1/host/bootstrap/nonce",
       "surface": "host_api",
