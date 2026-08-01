@@ -77,3 +77,6 @@ third_party/
 
 # Offline / VPS binary-bypass build output (deploy/dev-binary).
 dist/
+
+# Grok Build local project config (MCP, session state)
+.grok/
