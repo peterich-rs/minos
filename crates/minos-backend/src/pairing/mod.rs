@@ -7,15 +7,14 @@
 //!    persisted as a SHA-256 digest (never the plaintext). The plaintext
 //!    is returned once for QR rendering and then discarded.
 //! 2. Consume — the iOS client presents a candidate token; we atomically
-//!    mark the row consumed, mint a fresh `DeviceSecret` for the Mac
-//!    issuer, hash it with argon2id, and persist on the issuer row. iOS
-//!    never gets a `DeviceSecret`; its row keeps `secret_hash = NULL` per
-//!    ADR-0020 (the iOS rail is bearer-JWT only).
+//!    mark the row consumed and mint a `DeviceSecret` for the Mac issuer
+//!    (returned in the outcome for legacy event payloads only — **not**
+//!    persisted; `secret_hash` was removed). Host steady-state auth uses
+//!    `host_installation_tokens` from formal redeem.
 //!
-//! The `(host_device_id, mobile_account_id)` pair row in
-//! `account_host_pairings` is inserted by the HTTP handler post-commit —
-//! see `http::v1::pairing::post_consume`. `consume_token` does not see
-//! the bearer's `account_id`, so it cannot insert the pair itself.
+//! The account↔host link in `host_links` is inserted by the HTTP handler
+//! post-commit — see `http::v1::pairing`. `consume_token` does not see
+//! the bearer's `account_id`, so it cannot insert the link itself.
 //!
 //! # Two hash primitives
 //!
@@ -56,8 +55,8 @@ pub mod secret;
 /// Successful outcome of [`PairingService::consume_token`].
 ///
 /// Carries the Mac issuer's plaintext `DeviceSecret` momentarily so the
-/// caller can push it via `EventKind::Paired`. Not persisted anywhere
-/// — only its argon2id hash was written as part of `consume_token`.
+/// caller can push it via `EventKind::Paired`. Not persisted (device-secret
+/// / `secret_hash` rail removed); formal host auth uses installation tokens.
 #[derive(Debug, Clone)]
 pub struct PairingOutcome {
     /// `DeviceId` of the side that originally issued the pairing token
@@ -831,24 +830,21 @@ impl PairingService {
     ///    missing, expired, or already-consumed token surfaces as
     ///    [`BackendError::PairingTokenInvalid`].
     /// 2. Refuse only self-pairing.
-    /// 3. Mint one fresh `DeviceSecret` for the issuer and hash it with
-    ///    argon2id.
-    /// 4. Upsert the consumer's device row (no-op if already registered).
-    ///    iOS rows keep `secret_hash = NULL` per ADR-0020.
-    /// 5. Write the issuer's `secret_hash`.
+    /// 3. Mint one fresh `DeviceSecret` for the issuer (returned only; not
+    ///    stored — device-secret rail removed with `secret_hash`).
+    /// 4. Ensure the consumer's installation row exists (no-op if present).
     ///
     /// Returns a [`PairingOutcome`] carrying the Mac plaintext secret so
     /// the caller can broadcast `Event::Paired` to the Mac side. The
-    /// `(mac, mobile_account)` pair row is inserted by the HTTP handler
-    /// after this function returns — `consume_token` does not have the
-    /// bearer's `account_id`.
+    /// `host_links` row is inserted by the HTTP handler after this
+    /// function returns — `consume_token` does not have the bearer's
+    /// `account_id`.
     ///
     /// # Errors
     ///
     /// - [`BackendError::PairingTokenInvalid`] — unknown / expired / already
     ///   consumed candidate.
     /// - [`BackendError::PairingStateMismatch`] — self-pair attempt.
-    /// - [`BackendError::PairingHash`] — argon2 reported an internal error.
     /// - [`BackendError::StoreQuery`] / [`BackendError::DeviceNotFound`] — any
     ///   underlying store write failed.
     pub async fn consume_token(

@@ -992,7 +992,8 @@ impl AccountCredentialsRepository for StoreBackedAccountCredentialsRepository {
 fn convert_installation_row(row: store::device_installations::DeviceRow) -> InstallationRow {
     InstallationRow {
         installation_id: row.device_id.to_string(),
-        kind: row.role.to_string(),
+        // Storage vocabulary (mobile/browser/desktop/host), not wire role.
+        kind: row.role.to_installation_kind().to_string(),
         platform: None,
         public_key: row.public_key,
         account_id: row.account_id,
@@ -1024,27 +1025,73 @@ impl InstallationsRepository for StoreBackedInstallationsRepository {
                 column: "installation_id".into(),
                 message: e.to_string(),
             })?;
-        let role = kind
-            .parse::<minos_domain::DeviceRole>()
-            .unwrap_or(minos_domain::DeviceRole::MobileClient);
+        // Accept either installation_kind (`mobile`) or wire role (`mobile-client`).
+        let role = minos_domain::DeviceRole::from_installation_kind(kind)
+            .or_else(|_| kind.parse::<minos_domain::DeviceRole>())
+            .map_err(|e| BackendError::StoreQuery {
+                operation: "installations.upsert".into(),
+                message: format!("invalid installation kind/role `{kind}`: {e}"),
+            })?;
         let name = display_name.unwrap_or("device");
 
-        // Attempt insert; ignore if already exists (upsert semantics).
-        let _ =
-            store::device_installations::insert_device(&self.store, device_id, name, role, at_ms)
+        if store::device_installations::get_device(&self.store, device_id)
+            .await?
+            .is_none()
+        {
+            // Postgres CHECK: clients need account_id; hosts need public_key.
+            if role.is_account_client() {
+                let account_id = account_id.ok_or_else(|| BackendError::StoreQuery {
+                    operation: "installations.upsert".into(),
+                    message: "account_id required for client installation kinds".into(),
+                })?;
+                store::device_installations::insert_client_for_account(
+                    &self.store,
+                    device_id,
+                    name,
+                    role,
+                    account_id,
+                    at_ms,
+                )
+                .await?;
+            } else if role == minos_domain::DeviceRole::AgentHost {
+                let public_key = public_key.ok_or_else(|| BackendError::StoreQuery {
+                    operation: "installations.upsert".into(),
+                    message: "public_key required for host installations".into(),
+                })?;
+                store::device_installations::insert_host_with_public_key(
+                    &self.store,
+                    device_id,
+                    name,
+                    public_key,
+                    at_ms,
+                )
+                .await?;
+            } else {
+                return Err(BackendError::StoreQuery {
+                    operation: "installations.upsert".into(),
+                    message: format!("unsupported installation role: {role}"),
+                });
+            }
+        } else {
+            if let Some(pk) = public_key {
+                let _ = store::device_installations::set_public_key_if_absent(
+                    &self.store,
+                    &device_id,
+                    pk,
+                )
                 .await;
-
-        if let Some(pk) = public_key {
-            let _ =
-                store::device_installations::set_public_key_if_absent(&self.store, &device_id, pk)
+            }
+            if let Some(aid) = account_id {
+                if role.is_account_client() {
+                    let _ =
+                        store::device_installations::set_account_id(&self.store, &device_id, aid)
+                            .await;
+                }
+            }
+            if let Some(dn) = display_name {
+                let _ = store::device_installations::set_display_name(&self.store, &device_id, dn)
                     .await;
-        }
-        if let Some(aid) = account_id {
-            let _ = store::device_installations::set_account_id(&self.store, &device_id, aid).await;
-        }
-        if let Some(dn) = display_name {
-            let _ =
-                store::device_installations::set_display_name(&self.store, &device_id, dn).await;
+            }
         }
 
         match store::device_installations::get_device(&self.store, device_id).await? {

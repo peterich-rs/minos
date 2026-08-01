@@ -1,20 +1,21 @@
 //! Shared header extraction + auth classification for HTTP handlers.
 //!
 //! The remaining header-auth flows call [`authenticate`] to resolve
-//! `(device_id, role)` from the `X-Device-*` header bundle. First-connect
-//! installations are inserted into `device_installations`. Device-secret
-//! verification has been removed (host steady-state uses
-//! `host_installation_tokens`; clients use bearer access tokens).
+//! `(device_id, role)` from the `X-Device-*` header bundle.
+//!
+//! Installation rows are **not** created here: Postgres CHECK requires
+//! `account_id` for clients and `public_key` for hosts. Clients are
+//! inserted at login/register/exchange via `insert_client_for_account`;
+//! hosts at bootstrap via `insert_host_with_public_key`. Device-secret
+//! verification has been removed (hosts use `host_installation_tokens`;
+//! clients use bearer access tokens).
 
 use axum::http::{HeaderMap, StatusCode};
 use minos_domain::{DeviceId, DeviceRole};
 use std::str::FromStr;
 use uuid::Uuid;
 
-use crate::store::{
-    self,
-    device_installations::{insert_device, DeviceRow},
-};
+use crate::store::{self, device_installations::DeviceRow};
 
 pub const HDR_DEVICE_ID: &str = "x-device-id";
 pub const HDR_DEVICE_ROLE: &str = "x-device-role";
@@ -53,9 +54,12 @@ impl AuthError {
     }
 }
 
-/// Parse headers, look up the device row, classify, insert on first
-/// connect, and return the resolved `(device_id, role)`. Side-effecting:
-/// may insert into `devices`.
+/// Parse headers, look up the installation row, classify, and return the
+/// resolved `(device_id, role)`.
+///
+/// Does **not** insert missing rows (Postgres CHECK forbids null-account
+/// clients and null-public_key hosts). Callers that create sessions must
+/// insert via CHECK-compliant helpers once account / host key is known.
 pub async fn authenticate(
     store: &impl store::AsStorePool,
     headers: &HeaderMap,
@@ -66,9 +70,6 @@ pub async fn authenticate(
     let provided_display_name = extract_device_name(headers)
         .map(|name| name.trim().to_owned())
         .filter(|name| !name.is_empty());
-    let display_name = provided_display_name
-        .clone()
-        .unwrap_or_else(|| DEFAULT_DISPLAY_NAME.into());
 
     let existing = store::device_installations::get_device(store, device_id)
         .await
@@ -82,17 +83,7 @@ pub async fn authenticate(
     let classification = classify(existing, device_secret.as_deref(), role)?;
     let authenticated_with_secret = matches!(classification, Classification::Authenticated);
 
-    if matches!(classification, Classification::FirstConnect) {
-        let now = chrono::Utc::now().timestamp_millis();
-        if let Err(e) = insert_device(store, device_id, &display_name, role, now).await {
-            tracing::warn!(
-                target: "minos_backend::http::auth",
-                error = %e,
-                device_id = %device_id,
-                "first-connect insert_device failed (race?)",
-            );
-        }
-    } else if should_backfill_display_name {
+    if should_backfill_display_name {
         if let Some(new_display_name) = provided_display_name.as_deref() {
             if let Err(e) =
                 store::device_installations::set_display_name(store, &device_id, new_display_name)

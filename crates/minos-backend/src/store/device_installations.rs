@@ -49,7 +49,11 @@ pub struct DeviceRow {
     pub account_id: Option<String>,
 }
 
-/// Insert a new installation row.
+/// Insert an installation with null account/public_key.
+///
+/// **SQLite tests / fixtures only.** Postgres CHECK rejects this shape;
+/// production code must use [`insert_client_for_account`] or
+/// [`insert_host_with_public_key`].
 ///
 /// Both timestamps are set to `now` (unix epoch ms). `now` is injected from
 /// the caller so tests can use fixed-epoch literals.
@@ -62,7 +66,12 @@ pub async fn insert_device(
 ) -> Result<(), BackendError> {
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => insert_device_with_executor(pool, id, name, role, now).await,
-        StorePoolRef::Postgres(pool) => insert_device_postgres(pool, id, name, role, now).await,
+        StorePoolRef::Postgres(_) => Err(BackendError::StoreQuery {
+            operation: "insert_device".into(),
+            message: "postgres CHECK requires insert_client_for_account \
+                      (clients) or insert_host_with_public_key (hosts)"
+                .into(),
+        }),
     }
 }
 
@@ -524,42 +533,6 @@ fn decode_installation_row(row: InstallationRowTuple) -> Result<DeviceRow, Backe
     })
 }
 
-async fn insert_device_postgres(
-    pool: &PgPool,
-    id: DeviceId,
-    name: &str,
-    role: DeviceRole,
-    now: i64,
-) -> Result<(), BackendError> {
-    let id_str = id.to_string();
-    let kind = role.to_installation_kind();
-
-    // Postgres CHECK is strict: client kinds need account_id; host needs
-    // public_key. Callers that know those fields should use
-    // `insert_client_for_account` / `insert_host_with_public_key`. This
-    // path is best-effort for SQLite-parity test helpers against PG.
-    sqlx::query(
-        r#"
-        INSERT INTO device_installations
-            (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
-        VALUES ($1, $2::installation_kind, $3, NULL, $4, $5, NULL)
-        "#,
-    )
-    .bind(&id_str)
-    .bind(kind)
-    .bind(name)
-    .bind(now)
-    .bind(now)
-    .execute(pool)
-    .await
-    .map_err(|e| BackendError::StoreQuery {
-        operation: "insert_device".to_string(),
-        message: e.to_string(),
-    })?;
-
-    Ok(())
-}
-
 async fn get_device_postgres(
     pool: &PgPool,
     id: DeviceId,
@@ -758,5 +731,101 @@ mod tests {
             }
             other => panic!("expected StoreQuery, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn insert_client_for_account_binds_account_atomically() {
+        let pool = memory_pool().await;
+        let account = crate::store::accounts::create(&pool, "client-insert@example.com", "phc")
+            .await
+            .unwrap();
+        let id = DeviceId::new();
+        insert_client_for_account(
+            &pool,
+            id,
+            "iPhone",
+            DeviceRole::MobileClient,
+            &account.account_id,
+            T0,
+        )
+        .await
+        .unwrap();
+        let row = get_device(&pool, id).await.unwrap().unwrap();
+        assert_eq!(row.role, DeviceRole::MobileClient);
+        assert_eq!(row.account_id.as_deref(), Some(account.account_id.as_str()));
+        assert!(row.public_key.is_none());
+    }
+
+    #[tokio::test]
+    async fn insert_client_for_account_rejects_host_role() {
+        let pool = memory_pool().await;
+        let account = crate::store::accounts::create(&pool, "host-as-client@example.com", "phc")
+            .await
+            .unwrap();
+        let err = insert_client_for_account(
+            &pool,
+            DeviceId::new(),
+            "mac",
+            DeviceRole::AgentHost,
+            &account.account_id,
+            T0,
+        )
+        .await
+        .unwrap_err();
+        match err {
+            BackendError::StoreQuery { message, .. } => {
+                assert!(
+                    message.contains("not an account client"),
+                    "unexpected: {message}"
+                );
+            }
+            other => panic!("expected StoreQuery, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn insert_host_with_public_key_sets_key_atomically() {
+        let pool = memory_pool().await;
+        let id = DeviceId::new();
+        insert_host_with_public_key(&pool, id, "Mac", "ed25519:testkey", T0)
+            .await
+            .unwrap();
+        let row = get_device(&pool, id).await.unwrap().unwrap();
+        assert_eq!(row.role, DeviceRole::AgentHost);
+        assert_eq!(row.public_key.as_deref(), Some("ed25519:testkey"));
+        assert!(row.account_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn insert_client_for_account_is_required_shape_for_exchange_style_bind() {
+        // Regression: exchange/login must never create a client with null
+        // account_id (Postgres CHECK). This asserts the CHECK-compliant
+        // helper writes account_id in the same INSERT.
+        let pool = memory_pool().await;
+        let account = crate::store::accounts::create(&pool, "exchange-shape@example.com", "phc")
+            .await
+            .unwrap();
+        let id = DeviceId::new();
+        insert_client_for_account(
+            &pool,
+            id,
+            "Desktop",
+            DeviceRole::DesktopConsole,
+            &account.account_id,
+            T0,
+        )
+        .await
+        .unwrap();
+        let (kind, account_id, public_key): (String, Option<String>, Option<String>) =
+            sqlx::query_as(
+                "SELECT kind, account_id, public_key FROM device_installations WHERE installation_id = ?",
+            )
+            .bind(id.to_string())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(kind, "desktop");
+        assert_eq!(account_id.as_deref(), Some(account.account_id.as_str()));
+        assert!(public_key.is_none());
     }
 }

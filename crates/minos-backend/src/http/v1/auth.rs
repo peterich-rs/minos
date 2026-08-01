@@ -223,10 +223,13 @@ pub async fn post_register(
     let Ok(outcome) = authenticate(&state.store, &headers).await else {
         return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
     };
+    let device_name = extract_device_name(&headers);
     match state
         .auth
         .register(
             outcome.device_id,
+            outcome.role,
+            device_name.as_deref(),
             &req.email,
             &req.password,
             &client_ip(&headers),
@@ -259,10 +262,13 @@ pub async fn post_login(
     let Ok(outcome) = authenticate(&state.store, &headers).await else {
         return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response();
     };
+    let device_name = extract_device_name(&headers);
     match state
         .auth
         .login(
             outcome.device_id,
+            outcome.role,
+            device_name.as_deref(),
             &req.email,
             &req.password,
             &client_ip(&headers),

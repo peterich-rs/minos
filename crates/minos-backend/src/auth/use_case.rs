@@ -382,12 +382,21 @@ impl AuthUseCase {
     pub async fn register(
         &self,
         device_id: DeviceId,
+        device_role: DeviceRole,
+        device_name: Option<&str>,
         email: &str,
         password: &str,
         client_ip: &str,
     ) -> Result<AuthSession, AuthUseCaseError> {
         let result = self
-            .register_inner(device_id, email, password, client_ip)
+            .register_inner(
+                device_id,
+                device_role,
+                device_name,
+                email,
+                password,
+                client_ip,
+            )
             .await;
         crate::telemetry::record_auth_register(auth_outcome_label(&result));
         result
@@ -396,12 +405,17 @@ impl AuthUseCase {
     async fn register_inner(
         &self,
         device_id: DeviceId,
+        device_role: DeviceRole,
+        device_name: Option<&str>,
         email: &str,
         password: &str,
         client_ip: &str,
     ) -> Result<AuthSession, AuthUseCaseError> {
         self.limits.check_register_per_ip(client_ip)?;
         validate_password(password)?;
+        if !device_role.is_account_client() {
+            return Err(AuthUseCaseError::UnsupportedWsTicketRole);
+        }
 
         let hash = passwords::hash(password)
             .map_err(|error| Self::log_internal("register.hash_password", error))?;
@@ -411,7 +425,8 @@ impl AuthUseCase {
             Err(error) => return Err(Self::log_internal("register.create_account", error)),
         };
 
-        self.bind_device_to_account(&device_id, &account.account_id)
+        // Postgres CHECK requires client rows to carry account_id at insert.
+        self.ensure_device_for_account(&device_id, device_role, device_name, &account.account_id)
             .await?;
         self.issue_auth_session(&account.account_id, &account.email, &device_id)
             .await
@@ -420,12 +435,21 @@ impl AuthUseCase {
     pub async fn login(
         &self,
         device_id: DeviceId,
+        device_role: DeviceRole,
+        device_name: Option<&str>,
         email: &str,
         password: &str,
         client_ip: &str,
     ) -> Result<AuthSession, AuthUseCaseError> {
         let result = self
-            .login_inner(device_id, email, password, client_ip)
+            .login_inner(
+                device_id,
+                device_role,
+                device_name,
+                email,
+                password,
+                client_ip,
+            )
             .await;
         crate::telemetry::record_auth_login(auth_outcome_label(&result));
         result
@@ -512,7 +536,7 @@ impl AuthUseCase {
             .await
             .map_err(|error| Self::log_internal("supabase.touch_last_login", error))?;
 
-        self.ensure_device_for_exchange(&device_id, device_role, device_name, &account.account_id)
+        self.ensure_device_for_account(&device_id, device_role, device_name, &account.account_id)
             .await?;
 
         self.issue_auth_session(&account.account_id, &account.email, &device_id)
@@ -609,53 +633,93 @@ impl AuthUseCase {
         }
     }
 
-    async fn ensure_device_for_exchange(
+    /// Ensure a client installation row exists and is bound to `account_id`.
+    ///
+    /// Uses [`insert_client_for_account`] so Postgres CHECK
+    /// (`account_id IS NOT NULL` for mobile/browser/desktop) is satisfied in
+    /// one insert — never create a null-account client row then patch later.
+    async fn ensure_device_for_account(
         &self,
         device_id: &DeviceId,
         device_role: DeviceRole,
         device_name: Option<&str>,
         account_id: &str,
     ) -> Result<(), AuthUseCaseError> {
+        if !device_role.is_account_client() {
+            return Err(AuthUseCaseError::UnsupportedWsTicketRole);
+        }
         let display_name = device_name
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .unwrap_or("unnamed");
         let existing = crate::store::device_installations::get_device(&self.store, *device_id)
             .await
-            .map_err(|error| Self::log_internal("supabase.get_device", error))?;
+            .map_err(|error| Self::log_internal("auth.get_device", error))?;
 
         match existing {
             None => {
                 let now = chrono::Utc::now().timestamp_millis();
-                crate::store::device_installations::insert_device(
+                crate::store::device_installations::insert_client_for_account(
                     &self.store,
                     *device_id,
                     display_name,
                     device_role,
+                    account_id,
                     now,
                 )
                 .await
-                .map_err(|error| Self::log_internal("supabase.insert_device", error))?;
+                .map_err(|error| Self::log_internal("auth.insert_client_for_account", error))?;
+                // Fresh bind: still invalidate peer caches for the account.
+                crate::ingest::invalidate_peer_targets_for_account(&self.store, account_id)
+                    .await
+                    .map_err(|error| {
+                        Self::log_internal("auth.invalidate_peer_targets_new", error)
+                    })?;
+                Ok(())
             }
             Some(row) => {
                 if row.role != device_role {
                     return Err(AuthUseCaseError::UnsupportedWsTicketRole);
                 }
+                if let Some(name) = device_name
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .filter(|s| *s != row.display_name.as_str())
+                {
+                    if let Err(error) = crate::store::device_installations::set_display_name(
+                        &self.store,
+                        device_id,
+                        name,
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            target: "minos_backend::auth",
+                            error = %error,
+                            device_id = %device_id,
+                            "failed to update installation display_name"
+                        );
+                    }
+                }
+                self.bind_device_to_account(device_id, account_id).await
             }
         }
-
-        self.bind_device_to_account(device_id, account_id).await
     }
 
     async fn login_inner(
         &self,
         device_id: DeviceId,
+        device_role: DeviceRole,
+        device_name: Option<&str>,
         email: &str,
         password: &str,
         client_ip: &str,
     ) -> Result<AuthSession, AuthUseCaseError> {
         self.limits.check_login_per_ip(client_ip)?;
         self.limits.check_login_per_email(&email.to_lowercase())?;
+        if !device_role.is_account_client() {
+            return Err(AuthUseCaseError::UnsupportedWsTicketRole);
+        }
 
         let account = match self.accounts.find_by_email(email).await {
             Ok(Some(account)) => account,
@@ -688,7 +752,7 @@ impl AuthUseCase {
             .touch_last_login(&account.account_id)
             .await
             .map_err(|error| Self::log_internal("login.touch_last_login", error))?;
-        self.bind_device_to_account(&device_id, &account.account_id)
+        self.ensure_device_for_account(&device_id, device_role, device_name, &account.account_id)
             .await?;
         self.issue_auth_session(&account.account_id, &account.email, &device_id)
             .await
@@ -815,12 +879,10 @@ impl AuthUseCase {
             return Err(AuthUseCaseError::UnsupportedWsTicketRole);
         }
 
-        let existing_account_id =
-            crate::store::device_installations::get_device(&self.store, device_id)
-                .await
-                .map_err(|error| Self::log_internal("ws_ticket.get_device", error))?
-                .and_then(|row| row.account_id);
-        match existing_account_id.as_deref() {
+        let existing = crate::store::device_installations::get_device(&self.store, device_id)
+            .await
+            .map_err(|error| Self::log_internal("ws_ticket.get_device", error))?;
+        match existing.as_ref().and_then(|row| row.account_id.as_deref()) {
             Some(bound_account_id) if bound_account_id != account_id => {
                 tracing::warn!(
                     target: "minos_backend::auth",
@@ -831,8 +893,12 @@ impl AuthUseCase {
                 );
                 return Err(AuthUseCaseError::WsTicketAccountMismatch);
             }
-            None => self.bind_device_to_account(&device_id, account_id).await?,
             Some(_) => {}
+            None => {
+                // Insert or re-bind with account_id in a CHECK-compliant way.
+                self.ensure_device_for_account(&device_id, device_role, None, account_id)
+                    .await?;
+            }
         }
 
         self.issue_tracked_ws_ticket(account_id, device_id, device_role)

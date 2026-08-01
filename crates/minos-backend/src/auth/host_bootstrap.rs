@@ -125,16 +125,17 @@ where
     )?;
 
     if existing.is_none() {
-        device_installations::insert_device(
+        // Postgres CHECK requires host rows to have public_key NOT NULL.
+        // Insert key atomically at TOFU register rather than insert-then-patch.
+        device_installations::insert_host_with_public_key(
             store,
             installation_id,
             display_name,
-            DeviceRole::AgentHost,
+            public_key_text,
             now_ms,
         )
         .await?;
-    }
-    if stored_public_key.is_none() {
+    } else if stored_public_key.is_none() {
         device_installations::set_public_key_if_absent(store, &installation_id, public_key_text)
             .await?;
     }
