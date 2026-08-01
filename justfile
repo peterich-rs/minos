@@ -215,7 +215,10 @@ dev-mobile-ios:
     fi
     cd apps/mobile && \
     MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
-    flutter run
+    flutter run \
+        --dart-define=MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
+        --dart-define=SUPABASE_URL="${SUPABASE_URL:-}" \
+        --dart-define=SUPABASE_ANON_KEY="${SUPABASE_ANON_KEY:-}"
 
 # Hot-reload Android workflow. Mirrors `dev-mobile-ios` so Android debug runs
 # stay on the same `.env.local` / cargokit path as release builds.
@@ -227,7 +230,10 @@ dev-mobile-android:
     fi
     cd apps/mobile && \
     MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
-    flutter run -d android
+    flutter run -d android \
+        --dart-define=MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
+        --dart-define=SUPABASE_URL="${SUPABASE_URL:-}" \
+        --dart-define=SUPABASE_ANON_KEY="${SUPABASE_ANON_KEY:-}"
 
 # Build Android APK with just-loaded env passthrough.
 build-mobile-android:
@@ -238,7 +244,10 @@ build-mobile-android:
     fi
     cd apps/mobile && \
     MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
-    flutter build apk
+    flutter build apk \
+        --dart-define=MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
+        --dart-define=SUPABASE_URL="${SUPABASE_URL:-}" \
+        --dart-define=SUPABASE_ANON_KEY="${SUPABASE_ANON_KEY:-}"
 
 # ── VPS binary bypass (coexists with Docker prod; see docs/ops/vps-dev-binary.md) ──
 
