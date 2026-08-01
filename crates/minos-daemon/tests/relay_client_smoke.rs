@@ -21,8 +21,8 @@ use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
 use std::time::Duration;
 
 use minos_backend::{
-    http::{router, BackendState},
     host_link::HostLinkService,
+    http::{router, BackendState},
     session::SessionRegistry,
     store,
 };

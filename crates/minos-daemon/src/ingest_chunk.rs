@@ -12,20 +12,29 @@ use crate::store::{EventRow, SessionRow};
 pub struct IngestChunk {
     pub ingest: RawIngest,
     pub seq: u64,
+    /// Local projection for Desktop/TUI; not uploaded as cloud SSOT.
     pub projection: Vec<UiEventMessage>,
+    /// Local conversation id for hub formal session auto-registration.
+    pub conversation_id: Option<String>,
     pub byte_len: u64,
     pub checksum_sha256: String,
 }
 
 impl IngestChunk {
     #[must_use]
-    pub fn new(ingest: RawIngest, seq: u64, projection: Vec<UiEventMessage>) -> Self {
+    pub fn new(
+        ingest: RawIngest,
+        seq: u64,
+        projection: Vec<UiEventMessage>,
+        conversation_id: Option<String>,
+    ) -> Self {
         let byte_len = ingest.body_len();
         let checksum_sha256 = checksum_raw_body(&ingest.body);
         Self {
             ingest,
             seq,
             projection,
+            conversation_id,
             byte_len,
             checksum_sha256,
         }
@@ -54,7 +63,9 @@ impl IngestChunk {
                 .clone()
                 .unwrap_or_else(|| "agent_event".to_string()),
             payload: payload_from_raw_body(&self.ingest.body),
-            projection: self.projection.clone(),
+            // Hub re-translates from payload; keep empty to save bandwidth.
+            conversation_id: self.conversation_id.clone(),
+            projection: Vec::new(),
             first_ts_ms: self.ingest.ts_ms,
             last_ts_ms: self.ingest.ts_ms,
             byte_len: self.byte_len,
@@ -69,14 +80,6 @@ pub fn wire_chunk_from_event_row(
     row: &EventRow,
 ) -> anyhow::Result<HostIngestChunk> {
     let seq = row.seq.max(0) as u64;
-    let projection = serde_json::from_slice::<Vec<UiEventMessage>>(&row.projection_json)
-        .unwrap_or_else(|error| {
-            vec![UiEventMessage::Error {
-                code: "local_projection_decode_failed".into(),
-                message: error.to_string(),
-                message_id: None,
-            }]
-        });
     let payload = payload_from_event_row(row);
     let payload_bytes = serde_json::to_vec(&payload)?;
     let checksum_sha256 = if let Some(sha256) = &row.artifact_sha256 {
@@ -91,7 +94,9 @@ pub fn wire_chunk_from_event_row(
         agent: agent_from_thread(thread),
         kind: "agent_event".to_string(),
         payload,
-        projection,
+        conversation_id: Some(thread.conversation_id.clone()).filter(|s| !s.is_empty()),
+        // Hub re-translates; empty projection on pull path too.
+        projection: Vec::new(),
         first_ts_ms: row.ts_ms,
         last_ts_ms: row.ts_ms,
         byte_len: event_row_body_len(row),

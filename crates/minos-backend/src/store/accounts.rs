@@ -28,7 +28,8 @@ pub struct AccountRow {
     pub last_login_at: Option<i64>,
 }
 
-const ACCOUNT_SELECT_SQLITE: &str = "SELECT account_id, email, minos_id, display_name, supabase_sub, created_at, last_login_at
+const ACCOUNT_SELECT_SQLITE: &str =
+    "SELECT account_id, email, minos_id, display_name, supabase_sub, created_at, last_login_at
                    FROM accounts";
 
 const ACCOUNT_SELECT_POSTGRES: &str = "SELECT account_id, email, minos_id, display_name,

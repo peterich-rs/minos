@@ -72,7 +72,7 @@ class HostCard extends StatelessWidget {
                     const SizedBox(width: MinosSpacing.xs),
                     Flexible(
                       child: Text(
-                        subtitle ?? (online ? '在线 · 可路由' : '离线'),
+                        subtitle ?? (online ? '设备在线 · 可路由' : '设备离线'),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.bodySmall?.copyWith(

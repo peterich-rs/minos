@@ -69,7 +69,6 @@ pub struct HostTokenRow {
     pub revoked_at_ms: Option<i64>,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostLinkRow {
     pub pair_id: String,
@@ -345,7 +344,6 @@ pub trait HostInstallationTokensRepository: Send + Sync {
 
     async fn revoke(&self, token_hash: &str, at_ms: i64) -> Result<bool, BackendError>;
 }
-
 
 #[async_trait]
 pub trait HostLinksRepository: Send + Sync {

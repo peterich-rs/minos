@@ -25,6 +25,59 @@ import { hasTimelineWorkingSet } from "@/shared/lib/message-history";
 import type { TranscriptItem } from "@/shared/lib/daemon";
 import { useReactionStore } from "@/features/chat/reaction-store";
 
+/**
+ * Debounced quiet re-list of conversation timeline (+ rail preview).
+ *
+ * Shared by conversation message push and session turn-end (idle/done):
+ * daemon `conversation_completion` writes `agent-result:…` then emits
+ * ConversationMessageAppended — either path can lag; one refresh covers both.
+ */
+function scheduleConversationTimelineRefresh(
+  get: WorkspaceGet,
+  conversationId: string,
+): void {
+  if (!conversationId) return;
+  const existing = conversationRefreshTimers.get(conversationId);
+  if (existing) clearTimeout(existing);
+  conversationRefreshTimers.set(
+    conversationId,
+    setTimeout(() => {
+      conversationRefreshTimers.delete(conversationId);
+      const st = get();
+      const projectId = st.conversations.find(
+        (c) => c.id === conversationId,
+      )?.projectId;
+      if (projectId) {
+        void get().loadConversations(projectId, { quiet: true });
+      }
+      const focused = st.focusedConversationId === conversationId;
+      const hasWorkingSet = hasTimelineWorkingSet(
+        st.messagesByConversation,
+        conversationId,
+        {
+          messageHistoryByConversation: st.messageHistoryByConversation,
+          timelineStatusByConversation: st.timelineStatusByConversation,
+        },
+      );
+      // Always refresh when this conversation is open or already has a window.
+      // Turn-end must not depend on conversation push alone.
+      if (!focused && !hasWorkingSet) {
+        // Background: mark dirty only (no invent Timeline for unopened convos).
+        // loadConversations above still updates rail preview/count.
+        return;
+      }
+      // conversation_completion may write a few hundred ms after Idle; burst
+      // re-list so agent-result lands without waiting for the next send.
+      void get().loadTimeline(conversationId, { quiet: true });
+      window.setTimeout(() => {
+        void get().loadTimeline(conversationId, { quiet: true });
+      }, 400);
+      window.setTimeout(() => {
+        void get().loadTimeline(conversationId, { quiet: true });
+      }, 1200);
+    }, 200),
+  );
+}
 
 export function createLiveIngressActions(
   set: WorkspaceSet,
@@ -125,31 +178,74 @@ export function createLiveIngressActions(
   applyManagerEvent: (ev) => {
     if (ev.kind === "sessionStateChanged") {
       const status = coerceUiSessionStatus(ev.status);
+      let conversationIdForTimeline: string | undefined;
       set((s) => {
+        const prev = s.sessionsById[ev.sessionId];
+        const known = findSessionRow(s, ev.sessionId);
         // Lifecycle only — hasPendingApproval prevents demote of needs_approval
         // while daemon still reports running (Grok park on permission/plan).
-        const entity = applyManagerLifecycleToEntity(
-          s.sessionsById[ev.sessionId],
+        let entity = applyManagerLifecycleToEntity(
+          prev,
           ev.sessionId,
           status,
           { lastTsMs: ev.atMs || undefined },
         );
+        // SessionAdded shells often lack conversationId; copy from list hydrate
+        // so projection can upsert into the inspector membership list.
+        if (!entity.conversationId && known?.conversationId) {
+          entity = patchSessionEntity(entity, ev.sessionId, {
+            conversationId: known.conversationId,
+            conversationTitle: known.conversationTitle,
+            agent: known.agent || entity.agent,
+            shortId: known.shortId || entity.shortId,
+            model: known.model || entity.model,
+            summary: known.summary || entity.summary,
+            parentId: known.parentId ?? entity.parentId,
+            messageCount: known.messageCount ?? entity.messageCount,
+            firstTsMs: known.firstTsMs ?? entity.firstTsMs,
+            lastTsMs: entity.lastTsMs ?? known.lastTsMs,
+          });
+        }
+        conversationIdForTimeline = entity.conversationId || known?.conversationId;
         return commitSessionEntity(s, entity, { elevateApprovalCount: false });
       });
+      // Turn end (idle/done/failed): conversation_completion may have just
+      // written agent-result into chat_messages. Conversation push can lag or
+      // drop; do not wait for livePush alone — quiet re-list the timeline.
+      if (
+        conversationIdForTimeline &&
+        (status === "idle" || status === "done" || status === "failed")
+      ) {
+        scheduleConversationTimelineRefresh(get, conversationIdForTimeline);
+      }
       return;
     }
     if (ev.kind === "sessionClosed") {
+      let conversationIdForTimeline: string | undefined;
       set((s) => {
-        const entity = patchSessionEntity(
-          s.sessionsById[ev.sessionId],
-          ev.sessionId,
-          {
-            daemonStatus: "done",
-            hasPendingApproval: false,
-          },
-        );
+        const prev = s.sessionsById[ev.sessionId];
+        const known = findSessionRow(s, ev.sessionId);
+        let entity = patchSessionEntity(prev, ev.sessionId, {
+          daemonStatus: "done",
+          hasPendingApproval: false,
+        });
+        if (!entity.conversationId && known?.conversationId) {
+          entity = patchSessionEntity(entity, ev.sessionId, {
+            conversationId: known.conversationId,
+            conversationTitle: known.conversationTitle,
+            agent: known.agent || entity.agent,
+            shortId: known.shortId || entity.shortId,
+            model: known.model || entity.model,
+            summary: known.summary || entity.summary,
+            parentId: known.parentId ?? entity.parentId,
+          });
+        }
+        conversationIdForTimeline = entity.conversationId || known?.conversationId;
         return commitSessionEntity(s, entity, { elevateApprovalCount: false });
       });
+      if (conversationIdForTimeline) {
+        scheduleConversationTimelineRefresh(get, conversationIdForTimeline);
+      }
       return;
     }
     if (ev.kind === "instanceCrashed") {
@@ -232,39 +328,29 @@ export function createLiveIngressActions(
       return;
     }
 
-    // Message append: debounced quiet re-list of chat_messages only.
-    // Without a Timeline working set: mark dirty, zero RPC.
+    // Message append / roster: debounced quiet re-list of chat_messages.
+    scheduleConversationTimelineRefresh(get, ev.conversationId);
+    // Background convos without a Timeline window: still mark dirty so open
+    // can force a hard load later if needed.
     const id = ev.conversationId;
-    const existing = conversationRefreshTimers.get(id);
-    if (existing) clearTimeout(existing);
-    conversationRefreshTimers.set(
+    const st = get();
+    const focused = st.focusedConversationId === id;
+    const hasWorkingSet = hasTimelineWorkingSet(
+      st.messagesByConversation,
       id,
-      setTimeout(() => {
-        conversationRefreshTimers.delete(id);
-        const st = get();
-        // Always refresh conversation list preview / messageCount for the
-        // owning project so the rail does not stay stale under livePush.
-        const projectId = st.conversations.find((c) => c.id === id)?.projectId;
-        if (projectId) {
-          void get().loadConversations(projectId, { quiet: true });
-        }
-        if (
-          !hasTimelineWorkingSet(st.messagesByConversation, id, {
-            messageHistoryByConversation: st.messageHistoryByConversation,
-            timelineStatusByConversation: st.timelineStatusByConversation,
-          })
-        ) {
-          set((s) => ({
-            timelineDirtyByConversation: {
-              ...s.timelineDirtyByConversation,
-              [id]: true,
-            },
-          }));
-          return;
-        }
-        void get().loadTimeline(id, { quiet: true });
-      }, 200),
+      {
+        messageHistoryByConversation: st.messageHistoryByConversation,
+        timelineStatusByConversation: st.timelineStatusByConversation,
+      },
     );
+    if (!focused && !hasWorkingSet) {
+      set((s) => ({
+        timelineDirtyByConversation: {
+          ...s.timelineDirtyByConversation,
+          [id]: true,
+        },
+      }));
+    }
   },
 
   };

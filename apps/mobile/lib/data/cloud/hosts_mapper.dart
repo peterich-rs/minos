@@ -50,11 +50,14 @@ LinkedHost mapHostSummaryJson(Object? json) {
   final linkedRaw = map['linked_at_ms'] ?? map['paired_at_ms'];
   final linkedAtMs = _asInt(linkedRaw);
   final online = map['online'] == true;
+  final lastSeenRaw = map['last_seen_at_ms'];
+  final lastSeenAtMs = _asInt(lastSeenRaw);
   return LinkedHost(
     hostInstallationId: id,
     hostDisplayName: name,
     linkedAtMs: linkedAtMs,
     online: online,
+    lastSeenAtMs: lastSeenAtMs > 0 ? lastSeenAtMs : linkedAtMs,
   );
 }
 

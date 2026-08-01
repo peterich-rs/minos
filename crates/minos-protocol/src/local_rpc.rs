@@ -117,9 +117,8 @@ pub trait LocalDaemonRpc {
     /// Fetch host installation identity + bootstrap nonce for Host Link.
     /// Registered as `minos_local_host_prepare_link` (D02 §7.2).
     #[method(name = "host_prepare_link")]
-    async fn host_prepare_link(
-        &self,
-    ) -> jsonrpsee::core::RpcResult<crate::HostPrepareLinkResponse>;
+    async fn host_prepare_link(&self)
+        -> jsonrpsee::core::RpcResult<crate::HostPrepareLinkResponse>;
 
     /// Sign `"{installation_id}:{nonce}:v1/hosts/link"` with the host key.
     #[method(name = "host_sign_link_proof")]

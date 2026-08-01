@@ -17,12 +17,12 @@ use crate::config::{
     DEFAULT_DB_MAX_CONNECTIONS, DEFAULT_TOKEN_TTL_SECS,
 };
 use crate::host_commands::{HostCommandService, RuntimeHostCommandService};
+use crate::host_link::HostLinkService;
 use crate::http::{self, BackendState, RouteContract};
 use crate::ingest::{translate::SessionTranslators, use_case::IngestUseCase};
 use crate::notifications::channels::composite::CompositeChannel;
 use crate::notifications::use_case::DefaultNotificationService;
 use crate::notifications::NotificationService;
-use crate::host_link::HostLinkService;
 use crate::project::ProjectService;
 use crate::realtime::{
     configure_peer_target_cache, CacheBackendKind, MessageBusBackend, MessageBusBackendKind,
@@ -106,6 +106,10 @@ pub struct AppContext {
     pub store: StoreHandle,
     pub token_ttl: Duration,
     pub ingest: Arc<IngestUseCase>,
+    /// Per-session agent translators for host live ingest (raw → UiEventMessage).
+    /// Shared with [`IngestUseCase`] so legacy Envelope::Ingest and HostIngest
+    /// share stateful projection.
+    pub translators: Arc<SessionTranslators>,
     pub realtime: Arc<RealtimeFanout>,
     pub notifications: Arc<dyn NotificationService>,
     pub instance_id: String,
@@ -196,6 +200,7 @@ impl AppContext {
             store,
             token_ttl,
             ingest,
+            translators,
             realtime,
             notifications,
             instance_id,
@@ -364,4 +369,3 @@ fn enum_names<T: clap::ValueEnum>() -> Vec<String> {
         })
         .collect()
 }
-

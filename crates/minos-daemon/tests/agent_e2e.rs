@@ -26,8 +26,8 @@ use std::time::Duration;
 
 use minos_agent_runtime::test_support::{FakeCodexServer, Step};
 use minos_backend::{
-    http::{router, BackendState},
     host_link::HostLinkService,
+    http::{router, BackendState},
     session::SessionRegistry,
     store,
 };
@@ -307,12 +307,7 @@ async fn register_formal_host(
     let linked = relay
         .state
         .host_link
-        .link_host(
-            host_id,
-            &account.account_id,
-            mobile_id,
-            Some("Test Mac"),
-        )
+        .link_host(host_id, &account.account_id, mobile_id, Some("Test Mac"))
         .await
         .map_err(|error| anyhow::anyhow!("host link failed: {error:?}"))?;
     let host_secret = DeviceSecret(linked.host_installation_token);

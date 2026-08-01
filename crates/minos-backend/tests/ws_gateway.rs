@@ -5,8 +5,8 @@ use minos_backend::{
     agent_sessions::{SendInputInput, StartAgentSessionInput},
     auth::use_case::AuthUseCase,
     conversations::{ConversationService, DefaultConversationService},
-    http::{router, BackendState},
     host_link::HostLinkService,
+    http::{router, BackendState},
     realtime::wire::{ClientFrame, ServerFrame},
     session::SessionRegistry,
     store,
@@ -118,6 +118,13 @@ async fn recv_server_frame(ws: &mut WsClient) -> anyhow::Result<ServerFrame> {
         match next {
             Some(Ok(Message::Text(text))) => {
                 if let Ok(frame) = serde_json::from_str::<ServerFrame>(&text) {
+                    // IM presence is fanout noise for most golden-path assertions.
+                    if matches!(
+                        &frame,
+                        ServerFrame::StreamEvent { kind, .. } if kind == "presence"
+                    ) {
+                        continue;
+                    }
                     return Ok(frame);
                 }
             }
@@ -1193,44 +1200,64 @@ async fn host_ingest_live_batch_fans_out_projection_to_subscribed_client() -> an
         other => panic!("expected host DurableEvent replay, got {other:?}"),
     }
 
-    let projection = vec![
-        UiEventMessage::MessageStarted {
-            message_id: "msg-live-1".into(),
-            role: minos_ui_protocol::MessageRole::Assistant,
-            started_at_ms: 2_000,
-        },
-        UiEventMessage::TextDelta {
-            message_id: "msg-live-1".into(),
-            text: minos_ui_protocol::DisplayPayload::inline("hello remote"),
-        },
-    ];
+    // Server translates raw Codex payloads; host projection is empty / ignored.
+    // item/started opens the assistant message; delta requires that state.
     send_client_frame(
         &mut host_ws,
         &ClientFrame::HostIngestLiveBatch {
             batch: minos_protocol::realtime::HostIngestLiveBatch {
                 batch_id: "batch-live-1".into(),
                 host_id,
-                chunks: vec![minos_protocol::realtime::HostIngestChunk {
-                    event_id: format!("{host_id}:{}:1", output.session_id),
-                    session_id: output.session_id.clone(),
-                    seq: 1,
-                    agent: minos_domain::AgentName::Codex,
-                    kind: "agent_event".into(),
-                    payload: serde_json::json!({
-                        "method": "item/agentMessage/delta",
-                        "params": { "delta": "hello remote" }
-                    }),
-                    projection: projection.clone(),
-                    first_ts_ms: 2_000,
-                    last_ts_ms: 2_000,
-                    byte_len: 32,
-                    checksum_sha256: "a".repeat(64),
-                }],
+                chunks: vec![
+                    minos_protocol::realtime::HostIngestChunk {
+                        event_id: format!("{host_id}:{}:1", output.session_id),
+                        session_id: output.session_id.clone(),
+                        seq: 1,
+                        agent: minos_domain::AgentName::Codex,
+                        kind: "agent_event".into(),
+                        payload: serde_json::json!({
+                            "method": "item/started",
+                            "params": {
+                                "item": {
+                                    "type": "agentMessage",
+                                    "id": "msg-live-1"
+                                }
+                            }
+                        }),
+                        conversation_id: Some(conversation.conversation_id.clone()),
+                        projection: vec![],
+                        first_ts_ms: 2_000,
+                        last_ts_ms: 2_000,
+                        byte_len: 64,
+                        checksum_sha256: "a".repeat(64),
+                    },
+                    minos_protocol::realtime::HostIngestChunk {
+                        event_id: format!("{host_id}:{}:2", output.session_id),
+                        session_id: output.session_id.clone(),
+                        seq: 2,
+                        agent: minos_domain::AgentName::Codex,
+                        kind: "agent_event".into(),
+                        payload: serde_json::json!({
+                            "method": "item/agentMessage/delta",
+                            "params": {
+                                "itemId": "msg-live-1",
+                                "delta": "hello remote"
+                            }
+                        }),
+                        conversation_id: Some(conversation.conversation_id.clone()),
+                        projection: vec![],
+                        first_ts_ms: 2_001,
+                        last_ts_ms: 2_001,
+                        byte_len: 48,
+                        checksum_sha256: "b".repeat(64),
+                    },
+                ],
             },
         },
     )
     .await?;
 
+    // One ack per accepted session (max seq across chunks in batch).
     match recv_server_frame(&mut host_ws).await? {
         ServerFrame::HostIngestAck {
             session_id,
@@ -1238,13 +1265,13 @@ async fn host_ingest_live_batch_fans_out_projection_to_subscribed_client() -> an
             batch_id,
         } => {
             assert_eq!(session_id, output.session_id);
-            assert_eq!(accepted_to_seq, 1);
+            assert_eq!(accepted_to_seq, 2);
             assert_eq!(batch_id.as_deref(), Some("batch-live-1"));
         }
         other => panic!("expected HostIngestAck, got {other:?}"),
     }
 
-    // Client should receive both projected UI events as StreamEvent.
+    // Client receives server-translated UI events (not host-supplied projection).
     let mut kinds = Vec::new();
     for _ in 0..2 {
         match recv_server_frame(&mut client_ws).await? {
@@ -1256,14 +1283,17 @@ async fn host_ingest_live_batch_fans_out_projection_to_subscribed_client() -> an
             } => {
                 assert_eq!(topic, format!("agent_session:{}", output.session_id));
                 assert_eq!(kind, "ui_event");
-                assert_eq!(seq, Some(1));
+                assert!(seq == Some(1) || seq == Some(2));
                 kinds.push(payload["kind"].as_str().unwrap_or_default().to_string());
             }
             other => panic!("expected StreamEvent fanout, got {other:?}"),
         }
     }
-    assert!(kinds.iter().any(|k| k == "message_started"));
-    assert!(kinds.iter().any(|k| k == "text_delta"));
+    assert!(
+        kinds.iter().any(|k| k == "message_started"),
+        "kinds={kinds:?}"
+    );
+    assert!(kinds.iter().any(|k| k == "text_delta"), "kinds={kinds:?}");
 
     let session = store::agent_sessions::get(&relay.pool, &output.session_id)
         .await?
@@ -1340,14 +1370,9 @@ async fn host_ingest_live_batch_records_approval_request() -> anyhow::Result<()>
                             "timeout_ms": 0
                         }
                     }),
-                    projection: vec![UiEventMessage::Raw {
-                        kind: "approval/request".into(),
-                        payload_json: serde_json::json!({
-                            "request_id": request_id,
-                            "method": "session/request_permission"
-                        })
-                        .to_string(),
-                    }],
+                    conversation_id: Some(conversation.conversation_id.clone()),
+                    // Host projection ignored; approvals come from raw payload.
+                    projection: vec![],
                     first_ts_ms: now_ms,
                     last_ts_ms: now_ms,
                     byte_len: 64,
@@ -1359,7 +1384,9 @@ async fn host_ingest_live_batch_records_approval_request() -> anyhow::Result<()>
     .await?;
 
     match recv_server_frame(&mut host_ws).await? {
-        ServerFrame::HostIngestAck { accepted_to_seq, .. } => {
+        ServerFrame::HostIngestAck {
+            accepted_to_seq, ..
+        } => {
             assert_eq!(accepted_to_seq, 1);
         }
         other => panic!("expected HostIngestAck, got {other:?}"),
@@ -1368,8 +1395,85 @@ async fn host_ingest_live_batch_records_approval_request() -> anyhow::Result<()>
     // Allow async approval side effects to settle.
     let row = wait_for_approval_row(&relay, request_id).await?;
     assert_eq!(row.agent_session_id, output.session_id);
-    assert_eq!(row.state, store::approval_requests::ApprovalRequestState::Pending);
+    assert_eq!(
+        row.state,
+        store::approval_requests::ApprovalRequestState::Pending
+    );
     assert_eq!(row.host_device_id, host_id);
+
+    Ok(())
+}
+
+/// Host-local session id (not cloud-started) is auto-registered when host is Linked.
+#[tokio::test]
+async fn host_ingest_auto_registers_unknown_session_when_linked() -> anyhow::Result<()> {
+    let relay = spawn_relay().await?;
+    let (account_id, phone_id) =
+        seed_client_account(&relay, "ws-host-ingest-autoreg@example.com").await?;
+    let host_id = seed_host(&relay).await?;
+    store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
+
+    let local_session_id = "57776df1-db66-4e7d-a2db-177a11f53c20";
+    let local_conversation_id = "desktop-local-conv-1";
+
+    let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
+    let mut host_ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
+    match recv_server_frame(&mut host_ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
+    }
+
+    send_client_frame(
+        &mut host_ws,
+        &ClientFrame::HostIngestLiveBatch {
+            batch: minos_protocol::realtime::HostIngestLiveBatch {
+                batch_id: "batch-autoreg-1".into(),
+                host_id,
+                chunks: vec![minos_protocol::realtime::HostIngestChunk {
+                    event_id: format!("{host_id}:{local_session_id}:1"),
+                    session_id: local_session_id.into(),
+                    seq: 1,
+                    agent: minos_domain::AgentName::Codex,
+                    kind: "agent_event".into(),
+                    payload: serde_json::json!({
+                        "method": "item/started",
+                        "params": {
+                            "item": { "type": "agentMessage", "id": "msg-auto-1" }
+                        }
+                    }),
+                    conversation_id: Some(local_conversation_id.into()),
+                    projection: vec![],
+                    first_ts_ms: 3_000,
+                    last_ts_ms: 3_000,
+                    byte_len: 80,
+                    checksum_sha256: "c".repeat(64),
+                }],
+            },
+        },
+    )
+    .await?;
+
+    match recv_server_frame(&mut host_ws).await? {
+        ServerFrame::HostIngestAck {
+            session_id,
+            accepted_to_seq,
+            ..
+        } => {
+            assert_eq!(session_id, local_session_id);
+            assert_eq!(accepted_to_seq, 1);
+        }
+        other => panic!("expected HostIngestAck after auto-register, got {other:?}"),
+    }
+
+    let session = store::agent_sessions::get(&relay.pool, local_session_id)
+        .await?
+        .expect("formal session auto-registered");
+    assert_eq!(session.conversation_id, local_conversation_id);
+    assert_eq!(
+        session.host_device_id.as_deref(),
+        Some(host_id.to_string().as_str())
+    );
+    assert_eq!(session.status, "running");
 
     Ok(())
 }

@@ -239,7 +239,8 @@ Migrations 为 latest-only 单一初始 schema（`sqlx::migrate!`）：
 - **首次成功 insert 副作用**（golden path）：
   1. `agent_sessions.status` 若为 `pending` 则提升为 `running`
   2. 从 payload 识别 `approval/request` / `approval/timeout`，写入/解决 `approval_requests`（支撑远程 `POST /v1/approvals/respond`）
-  3. 用 host 自带 `projection` 同步 formal turn/session 状态
+  3. 若 formal `agent_sessions` 不存在但 host 已 Link：用 chunk 上的 `conversation_id`（或 `host-local-session:{id}`）**自动登记** formal session（必要时 ensure 云端 group conversation），再 accept ingest
+  4. **server** 用 `SessionTranslators`（`minos-ui-protocol::translate_*`）把 raw 投成 `UiEventMessage`，同步 formal turn/session 状态并 fanout；host 自带 `projection` 忽略
   4. 向 `agent_session:{id}` 的 `/ws/client` 订阅者 fanout `StreamEvent{kind: ui_event}`
 - 旧 envelope 路径的 peer-target 解析：`host_links` → 同 account 下 mobile/browser/desktop installations（带缓存；Host Link/unlink 时 invalidate）
 - `HostGapManifest` 落 `thread_sync_state` 后，backend 立即按 manifest range 通过同一条 host WS 发 `PullIngestRange`。

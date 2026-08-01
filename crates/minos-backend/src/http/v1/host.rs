@@ -68,10 +68,7 @@ async fn post_bootstrap_nonce(
     }
     let nonce = state
         .bootstrap_nonces
-        .issue(
-            &req.installation_id,
-            chrono::Utc::now().timestamp_millis(),
-        )
+        .issue(&req.installation_id, chrono::Utc::now().timestamp_millis())
         .await
         .map_err(|error| {
             tracing::warn!(
@@ -178,7 +175,7 @@ async fn post_installations_self(
             link_display_name: display_name,
             paired_at_ms: pair.paired_at_ms,
             last_active_at_ms,
-            online: is_mobile_account_online(&state, &pair.mobile_account_id),
+            online: is_account_online(&state, &pair.mobile_account_id),
         });
     }
 
@@ -193,7 +190,11 @@ async fn post_installations_self(
     )))
 }
 
-fn is_mobile_account_online(state: &BackendState, account_id: &str) -> bool {
+/// IM **account online**: at least one Mobile client has a live `/ws/client`
+/// session for this account (user reachable on the phone app).
+///
+/// Not browser/desktop account shells — product account presence is mobile.
+fn is_account_online(state: &BackendState, account_id: &str) -> bool {
     state.registry.mobile_client_session_count(account_id) > 0
 }
 

@@ -72,7 +72,6 @@ pub enum BackendError {
     #[error("host already linked to another account")]
     HostLinkedElsewhere { host_installation_id: String },
 
-
     /// HS256 JWT signing failed (e.g. malformed key).
     #[error("jwt sign error: {message}")]
     JwtSign { message: String },

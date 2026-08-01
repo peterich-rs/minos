@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   useWorkspaceStore,
   type ProjectSession,
@@ -54,28 +54,55 @@ export function Timeline({ conversationId }: { conversationId: string }) {
     bootEpoch,
   ]);
 
-  // Degraded quiet poll of Timeline only when live push is off.
-  // Live path relies on applyConversationEvent → conditional loadTimeline.
+  // Quiet poll recovery:
+  // - expectHistoryEmpty: count/preview says messages exist but window empty.
+  // - hasLiveSession: agent still running (may post agent-result mid-turn via
+  //   post_conversation_update); keep re-listing even under livePush.
+  // - trailing after live→idle: conversation_completion write can lag Idle by
+  //   hundreds of ms; one short burst catches agent-result without forever poll.
+  // - phase error + !livePush: degraded reconnect.
   const hasLiveSession = sessions.some(
     (s) => s.status === "running" || s.status === "needs_approval",
   );
   const expectHistoryEmpty =
     (conversation?.messageCount ?? 0) > 0 && messagesLength === 0;
+  const wasLiveRef = useRef(false);
+  const [trailRefresh, setTrailRefresh] = useState(false);
+  useEffect(() => {
+    if (hasLiveSession) {
+      wasLiveRef.current = true;
+      setTrailRefresh(false);
+      return;
+    }
+    if (!wasLiveRef.current) return;
+    wasLiveRef.current = false;
+    setTrailRefresh(true);
+    const t = window.setTimeout(() => setTrailRefresh(false), 3500);
+    return () => window.clearTimeout(t);
+  }, [hasLiveSession]);
+
   useEffect(() => {
     if (source !== "daemon") return;
-    if (livePush) return;
     const needPoll =
-      hasLiveSession || phase === "error" || expectHistoryEmpty;
+      expectHistoryEmpty ||
+      hasLiveSession ||
+      trailRefresh ||
+      (!livePush && phase === "error");
     if (!needPoll) return;
+    // Immediate refresh when entering trail (turn just ended).
+    if (trailRefresh || hasLiveSession) {
+      void loadTimeline(conversationId, { quiet: true });
+    }
     const id = window.setInterval(() => {
       void loadTimeline(conversationId, { quiet: true });
-    }, 2500);
+    }, 2000);
     return () => window.clearInterval(id);
   }, [
     conversationId,
     source,
     livePush,
     hasLiveSession,
+    trailRefresh,
     expectHistoryEmpty,
     phase,
     loadTimeline,

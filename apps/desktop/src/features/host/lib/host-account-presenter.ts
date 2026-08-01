@@ -1,7 +1,10 @@
 /**
  * Pure presenter for Host page account + link chrome (T-ui-06 / T-host-04).
  *
- * States: Signed out / Signed in Local only / Linked / Error
+ * Sign-in is owned by the root LoginPage gate. Host only shows identity +
+ * Link / Unlink after AppShell is entered.
+ *
+ * States: Signed out (defensive) / Signed in Local only / Linked / Error
  */
 
 export type AccountAuthMode = "login" | "register";
@@ -12,8 +15,13 @@ export type HostAccountInput = {
   email: string | null;
   /** Daemon usable for local coding. */
   daemonReady: boolean;
-  /** Host Link active (relay / backend collaboration). */
+  /** Host Link active (account ↔ this Mac binding). */
   relayLinked: boolean;
+  /**
+   * Live hub `/ws/host` (IM device online). `undefined` when unknown.
+   * Distinct from [relayLinked].
+   */
+  hubOnline?: boolean;
   hostDisplayName: string | null;
   /** In-flight sign-in / link / unlink. */
   busy: boolean;
@@ -29,7 +37,6 @@ export type HostAccountViewModel = {
   statusLabel: string;
   statusHint: string;
   emailLabel: string | null;
-  showSignInForm: boolean;
   showSignOut: boolean;
   /** Primary CTA for Host Link when signed in + daemon ready + not linked. */
   showLinkCta: boolean;
@@ -47,15 +54,15 @@ export function presentHostAccount(
   const email = input.email?.trim() || null;
   const errorMessage = input.error?.trim() || null;
 
+  // Root gate should prevent AppShell without a session; keep a defensive
+  // empty state if store is briefly empty after sign-out.
   if (!input.signedIn) {
     return {
       statusKind: errorMessage ? "error" : "signed_out",
       statusLabel: errorMessage ? "Sign-in error" : "Signed out",
-      statusHint: input.cloudConfigured
-        ? "Sign in with your Minos account to link this Mac for phone control."
-        : "Set VITE_MINOS_BACKEND_URL (and optional Supabase) to enable cloud account.",
+      statusHint:
+        "You will return to the sign-in screen. Sign in again to manage Host Link.",
       emailLabel: null,
-      showSignInForm: true,
       showSignOut: false,
       showLinkCta: false,
       linkCtaLabel: "Link this Mac",
@@ -68,12 +75,22 @@ export function presentHostAccount(
   }
 
   if (input.relayLinked) {
+    const hubHint =
+      input.hubOnline === true
+        ? "Hub online — Mobile sees this device as online."
+        : input.hubOnline === false
+          ? "Hub offline — linked but no live /ws/host yet; Mobile shows device offline."
+          : "Linked. Hub online appears when the daemon holds a live /ws/host.";
     return {
       statusKind: errorMessage ? "error" : "linked",
-      statusLabel: "Linked",
-      statusHint: "Remote clients can reach this Mac through your account.",
+      statusLabel:
+        input.hubOnline === true
+          ? "Linked · Hub online"
+          : input.hubOnline === false
+            ? "Linked · Hub offline"
+            : "Linked",
+      statusHint: hubHint,
       emailLabel: email,
-      showSignInForm: false,
       showSignOut: true,
       showLinkCta: false,
       linkCtaLabel: "Link this Mac",
@@ -99,7 +116,6 @@ export function presentHostAccount(
     statusHint:
       "Signed in. Link this Mac so phone and web can route to your daemon.",
     emailLabel: email,
-    showSignInForm: false,
     showSignOut: true,
     showLinkCta: true,
     linkCtaLabel: input.busy ? "Linking…" : "Link this Mac",

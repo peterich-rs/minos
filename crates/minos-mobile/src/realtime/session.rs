@@ -210,6 +210,33 @@ fn dispatch_event(
                     ts_ms: chrono::Utc::now().timestamp_millis(),
                 });
             }
+            "presence" => {
+                // IM presence: host device online (account:{id} topic) or
+                // peer account-client online (host:{id}). Surface as Raw UI
+                // event so Flutter can patch host lists without a full refresh.
+                tracing::info!(
+                    topic,
+                    online = payload.get("online").and_then(|v| v.as_bool()),
+                    installation_id = payload
+                        .get("installation_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(""),
+                    principal_kind = payload
+                        .get("principal_kind")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(""),
+                    "presence stream event"
+                );
+                let _ = ui_events_tx.send(UiEventFrame {
+                    session_id: String::new(),
+                    seq: 0,
+                    ui: UiEventMessage::Raw {
+                        kind: "presence".into(),
+                        payload_json: payload.to_string(),
+                    },
+                    ts_ms: chrono::Utc::now().timestamp_millis(),
+                });
+            }
             _ => {
                 tracing::debug!(kind, topic, "unhandled stream event");
             }

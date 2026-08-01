@@ -805,7 +805,7 @@ class _AgentEditorSheetState extends ConsumerState<AgentEditorSheet> {
               _hostLabelForId(widget.hosts, host.hostDeviceId) ??
               host.hostDeviceId,
           subtitle:
-              '${host.hostDeviceId} · ${host.online ? 'Runtime 在线' : 'Runtime 离线'}',
+              '${host.hostDeviceId} · ${host.online ? '设备在线' : '设备离线'}',
         ),
     ];
     final selected = await _showPickerSheet<String?>(
@@ -1997,7 +1997,7 @@ class _DeviceRosterTile extends StatelessWidget {
     final title = host.hostDisplayName.trim().isEmpty
         ? host.hostDeviceId
         : host.hostDisplayName.trim();
-    final runtimeLabel = host.online ? 'Runtime 在线' : 'Runtime 离线';
+    final runtimeLabel = host.online ? '设备在线' : '设备离线';
     final stateLabel = isActive
         ? '当前路由 · $runtimeLabel · App ${_connectionLabel(connection)}'
         : '已配对 · $runtimeLabel';

@@ -372,6 +372,9 @@ export function createUseCasesActions(
         resolvedId,
       );
       patchDelivery("sent", messageSeq);
+      // Do not wait for agent start: re-list timeline so durable user bubble
+      // appears even if later routing/start throws or UI lost the optimistic row.
+      void get().loadTimeline(conversationId, { quiet: true });
 
       let sessionId: string | undefined;
       // Use-case: need session list for reuse / #short before routing.
@@ -510,6 +513,7 @@ export function createUseCasesActions(
         messageId,
       );
       patchDelivery("sent", messageSeq);
+      void get().loadTimeline(conversationId, { quiet: true });
 
       const mentionProfiles = await loadMentionProfiles();
       const routed = parseAgentRouting(messageBody, mentionProfiles);

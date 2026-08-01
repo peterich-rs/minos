@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 import { ChevronRight, FolderOpen, X } from "lucide-react";
 import {
   AuxiliaryPanel,
@@ -64,11 +64,58 @@ export function SessionInspector({
     void loadInspector(conversationId);
   }, [conversationId, detailsOpen, source, loadInspector, bootEpoch]);
 
+  // While any session is live, quiet-relist even if livePush is healthy.
+  // Manager SessionStateChanged can lag or miss projection after SessionAdded
+  // shells; Sessions tab remount re-list is what users noticed "fixes" status.
+  const hasLiveSession = sessions.some(
+    (s) => s.status === "running" || s.status === "needs_approval",
+  );
+  useEffect(() => {
+    if (source !== "daemon" || !conversationId || !detailsOpen) return;
+    if (!hasLiveSession) return;
+    const id = window.setInterval(() => {
+      void loadInspector(conversationId, { quiet: true });
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [conversationId, detailsOpen, source, hasLiveSession, loadInspector]);
+
   const conversation = conversations.find((c) => c.id === conversationId);
   const project = projects.find((p) => p.id === projectId);
-  const roots = sessions.filter((s) => !s.parentId);
+  // Subscribe to Entity map so Running→Idle paints without waiting for list re-list.
+  const sessionsById = useWorkspaceStore((s) => s.sessionsById);
+  const sessionsWithEntity = useMemo(() => {
+    return sessions.map((row) => {
+      const ent = sessionsById[row.id];
+      if (!ent) return row;
+      if (
+        ent.conversationId &&
+        ent.conversationId !== conversationId
+      ) {
+        return row;
+      }
+      if (
+        ent.status === row.status &&
+        (ent.summary || "") === (row.summary || "") &&
+        ent.lastTsMs === row.lastTsMs
+      ) {
+        return row;
+      }
+      return {
+        ...row,
+        status: ent.status,
+        summary: ent.summary || row.summary,
+        lastTsMs: ent.lastTsMs ?? row.lastTsMs,
+        needsContinue: ent.needsContinue ?? row.needsContinue,
+        messageCount: ent.messageCount ?? row.messageCount,
+      };
+    });
+  }, [sessions, sessionsById, conversationId]);
+  const roots = sessionsWithEntity.filter((s) => !s.parentId);
+  const selectedFromList = sessionsWithEntity.find(
+    (s) => s.id === selectedSessionId,
+  );
   const selected =
-    sessions.find((s) => s.id === selectedSessionId) ??
+    selectedFromList ??
     (selectedEntity && selectedEntity.conversationId === conversationId
       ? ({
           id: selectedEntity.sessionId,

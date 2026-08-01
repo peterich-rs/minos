@@ -330,7 +330,6 @@ impl DaemonHandle {
         Ok(self.inner.peers.lock().unwrap().clone())
     }
 
-
     /// Forget the currently paired peer. Calls the relay first and, on
     /// success, clears the in-memory mirror. The relay will still echo an
     /// `Event::Unpaired`, which is now just a benign in-memory re-apply.

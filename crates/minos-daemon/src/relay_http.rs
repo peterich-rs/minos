@@ -37,13 +37,10 @@ struct BootstrapNonceData {
     nonce: String,
 }
 
-
-
 #[derive(Debug, Deserialize)]
 struct ResponseEnvelope<T> {
     data: T,
 }
-
 
 #[derive(Debug, Deserialize)]
 struct HostSelfData {
@@ -71,7 +68,6 @@ struct ErrorBody {
     code: String,
     message: String,
 }
-
 
 pub struct RelayHttpClient {
     client: Client,
@@ -129,9 +125,6 @@ impl RelayHttpClient {
             host_signing_key,
         })
     }
-
-
-
 
     pub async fn forget_peer_device(
         &self,

@@ -70,6 +70,8 @@ class HostsRepository {
             hostDisplayName: h.hostDisplayName,
             linkedAtMs: platformInt64ToInt(h.pairedAtMs),
             online: h.online,
+            // FRB DTO has no last_seen yet; use linked time as cold fallback.
+            lastSeenAtMs: platformInt64ToInt(h.pairedAtMs),
           ),
         )
         .toList(growable: false);

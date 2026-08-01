@@ -10,8 +10,8 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use minos_backend::{
     auth::use_case::AuthUseCase,
-    http::{router, BackendState},
     host_link::HostLinkService,
+    http::{router, BackendState},
     session::SessionRegistry,
     store,
 };

@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 use chrono::{TimeZone, Utc};
 use futures_util::{SinkExt, StreamExt};
 use minos_domain::{DeviceId, DeviceSecret, MinosError, PeerState, RelayLinkState};
-use minos_protocol::realtime::{ClientFrame, ServerFrame};
+use minos_protocol::realtime::{ClientFrame, ServerFrame, PRESENCE_STREAM_KIND};
 use minos_protocol::HostPeerSummary;
 use minos_transport::backoff::delay_for_attempt;
 use serde_json::Value;
@@ -60,7 +60,6 @@ const RELAY_PING_INTERVAL: Duration = Duration::from_secs(30);
 const RELAY_PONG_TIMEOUT: Duration = Duration::from_secs(45);
 const HOST_COMMAND_RESULT_CACHE_CAPACITY: usize = 512;
 const TOKEN_WAIT_POLL_INTERVAL: Duration = Duration::from_secs(5);
-const PEER_PRESENCE_REFRESH_INTERVAL: Duration = Duration::from_secs(15);
 
 type HostCommandCache = Arc<Mutex<HashMap<String, HostCommandCacheEntry>>>;
 
@@ -274,7 +273,6 @@ impl RelayClient {
         );
         Ok(minos_protocol::HostApplyLinkTokenResponse { linked: true })
     }
-
 
     /// Back-compat helper for callers that still think in terms of a
     /// single paired device. Deletes the first currently paired row, if
@@ -577,6 +575,9 @@ async fn run_once(
     Box::pin(dispatch_loop(ws, ctx, shutdown_rx)).await
 }
 
+/// Cold snapshot of linked account clients (online / last_active).
+/// Call sites: WS upgrade, presence StreamEvent, host-command path that
+/// needs fresh peer routing — never on a timer.
 async fn refresh_peers_from_backend(ctx: &DispatchCtx, secret: Option<&DeviceSecret>) {
     let Some(secret) = secret else {
         apply_peers_snapshot(ctx, Vec::new());
@@ -588,7 +589,7 @@ async fn refresh_peers_from_backend(ctx: &DispatchCtx, secret: Option<&DeviceSec
             tracing::warn!(
                 target: "minos_daemon::relay_client",
                 error = %e,
-                "failed to refresh paired peers after relay connect/event",
+                "failed to refresh paired peers",
             );
         }
     }
@@ -643,12 +644,14 @@ async fn dispatch_loop(
     let (mut sink, mut stream) = ws.split();
     let mut heartbeat = tokio::time::interval(RELAY_PING_INTERVAL);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut peer_refresh = tokio::time::interval(PEER_PRESENCE_REFRESH_INTERVAL);
-    peer_refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_pong_at = Instant::now();
+    // First tick is immediate; skip so we do not probe right after Hello.
     heartbeat.tick().await;
-    peer_refresh.tick().await;
 
+    // Peer presence is event-driven only:
+    // - snapshot once after WS upgrade (caller)
+    // - StreamEvent kind=presence → refresh_peers_from_backend
+    // No periodic poll (avoids dual SSOT with live presence pushes).
     loop {
         tokio::select! {
             biased;
@@ -749,10 +752,6 @@ async fn dispatch_loop(
                     );
                     return CycleOutcome::Reconnect;
                 }
-            }
-            _ = peer_refresh.tick() => {
-                let secret = ctx.secret.lock().ok().and_then(|guard| guard.clone());
-                refresh_peers_from_backend(ctx, secret.as_ref()).await;
             }
         }
     }
@@ -878,13 +877,30 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
                 "server force-closed the connection"
             );
         }
-        ServerFrame::StreamEvent { kind, topic, .. } => {
-            tracing::debug!(
-                target: "minos_daemon::relay_client",
-                kind,
-                topic,
-                "ignoring stream event on host side"
-            );
+        ServerFrame::StreamEvent {
+            kind,
+            topic,
+            payload,
+            ..
+        } => {
+            if kind == PRESENCE_STREAM_KIND {
+                tracing::info!(
+                    target: "minos_daemon::relay_client",
+                    topic,
+                    payload = %payload,
+                    "presence stream event; refreshing peer snapshot"
+                );
+                // Account-client online/offline on host:{id}; refresh HTTP list.
+                let secret = ctx.secret.lock().ok().and_then(|g| g.clone());
+                refresh_peers_from_backend(ctx, secret.as_ref()).await;
+            } else {
+                tracing::debug!(
+                    target: "minos_daemon::relay_client",
+                    kind,
+                    topic,
+                    "ignoring stream event on host side"
+                );
+            }
         }
         ServerFrame::SnapshotRequired { topic, .. } => {
             tracing::warn!(
@@ -1149,7 +1165,6 @@ fn store_last_error(slot: &Arc<StdMutex<Option<MinosError>>>, err: MinosError) {
         *guard = Some(err);
     }
 }
-
 
 fn is_auth_error(error: &MinosError) -> bool {
     matches!(

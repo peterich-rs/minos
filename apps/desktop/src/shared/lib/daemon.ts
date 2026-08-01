@@ -16,6 +16,11 @@ export type DaemonConnection = {
   source: string;
   /** This process owns an in-process daemon (TUI-style). Diagnostics only. */
   managed: boolean;
+  /**
+   * Hub device online: managed daemon live `/ws/host` to minos-backend.
+   * Distinct from Host Link (account binding) and local daemon IPC.
+   */
+  hubOnline?: boolean;
 };
 
 export type DaemonProject = {
@@ -333,16 +338,28 @@ export const daemonApi = {
       priority: patch.priority ?? null,
       progress: patch.progress ?? null,
     }),
-  appendUserMessage: (
+  appendUserMessage: async (
     conversationId: string,
     body: string,
     messageId: string,
-  ) =>
-    call<{ messageSeq: number }>("daemon_append_user_message", {
-      conversationId,
-      body,
-      messageId,
-    }),
+  ) => {
+    // Tauri historically returned a bare i64; prefer { messageSeq }.
+    const raw = await call<number | { messageSeq: number }>(
+      "daemon_append_user_message",
+      {
+        conversationId,
+        body,
+        messageId,
+      },
+    );
+    if (typeof raw === "number") {
+      return { messageSeq: raw };
+    }
+    if (raw && typeof raw.messageSeq === "number") {
+      return raw;
+    }
+    throw new Error("daemon_append_user_message: invalid response");
+  },
   listClis: () =>
     call<
       {

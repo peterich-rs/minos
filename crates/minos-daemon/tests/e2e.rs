@@ -15,8 +15,8 @@ use std::time::Duration;
 use http_body_util::BodyExt as _;
 use minos_backend::{
     auth::jwt,
-    http::{router, BackendState},
     host_link::HostLinkService,
+    http::{router, BackendState},
     session::SessionRegistry,
     store,
 };
@@ -216,8 +216,7 @@ async fn register_formal_host(relay: &Relay, host_id: DeviceId) -> anyhow::Resul
         0,
     )
     .await?;
-    let account =
-        store::accounts::create(&relay.state.store, "relay-e2e@example.com").await?;
+    let account = store::accounts::create(&relay.state.store, "relay-e2e@example.com").await?;
     let mobile_id = DeviceId::new();
     store::device_installations::insert_device(
         &relay.state.store,
@@ -237,12 +236,7 @@ async fn register_formal_host(relay: &Relay, host_id: DeviceId) -> anyhow::Resul
     let linked = relay
         .state
         .host_link
-        .link_host(
-            host_id,
-            &account.account_id,
-            mobile_id,
-            Some("Test Mac"),
-        )
+        .link_host(host_id, &account.account_id, mobile_id, Some("Test Mac"))
         .await
         .map_err(|error| anyhow::anyhow!("host link failed: {error:?}"))?;
     let host_secret = DeviceSecret(linked.host_installation_token);

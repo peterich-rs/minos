@@ -4,8 +4,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ed25519_dalek::{Signer, SigningKey};
-use minos_backend::http;
 use minos_backend::auth::jwt;
+use minos_backend::http;
 use minos_backend::http::test_support::{backend_state, TEST_JWT_SECRET};
 use minos_backend::http::v1::hosts::LINK_PATH;
 use minos_backend::session::SessionHandle;
@@ -26,12 +26,7 @@ fn public_key(signing_key: &SigningKey) -> String {
     )
 }
 
-fn signature(
-    signing_key: &SigningKey,
-    installation_id: &str,
-    nonce: &str,
-    path: &str,
-) -> String {
+fn signature(signing_key: &SigningKey, installation_id: &str, nonce: &str, path: &str) -> String {
     let payload = format!("{installation_id}:{nonce}:{path}");
     format!(
         "ed25519-sig:{}",
@@ -75,10 +70,7 @@ async fn get_json(
     common::send(app, builder.body(Body::empty()).unwrap()).await
 }
 
-async fn register_desktop(
-    state: &http::BackendState,
-    email: &str,
-) -> (String, String, String) {
+async fn register_desktop(state: &http::BackendState, email: &str) -> (String, String, String) {
     let installation_id = uuid::Uuid::new_v4().to_string();
     let device_id = uuid::Uuid::parse_str(&installation_id)
         .map(DeviceId)
@@ -152,11 +144,9 @@ async fn host_link_unlink_list_round_trip() {
     assert_eq!(body["data"]["link"]["host_display_name"], "Studio Mac");
     assert!(body["data"]["link"]["linked_at_ms"].as_i64().unwrap() > 0);
 
-    assert!(
-        host_links::exists(&state.store, host, &account_id)
-            .await
-            .unwrap()
-    );
+    assert!(host_links::exists(&state.store, host, &account_id)
+        .await
+        .unwrap());
     let host_row = device_installations::get_device(&state.store, host)
         .await
         .unwrap()
@@ -190,11 +180,9 @@ async fn host_link_unlink_list_round_trip() {
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT, "body={body}");
-    assert!(
-        !host_links::exists(&state.store, host, &account_id)
-            .await
-            .unwrap()
-    );
+    assert!(!host_links::exists(&state.store, host, &account_id)
+        .await
+        .unwrap());
     assert!(state.registry.get(host).is_none());
 
     // Token must be revoked (verify_active_token returns None)
@@ -213,8 +201,7 @@ async fn host_link_unlink_list_round_trip() {
 async fn multi_host_list_for_account() {
     let state = backend_state().await;
     let mut app = http::router(state.clone());
-    let (access, account_id, _) =
-        register_desktop(&state, "multi-host-list@example.com").await;
+    let (access, account_id, _) = register_desktop(&state, "multi-host-list@example.com").await;
     let auth = format!("Bearer {access}");
 
     for (seed, name) in [(31_u8, "Mac A"), (32, "Mac B")] {
@@ -330,8 +317,7 @@ async fn host_already_linked_elsewhere_returns_409() {
 async fn same_account_re_link_rotates_token() {
     let state = backend_state().await;
     let mut app = http::router(state.clone());
-    let (access, account_id, _) =
-        register_desktop(&state, "re-link-rotate@example.com").await;
+    let (access, account_id, _) = register_desktop(&state, "re-link-rotate@example.com").await;
     let auth = format!("Bearer {access}");
 
     let host = DeviceId::new();
@@ -379,11 +365,9 @@ async fn same_account_re_link_rotates_token() {
         .unwrap()
         .to_string();
     assert_ne!(token1, token2);
-    assert!(
-        host_links::exists(&state.store, host, &account_id)
-            .await
-            .unwrap()
-    );
+    assert!(host_links::exists(&state.store, host, &account_id)
+        .await
+        .unwrap());
 
     let old_hash = minos_backend::host_link::sha256_hex(&token1);
     let active_old = host_installation_tokens::verify_active_token(
@@ -393,7 +377,10 @@ async fn same_account_re_link_rotates_token() {
     )
     .await
     .unwrap();
-    assert!(active_old.is_none(), "prior token must be revoked on re-link");
+    assert!(
+        active_old.is_none(),
+        "prior token must be revoked on re-link"
+    );
 
     let new_hash = minos_backend::host_link::sha256_hex(&token2);
     let active_new = host_installation_tokens::verify_active_token(

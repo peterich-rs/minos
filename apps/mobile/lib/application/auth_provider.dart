@@ -66,8 +66,8 @@ class AuthController extends _$AuthController {
     };
     if (frame is AuthStateFrame_Authenticated && !_wsResumed) {
       _wsResumed = true;
-      // Best-effort: a missing pairing snapshot or an unreachable Mac
-      // surfaces on connectionStateProvider — don't block the auth flow.
+      // Best-effort: missing host link / offline Mac surfaces via
+      // connectionStateProvider — don't block the auth flow.
       unawaited(_repository.resumePersistedSession().catchError((_) {}));
     } else if (frame is AuthStateFrame_Unauthenticated) {
       _wsResumed = false;

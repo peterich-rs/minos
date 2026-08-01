@@ -11,10 +11,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::bearer;
 use crate::auth::host_bootstrap::{self, HostBootstrapError, HostBootstrapProof};
+use crate::host_link::HostLinkError;
 use crate::http::error_response::{err_json as err_body, ErrorEnvelope};
 use crate::http::v1::contract::{request_id, ResponseEnvelope};
 use crate::http::BackendState;
-use crate::host_link::HostLinkError;
 
 pub const LINK_PATH: &str = "v1/hosts/link";
 
@@ -65,6 +65,9 @@ struct HostSummary {
     host_display_name: String,
     linked_at_ms: i64,
     online: bool,
+    /// Durable last activity from `device_installations.last_seen_at_ms`.
+    /// Live online is `registry`; cold path is this timestamp.
+    last_seen_at_ms: i64,
 }
 
 async fn post_link(
@@ -212,6 +215,7 @@ async fn get_hosts(
                     err_body("internal", e.to_string()),
                 )
             })?;
+        let last_seen_at_ms = row.as_ref().map(|r| r.last_seen_at).unwrap_or(0);
         let host_display_name = pair
             .link_display_name
             .filter(|name| !name.trim().is_empty())
@@ -221,7 +225,9 @@ async fn get_hosts(
             host_installation_id: pair.host_device_id.to_string(),
             host_display_name,
             linked_at_ms: pair.paired_at_ms,
+            // IM **device online**: host installation has live `/ws/host`.
             online: state.registry.get(pair.host_device_id).is_some(),
+            last_seen_at_ms,
         });
     }
 

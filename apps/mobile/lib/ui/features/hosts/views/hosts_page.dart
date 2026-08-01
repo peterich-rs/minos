@@ -101,9 +101,9 @@ class HostsPage extends ConsumerWidget {
                               .setActive(host.hostDeviceId),
                           subtitle: host.online
                               ? (host.hostDeviceId == activeHostId
-                                    ? '在线 · 当前路由目标'
-                                    : '在线 · 点按设为路由目标')
-                              : '离线 · Desktop 需保持 Link 并连接',
+                                    ? '设备在线 · 当前路由目标'
+                                    : '设备在线 · 点按设为路由目标')
+                              : _offlineSubtitle(ref, host.hostDeviceId),
                         );
                       },
                     );
@@ -135,11 +135,24 @@ class HostsPage extends ConsumerWidget {
 
   static String _connectionSubtitle(ConnectionState? state) {
     return switch (state) {
-      ConnectionState_Connected() => '实时通道已连接',
-      ConnectionState_Reconnecting(:final attempt) => '重连中 #$attempt',
+      ConnectionState_Connected() => '账号在线 · 实时通道已连接',
+      ConnectionState_Reconnecting(:final attempt) => '账号重连中 #$attempt',
       ConnectionState_Pairing() => '建立实时连接…',
-      _ => '实时通道离线',
+      _ => '账号离线 · 实时通道未连接',
     };
+  }
+
+  /// Device offline subtitle; include last_seen when known.
+  static String _offlineSubtitle(WidgetRef ref, String hostId) {
+    final seen = ref.read(pairedMacsProvider.notifier).lastSeenAtMs(hostId);
+    if (seen == null || seen <= 0) {
+      return '设备离线 · 需 Desktop 已 Link 且 Hub 长连接';
+    }
+    final dt = DateTime.fromMillisecondsSinceEpoch(seen);
+    final stamp =
+        '${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} '
+        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    return '设备离线 · 上次活跃 $stamp';
   }
 }
 

@@ -108,7 +108,11 @@ async fn retired_password_register_and_login_return_404() {
     let mut app = http::router(state);
     let device_id = uuid::Uuid::new_v4().to_string();
 
-    for path in ["/v1/auth/register", "/v1/auth/login", "/v1/auth/change-password"] {
+    for path in [
+        "/v1/auth/register",
+        "/v1/auth/login",
+        "/v1/auth/change-password",
+    ] {
         let (status, body) = post_json(
             &mut app,
             path,
@@ -125,9 +129,13 @@ async fn auth_supabase_exchange_returns_access_and_refresh_tokens() {
     let state = backend_state_with_supabase().await;
     let mut app = http::router(state);
     let device_id = uuid::Uuid::new_v4().to_string();
-    let (access, refresh, _account_id, email) =
-        exchange_session(&mut app, &ios_headers(&device_id), "sub-ios-1", "alice@example.com")
-            .await;
+    let (access, refresh, _account_id, email) = exchange_session(
+        &mut app,
+        &ios_headers(&device_id),
+        "sub-ios-1",
+        "alice@example.com",
+    )
+    .await;
     assert!(!access.is_empty());
     assert!(!refresh.is_empty());
     assert_eq!(email, "alice@example.com");
@@ -227,7 +235,10 @@ async fn auth_exchange_refresh_logout_happy_path() {
         "happy@example.com",
     )
     .await;
-    assert_ne!(new_refresh, refresh, "re-exchange mints a fresh refresh token");
+    assert_ne!(
+        new_refresh, refresh,
+        "re-exchange mints a fresh refresh token"
+    );
 
     let (status, body) = post_json(
         &mut app,

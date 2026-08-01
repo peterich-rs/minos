@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Check,
   ChevronDown,
@@ -51,7 +51,18 @@ export function HostView() {
   const error = useWorkspaceStore((s) => s.error);
   const actionError = useWorkspaceStore((s) => s.actionError);
   const bootstrap = useWorkspaceStore((s) => s.bootstrap);
+  const refreshDaemonStatus = useWorkspaceStore((s) => s.refreshDaemonStatus);
   const [diagOpen, setDiagOpen] = useState(false);
+
+  // Poll hubOnline (live /ws/host) so Mobile device-online stays aligned.
+  useEffect(() => {
+    if (source !== "daemon") return;
+    void refreshDaemonStatus();
+    const id = window.setInterval(() => {
+      void refreshDaemonStatus();
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, [source, refreshDaemonStatus]);
   const {
     themeName,
     themes,
@@ -64,27 +75,23 @@ export function HostView() {
 
   const session = useAccountStore((s) => s.session);
   const hostLink = useAccountStore((s) => s.hostLink);
-  const authMode = useAccountStore((s) => s.authMode);
-  const setAuthMode = useAccountStore((s) => s.setAuthMode);
   const accountBusy = useAccountStore((s) => s.busy);
   const accountError = useAccountStore((s) => s.error);
-  const clearError = useAccountStore((s) => s.clearError);
-  const signIn = useAccountStore((s) => s.signIn);
-  const signUp = useAccountStore((s) => s.signUp);
   const signOut = useAccountStore((s) => s.signOut);
   const linkThisMac = useAccountStore((s) => s.linkThisMac);
   const unlinkThisMac = useAccountStore((s) => s.unlinkThisMac);
-  const isSupabaseReady = useAccountStore((s) => s.isSupabaseReady);
   const isCloudConfigured = useAccountStore((s) => s.isCloudConfigured);
 
   const daemonReady =
     source === "daemon" && connection?.connected === true;
   const relayLinked = hostLink.linked === true;
 
+  const hubOnline = connection?.hubOnline;
   const presence = deriveHostPresence({
     source,
     daemonConnected: daemonReady,
     relayLinked,
+    hubOnline,
   });
 
   const accountVm = useMemo(
@@ -94,6 +101,7 @@ export function HostView() {
         email: session?.email ?? null,
         daemonReady,
         relayLinked,
+        hubOnline,
         hostDisplayName: hostLink.hostDisplayName,
         busy: accountBusy,
         error: accountError,
@@ -103,24 +111,13 @@ export function HostView() {
       session,
       daemonReady,
       relayLinked,
+      hubOnline,
       hostLink.hostDisplayName,
       accountBusy,
       accountError,
       isCloudConfigured,
     ],
   );
-
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-
-  const passwordReady = password.length >= 8;
-  const confirmReady = password === confirmPassword && passwordReady;
-  const formDisabled =
-    accountBusy ||
-    !email.includes("@") ||
-    !passwordReady ||
-    (authMode === "register" && !confirmReady);
 
   const lastError = connection?.error || error || actionError || null;
   const processLabel = !presence.runtimeReady
@@ -133,7 +130,7 @@ export function HostView() {
     <div className="flex min-h-0 flex-1 flex-col bg-canvas-soft/40">
       <PageHeader
         title="Host"
-        description={`${PROJECT_HOST_THIS_MAC} · local coding works without remote pairing`}
+        description={`${PROJECT_HOST_THIS_MAC} · link this Mac for phone and web remote control`}
         badge={
           <span
             className={cn(
@@ -262,111 +259,6 @@ export function HostView() {
                       Sign out
                     </button>
                   ) : null}
-                </div>
-              ) : null}
-
-              {accountVm.showSignInForm ? (
-                <div className="space-y-2.5">
-                  <div className="grid grid-cols-2 gap-1 rounded-lg bg-surface-muted p-1">
-                    {(["login", "register"] as const).map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        onClick={() => {
-                          setAuthMode(mode);
-                          clearError();
-                        }}
-                        className={cn(
-                          "rounded-md py-1.5 text-2xs font-medium transition-colors",
-                          authMode === mode
-                            ? "bg-surface text-ink shadow-sm"
-                            : "text-ink-muted hover:text-ink",
-                        )}
-                      >
-                        {mode === "login" ? "Sign in" : "Register"}
-                      </button>
-                    ))}
-                  </div>
-                  <form
-                    className="space-y-2"
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      if (formDisabled) return;
-                      if (authMode === "register") {
-                        void signUp(email.trim(), password);
-                      } else {
-                        void signIn(email.trim(), password);
-                      }
-                    }}
-                  >
-                    <label className="block space-y-1">
-                      <span className="text-3xs font-medium text-ink-muted">
-                        Email
-                      </span>
-                      <input
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        type="email"
-                        autoComplete="email"
-                        required
-                        className="h-9 w-full rounded-lg border border-ink/10 bg-surface px-2.5 text-sm text-ink outline-none ring-accent/30 placeholder:text-ink-muted focus:ring-2"
-                        placeholder="you@example.com"
-                      />
-                    </label>
-                    <label className="block space-y-1">
-                      <span className="text-3xs font-medium text-ink-muted">
-                        Password
-                      </span>
-                      <input
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        type="password"
-                        autoComplete={
-                          authMode === "login"
-                            ? "current-password"
-                            : "new-password"
-                        }
-                        required
-                        className="h-9 w-full rounded-lg border border-ink/10 bg-surface px-2.5 text-sm text-ink outline-none ring-accent/30 placeholder:text-ink-muted focus:ring-2"
-                        placeholder="At least 8 characters"
-                      />
-                    </label>
-                    {authMode === "register" ? (
-                      <label className="block space-y-1">
-                        <span className="text-3xs font-medium text-ink-muted">
-                          Confirm password
-                        </span>
-                        <input
-                          value={confirmPassword}
-                          onChange={(e) => setConfirmPassword(e.target.value)}
-                          type="password"
-                          required
-                          className="h-9 w-full rounded-lg border border-ink/10 bg-surface px-2.5 text-sm text-ink outline-none ring-accent/30 focus:ring-2"
-                          placeholder="Again"
-                        />
-                      </label>
-                    ) : null}
-                    <button
-                      type="submit"
-                      disabled={formDisabled}
-                      className="flex h-9 w-full items-center justify-center rounded-lg bg-accent text-2xs font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-40"
-                    >
-                      {accountBusy
-                        ? "Working…"
-                        : authMode === "login"
-                          ? isSupabaseReady()
-                            ? "Sign in (Supabase → Minos)"
-                            : "Sign in"
-                          : isSupabaseReady()
-                            ? "Create account (Supabase → Minos)"
-                            : "Create account"}
-                    </button>
-                    <p className="text-3xs text-ink-muted">
-                      {isSupabaseReady()
-                        ? "IdP via Supabase; product session is Minos JWT."
-                        : "Minos password login (set Supabase env for IdP)."}
-                    </p>
-                  </form>
                 </div>
               ) : null}
 

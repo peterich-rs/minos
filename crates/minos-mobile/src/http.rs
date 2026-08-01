@@ -82,6 +82,8 @@ struct FormalHostSummary {
     linked_at_ms: i64,
     #[serde(default)]
     online: bool,
+    #[serde(default)]
+    last_seen_at_ms: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -2118,6 +2120,7 @@ fn formal_hosts_to_me_hosts(data: ListHostsData) -> Result<MeHostsResponse, Mino
             // UI that reads `paired_via_device_id` does not crash.
             paired_via_device_id: DeviceId(uuid::Uuid::nil()),
             online: host.online,
+            last_seen_at_ms: host.last_seen_at_ms,
         });
     }
     Ok(MeHostsResponse { hosts })
@@ -2693,6 +2696,7 @@ mod tests {
                 host_display_name: "Mac Studio".into(),
                 linked_at_ms: 123,
                 online: true,
+                last_seen_at_ms: 456,
             }],
         })
         .unwrap();
@@ -2706,6 +2710,7 @@ mod tests {
             DeviceId(uuid::Uuid::nil())
         );
         assert!(response.hosts[0].online);
+        assert_eq!(response.hosts[0].last_seen_at_ms, 456);
     }
 
     #[test]
@@ -2716,6 +2721,7 @@ mod tests {
                 host_display_name: "Mac Studio".into(),
                 linked_at_ms: 123,
                 online: false,
+                last_seen_at_ms: 0,
             }],
         })
         .expect_err("invalid host id must not be silently accepted");

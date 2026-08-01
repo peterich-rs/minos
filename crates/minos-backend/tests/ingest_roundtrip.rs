@@ -10,8 +10,8 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use futures::{SinkExt, StreamExt};
 use minos_backend::{
     auth::use_case::AuthUseCase,
-    http::{router, BackendState},
     host_link::HostLinkService,
+    http::{router, BackendState},
     session::SessionRegistry,
     store,
 };

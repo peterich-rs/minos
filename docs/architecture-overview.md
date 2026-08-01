@@ -4,7 +4,9 @@
 
 ## 项目定位
 
-Minos 是一个远程 AI 编码控制系统：在 Mac 上运行 host 端，通过手机（iOS/Android）或浏览器远程驱动 `codex` / `claude` / `gemini` / `opencode` 等 CLI agent。
+Minos 是一个 **以 Conversation 协作为核心** 的远程 AI 编码协作产品：在 Project 下的对话时间线中，人与人、人与 Agent、Agent 与 Agent 协作；Agent 在用户 Mac/Linux Host 上执行 `codex` / `claude` / `gemini` / `opencode` 等 CLI，手机 / 浏览器 / Desktop 通过云端 IM 中枢同步消息、@、审批 Attention 与投影。
+
+技术上仍包含 Host 守护进程与远程驱动能力，但 **产品主轴是聊天协作 IM**，Agent 是对话内可执行能力，而不是「运维台外挂聊天」。消息体系 SSOT 见 [architecture-messaging.md](architecture-messaging.md)。
 
 ## 顶层架构
 
@@ -107,6 +109,7 @@ minos-protocol ----> minos-transport
 | Desktop 自动更新 | [docs/desktop-auto-update.md](desktop-auto-update.md) |
 | Grok ACP 投影 | [docs/architecture-grok-acp-projection.md](architecture-grok-acp-projection.md) |
 | 共享 Crate | [docs/architecture-shared-crates.md](architecture-shared-crates.md) |
+| 消息架构体系（Server + 全端） | [docs/architecture-messaging.md](architecture-messaging.md) |
 | 业务流程 | [docs/architecture-business-flow.md](architecture-business-flow.md) |
 | CI / 本地门禁 | [docs/ci-gates.md](ci-gates.md) |
 

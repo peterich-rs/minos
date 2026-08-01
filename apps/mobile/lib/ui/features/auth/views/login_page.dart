@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:minos/application/auth_provider.dart';
 import 'package:minos/application/flutter_log.dart';
 import 'package:minos/application/ui_state_providers.dart';
-import 'package:minos/domain/auth_state.dart';
 import 'package:minos/domain/minos_error_display.dart';
 import 'package:minos/src/rust/api/minos.dart' show ErrorKind, MinosError;
 import 'package:minos/ui/features/auth/widgets/auth_error_banner.dart';
@@ -19,17 +18,6 @@ class LoginPage extends ConsumerStatefulWidget {
 }
 
 class _LoginPageState extends ConsumerState<LoginPage> {
-  @override
-  void initState() {
-    super.initState();
-    final authState = ref.read(authControllerProvider);
-    ref
-        .read(loginPageStateControllerProvider.notifier)
-        .seedInitialError(
-          authState is AuthRefreshFailed ? authState.error : null,
-        );
-  }
-
   Future<void> _submit(String email, String password) async {
     final controller = ref.read(loginPageStateControllerProvider.notifier);
     final currentState = ref.read(loginPageStateControllerProvider);

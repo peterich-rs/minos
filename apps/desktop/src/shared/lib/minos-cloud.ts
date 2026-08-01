@@ -28,6 +28,8 @@ export type ListedHost = {
   hostDisplayName: string;
   linkedAtMs: number;
   online: boolean;
+  /** Durable last activity from hub; 0 when unknown. */
+  lastSeenAtMs: number;
 };
 
 export class MinosCloudError extends Error {
@@ -232,6 +234,7 @@ export async function listHosts(
         host_display_name: string;
         linked_at_ms: number;
         online: boolean;
+        last_seen_at_ms?: number;
       }>;
     }>
   >("/v1/hosts", {
@@ -243,5 +246,6 @@ export async function listHosts(
     hostDisplayName: h.host_display_name,
     linkedAtMs: h.linked_at_ms,
     online: h.online,
+    lastSeenAtMs: h.last_seen_at_ms ?? 0,
   }));
 }

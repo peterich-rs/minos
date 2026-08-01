@@ -101,18 +101,25 @@ pub async fn daemon_list_messages(
         .map_err(|e| e.to_string())
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppendUserMessageDto {
+    pub message_seq: i64,
+}
+
 #[tauri::command]
 pub async fn daemon_append_user_message(
     state: State<'_, AppState>,
     conversation_id: String,
     message_id: String,
     body: String,
-) -> Result<i64, String> {
-    state
+) -> Result<AppendUserMessageDto, String> {
+    let message_seq = state
         .daemon
         .append_user_message(conversation_id, message_id, body)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    Ok(AppendUserMessageDto { message_seq })
 }
 
 #[tauri::command]

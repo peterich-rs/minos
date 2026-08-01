@@ -14,10 +14,9 @@ const base = {
 };
 
 describe("presentHostAccount", () => {
-  it("signed out shows sign-in form and no link CTA", () => {
+  it("signed out has no link CTA (login is root-gated)", () => {
     const vm = presentHostAccount(base);
     assert.equal(vm.statusKind, "signed_out");
-    assert.equal(vm.showSignInForm, true);
     assert.equal(vm.showLinkCta, false);
     assert.equal(vm.showSignOut, false);
   });
@@ -61,6 +60,19 @@ describe("presentHostAccount", () => {
     assert.equal(vm.statusLabel, "Linked");
     assert.equal(vm.showLinkCta, false);
     assert.equal(vm.showUnlink, true);
+  });
+
+  it("linked + hub online labels device presence for Mobile parity", () => {
+    const vm = presentHostAccount({
+      ...base,
+      signedIn: true,
+      email: "you@example.com",
+      relayLinked: true,
+      hubOnline: true,
+      hostDisplayName: "Studio Mac",
+    });
+    assert.equal(vm.statusLabel, "Linked · Hub online");
+    assert.match(vm.statusHint, /Hub online/i);
   });
 
   it("surfaces error kind when error present", () => {

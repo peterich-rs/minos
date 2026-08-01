@@ -21,6 +21,7 @@ export function createWorkspaceActions(
   WorkspaceState,
   | "bootstrap"
   | "refreshProjects"
+  | "refreshDaemonStatus"
   | "clearActionError"
   | "loadConversations"
   | "loadTimeline"

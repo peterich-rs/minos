@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:minos/application/auth_provider.dart';
-import 'package:minos/application/minos_providers.dart';
 import 'package:minos/application/root_route_decision.dart';
 import 'package:minos/src/rust/api/minos.dart' show AgentName, ConversationKind;
 import 'package:minos/ui/features/agents/views/agent_start_page.dart';
@@ -33,13 +32,11 @@ abstract final class AppRoutes {
 
 /// Creates the [GoRouter] instance wired to Riverpod for auth-based redirects.
 ///
-/// The router watches [authControllerProvider], [connectionStateProvider], and
-/// [hasPersistedPairingProvider] to decide the root redirect (splash → login →
-/// shell) using the same [decideRootRoute] pure function the old `_Router`
-/// widget used.
+/// Redirect reads only the synchronous [authControllerProvider]. Both
+/// [RootRoute.projectList] and [RootRoute.projectListOffline] map to the
+/// same shell path, so async connection/pairing providers are not needed
+/// here (offline chrome lives inside the shell).
 GoRouter createAppRouter(Ref ref) {
-  // Listenable that fires whenever the auth/connection state changes,
-  // triggering GoRouter's redirect evaluation.
   final routerNotifier = _RouterRefreshNotifier(ref);
 
   return GoRouter(
@@ -47,12 +44,9 @@ GoRouter createAppRouter(Ref ref) {
     refreshListenable: routerNotifier,
     redirect: (context, state) {
       final authState = ref.read(authControllerProvider);
-      final connection = ref.read(connectionStateProvider);
-      final hasPersistedPairing = ref.read(hasPersistedPairingProvider);
       final route = decideRootRoute(
         authState: authState,
-        connectionState: connection.asData?.value,
-        hasPersistedPairing: hasPersistedPairing.asData?.value ?? false,
+        connectionState: null,
       );
 
       final currentPath = state.uri.path;
@@ -188,21 +182,19 @@ class ProjectDetailRouteExtra {
 
 class _RouterRefreshNotifier extends ChangeNotifier {
   _RouterRefreshNotifier(this._ref) {
-    _subscriptions = [
-      _ref.listen(authControllerProvider, (_, _) => notifyListeners()),
-      _ref.listen(connectionStateProvider, (_, _) => notifyListeners()),
-      _ref.listen(hasPersistedPairingProvider, (_, _) => notifyListeners()),
-    ];
+    // Auth alone drives root redirects (splash ↔ login ↔ shell).
+    _subscription = _ref.listen(
+      authControllerProvider,
+      (_, _) => notifyListeners(),
+    );
   }
 
   final Ref _ref;
-  late final List<ProviderSubscription<dynamic>> _subscriptions;
+  late final ProviderSubscription<dynamic> _subscription;
 
   @override
   void dispose() {
-    for (final sub in _subscriptions) {
-      sub.close();
-    }
+    _subscription.close();
     super.dispose();
   }
 }

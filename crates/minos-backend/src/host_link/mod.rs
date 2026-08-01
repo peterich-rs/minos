@@ -12,9 +12,7 @@ use sqlx::{PgPool, Postgres};
 use crate::{
     error::BackendError,
     session::{SessionRegistry, SessionRevocation},
-    store::{
-        host_installation_tokens, host_links, AsStorePool, StoreHandle, StorePoolRef,
-    },
+    store::{host_installation_tokens, host_links, AsStorePool, StoreHandle, StorePoolRef},
 };
 
 /// Outcome of a successful [`HostLinkService::link_host`].

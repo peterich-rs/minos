@@ -48,7 +48,10 @@ async fn host_bootstrap_nonce_issues_for_valid_installation_id() {
     .await;
 
     assert_eq!(status, StatusCode::OK, "body={body}");
-    assert!(body["data"]["nonce"].as_str().unwrap().starts_with("nonce_"));
+    assert!(body["data"]["nonce"]
+        .as_str()
+        .unwrap()
+        .starts_with("nonce_"));
     assert!(body["data"]["expires_at_ms"].as_i64().unwrap() > 0);
 }
 

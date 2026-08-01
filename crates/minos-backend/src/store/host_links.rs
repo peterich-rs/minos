@@ -265,12 +265,13 @@ pub async fn insert_pair(
 ) -> Result<bool, BackendError> {
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
-            let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| {
-                BackendError::StoreQuery {
-                    operation: "host_links::insert_pair.begin".into(),
-                    message: e.to_string(),
-                }
-            })?;
+            let mut tx =
+                pool.begin_with("BEGIN IMMEDIATE")
+                    .await
+                    .map_err(|e| BackendError::StoreQuery {
+                        operation: "host_links::insert_pair.begin".into(),
+                        message: e.to_string(),
+                    })?;
             assert_host_available_or_same_account_sqlite(
                 &mut *tx,
                 host_device_id,
@@ -654,7 +655,6 @@ where
     })?;
     Ok(res.rows_affected())
 }
-
 
 fn decode_pair_row(row: PairRowTuple) -> Result<PairRow, BackendError> {
     let (

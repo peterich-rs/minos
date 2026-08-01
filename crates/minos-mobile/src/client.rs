@@ -1954,8 +1954,6 @@ mod tests {
         assert_eq!(url, "wss://edge.example/ws/client?ticket=edge-ticket");
     }
 
-
-
     #[tokio::test]
     async fn list_sessions_without_persisted_state_errors_unauthorized() {
         // ADR-0020 dropped the device-secret rail; list_sessions is

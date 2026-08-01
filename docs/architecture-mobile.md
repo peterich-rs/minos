@@ -106,11 +106,17 @@ AuthAuthenticated + Connected → projectList
 AuthAuthenticated + offline → projectListOffline
 ```
 
+`createAppRouter` redirect only reads synchronous `authControllerProvider`.
+`projectList` and `projectListOffline` both map to shell `/` (offline chrome is
+in-shell). Do not seed login-page provider state from widget `initState` —
+`LoginPageStateController.build` reads `AuthRefreshFailed` once when the
+provider is created.
+
 ### App Shell（3 个 Tab）
 
-- **Tab 0 (消息)**: `SocialHubPage` — 对话列表 + 未读数
-- **Tab 1 (Agents)**: `AgentsHubTab` — Agent 配置管理
-- **Tab 2 (我的)**: 个人信息、社交功能、开发工具、登出、配对
+- **Tab 0 (Sessions)**: `SessionsPage` — session inbox
+- **Tab 1 (Hosts)**: `HostsPage` — linked hosts
+- **Tab 2 (账户)**: `AccountPage` — profile / logout
 
 ## Rust FFI 桥接
 

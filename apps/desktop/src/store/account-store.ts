@@ -1,8 +1,8 @@
 /**
  * Desktop account session + Host Link state (D01 dual session, D02 link UX).
  *
- * Local coding remains first-class: this store is optional cloud chrome.
- * `hostLink.linked` drives sidebar / Host presence `relayLinked`.
+ * Product default is **account-first**: a valid Minos session is required
+ * before AppShell. Host Link remains a separate second step after sign-in.
  */
 
 import { create } from "zustand";
@@ -11,6 +11,7 @@ import {
   clearStoredSession,
   EMPTY_HOST_LINK,
   ensureDesktopDeviceId,
+  isAccessTokenFresh,
   loadStoredHostLink,
   loadStoredSession,
   saveStoredHostLink,
@@ -24,8 +25,8 @@ import {
   exchangeSupabaseSession,
   linkHost as cloudLinkHost,
   logoutSession,
+  refreshSession,
   unlinkHost as cloudUnlinkHost,
-  type AuthResponse,
 } from "@/shared/lib/minos-cloud";
 import {
   isSupabaseConfigured,
@@ -39,6 +40,7 @@ import {
   runHostLinkFlow,
   runHostUnlinkFlow,
 } from "@/features/host/lib/host-link-flow";
+import type { DesktopAuthPhase } from "@/shared/lib/desktop-root-gate";
 
 export type AuthMode = "login" | "register";
 
@@ -47,13 +49,18 @@ type AccountState = {
   session: MinosSession | null;
   hostLink: HostLinkState;
   authMode: AuthMode;
+  /** Root gate phase (hydrate → login | app). */
+  authPhase: DesktopAuthPhase;
   busy: boolean;
   error: string | null;
-  /** Hydrated once on first import; no async boot required for localStorage. */
+  /** True after first hydrateAuth settles. */
   hydrated: boolean;
 
   setAuthMode: (mode: AuthMode) => void;
   clearError: () => void;
+
+  /** Cold-start: load local session, refresh if stale, set authPhase. */
+  hydrateAuth: () => Promise<void>;
 
   signIn: (email: string, password: string) => Promise<boolean>;
   signUp: (email: string, password: string) => Promise<boolean>;
@@ -76,20 +83,80 @@ function isCloudConfigured(): boolean {
   }
 }
 
+function applyAuthSuccess(
+  set: (partial: Partial<AccountState>) => void,
+  session: MinosSession,
+): void {
+  saveStoredSession(session);
+  set({
+    session,
+    authPhase: "authenticated",
+    busy: false,
+    error: null,
+    hydrated: true,
+  });
+}
+
 export const useAccountStore = create<AccountState>()((set, get) => ({
   deviceId: ensureDesktopDeviceId(),
-  session: loadStoredSession(),
+  session: null,
   hostLink: loadStoredHostLink(),
   authMode: "login",
+  authPhase: "booting",
   busy: false,
   error: null,
-  hydrated: true,
+  hydrated: false,
 
   setAuthMode: (authMode) => set({ authMode, error: null }),
   clearError: () => set({ error: null }),
 
   isCloudConfigured,
   isSupabaseReady: () => isSupabaseConfigured(),
+
+  hydrateAuth: async () => {
+    set({ authPhase: "booting", error: null });
+    const stored = loadStoredSession();
+    if (!stored) {
+      set({
+        session: null,
+        authPhase: "unauthenticated",
+        hydrated: true,
+      });
+      return;
+    }
+
+    if (isAccessTokenFresh(stored)) {
+      set({
+        session: stored,
+        authPhase: "authenticated",
+        hydrated: true,
+      });
+      return;
+    }
+
+    try {
+      const tokens = await refreshSession(
+        get().deviceId,
+        stored.refreshToken,
+      );
+      const session: MinosSession = {
+        ...stored,
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token,
+        expiresInSec: tokens.expires_in,
+        issuedAtMs: Date.now(),
+      };
+      applyAuthSuccess(set, session);
+    } catch {
+      clearStoredSession();
+      set({
+        session: null,
+        authPhase: "unauthenticated",
+        hydrated: true,
+        error: null,
+      });
+    }
+  },
 
   signIn: async (email, password) => {
     set({ busy: true, error: null });
@@ -102,9 +169,7 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
       const deviceId = get().deviceId;
       const supabaseToken = await signInWithSupabasePassword(email, password);
       const auth = await exchangeSupabaseSession(deviceId, supabaseToken);
-      const session = sessionFromAuthResponse(auth);
-      saveStoredSession(session);
-      set({ session, busy: false, error: null });
+      applyAuthSuccess(set, sessionFromAuthResponse(auth));
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -124,9 +189,7 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
       const deviceId = get().deviceId;
       const supabaseToken = await signUpWithSupabasePassword(email, password);
       const auth = await exchangeSupabaseSession(deviceId, supabaseToken);
-      const session = sessionFromAuthResponse(auth);
-      saveStoredSession(session);
-      set({ session, busy: false, error: null });
+      applyAuthSuccess(set, sessionFromAuthResponse(auth));
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -149,7 +212,13 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
     clearStoredSession();
     // Host installation token stays on daemon; link flag is independent of
     // human session. Keep hostLink so Linked status survives account re-login.
-    set({ session: null, busy: false, error: null });
+    set({
+      session: null,
+      authPhase: "unauthenticated",
+      busy: false,
+      error: null,
+      hydrated: true,
+    });
   },
 
   linkThisMac: async (hostDisplayName) => {

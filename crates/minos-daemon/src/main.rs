@@ -463,7 +463,6 @@ async fn status(
     action
 }
 
-
 async fn peers(args: OutputArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn std::error::Error>> {
     let started = start_ephemeral(paths, args.connect.mac_name.clone()).await?;
     let action = async {

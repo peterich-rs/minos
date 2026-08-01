@@ -73,8 +73,10 @@ describe("projectEntityIntoLists", () => {
     assert.equal(out.attentionSessions[0]?.status, "needs_approval");
   });
 
-  it("does not invent membership for lists that lack the session", () => {
-    const e = entity("s9", "running");
+  it("upserts inspector membership when conversationId is known", () => {
+    // Live manager path: entity has conversationId but inspector list never
+    // received a hydrate row yet (SessionAdded shell → StateChanged race).
+    const e = entity("s9", "idle", { conversationId: "c1" });
     const s = {
       sessionsById: { s9: e },
       sessionsByConversation: { c1: [row("s1")] },
@@ -83,10 +85,29 @@ describe("projectEntityIntoLists", () => {
       attentionReady: false,
     };
     const out = projectEntityIntoLists(s, "s9");
-    assert.equal(out.sessionsByConversation.c1?.length, 1);
-    assert.equal(out.sessionsByConversation.c1?.[0]?.id, "s1");
+    assert.equal(out.sessionsByConversation.c1?.length, 2);
+    assert.equal(out.sessionsByConversation.c1?.[0]?.id, "s9");
+    assert.equal(out.sessionsByConversation.c1?.[0]?.status, "idle");
+    assert.equal(out.sessionsByConversation.c1?.[1]?.id, "s1");
+    // Project list still membership-only (no invent without project hydrate).
     assert.deepEqual(out.projectSessionsByProject, {});
     assert.deepEqual(out.attentionSessions, []);
+  });
+
+  it("does not invent project membership when session is absent", () => {
+    const e = entity("s9", "running", { conversationId: "c-other" });
+    const s = {
+      sessionsById: { s9: e },
+      sessionsByConversation: { c1: [row("s1")] },
+      projectSessionsByProject: { p1: [row("s1")] },
+      attentionSessions: [] as SessionListRow[],
+      attentionReady: false,
+    };
+    const out = projectEntityIntoLists(s, "s9");
+    assert.equal(out.projectSessionsByProject.p1?.length, 1);
+    assert.equal(out.projectSessionsByProject.p1?.[0]?.id, "s1");
+    // Invents under the entity's conversation key only.
+    assert.equal(out.sessionsByConversation["c-other"]?.[0]?.id, "s9");
   });
 
   it("drops attention row when entity no longer needs attention (not ready)", () => {
@@ -178,12 +199,18 @@ describe("projectSessionIdsIntoLists", () => {
       attentionReady: false,
     };
     const out = projectSessionIdsIntoLists(s, ["s1", "s2"]);
-    assert.equal(out.sessionsByConversation.c1?.[0]?.status, "needs_approval");
+    const c1 = out.sessionsByConversation.c1 ?? [];
+    assert.equal(c1.find((r) => r.id === "s1")?.status, "needs_approval");
+    // s2 is invented into inspector for c1 when entity has conversationId.
+    assert.equal(c1.find((r) => r.id === "s2")?.status, "running");
     assert.equal(
-      out.projectSessionsByProject.p1?.[0]?.status,
+      out.projectSessionsByProject.p1?.find((r) => r.id === "s1")?.status,
       "needs_approval",
     );
-    assert.equal(out.projectSessionsByProject.p1?.[1]?.status, "running");
+    assert.equal(
+      out.projectSessionsByProject.p1?.find((r) => r.id === "s2")?.status,
+      "running",
+    );
   });
 });
 

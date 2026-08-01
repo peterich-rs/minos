@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   FolderGit2,
   LayoutDashboard,
@@ -51,13 +51,26 @@ export function Sidebar() {
   const projects = useWorkspaceStore((s) => s.projects);
   const connection = useWorkspaceStore((s) => s.connection);
   const source = useWorkspaceStore((s) => s.source);
+  const refreshDaemonStatus = useWorkspaceStore((s) => s.refreshDaemonStatus);
   const relayLinked = useAccountStore((s) => s.hostLink.linked === true);
   const [updateDismissed, setUpdateDismissed] = useState(false);
   const attention = projects.reduce((sum, p) => sum + p.needsAttention, 0);
+
+  // Keep hubOnline fresh for the brand presence line.
+  useEffect(() => {
+    if (source !== "daemon") return;
+    void refreshDaemonStatus();
+    const id = window.setInterval(() => {
+      void refreshDaemonStatus();
+    }, 8000);
+    return () => window.clearInterval(id);
+  }, [source, refreshDaemonStatus]);
+
   const presence = deriveHostPresence({
     source,
     daemonConnected: source === "daemon" && connection?.connected === true,
     relayLinked,
+    hubOnline: connection?.hubOnline,
   });
 
   return (

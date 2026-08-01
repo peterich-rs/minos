@@ -45,6 +45,9 @@ class _MinosAppState extends ConsumerState<MinosApp>
 
   @override
   Widget build(BuildContext context) {
+    // Side-effect listen is the Riverpod-supported pattern (not initState).
+    // fireImmediately is false, so the first AsyncValue does not run here
+    // during mount — only later Connected transitions invalidate caches.
     ref.listen<AsyncValue<core.ConnectionState>>(connectionStateProvider, (
       previous,
       next,

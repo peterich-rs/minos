@@ -163,13 +163,13 @@ class _ConnectionLine extends StatelessWidget {
     final colors = context.minosColors;
     final theme = Theme.of(context);
     final (label, presence) = switch (state) {
-      ConnectionState_Connected() => ('实时连接在线', MinosPresence.online),
+      ConnectionState_Connected() => ('账号在线', MinosPresence.online),
       ConnectionState_Reconnecting(:final attempt) => (
-        '实时连接重连中 #$attempt',
+        '账号重连中 #$attempt',
         MinosPresence.warning,
       ),
-      ConnectionState_Pairing() => ('实时连接初始化中', MinosPresence.warning),
-      _ => ('实时连接离线', MinosPresence.offline),
+      ConnectionState_Pairing() => ('账号连接初始化中', MinosPresence.warning),
+      _ => ('账号离线', MinosPresence.offline),
     };
 
     return Row(

@@ -40,7 +40,7 @@ describe("deriveHostPresence", () => {
     assert.equal(p.runtimeReady, true);
   });
 
-  it("shows Ready · Linked when relay is linked", () => {
+  it("shows Ready · Linked when linked without hub state", () => {
     const p = deriveHostPresence({
       source: "daemon",
       daemonConnected: true,
@@ -49,6 +49,30 @@ describe("deriveHostPresence", () => {
     assert.equal(p.label, "Ready · Linked");
     assert.equal(p.linkMode, "linked");
     assert.equal(p.linkLabel, "Linked");
+    assert.equal(p.hubOnline, "unknown");
+  });
+
+  it("shows Ready · Linked · Hub online when hub WS is live", () => {
+    const p = deriveHostPresence({
+      source: "daemon",
+      daemonConnected: true,
+      relayLinked: true,
+      hubOnline: true,
+    });
+    assert.equal(p.label, "Ready · Linked · Hub online");
+    assert.equal(p.hubOnline, "online");
+    assert.equal(p.hubLabel, "Hub online");
+  });
+
+  it("shows Hub offline when linked but no /ws/host", () => {
+    const p = deriveHostPresence({
+      source: "daemon",
+      daemonConnected: true,
+      relayLinked: true,
+      hubOnline: false,
+    });
+    assert.equal(p.label, "Ready · Linked · Hub offline");
+    assert.equal(p.hubOnline, "offline");
   });
 
   it("treats explicit relayLinked false as Local only", () => {

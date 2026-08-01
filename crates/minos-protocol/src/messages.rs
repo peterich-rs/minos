@@ -40,6 +40,9 @@ pub struct HostSummary {
     pub paired_via_device_id: DeviceId,
     #[serde(default)]
     pub online: bool,
+    /// Best-effort last activity from hub (`device_installations.last_seen_at_ms`).
+    #[serde(default)]
+    pub last_seen_at_ms: i64,
 }
 
 /// Response body for `GET /v1/me/peers`. Host callers receive every
@@ -105,7 +108,6 @@ pub struct SetDisplayNameRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
 }
-
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -1527,6 +1529,7 @@ mod tests {
                 paired_at_ms: 1_714_000_000_000,
                 paired_via_device_id: DeviceId::new(),
                 online: true,
+                last_seen_at_ms: 1_714_000_000_100,
             }],
         };
         let json = serde_json::to_string(&hosts).unwrap();

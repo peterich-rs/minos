@@ -14,8 +14,8 @@ use ed25519_dalek::{Signer, SigningKey};
 use futures::{SinkExt, StreamExt};
 use minos_backend::{
     auth::{jwt, use_case::AuthUseCase},
-    http::{router, BackendState},
     host_link::HostLinkService,
+    http::{router, BackendState},
     session::SessionRegistry,
     store,
 };
@@ -131,8 +131,12 @@ async fn formally_paired_host(relay: &Relay) -> anyhow::Result<FormalHostFixture
     let nonce = body["data"]["nonce"].as_str().unwrap().to_string();
     let signature = signature_for_path(&signing_key, &installation_id, &nonce, LINK_PATH);
 
-    let bearer = jwt::sign(TEST_JWT_SECRET.as_bytes(), &account_id, &desktop.to_string())
-        .expect("test bearer signs cleanly");
+    let bearer = jwt::sign(
+        TEST_JWT_SECRET.as_bytes(),
+        &account_id,
+        &desktop.to_string(),
+    )
+    .expect("test bearer signs cleanly");
     let account_auth_header = format!("Bearer {bearer}");
     let (status, body) = post_json(
         &mut app,

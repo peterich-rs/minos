@@ -1,12 +1,14 @@
 /**
- * Product-facing host presence for the desktop shell.
+ * Product-facing host presence for the desktop shell (IM-aligned).
  *
- * Three planes (do not collapse into "Daemon · managed"):
- * - Runtime (A): local daemon usable → Ready / Unavailable / Preview
- * - Link (B): relay/backend collaboration → Local only / Linked
+ * Planes (do not collapse):
+ * - Runtime (A): local daemon IPC usable → Ready / Unavailable / Preview
+ * - Link (B): account Host Link binding → Local only / Linked
+ * - Hub (D): this Mac's live `/ws/host` on the server → Hub online / offline
  * - Project locus (C): which machine owns the project → This Mac / device name
  *
- * Local coding is first-class: missing relay is "Local only", not Offline.
+ * Local coding is first-class: missing hub is not "daemon offline".
+ * Mobile "device online" is Hub (D), not Link (B).
  */
 
 export type DataSource = "mock" | "daemon";
@@ -14,14 +16,17 @@ export type DataSource = "mock" | "daemon";
 /** Collaboration link to backend / other hosts (plane B). */
 export type HostLinkMode = "local_only" | "linked";
 
-/** App-level readiness shown under the brand mark (planes A + B). */
+/** Live hub session for this host installation (plane D). */
+export type HubOnlineMode = "online" | "offline" | "unknown";
+
+/** App-level readiness shown under the brand mark (planes A + B + D). */
 export type HostPresenceTone = "ready" | "unavailable" | "preview";
 
 export type HostPresence = {
   /** Dot + primary line tone. */
   tone: HostPresenceTone;
   /**
-   * Primary label under Minos, e.g. "Ready · Local only".
+   * Primary label under Minos, e.g. "Ready · Linked · Hub online".
    * Never exposes managed / discovery implementation detail.
    */
   label: string;
@@ -29,6 +34,8 @@ export type HostPresence = {
   readinessLabel: "Ready" | "Unavailable" | "Preview";
   linkMode: HostLinkMode;
   linkLabel: "Local only" | "Linked";
+  hubOnline: HubOnlineMode;
+  hubLabel: "Hub online" | "Hub offline" | "Hub unknown";
   /** True when local coding runtime is usable. */
   runtimeReady: boolean;
 };
@@ -38,11 +45,15 @@ export type HostPresenceInput = {
   /** True when Tauri bridge reports daemon connected. */
   daemonConnected: boolean;
   /**
-   * Relay / backend linked for remote collaboration.
+   * Host Link binding for remote collaboration (account ↔ this Mac).
    * `true` → Linked; `false` / omit → Local only when runtime is ready.
-   * Desktop: driven by account-store Host Link state after same-account link.
    */
   relayLinked?: boolean;
+  /**
+   * Live `/ws/host` to minos-backend (IM device online).
+   * Omit → unknown (external daemon without link observer).
+   */
+  hubOnline?: boolean;
 };
 
 /** Default project locus for projects on this machine (plane C). */
@@ -56,6 +67,8 @@ export function deriveHostPresence(input: HostPresenceInput): HostPresence {
       readinessLabel: "Preview",
       linkMode: "local_only",
       linkLabel: "Local only",
+      hubOnline: "unknown",
+      hubLabel: "Hub unknown",
       runtimeReady: false,
     };
   }
@@ -67,6 +80,8 @@ export function deriveHostPresence(input: HostPresenceInput): HostPresence {
       readinessLabel: "Unavailable",
       linkMode: "local_only",
       linkLabel: "Local only",
+      hubOnline: "offline",
+      hubLabel: "Hub offline",
       runtimeReady: false,
     };
   }
@@ -75,12 +90,30 @@ export function deriveHostPresence(input: HostPresenceInput): HostPresence {
   const linkMode: HostLinkMode = linked ? "linked" : "local_only";
   const linkLabel = linked ? "Linked" : "Local only";
 
+  let hubOnline: HubOnlineMode = "unknown";
+  let hubLabel: HostPresence["hubLabel"] = "Hub unknown";
+  if (input.hubOnline === true) {
+    hubOnline = "online";
+    hubLabel = "Hub online";
+  } else if (input.hubOnline === false) {
+    hubOnline = "offline";
+    hubLabel = "Hub offline";
+  }
+
+  // When linked, surface hub state so Mobile device-online is understandable.
+  const label =
+    linked && hubOnline !== "unknown"
+      ? `Ready · ${linkLabel} · ${hubLabel}`
+      : `Ready · ${linkLabel}`;
+
   return {
     tone: "ready",
-    label: `Ready · ${linkLabel}`,
+    label,
     readinessLabel: "Ready",
     linkMode,
     linkLabel,
+    hubOnline,
+    hubLabel,
     runtimeReady: true,
   };
 }

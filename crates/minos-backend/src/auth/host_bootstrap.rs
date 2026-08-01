@@ -129,15 +129,16 @@ impl BootstrapNonceStore {
                 entry.installation_id
             }
             BootstrapNonceBackend::Redis { client } => {
-                let mut conn = client
-                    .get_multiplexed_async_connection()
-                    .await
-                    .map_err(|error| {
-                        HostBootstrapError::Store(BackendError::Cache {
-                            operation: "bootstrap_nonce.redis_connect".into(),
-                            message: error.to_string(),
-                        })
-                    })?;
+                let mut conn =
+                    client
+                        .get_multiplexed_async_connection()
+                        .await
+                        .map_err(|error| {
+                            HostBootstrapError::Store(BackendError::Cache {
+                                operation: "bootstrap_nonce.redis_connect".into(),
+                                message: error.to_string(),
+                            })
+                        })?;
                 let payload: Option<String> = redis::cmd("GETDEL")
                     .arg(nonce_key(nonce))
                     .query_async(&mut conn)

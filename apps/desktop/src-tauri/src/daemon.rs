@@ -19,12 +19,11 @@ use minos_protocol::local_rpc::{
 use minos_protocol::{
     AppendConversationMessageParams, ApprovalDecisionRequest, CreateConversationParams,
     CreateProjectRequest, HostApplyLinkTokenParams, HostApplyLinkTokenResponse,
-    HostPrepareLinkResponse, HostSignLinkProofParams, HostSignLinkProofResponse,
-    ListClisResponse, ListConversationAgentSessionsParams, ListConversationMessagesParams,
-    ListConversationsParams, ListProjectsResponse, LocalConversationMessage,
-    LocalConversationSummary, LocalReactionGroup, ProjectSummary, ReadSessionParams,
-    RemoveConversationAgentParams, SendUserMessageRequest, SessionState, SessionSummary,
-    StartAgentInConversationRequest, StartAgentResponse,
+    HostPrepareLinkResponse, HostSignLinkProofParams, HostSignLinkProofResponse, ListClisResponse,
+    ListConversationAgentSessionsParams, ListConversationMessagesParams, ListConversationsParams,
+    ListProjectsResponse, LocalConversationMessage, LocalConversationSummary, LocalReactionGroup,
+    ProjectSummary, ReadSessionParams, RemoveConversationAgentParams, SendUserMessageRequest,
+    SessionState, SessionSummary, StartAgentInConversationRequest, StartAgentResponse,
     ToggleConversationMessageReactionParams, ToggleConversationMessageReactionResponse,
     UpdateConversationParams,
 };
@@ -55,6 +54,11 @@ pub struct ConnectionDto {
     pub source: String,
     /// True when this process owns a managed DaemonHandle.
     pub managed: bool,
+    /// IM **device online**: managed daemon has live `/ws/host` to the hub.
+    /// False when disconnected, connecting, or non-managed external daemon
+    /// without a handle (cannot observe relay link).
+    #[serde(default)]
+    pub hub_online: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -633,12 +637,19 @@ impl DaemonBridge {
     }
 
     fn status_locked(guard: &BridgeInner) -> ConnectionDto {
+        let hub_online = guard.managed.as_ref().is_some_and(|h| {
+            matches!(
+                h.current_relay_link(),
+                minos_domain::RelayLinkState::Connected
+            )
+        });
         ConnectionDto {
             connected: guard.client.is_some(),
             endpoint: guard.endpoint.clone(),
             error: guard.last_error.clone(),
             source: guard.source.clone(),
             managed: guard.managed.is_some(),
+            hub_online,
         }
     }
 

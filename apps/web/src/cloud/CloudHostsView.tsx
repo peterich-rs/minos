@@ -8,8 +8,7 @@ import { listHosts, type HostSummary } from '@/lib/minos'
 import { useAppStore } from '@/lib/store'
 
 export function CloudHostsView() {
-  const { deviceId, session, setSession, setHosts, setActiveHost, activeHost } =
-    useAppStore()
+  const { deviceId, session, setHosts, setActiveHost, activeHost } = useAppStore()
   const [rows, setRows] = useState<HostSummary[]>([])
   const [loading, setLoading] = useState(false)
 
@@ -31,7 +30,12 @@ export function CloudHostsView() {
   }, [activeHost, deviceId, session, setActiveHost, setHosts])
 
   useEffect(() => {
-    void refresh()
+    // Cold load when auth session becomes available (external store → local rows).
+    // Defer so we do not setState synchronously inside the effect body.
+    const timer = window.setTimeout(() => {
+      void refresh()
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [refresh])
 
   return (

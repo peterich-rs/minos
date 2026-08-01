@@ -15,11 +15,11 @@
 //!    (`owner_device_id`). See [`broadcast_to_peers_of`] for the
 //!    `host_links → device_installations` walk (ADR-0020 / Phase G).
 //!
-//! The formal host gateway path (`HostIngestLiveBatch`) persists and fans out
-//! host-projected UI events separately in `realtime::gateway`, and reuses
-//! [`apply_approval_side_effects_from_payload`] +
-//! [`sync_formal_agent_session_from_ui_events`] for approval recording and
-//! formal session status.
+//! The formal host gateway path (`HostIngestLiveBatch`) persists raw in
+//! `realtime::gateway`, then **server-translates** with the same
+//! [`SessionTranslators`] stack (host-supplied `projection` is ignored). It
+//! reuses [`apply_approval_side_effects_from_payload`] +
+//! [`sync_formal_agent_session_from_ui_events`] for approvals and formal status.
 //!
 //! Fan-out is bounded: the SessionHandle's outbox is a fixed-size
 //! `mpsc::channel(256)`; full channels drop the one frame with a warn log

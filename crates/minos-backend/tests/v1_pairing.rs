@@ -9,11 +9,7 @@ use serde_json::json;
 
 mod common;
 
-async fn post(
-    app: &mut axum::Router,
-    path: &str,
-    body: serde_json::Value,
-) -> StatusCode {
+async fn post(app: &mut axum::Router, path: &str, body: serde_json::Value) -> StatusCode {
     let (status, _) = common::send(
         app,
         Request::builder()

@@ -353,9 +353,6 @@ pub fn record_auth_refresh_reuse() {
     metrics::counter!(AUTH_REFRESH_REUSE_TOTAL).increment(1);
 }
 
-
-
-
 pub fn record_approval_decision(outcome: &str) {
     init();
     metrics::counter!(APPROVAL_DECISION_TOTAL, "outcome" => outcome.to_string()).increment(1);

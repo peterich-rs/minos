@@ -1,17 +1,62 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart'
-    show AsyncNotifier, AsyncNotifierProvider, FutureProvider;
+    show AsyncNotifier, AsyncNotifierProvider, FutureProvider, Provider;
 import 'package:minos/data/repositories/hosts_repository.dart';
 import 'package:minos/data/repositories/runtime_repository.dart';
+import 'package:minos/data/repositories/thread_repository.dart';
+import 'package:minos/domain/linked_host.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'minos_providers.g.dart';
 
 /// Hot stream of connection-state transitions sourced from the Rust core.
+///
+/// This is IM **account online** for this phone: live `/ws/client` to the hub.
 @Riverpod(keepAlive: true)
 Stream<ConnectionState> connectionState(Ref ref) {
   return ref.watch(runtimeRepositoryProvider).connectionStates;
 }
+
+/// Keep [pairedMacsProvider] in sync with hub presence StreamEvents
+/// (`UiEventMessage.raw(kind: presence)`). Device online = host WS on server.
+final hostPresenceSyncProvider = Provider<void>((ref) {
+  final repo = ref.watch(threadRepositoryProvider);
+  final sub = repo.uiEvents.listen((frame) {
+    final ui = frame.ui;
+    if (ui is! UiEventMessage_Raw || ui.kind != 'presence') return;
+    try {
+      final map = jsonDecode(ui.payloadJson);
+      if (map is! Map) return;
+      final kind = map['principal_kind']?.toString();
+      // Only host device rows live in pairedMacs; account_client is for hosts.
+      if (kind != null && kind != 'host') return;
+      final id = map['installation_id']?.toString().trim() ?? '';
+      if (id.isEmpty) return;
+      final online = map['online'] == true;
+      final lastSeen = map['last_seen_at_ms'];
+      final lastSeenMs = lastSeen is int
+          ? lastSeen
+          : lastSeen is num
+          ? lastSeen.toInt()
+          : int.tryParse(lastSeen?.toString() ?? '') ?? 0;
+      unawaited(
+        ref
+            .read(pairedMacsProvider.notifier)
+            .applyHostPresence(
+              installationId: id,
+              online: online,
+              lastSeenAtMs: lastSeenMs > 0 ? lastSeenMs : null,
+            ),
+      );
+    } catch (_) {
+      // Malformed presence payload — ignore; next list refresh corrects.
+    }
+  });
+  ref.onDispose(sub.cancel);
+});
 
 final hasPersistedPairingProvider = FutureProvider<bool>((ref) {
   return ref.watch(runtimeRepositoryProvider).hasPersistedPairing();
@@ -62,9 +107,16 @@ final pairedMacsProvider =
     AsyncNotifierProvider<PairedMacs, List<HostSummaryDto>>(PairedMacs.new);
 
 class PairedMacs extends AsyncNotifier<List<HostSummaryDto>> {
+  /// last_seen_at_ms by host installation id (not on FRB DTO).
+  final Map<String, int> _lastSeenByHost = {};
+
   @override
   Future<List<HostSummaryDto>> build() async {
-    final hosts = await ref.watch(hostsRepositoryProvider).listHostsAsDto();
+    // Arm presence listener for the app lifetime.
+    ref.watch(hostPresenceSyncProvider);
+    final linked = await ref.watch(hostsRepositoryProvider).listLinkedHosts();
+    _ingestLastSeen(linked);
+    final hosts = linked.map(linkedHostToDto).toList(growable: false);
     await _ensureActiveHost(hosts);
     return hosts;
   }
@@ -72,7 +124,9 @@ class PairedMacs extends AsyncNotifier<List<HostSummaryDto>> {
   Future<void> refresh() async {
     final previous = state;
     try {
-      final hosts = await ref.read(hostsRepositoryProvider).listHostsAsDto();
+      final linked = await ref.read(hostsRepositoryProvider).listLinkedHosts();
+      _ingestLastSeen(linked);
+      final hosts = linked.map(linkedHostToDto).toList(growable: false);
       await _ensureActiveHost(hosts);
       state = AsyncValue.data(hosts);
     } catch (error, stackTrace) {
@@ -81,6 +135,52 @@ class PairedMacs extends AsyncNotifier<List<HostSummaryDto>> {
         Error.throwWithStackTrace(error, stackTrace);
       }
       state = AsyncValue.error(error, stackTrace);
+    }
+  }
+
+  /// Live hub presence for a host device (IM friend-device online).
+  Future<void> applyHostPresence({
+    required String installationId,
+    required bool online,
+    int? lastSeenAtMs,
+  }) async {
+    if (lastSeenAtMs != null && lastSeenAtMs > 0) {
+      _lastSeenByHost[installationId] = lastSeenAtMs;
+    }
+    final current = state.asData?.value;
+    if (current == null) {
+      // No list yet — full refresh when possible.
+      try {
+        await refresh();
+      } catch (_) {}
+      return;
+    }
+    var changed = false;
+    final next = current.map((h) {
+      if (h.hostDeviceId != installationId) return h;
+      if (h.online == online) return h;
+      changed = true;
+      return HostSummaryDto(
+        hostDeviceId: h.hostDeviceId,
+        hostDisplayName: h.hostDisplayName,
+        pairedAtMs: h.pairedAtMs,
+        pairedViaDeviceId: h.pairedViaDeviceId,
+        online: online,
+      );
+    }).toList(growable: false);
+    if (changed) {
+      state = AsyncValue.data(next);
+    }
+  }
+
+  int? lastSeenAtMs(String hostInstallationId) =>
+      _lastSeenByHost[hostInstallationId];
+
+  void _ingestLastSeen(List<LinkedHost> linked) {
+    for (final h in linked) {
+      if (h.lastSeenAtMs > 0) {
+        _lastSeenByHost[h.hostInstallationId] = h.lastSeenAtMs;
+      }
     }
   }
 

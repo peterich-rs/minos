@@ -39,12 +39,9 @@ async fn formal_realtime_ws_ticket_uses_account_bearer_without_device_headers() 
         .map(DeviceId)
         .unwrap();
 
-    let account = minos_backend::store::accounts::create(
-        &state.store,
-        "formal-ticket@example.com",
-    )
-    .await
-    .unwrap();
+    let account = minos_backend::store::accounts::create(&state.store, "formal-ticket@example.com")
+        .await
+        .unwrap();
     let account_id = account.account_id.clone();
     device_installations::insert_client_for_account(
         &state.store,
@@ -91,10 +88,9 @@ async fn formal_realtime_ws_ticket_uses_account_bearer_without_device_headers() 
 #[tokio::test]
 async fn formal_hosts_list_uses_account_bearer_without_device_headers() {
     let state = backend_state().await;
-    let account =
-        minos_backend::store::accounts::create(&state.store, "formal-hosts@example.com")
-            .await
-            .unwrap();
+    let account = minos_backend::store::accounts::create(&state.store, "formal-hosts@example.com")
+        .await
+        .unwrap();
     let host = DeviceId::new();
     let mobile = DeviceId::new();
 
