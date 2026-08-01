@@ -149,7 +149,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-schema-01 · SQLite dev migration 对齐 Postgres 形态
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done |
 | lane | backend |
 | depends_on | — (soft: T-p0-03) |
 | exit | SQLite `devices` → `device_installations`（`kind` enum）；`account_host_pairings` → `host_links`（加 `acl_json`/`link_display_name`）；移除 `secret_hash`；移除 `pairing_codes`；加 CHECK 约束 |
@@ -157,7 +157,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-schema-02 · Rust store 层迁移到新表名
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done |
 | lane | backend |
 | depends_on | T-schema-01 |
 | exit | `store::devices` → `store::device_installations`；`store::account_host_pairings` → `store::host_links`；所有 SQL 查询更新；`cargo test` 绿 |
@@ -169,7 +169,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-auth-01 · Migration `accounts.supabase_sub` + `installation_kind` add `desktop`
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done |
 | lane | backend |
 | depends_on | — (soft: T-p0-03) |
 | exit | Postgres: `accounts.supabase_sub TEXT NULL UNIQUE`；`ALTER TYPE installation_kind ADD VALUE 'desktop'`；CHECK 约束更新；backend boots |

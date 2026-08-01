@@ -124,7 +124,7 @@
 ### 配对流程（正式/代码模式）
 
 1. **Mac 请求配对码**: `POST /v1/host/pairing/request-code` → 返回配对码
-2. **手机确认**: `POST /v1/pairing/confirm` 带配对码 → 创建 `account_host_pairings` 关联
+2. **手机确认**: `POST /v1/pairing/confirm` 带配对码 → 创建 `host_links` 关联
 3. **Mac 赎回**: `POST /v1/host/pairing/redeem` → 获得 `hit_*` host 安装令牌
 4. **Mac 连接**: 用安装令牌签发 WS ticket → 连接 `/ws/host`
 
@@ -179,12 +179,12 @@ Migrations 为 latest-only 单一初始 schema（`sqlx::migrate!`）：
 | 表 | 用途 |
 |----|------|
 | `accounts` | 账户（email, password_hash, minos_id, display_name） |
-| `devices` | 设备（role: agent-host/mobile-client/browser-admin, secret_hash, account_id） |
+| `device_installations` | 安装（kind: mobile/browser/desktop/host, public_key, account_id） |
 | `pairing_tokens` | 配对令牌（token_hash, issuer_device_id, expires_at） |
 | `pairing_codes` | 配对码（code_hash, host_installation_id, status） |
 | `host_installation_tokens` | Host 安装令牌 |
 | `refresh_tokens` | 刷新令牌 |
-| `account_host_pairings` | 账户-Host 关联 |
+| `host_links` | 账户-Host 关联 |
 | `friend_requests` | 好友请求 |
 | `friendships` | 好友关系 |
 | `conversations` | 对话（直接/群组） |
@@ -203,7 +203,7 @@ Migrations 为 latest-only 单一初始 schema（`sqlx::migrate!`）：
 
 ### 30 个 Store 子模块
 
-涵盖: accounts, devices, tokens, pairing_codes, host_installation_tokens, refresh_tokens, account_host_pairings, agent_sessions, agent_turns, agent_turn_events, approval_requests, host_commands, durable_event_log, outbox_events, sessions, raw_events, thread_sync_state, projects, push_tokens, notification_preferences, notification_cooldowns 等。
+涵盖: accounts, device_installations, tokens, pairing_codes, host_installation_tokens, refresh_tokens, host_links, agent_sessions, agent_turns, agent_turn_events, approval_requests, host_commands, durable_event_log, outbox_events, sessions, raw_events, thread_sync_state, projects, push_tokens, notification_preferences, notification_cooldowns 等。
 
 ## Agent 会话管理 (`src/agent_sessions/`)
 
