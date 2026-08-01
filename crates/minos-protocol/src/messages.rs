@@ -768,41 +768,6 @@ pub struct GetSessionResponse {
     pub state: SessionState,
 }
 
-/// Deep-link QR payload minted by the Mac and scanned by iOS. Carries a
-/// display name for the host, a short-lived one-shot `pairing_token`, and
-/// its RFC-3339-ish epoch-ms expiry. The backend URL lives in the mobile
-/// client's compile-time build config (see `minos_mobile::build_config`);
-/// it is not a transit value and never enters the QR payload, durable
-/// storage, or the post-pair business logic.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct PairingQrPayload {
-    #[serde(default = "default_pairing_qr_version")]
-    pub v: u8,
-    pub host_display_name: String,
-    #[serde(alias = "token")]
-    pub pairing_token: String,
-    #[serde(default)]
-    pub expires_at_ms: i64,
-}
-
-const fn default_pairing_qr_version() -> u8 {
-    2
-}
-
-/// Parameters for `request_pairing_qr` — the Mac tells the backend which
-/// display name to embed so the iPhone UI can say "Pair with <name>?".
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct RequestPairingQrParams {
-    pub host_display_name: String,
-}
-
-/// Response from `request_pairing_qr`; wraps a [`PairingQrPayload`] for
-/// the Mac to render directly as a QR code.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct RequestPairingQrResponse {
-    pub qr_payload: PairingQrPayload,
-}
-
 /// Compact summary of one persisted session, returned by `list_sessions`
 /// for the mobile history list.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -1954,51 +1919,6 @@ mod tests {
 mod new_type_tests {
     use super::*;
     use pretty_assertions::assert_eq;
-
-    #[test]
-    fn pairing_qr_payload_ignores_legacy_unknown_fields() {
-        // Legacy QR payloads may still carry `backend_url` and CF Access
-        // fields — `serde` ignores unknown fields by default, so this is
-        // a forward-compat read of older Mac builds. The struct itself no
-        // longer carries them. The legacy display-name alias was dropped
-        // in Phase B; new payloads must use `host_display_name`.
-        let back: PairingQrPayload = serde_json::from_value(serde_json::json!({
-            "backend_url": "wss://minos.fan-nn.top/devices",
-            "host_display_name": "Mac",
-            "token": "tok"
-        }))
-        .unwrap();
-
-        assert_eq!(back.v, 2);
-        assert_eq!(back.host_display_name, "Mac");
-        assert_eq!(back.pairing_token, "tok");
-        assert_eq!(back.expires_at_ms, 0);
-    }
-
-    #[test]
-    fn request_pairing_qr_params_round_trip() {
-        let p = RequestPairingQrParams {
-            host_display_name: "Fan's Mac".into(),
-        };
-        let back: RequestPairingQrParams =
-            serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
-        assert_eq!(p, back);
-    }
-
-    #[test]
-    fn request_pairing_qr_response_round_trip() {
-        let r = RequestPairingQrResponse {
-            qr_payload: PairingQrPayload {
-                v: 1,
-                host_display_name: "Mac".into(),
-                pairing_token: "tok".into(),
-                expires_at_ms: 42,
-            },
-        };
-        let back: RequestPairingQrResponse =
-            serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
-        assert_eq!(r, back);
-    }
 
     #[test]
     fn thread_summary_round_trip_with_end_reason() {

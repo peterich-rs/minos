@@ -59,10 +59,6 @@ class RuntimeRepository {
     return _core.setActiveHost(hostDeviceId);
   }
 
-  Future<void> pairWithQrJson(String qrJson) {
-    return _core.pairWithQrJson(qrJson);
-  }
-
   Future<void> setPeerDisplayName(String? displayName) {
     return _core.setPeerDisplayName(displayName);
   }

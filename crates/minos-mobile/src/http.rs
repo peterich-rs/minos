@@ -64,26 +64,6 @@ struct WsTicketData {
     gateway_url: String,
 }
 
-#[derive(Debug, Serialize)]
-struct PairConfirmRequest<'a> {
-    pairing_code: &'a str,
-    client_request_id: &'a str,
-}
-
-#[derive(Debug, Deserialize)]
-struct PairConfirmEnvelope {
-    data: PairConfirmData,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct PairConfirmData {
-    pub host_installation_id: String,
-    #[allow(dead_code)]
-    pub status: String,
-    #[allow(dead_code)]
-    pub already_confirmed: bool,
-}
-
 #[derive(Debug, Deserialize)]
 struct ListHostsEnvelope {
     data: ListHostsData,
@@ -356,50 +336,9 @@ impl MobileHttpClient {
         })
     }
 
-    /// Confirm a formal host pairing code with the logged-in account bearer.
-    pub async fn pair_confirm(
-        &self,
-        pairing_code: &str,
-        access_token: &str,
-    ) -> Result<PairConfirmData, MinosError> {
-        let path = "/v1/pairing/confirm";
-        let url = format!("{}{path}", self.base);
-        let trace_id = start_http_trace(
-            Method::POST.as_str(),
-            path,
-            None,
-            Some("formal-pair-confirm".into()),
-        );
-        let req = PairConfirmRequest {
-            pairing_code,
-            client_request_id: "mobile-pair-confirm",
-        };
-        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
-        let resp = self.execute_with_trace(trace_id, &url, request).await?;
-        let status = resp.status();
-        if status.is_success() {
-            let envelope: PairConfirmEnvelope =
-                decode_success_json(resp, "PairConfirmEnvelope").await?;
-            request_trace::finish_success(
-                trace_id,
-                Some(status.as_u16()),
-                Some(format!(
-                    "host_installation_id={}",
-                    envelope.data.host_installation_id
-                )),
-                None,
-            );
-            Ok(envelope.data)
-        } else {
-            let error = decode_error(resp).await;
-            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
-            Err(error)
-        }
-    }
-
     /// Unlink a host from the caller's account (`POST /v1/hosts/unlink`).
-    /// Bearer-only. Replaces the removed `DELETE /v1/pairings/:id` path.
-    pub async fn delete_pair(
+    /// Bearer-only.
+    pub async fn unlink_host(
         &self,
         access_token: &str,
         host_device_id: DeviceId,
@@ -429,11 +368,8 @@ impl MobileHttpClient {
     }
 
     /// List every Mac linked to the caller's account (`GET /v1/hosts`).
-    /// Bearer-only. Replaces the legacy `POST /v1/pairing/list-hosts` path.
-    pub async fn list_paired_hosts(
-        &self,
-        access_token: &str,
-    ) -> Result<MeHostsResponse, MinosError> {
+    /// Bearer-only.
+    pub async fn list_hosts(&self, access_token: &str) -> Result<MeHostsResponse, MinosError> {
         let path = "/v1/hosts";
         let url = format!("{}{path}", self.base);
         let trace_id = start_http_trace(Method::GET.as_str(), path, None, None);

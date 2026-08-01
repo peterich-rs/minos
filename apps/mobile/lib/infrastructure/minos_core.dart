@@ -102,17 +102,6 @@ class MinosCore implements MinosCoreProtocol {
   }
 
   @override
-  Future<void> pairWithQrJson(String qrJson) async {
-    await _client.pairWithQrJson(qrJson: qrJson);
-    try {
-      await _secure.saveState(await _client.persistedPairingState());
-    } catch (error, stackTrace) {
-      await _rollbackFailedPersistedPairSave();
-      Error.throwWithStackTrace(error, stackTrace);
-    }
-  }
-
-  @override
   Future<void> forgetHost(String hostDeviceId) async {
     await _client.forgetHost(hostDeviceId: hostDeviceId);
   }
@@ -575,22 +564,6 @@ class MinosCore implements MinosCoreProtocol {
     questionId: questionId,
     answersJson: jsonEncode(answers),
   );
-
-  Future<void> _rollbackFailedPersistedPairSave() async {
-    // ADR-0020: with bearer-only auth the server's `account_host_pairings`
-    // row is the source of truth for the pairing — we can't atomically
-    // un-pair without the just-minted host_device_id, which the failed
-    // persistedPairingState() may not have surfaced. Best-effort: drop
-    // any partial keychain snapshot so the next launch starts clean. The
-    // user can forget the Mac explicitly from the Partners tab if the
-    // server-side pairing turns out to be stale.
-    try {
-      await _secure.clearAll();
-    } catch (_) {
-      // Preserve the original persistence failure; the next launch will still
-      // treat any leftover partial snapshot as non-resumable.
-    }
-  }
 
   static bool _shouldDiscardPersistedState(Object error) {
     return error is MinosError_DeviceNotTrusted ||

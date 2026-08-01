@@ -46,23 +46,12 @@ interface ResponseEnvelope<T> {
   data: T
 }
 
-export interface PairingQrPayload {
-  v: number
-  host_display_name: string
-  pairing_token: string
-  expires_at_ms: number
-}
-
-export interface PairResponse {
-  peer_device_id: string
-  peer_name: string
-}
-
 export interface HostSummary {
   host_device_id: string
   host_display_name: string
   paired_at_ms: number
   paired_via_device_id: string
+  online?: boolean
 }
 
 export interface MeHostsResponse {
@@ -71,18 +60,13 @@ export interface MeHostsResponse {
 
 interface FormalHostSummary {
   host_installation_id: string
-  host_display_name: string
-  paired_at_ms: number
-  linked_via_installation_id: string
+  host_display_name: string | null
+  linked_at_ms: number
+  online: boolean
 }
 
 interface ListHostsData {
   hosts: FormalHostSummary[]
-}
-
-interface ConfirmPairingData {
-  host_installation_id: string
-  status: string
 }
 
 export interface MyProfileResponse {
@@ -638,43 +622,23 @@ function requestAuthedQuery<T>(
   })
 }
 
+/** List Host-Link hosts for the account (`GET /v1/hosts`). */
 export async function listHosts(
   deviceId: string,
   accessToken: string,
 ): Promise<MeHostsResponse> {
-  const envelope = await requestAuthedQuery<ResponseEnvelope<ListHostsData>>(
-    '/v1/pairing/list-hosts',
-    deviceId,
-    accessToken,
-  )
+  const envelope = await requestJson<ResponseEnvelope<ListHostsData>>('/v1/hosts', {
+    method: 'GET',
+    headers: deviceHeaders(deviceId, accessToken),
+  })
   return {
     hosts: envelope.data.hosts.map((host) => ({
       host_device_id: host.host_installation_id,
-      host_display_name: host.host_display_name,
-      paired_at_ms: host.paired_at_ms,
-      paired_via_device_id: host.linked_via_installation_id,
+      host_display_name: host.host_display_name ?? 'Mac',
+      paired_at_ms: host.linked_at_ms,
+      paired_via_device_id: '',
+      online: host.online,
     })),
-  }
-}
-
-export async function pairHost(
-  deviceId: string,
-  accessToken: string,
-  pairingToken: string,
-  deviceName = 'Browser admin',
-): Promise<PairResponse> {
-  void deviceName
-  const envelope = await requestJson<ResponseEnvelope<ConfirmPairingData>>('/v1/pairing/confirm', {
-    method: 'POST',
-    headers: deviceHeaders(deviceId, accessToken),
-    body: JSON.stringify({
-      pairing_code: pairingToken,
-      client_request_id: crypto.randomUUID(),
-    }),
-  })
-  return {
-    peer_device_id: envelope.data.host_installation_id,
-    peer_name: envelope.data.status,
   }
 }
 

@@ -1082,7 +1082,7 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
     const MODULEMAP_DECL: &str = "framework module MinosCore {";
     const MODULEMAP_DECL_NORMALIZED: &str = "module MinosCoreFFI {";
     const MODULEMAP_DECL_ALREADY_NORMALIZED: &str = "framework module MinosCoreFFI {";
-    // Each cross-crate newtype that minos-daemon and minos-pairing both
+    // Each cross-crate newtype that minos-daemon and related crates both
     // register as a `remote` UniFFI custom_type emits an identical typealias
     // + FfiConverter block in `minos_daemon.swift` and `minos_pairing.swift`.
     // The two files share a Swift module, so we strip the daemon copy and

@@ -19,16 +19,14 @@
 //! (`flutter_secure_storage`, plan D5). For Rust unit/integration tests
 //! this module offers an in-memory implementation.
 //!
-//! The trait is mobile-local rather than reused from `minos-pairing` because
-//! the backend-assembled QR (spec §8.1) changed the data shape: there is no
-//! longer a `TrustedDevice` list, just a single paired-backend descriptor
-//! plus credentials.
+//! The trait is mobile-local: durable account session + active-host routing
+//! target. Host binding (Host Link) is performed on Desktop, not via QR.
 
 use async_trait::async_trait;
 use minos_domain::{DeviceId, MinosError};
 use tokio::sync::RwLock;
 
-/// Durable mobile pairing snapshot mirrored into the iOS keychain.
+/// Durable mobile session snapshot mirrored into the iOS keychain.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PersistedPairingState {
     pub device_id: Option<String>,
@@ -55,7 +53,7 @@ pub struct PersistedAuth {
     pub account_email: String,
 }
 
-/// Asynchronous store for the mobile client's durable pairing state.
+/// Asynchronous store for the mobile client's durable session state.
 ///
 /// Errors surface as `MinosError::StoreIo` / `StoreCorrupt` at the boundary.
 /// Implementations must be cheap enough to call on the UI thread — i.e. no
@@ -67,13 +65,11 @@ pub trait MobilePairingStore: Send + Sync {
     /// Persist the client's own DeviceId (post-register / pre-pair).
     async fn save_device(&self, id: &DeviceId) -> Result<(), MinosError>;
 
-    /// Persist the active-Mac DeviceId — the Mac that subsequent
-    /// `Envelope::Forward` frames target. Set by `pair_with_qr_json` after
-    /// a successful consume; updated by `set_active_host` when the user
-    /// switches between paired Macs in `/v1/me/macs`.
+    /// Persist the active-Mac DeviceId — the Mac that subsequent host
+    /// commands target. Set after Host Link when the user selects a host
+    /// from `GET /v1/hosts`.
     async fn save_active_host(&self, host: &DeviceId) -> Result<(), MinosError>;
-    /// Read the currently-active Mac id, or `None` if no pair has been
-    /// completed yet.
+    /// Read the currently-active Mac id, or `None` if none selected.
     async fn load_active_host(&self) -> Result<Option<DeviceId>, MinosError>;
     /// Conditionally clear the active-Mac slot — only if it currently
     /// equals `host`. Used by `forget_host` to avoid clobbering a
@@ -97,7 +93,7 @@ pub trait MobilePairingStore: Send + Sync {
     async fn load_auth(&self) -> Result<Option<PersistedAuth>, MinosError>;
 
     /// Clear the auth tuple (logout / refresh-failure path). Leaves the
-    /// pairing fields untouched.
+    /// device / active-host fields untouched.
     async fn clear_auth(&self) -> Result<(), MinosError>;
 
     async fn clear_all(&self) -> Result<(), MinosError>;

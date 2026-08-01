@@ -130,7 +130,7 @@ check-desktop:
 
 # Run the fake-peer smoke binary with a subcommand (default: register).
 
-# Usage: just smoke-fake-peer [register|smoke-session|pair]
+# Usage: just smoke-fake-peer [register|login|list-hosts|smoke-session]
 smoke-fake-peer kind='register':
     @just check-env >/dev/null
     cargo run -p minos-mobile --bin fake-peer --features cli -- \

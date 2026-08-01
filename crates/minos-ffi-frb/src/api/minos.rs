@@ -161,7 +161,7 @@ impl From<PersistedPairingState> for minos_mobile::PersistedPairingState {
 }
 
 /// Dart-visible mirror of `minos_protocol::HostSummary`. One row returned by
-/// `/v1/pairing/list-hosts`.
+/// `GET /v1/hosts`.
 pub struct HostSummaryDto {
     pub host_device_id: String,
     pub host_display_name: String,
@@ -233,8 +233,8 @@ impl From<minos_mobile::auth::AuthStateFrame> for AuthStateFrame {
 }
 
 impl MobileClient {
-    /// Construct a client backed by the built-in in-memory pairing store.
-    /// Synchronous — no I/O happens until a pairing method is called.
+    /// Construct a client backed by the built-in in-memory session store.
+    /// Synchronous — no I/O happens until an auth/session method is called.
     #[frb(sync)]
     #[must_use]
     pub fn new(self_name: String) -> Self {
@@ -243,7 +243,7 @@ impl MobileClient {
         ))
     }
 
-    /// Construct a client preloaded with a durable pairing snapshot from the
+    /// Construct a client preloaded with a durable session snapshot from the
     /// Dart-side secure store.
     #[frb(sync)]
     #[must_use]
@@ -254,27 +254,20 @@ impl MobileClient {
         ))
     }
 
-    /// Pair using the raw JSON payload extracted from the scanned QR v2
-    /// code. Delegates to `MobileClient::pair_with_qr_json`.
-    pub async fn pair_with_qr_json(&self, qr_json: String) -> Result<(), MinosError> {
-        self.0.pair_with_qr_json(qr_json).await
-    }
-
-    /// Reconnect using the durable pairing snapshot already loaded from the
+    /// Reconnect using the durable session snapshot already loaded from the
     /// Dart-side secure store.
     pub async fn resume_persisted_session(&self) -> Result<(), MinosError> {
         self.0.resume_persisted_session().await
     }
 
-    /// Forget a specific paired Mac. The path-bound `host_device_id` is
-    /// the Mac to forget. Idempotent. ADR-0020 supersedes the old
-    /// `forget_peer` (single-peer) call.
+    /// Unlink a host installation from the account and clear local active-host
+    /// when it matches. Idempotent.
     pub async fn forget_host(&self, host_device_id: String) -> Result<(), MinosError> {
         let host = parse_device_id(&host_device_id)?;
         self.0.forget_host(host).await
     }
 
-    /// List every Mac paired to the caller's account.
+    /// List every Mac linked to the caller's account (`GET /v1/hosts`).
     pub async fn list_paired_hosts(&self) -> Result<Vec<HostSummaryDto>, MinosError> {
         let hosts = self.0.list_paired_hosts().await?;
         Ok(hosts.into_iter().map(HostSummaryDto::from).collect())
