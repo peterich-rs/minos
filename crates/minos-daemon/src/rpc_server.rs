@@ -8,6 +8,8 @@
 //! token / connection-state plumbing are gone.
 //!
 //! Holds `Arc`s only — cheap to clone once and pass into the dispatcher.
+//! Host binding (account↔host) is Host Link on the backend; this server only
+//! runs local agent / workspace commands.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -21,9 +23,8 @@ use minos_protocol::{
     GetSessionResponse, HealthResponse, InterruptSessionRequest, ListClisResponse,
     ListHostSkillsRequest, ListHostSkillsResponse, ListHostWorkspacesRequest,
     ListHostWorkspacesResponse, ListSessionsParams, ListSessionsResponse, MinosRpcServer,
-    PairRequest, PairResponse, RespondOpencodeQuestionRequest, SendUserMessageRequest,
-    StartAgentRequest, StartAgentResponse, WriteHostSkillConfigRequest,
-    WriteHostSkillConfigResponse,
+    RespondOpencodeQuestionRequest, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
+    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use serde_json::{json, Map, Value};
 
@@ -37,18 +38,6 @@ pub struct RpcServerImpl {
 
 #[async_trait]
 impl MinosRpcServer for RpcServerImpl {
-    async fn pair(&self, _req: PairRequest) -> jsonrpsee::core::RpcResult<PairResponse> {
-        // Pairing is owned end-to-end by the backend broker (plan 05 Phase F.3).
-        // The Mac receives a Paired event from the backend's HTTP
-        // `POST /v1/pairing/consume` handler — it never sees a peer-originated
-        // `pair` JSON-RPC. If a forwarded JSON-RPC frame somehow reaches here,
-        // the right answer is that the host explicitly does not trust this
-        // surface for pairing.
-        Err(rpc_err(MinosError::Unauthorized {
-            reason: "pair handled by backend, not host".into(),
-        }))
-    }
-
     async fn health(&self) -> jsonrpsee::core::RpcResult<HealthResponse> {
         Ok(HealthResponse {
             version: env!("CARGO_PKG_VERSION").into(),
@@ -165,10 +154,6 @@ pub async fn invoke_host_command(
     server: &Arc<RpcServerImpl>,
 ) -> Result<Value, Value> {
     match method {
-        "minos_pair" => {
-            let req: PairRequest = parse_params(&params)?;
-            into_result(server.pair(req).await)
-        }
         "minos_health" => into_result(server.health().await),
         "minos_list_clis" => into_result(server.list_clis().await),
         "minos_list_host_skills" => {
@@ -462,27 +447,6 @@ mod tests {
         let value = result.unwrap();
         assert!(value["version"].is_string());
         assert!(value["uptime_secs"].is_number());
-    }
-
-    #[tokio::test]
-    async fn invoke_host_command_pair_returns_error() {
-        let server = fake_server().await;
-        let result = invoke_host_command(
-            "minos_pair",
-            json!({
-                "device_id": "00000000-0000-0000-0000-000000000000",
-                "name": "x",
-                "token": "tok",
-            }),
-            &server,
-        )
-        .await;
-        let err = result.unwrap_err();
-        let msg = err["message"].as_str().unwrap_or_default();
-        assert!(
-            msg.contains("backend"),
-            "expected 'backend'-mentioning message, got {msg}"
-        );
     }
 
     #[tokio::test]

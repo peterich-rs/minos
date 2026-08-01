@@ -1,6 +1,6 @@
 //! Request and response payload types.
 
-use minos_domain::{AgentDescriptor, AgentName, DeviceId, PairingToken};
+use minos_domain::{AgentDescriptor, AgentName, DeviceId};
 use minos_ui_protocol::{SessionEndReason, UiEventMessage};
 use serde::{Deserialize, Serialize};
 
@@ -390,34 +390,6 @@ pub struct SendAgentMessageRequest {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to_message_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PairRequest {
-    pub device_id: DeviceId,
-    pub name: String,
-    /// One-shot pairing token presented in the QR. Validated server-side
-    /// against the daemon's currently-active token before any state is
-    /// mutated; spec §6.4. Required by MVP.
-    pub token: PairingToken,
-}
-
-/// Result of `POST /v1/pairings` (consume). iOS no longer receives a
-/// device secret — the rail is bearer-only post ADR-0020. Mac-side
-/// pair state is delivered separately via `EventKind::Paired`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PairResponse {
-    pub peer_device_id: DeviceId,
-    pub peer_name: String,
-}
-
-/// Request body for `POST /v1/pairing/consume`. Distinct from
-/// [`PairRequest`] because the HTTP route derives `device_id` from the
-/// `X-Device-Id` header, not the body.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PairConsumeRequest {
-    pub token: PairingToken,
-    pub device_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1551,52 +1523,6 @@ pub struct ListProjectSessionsResponse {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-
-    #[test]
-    fn pair_request_round_trip() {
-        let req = PairRequest {
-            device_id: DeviceId::new(),
-            name: "iPhone of fan".into(),
-            token: PairingToken::generate(),
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        let back: PairRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(req, back);
-    }
-
-    #[test]
-    fn pair_response_round_trip() {
-        let resp = PairResponse {
-            peer_device_id: DeviceId::new(),
-            peer_name: "MacBook".into(),
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(
-            value["peer_device_id"],
-            serde_json::to_value(resp.peer_device_id).unwrap()
-        );
-        assert_eq!(value["peer_name"], serde_json::json!("MacBook"));
-        assert!(value.get("your_device_secret").is_none());
-        let back: PairResponse = serde_json::from_str(&json).unwrap();
-        assert_eq!(resp, back);
-    }
-
-    #[test]
-    fn pair_response_no_secret_field_round_trip() {
-        let resp = PairResponse {
-            peer_device_id: DeviceId::new(),
-            peer_name: "iPhone".into(),
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert!(
-            value.get("your_device_secret").is_none(),
-            "secret must not appear"
-        );
-        let back: PairResponse = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, resp);
-    }
 
     #[test]
     fn me_hosts_response_round_trips() {
