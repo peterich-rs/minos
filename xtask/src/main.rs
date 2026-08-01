@@ -1068,10 +1068,7 @@ fn prune_unexpected_uniffi_outputs(out_dir: &Path) {
     // Host Link replaced QR pairing; `minos-pairing` is no longer a UniFFI
     // surface. Stale bindgen artifacts must not stay under Minos/Generated or
     // they collide with `DateTimeUtc` / converters also emitted by minos-daemon.
-    const RETIRED: &[&str] = &[
-        "minos_pairing.swift",
-        "minos_pairingFFI.h",
-    ];
+    const RETIRED: &[&str] = &["minos_pairing.swift", "minos_pairingFFI.h"];
     for name in RETIRED {
         let path = out_dir.join(name);
         if path.exists() {
