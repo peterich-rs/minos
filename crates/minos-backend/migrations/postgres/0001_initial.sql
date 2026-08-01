@@ -22,7 +22,7 @@ CREATE TABLE account_credentials (
     updated_at_ms   BIGINT NOT NULL
 );
 
-CREATE TYPE installation_kind AS ENUM ('mobile', 'browser', 'host');
+CREATE TYPE installation_kind AS ENUM ('mobile', 'browser', 'desktop', 'host');
 
 CREATE TABLE device_installations (
     installation_id   TEXT PRIMARY KEY,
@@ -33,8 +33,10 @@ CREATE TABLE device_installations (
     display_name      TEXT,
     created_at_ms     BIGINT NOT NULL,
     last_seen_at_ms   BIGINT NOT NULL,
+    -- desktop behaves like mobile/browser: account_id required, public_key null.
+    -- host: account_id null + public_key required (insert with key at TOFU register).
     CONSTRAINT installation_kind_account_consistency CHECK (
-        (kind IN ('mobile', 'browser') AND account_id IS NOT NULL AND public_key IS NULL) OR
+        (kind IN ('mobile', 'browser', 'desktop') AND account_id IS NOT NULL AND public_key IS NULL) OR
         (kind = 'host' AND account_id IS NULL AND public_key IS NOT NULL)
     )
 );
