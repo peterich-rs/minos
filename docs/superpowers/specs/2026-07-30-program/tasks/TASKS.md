@@ -329,7 +329,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-nonce-01 · Bootstrap nonce 迁移 Redis
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done |
 | lane | backend |
 | depends_on | — |
 | exit | `BootstrapNonceStore` 从 DashMap 迁到 Redis（`SET nonce:<value> EX 60` + `GETDEL` consume）；dev 用 Inline Redis；multi-instance safe |
@@ -337,7 +337,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-host-01 · Link/unlink API design locked
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done |
 | lane | backend |
 | depends_on | T-auth-04 |
 | exit | OpenAPI/sketch in D02；threat model satisfied；wire shape locked |
@@ -345,7 +345,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-host-02 · Backend implement link/unlink/list
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done |
 | lane | backend |
 | depends_on | T-host-01, T-nonce-01, T-schema-02 |
 | exit | `POST /v1/hosts/link` + `POST /v1/hosts/unlink` + `GET /v1/hosts`；tests: link / unlink / multi-host list / host proof / host_linked_elsewhere 409 |
@@ -353,7 +353,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-host-03 · Daemon link RPC + persist + ws/host
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done |
 | lane | daemon |
 | depends_on | T-host-02 |
 | exit | `host.prepare_link` / `host.sign_link_proof` / `host.apply_link_token` RPC；daemon 持久化 token；Linked 时连接 `/ws/host` |

@@ -97,7 +97,7 @@
 | `bearer.rs` | Bearer token 提取 | `require()`, `require_account()` |
 | `passwords.rs` | Argon2id 密码哈希 | hash/verify |
 | `use_case.rs` | 认证业务逻辑 | `AuthUseCase` — register, login, refresh, logout, change_password |
-| `host_bootstrap.rs` | Host 初始认证 | `BootstrapNonceStore` |
+| `host_bootstrap.rs` | Host Ed25519 初始证明 | `BootstrapNonceStore`（Redis 或 in-memory；`GETDEL` 单次消费） |
 | `host_installation.rs` | Host 安装令牌 | `hit_*` 令牌验证 |
 | `realtime_ticket.rs` | WS 票据存储 | `RealtimeTicketStore` — 一次性票据 |
 | `rate_limit.rs` | 速率限制 | `RateLimiter` — 固定窗口 |
@@ -108,8 +108,8 @@
 2. **登录** (`POST /v1/auth/login`): 验证密码 → 签发 JWT
 3. **Supabase 交换** (`POST /v1/auth/supabase`): 校验 Supabase access JWT（JWKS）→ 按 `sub`/verified email 合并或创建 account → 签发 **Minos** JWT + refresh（不经 device-secret `authenticate()`）
 4. **刷新** (`POST /v1/auth/refresh`): 验证 refresh token → 轮转签发新 JWT + refresh token
-4. **Bearer 认证**: `Authorization: Bearer <jwt>` → `jwt::verify()` → 提取 account_id/device_id
-5. **WS 票据**: Bearer 认证后签发 60s 一次性 JWT → WS 升级时消费
+5. **Bearer 认证**: `Authorization: Bearer <jwt>` → `jwt::verify()` → 提取 account_id/device_id
+6. **WS 票据**: Bearer 认证后签发 60s 一次性 JWT → WS 升级时消费
 
 ### 速率限制
 
@@ -117,11 +117,27 @@
 - 登录: 10次/分钟/email, 5次/分钟/IP
 - 刷新: 60次/小时/account
 
-## 配对模块 (`src/pairing/`)
+## Host Link（同账户绑定，主路径）
+
+**Primary path** for account↔host binding (D02). QR pairing coexists until Phase D cleanup.
+
+| Endpoint | Auth | 作用 |
+|----------|------|------|
+| `POST /v1/hosts/link` | account bearer + host Ed25519 proof | upsert `host_links` + 签发 `hit_*` |
+| `POST /v1/hosts/unlink` | account bearer | 删 link、**始终**撤销 host tokens、kill `/ws/host`、清 peer cache |
+| `GET /v1/hosts` | account bearer | 列出本账户 hosts（`online` 来自 connection registry） |
+
+Link proof 签名载荷：`"{installation_id}:{nonce}:v1/hosts/link"`（无 leading slash）。Nonce 经 `POST /v1/host/bootstrap/nonce` 获取；多实例部署时 `BootstrapNonceStore` 走 Redis（与 `RealtimeTicketStore` 同 `MINOS_REDIS_URL`）。
+
+`host already linked elsewhere` → **409** `host_linked_elsewhere`（Host Link 路径单 account↔host）。
+
+实现：`http/v1/hosts.rs` + `PairingService::link_host` / `unlink_host`。
+
+## 配对模块 (`src/pairing/`) — QR（遗留，Phase D 删除）
 
 ### 核心类型: `PairingService`
 
-### 配对流程（正式/代码模式）
+### QR 配对流程（仍挂载）
 
 1. **Mac 请求配对码**: `POST /v1/host/pairing/request-code` → 返回配对码
 2. **手机确认**: `POST /v1/pairing/confirm` 带配对码 → 创建 `host_links` 关联
@@ -131,7 +147,7 @@
 ### 安全措施
 
 - 配对码/令牌存储前 SHA-256 哈希
-- Device secret 使用 Argon2id 哈希（PHC 字符串格式）
+- Host installation token 明文仅返回一次，库中只存 SHA-256
 - 禁止自我配对
 - 所有变更使用 `BEGIN IMMEDIATE`（SQLite）或 `SERIALIZABLE`（Postgres）事务
 

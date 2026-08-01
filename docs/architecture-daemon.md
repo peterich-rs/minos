@@ -325,11 +325,24 @@ main.rs
         │     ├── IngestCoalescer (ingest_coalescer.rs) — seq/projection/chunk 生成
         │     ├── EventWriter (store/event_writer.rs) — SQLite 本地写入
         │     └── LocalStore (store/mod.rs) — SQLite 连接池
-        ├── LocalRpcImpl (local_rpc.rs) — TUI JSON-RPC 服务器
+        ├── LocalRpcImpl (local_rpc.rs) — TUI/Desktop JSON-RPC 服务器
+        │     └── Host Link RPC（需 RelayClient）:
+        │           minos_local_host_prepare_link
+        │           minos_local_host_sign_link_proof
+        │           minos_local_host_apply_link_token
         ├── Subscription (subscription.rs) — UniFFI observer 桥接
-        ├── device_secret_store.rs — Host 令牌持久化
+        ├── device_secret_store.rs — Host 令牌持久化（`hit_*`）
         ├── host_bootstrap_key_store.rs — Ed25519 密钥持久化
         ├── local_state.rs — DeviceId + PeerRecord JSON
-        ├── relay_pairing.rs — RelayQrPayload, PeerRecord
+        ├── relay_pairing.rs — RelayQrPayload, PeerRecord（QR 遗留）
         └── jsonl_recover.rs — Codex JSONL 恢复
 ```
+
+### Host Link local RPC（D02）
+
+Desktop 在登录后调用：
+
+1. `minos_local_host_prepare_link` — 返回 `installation_id` + `public_key` + backend nonce
+2. Desktop 用 account bearer 调 `POST /v1/hosts/link`（签名可由 `minos_local_host_sign_link_proof` 生成）
+3. `minos_local_host_apply_link_token` — 持久化 `hit_*` 并 `secret_notify` 唤醒 relay 拨号 `/ws/host`
+
