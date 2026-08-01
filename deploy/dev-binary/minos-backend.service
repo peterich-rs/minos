@@ -1,0 +1,48 @@
+# systemd unit for minos-backend binary bypass (dev/agent urgency).
+#
+# Install (usually done by deploy-backend.sh):
+#   sudo install -m 644 minos-backend.service /etc/systemd/system/minos-backend.service
+#   sudo systemctl daemon-reload
+#
+# Env file (host paths, not Docker service DNS names):
+#   /opt/minos/deploy/backend.env
+#
+# Mutual exclusion: do not run this unit while Docker compose service
+# minos-backend is bound to 127.0.0.1:8787. Use switch-to-binary.sh /
+# switch-to-docker.sh.
+#
+# Caddy continues to terminate TLS and reverse_proxy to 127.0.0.1:8787.
+
+[Unit]
+Description=Minos backend (binary bypass)
+Documentation=https://github.com/peterich-rs/minos/blob/main/docs/ops/vps-dev-binary.md
+After=network-online.target
+Wants=network-online.target
+# Postgres/Redis may be Docker-managed; do not hard-require docker.service
+# so a pure-host data plane still works.
+
+[Service]
+Type=simple
+User=minos
+Group=minos
+WorkingDirectory=/opt/minos
+EnvironmentFile=/opt/minos/deploy/backend.env
+ExecStart=/opt/minos/current/minos-backend
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=35
+# Align with compose mem_limit for the backend process
+MemoryMax=512M
+# Hardening (binary still needs loopback network + DNS for any external IdP)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/minos
+# Logs: journald + optional MINOS_BACKEND_LOG_DIR under /opt/minos
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=minos-backend
+
+[Install]
+WantedBy=multi-user.target

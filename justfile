@@ -239,3 +239,22 @@ build-mobile-android:
     cd apps/mobile && \
     MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
     flutter build apk
+
+# ── VPS binary bypass (coexists with Docker prod; see docs/ops/vps-dev-binary.md) ──
+
+# Build linux/amd64 minos-backend only (default method: docker extract).
+# method = docker | cross | zig | native
+build-backend-linux method='docker':
+    ./deploy/dev-binary/build-linux-backend.sh --method {{ method }}
+
+# Build + rsync binary to VPS + install systemd unit + restart.
+# Example: just deploy-backend-dev user@vps
+# Extra flags: just deploy-backend-dev user@vps --dry-run
+deploy-backend-dev HOST *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "{{ HOST }}" ]; then
+      echo "error: HOST is required (just deploy-backend-dev user@vps)" >&2
+      exit 2
+    fi
+    ./deploy/dev-binary/deploy-backend.sh --host "{{ HOST }}" {{ ARGS }}
