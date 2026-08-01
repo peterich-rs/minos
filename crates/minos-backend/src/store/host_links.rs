@@ -16,7 +16,7 @@ use uuid::Uuid;
 use crate::error::BackendError;
 use crate::store::{AsStorePool, StorePoolRef};
 
-type PairRowTuple = (String, String, String, String, i64);
+type PairRowTuple = (String, String, String, String, Option<String>, i64);
 
 /// A single host-link row after decoding stringly columns into domain ids.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,7 +26,132 @@ pub struct PairRow {
     pub mobile_account_id: String,
     /// Client installation that established the link (audit only).
     pub paired_via_device_id: DeviceId,
+    pub link_display_name: Option<String>,
     pub paired_at_ms: i64,
+}
+
+/// Upsert a host link and return the resulting row.
+///
+/// On conflict `(account_id, host_installation_id)` refreshes
+/// `paired_at_ms`, `linked_via_installation_id`, and `link_display_name`.
+pub async fn upsert_link(
+    store: &impl AsStorePool,
+    host_device_id: DeviceId,
+    mobile_account_id: &str,
+    paired_via_device_id: DeviceId,
+    link_display_name: Option<&str>,
+    now_ms: i64,
+) -> Result<PairRow, BackendError> {
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            upsert_link_with_executor(
+                pool,
+                host_device_id,
+                mobile_account_id,
+                paired_via_device_id,
+                link_display_name,
+                now_ms,
+            )
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            upsert_link_with_postgres_executor(
+                pool,
+                host_device_id,
+                mobile_account_id,
+                paired_via_device_id,
+                link_display_name,
+                now_ms,
+            )
+            .await
+        }
+    }
+}
+
+pub(crate) async fn upsert_link_with_executor<'e, E>(
+    executor: E,
+    host_device_id: DeviceId,
+    mobile_account_id: &str,
+    paired_via_device_id: DeviceId,
+    link_display_name: Option<&str>,
+    now_ms: i64,
+) -> Result<PairRow, BackendError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
+    let pair_id = Uuid::new_v4().to_string();
+    let host_s = host_device_id.to_string();
+    let via_s = paired_via_device_id.to_string();
+    let row = sqlx::query_as::<_, PairRowTuple>(
+        r#"
+        INSERT INTO host_links
+            (pair_id, account_id, host_installation_id, linked_via_installation_id,
+             link_display_name, acl_json, paired_at_ms)
+        VALUES (?, ?, ?, ?, ?, '{}', ?)
+        ON CONFLICT (account_id, host_installation_id) DO UPDATE SET
+            linked_via_installation_id = excluded.linked_via_installation_id,
+            link_display_name = excluded.link_display_name,
+            paired_at_ms = excluded.paired_at_ms
+        RETURNING pair_id, host_installation_id, account_id,
+                  linked_via_installation_id, link_display_name, paired_at_ms
+        "#,
+    )
+    .bind(&pair_id)
+    .bind(mobile_account_id)
+    .bind(&host_s)
+    .bind(&via_s)
+    .bind(link_display_name)
+    .bind(now_ms)
+    .fetch_one(executor)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "host_links::upsert_link".into(),
+        message: e.to_string(),
+    })?;
+    decode_pair_row(row)
+}
+
+pub(crate) async fn upsert_link_with_postgres_executor<'e, E>(
+    executor: E,
+    host_device_id: DeviceId,
+    mobile_account_id: &str,
+    paired_via_device_id: DeviceId,
+    link_display_name: Option<&str>,
+    now_ms: i64,
+) -> Result<PairRow, BackendError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let pair_id = Uuid::new_v4().to_string();
+    let host_s = host_device_id.to_string();
+    let via_s = paired_via_device_id.to_string();
+    let row = sqlx::query_as::<_, PairRowTuple>(
+        r#"
+        INSERT INTO host_links
+            (pair_id, account_id, host_installation_id, linked_via_installation_id,
+             link_display_name, acl_json, paired_at_ms)
+        VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, $6)
+        ON CONFLICT (account_id, host_installation_id) DO UPDATE SET
+            linked_via_installation_id = EXCLUDED.linked_via_installation_id,
+            link_display_name = EXCLUDED.link_display_name,
+            paired_at_ms = EXCLUDED.paired_at_ms
+        RETURNING pair_id, host_installation_id, account_id,
+                  linked_via_installation_id, link_display_name, paired_at_ms
+        "#,
+    )
+    .bind(&pair_id)
+    .bind(mobile_account_id)
+    .bind(&host_s)
+    .bind(&via_s)
+    .bind(link_display_name)
+    .bind(now_ms)
+    .fetch_one(executor)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "host_links::upsert_link".into(),
+        message: e.to_string(),
+    })?;
+    decode_pair_row(row)
 }
 
 /// Insert a new host link. Returns `Ok(false)` on UNIQUE conflict
@@ -144,7 +269,7 @@ pub async fn list_hosts_for_account(
             sqlx::query_as::<_, PairRowTuple>(
                 r#"
                 SELECT pair_id, host_installation_id, account_id,
-                       linked_via_installation_id, paired_at_ms
+                       linked_via_installation_id, link_display_name, paired_at_ms
                 FROM host_links
                 WHERE account_id = ?
                 ORDER BY paired_at_ms DESC
@@ -158,7 +283,7 @@ pub async fn list_hosts_for_account(
             sqlx::query_as::<_, PairRowTuple>(
                 r#"
                 SELECT pair_id, host_installation_id, account_id,
-                       linked_via_installation_id, paired_at_ms
+                       linked_via_installation_id, link_display_name, paired_at_ms
                 FROM host_links
                 WHERE account_id = $1
                 ORDER BY paired_at_ms DESC
@@ -187,7 +312,7 @@ pub async fn list_accounts_for_host(
             sqlx::query_as::<_, PairRowTuple>(
                 r#"
                 SELECT pair_id, host_installation_id, account_id,
-                       linked_via_installation_id, paired_at_ms
+                       linked_via_installation_id, link_display_name, paired_at_ms
                 FROM host_links
                 WHERE host_installation_id = ?
                 ORDER BY paired_at_ms DESC
@@ -201,7 +326,7 @@ pub async fn list_accounts_for_host(
             sqlx::query_as::<_, PairRowTuple>(
                 r#"
                 SELECT pair_id, host_installation_id, account_id,
-                       linked_via_installation_id, paired_at_ms
+                       linked_via_installation_id, link_display_name, paired_at_ms
                 FROM host_links
                 WHERE host_installation_id = $1
                 ORDER BY paired_at_ms DESC
@@ -442,12 +567,20 @@ where
 }
 
 fn decode_pair_row(row: PairRowTuple) -> Result<PairRow, BackendError> {
-    let (pair_id, host_device_id, mobile_account_id, paired_via_device_id, paired_at_ms) = row;
+    let (
+        pair_id,
+        host_device_id,
+        mobile_account_id,
+        paired_via_device_id,
+        link_display_name,
+        paired_at_ms,
+    ) = row;
     Ok(PairRow {
         pair_id,
         host_device_id: parse_device_id(&host_device_id, "host_installation_id")?,
         mobile_account_id,
         paired_via_device_id: parse_device_id(&paired_via_device_id, "linked_via_installation_id")?,
+        link_display_name,
         paired_at_ms,
     })
 }

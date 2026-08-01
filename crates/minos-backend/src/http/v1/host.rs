@@ -104,7 +104,20 @@ async fn post_bootstrap_nonce(
     }
     let nonce = state
         .bootstrap_nonces
-        .issue(&req.installation_id, chrono::Utc::now().timestamp_millis());
+        .issue(
+            &req.installation_id,
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await
+        .map_err(|error| {
+            tracing::warn!(
+                target: "minos_backend::v1::host",
+                error = %error,
+                installation_id = %req.installation_id,
+                "bootstrap nonce issue failed",
+            );
+            (StatusCode::INTERNAL_SERVER_ERROR, err("internal"))
+        })?;
 
     Ok(Json(ResponseEnvelope::new(
         BootstrapNonceData {

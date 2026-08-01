@@ -256,6 +256,27 @@ const ROUTE_INVENTORY: &[RouteContract] = &[
     ),
     RouteContract::new(
         "POST",
+        "/v1/hosts/link",
+        "/v1/hosts/link",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/hosts/unlink",
+        "/v1/hosts/unlink",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "GET",
+        "/v1/hosts",
+        "/v1/hosts",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
         "/v1/host/pairing/request-code",
         "/v1/host/pairing/request-code",
         "host_api",
@@ -736,6 +757,7 @@ impl BackendState {
             peer_target_cache,
             Arc::new(crate::auth::realtime_ticket::RealtimeTicketStore::default()),
             None,
+            None,
         );
         Self::from_app_context(app, cors_origins, env!("CARGO_PKG_VERSION"))
     }
@@ -1015,6 +1037,7 @@ pub mod test_support {
             PeerTargetCacheBackend::in_memory(Duration::from_secs(5)),
             Arc::new(RealtimeTicketStore::default()),
             Some(verifier),
+            None,
         );
         BackendState::from_app_context(app, None, "test")
     }
@@ -1105,6 +1128,7 @@ mod tests {
             MessageBusBackend::inline(),
             PeerTargetCacheBackend::in_memory(Duration::from_secs(5)),
             Arc::new(crate::auth::realtime_ticket::RealtimeTicketStore::default()),
+            None,
             None,
         );
         let app = router(super::BackendState::from_app_context(app, None, "test"));
@@ -1292,6 +1316,7 @@ mod tests {
             MessageBusBackend::inline(),
             PeerTargetCacheBackend::in_memory(Duration::from_secs(5)),
             Arc::new(crate::auth::realtime_ticket::RealtimeTicketStore::default()),
+            None,
             None,
         );
         let app = router(super::BackendState::from_app_context(app, None, "test"));

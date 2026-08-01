@@ -204,6 +204,27 @@
     },
     {
       "method": "POST",
+      "path": "/v1/hosts/link",
+      "probe_path": "/v1/hosts/link",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/hosts/unlink",
+      "probe_path": "/v1/hosts/unlink",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/hosts",
+      "probe_path": "/v1/hosts",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
       "path": "/v1/host/pairing/request-code",
       "probe_path": "/v1/host/pairing/request-code",
       "surface": "host_api",

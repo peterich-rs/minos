@@ -22,6 +22,7 @@ pub mod conversations;
 pub mod friends;
 pub mod host;
 pub mod host_commands;
+pub mod hosts;
 pub mod notifications;
 pub mod pairing;
 pub mod profiles;
@@ -46,6 +47,7 @@ fn router_with_social(social_router: Router<BackendState>) -> Router<BackendStat
         .merge(friends::router())
         .merge(host::router())
         .merge(host_commands::router())
+        .merge(hosts::router())
         .merge(notifications::router())
         .merge(pairing::router())
         .merge(profiles::router())

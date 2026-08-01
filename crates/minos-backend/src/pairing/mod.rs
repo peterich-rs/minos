@@ -110,6 +110,21 @@ pub enum FormalPairingError {
     PairingStateMismatch { actual: String },
 }
 
+/// Same-account host link (D02) outcome.
+#[derive(Debug, Clone)]
+pub struct HostLinkOutcome {
+    pub host_installation_id: DeviceId,
+    pub host_installation_token: String,
+    pub link: host_links::PairRow,
+}
+
+#[derive(Debug)]
+pub enum HostLinkError {
+    HostLinkedElsewhere { account_id: String },
+    NotFound,
+    Internal(BackendError),
+}
+
 /// Stateless facade around the pairing-related store helpers.
 ///
 /// Cheap to clone — just holds a `SqlitePool` handle. Usually instantiated
@@ -628,6 +643,261 @@ impl PairingService {
         }
     }
 
+    /// Same-account host link: upsert `host_links` + mint a host installation token.
+    ///
+    /// Rejects hosts already linked to a different account (`HostLinkedElsewhere`).
+    /// Re-linking the same account is idempotent and re-issues a fresh token.
+    pub async fn link_host(
+        &self,
+        host_installation_id: DeviceId,
+        account_id: &str,
+        linked_via_installation_id: DeviceId,
+        host_display_name: Option<&str>,
+    ) -> Result<HostLinkOutcome, HostLinkError> {
+        let now = Utc::now().timestamp_millis();
+        let existing = host_links::list_accounts_for_host(&self.pool, host_installation_id)
+            .await
+            .map_err(HostLinkError::Internal)?;
+        if let Some(other) = existing
+            .iter()
+            .find(|row| row.mobile_account_id != account_id)
+        {
+            return Err(HostLinkError::HostLinkedElsewhere {
+                account_id: other.mobile_account_id.clone(),
+            });
+        }
+
+        let token = generate_host_installation_token();
+        let token_hash = sha256_hex(&token);
+        let link = match self.pool.as_store_pool() {
+            StorePoolRef::Sqlite(pool) => {
+                let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| {
+                    HostLinkError::Internal(BackendError::StoreQuery {
+                        operation: "begin_host_link".into(),
+                        message: e.to_string(),
+                    })
+                })?;
+                let result: Result<host_links::PairRow, HostLinkError> = async {
+                    let link = host_links::upsert_link_with_executor(
+                        &mut *tx,
+                        host_installation_id,
+                        account_id,
+                        linked_via_installation_id,
+                        host_display_name,
+                        now,
+                    )
+                    .await
+                    .map_err(HostLinkError::Internal)?;
+                    host_installation_tokens::insert_token_with_executor(
+                        &mut *tx,
+                        &token_hash,
+                        host_installation_id,
+                        now,
+                    )
+                    .await
+                    .map_err(HostLinkError::Internal)?;
+                    Ok(link)
+                }
+                .await;
+                match result {
+                    Ok(link) => {
+                        tx.commit().await.map_err(|e| {
+                            HostLinkError::Internal(BackendError::StoreQuery {
+                                operation: "commit_host_link".into(),
+                                message: e.to_string(),
+                            })
+                        })?;
+                        link
+                    }
+                    Err(err) => {
+                        tx.rollback().await.map_err(|e| {
+                            HostLinkError::Internal(BackendError::StoreQuery {
+                                operation: "rollback_host_link".into(),
+                                message: e.to_string(),
+                            })
+                        })?;
+                        return Err(err);
+                    }
+                }
+            }
+            StorePoolRef::Postgres(pool) => {
+                let mut tx = begin_serializable_postgres_tx(pool, "begin_host_link")
+                    .await
+                    .map_err(HostLinkError::Internal)?;
+                let result: Result<host_links::PairRow, HostLinkError> = async {
+                    let link = host_links::upsert_link_with_postgres_executor(
+                        &mut *tx,
+                        host_installation_id,
+                        account_id,
+                        linked_via_installation_id,
+                        host_display_name,
+                        now,
+                    )
+                    .await
+                    .map_err(HostLinkError::Internal)?;
+                    host_installation_tokens::insert_token_with_postgres_executor(
+                        &mut *tx,
+                        &token_hash,
+                        host_installation_id,
+                        now,
+                    )
+                    .await
+                    .map_err(HostLinkError::Internal)?;
+                    Ok(link)
+                }
+                .await;
+                match result {
+                    Ok(link) => {
+                        tx.commit().await.map_err(|e| {
+                            HostLinkError::Internal(BackendError::StoreQuery {
+                                operation: "commit_host_link".into(),
+                                message: e.to_string(),
+                            })
+                        })?;
+                        link
+                    }
+                    Err(err) => {
+                        tx.rollback().await.map_err(|e| {
+                            HostLinkError::Internal(BackendError::StoreQuery {
+                                operation: "rollback_host_link".into(),
+                                message: e.to_string(),
+                            })
+                        })?;
+                        return Err(err);
+                    }
+                }
+            }
+        };
+
+        let _ = crate::ingest::invalidate_peer_targets_for_host(host_installation_id).await;
+        let _ = crate::ingest::invalidate_peer_targets_for_account(&self.pool, account_id).await;
+
+        Ok(HostLinkOutcome {
+            host_installation_id,
+            host_installation_token: token,
+            link,
+        })
+    }
+
+    /// Unlink host for one account: delete link, always revoke host tokens,
+    /// kill live `/ws/host`, and invalidate peer-target caches.
+    pub async fn unlink_host(
+        &self,
+        registry: &SessionRegistry,
+        host_installation_id: DeviceId,
+        account_id: &str,
+    ) -> Result<(), HostLinkError> {
+        let now = Utc::now().timestamp_millis();
+        let deleted = match self.pool.as_store_pool() {
+            StorePoolRef::Sqlite(pool) => {
+                let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| {
+                    HostLinkError::Internal(BackendError::StoreQuery {
+                        operation: "begin_host_unlink".into(),
+                        message: e.to_string(),
+                    })
+                })?;
+                let result: Result<u64, HostLinkError> = async {
+                    let deleted = host_links::delete_pair_with_executor(
+                        &mut *tx,
+                        host_installation_id,
+                        account_id,
+                    )
+                    .await
+                    .map_err(HostLinkError::Internal)?;
+                    if deleted == 0 {
+                        return Ok(0);
+                    }
+                    host_installation_tokens::revoke_all_for_host_with_executor(
+                        &mut *tx,
+                        host_installation_id,
+                        now,
+                    )
+                    .await
+                    .map_err(HostLinkError::Internal)?;
+                    Ok(deleted)
+                }
+                .await;
+                match result {
+                    Ok(deleted) => {
+                        tx.commit().await.map_err(|e| {
+                            HostLinkError::Internal(BackendError::StoreQuery {
+                                operation: "commit_host_unlink".into(),
+                                message: e.to_string(),
+                            })
+                        })?;
+                        deleted
+                    }
+                    Err(err) => {
+                        tx.rollback().await.map_err(|e| {
+                            HostLinkError::Internal(BackendError::StoreQuery {
+                                operation: "rollback_host_unlink".into(),
+                                message: e.to_string(),
+                            })
+                        })?;
+                        return Err(err);
+                    }
+                }
+            }
+            StorePoolRef::Postgres(pool) => {
+                let mut tx = begin_serializable_postgres_tx(pool, "begin_host_unlink")
+                    .await
+                    .map_err(HostLinkError::Internal)?;
+                let result: Result<u64, HostLinkError> = async {
+                    let deleted = host_links::delete_pair_with_postgres_executor(
+                        &mut *tx,
+                        host_installation_id,
+                        account_id,
+                    )
+                    .await
+                    .map_err(HostLinkError::Internal)?;
+                    if deleted == 0 {
+                        return Ok(0);
+                    }
+                    host_installation_tokens::revoke_all_for_host_with_postgres_executor(
+                        &mut *tx,
+                        host_installation_id,
+                        now,
+                    )
+                    .await
+                    .map_err(HostLinkError::Internal)?;
+                    Ok(deleted)
+                }
+                .await;
+                match result {
+                    Ok(deleted) => {
+                        tx.commit().await.map_err(|e| {
+                            HostLinkError::Internal(BackendError::StoreQuery {
+                                operation: "commit_host_unlink".into(),
+                                message: e.to_string(),
+                            })
+                        })?;
+                        deleted
+                    }
+                    Err(err) => {
+                        tx.rollback().await.map_err(|e| {
+                            HostLinkError::Internal(BackendError::StoreQuery {
+                                operation: "rollback_host_unlink".into(),
+                                message: e.to_string(),
+                            })
+                        })?;
+                        return Err(err);
+                    }
+                }
+            }
+        };
+
+        if deleted == 0 {
+            return Err(HostLinkError::NotFound);
+        }
+
+        let _ = crate::ingest::invalidate_peer_targets_for_host(host_installation_id).await;
+        let _ = crate::ingest::invalidate_peer_targets_for_account(&self.pool, account_id).await;
+        if let Some(handle) = registry.remove(host_installation_id) {
+            handle.revoke(SessionRevocation::AuthRevoked);
+        }
+        Ok(())
+    }
+
     pub async fn revoke_link(
         &self,
         registry: &SessionRegistry,
@@ -1122,7 +1392,7 @@ async fn begin_serializable_postgres_tx<'a>(
 ///
 /// Hand-rolled `{:02x}` loop so we don't pull in the `hex` crate just for
 /// a 64-char output.
-pub(crate) fn sha256_hex(input: &str) -> String {
+pub fn sha256_hex(input: &str) -> String {
     let digest = Sha256::digest(input.as_bytes());
     let mut out = String::with_capacity(digest.len() * 2);
     for b in digest {

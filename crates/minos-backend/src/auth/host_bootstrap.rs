@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -25,43 +26,141 @@ struct NonceEntry {
     expires_at_ms: i64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone)]
+enum BootstrapNonceBackend {
+    InMemory(Arc<DashMap<String, NonceEntry>>),
+    Redis { client: redis::Client },
+}
+
+/// Single-use bootstrap nonces for host Ed25519 proofs.
+///
+/// Production multi-instance deployments back this with Redis (`GETDEL` on
+/// consume). Dev/tests use an in-memory map. Both share the same issue/consume
+/// contract so callers do not branch on backend kind.
+#[derive(Debug, Clone)]
 pub struct BootstrapNonceStore {
-    entries: DashMap<String, NonceEntry>,
+    backend: BootstrapNonceBackend,
+}
+
+impl Default for BootstrapNonceStore {
+    fn default() -> Self {
+        Self::in_memory()
+    }
 }
 
 impl BootstrapNonceStore {
     #[must_use]
-    pub fn issue(&self, installation_id: &str, now_ms: i64) -> BootstrapNonce {
-        let nonce = generate_nonce();
-        let expires_at_ms = now_ms + BOOTSTRAP_NONCE_TTL.as_millis() as i64;
-        self.entries.insert(
-            nonce.clone(),
-            NonceEntry {
-                installation_id: installation_id.to_string(),
-                expires_at_ms,
-            },
-        );
-        BootstrapNonce {
-            nonce,
-            expires_at_ms,
+    pub fn in_memory() -> Self {
+        Self {
+            backend: BootstrapNonceBackend::InMemory(Arc::new(DashMap::new())),
         }
     }
 
-    pub fn consume(
+    pub fn redis(redis_url: &str) -> Result<Self, BackendError> {
+        let client = redis::Client::open(redis_url).map_err(|error| BackendError::Cache {
+            operation: "bootstrap_nonce.redis_client".into(),
+            message: error.to_string(),
+        })?;
+        Ok(Self {
+            backend: BootstrapNonceBackend::Redis { client },
+        })
+    }
+
+    pub async fn issue(
+        &self,
+        installation_id: &str,
+        now_ms: i64,
+    ) -> Result<BootstrapNonce, BackendError> {
+        let nonce = generate_nonce();
+        let expires_at_ms = now_ms + BOOTSTRAP_NONCE_TTL.as_millis() as i64;
+        match &self.backend {
+            BootstrapNonceBackend::InMemory(entries) => {
+                entries.insert(
+                    nonce.clone(),
+                    NonceEntry {
+                        installation_id: installation_id.to_string(),
+                        expires_at_ms,
+                    },
+                );
+            }
+            BootstrapNonceBackend::Redis { client } => {
+                let mut conn =
+                    client
+                        .get_multiplexed_async_connection()
+                        .await
+                        .map_err(|error| BackendError::Cache {
+                            operation: "bootstrap_nonce.redis_connect".into(),
+                            message: error.to_string(),
+                        })?;
+                let ttl_secs = BOOTSTRAP_NONCE_TTL.as_secs().max(1);
+                let _: () = redis::cmd("SET")
+                    .arg(nonce_key(&nonce))
+                    .arg(installation_id)
+                    .arg("EX")
+                    .arg(ttl_secs)
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(|error| BackendError::Cache {
+                        operation: "bootstrap_nonce.redis_set".into(),
+                        message: error.to_string(),
+                    })?;
+            }
+        }
+        Ok(BootstrapNonce {
+            nonce,
+            expires_at_ms,
+        })
+    }
+
+    pub async fn consume(
         &self,
         installation_id: &str,
         nonce: &str,
         now_ms: i64,
     ) -> Result<(), HostBootstrapError> {
-        let Some((_, entry)) = self.entries.remove(nonce) else {
-            return Err(HostBootstrapError::NonceInvalid);
+        let entry_installation_id = match &self.backend {
+            BootstrapNonceBackend::InMemory(entries) => {
+                let Some((_, entry)) = entries.remove(nonce) else {
+                    return Err(HostBootstrapError::NonceInvalid);
+                };
+                if entry.expires_at_ms <= now_ms {
+                    return Err(HostBootstrapError::NonceInvalid);
+                }
+                entry.installation_id
+            }
+            BootstrapNonceBackend::Redis { client } => {
+                let mut conn = client
+                    .get_multiplexed_async_connection()
+                    .await
+                    .map_err(|error| {
+                        HostBootstrapError::Store(BackendError::Cache {
+                            operation: "bootstrap_nonce.redis_connect".into(),
+                            message: error.to_string(),
+                        })
+                    })?;
+                let payload: Option<String> = redis::cmd("GETDEL")
+                    .arg(nonce_key(nonce))
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(|error| {
+                        HostBootstrapError::Store(BackendError::Cache {
+                            operation: "bootstrap_nonce.redis_getdel".into(),
+                            message: error.to_string(),
+                        })
+                    })?;
+                payload.ok_or(HostBootstrapError::NonceInvalid)?
+            }
         };
-        if entry.installation_id != installation_id || entry.expires_at_ms <= now_ms {
+
+        if entry_installation_id != installation_id {
             return Err(HostBootstrapError::NonceInvalid);
         }
         Ok(())
     }
+}
+
+fn nonce_key(nonce: &str) -> String {
+    format!("minos:bootstrap_nonce:{nonce}")
 }
 
 pub struct HostBootstrapProof<'a> {
@@ -97,7 +196,9 @@ where
     let installation_id = Uuid::parse_str(proof.installation_id)
         .map(DeviceId)
         .map_err(|_| HostBootstrapError::ProofInvalid)?;
-    nonce_store.consume(proof.installation_id, proof.nonce, now_ms)?;
+    nonce_store
+        .consume(proof.installation_id, proof.nonce, now_ms)
+        .await?;
 
     let existing = device_installations::get_device(store, installation_id).await?;
     if let Some(row) = existing.as_ref() {
@@ -220,7 +321,7 @@ mod tests {
         let pool = crate::store::test_support::memory_pool().await;
         let store = BootstrapNonceStore::default();
         let installation_id = DeviceId::new().to_string();
-        let nonce = store.issue(&installation_id, 100).nonce;
+        let nonce = store.issue(&installation_id, 100).await.unwrap().nonce;
         let host_signing_key = keypair();
         let host_public_key = public_key(&host_signing_key);
         let host_signature = signature(&host_signing_key, &installation_id, &nonce);
@@ -254,7 +355,7 @@ mod tests {
         let pool = crate::store::test_support::memory_pool().await;
         let store = BootstrapNonceStore::default();
         let installation_id = DeviceId::new().to_string();
-        let nonce = store.issue(&installation_id, 100).nonce;
+        let nonce = store.issue(&installation_id, 100).await.unwrap().nonce;
         let host_signing_key = keypair();
         let host_public_key = public_key(&host_signing_key);
         let host_signature = signature(&host_signing_key, &installation_id, &nonce);
@@ -300,7 +401,7 @@ mod tests {
         let installation_id = DeviceId::new().to_string();
         let host_signing_key = keypair();
         let host_public_key = public_key(&host_signing_key);
-        let nonce = store.issue(&installation_id, 100).nonce;
+        let nonce = store.issue(&installation_id, 100).await.unwrap().nonce;
         let host_signature = signature(&host_signing_key, &installation_id, &nonce);
 
         verify_and_register(
@@ -321,7 +422,7 @@ mod tests {
 
         let different_key = SigningKey::from_bytes(&[9_u8; 32]);
         let different_public_key = public_key(&different_key);
-        let nonce = store.issue(&installation_id, 200).nonce;
+        let nonce = store.issue(&installation_id, 200).await.unwrap().nonce;
         let signature = signature(&different_key, &installation_id, &nonce);
 
         let err = verify_and_register(

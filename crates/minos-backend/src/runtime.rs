@@ -127,6 +127,7 @@ impl AppContext {
         peer_target_cache: PeerTargetCacheBackend,
         realtime_tickets: Arc<RealtimeTicketStore>,
         supabase: Option<Arc<SupabaseTokenVerifier>>,
+        bootstrap_nonces: Option<Arc<BootstrapNonceStore>>,
     ) -> Arc<Self> {
         let translators = SessionTranslators::new();
         let data = AppDataContext::new(store.clone());
@@ -174,7 +175,8 @@ impl AppContext {
             realtime_tickets,
             supabase,
         );
-        let bootstrap_nonces = Arc::new(BootstrapNonceStore::default());
+        let bootstrap_nonces =
+            bootstrap_nonces.unwrap_or_else(|| Arc::new(BootstrapNonceStore::in_memory()));
         let projects = ProjectService::new(store.clone());
         let agent_sessions: Arc<dyn AgentSessionService> = DefaultAgentSessionService::new(
             Arc::clone(&data.repos),
@@ -241,6 +243,12 @@ impl RuntimeShell {
             }
             _ => Arc::new(RealtimeTicketStore::default()),
         };
+        let bootstrap_nonces = match cfg.redis_url.as_deref() {
+            Some(redis_url) if !redis_url.is_empty() => {
+                Arc::new(BootstrapNonceStore::redis(redis_url)?)
+            }
+            _ => Arc::new(BootstrapNonceStore::in_memory()),
+        };
         let app = AppContext::compose(
             AppRuntimeConfig::from(cfg),
             registry,
@@ -253,6 +261,7 @@ impl RuntimeShell {
             peer_target_cache,
             realtime_tickets,
             cfg.supabase_verifier(),
+            Some(bootstrap_nonces),
         );
         let cluster_listener = if cfg.runtime_mode.serves_http() {
             app.realtime.spawn_listener()
