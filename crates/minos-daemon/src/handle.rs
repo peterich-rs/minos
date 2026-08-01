@@ -20,7 +20,7 @@ use minos_protocol::HostPeerSummary;
 use crate::agent::AgentGlue;
 use crate::config::RelayConfig;
 use crate::ingest_sync::IngestSyncHandle;
-use crate::local_rpc::{start_local_rpc_server, LocalRpcConfig};
+use crate::local_rpc::{start_local_rpc_server_with_relay, LocalRpcConfig};
 use crate::paths;
 use crate::relay_client::{PersistenceCtx, RelayClient};
 use crate::relay_pairing::{PeerRecord, RelayQrPayload};
@@ -262,7 +262,13 @@ impl DaemonHandle {
             let runner = Arc::new(minos_cli_detect::RealCommandRunner::new(
                 subprocess_env.clone(),
             ));
-            let started = start_local_rpc_server(lr_config, runner, agent.clone()).await?;
+            let started = start_local_rpc_server_with_relay(
+                lr_config,
+                runner,
+                agent.clone(),
+                Some(relay.clone()),
+            )
+            .await?;
             (Some(started.handle), Some(started.url))
         } else {
             (None, None)

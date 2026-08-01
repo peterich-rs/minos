@@ -114,6 +114,27 @@ pub trait LocalDaemonRpc {
     #[method(name = "health")]
     async fn health(&self) -> jsonrpsee::core::RpcResult<crate::HealthResponse>;
 
+    /// Fetch host installation identity + bootstrap nonce for Host Link.
+    /// Registered as `minos_local_host_prepare_link` (D02 §7.2).
+    #[method(name = "host_prepare_link")]
+    async fn host_prepare_link(
+        &self,
+    ) -> jsonrpsee::core::RpcResult<crate::HostPrepareLinkResponse>;
+
+    /// Sign `"{installation_id}:{nonce}:v1/hosts/link"` with the host key.
+    #[method(name = "host_sign_link_proof")]
+    async fn host_sign_link_proof(
+        &self,
+        req: crate::HostSignLinkProofParams,
+    ) -> jsonrpsee::core::RpcResult<crate::HostSignLinkProofResponse>;
+
+    /// Persist `hit_…` token and wake the relay to connect `/ws/host`.
+    #[method(name = "host_apply_link_token")]
+    async fn host_apply_link_token(
+        &self,
+        req: crate::HostApplyLinkTokenParams,
+    ) -> jsonrpsee::core::RpcResult<crate::HostApplyLinkTokenResponse>;
+
     #[method(name = "list_clis")]
     async fn list_clis(&self) -> jsonrpsee::core::RpcResult<crate::ListClisResponse>;
 

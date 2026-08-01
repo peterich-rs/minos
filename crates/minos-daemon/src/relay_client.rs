@@ -226,6 +226,57 @@ impl RelayClient {
         (Arc::new(Self { inner }), link_rx, peer_rx)
     }
 
+    /// Prepare Host Link proof material: installation id, public key, nonce.
+    pub async fn prepare_link(
+        &self,
+    ) -> Result<minos_protocol::HostPrepareLinkResponse, MinosError> {
+        let nonce = self.inner.http.fetch_bootstrap_nonce().await?;
+        Ok(minos_protocol::HostPrepareLinkResponse {
+            installation_id: self.inner.http.device_id().to_string(),
+            public_key: self.inner.http.host_public_key(),
+            nonce,
+        })
+    }
+
+    /// Sign Host Link proof for the local installation.
+    pub fn sign_link_proof(
+        &self,
+        installation_id: &str,
+        nonce: &str,
+    ) -> Result<minos_protocol::HostSignLinkProofResponse, MinosError> {
+        if installation_id != self.inner.http.device_id().to_string() {
+            return Err(MinosError::BackendInternal {
+                message: "installation_id does not match this host".into(),
+            });
+        }
+        Ok(minos_protocol::HostSignLinkProofResponse {
+            signature: self.inner.http.host_link_signature(nonce),
+        })
+    }
+
+    /// Persist a host installation token and wake the realtime dial loop.
+    pub fn apply_link_token(
+        &self,
+        host_installation_token: &str,
+    ) -> Result<minos_protocol::HostApplyLinkTokenResponse, MinosError> {
+        if !host_installation_token.starts_with("hit_") {
+            return Err(MinosError::BackendInternal {
+                message: "host_installation_token must start with hit_".into(),
+            });
+        }
+        let token = DeviceSecret(host_installation_token.to_string());
+        crate::device_secret_store::write(&token)?;
+        if let Ok(mut guard) = self.inner.secret.lock() {
+            *guard = Some(token);
+        }
+        self.inner.secret_notify.notify_waiters();
+        tracing::info!(
+            target: "minos_daemon::relay_client",
+            "host installation token applied for Host Link; waking /ws/host dialer"
+        );
+        Ok(minos_protocol::HostApplyLinkTokenResponse { linked: true })
+    }
+
     /// Issue `request_pairing_qr` against the backend's HTTP control plane
     /// and wrap the response into the Mac-side QR payload shape.
     pub async fn request_pairing_token(&self) -> Result<RelayQrPayload, MinosError> {

@@ -426,6 +426,37 @@ pub struct HealthResponse {
     pub uptime_secs: u64,
 }
 
+/// Daemon local RPC: prepare same-account host link proof material.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostPrepareLinkResponse {
+    pub installation_id: String,
+    pub public_key: String,
+    pub nonce: String,
+}
+
+/// Daemon local RPC: sign the Host Link Ed25519 proof.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostSignLinkProofParams {
+    pub installation_id: String,
+    pub nonce: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostSignLinkProofResponse {
+    pub signature: String,
+}
+
+/// Daemon local RPC: persist host installation token and wake `/ws/host`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostApplyLinkTokenParams {
+    pub host_installation_token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostApplyLinkTokenResponse {
+    pub linked: bool,
+}
+
 /// Account-side request to target one paired host for a CLI scan.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ListHostClisRequest {

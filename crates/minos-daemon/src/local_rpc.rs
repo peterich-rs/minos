@@ -10,8 +10,10 @@ use minos_domain::MinosError;
 use minos_protocol::{
     AppendConversationMessageParams, AppendConversationMessageResponse, ApprovalDecisionRequest,
     CloseSessionRequest, CreateConversationParams, CreateConversationResponse,
-    CreateProjectRequest, CreateProjectResponse, HealthResponse, InterruptSessionRequest,
-    ListClisResponse, ListConversationAgentSessionsParams, ListConversationAgentSessionsResponse,
+    CreateProjectRequest, CreateProjectResponse, HealthResponse, HostApplyLinkTokenParams,
+    HostApplyLinkTokenResponse, HostPrepareLinkResponse, HostSignLinkProofParams,
+    HostSignLinkProofResponse, InterruptSessionRequest, ListClisResponse,
+    ListConversationAgentSessionsParams, ListConversationAgentSessionsResponse,
     ListConversationMessagesParams, ListConversationMessagesResponse, ListConversationsParams,
     ListConversationsResponse, ListProjectsResponse, LocalConversationEvent, LocalDaemonRpcServer,
     LocalIngestFrame, LocalManagerEvent, LocalSessionSnapshot, ReadArtifactRangeRequest,
@@ -26,6 +28,7 @@ use tokio::sync::broadcast;
 use tracing;
 
 use crate::agent::{map_store_error, parse_agent_label, row_state_to_proto, AgentGlue};
+use crate::relay_client::RelayClient;
 use crate::rpc_server::rpc_err;
 
 pub struct LocalRpcConfig {
@@ -46,9 +49,17 @@ pub struct LocalRpcImpl {
     pub started_at: Instant,
     pub runner: Arc<dyn CommandRunner>,
     pub agent: Arc<AgentGlue>,
+    /// Present when the local RPC server is owned by a full daemon with relay.
+    pub relay: Option<Arc<RelayClient>>,
     pub ingest_broadcaster: broadcast::Sender<LocalIngestFrame>,
     pub manager_event_broadcaster: broadcast::Sender<LocalManagerEvent>,
     pub conversation_event_broadcaster: broadcast::Sender<LocalConversationEvent>,
+}
+
+fn host_link_unavailable() -> jsonrpsee::types::ErrorObjectOwned {
+    rpc_err(MinosError::BackendInternal {
+        message: "host link RPC requires a running relay client".into(),
+    })
 }
 
 #[async_trait]
@@ -58,6 +69,37 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
             version: env!("CARGO_PKG_VERSION").into(),
             uptime_secs: self.started_at.elapsed().as_secs(),
         })
+    }
+
+    async fn host_prepare_link(&self) -> jsonrpsee::core::RpcResult<HostPrepareLinkResponse> {
+        let Some(relay) = self.relay.as_ref() else {
+            return Err(host_link_unavailable());
+        };
+        relay.prepare_link().await.map_err(rpc_err)
+    }
+
+    async fn host_sign_link_proof(
+        &self,
+        req: HostSignLinkProofParams,
+    ) -> jsonrpsee::core::RpcResult<HostSignLinkProofResponse> {
+        let Some(relay) = self.relay.as_ref() else {
+            return Err(host_link_unavailable());
+        };
+        relay
+            .sign_link_proof(&req.installation_id, &req.nonce)
+            .map_err(rpc_err)
+    }
+
+    async fn host_apply_link_token(
+        &self,
+        req: HostApplyLinkTokenParams,
+    ) -> jsonrpsee::core::RpcResult<HostApplyLinkTokenResponse> {
+        let Some(relay) = self.relay.as_ref() else {
+            return Err(host_link_unavailable());
+        };
+        relay
+            .apply_link_token(&req.host_installation_token)
+            .map_err(rpc_err)
     }
 
     async fn list_clis(&self) -> jsonrpsee::core::RpcResult<ListClisResponse> {
@@ -539,6 +581,16 @@ pub async fn start_local_rpc_server(
     runner: Arc<dyn CommandRunner>,
     agent: Arc<AgentGlue>,
 ) -> Result<LocalRpcServer, MinosError> {
+    start_local_rpc_server_with_relay(config, runner, agent, None).await
+}
+
+/// Like [`start_local_rpc_server`] but wires Host Link RPC to a live relay.
+pub async fn start_local_rpc_server_with_relay(
+    config: LocalRpcConfig,
+    runner: Arc<dyn CommandRunner>,
+    agent: Arc<AgentGlue>,
+    relay: Option<Arc<RelayClient>>,
+) -> Result<LocalRpcServer, MinosError> {
     let (ingest_tx, _) = broadcast::channel(256);
     let (mgr_evt_tx, _) = broadcast::channel(256);
     let (conversation_evt_tx, _) = broadcast::channel(256);
@@ -547,6 +599,7 @@ pub async fn start_local_rpc_server(
         started_at: Instant::now(),
         runner,
         agent: agent.clone(),
+        relay,
         ingest_broadcaster: ingest_tx.clone(),
         manager_event_broadcaster: mgr_evt_tx.clone(),
         conversation_event_broadcaster: conversation_evt_tx.clone(),

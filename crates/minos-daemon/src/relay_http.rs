@@ -28,6 +28,8 @@ static INSTALL_RUSTLS_PROVIDER: Once = Once::new();
 const BOOTSTRAP_NONCE_PATH: &str = "/v1/host/bootstrap/nonce";
 const REQUEST_CODE_PATH: &str = "/v1/host/pairing/request-code";
 const REDEEM_PATH: &str = "/v1/host/pairing/redeem";
+/// Signed path segment for same-account Host Link (D02); no leading slash.
+pub const HOST_LINK_PROOF_PATH: &str = "v1/hosts/link";
 const HOST_WS_TICKET_PATH: &str = "/v1/host/realtime/ws-ticket";
 const HOST_SELF_PATH: &str = "/v1/host/installations/self";
 
@@ -367,7 +369,12 @@ impl RelayHttpClient {
         Err(decode_error(resp).await)
     }
 
-    async fn fetch_bootstrap_nonce(&self) -> Result<String, MinosError> {
+    #[must_use]
+    pub fn device_id(&self) -> DeviceId {
+        self.device_id
+    }
+
+    pub async fn fetch_bootstrap_nonce(&self) -> Result<String, MinosError> {
         let url = format!("{}{}", self.base, BOOTSTRAP_NONCE_PATH);
         let request = self.request_with_json(
             Method::POST,
@@ -388,19 +395,27 @@ impl RelayHttpClient {
         Err(decode_error(resp).await)
     }
 
-    fn host_public_key(&self) -> String {
+    #[must_use]
+    pub fn host_public_key(&self) -> String {
         format!(
             "ed25519:{}",
             URL_SAFE_NO_PAD.encode(self.host_signing_key.verifying_key().to_bytes())
         )
     }
 
-    fn host_signature(&self, path: &str, nonce: &str) -> String {
+    #[must_use]
+    pub fn host_signature(&self, path: &str, nonce: &str) -> String {
         let payload = format!("{}:{nonce}:{path}", self.device_id);
         format!(
             "ed25519-sig:{}",
             URL_SAFE_NO_PAD.encode(self.host_signing_key.sign(payload.as_bytes()).to_bytes())
         )
+    }
+
+    /// Sign the same-account Host Link proof over `v1/hosts/link`.
+    #[must_use]
+    pub fn host_link_signature(&self, nonce: &str) -> String {
+        self.host_signature(HOST_LINK_PROOF_PATH, nonce)
     }
 
     fn request_with_json<T>(
@@ -674,5 +689,31 @@ mod tests {
         assert_eq!(peers[0].paired_at_ms, 100);
         assert_eq!(peers[0].last_active_at_ms, 900);
         assert!(peers[0].online);
+    }
+
+    #[test]
+    fn host_link_signature_uses_d02_path_segment() {
+        let device_id = DeviceId::new();
+        let signing_key = SigningKey::from_bytes(&[11_u8; 32]);
+        let client = RelayHttpClient::new_with_signing_key(
+            "wss://example.com/devices",
+            device_id,
+            "Minos Mac".into(),
+            signing_key.clone(),
+        )
+        .unwrap();
+        let nonce = "nonce_test";
+        let signature = client.host_link_signature(nonce);
+        assert!(signature.starts_with("ed25519-sig:"));
+        assert_eq!(
+            signature,
+            client.host_signature(HOST_LINK_PROOF_PATH, nonce)
+        );
+        let payload = format!("{device_id}:{nonce}:{HOST_LINK_PROOF_PATH}");
+        let expected = format!(
+            "ed25519-sig:{}",
+            URL_SAFE_NO_PAD.encode(signing_key.sign(payload.as_bytes()).to_bytes())
+        );
+        assert_eq!(signature, expected);
     }
 }
