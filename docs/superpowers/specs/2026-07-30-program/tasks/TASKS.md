@@ -438,7 +438,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-mob-05 · Hide non-golden nav items
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done (Phase F: Sessions / Hosts / 账户 shell; social/projects secondary routes only) |
 | lane | mobile |
 | depends_on | T-mob-04 |
 | exit | Primary nav only golden-path features |

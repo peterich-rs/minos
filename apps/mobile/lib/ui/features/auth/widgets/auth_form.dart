@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
+import 'package:minos/ui/theme/theme.dart';
 
 final _authFormValidationProvider = NotifierProvider.autoDispose
     .family<_AuthFormValidationController, AuthFormValidationState, String>(
@@ -45,14 +45,7 @@ class AuthFormValidationState {
   int get hashCode => Object.hash(emailError, passwordError, confirmError);
 }
 
-/// Two-mode auth form: e-mail + password (+ confirm in register). The form
-/// owns its own controllers and inline validation, but delegates the
-/// "actually call register/login" decision to the parent via [onSubmit].
-///
-/// The parent owns the in-flight flag so it can survive an orientation
-/// change and so a single inline spinner doesn't have to know about the
-/// network. While [inFlight] is `true`, all interactive surfaces are
-/// disabled and the submit button shows a [CircularProgressIndicator].
+/// Two-mode auth form: e-mail + password (+ confirm in register).
 enum AuthMode { login, register }
 
 class AuthForm extends ConsumerStatefulWidget {
@@ -66,14 +59,7 @@ class AuthForm extends ConsumerStatefulWidget {
 
   final AuthMode mode;
   final ValueChanged<AuthMode> onModeChanged;
-
-  /// Called only after local validation passes. The parent is expected to
-  /// flip [inFlight] to `true` before awaiting the network call and back to
-  /// `false` in a `finally` block.
   final Future<void> Function(String email, String password) onSubmit;
-
-  /// Disables fields + submit button and swaps the submit label for a
-  /// spinner. Owned by the parent so it survives a rebuild of this widget.
   final bool inFlight;
 
   @override
@@ -86,8 +72,6 @@ class _AuthFormState extends ConsumerState<AuthForm> {
   final _confirmCtl = TextEditingController();
   late final String _formId = 'auth-form-${identityHashCode(this)}';
 
-  // Permissive: the canonical check happens server-side. We just rule out
-  // obvious typos so the user doesn't burn an RPC round-trip.
   static final _emailRe = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$');
 
   @override
@@ -102,10 +86,10 @@ class _AuthFormState extends ConsumerState<AuthForm> {
     final email = _emailCtl.text.trim();
     final pwd = _passwordCtl.text;
     final next = AuthFormValidationState(
-      emailError: _emailRe.hasMatch(email) ? null : 'Invalid email',
-      passwordError: pwd.length >= 8 ? null : 'Min 8 characters',
+      emailError: _emailRe.hasMatch(email) ? null : '邮箱格式不正确',
+      passwordError: pwd.length >= 8 ? null : '至少 8 个字符',
       confirmError: widget.mode == AuthMode.register
-          ? (_confirmCtl.text == pwd ? null : 'Does not match')
+          ? (_confirmCtl.text == pwd ? null : '两次密码不一致')
           : null,
     );
     ref.read(_authFormValidationProvider(_formId).notifier).update(next);
@@ -120,74 +104,95 @@ class _AuthFormState extends ConsumerState<AuthForm> {
   @override
   Widget build(BuildContext context) {
     final validation = ref.watch(_authFormValidationProvider(_formId));
-    final isRegister = widget.mode == .register;
-    final submitLabel = isRegister ? 'Register' : 'Log in';
-    final toggleLabel = isRegister
-        ? 'Have an account? Log in'
-        : 'Create account';
-    final errorStyle = TextStyle(
-      color: Theme.of(context).colorScheme.error,
-      fontSize: 12,
+    final isRegister = widget.mode == AuthMode.register;
+    final submitLabel = isRegister ? '注册' : '登录';
+    final toggleLabel = isRegister ? '已有账号？登录' : '创建新账号';
+    final colors = context.minosColors;
+    final theme = Theme.of(context);
+    final errorStyle = theme.textTheme.bodySmall?.copyWith(
+      color: colors.danger,
     );
 
     return Column(
-      crossAxisAlignment: .stretch,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        ShadInput(
+        TextField(
           controller: _emailCtl,
-          placeholder: const Text('Email'),
-          keyboardType: .emailAddress,
-          autocorrect: false,
           enabled: !widget.inFlight,
+          keyboardType: TextInputType.emailAddress,
+          autocorrect: false,
+          textInputAction: TextInputAction.next,
+          decoration: const InputDecoration(
+            hintText: '邮箱',
+            prefixIcon: Icon(Icons.mail_outline_rounded),
+          ),
         ),
         if (validation.emailError != null)
           Padding(
-            padding: const EdgeInsets.only(top: 4),
+            padding: const EdgeInsets.only(top: MinosSpacing.xs),
             child: Text(validation.emailError!, style: errorStyle),
           ),
-        const SizedBox(height: 12),
-        ShadInput(
+        const SizedBox(height: MinosSpacing.md),
+        TextField(
           controller: _passwordCtl,
-          placeholder: const Text('Password'),
-          obscureText: true,
           enabled: !widget.inFlight,
+          obscureText: true,
+          textInputAction: isRegister
+              ? TextInputAction.next
+              : TextInputAction.done,
+          onSubmitted: widget.inFlight || isRegister
+              ? null
+              : (_) => _handleSubmit(),
+          decoration: const InputDecoration(
+            hintText: '密码',
+            prefixIcon: Icon(Icons.lock_outline_rounded),
+          ),
         ),
         if (validation.passwordError != null)
           Padding(
-            padding: const EdgeInsets.only(top: 4),
+            padding: const EdgeInsets.only(top: MinosSpacing.xs),
             child: Text(validation.passwordError!, style: errorStyle),
           ),
         if (isRegister) ...<Widget>[
-          const SizedBox(height: 12),
-          ShadInput(
+          const SizedBox(height: MinosSpacing.md),
+          TextField(
             controller: _confirmCtl,
-            placeholder: const Text('Confirm password'),
-            obscureText: true,
             enabled: !widget.inFlight,
+            obscureText: true,
+            textInputAction: TextInputAction.done,
+            onSubmitted: widget.inFlight ? null : (_) => _handleSubmit(),
+            decoration: const InputDecoration(
+              hintText: '确认密码',
+              prefixIcon: Icon(Icons.lock_outline_rounded),
+            ),
           ),
           if (validation.confirmError != null)
             Padding(
-              padding: const EdgeInsets.only(top: 4),
+              padding: const EdgeInsets.only(top: MinosSpacing.xs),
               child: Text(validation.confirmError!, style: errorStyle),
             ),
         ],
-        const SizedBox(height: 20),
-        ShadButton(
-          enabled: !widget.inFlight,
+        const SizedBox(height: MinosSpacing.xl),
+        FilledButton(
           onPressed: widget.inFlight ? null : _handleSubmit,
           child: widget.inFlight
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+              ? SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: colors.textOnAccent,
+                  ),
                 )
               : Text(submitLabel),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: MinosSpacing.sm),
         TextButton(
           onPressed: widget.inFlight
               ? null
-              : () => widget.onModeChanged(isRegister ? .login : .register),
+              : () => widget.onModeChanged(
+                  isRegister ? AuthMode.login : AuthMode.register,
+                ),
           child: Text(toggleLabel),
         ),
       ],

@@ -1,28 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
 import 'package:minos/application/auth_provider.dart';
 import 'package:minos/application/flutter_log.dart';
 import 'package:minos/application/ui_state_providers.dart';
 import 'package:minos/domain/auth_state.dart';
 import 'package:minos/domain/minos_error_display.dart';
-import 'package:minos/src/rust/api/minos.dart' show MinosError;
+import 'package:minos/src/rust/api/minos.dart' show ErrorKind, MinosError;
 import 'package:minos/ui/features/auth/widgets/auth_error_banner.dart';
 import 'package:minos/ui/features/auth/widgets/auth_form.dart';
+import 'package:minos/ui/theme/theme.dart';
 
-/// Email + password login / register surface. Owns the local mode toggle,
-/// in-flight flag and most-recent error so the form widget can stay
-/// stateless re: side effects.
-///
-/// On `EmailTaken` while in register mode we automatically flip to login —
-/// the user almost certainly just forgot they already have an account, and
-/// re-entering the same email + password is the right next step. Other
-/// errors stay in the current mode and surface only the destructive
-/// banner.
-///
-/// Wired from the GoRouter for `RootRoute.login`.
-/// Reads the auth state directly to surface any `AuthRefreshFailed` error
-/// as the initial banner.
+/// Clean mobile auth surface (login / register).
 class LoginPage extends ConsumerStatefulWidget {
   const LoginPage({super.key});
 
@@ -34,7 +22,6 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   @override
   void initState() {
     super.initState();
-    // Surface any carry-over error from AuthRefreshFailed.
     final authState = ref.read(authControllerProvider);
     ref
         .read(loginPageStateControllerProvider.notifier)
@@ -54,17 +41,16 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
     try {
       final notifier = ref.read(authControllerProvider.notifier);
-      if (currentState.mode == .login) {
+      if (currentState.mode == LoginPageMode.login) {
         await notifier.login(email, password);
       } else {
         await notifier.register(email, password);
       }
       clearError = true;
     } on MinosError catch (e) {
-      // EmailTaken in register mode is the one auto-mode-switch we do —
-      // see class doc.
-      if (e.kind == .emailTaken && currentState.mode == .register) {
-        nextMode = .login;
+      if (e.kind == ErrorKind.emailTaken &&
+          currentState.mode == LoginPageMode.register) {
+        nextMode = LoginPageMode.login;
         nextError = e;
       } else {
         nextError = e;
@@ -77,7 +63,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         stackTrace: st,
       );
       nextError = e;
-    } finally {}
+    }
 
     if (!mounted) return;
     controller.finishSubmitting(
@@ -90,34 +76,60 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   @override
   Widget build(BuildContext context) {
     final pageState = ref.watch(loginPageStateControllerProvider);
+    final colors = context.minosColors;
+    final theme = Theme.of(context);
+
     return Scaffold(
+      backgroundColor: colors.canvas,
       body: SafeArea(
-        child: Padding(
-          padding: const .all(24),
-          child: Column(
-            crossAxisAlignment: .stretch,
-            children: <Widget>[
-              const SizedBox(height: 48),
-              const Text(
-                'Minos',
-                textAlign: .center,
-                style: TextStyle(fontSize: 32, fontWeight: .bold),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(
+                horizontal: MinosSpacing.xxl,
+                vertical: MinosSpacing.xxl,
               ),
-              const SizedBox(height: 32),
-              AuthErrorBanner(error: pageState.error),
-              const SizedBox(height: 16),
-              AuthForm(
-                mode: _toAuthMode(pageState.mode),
-                onModeChanged: pageState.inFlight
-                    ? (_) {}
-                    : (m) => ref
-                          .read(loginPageStateControllerProvider.notifier)
-                          .setMode(_fromAuthMode(m)),
-                onSubmit: _submit,
-                inFlight: pageState.inFlight,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  minHeight: constraints.maxHeight - 48,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    const SizedBox(height: MinosSpacing.huge),
+                    Text(
+                      'Minos',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.displayLarge,
+                    ),
+                    const SizedBox(height: MinosSpacing.sm),
+                    Text(
+                      pageState.mode == LoginPageMode.register
+                          ? '创建账号以查看 Linked Host 与会话'
+                          : '登录后远程驱动你的 Mac',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: colors.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(height: MinosSpacing.xxxl),
+                    AuthErrorBanner(error: pageState.error),
+                    const SizedBox(height: MinosSpacing.md),
+                    AuthForm(
+                      mode: _toAuthMode(pageState.mode),
+                      onModeChanged: pageState.inFlight
+                          ? (_) {}
+                          : (m) => ref
+                                .read(loginPageStateControllerProvider.notifier)
+                                .setMode(_fromAuthMode(m)),
+                      onSubmit: _submit,
+                      inFlight: pageState.inFlight,
+                    ),
+                  ],
+                ),
               ),
-            ],
-          ),
+            );
+          },
         ),
       ),
     );
@@ -126,14 +138,14 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
 AuthMode _toAuthMode(LoginPageMode mode) {
   return switch (mode) {
-    .login => AuthMode.login,
-    .register => AuthMode.register,
+    LoginPageMode.login => AuthMode.login,
+    LoginPageMode.register => AuthMode.register,
   };
 }
 
 LoginPageMode _fromAuthMode(AuthMode mode) {
   return switch (mode) {
-    .login => LoginPageMode.login,
-    .register => LoginPageMode.register,
+    AuthMode.login => LoginPageMode.login,
+    AuthMode.register => LoginPageMode.register,
   };
 }

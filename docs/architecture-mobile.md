@@ -39,13 +39,18 @@ lib/
     thread_commands.dart             # 命令门面
     root_route_decision.dart         # 根路由决策
   ui/                                # 功能组织 UI
-    core/widgets/                    # 共享交互组件（审批、Agent question sheet 等）
+    theme/                           # Minos design tokens（color/spacing/radius/type）
+    core/widgets/                    # 共享交互组件（审批、empty state、surface 等）
     features/
-      shell/                         # 应用壳（Tab 导航）
-      chat/                          # Agent 对话
-      social/                        # 社交（好友/对话）
-      projects/                      # 项目
-      profile/                       # 个人资料
+      shell/                         # 应用壳（Sessions / Hosts / 账户）
+      sessions/                      # Golden-path 会话 inbox
+      hosts/                         # Linked hosts 列表
+      account/                       # 账户 / 退出登录
+      auth/                          # 登录注册
+      chat/                          # Agent 对话 stream + composer
+      social/                        # 社交（好友/对话，次级路由）
+      projects/                      # 项目（次级路由）
+      agents/                        # Agent profile（次级路由）
   src/rust/                          # 自动生成的 FRB 代码（勿手改）
 ```
 
@@ -84,13 +89,13 @@ lib/
 |------|------|------|
 | `/splash` | `_SplashScreen` | 启动加载 |
 | `/login` | `LoginPage` | 登录/注册 |
-| `/` | `AppShellPage` | 主壳（3 Tab） |
+| `/` | `AppShellPage` | 主壳（Sessions / Hosts / 账户） |
 | `/thread/:sessionId` | `ThreadViewPage` | Agent 线程对话 |
 | `/thread/new` | `ThreadViewPage` | 新线程 |
-| `/agent-start` | `AgentStartPage` | Agent 选择 |
-| `/project/:projectId` | `ProjectDetailPage` | 项目详情 |
-| `/social` | `SocialHubPage` | 社交中心 |
-| `/social/chat/:conversationId` | `SocialChatPage` | 社交聊天 |
+| `/agent-start` | `AgentStartPage` | Agent 选择（次级） |
+| `/project/:projectId` | `ProjectDetailPage` | 项目详情（次级） |
+| `/social` | `SocialHubPage` | 社交中心（次级，非主导航） |
+| `/social/chat/:conversationId` | `SocialChatPage` | 社交聊天（次级） |
 
 ### 根路由决策 (`root_route_decision.dart`)
 

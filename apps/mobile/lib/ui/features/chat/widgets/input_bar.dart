@@ -1,7 +1,8 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:minos/domain/active_session.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
+import 'package:minos/ui/theme/theme.dart';
 
 final _inputBarDraftProvider = NotifierProvider.autoDispose
     .family<_InputBarDraftController, String, String>(
@@ -20,18 +21,7 @@ class _InputBarDraftController extends Notifier<String> {
   }
 }
 
-/// Sticky bottom composer for the chat surface. Two visual states keyed
-/// off the [ActiveSession]:
-///
-///   - Idle / AwaitingInput / Stopped → Send button (gated on
-///     `_canSend`: text non-empty + ≤ [_maxChars]).
-///   - Starting / Streaming → destructive Stop button.
-///   - Error → Send retries; if the error has a session id the parent resumes
-///     that session instead of starting a new agent.
-///
-/// The widget owns its own `TextEditingController`; the parent receives
-/// the message via `onSend(text)` and is responsible for clearing /
-/// resetting state by feeding back a new `session` value.
+/// Sticky bottom composer for the chat surface.
 class InputBar extends ConsumerStatefulWidget {
   const InputBar({
     super.key,
@@ -99,55 +89,87 @@ class _InputBarState extends ConsumerState<InputBar> {
 
   @override
   Widget build(BuildContext context) {
-    final shadTheme = ShadTheme.of(context);
-    final materialTheme = Theme.of(context);
+    final colors = context.minosColors;
+    final theme = Theme.of(context);
     final helperText = _isStreaming ? 'Agent 正在回复，可随时停止。' : '准备好后发送，可连续追问。';
+
     return SafeArea(
       top: false,
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: shadTheme.colorScheme.background,
-          border: Border(top: BorderSide(color: shadTheme.colorScheme.border)),
+          color: colors.surface,
+          border: Border(top: BorderSide(color: colors.borderSubtle)),
         ),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          padding: const EdgeInsets.fromLTRB(
+            MinosSpacing.md,
+            MinosSpacing.md,
+            MinosSpacing.md,
+            MinosSpacing.md,
+          ),
           child: Column(
-            mainAxisSize: .min,
-            children: [
-              ShadInput(
-                controller: _ctl,
-                focusNode: _focus,
-                minLines: 1,
-                maxLines: 6,
-                enabled: !_isStreaming,
-                textCapitalization: .sentences,
-                keyboardType: .multiline,
-                textInputAction: .newline,
-                placeholder: const Text('继续追问，或让它帮你完成下一步...'),
-                style: materialTheme.textTheme.bodyMedium?.copyWith(
-                  height: 1.35,
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Container(
+                decoration: BoxDecoration(
+                  color: colors.surfaceMuted,
+                  borderRadius: MinosRadii.mdAll,
+                  border: Border.all(color: colors.borderSubtle),
                 ),
-                padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-                trailing: Consumer(
-                  builder: (context, ref, _) {
-                    final draft = ref.watch(
-                      _inputBarDraftProvider(_composerId),
-                    );
-                    final canSend = _canSend(draft);
-                    return _ComposerActionButton(
-                      icon: _isStreaming
-                          ? LucideIcons.circleStop
-                          : LucideIcons.sendHorizontal,
-                      onTap: _isStreaming
-                          ? widget.onStop
-                          : (canSend ? _submit : null),
-                      destructive: _isStreaming,
-                      enabled: _isStreaming || canSend,
-                    );
-                  },
+                padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: <Widget>[
+                    Expanded(
+                      child: TextField(
+                        controller: _ctl,
+                        focusNode: _focus,
+                        minLines: 1,
+                        maxLines: 6,
+                        enabled: !_isStreaming,
+                        textCapitalization: TextCapitalization.sentences,
+                        keyboardType: TextInputType.multiline,
+                        textInputAction: TextInputAction.newline,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          height: 1.35,
+                        ),
+                        decoration: InputDecoration(
+                          hintText: '继续追问，或让它帮你完成下一步…',
+                          hintStyle: theme.textTheme.bodyMedium?.copyWith(
+                            color: colors.textTertiary,
+                          ),
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          filled: false,
+                          contentPadding: const EdgeInsets.symmetric(
+                            vertical: 10,
+                          ),
+                        ),
+                      ),
+                    ),
+                    Consumer(
+                      builder: (context, ref, _) {
+                        final draft = ref.watch(
+                          _inputBarDraftProvider(_composerId),
+                        );
+                        final canSend = _canSend(draft);
+                        return _ComposerActionButton(
+                          icon: _isStreaming
+                              ? CupertinoIcons.stop_circle_fill
+                              : CupertinoIcons.arrow_up_circle_fill,
+                          onTap: _isStreaming
+                              ? widget.onStop
+                              : (canSend ? _submit : null),
+                          destructive: _isStreaming,
+                          enabled: _isStreaming || canSend,
+                        );
+                      },
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 7),
+              const SizedBox(height: MinosSpacing.sm),
               _ComposerStatusRow(
                 composerId: _composerId,
                 isStreaming: _isStreaming,
@@ -177,30 +199,24 @@ class _ComposerStatusRow extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final shadTheme = ShadTheme.of(context);
+    final colors = context.minosColors;
     final draftLength = ref.watch(
       _inputBarDraftProvider(composerId).select((draft) => draft.length),
     );
     final overLimit = draftLength > maxChars;
 
     return Row(
-      children: [
+      children: <Widget>[
         Expanded(
           child: Text(
             overLimit ? '$draftLength / $maxChars 字符' : helperText,
-            style: shadTheme.textTheme.muted.copyWith(
-              color: overLimit
-                  ? shadTheme.colorScheme.destructive
-                  : shadTheme.colorScheme.mutedForeground,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: overLimit ? colors.danger : colors.textTertiary,
             ),
           ),
         ),
         if (!overLimit && !isStreaming)
-          Icon(
-            LucideIcons.sparkles,
-            size: 14,
-            color: shadTheme.colorScheme.mutedForeground,
-          ),
+          Icon(CupertinoIcons.sparkles, size: 14, color: colors.textTertiary),
       ],
     );
   }
@@ -221,27 +237,17 @@ class _ComposerActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final button = destructive
-        ? ShadIconButton.destructive(
-            icon: Icon(icon),
-            iconSize: 18,
-            width: 36,
-            height: 36,
-            enabled: enabled,
-            onPressed: onTap,
-          )
-        : ShadIconButton(
-            icon: Icon(icon),
-            iconSize: 18,
-            width: 36,
-            height: 36,
-            enabled: enabled,
-            onPressed: onTap,
-          );
-    return AnimatedOpacity(
-      duration: const Duration(milliseconds: 160),
-      opacity: enabled ? 1 : 0.6,
-      child: button,
+    final colors = context.minosColors;
+    final color = !enabled
+        ? colors.textTertiary.withValues(alpha: 0.45)
+        : (destructive ? colors.danger : colors.accent);
+
+    return IconButton(
+      onPressed: enabled ? onTap : null,
+      icon: Icon(icon, color: color, size: 30),
+      visualDensity: VisualDensity.compact,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
     );
   }
 }

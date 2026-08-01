@@ -1,6 +1,7 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
+import 'package:minos/ui/theme/theme.dart';
 
 enum MessageDeliveryState { none, sending, failed }
 
@@ -18,14 +19,10 @@ class MessageBubbleStatusLine {
   final MessageBubbleStatusTone tone;
 }
 
-/// One chat bubble. iMessage-style:
-///   - user (right): iOS systemBlue bubble, white text
-///   - assistant (left): full-width content rail with optional live status rows
+/// Chat bubble for the golden-path transcript.
 ///
-/// Bubbles use an asymmetric corner radius (small corner on the speaker
-/// side) so the row reads as belonging to the avatar rail. Assistant
-/// messages deliberately avoid the narrow bubble treatment so markdown,
-/// tool progress, and long-form output read more like a transcript.
+/// User messages sit on the right as accent bubbles; assistant messages use a
+/// soft full-width transcript rail with a compact bot glyph.
 class MessageBubble extends StatelessWidget {
   const MessageBubble({
     super.key,
@@ -45,21 +42,16 @@ class MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final shadTheme = ShadTheme.of(context);
-    final scheme = theme.colorScheme;
+    final colors = context.minosColors;
 
-    final bg = isUser
-        ? shadTheme.colorScheme.primary
-        : shadTheme.colorScheme.card;
-    final fg = isUser
-        ? shadTheme.colorScheme.primaryForeground
-        : shadTheme.colorScheme.foreground;
+    final bg = isUser ? colors.userBubble : colors.assistantBubble;
+    final fg = isUser ? colors.userBubbleForeground : colors.textPrimary;
 
     final radius = BorderRadius.only(
-      topLeft: const Radius.circular(8),
-      topRight: const Radius.circular(8),
-      bottomLeft: Radius.circular(isUser ? 8 : 3),
-      bottomRight: Radius.circular(isUser ? 3 : 8),
+      topLeft: const Radius.circular(MinosRadii.md),
+      topRight: const Radius.circular(MinosRadii.md),
+      bottomLeft: Radius.circular(isUser ? MinosRadii.md : MinosRadii.xs),
+      bottomRight: Radius.circular(isUser ? MinosRadii.xs : MinosRadii.md),
     );
 
     final content = Column(
@@ -78,22 +70,24 @@ class MessageBubble extends StatelessWidget {
               color: fg,
               backgroundColor: isUser
                   ? Colors.white.withValues(alpha: 0.18)
-                  : shadTheme.colorScheme.muted,
+                  : colors.surfaceMuted,
             ),
             a: TextStyle(
-              color: isUser ? Colors.white : scheme.primary,
+              color: isUser ? Colors.white : colors.accent,
               decoration: TextDecoration.underline,
             ),
           ),
         ),
         if (statusLines.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.only(top: 8),
+            padding: const EdgeInsets.only(top: MinosSpacing.sm),
             child: _MessageStatusLines(lines: statusLines),
           ),
         if (isStreaming)
           Padding(
-            padding: EdgeInsets.only(top: statusLines.isEmpty ? 6 : 8),
+            padding: EdgeInsets.only(
+              top: statusLines.isEmpty ? MinosSpacing.sm : MinosSpacing.sm,
+            ),
             child: _StreamingCursor(color: fg),
           ),
       ],
@@ -113,7 +107,11 @@ class MessageBubble extends StatelessWidget {
         : Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(color: bg, borderRadius: radius),
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: radius,
+              border: Border.all(color: colors.borderSubtle),
+            ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
@@ -121,14 +119,14 @@ class MessageBubble extends StatelessWidget {
                   width: 26,
                   height: 26,
                   decoration: BoxDecoration(
-                    color: shadTheme.colorScheme.secondary,
-                    borderRadius: BorderRadius.circular(6),
+                    color: colors.accentSoft,
+                    borderRadius: MinosRadii.xsAll,
                   ),
                   alignment: Alignment.center,
                   child: Icon(
-                    LucideIcons.bot,
-                    size: 15,
-                    color: shadTheme.colorScheme.secondaryForeground,
+                    CupertinoIcons.sparkles,
+                    size: 14,
+                    color: colors.accent,
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -142,11 +140,6 @@ class MessageBubble extends StatelessWidget {
             ),
           );
 
-    // For a user bubble in a non-`none` delivery state we render the
-    // indicator OUTSIDE the bubble, just to its left — the WeChat / iMessage
-    // convention. Sandwich is `[indicator] [bubble]` inside a right-aligned
-    // Row so the bubble stays flush with the right edge regardless of
-    // indicator presence. Assistant bubbles never carry a delivery state.
     final showIndicator = isUser && deliveryState != MessageDeliveryState.none;
 
     final child = isUser
@@ -159,7 +152,7 @@ class MessageBubble extends StatelessWidget {
                   padding: const EdgeInsets.only(right: 6),
                   child: _DeliveryStateIndicator(
                     state: deliveryState,
-                    color: theme.colorScheme.onSurfaceVariant,
+                    color: colors.textSecondary,
                   ),
                 ),
               Flexible(child: bubble),
@@ -168,7 +161,7 @@ class MessageBubble extends StatelessWidget {
         : bubble;
 
     return Padding(
-      padding: EdgeInsets.fromLTRB(isUser ? 48 : 10, 4, isUser ? 12 : 10, 4),
+      padding: EdgeInsets.fromLTRB(isUser ? 48 : 12, 4, isUser ? 12 : 12, 4),
       child: child,
     );
   }
@@ -247,6 +240,7 @@ class _MessageStatusLines extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final colors = context.minosColors;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -257,7 +251,7 @@ class _MessageStatusLines extends StatelessWidget {
               Icon(
                 lines[index].icon,
                 size: 14,
-                color: _statusColor(theme, lines[index].tone),
+                color: _statusColor(colors, lines[index].tone),
               ),
               const SizedBox(width: 6),
               Expanded(
@@ -271,7 +265,7 @@ class _MessageStatusLines extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.labelSmall?.copyWith(
-                      color: _statusColor(theme, lines[index].tone),
+                      color: _statusColor(colors, lines[index].tone),
                       fontWeight: FontWeight.w500,
                       height: 1.2,
                     ),
@@ -285,13 +279,12 @@ class _MessageStatusLines extends StatelessWidget {
     );
   }
 
-  static Color _statusColor(ThemeData theme, MessageBubbleStatusTone tone) {
-    final scheme = theme.colorScheme;
+  static Color _statusColor(MinosColors colors, MessageBubbleStatusTone tone) {
     return switch (tone) {
-      MessageBubbleStatusTone.info => scheme.primary,
-      MessageBubbleStatusTone.success => const Color(0xFF248A3D),
-      MessageBubbleStatusTone.error => scheme.error,
-      MessageBubbleStatusTone.neutral => scheme.onSurfaceVariant,
+      MessageBubbleStatusTone.info => colors.accent,
+      MessageBubbleStatusTone.success => colors.success,
+      MessageBubbleStatusTone.error => colors.danger,
+      MessageBubbleStatusTone.neutral => colors.textSecondary,
     };
   }
 }

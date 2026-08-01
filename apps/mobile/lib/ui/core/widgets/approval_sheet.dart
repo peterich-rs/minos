@@ -1,9 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
+import 'package:minos/ui/theme/theme.dart';
 
 final _approvalCountdownProvider = NotifierProvider.autoDispose
     .family<_ApprovalCountdownController, int, _ApprovalCountdownConfig>(
@@ -58,8 +59,7 @@ class _ApprovalCountdownController extends Notifier<int> {
   }
 }
 
-/// Data class representing an approval request received from the host via
-/// the server relay. Maps to `EventKind::ApprovalRequest` on the wire.
+/// Data class representing an approval request received from the host.
 class ApprovalRequestData {
   const ApprovalRequestData({
     required this.sessionId,
@@ -77,7 +77,6 @@ class ApprovalRequestData {
   final Map<String, dynamic> params;
   final int timeoutMs;
 
-  /// Parse from a raw JSON payload (e.g. from `UiEventMessage.raw`).
   factory ApprovalRequestData.fromJson(Map<String, dynamic> json) {
     return ApprovalRequestData(
       sessionId: json['session_id'] as String? ?? '',
@@ -99,14 +98,6 @@ class ApprovalRequestData {
   }
 }
 
-/// Modal bottom sheet that displays an approval request and lets the user
-/// accept or decline. Shows a countdown timer for the remaining time before
-/// auto-decline.
-///
-/// Usage:
-/// ```dart
-/// final decision = await showApprovalSheet(context, request: data);
-/// ```
 Future<ApprovalDecision?> showApprovalSheet(
   BuildContext context, {
   required ApprovalRequestData request,
@@ -121,7 +112,6 @@ Future<ApprovalDecision?> showApprovalSheet(
   );
 }
 
-/// The user's decision on an approval request.
 enum ApprovalDecision { accept, decline }
 
 class _ApprovalSheet extends ConsumerStatefulWidget {
@@ -158,21 +148,21 @@ class _ApprovalSheetState extends ConsumerState<_ApprovalSheet> {
     final method = widget.request.method;
     if (method.contains('command_execution') ||
         method.contains('exec_command')) {
-      return LucideIcons.terminal;
+      return Icons.terminal_rounded;
     } else if (method.contains('file_change') ||
         method.contains('apply_patch')) {
-      return LucideIcons.fileDiff;
+      return CupertinoIcons.doc_on_doc;
     } else if (method.contains('permissions')) {
-      return LucideIcons.shield;
+      return CupertinoIcons.shield;
     }
-    return LucideIcons.circleAlert;
+    return CupertinoIcons.exclamationmark_triangle;
   }
 
   Widget _buildDetailSection(Map<String, dynamic> params) {
     final widgets = <Widget>[];
     final method = widget.request.method;
+    final colors = context.minosColors;
 
-    // Command execution: show the command
     if (method.contains('command_execution') ||
         method.contains('exec_command')) {
       final command =
@@ -188,7 +178,6 @@ class _ApprovalSheetState extends ConsumerState<_ApprovalSheet> {
       }
     }
 
-    // File change: show affected files
     if (method.contains('file_change') || method.contains('apply_patch')) {
       final files = params['files'] as List? ?? params['patches'] as List?;
       if (files != null && files.isNotEmpty) {
@@ -205,10 +194,10 @@ class _ApprovalSheetState extends ConsumerState<_ApprovalSheet> {
         if (files.length > 5) {
           widgets.add(
             Padding(
-              padding: const .only(left: 60),
+              padding: const EdgeInsets.only(left: 60),
               child: Text(
                 '…及其他 ${files.length - 5} 个文件',
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
+                style: TextStyle(fontSize: 12, color: colors.textTertiary),
               ),
             ),
           );
@@ -216,7 +205,6 @@ class _ApprovalSheetState extends ConsumerState<_ApprovalSheet> {
       }
     }
 
-    // Permissions: show what's being requested
     if (method.contains('permissions')) {
       final permissions =
           params['permissions'] as List? ?? params['scopes'] as List?;
@@ -230,19 +218,20 @@ class _ApprovalSheetState extends ConsumerState<_ApprovalSheet> {
       }
     }
 
-    // Reason field (common across types)
     final reason = params['reason'] as String? ?? params['message'] as String?;
     if (reason != null && reason.isNotEmpty) {
       widgets.add(_DetailRow(label: '原因', value: reason));
     }
 
-    // Fallback: show raw JSON if no structured fields were rendered
     if (widgets.isEmpty && params.isNotEmpty) {
       final prettyJson = const JsonEncoder.withIndent('  ').convert(params);
       widgets.add(_DetailRow(label: '详情', value: prettyJson, isCode: true));
     }
 
-    return Column(crossAxisAlignment: .start, children: widgets);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: widgets,
+    );
   }
 
   @override
@@ -258,64 +247,72 @@ class _ApprovalSheetState extends ConsumerState<_ApprovalSheet> {
       });
     });
 
-    final shadTheme = ShadTheme.of(context);
+    final colors = context.minosColors;
     final theme = Theme.of(context);
 
     return Container(
       decoration: BoxDecoration(
-        color: shadTheme.colorScheme.background,
-        borderRadius: const .vertical(top: .circular(16)),
+        color: colors.surface,
+        borderRadius: MinosRadii.sheetTop,
       ),
-      padding: .only(
-        left: 20,
-        right: 20,
-        top: 20,
-        bottom: 20 + MediaQuery.of(context).viewPadding.bottom,
+      padding: EdgeInsets.only(
+        left: MinosSpacing.xl,
+        right: MinosSpacing.xl,
+        top: MinosSpacing.xl,
+        bottom: MinosSpacing.xl + MediaQuery.of(context).viewPadding.bottom,
       ),
       child: Column(
-        mainAxisSize: .min,
-        crossAxisAlignment: .stretch,
-        children: [
-          // Header
-          Row(
-            children: [
-              Icon(
-                _requestTypeIcon,
-                size: 22,
-                color: shadTheme.colorScheme.primary,
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Center(
+            child: Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: colors.border,
+                borderRadius: MinosRadii.pillAll,
               ),
-              const SizedBox(width: 10),
+            ),
+          ),
+          const SizedBox(height: MinosSpacing.lg),
+          Row(
+            children: <Widget>[
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: colors.warningSoft,
+                  borderRadius: MinosRadii.smAll,
+                ),
+                alignment: Alignment.center,
+                child: Icon(_requestTypeIcon, size: 20, color: colors.warning),
+              ),
+              const SizedBox(width: MinosSpacing.md),
               Expanded(
                 child: Text(
                   _requestTypeLabel,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: .w600,
-                    color: shadTheme.colorScheme.foreground,
-                  ),
+                  style: theme.textTheme.titleLarge,
                 ),
               ),
               _ApprovalCountdownBadge(countdownConfig: _countdownConfig),
             ],
           ),
-          const SizedBox(height: 16),
-
-          // Details
+          const SizedBox(height: MinosSpacing.lg),
           _buildDetailSection(widget.request.params),
-          const SizedBox(height: 20),
-
-          // Action buttons
+          const SizedBox(height: MinosSpacing.xl),
           Row(
-            children: [
+            children: <Widget>[
               Expanded(
-                child: ShadButton.outline(
+                child: OutlinedButton(
                   onPressed: () =>
                       Navigator.of(context).pop(ApprovalDecision.decline),
                   child: const Text('拒绝'),
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: MinosSpacing.md),
               Expanded(
-                child: ShadButton(
+                child: FilledButton(
                   onPressed: () =>
                       Navigator.of(context).pop(ApprovalDecision.accept),
                   child: const Text('允许'),
@@ -336,30 +333,30 @@ class _ApprovalCountdownBadge extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final shadTheme = ShadTheme.of(context);
+    final colors = context.minosColors;
     final remainingSeconds = ref.watch(
       _approvalCountdownProvider(countdownConfig),
     );
     final timerColor = remainingSeconds <= 30
-        ? shadTheme.colorScheme.destructive
-        : shadTheme.colorScheme.mutedForeground;
+        ? colors.danger
+        : colors.textSecondary;
 
     return Container(
-      padding: const .symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: timerColor.withValues(alpha: 0.1),
-        borderRadius: .circular(12),
+        borderRadius: MinosRadii.pillAll,
       ),
       child: Row(
-        mainAxisSize: .min,
-        children: [
-          Icon(LucideIcons.clock, size: 14, color: timerColor),
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(CupertinoIcons.timer, size: 14, color: timerColor),
           const SizedBox(width: 4),
           Text(
             '${remainingSeconds}s',
             style: TextStyle(
               fontSize: 13,
-              fontWeight: .w500,
+              fontWeight: FontWeight.w600,
               color: timerColor,
             ),
           ),
@@ -382,48 +379,45 @@ class _DetailRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final shadTheme = ShadTheme.of(context);
+    final colors = context.minosColors;
+    final theme = Theme.of(context);
     return Padding(
-      padding: const .only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: MinosSpacing.md),
       child: Row(
-        crossAxisAlignment: .start,
-        children: [
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
           SizedBox(
             width: 50,
             child: Text(
               label,
-              style: TextStyle(
-                fontSize: 13,
-                color: shadTheme.colorScheme.mutedForeground,
-                fontWeight: .w500,
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: colors.textTertiary,
               ),
             ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: MinosSpacing.md),
           Expanded(
             child: isCode
                 ? Container(
-                    padding: const .all(8),
+                    padding: const EdgeInsets.all(MinosSpacing.sm),
                     decoration: BoxDecoration(
-                      color: shadTheme.colorScheme.muted,
-                      borderRadius: .circular(6),
+                      color: colors.surfaceMuted,
+                      borderRadius: MinosRadii.xsAll,
                     ),
                     child: Text(
                       value,
-                      style: TextStyle(
-                        fontSize: 12,
+                      style: theme.textTheme.bodySmall?.copyWith(
                         fontFamily: 'monospace',
-                        color: shadTheme.colorScheme.foreground,
+                        color: colors.textPrimary,
                       ),
                       maxLines: 8,
-                      overflow: .ellipsis,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   )
                 : Text(
                     value,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: shadTheme.colorScheme.foreground,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colors.textPrimary,
                     ),
                   ),
           ),
