@@ -804,8 +804,7 @@ class _AgentEditorSheetState extends ConsumerState<AgentEditorSheet> {
           title:
               _hostLabelForId(widget.hosts, host.hostDeviceId) ??
               host.hostDeviceId,
-          subtitle:
-              '${host.hostDeviceId} · ${host.online ? '设备在线' : '设备离线'}',
+          subtitle: '${host.hostDeviceId} · ${host.online ? '设备在线' : '设备离线'}',
         ),
     ];
     final selected = await _showPickerSheet<String?>(

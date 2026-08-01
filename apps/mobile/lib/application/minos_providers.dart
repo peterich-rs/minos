@@ -156,18 +156,20 @@ class PairedMacs extends AsyncNotifier<List<HostSummaryDto>> {
       return;
     }
     var changed = false;
-    final next = current.map((h) {
-      if (h.hostDeviceId != installationId) return h;
-      if (h.online == online) return h;
-      changed = true;
-      return HostSummaryDto(
-        hostDeviceId: h.hostDeviceId,
-        hostDisplayName: h.hostDisplayName,
-        pairedAtMs: h.pairedAtMs,
-        pairedViaDeviceId: h.pairedViaDeviceId,
-        online: online,
-      );
-    }).toList(growable: false);
+    final next = current
+        .map((h) {
+          if (h.hostDeviceId != installationId) return h;
+          if (h.online == online) return h;
+          changed = true;
+          return HostSummaryDto(
+            hostDeviceId: h.hostDeviceId,
+            hostDisplayName: h.hostDisplayName,
+            pairedAtMs: h.pairedAtMs,
+            pairedViaDeviceId: h.pairedViaDeviceId,
+            online: online,
+          );
+        })
+        .toList(growable: false);
     if (changed) {
       state = AsyncValue.data(next);
     }

@@ -71,7 +71,10 @@ void main() {
             error: submit,
           );
 
-      expect(container.read(loginPageStateControllerProvider).error, same(submit));
+      expect(
+        container.read(loginPageStateControllerProvider).error,
+        same(submit),
+      );
     });
   });
 }

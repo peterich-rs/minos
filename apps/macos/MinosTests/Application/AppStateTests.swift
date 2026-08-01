@@ -2,8 +2,8 @@ import XCTest
 
 @testable import Minos
 
-/// canForgetPeer) and the round-trip pairing/forget paths. Boot-side
-/// scenarios live in `AppStateBootTests`.
+/// Gate predicates (`canForgetPeer`) and the forget-peer round-trip.
+/// Boot-side scenarios live in `AppStateBootTests`.
 final class AppStateTests: XCTestCase {
     func testPeerActivityDateUsesEpochMilliseconds() throws {
         let date = try XCTUnwrap(
@@ -23,14 +23,6 @@ final class AppStateTests: XCTestCase {
     }
 
     // ── Gates ──
-
-    @MainActor
-    func testCanShowQrTrueWhenDaemonRunningEvenIfLinkDown() async {
-        let (appState, daemon) = AppStateFixtures.runningState()
-        daemon.emitRelayLink(.disconnected)
-        await AppStateFixtures.drainMainActor()
-
-    }
 
     @MainActor
     func testCanForgetPeerFalseWhenLinkDown() async {
@@ -53,62 +45,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(appState.canForgetPeer)
     }
 
-    @MainActor
-    func testCanShowQrTrueWhenPairedAndConnected() async {
-        let (appState, daemon) = AppStateFixtures.runningState()
-        let did = "00000000-0000-0000-0000-000000000889"
-        daemon.emitPeer(.paired(peerId: did, peerName: "iPhone", online: true))
-        await AppStateFixtures.drainMainActor()
-
-    }
-
-    // ── QR / forget round-trips ──
-
-    @MainActor
-    func testShowQrStoresPayloadAndMarksShowingQr() async throws {
-        let daemon = MockDaemon(
-            currentRelayLink: .disconnected,
-            currentPeer: .unpaired,
-        )
-        let appState = AppState()
-
-        appState.finishBoot(
-            daemon: daemon,
-            relayLinkSubscription: MockSubscription(),
-            peerSubscription: MockSubscription(),
-            relayLink: .disconnected,
-            peer: .unpaired,
-            trustedDevice: nil
-        )
-
-
-        XCTAssertNil(appState.displayError)
-
-        XCTAssertEqual(expiresAt.timeIntervalSince(generatedAt), 300, accuracy: 0.001)
-    }
-
-    @MainActor
-    func testQrStaysVisibleWhenUnpairedRefreshArrivesDuringPairing() async throws {
-        let daemon = MockDaemon(
-            currentRelayLink: .disconnected,
-            currentPeer: .unpaired,
-            currentPeers: [],
-        )
-        let appState = AppState()
-
-        appState.finishBoot(
-            daemon: daemon,
-            relayLinkSubscription: MockSubscription(),
-            peerSubscription: MockSubscription(),
-            relayLink: .disconnected,
-            peer: .unpaired,
-            trustedDevice: nil
-        )
-
-        await appState.applyPeer(.unpaired)
-
-        XCTAssertNil(appState.displayError)
-    }
+    // ── Forget round-trip ──
 
     @MainActor
     func testForgetPeerSuccessClearsLocalAndCallsMock() async {
@@ -140,5 +77,4 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.peer, .unpaired)
         XCTAssertNil(appState.trustedDevice)
     }
-
 }

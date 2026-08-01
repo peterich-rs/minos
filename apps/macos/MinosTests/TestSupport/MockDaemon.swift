@@ -114,7 +114,6 @@ final class MockDaemon: DaemonDriving, @unchecked Sendable {
         return currentPeersValue
     }
 
-
     func forgetPeer() async throws {
         forgetPeerCallCount += 1
         if let forgetPeerError {
@@ -217,12 +216,24 @@ extension MockDaemon {
         }
     }
 
-
     static func makeStartAgentResponse(
         sessionId: String = "thread-abc12",
         cwd: String = "/Users/fan/.minos/workspaces"
     ) -> StartAgentResponse {
         StartAgentResponse(sessionId: sessionId, cwd: cwd)
+    }
+
+    /// Matches `AppState.startAgent(mode:)` request shape for call assertions.
+    static func makeStartAgentRequest(mode: AgentLaunchMode = .jsonl) -> StartAgentRequest {
+        StartAgentRequest(
+            agent: .codex,
+            workspace: "",
+            mode: mode,
+            profileId: nil,
+            model: nil,
+            reasoningEffort: nil,
+            instructions: nil
+        )
     }
 
     static func makeAgentSessionSnapshot(

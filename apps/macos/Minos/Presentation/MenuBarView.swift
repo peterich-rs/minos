@@ -107,7 +107,6 @@ struct MenuBarView: View {
         VStack(alignment: .leading, spacing: 12) {
             pairedDevicesSection
 
-
             if appState.canReconnectBackend {
                 actionButton("重新连接后端") {
                     Task { await appState.reconnectBackend() }

@@ -1065,7 +1065,20 @@ fn require_generated_text(path: &Path, needle: &str, context: &str) -> Result<()
 }
 
 fn prune_unexpected_uniffi_outputs(out_dir: &Path) {
-    let _ = out_dir;
+    // Host Link replaced QR pairing; `minos-pairing` is no longer a UniFFI
+    // surface. Stale bindgen artifacts must not stay under Minos/Generated or
+    // they collide with `DateTimeUtc` / converters also emitted by minos-daemon.
+    const RETIRED: &[&str] = &[
+        "minos_pairing.swift",
+        "minos_pairingFFI.h",
+    ];
+    for name in RETIRED {
+        let path = out_dir.join(name);
+        if path.exists() {
+            let _ = fs::remove_file(&path);
+            eprintln!("==> pruned retired UniFFI artifact {}", path.display());
+        }
+    }
 }
 
 #[allow(clippy::too_many_lines)] // Sequential drift guards; splitting them would obscure the per-needle context.
