@@ -29,10 +29,21 @@ rm -f minos-backend.db minos-backend.db-wal minos-backend.db-shm
 
 Run each in a **separate terminal tab**, from the **repo root**.
 
+> **Shell trap:** if your parent shell already `export`ed `MINOS_BACKEND_URL=wss://minos.fan-nn.top/...`,
+> it **overrides** `.env.local` (just dotenv does not clobber existing exports).  
+> Start each tab with:
+>
+> ```bash
+> unset MINOS_BACKEND_URL MINOS_BACKEND_PUBLIC_URL
+> ```
+>
+> Then `just print-local-env` should show `ws://127.0.0.1:8787/devices`.
+
 ### Tab 1 — Backend
 
 ```bash
 cd /Users/zhangfan/develop/github.com/minos
+unset MINOS_BACKEND_URL MINOS_BACKEND_PUBLIC_URL
 just print-local-env
 just backend
 ```
