@@ -7,8 +7,8 @@
 | 项 | 值 |
 |----|-----|
 | 源码路径 | `apps/desktop/` |
-| 产品定位 | **Conversation 协作工作台**（Project → Timeline 为主舞台；Session/Approval 为对话内能力与 Attention）。本机对标 TUI 能力；**account-first** + Host Link 供手机/Web 远程；Host 页是连接/身份能力面而非主场景 |
-| 当前阶段 | **Daemon-backed**：Tauri 宿主嵌 daemon；bootstrap 经 `daemonApi` 拉 projects / CLIs / live push。浏览器 `vite` 直开时 fallback mock 数据。**根门禁 account-first**：冷启动 `hydrateAuth`（localStorage session → 必要时 `POST /v1/auth/refresh`）→ 无有效 Minos session 则全屏 `LoginPage`（Supabase IdP → `/v1/auth/supabase`）；有 session 再 daemon bootstrap 进 `AppShell`。**Link this Mac**（daemon prepare/sign/apply + `POST /v1/hosts/link`）仍在 Host 页，与登录解耦 |
+| 产品定位 | **Conversation 协作工作台**（Project → Timeline 为主舞台；Session/Approval 为对话内能力与 Attention）。本机对标 TUI 能力；**account-first**：在本机登录 Desktop 即拥有 host 控制权；手机/Web 远程依赖 cloud **Online**（live `/ws/host`） |
+| 当前阶段 | **Daemon-backed**：Tauri 宿主嵌 daemon；bootstrap 经 `daemonApi` 拉 projects / CLIs / live push。浏览器 `vite` 直开时 fallback mock 数据。**根门禁 account-first**：冷启动 `hydrateAuth` → 无 session 则 `LoginPage`；有 session 进 `AppShell`。**登录后自动** `ensureCloudConnection`（内部 prepare/sign/`POST /v1/hosts/link`/apply + 等待 hub online）。用户只见 **Online / Connecting / Offline**（顶栏 banner + 品牌副标题），无 Link/Unlink 主路径。**Hub conversation_id** 经 `agent_session.start` 透传到 Host 落库（禁止再造 Direct agent sessions 假会话） |
 | 视觉 | 暖色多栏（参考 `res/desktop.jpeg` 气质，非客服 Inbox 语义） |
 | 产品 spec | [2026-07-18-desktop-product-experience.md](superpowers/specs/2026-07-18-desktop-product-experience.md) |
 | 状态拆分 spec | [2026-07-21-desktop-state-by-consumption.md](superpowers/specs/2026-07-21-desktop-state-by-consumption.md)（**P0–P4 done**；P5 cleanup reviewed；编码入口 §18） |
@@ -74,7 +74,7 @@ Work → Project
 | Board | 四列派生状态 | 非独立任务系统 |
 | Attention | needs_approval | approvals |
 | Agents | CLI inventory + personalized profiles | `list_clis` (runtime set + capability flags from Rust SSOT), `list_models` (honest per-model efforts), agent profile CRUD; **profile `description` = peer-facing role brief** (≤500, seeds conversation roster when member brief empty); start session accepts optional `profile_id` (daemon resolves model/effort/instructions; explicit fields override) |
-| Host | Ready / Local only / Linked + 诊断；Account & remote（身份 / Link this Mac / Unlink / Sign out） | `deriveHostPresence` + `account-store.hostLink.linked`；daemon `host_prepare_link` / `sign` / `apply`。登录表单在根 `LoginPage`，不在 Host |
+| Host | Local Ready + Server Online/Offline + 诊断；Account（身份 / Sign out）；Appearance / Updates | `deriveHostPresence`（cloud status）+ `account-store.ensureCloudConnection`；顶栏 `CloudConnectionBanner`。登录表单在根 `LoginPage` |
 
 ### Agents capability SSOT
 
@@ -162,7 +162,7 @@ apps/desktop/
       attention/                 # AttentionView.tsx
       agents/                    # AgentsView.tsx · AGENTS.md (capability SSOT rule)
         lib/agentConfigProjection.ts  # pure map: list_clis/list_models → UI options
-      host/                      # HostView.tsx · identity + Link this Mac (no login form)
+      host/                      # HostView.tsx · identity + cloud status (auto-connect; no link CTA)
         lib/host-link-flow.ts    # pure prepare→sign→cloud→apply orchestration
         lib/host-account-presenter.ts  # Local only / Linked / Error (+ defensive signed out)
       chat/                      # Conversation chat UI (Wave 1–2)
@@ -202,7 +202,15 @@ apps/desktop/
         connection-card-policy.ts # when to show sidebar daemon offline card
         host-status.ts           # Ready · Local only / Linked / This Mac
         account-session.ts       # MinosSession + HostLinkState localStorage
-        minos-cloud.ts           # /v1/auth/* + /v1/hosts/* HTTP (desktop-console)
+        minos-cloud.ts           # /v1/auth/* + /v1/hosts/* + Hub IM HTTP
+        im-cloud-sync.ts         # Hub shell upsert + user Outbox (no agent dual-write)
+        im-outbox.ts             # durable localStorage Outbox for user messages
+        im-cloud-inbound.ts      # Hub cold pull → TimelineMessage[] (no daemon append)
+        hub-timeline.ts          # mergeHubAndLocalTimeline (Hub chat + local tool/git)
+        hub-cursors.ts           # per-topic topic_seq resume_after (localStorage)
+        hub-realtime.ts          # Sync SM + conversation:* Subscribe + SnapshotRequired
+        im-hub-bridge.ts         # auth → realtime → messagesByConversation (Hub-first)
+        # 协作气泡：docs/superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md
         supabase.ts              # optional Supabase email/password IdP
         mock-data.ts
         toast.ts                 # sonner wrappers
@@ -220,7 +228,7 @@ apps/desktop/
         daemon.ts · agent-route.ts · …
     store/                       # L0–L6 工作区契约不变；chat reactions 不进 workspace
       ui-store.ts                # nav + drafts + replyTo + commandPaletteOpen
-      account-store.ts           # Minos session + Host Link actions (sign-in / link / unlink)
+      account-store.ts           # Minos session + auto cloud ensure (sign-in / Online·Offline)
       workspace-store.ts         # thin create() + re-export useWorkspaceStore
       workspace/
         types.ts                 # WorkspaceState / ResourceFetchStatus / ProjectSession
@@ -413,7 +421,8 @@ minos_local_read_session_raw_history / subscribe_ingest
 | Raw(approval/*) | `approval` | 审批卡 |
 | Raw(其它) | 丢弃 | 不进 timeline |
 
-**Conversation 主时间线**只读 `chat_messages`（user / agent-result / post_conversation_update），**不含** session 全过程 tool 流水——与 TUI conversation 层一致。展示风格可借鉴 Grok，但数据路径对所有 CLI 统一。
+**Conversation 主时间线（目标）**：Linked 会话以 **Hub 协作气泡** 为 SSOT 投影；本地 daemon `chat_messages` 不再与 Hub 对等权威。过渡期仍可能读本地 `chat_messages`（含 dual-write 镜像），见 [Hub 协作消息 SSOT 收敛](superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md)。  
+**Session transcript** 仍只认 Host（user / assistant / tool / reasoning），**不含**把全过程 tool 流水写进协作气泡——与 TUI 分层一致。
 
 ### Conversation timeline（messenger 气泡）
 

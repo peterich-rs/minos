@@ -23,6 +23,10 @@
 Daemon (agents) ──ingest/events──► minos-backend ──fanout──► /ws/client viewers
 ```
 
+**分层澄清（2026-08-02）**：D05 的 ingest/stream 解决的是 **Agent 执行投影**（session / turns / approvals）。  
+**人读的协作聊天气泡**（user / agent 最终文本）属于 **Hub conversation SSOT**，不得用 Desktop↔Hub 对等 dual-write 冒充完成。  
+收敛清单见 [2026-08-02-hub-collaboration-message-ssot.md](../2026-08-02-hub-collaboration-message-ssot.md)。
+
 ---
 
 ## 2. Decisions (locked)

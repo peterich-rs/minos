@@ -40,15 +40,18 @@ lib/
     root_route_decision.dart         # 根路由决策
   ui/                                # 功能组织 UI
     theme/                           # Minos design tokens（color/spacing/radius/type）
-    core/widgets/                    # 共享交互组件（审批、empty state、surface 等）
+    core/widgets/                    # 共享交互组件（toast/button/empty/surface 等）
     features/
-      shell/                         # 应用壳（Sessions / Hosts / 账户）
-      sessions/                      # Golden-path 会话 inbox
+      shell/                         # 应用壳（消息 / Hosts / 账户）
+      messages/                      # Golden-path conversation inbox
+      sessions/                      # Agent session inbox（次级）
       hosts/                         # Linked hosts 列表
       account/                       # 账户 / 退出登录
       auth/                          # 登录注册
-      chat/                          # Agent 对话 stream + composer
-      social/                        # 社交（好友/对话，次级路由）
+      chat/                          # Agent session transcript stream + composer
+      social/                        # 协作 IM 聊天 / 成员（次级路由）
+        lib/message_grouping.dart    # 10min 分组 + day divider（对齐 Desktop）
+        widgets/                     # Slack/Buzz 全宽行 chrome / row / actions
       projects/                      # 项目（次级路由）
       agents/                        # Agent profile（次级路由）
   src/rust/                          # 自动生成的 FRB 代码（勿手改）
@@ -89,13 +92,14 @@ lib/
 |------|------|------|
 | `/splash` | `_SplashScreen` | 启动加载 |
 | `/login` | `LoginPage` | 登录/注册 |
-| `/` | `AppShellPage` | 主壳（Sessions / Hosts / 账户） |
+| `/` | `AppShellPage` | 主壳（消息 / Hosts / 账户） |
+| `/sessions` | `SessionsPage` | Agent session 列表（次级） |
 | `/thread/:sessionId` | `ThreadViewPage` | Agent 线程对话 |
 | `/thread/new` | `ThreadViewPage` | 新线程 |
 | `/agent-start` | `AgentStartPage` | Agent 选择（次级） |
 | `/project/:projectId` | `ProjectDetailPage` | 项目详情（次级） |
-| `/social` | `SocialHubPage` | 社交中心（次级，非主导航） |
-| `/social/chat/:conversationId` | `SocialChatPage` | 社交聊天（次级） |
+| `/social` | redirect → `/` | 旧消息入口，兼容跳转到 shell 消息 Tab |
+| `/social/chat/:conversationId` | `SocialChatPage` | Conversation 协作 IM（Hub 气泡；Slack/Buzz 全宽左对齐行） |
 
 ### 根路由决策 (`root_route_decision.dart`)
 
@@ -114,9 +118,26 @@ provider is created.
 
 ### App Shell（3 个 Tab）
 
-- **Tab 0 (Sessions)**: `SessionsPage` — session inbox
+- **Tab 0 (消息)**: `MessagesPage` — 全部 conversation，按 `lastMessageAtMs` 倒序
 - **Tab 1 (Hosts)**: `HostsPage` — linked hosts
-- **Tab 2 (账户)**: `AccountPage` — profile / logout
+- **Tab 2 (账户)**: `AccountPage` — profile / logout；入口可进次级「Agent 会话」
+
+UI 使用自研 **Minos design tokens**（iOS 向手感），不再依赖 `shadcn_ui`。
+
+### 协作 IM 时间线（`SocialChatPage`）
+
+与 Desktop `MessageList` / `MessageChrome` 对齐的 **Slack/Buzz 全宽左对齐行**（非 iMessage 左右气泡）：
+
+| 能力 | 实现 |
+|------|------|
+| 行壳 | `ConversationMessageRow` + `ConversationMessageChrome`：头像 gutter + 作者/时间 header + markdown body |
+| 分组 | 同作者 10 分钟窗口隐藏 avatar/header（`message_grouping.dart`） |
+| 分隔 | 日历日 `ConversationDayDivider`（今天 / 昨天 / 日期） |
+| 撤回 | 居中 `ConversationSystemMessage` |
+| 交互 | 长按：引用 / 复制 / 重试 / 撤回；失败红 `!` 重试；stick-to-bottom + 跳转最新 FAB |
+| 实时 | Composer 上 Agent activity ticker；深链 Agent 气泡 → `/thread/:sessionId` |
+
+**注意**：Agent session transcript（`ThreadViewPage` / `MessageBubble`）仍是执行面，可保留 L/R 或 transcript rail，不与协作 IM 行壳混用。
 
 ## Rust FFI 桥接
 
