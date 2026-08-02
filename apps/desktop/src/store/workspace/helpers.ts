@@ -28,6 +28,7 @@ export {
   coerceUiSessionStatus,
   bumpStatus,
   toUiProject,
+  toUiProjects,
   normalizeDaemonConversation,
   toUiConversation,
   patchLocalConversation,

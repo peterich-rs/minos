@@ -454,6 +454,7 @@ mod tests {
                 account_id: "sender-account".into(),
             },
             at_ms: 1_700_000_000_000,
+            message: None,
         };
 
         assert!(resolve_target_accounts(&event).is_empty());

@@ -11,10 +11,12 @@
 /// │  ├── core/widgets/       Shared reusable widgets        │
 /// │  └── features/           Feature-grouped views          │
 /// │       ├── auth/          Login / register               │
+/// │       ├── messages/      Conversation inbox (primary)   │
+/// │       ├── sessions/      Agent session list (secondary) │
 /// │       ├── chat/          Agent session chat              │
 /// │       ├── projects/      Project CRUD + sessions         │
 /// │       ├── agents/        Agent profile management       │
-/// │       ├── social/        Friends & conversations        │
+/// │       ├── social/        Conversation chat / members    │
 /// │       ├── debug/         Log viewer & traces            │
 /// │       └── shell/         Root navigation shell          │
 /// ├─────────────────────────────────────────────────────────┤

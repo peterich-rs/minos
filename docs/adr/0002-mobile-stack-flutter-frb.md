@@ -27,7 +27,7 @@ Flutter UI + flutter_rust_bridge v2. A `PlatformView`-based native chat surface 
 **Positive**
 - One UI codebase for iOS and Android (and, optionally, desktop / web later).
 - frb v2 maps Rust `async fn`, `Stream`, and `Result<T, E>` directly to Dart `Future`, `Stream`, and typed exceptions. No hand-written FFI shims.
-- Skia / Impeller renders chat-grade UI smoothly; `shadcn_ui` covers MVP component needs cleanly.
+- Skia / Impeller renders chat-grade UI smoothly; production UI uses a self-built Minos design system (iOS-leaning tokens + widgets), not Material/shadcn web chrome.
 - Hot reload accelerates UI iteration significantly.
 - `PlatformView` escape hatch lets us replace just the chat surface (one screen) with a UIKit / Android view if benchmarks demand it — without abandoning Flutter for the rest of the app.
 

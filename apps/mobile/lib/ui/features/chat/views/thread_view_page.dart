@@ -19,13 +19,13 @@ import 'package:minos/src/rust/api/minos.dart';
 import 'package:minos/ui/core/widgets/agent_question_sheet.dart';
 import 'package:minos/ui/core/widgets/approval_sheet.dart';
 import 'package:minos/ui/core/widgets/error_feedback.dart';
+import 'package:minos/ui/core/widgets/minos_toast.dart';
 import 'package:minos/ui/features/chat/widgets/input_bar.dart';
 import 'package:minos/ui/features/chat/widgets/message_bubble.dart';
 import 'package:minos/ui/features/chat/widgets/reasoning_section.dart';
 import 'package:minos/ui/features/chat/widgets/streaming_text.dart';
 import 'package:minos/ui/features/chat/widgets/tool_call_card.dart';
 import 'package:minos/ui/theme/theme.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
 
 /// Chat surface for a single thread. Renders the translated
 /// `UiEventMessage` stream as a sequence of bubbles + tool-call cards +
@@ -738,14 +738,7 @@ class _NewChatEmptyState extends StatelessWidget {
 }
 
 void _showThreadInfo(BuildContext context, String title) {
-  final toaster = ShadToaster.maybeOf(context);
-  if (toaster != null) {
-    toaster.show(ShadToast(title: Text(title)));
-    return;
-  }
-  ScaffoldMessenger.maybeOf(
-    context,
-  )?.showSnackBar(SnackBar(content: Text(title)));
+  showMinosToast(context, title: title);
 }
 
 class _ThreadEventStream extends ConsumerWidget {

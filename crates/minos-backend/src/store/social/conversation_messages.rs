@@ -184,7 +184,48 @@ pub async fn insert_message(
     reply_to_message_id: Option<&str>,
     mentioned_account_ids: &[String],
 ) -> Result<ChatMessageRow, BackendError> {
-    let message_id = Uuid::new_v4().to_string();
+    insert_message_with_id(
+        store,
+        conversation_id,
+        sender_account_id,
+        text,
+        created_at_ms,
+        reply_to_message_id,
+        mentioned_account_ids,
+        None,
+    )
+    .await
+}
+
+/// Insert a user chat message, optionally with a client-owned id for multi-end
+/// idempotent dual-write. If `client_message_id` already exists, returns the
+/// existing row when it belongs to the same conversation.
+pub async fn insert_message_with_id(
+    store: &impl AsStorePool,
+    conversation_id: &str,
+    sender_account_id: &str,
+    text: &str,
+    created_at_ms: i64,
+    reply_to_message_id: Option<&str>,
+    mentioned_account_ids: &[String],
+    client_message_id: Option<&str>,
+) -> Result<ChatMessageRow, BackendError> {
+    let message_id = match client_message_id.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(id) => {
+            if let Some(existing) = get_message(store, id).await? {
+                if existing.conversation_id == conversation_id {
+                    return Ok(existing);
+                }
+                return Err(BackendError::StoreQuery {
+                    operation: "social::insert_message_with_id.conflict".into(),
+                    message: format!("message_id {id} already exists in a different conversation"),
+                });
+            }
+            id.to_string()
+        }
+        None => Uuid::new_v4().to_string(),
+    };
+
     let mut unique_mentions = mentioned_account_ids.to_vec();
     unique_mentions.sort();
     unique_mentions.dedup();

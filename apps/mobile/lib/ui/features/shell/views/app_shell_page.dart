@@ -4,17 +4,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:minos/application/ui_state_providers.dart';
 import 'package:minos/ui/features/account/views/account_page.dart';
 import 'package:minos/ui/features/hosts/views/hosts_page.dart';
-import 'package:minos/ui/features/sessions/views/sessions_page.dart';
+import 'package:minos/ui/features/messages/views/messages_page.dart';
 import 'package:minos/ui/theme/theme.dart';
 
-/// Golden-path mobile shell: Sessions / Hosts / Account.
+/// Golden-path mobile shell: Messages / Hosts / Account.
 ///
-/// Single-column bottom navigation. Social, projects, and agent-profile
-/// management stay reachable via deep routes but are no longer primary tabs.
+/// Single-column bottom navigation. Agent sessions, projects, and agent-profile
+/// management stay reachable via secondary routes.
 class AppShellPage extends ConsumerWidget {
   const AppShellPage({super.key});
 
-  static const int sessionsTab = 0;
+  static const int messagesTab = 0;
   static const int hostsTab = 1;
   static const int accountTab = 2;
 
@@ -27,7 +27,7 @@ class AppShellPage extends ConsumerWidget {
       backgroundColor: colors.canvas,
       body: IndexedStack(
         index: tabIndex,
-        children: const <Widget>[SessionsPage(), HostsPage(), AccountPage()],
+        children: const <Widget>[MessagesPage(), HostsPage(), AccountPage()],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: tabIndex,
@@ -38,7 +38,7 @@ class AppShellPage extends ConsumerWidget {
           NavigationDestination(
             icon: Icon(CupertinoIcons.chat_bubble_2),
             selectedIcon: Icon(CupertinoIcons.chat_bubble_2_fill),
-            label: 'Sessions',
+            label: '消息',
           ),
           NavigationDestination(
             icon: Icon(CupertinoIcons.desktopcomputer),

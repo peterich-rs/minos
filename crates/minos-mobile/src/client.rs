@@ -695,6 +695,10 @@ impl MobileClient {
                 SendChatMessageRequest {
                     text,
                     reply_to_message_id,
+                    client_message_id: None,
+                    message_source: None,
+                    client_sent_at_ms: None,
+                    created_at_ms: None,
                 },
             )
         })

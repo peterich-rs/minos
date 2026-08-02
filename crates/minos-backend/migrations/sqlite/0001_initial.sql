@@ -178,6 +178,9 @@ CREATE TABLE agents (
     owner_account_id  TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
     name              TEXT NOT NULL,
     description       TEXT NOT NULL DEFAULT '',
+    -- user | host_runtime | system — host_runtime is the stable Desktop/Host mapping
+    source            TEXT NOT NULL DEFAULT 'user'
+                        CHECK (source IN ('user', 'host_runtime', 'system')),
     runtime_agent     TEXT NOT NULL CHECK (runtime_agent IN ('codex', 'claude', 'gemini', 'opencode', 'grok')),
     model             TEXT NOT NULL DEFAULT '',
     workspace_path    TEXT,
@@ -187,6 +190,11 @@ CREATE TABLE agents (
 
 CREATE INDEX idx_agents_owner
     ON agents(owner_account_id, created_at_ms DESC);
+
+-- One host-runtime projection per (owner, runtime_agent).
+CREATE UNIQUE INDEX idx_agents_host_runtime_unique
+    ON agents(owner_account_id, runtime_agent)
+    WHERE source = 'host_runtime';
 
 CREATE TABLE conversation_agent_members (
     conversation_id     TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,

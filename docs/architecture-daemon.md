@@ -125,7 +125,9 @@ subagent 也是普通 thread，只是在 `SessionAdded` / `SessionSummary` / `Lo
 
 **Conversation 主时间线排序契约：** `chat_messages.message_seq`（SQLite rowid PK）是唯一排序键；list 按 `message_seq DESC` 分页，客户端 reverse 为 ASC 展示。`message_id` upsert 复用原 `message_seq`（body/metadata 可更新）。`created_at_ms` 仅展示。多 agent 完成顺序 = durable 落库顺序（finish/write order）；因果关系用 `reply_to_message_id` / `mentions` / `delegation_id` 表达（例如 MCP 委托 result 引用 request），不通过重排历史 seq。Agent 回合结果由 `conversation_completion` 在 turn boundary 写入 `agent-result:…`；subagent session 不写 conversation result。
 
-**Agent 终态正文（last segment）：** Grok/Gemini 等 ACP agent 常在同一 `message_id` 下用多段 `agent_message_chunk` 输出中间进度（「正在定位…」），工具/思考会把 session 时间线拆成多个气泡。`conversation_completion` 与 session `ChatState` 对齐：tool / reasoning / subagent 事件关闭当前文本 segment，turn 结束时只把**最后一个未关闭的 assistant 文本段**写入 conversation；不会把全过程进度日志与最终摘要拼接成一条。工具后若无新的最终文本，则不回写中间进度。显式 `post_conversation_update` 仍可单独追加中途状态条。
+**多端 vs 本机：** 本地 `agent-result:…` 是 **Host 时间线 / 工作台** 权威（local-only 或 Linked 本机 tool/git 合并源）。**多端协作聊天气泡** 的 agent 终态由 Hub `TurnCompletionProjector` 单写者落 `conversation_messages`（Desktop Linked 读路径以 Hub 为主，过滤本地 agent-result 重复）。Daemon **不**负责把 agent-result dual-write 到 Hub；Desktop UI 也不再 project agent 气泡上云。
+
+**Agent 终态正文（last segment）：** Grok/Gemini 等 ACP agent 常在同一 `message_id` 下用多段 `agent_message_chunk` 输出中间进度（「正在定位…」），工具/思考会把 session 时间线拆成多个气泡。`conversation_completion` 与 session `ChatState` 对齐：tool / reasoning / subagent 事件关闭当前文本 segment，turn 结束时只把**最后一个未关闭的 assistant 文本段**写入 conversation；不会把全过程进度日志与最终摘要拼接成一条。工具后若无新的最终文本，则不回写中间进度。显式 `post_conversation_update` 仍可单独追加中途状态条。 Hub projector 复用同一 last-segment 语义（`minos-ui-protocol` 翻译）。
 
 **Grok 投影（Phase A–C）：** `translate_grok` 在 daemon 投影层对齐 grok-build pager：
 - **A**：读 `_meta.streamStartMs` / `agentTimestampMs` / `promptId`；`tool_call` 与 **agent_message_chunk** 上的 `streamStartMs` 变化会 `MessageCompleted` 当前 assistant text，下一段 agent text 用新 `message_id`。`agent_thought_chunk` 使用独立的 concurrent `streamStartMs`，**不得**据此关闭 text（否则 thought/text 交错会把正文拆成逐 token 气泡）。

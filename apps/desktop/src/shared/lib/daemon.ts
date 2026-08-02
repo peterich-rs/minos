@@ -18,9 +18,14 @@ export type DaemonConnection = {
   managed: boolean;
   /**
    * Hub device online: managed daemon live `/ws/host` to minos-backend.
-   * Distinct from Host Link (account binding) and local daemon IPC.
+   * Distinct from cloud bind (silent after login) and local daemon IPC.
    */
   hubOnline?: boolean;
+  /**
+   * Local host credential (`hit_`) present. Steady-state connect uses this;
+   * only missing/invalid credential triggers a one-time silent register.
+   */
+  hasHostToken?: boolean;
 };
 
 export type DaemonProject = {
@@ -283,7 +288,7 @@ export const daemonApi = {
   listSessions: (conversationId: string) =>
     call<DaemonSession[]>("daemon_list_sessions", { conversationId }),
 
-  /** Host Link (D02): prepare identity + bootstrap nonce. */
+  /** Silent host bind (D02): prepare identity + bootstrap nonce. */
   hostPrepareLink: () =>
     call<{
       installationId: string;

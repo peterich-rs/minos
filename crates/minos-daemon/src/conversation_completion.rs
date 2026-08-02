@@ -2,9 +2,19 @@
 //!
 //! When a top-level conversation agent finishes a **turn** (not each intermediate
 //! assistant message), this module:
-//! 1. Upserts a durable conversation message (`agent-result:…`)
+//! 1. Upserts a durable conversation message (`agent-result:…`) **local-only**
 //! 2. Completes any running teamwork delegation for that session
 //! 3. Delivers the result to the source thread (or queues if busy)
+//!
+//! ## Multi-end (Linked) vs local-only
+//!
+//! - **Local-only Desktop / unauthenticated**: this module is the conversation
+//!   timeline writer for agent final text (Host SQLite SSOT for the workbench).
+//! - **Linked multi-end IM**: Hub [`TurnCompletionProjector`] is the multi-end
+//!   writer for other devices. Local `agent-result:…` rows still write for the
+//!   Host workbench timeline. Desktop merge: Hub wins on same `message_id`,
+//!   otherwise **gap-fills** local agent-result so native Desktop runs are not
+//!   blank while Hub projection lags.
 //!
 //! Timeline order is the durable insert order of `chat_messages.message_seq`
 //! (finish/write order). Delegation results set `reply_to_message_id` to the

@@ -1,23 +1,23 @@
 /**
- * Desktop account session + Host Link state (D01 dual session, D02 link UX).
+ * Desktop account session + automatic cloud (host) connection.
  *
- * Product default is **account-first**: a valid Minos session is required
- * before AppShell. Host Link remains a separate second step after sign-in.
+ * Product rule: signing into Desktop on this Mac owns host control.
+ * After auth, we silently bind + dial `/ws/host`. UI only shows Online /
+ * Connecting / Offline — never Link / Unlink.
  */
 
 import { create } from "zustand";
 import {
-  clearStoredHostLink,
   clearStoredSession,
-  EMPTY_HOST_LINK,
+  EMPTY_HOST_BIND,
   ensureDesktopDeviceId,
   isAccessTokenFresh,
-  loadStoredHostLink,
+  loadStoredHostBind,
   loadStoredSession,
-  saveStoredHostLink,
+  saveStoredHostBind,
   saveStoredSession,
   sessionFromAuthResponse,
-  type HostLinkState,
+  type HostBindState,
   type MinosSession,
 } from "@/shared/lib/account-session";
 import {
@@ -26,7 +26,6 @@ import {
   linkHost as cloudLinkHost,
   logoutSession,
   refreshSession,
-  unlinkHost as cloudUnlinkHost,
 } from "@/shared/lib/minos-cloud";
 import {
   isSupabaseConfigured,
@@ -37,39 +36,55 @@ import {
 import { PROJECT_HOST_THIS_MAC } from "@/shared/lib/host-status";
 import { daemonApi } from "@/shared/lib/daemon";
 import {
-  runHostLinkFlow,
-  runHostUnlinkFlow,
-} from "@/features/host/lib/host-link-flow";
+  registerHostCredential,
+  waitForHubOnline,
+} from "@/features/host/lib/ensure-host-connection";
 import type { DesktopAuthPhase } from "@/shared/lib/desktop-root-gate";
+import type { CloudMode } from "@/shared/lib/host-status";
 
 export type AuthMode = "login" | "register";
+
+export type CloudConnectionStatus = CloudMode;
 
 type AccountState = {
   deviceId: string;
   session: MinosSession | null;
-  hostLink: HostLinkState;
+  /** Internal bind snapshot (diagnostics); not a product "Link" flag. */
+  hostBind: HostBindState;
+  /**
+   * User-facing cloud connection: online | connecting | offline | unknown.
+   * Driven by auto ensure + hubOnline polling.
+   */
+  cloudStatus: CloudConnectionStatus;
+  cloudError: string | null;
   authMode: AuthMode;
-  /** Root gate phase (hydrate → login | app). */
   authPhase: DesktopAuthPhase;
   busy: boolean;
   error: string | null;
-  /** True after first hydrateAuth settles. */
   hydrated: boolean;
 
   setAuthMode: (mode: AuthMode) => void;
   clearError: () => void;
 
-  /** Cold-start: load local session, refresh if stale, set authPhase. */
   hydrateAuth: () => Promise<void>;
-
   signIn: (email: string, password: string) => Promise<boolean>;
   signUp: (email: string, password: string) => Promise<boolean>;
   signOut: () => Promise<void>;
 
-  linkThisMac: (hostDisplayName?: string) => Promise<boolean>;
-  unlinkThisMac: () => Promise<boolean>;
+  /**
+   * Connect to server as this Mac's host. Safe to call often:
+   * - already Online → no-op
+   * - has hit_ → only wait for dial (never re-register)
+   * - no hit_ → one silent register
+   * - `forceReregister` → mint new hit_ (Retry / recovery only)
+   */
+  ensureCloudConnection: (opts?: { forceReregister?: boolean }) => Promise<void>;
+  /** Banner Retry: force re-register credential then dial. */
+  retryCloudConnection: () => Promise<void>;
 
-  /** Whether backend URL is configured for cloud API. */
+  /** Sync cloudStatus from latest daemon hubOnline (polling). */
+  syncCloudFromHub: (hubOnline: boolean | undefined) => void;
+
   isCloudConfigured: () => boolean;
   isSupabaseReady: () => boolean;
 };
@@ -83,24 +98,65 @@ function isCloudConfigured(): boolean {
   }
 }
 
+let ensureInFlight: Promise<void> | null = null;
+let ensureGeneration = 0;
+
+type DaemonCloudFlags = {
+  hubOnline: boolean;
+  hasHostToken: boolean;
+};
+
+async function refreshDaemonCloudFlags(): Promise<DaemonCloudFlags> {
+  try {
+    const { useWorkspaceStore } = await import("@/store/workspace-store");
+    await useWorkspaceStore.getState().refreshDaemonStatus();
+    const connection = useWorkspaceStore.getState().connection;
+    return {
+      hubOnline: connection?.hubOnline === true,
+      hasHostToken: connection?.hasHostToken === true,
+    };
+  } catch {
+    return { hubOnline: false, hasHostToken: false };
+  }
+}
+
+async function refreshHubOnlineFlag(): Promise<boolean> {
+  return (await refreshDaemonCloudFlags()).hubOnline;
+}
+
 function applyAuthSuccess(
-  set: (partial: Partial<AccountState>) => void,
+  set: (
+    partial:
+      | Partial<AccountState>
+      | ((state: AccountState) => Partial<AccountState>),
+  ) => void,
+  get: () => AccountState,
   session: MinosSession,
 ): void {
   saveStoredSession(session);
+  const hostBind = loadStoredHostBind(session.accountId);
   set({
     session,
+    hostBind,
+    cloudStatus: "connecting",
+    cloudError: null,
     authPhase: "authenticated",
     busy: false,
     error: null,
     hydrated: true,
   });
+  void import("@/shared/lib/im-hub-bridge").then(({ ensureImHubBridge }) =>
+    ensureImHubBridge(),
+  );
+  void get().ensureCloudConnection();
 }
 
 export const useAccountStore = create<AccountState>()((set, get) => ({
   deviceId: ensureDesktopDeviceId(),
   session: null,
-  hostLink: loadStoredHostLink(),
+  hostBind: { ...EMPTY_HOST_BIND },
+  cloudStatus: "unknown",
+  cloudError: null,
   authMode: "login",
   authPhase: "booting",
   busy: false,
@@ -119,6 +175,9 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
     if (!stored) {
       set({
         session: null,
+        hostBind: { ...EMPTY_HOST_BIND },
+        cloudStatus: "unknown",
+        cloudError: null,
         authPhase: "unauthenticated",
         hydrated: true,
       });
@@ -128,9 +187,16 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
     if (isAccessTokenFresh(stored)) {
       set({
         session: stored,
+        hostBind: loadStoredHostBind(stored.accountId),
+        cloudStatus: "connecting",
+        cloudError: null,
         authPhase: "authenticated",
         hydrated: true,
       });
+      void import("@/shared/lib/im-hub-bridge").then(({ ensureImHubBridge }) =>
+        ensureImHubBridge(),
+      );
+      void get().ensureCloudConnection();
       return;
     }
 
@@ -146,11 +212,14 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
         expiresInSec: tokens.expires_in,
         issuedAtMs: Date.now(),
       };
-      applyAuthSuccess(set, session);
+      applyAuthSuccess(set, get, session);
     } catch {
       clearStoredSession();
       set({
         session: null,
+        hostBind: { ...EMPTY_HOST_BIND },
+        cloudStatus: "unknown",
+        cloudError: null,
         authPhase: "unauthenticated",
         hydrated: true,
         error: null,
@@ -169,7 +238,7 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
       const deviceId = get().deviceId;
       const supabaseToken = await signInWithSupabasePassword(email, password);
       const auth = await exchangeSupabaseSession(deviceId, supabaseToken);
-      applyAuthSuccess(set, sessionFromAuthResponse(auth));
+      applyAuthSuccess(set, get, sessionFromAuthResponse(auth));
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -189,7 +258,7 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
       const deviceId = get().deviceId;
       const supabaseToken = await signUpWithSupabasePassword(email, password);
       const auth = await exchangeSupabaseSession(deviceId, supabaseToken);
-      applyAuthSuccess(set, sessionFromAuthResponse(auth));
+      applyAuthSuccess(set, get, sessionFromAuthResponse(auth));
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -201,6 +270,7 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
   signOut: async () => {
     const { session, deviceId } = get();
     set({ busy: true, error: null });
+    ensureGeneration += 1;
     if (session) {
       try {
         await logoutSession(deviceId, session.accessToken, session.refreshToken);
@@ -210,10 +280,14 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
     }
     await signOutSupabase();
     clearStoredSession();
-    // Host installation token stays on daemon; link flag is independent of
-    // human session. Keep hostLink so Linked status survives account re-login.
+    void import("@/shared/lib/im-hub-bridge").then(({ stopImHubBridge }) =>
+      stopImHubBridge(),
+    );
     set({
       session: null,
+      hostBind: { ...EMPTY_HOST_BIND },
+      cloudStatus: "unknown",
+      cloudError: null,
       authPhase: "unauthenticated",
       busy: false,
       error: null,
@@ -221,73 +295,139 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
     });
   },
 
-  linkThisMac: async (hostDisplayName) => {
-    const session = get().session;
-    if (!session) {
-      set({ error: "Sign in before linking this Mac" });
-      return false;
-    }
-    set({ busy: true, error: null });
-    const deviceId = get().deviceId;
-    const displayName = hostDisplayName?.trim() || PROJECT_HOST_THIS_MAC;
+  ensureCloudConnection: async (opts) => {
+    if (ensureInFlight && !opts?.forceReregister) return ensureInFlight;
 
-    const outcome = await runHostLinkFlow(
-      {
-        prepareLink: () => daemonApi.hostPrepareLink(),
-        signLinkProof: (installationId, nonce) =>
-          daemonApi.hostSignLinkProof(installationId, nonce),
-        applyLinkToken: (token) => daemonApi.hostApplyLinkToken(token),
-        linkHost: (input) =>
-          cloudLinkHost(deviceId, session.accessToken, input),
-      },
-      displayName,
-    );
+    const forceReregister = opts?.forceReregister === true;
 
-    if (!outcome.linked) {
-      set({
-        busy: false,
-        error: `Link failed (${outcome.stage}): ${outcome.message}`,
+    const run = async () => {
+      const gen = ++ensureGeneration;
+      const session = get().session;
+      if (!session) {
+        set({ cloudStatus: "unknown", cloudError: null });
+        return;
+      }
+      if (!isCloudConfigured()) {
+        set({
+          cloudStatus: "offline",
+          cloudError: "Backend URL not configured",
+        });
+        return;
+      }
+
+      set({ cloudStatus: "connecting", cloudError: null });
+
+      // ── Steady state: never re-register if we already have hit_ ────────
+      // Product has no "Link". Protocol only needs hit_ once. Calling
+      // POST /v1/hosts/link again revokes the live token → 401 races.
+      const flags = await refreshDaemonCloudFlags();
+      if (gen !== ensureGeneration) return;
+
+      if (flags.hubOnline) {
+        set({ cloudStatus: "online", cloudError: null });
+        return;
+      }
+
+      if (!forceReregister && flags.hasHostToken) {
+        // Credential exists — only wait for dialer; do not mint/revoke.
+        const online = await waitForHubOnline(refreshHubOnlineFlag, {
+          timeoutMs: 20_000,
+          intervalMs: 500,
+        });
+        if (gen !== ensureGeneration) return;
+        if (online) {
+          set({ cloudStatus: "online", cloudError: null });
+          return;
+        }
+        // Still offline with a local hit_: backend down or token dead.
+        // Do **not** auto-rotate here (would thrash). Retry uses forceReregister.
+        set({
+          cloudStatus: "offline",
+          cloudError:
+            "Has local host credential but server is unreachable. Check minos-backend, then Retry.",
+        });
+        return;
+      }
+
+      // ── Missing hit_ or explicit Retry: one silent register ────────────
+      const outcome = await registerHostCredential(
+        {
+          prepareLink: () => daemonApi.hostPrepareLink(),
+          signLinkProof: (installationId, nonce) =>
+            daemonApi.hostSignLinkProof(installationId, nonce),
+          applyLinkToken: (token) => daemonApi.hostApplyLinkToken(token),
+          registerHost: (input) =>
+            cloudLinkHost(get().deviceId, session.accessToken, input),
+        },
+        PROJECT_HOST_THIS_MAC,
+      );
+
+      if (gen !== ensureGeneration) return;
+
+      if (!outcome.ok) {
+        set({
+          cloudStatus: "offline",
+          cloudError: `Connect failed (${outcome.stage}): ${outcome.message}`,
+        });
+        return;
+      }
+
+      const hostBind: HostBindState = {
+        bound: true,
+        hostInstallationId: outcome.hostInstallationId,
+        hostDisplayName: outcome.hostDisplayName,
+        boundAtMs: outcome.linkedAtMs,
+        pairId: outcome.pairId,
+      };
+      saveStoredHostBind(session.accountId, hostBind);
+      set({ hostBind });
+
+      const online = await waitForHubOnline(refreshHubOnlineFlag, {
+        timeoutMs: 20_000,
+        intervalMs: 500,
       });
-      return false;
-    }
 
-    const hostLink: HostLinkState = {
-      linked: true,
-      hostInstallationId: outcome.hostInstallationId,
-      hostDisplayName: outcome.hostDisplayName,
-      linkedAtMs: outcome.linkedAtMs,
-      pairId: outcome.pairId,
+      if (gen !== ensureGeneration) return;
+
+      if (online) {
+        set({ cloudStatus: "online", cloudError: null });
+      } else {
+        set({
+          cloudStatus: "offline",
+          cloudError:
+            "Signed in but not connected to the server yet. Retry or check that minos-backend is running.",
+        });
+      }
     };
-    saveStoredHostLink(hostLink);
-    set({ hostLink, busy: false, error: null });
-    return true;
+
+    ensureInFlight = run().finally(() => {
+      ensureInFlight = null;
+    });
+    return ensureInFlight;
   },
 
-  unlinkThisMac: async () => {
-    const session = get().session;
-    const hostId = get().hostLink.hostInstallationId;
-    if (!session) {
-      set({ error: "Sign in to unlink this Mac" });
-      return false;
+  retryCloudConnection: async () => {
+    ensureGeneration += 1;
+    ensureInFlight = null;
+    await get().ensureCloudConnection({ forceReregister: true });
+  },
+
+  syncCloudFromHub: (hubOnline) => {
+    const { session, cloudStatus } = get();
+    if (!session) return;
+    // Do not clobber an in-flight ensure.
+    if (cloudStatus === "connecting") return;
+    if (hubOnline === true) {
+      if (cloudStatus !== "online") {
+        set({ cloudStatus: "online", cloudError: null });
+      }
+      return;
     }
-    if (!hostId) {
-      set({ error: "No linked host installation id on this Mac" });
-      return false;
+    if (hubOnline === false && cloudStatus === "online") {
+      set({
+        cloudStatus: "offline",
+        cloudError: "Disconnected from server",
+      });
     }
-    set({ busy: true, error: null });
-    const outcome = await runHostUnlinkFlow(
-      {
-        unlinkHost: (id) =>
-          cloudUnlinkHost(get().deviceId, session.accessToken, id),
-      },
-      hostId,
-    );
-    if (!outcome.ok) {
-      set({ busy: false, error: outcome.message });
-      return false;
-    }
-    clearStoredHostLink();
-    set({ hostLink: { ...EMPTY_HOST_LINK }, busy: false, error: null });
-    return true;
   },
 }));

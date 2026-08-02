@@ -231,28 +231,15 @@ build-mobile-ios configuration='Release':
 # Hot-reload dev workflow. Cargokit still self-bootstraps through just
 # before the Rust compile.
 #
-# iOS Simulator note: Xcode's active Simulator SDK may not list older runtimes
-# (e.g. iOS 26.0 device while SDK is 26.2) → "Unable to find a destination".
-# Default to a booted sim, or FLUTTER_IOS_DEVICE / a 26.2+ iPhone if none.
+# Default target: iPhone 15 Pro Max (iOS 17.0) simulator.
+# Override with FLUTTER_IOS_DEVICE=<uuid> when needed.
 dev-mobile-ios:
     @just check-env >/dev/null
     @if [ -z "${MINOS_BACKEND_URL:-}" ]; then \
         echo "error: MINOS_BACKEND_URL required for dev-mobile-ios"; \
         exit 1; \
     fi
-    @# Prefer FLUTTER_IOS_DEVICE, else first *booted* sim (must match Xcode Simulator SDK).
-    @# Use single-$ for shell (like check-env). Double-$$ becomes bash PID (e.g. 28704device).
-    @device="${FLUTTER_IOS_DEVICE:-}"; \
-    if [ -z "$device" ]; then \
-      device="$(xcrun simctl list devices booted 2>/dev/null | sed -n 's/.*(\([A-F0-9-]\{36\}\)).*/\1/p' | head -1)"; \
-    fi; \
-    if [ -z "$device" ]; then \
-      echo "error: no booted iOS simulator."; \
-      echo "  open -a Simulator"; \
-      echo "  # Device → pick iPhone on iOS 26.2+ (not a stale 26.0 runtime)"; \
-      echo "  # or: FLUTTER_IOS_DEVICE=<uuid> just dev-mobile-ios"; \
-      exit 1; \
-    fi; \
+    @device="${FLUTTER_IOS_DEVICE:-BB51144F-D336-4BC1-A338-0751322D7204}"; \
     echo "flutter run -d $device"; \
     cd apps/mobile && \
     MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \

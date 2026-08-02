@@ -279,7 +279,8 @@ async fn wait_for_message_count(
     conversation_id: &str,
     expected: usize,
 ) -> Vec<social::ChatMessageRow> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    // Must exceed GROUP_COMPLETION_SEQ_STABLE (2s) plus poll overhead.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let rows = social::list_messages(&state.store, conversation_id, None, 50)
             .await
@@ -1346,4 +1347,135 @@ async fn group_reply_to_agent_message_reuses_session() {
         "can you also include the test coverage?",
     )
     .await;
+}
+
+/// Desktop-started sessions are formalized by Host ingest into `agent_sessions`
+/// without necessarily writing `chat_messages.agent_session_id`. Mobile `@agent`
+/// must reuse that formal session (send_input) instead of `agent_session.start`.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn mobile_at_agent_reuses_desktop_formal_session_without_chat_bind() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let host_device_id = seed_host_pair_for_account(&state, &alice.account_id, alice_device).await;
+    let _host_rx = seed_live_host_session(&state, host_device_id, &alice.account_id);
+
+    let conversation = social::create_group_conversation(
+        &state.store,
+        &alice.account_id,
+        "Desktop first",
+        &[],
+        100,
+    )
+    .await
+    .unwrap();
+    // Host-runtime agent (same path as Desktop attach / Host ingest).
+    let agent = social::ensure_host_runtime_agent(
+        &state.store,
+        &alice.account_id,
+        "codex",
+        "Codex",
+        "",
+        Some("/Users/example/minos"),
+        100,
+    )
+    .await
+    .unwrap();
+    social::add_agent_to_conversation(
+        &state.store,
+        &conversation.conversation_id,
+        &agent.agent_id,
+        &alice.account_id,
+        100,
+    )
+    .await
+    .unwrap();
+
+    // Simulate Desktop-local session registered only via Host ingest formal row
+    // (no chat_messages.agent_session_id bind).
+    let desktop_session_id = "desktop-local-sess-abcdef12";
+    agent_sessions::create(
+        &state.store,
+        desktop_session_id,
+        &conversation.conversation_id,
+        None,
+        Some(&host_device_id.to_string()),
+        Some(&agent.agent_id),
+        "running",
+        150,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // No chat bind: lookup_latest_session_id_for_conversation_agent is empty.
+    assert_eq!(
+        social::lookup_latest_session_id_for_conversation_agent(
+            &state.store,
+            &conversation.conversation_id,
+            &agent.agent_id
+        )
+        .await
+        .unwrap(),
+        None
+    );
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(serde_json::json!({ "text": "@codex continue the refactor" }).to_string()),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let user_message_id = body["message_id"].as_str().unwrap().to_string();
+
+    // Bound to the existing Desktop session — not a new social-start UUID.
+    assert_eq!(
+        social::lookup_session_id_for_message(&state.store, &user_message_id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(desktop_session_id)
+    );
+    assert_ne!(
+        expected_social_start_session_id(&alice.account_id, &user_message_id),
+        desktop_session_id
+    );
+
+    // Must enqueue send_input against the reused session, not agent_session.start.
+    assert_agent_send_host_command(
+        &state.store,
+        host_device_id,
+        &alice.account_id,
+        desktop_session_id,
+        &user_message_id,
+        "continue the refactor",
+    )
+    .await;
+    assert!(
+        host_commands::get(
+            &state.store,
+            &format!(
+                "cmd-agent-session-start-{}",
+                expected_social_start_session_id(&alice.account_id, &user_message_id)
+            )
+        )
+        .await
+        .unwrap()
+        .is_none(),
+        "must not start a new formal session when Desktop formal session exists"
+    );
 }

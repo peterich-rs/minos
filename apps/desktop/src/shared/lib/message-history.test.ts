@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { TimelineMessage } from "./mock-data.ts";
 import {
+  firstMessageCreatedAtMs,
   firstMessageSeq,
   hasTimelineWorkingSet,
   mergeMessagesOlder,
@@ -42,6 +43,22 @@ describe("firstMessageSeq / metaAfterMessageTail", () => {
     assert.equal(meta.firstLoadedSeq, 50);
     assert.equal(meta.hasOlder, true);
     assert.equal(meta.loadingOlder, false);
+  });
+
+  it("tracks firstLoadedCreatedAtMs for Hub before_ts_ms", () => {
+    const meta = metaAfterMessageTail(
+      [msg({ id: "a", messageSeq: 50, createdAtMs: 900 })],
+      true,
+      900,
+    );
+    assert.equal(meta.firstLoadedCreatedAtMs, 900);
+    assert.equal(
+      firstMessageCreatedAtMs([
+        msg({ id: "b", createdAtMs: 200 }),
+        msg({ id: "a", createdAtMs: 100 }),
+      ]),
+      100,
+    );
   });
 });
 

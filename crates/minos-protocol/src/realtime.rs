@@ -454,16 +454,22 @@ pub enum DurableEvent {
         resolution: ApprovalResolution,
         at_ms: i64,
     },
+    /// Open-conversation timeline hot path (`conversation:{id}`).
+    /// Optional full `message` lets clients apply without an extra HTTP fetch.
     ConversationMessageAppended {
         conversation_id: String,
         message_id: String,
         sender: SenderRef,
         at_ms: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<ChatMessageSummary>,
     },
     ConversationMessageRecalled {
         conversation_id: String,
         message_id: String,
         at_ms: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<ChatMessageSummary>,
     },
     AccountConversationMessageAppended {
         account_id: String,

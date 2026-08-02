@@ -3,6 +3,7 @@
  */
 import { daemonApi } from "@/shared/lib/daemon";
 import type { KnownAgent } from "@/shared/lib/agent-route";
+import { attachAgentsToConversationCloud } from "@/shared/lib/im-cloud-sync";
 import type { WorkspaceGet } from "./types";
 
 /**
@@ -84,5 +85,11 @@ export async function startNewAgentSession(
     workspacePath,
     { profileId: resolvedProfileId },
   );
+  // Multi-end IM: ensure cloud host-runtime agent is on the conversation roster
+  // so Mobile members + session matching work once host ingest registers formal session.
+  void attachAgentsToConversationCloud({
+    conversationId,
+    agentRuntimes: [agent],
+  });
   return started.sessionId;
 }

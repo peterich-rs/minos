@@ -8,6 +8,16 @@ use crate::store::{AsStorePool, StorePoolRef};
 
 use super::{get_message, store_err, AgentRow, ChatMessageRow};
 
+/// Legacy description marker (no longer used for lookup; kept for display).
+pub const HOST_RUNTIME_AGENT_DESCRIPTION: &str = "minos:host-runtime";
+/// Canonical agents.source value for Host/Desktop runtime projections.
+pub const AGENT_SOURCE_USER: &str = "user";
+pub const AGENT_SOURCE_HOST_RUNTIME: &str = "host_runtime";
+pub const AGENT_SOURCE_SYSTEM: &str = "system";
+
+const AGENT_SELECT_COLS: &str =
+    "agent_id, owner_account_id, name, description, source, runtime_agent, model, workspace_path, created_at_ms, updated_at_ms";
+
 pub async fn register_agent(
     store: &impl AsStorePool,
     owner_account_id: &str,
@@ -18,17 +28,44 @@ pub async fn register_agent(
     workspace_path: Option<&str>,
     now_ms: i64,
 ) -> Result<AgentRow, BackendError> {
+    register_agent_with_source(
+        store,
+        owner_account_id,
+        name,
+        description,
+        AGENT_SOURCE_USER,
+        runtime_agent,
+        model,
+        workspace_path,
+        now_ms,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn register_agent_with_source(
+    store: &impl AsStorePool,
+    owner_account_id: &str,
+    name: &str,
+    description: &str,
+    source: &str,
+    runtime_agent: &str,
+    model: &str,
+    workspace_path: Option<&str>,
+    now_ms: i64,
+) -> Result<AgentRow, BackendError> {
     let agent_id = format!("bot-{}", Uuid::new_v4());
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query(
-                "INSERT INTO agents (agent_id, owner_account_id, name, description, runtime_agent, model, workspace_path, created_at_ms, updated_at_ms)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO agents (agent_id, owner_account_id, name, description, source, runtime_agent, model, workspace_path, created_at_ms, updated_at_ms)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&agent_id)
             .bind(owner_account_id)
             .bind(name)
             .bind(description)
+            .bind(source)
             .bind(runtime_agent)
             .bind(model)
             .bind(workspace_path)
@@ -40,13 +77,14 @@ pub async fn register_agent(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query(
-                "INSERT INTO agents (agent_id, owner_account_id, name, description, runtime_agent, model, workspace_path, created_at_ms, updated_at_ms)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                "INSERT INTO agents (agent_id, owner_account_id, name, description, source, runtime_agent, model, workspace_path, created_at_ms, updated_at_ms)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
             )
             .bind(&agent_id)
             .bind(owner_account_id)
             .bind(name)
             .bind(description)
+            .bind(source)
             .bind(runtime_agent)
             .bind(model)
             .bind(workspace_path)
@@ -67,25 +105,93 @@ pub async fn register_agent(
         })
 }
 
+/// Find the Host/Desktop runtime agent for `(owner, runtime)`, if any.
+pub async fn find_host_runtime_agent(
+    store: &impl AsStorePool,
+    owner_account_id: &str,
+    runtime_agent: &str,
+) -> Result<Option<AgentRow>, BackendError> {
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, AgentRow>(&format!(
+                "SELECT {AGENT_SELECT_COLS}
+                   FROM agents
+                  WHERE owner_account_id = ?
+                    AND runtime_agent = ?
+                    AND source = ?
+                  ORDER BY created_at_ms ASC
+                  LIMIT 1"
+            ))
+            .bind(owner_account_id)
+            .bind(runtime_agent)
+            .bind(AGENT_SOURCE_HOST_RUNTIME)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, AgentRow>(&format!(
+                "SELECT {AGENT_SELECT_COLS}
+                   FROM agents
+                  WHERE owner_account_id = $1
+                    AND runtime_agent = $2
+                    AND source = $3
+                  ORDER BY created_at_ms ASC
+                  LIMIT 1"
+            ))
+            .bind(owner_account_id)
+            .bind(runtime_agent)
+            .bind(AGENT_SOURCE_HOST_RUNTIME)
+            .fetch_optional(pool)
+            .await
+        }
+    }
+    .map_err(store_err("social::find_host_runtime_agent"))
+}
+
+/// Ensure a Host/Desktop runtime agent exists (stable mapping local bin → cloud id).
+pub async fn ensure_host_runtime_agent(
+    store: &impl AsStorePool,
+    owner_account_id: &str,
+    runtime_agent: &str,
+    name: &str,
+    model: &str,
+    workspace_path: Option<&str>,
+    now_ms: i64,
+) -> Result<AgentRow, BackendError> {
+    if let Some(existing) = find_host_runtime_agent(store, owner_account_id, runtime_agent).await? {
+        return Ok(existing);
+    }
+    register_agent_with_source(
+        store,
+        owner_account_id,
+        name,
+        HOST_RUNTIME_AGENT_DESCRIPTION,
+        AGENT_SOURCE_HOST_RUNTIME,
+        runtime_agent,
+        model,
+        workspace_path,
+        now_ms,
+    )
+    .await
+}
+
 pub async fn get_agent(
     store: &impl AsStorePool,
     agent_id: &str,
 ) -> Result<Option<AgentRow>, BackendError> {
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
-            sqlx::query_as::<_, AgentRow>(
-                "SELECT agent_id, owner_account_id, name, description, runtime_agent, model, workspace_path, created_at_ms, updated_at_ms
-                   FROM agents WHERE agent_id = ?",
-            )
+            sqlx::query_as::<_, AgentRow>(&format!(
+                "SELECT {AGENT_SELECT_COLS} FROM agents WHERE agent_id = ?"
+            ))
             .bind(agent_id)
             .fetch_optional(pool)
             .await
         }
         StorePoolRef::Postgres(pool) => {
-            sqlx::query_as::<_, AgentRow>(
-                "SELECT agent_id, owner_account_id, name, description, runtime_agent, model, workspace_path, created_at_ms, updated_at_ms
-                   FROM agents WHERE agent_id = $1",
-            )
+            sqlx::query_as::<_, AgentRow>(&format!(
+                "SELECT {AGENT_SELECT_COLS} FROM agents WHERE agent_id = $1"
+            ))
             .bind(agent_id)
             .fetch_optional(pool)
             .await
@@ -104,9 +210,9 @@ pub async fn agents_by_ids(
 
     let rows = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
-            let mut builder = QueryBuilder::<Sqlite>::new(
-                "SELECT agent_id, owner_account_id, name, description, runtime_agent, model, workspace_path, created_at_ms, updated_at_ms\n           FROM agents\n          WHERE agent_id IN (",
-            );
+            let mut builder = QueryBuilder::<Sqlite>::new(format!(
+                "SELECT {AGENT_SELECT_COLS}\n           FROM agents\n          WHERE agent_id IN ("
+            ));
             {
                 let mut separated = builder.separated(", ");
                 for agent_id in agent_ids {
@@ -117,9 +223,9 @@ pub async fn agents_by_ids(
             builder.build_query_as::<AgentRow>().fetch_all(pool).await
         }
         StorePoolRef::Postgres(pool) => {
-            let mut builder = QueryBuilder::<Postgres>::new(
-                "SELECT agent_id, owner_account_id, name, description, runtime_agent, model, workspace_path, created_at_ms, updated_at_ms\n           FROM agents\n          WHERE agent_id IN (",
-            );
+            let mut builder = QueryBuilder::<Postgres>::new(format!(
+                "SELECT {AGENT_SELECT_COLS}\n           FROM agents\n          WHERE agent_id IN ("
+            ));
             {
                 let mut separated = builder.separated(", ");
                 for agent_id in agent_ids {
@@ -144,19 +250,19 @@ pub async fn list_agents_for_owner(
 ) -> Result<Vec<AgentRow>, BackendError> {
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
-            sqlx::query_as::<_, AgentRow>(
-                "SELECT agent_id, owner_account_id, name, description, runtime_agent, model, workspace_path, created_at_ms, updated_at_ms
-                   FROM agents WHERE owner_account_id = ? ORDER BY created_at_ms DESC",
-            )
+            sqlx::query_as::<_, AgentRow>(&format!(
+                "SELECT {AGENT_SELECT_COLS}
+                   FROM agents WHERE owner_account_id = ? ORDER BY created_at_ms DESC"
+            ))
             .bind(owner_account_id)
             .fetch_all(pool)
             .await
         }
         StorePoolRef::Postgres(pool) => {
-            sqlx::query_as::<_, AgentRow>(
-                "SELECT agent_id, owner_account_id, name, description, runtime_agent, model, workspace_path, created_at_ms, updated_at_ms
-                   FROM agents WHERE owner_account_id = $1 ORDER BY created_at_ms DESC",
-            )
+            sqlx::query_as::<_, AgentRow>(&format!(
+                "SELECT {AGENT_SELECT_COLS}
+                   FROM agents WHERE owner_account_id = $1 ORDER BY created_at_ms DESC"
+            ))
             .bind(owner_account_id)
             .fetch_all(pool)
             .await
@@ -332,25 +438,25 @@ pub async fn list_conversation_agents(
 ) -> Result<Vec<AgentRow>, BackendError> {
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
-            sqlx::query_as::<_, AgentRow>(
-                "SELECT a.agent_id, a.owner_account_id, a.name, a.description, a.runtime_agent, a.model, a.workspace_path, a.created_at_ms, a.updated_at_ms
+            sqlx::query_as::<_, AgentRow>(&format!(
+                "SELECT a.agent_id, a.owner_account_id, a.name, a.description, a.source, a.runtime_agent, a.model, a.workspace_path, a.created_at_ms, a.updated_at_ms
                    FROM agents a
                    JOIN conversation_agent_members cam ON cam.agent_id = a.agent_id
                   WHERE cam.conversation_id = ?
-                  ORDER BY cam.joined_at_ms ASC",
-            )
+                  ORDER BY cam.joined_at_ms ASC"
+            ))
             .bind(conversation_id)
             .fetch_all(pool)
             .await
         }
         StorePoolRef::Postgres(pool) => {
-            sqlx::query_as::<_, AgentRow>(
-                "SELECT a.agent_id, a.owner_account_id, a.name, a.description, a.runtime_agent, a.model, a.workspace_path, a.created_at_ms, a.updated_at_ms
+            sqlx::query_as::<_, AgentRow>(&format!(
+                "SELECT a.agent_id, a.owner_account_id, a.name, a.description, a.source, a.runtime_agent, a.model, a.workspace_path, a.created_at_ms, a.updated_at_ms
                    FROM agents a
                    JOIN conversation_agent_members cam ON cam.agent_id = a.agent_id
                   WHERE cam.conversation_id = $1
-                  ORDER BY cam.joined_at_ms ASC",
-            )
+                  ORDER BY cam.joined_at_ms ASC"
+            ))
             .bind(conversation_id)
             .fetch_all(pool)
             .await
@@ -410,10 +516,14 @@ pub async fn insert_agent_message(
         reply_to_message_id,
         None,
         mentioned_account_ids,
+        None,
     )
     .await
 }
 
+/// Insert an agent chat message. Optional `client_message_id` makes multi-end
+/// dual-write idempotent (Desktop `agent-result:…` ids).
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_agent_message_with_session(
     store: &impl AsStorePool,
     conversation_id: &str,
@@ -423,6 +533,7 @@ pub async fn insert_agent_message_with_session(
     reply_to_message_id: Option<&str>,
     agent_session_id: Option<&str>,
     mentioned_account_ids: &[String],
+    client_message_id: Option<&str>,
 ) -> Result<ChatMessageRow, BackendError> {
     let agent = get_agent(store, agent_id)
         .await?
@@ -430,7 +541,26 @@ pub async fn insert_agent_message_with_session(
             operation: "social::insert_agent_message.load_agent".into(),
             message: format!("agent not found: {agent_id}"),
         })?;
-    let message_id = Uuid::new_v4().to_string();
+
+    let message_id = match client_message_id.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(id) => {
+            if let Some(existing) = get_message(store, id).await? {
+                if existing.conversation_id == conversation_id {
+                    return Ok(existing);
+                }
+                return Err(BackendError::StoreQuery {
+                    operation: "social::insert_agent_message.conflict".into(),
+                    message: format!("message_id {id} already exists in a different conversation"),
+                });
+            }
+            id.to_string()
+        }
+        None => Uuid::new_v4().to_string(),
+    };
+
+    let mut unique_mentions = mentioned_account_ids.to_vec();
+    unique_mentions.sort();
+    unique_mentions.dedup();
 
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
@@ -464,7 +594,7 @@ pub async fn insert_agent_message_with_session(
             .await
             .map_err(store_err("social::insert_agent_message.insert"))?;
 
-            for mentioned_id in mentioned_account_ids {
+            for mentioned_id in &unique_mentions {
                 sqlx::query(
                     "INSERT OR IGNORE INTO chat_message_mentions (message_id, mentioned_account_id)
                      VALUES (?, ?)",
@@ -522,7 +652,7 @@ pub async fn insert_agent_message_with_session(
             .await
             .map_err(store_err("social::insert_agent_message.insert"))?;
 
-            for mentioned_id in mentioned_account_ids {
+            for mentioned_id in &unique_mentions {
                 sqlx::query(
                     "INSERT INTO chat_message_mentions (message_id, mentioned_account_id)
                      VALUES ($1, $2)

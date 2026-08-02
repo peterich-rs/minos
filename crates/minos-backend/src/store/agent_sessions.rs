@@ -424,6 +424,156 @@ pub async fn update_status(
     get(store, session_id).await
 }
 
+/// Statuses that must not receive further @agent input (session is gone).
+///
+/// `idle` is **reusable** (turn finished, process may still be reattachable).
+/// Aligns with Desktop workbench reuse (`done`/`failed` only excluded).
+fn is_non_reusable_session_status(status: &str) -> bool {
+    matches!(
+        status.to_ascii_lowercase().as_str(),
+        "ended" | "stopped" | "failed" | "completed" | "cancelled" | "canceled" | "closed" | "done"
+    )
+}
+
+/// Latest reusable formal session for a conversation + agent.
+///
+/// Used by Mobile `@agent` dispatch when chat_messages has no bound
+/// `agent_session_id` yet (common when Desktop started the session locally and
+/// Host ingest registered the formal row without a prior Hub bind).
+///
+/// Matches exact `agent_id` first, then any session whose agent shares the same
+/// `runtime_agent` (host_runtime vs user-registered bot id skew).
+pub async fn latest_reusable_for_conversation_agent(
+    store: &impl AsStorePool,
+    conversation_id: &str,
+    agent_id: &str,
+    runtime_agent: &str,
+) -> Result<Option<String>, BackendError> {
+    let rows = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, AgentSessionRow>(
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                   FROM agent_sessions s
+                  WHERE s.conversation_id = ?
+                    AND s.ended_at_ms IS NULL
+                    AND (
+                      s.agent_id = ?
+                      OR s.agent_id IN (
+                        SELECT a.agent_id FROM agents a
+                         WHERE lower(a.runtime_agent) = lower(?)
+                      )
+                    )
+                  ORDER BY s.started_at_ms DESC, s.session_id DESC",
+            )
+            .bind(conversation_id)
+            .bind(agent_id)
+            .bind(runtime_agent)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, AgentSessionRow>(
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                   FROM agent_sessions s
+                  WHERE s.conversation_id = $1
+                    AND s.ended_at_ms IS NULL
+                    AND (
+                      s.agent_id = $2
+                      OR s.agent_id IN (
+                        SELECT a.agent_id FROM agents a
+                         WHERE lower(a.runtime_agent) = lower($3)
+                      )
+                    )
+                  ORDER BY s.started_at_ms DESC, s.session_id DESC",
+            )
+            .bind(conversation_id)
+            .bind(agent_id)
+            .bind(runtime_agent)
+            .fetch_all(pool)
+            .await
+        }
+    }
+    .map_err(store_err(
+        "agent_sessions.latest_reusable_for_conversation_agent",
+    ))?;
+
+    Ok(rows
+        .into_iter()
+        .find(|row| !is_non_reusable_session_status(&row.status))
+        .map(|row| row.session_id))
+}
+
+/// Resolve a reusable formal session by short-id prefix (`@agent#short`).
+pub async fn find_reusable_by_short_id(
+    store: &impl AsStorePool,
+    conversation_id: &str,
+    agent_id: &str,
+    runtime_agent: &str,
+    session_short_id: &str,
+) -> Result<Option<String>, BackendError> {
+    let short = session_short_id.trim();
+    if short.is_empty() {
+        return Ok(None);
+    }
+    // Load candidates by agent scope, then match short-id in Rust (avoids
+    // dialect-specific LIKE bind quirks; conversation session counts are small).
+    let rows = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, AgentSessionRow>(
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                   FROM agent_sessions s
+                  WHERE s.conversation_id = ?
+                    AND s.ended_at_ms IS NULL
+                    AND (
+                      s.agent_id = ?
+                      OR s.agent_id IN (
+                        SELECT a.agent_id FROM agents a
+                         WHERE lower(a.runtime_agent) = lower(?)
+                      )
+                    )
+                  ORDER BY s.started_at_ms DESC, s.session_id DESC",
+            )
+            .bind(conversation_id)
+            .bind(agent_id)
+            .bind(runtime_agent)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, AgentSessionRow>(
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                   FROM agent_sessions s
+                  WHERE s.conversation_id = $1
+                    AND s.ended_at_ms IS NULL
+                    AND (
+                      s.agent_id = $2
+                      OR s.agent_id IN (
+                        SELECT a.agent_id FROM agents a
+                         WHERE lower(a.runtime_agent) = lower($3)
+                      )
+                    )
+                  ORDER BY s.started_at_ms DESC, s.session_id DESC",
+            )
+            .bind(conversation_id)
+            .bind(agent_id)
+            .bind(runtime_agent)
+            .fetch_all(pool)
+            .await
+        }
+    }
+    .map_err(store_err("agent_sessions.find_reusable_by_short_id"))?;
+
+    Ok(rows
+        .into_iter()
+        .find(|row| {
+            !is_non_reusable_session_status(&row.status)
+                && (row.session_id == short
+                    || row.session_id.starts_with(short)
+                    || row.session_id.ends_with(short))
+        })
+        .map(|row| row.session_id))
+}
+
 pub async fn claim_host_if_empty(
     store: &impl AsStorePool,
     session_id: &str,
@@ -570,5 +720,81 @@ mod tests {
             conversation_rows[0].project_id.as_deref(),
             Some("proj-session-scope")
         );
+    }
+
+    #[tokio::test]
+    async fn latest_reusable_prefers_running_desktop_session_and_skips_ended() {
+        let pool = memory_pool().await;
+        let account = insert_account(&pool, "agent-session-reuse@example.com").await;
+        let conversation =
+            social::create_group_conversation(&pool, &account, "Reuse", &[account.clone()], 100)
+                .await
+                .unwrap();
+        let agent =
+            social::ensure_host_runtime_agent(&pool, &account, "codex", "Codex", "", None, 100)
+                .await
+                .unwrap();
+        social::add_agent_to_conversation(
+            &pool,
+            &conversation.conversation_id,
+            &agent.agent_id,
+            &account,
+            100,
+        )
+        .await
+        .unwrap();
+
+        create(
+            &pool,
+            "sess_ended_old",
+            &conversation.conversation_id,
+            None,
+            None,
+            Some(&agent.agent_id),
+            "ended",
+            100,
+            Some(150),
+        )
+        .await
+        .unwrap();
+        // Formal status CHECK: pending|running|stopping|stopped|ended|failed
+        create(
+            &pool,
+            "sess_desktop_run_abcdef12",
+            &conversation.conversation_id,
+            None,
+            None,
+            Some(&agent.agent_id),
+            "running",
+            200,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let latest = latest_reusable_for_conversation_agent(
+            &pool,
+            &conversation.conversation_id,
+            &agent.agent_id,
+            "codex",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            latest.as_deref(),
+            Some("sess_desktop_run_abcdef12"),
+            "running Desktop formal session must be reusable for Mobile @agent"
+        );
+
+        let by_short = find_reusable_by_short_id(
+            &pool,
+            &conversation.conversation_id,
+            &agent.agent_id,
+            "codex",
+            "sess_des",
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_short.as_deref(), Some("sess_desktop_run_abcdef12"));
     }
 }

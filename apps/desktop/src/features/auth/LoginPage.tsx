@@ -158,8 +158,8 @@ export function LoginPage() {
           </button>
 
           <p className="text-center text-3xs leading-snug text-ink-muted">
-            Supabase Auth → Minos session. Link this Mac later on the Host page
-            for phone control.
+            Signing in connects this Mac to the server automatically for phone
+            and remote control.
           </p>
         </form>
       </div>

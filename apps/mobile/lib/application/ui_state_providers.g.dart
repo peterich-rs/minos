@@ -61,11 +61,30 @@ abstract class _$ShellTabIndex extends $Notifier<int> {
   }
 }
 
+/// Form UX for [LoginPage] (mode / in-flight / banner error).
+///
+/// Initial banner error is taken from [authControllerProvider] **inside**
+/// [build] (not from a widget `initState`). Writing a provider from
+/// `initState` trips Riverpod's "modify while the widget tree is building"
+/// assert when go_router mounts [LoginPage] after [AuthRefreshFailed].
+
 @ProviderFor(LoginPageStateController)
 final loginPageStateControllerProvider = LoginPageStateControllerProvider._();
 
+/// Form UX for [LoginPage] (mode / in-flight / banner error).
+///
+/// Initial banner error is taken from [authControllerProvider] **inside**
+/// [build] (not from a widget `initState`). Writing a provider from
+/// `initState` trips Riverpod's "modify while the widget tree is building"
+/// assert when go_router mounts [LoginPage] after [AuthRefreshFailed].
 final class LoginPageStateControllerProvider
     extends $NotifierProvider<LoginPageStateController, LoginPageState> {
+  /// Form UX for [LoginPage] (mode / in-flight / banner error).
+  ///
+  /// Initial banner error is taken from [authControllerProvider] **inside**
+  /// [build] (not from a widget `initState`). Writing a provider from
+  /// `initState` trips Riverpod's "modify while the widget tree is building"
+  /// assert when go_router mounts [LoginPage] after [AuthRefreshFailed].
   LoginPageStateControllerProvider._()
     : super(
         from: null,
@@ -94,7 +113,14 @@ final class LoginPageStateControllerProvider
 }
 
 String _$loginPageStateControllerHash() =>
-    r'006d9bf76371cc8159b14202c7506bfc5c009e38';
+    r'e2ef8c2a89f6a9c11c7dafb93747c2ae269fa4d4';
+
+/// Form UX for [LoginPage] (mode / in-flight / banner error).
+///
+/// Initial banner error is taken from [authControllerProvider] **inside**
+/// [build] (not from a widget `initState`). Writing a provider from
+/// `initState` trips Riverpod's "modify while the widget tree is building"
+/// assert when go_router mounts [LoginPage] after [AuthRefreshFailed].
 
 abstract class _$LoginPageStateController extends $Notifier<LoginPageState> {
   LoginPageState build();

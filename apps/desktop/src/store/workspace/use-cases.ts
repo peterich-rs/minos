@@ -20,6 +20,18 @@ import {
   quietRefreshConversationSlices,
   startNewAgentSession,
 } from "./shared";
+import { syncUserMessageToCloud } from "@/shared/lib/im-cloud-sync";
+import { isHubImMode } from "@/shared/lib/hub-timeline";
+import { useAccountStore } from "@/store/account-store";
+
+/** True when Minos account is signed in (multi-end Hub projection available). */
+function hubAuthenticated(): boolean {
+  const { session, authPhase } = useAccountStore.getState();
+  return isHubImMode({
+    authPhase,
+    accessToken: session?.accessToken,
+  });
+}
 
 /** Load host profiles for @ProfileName / @p/id parse (best-effort). */
 async function loadMentionProfiles(): Promise<MentionProfile[]> {
@@ -257,6 +269,30 @@ export function createUseCasesActions(
         c.id === conversationId ? { ...c, unread: undefined } : c,
       ),
     }));
+    // Phase 5.3: Linked / authenticated → Hub mark-read (multi-end inbox).
+    void import("@/shared/lib/minos-cloud").then(async (cloud) => {
+      const { isHubImMode } = await import("@/shared/lib/hub-timeline");
+      const { useAccountStore } = await import("@/store/account-store");
+      const { deviceId, session, authPhase } = useAccountStore.getState();
+      if (
+        !isHubImMode({
+          authPhase,
+          accessToken: session?.accessToken,
+        }) ||
+        !session?.accessToken
+      ) {
+        return;
+      }
+      try {
+        await cloud.markHubConversationRead(
+          deviceId,
+          session.accessToken,
+          conversationId,
+        );
+      } catch (error) {
+        console.warn("[workspace] hub mark-read failed", error);
+      }
+    });
   },
 
   sendMessage: async (conversationId, body, messageId, options) => {
@@ -362,18 +398,35 @@ export function createUseCasesActions(
         throw new Error("Cannot start an agent session with an empty prompt.");
       }
 
+      const convTitle = conv.title;
+      const agentRuntimes = conv.participatingAgents;
+      const accountOn = hubAuthenticated();
+
+      // Desktop workbench always executes agents natively on this Host.
+      // Linked/Hub is multi-end IM projection only — never the primary start path
+      // (Hub try_agent_dispatch is for Mobile and will be hardened separately).
       // Append is idempotent by message_id (store upsert). Constraint #3:
-      // success here only means durable; later session steps may still throw,
-      // in which case the row stays `failed` but the message may be durable.
-      // That is the defined send-pipeline-failed semantics.
+      // success here only means durable; later session steps may still throw.
       const { messageSeq } = await daemonApi.appendUserMessage(
         conversationId,
         messageBody,
         resolvedId,
       );
       patchDelivery("sent", messageSeq);
-      // Do not wait for agent start: re-list timeline so durable user bubble
-      // appears even if later routing/start throws or UI lost the optimistic row.
+      // Multi-end visibility: project user bubble with host_projection so Hub
+      // does not re-dispatch (this machine already owns execution).
+      if (accountOn) {
+        void syncUserMessageToCloud({
+          conversationId,
+          messageId: resolvedId,
+          text: messageBody,
+          title: convTitle,
+          replyToMessageId,
+          createdAtMs: Date.now(),
+          agentRuntimes,
+          messageSource: "host_projection",
+        });
+      }
       void get().loadTimeline(conversationId, { quiet: true });
 
       let sessionId: string | undefined;
@@ -505,6 +558,7 @@ export function createUseCasesActions(
         throw new Error("conversation or project not found");
       }
 
+      // Same as sendMessage: native local execution first; Hub is projection only.
       // Idempotent append by message_id — durable row (if any) is updated in
       // place rather than duplicated. This is the A9 main path.
       const { messageSeq } = await daemonApi.appendUserMessage(
@@ -513,6 +567,17 @@ export function createUseCasesActions(
         messageId,
       );
       patchDelivery("sent", messageSeq);
+      if (hubAuthenticated()) {
+        void syncUserMessageToCloud({
+          conversationId,
+          messageId,
+          text: messageBody,
+          title: conv.title,
+          createdAtMs: failed.createdAtMs ?? Date.now(),
+          agentRuntimes: conv.participatingAgents,
+          messageSource: "host_projection",
+        });
+      }
       void get().loadTimeline(conversationId, { quiet: true });
 
       const mentionProfiles = await loadMentionProfiles();

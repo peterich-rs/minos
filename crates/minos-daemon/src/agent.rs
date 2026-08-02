@@ -448,6 +448,31 @@ impl AgentGlue {
         req: StartAgentRequest,
         initial_user_message: Option<String>,
     ) -> Result<StartAgentResponse, MinosError> {
+        self.start_agent_with_session_id_in_conversation(
+            session_id,
+            req,
+            initial_user_message,
+            None,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Start agent with a fixed session id and optional Hub collaboration identity.
+    ///
+    /// When `conversation_id` is set (Mobile/Hub dispatch), the session is bound to
+    /// **that exact id** under a resolved local project — never
+    /// `ensure_workspace_conversation` / "Direct agent sessions".
+    pub async fn start_agent_with_session_id_in_conversation(
+        &self,
+        session_id: String,
+        req: StartAgentRequest,
+        initial_user_message: Option<String>,
+        conversation_id: Option<String>,
+        project_id: Option<String>,
+        conversation_title: Option<String>,
+    ) -> Result<StartAgentResponse, MinosError> {
         let _mode = req.mode.map_or(AgentLaunchMode::Server, runtime_mode);
         let workspace = resolve_workspace(&self.default_workspace, &req.workspace);
         let launch = self
@@ -471,13 +496,46 @@ impl AgentGlue {
             .await
             .map_err(map_anyhow)?;
         let cwd = outcome.cwd.display().to_string();
-        self.persist_thread_parent_rows(
-            &session_id,
-            &cwd,
-            req.agent,
-            outcome.provider_session_id.as_deref(),
-        )
-        .await;
+
+        let hub_conversation_id = conversation_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        if let Some(conv_id) = hub_conversation_id {
+            if let Err(error) = ensure_hub_collaboration_conversation(
+                &self.store,
+                conv_id,
+                project_id.as_deref(),
+                conversation_title.as_deref(),
+                Some(cwd.as_str()),
+            )
+            .await
+            {
+                tracing::warn!(
+                    target: "minos_daemon::agent",
+                    error = %error,
+                    conversation_id = %conv_id,
+                    "ensure_hub_collaboration_conversation failed; session may lack parent rows"
+                );
+            }
+            self.persist_thread_parent_rows_in_conversation(
+                &session_id,
+                conv_id,
+                &cwd,
+                req.agent,
+                outcome.provider_session_id.as_deref(),
+            )
+            .await;
+        } else {
+            // True local direct-agent path (no Hub conversation).
+            self.persist_thread_parent_rows(
+                &session_id,
+                &cwd,
+                req.agent,
+                outcome.provider_session_id.as_deref(),
+            )
+            .await;
+        }
 
         if let Some(message) = initial_user_message
             .as_deref()
@@ -496,7 +554,8 @@ impl AgentGlue {
             profile_id = req.profile_id.as_deref().unwrap_or(""),
             agent = %agent_label(req.agent),
             session_id = %session_id,
-            "agent session started with fixed session_id",
+            conversation_id = hub_conversation_id.unwrap_or(""),
+            "agent session started with fixed session_id"
         );
         Ok(StartAgentResponse { session_id, cwd })
     }
@@ -4807,6 +4866,89 @@ async fn ensure_workspace_conversation(
             }
         })?;
     Ok(conversation_id)
+}
+
+/// Bind a **Hub** conversation id onto a local project without inventing
+/// `conversation-{slug}` / "Direct agent sessions".
+///
+/// Project resolution order:
+/// 1. existing conversation row (keep its project)
+/// 2. explicit `project_id` (ensure row)
+/// 3. project matching `workspace_path`
+/// 4. create project from workspace folder name (stable id from slug)
+async fn ensure_hub_collaboration_conversation(
+    store: &LocalStore,
+    conversation_id: &str,
+    project_id: Option<&str>,
+    title: Option<&str>,
+    workspace_path: Option<&str>,
+) -> anyhow::Result<()> {
+    let now_ms = current_unix_ms();
+    let title = title
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Conversation");
+
+    if store.get_conversation(conversation_id).await?.is_some() {
+        // Already bound to a local project; only refresh placeholder titles.
+        let _ = store
+            .ensure_conversation(
+                conversation_id,
+                // project_id ignored when row exists
+                "_",
+                title,
+                now_ms,
+            )
+            .await;
+        return Ok(());
+    }
+
+    let cwd = workspace_path.map(str::trim).filter(|s| !s.is_empty());
+    let resolved_project_id = if let Some(pid) = project_id.map(str::trim).filter(|s| !s.is_empty())
+    {
+        let name = cwd
+            .map(project_name_from_path)
+            .unwrap_or_else(|| "Project".into());
+        let slug = cwd.map(workspace_slug).unwrap_or_else(|| "project".into());
+        store.ensure_project(pid, &name, &slug, cwd, now_ms).await?;
+        pid.to_string()
+    } else if let Some(path) = cwd {
+        if let Some(existing) = store.find_project_by_workspace_path(path).await? {
+            existing.project_id
+        } else {
+            let slug = workspace_slug(path);
+            let project_id = format!("project-{slug}");
+            let name = project_name_from_path(path);
+            store
+                .ensure_project(&project_id, &name, &slug, Some(path), now_ms)
+                .await?;
+            project_id
+        }
+    } else {
+        let project_id = format!(
+            "project-hub-{}",
+            &conversation_id[..8.min(conversation_id.len())]
+        );
+        store
+            .ensure_project(&project_id, "Hub", "hub", None, now_ms)
+            .await?;
+        project_id
+    };
+
+    store
+        .ensure_conversation(conversation_id, &resolved_project_id, title, now_ms)
+        .await?;
+    Ok(())
+}
+
+fn project_name_from_path(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    trimmed
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Project")
+        .to_string()
 }
 
 fn workspace_slug(cwd: &str) -> String {

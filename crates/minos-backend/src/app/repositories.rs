@@ -1327,13 +1327,33 @@ impl HostLinksRepository for StoreBackedHostLinksRepository {
 // ---------------------------------------------------------------------------
 // Store-backed implementations — AgentsRepository
 //
-// The agents table schema differs between SQLite (user-created agents with
-// owner_account_id, name, runtime_agent) and Postgres (system-defined agents
-// with runtime_kind, display_name, enabled). The adapter handles both.
+// Social agents table is shared across SQLite and Postgres (owner + runtime_agent +
+// source). AgentsRepository projects that shape into the legacy AgentRow DTO.
 // ---------------------------------------------------------------------------
 
 struct StoreBackedAgentsRepository {
     store: StoreHandle,
+}
+
+fn map_social_agent_row(
+    agent_id: String,
+    runtime_agent: String,
+    name: String,
+    description: String,
+    created_at_ms: i64,
+) -> AgentRow {
+    AgentRow {
+        agent_id,
+        runtime_kind: runtime_agent,
+        display_name: name,
+        description: if description.is_empty() {
+            None
+        } else {
+            Some(description)
+        },
+        enabled: true,
+        created_at_ms,
+    }
 }
 
 #[async_trait]
@@ -1341,7 +1361,7 @@ impl AgentsRepository for StoreBackedAgentsRepository {
     async fn list_enabled(&self) -> Result<Vec<AgentRow>, BackendError> {
         match self.store.as_store_pool() {
             StorePoolRef::Sqlite(pool) => {
-                let rows = sqlx::query_as::<_, (String, String, String, Option<String>, i64)>(
+                let rows = sqlx::query_as::<_, (String, String, String, String, i64)>(
                     "SELECT agent_id, runtime_agent, name, description, created_at_ms \
                      FROM agents ORDER BY created_at_ms ASC",
                 )
@@ -1354,26 +1374,22 @@ impl AgentsRepository for StoreBackedAgentsRepository {
                 Ok(rows
                     .into_iter()
                     .map(
-                        |(agent_id, runtime_kind, display_name, description, created_at_ms)| {
-                            AgentRow {
+                        |(agent_id, runtime_agent, name, description, created_at_ms)| {
+                            map_social_agent_row(
                                 agent_id,
-                                runtime_kind,
-                                display_name,
+                                runtime_agent,
+                                name,
                                 description,
-                                enabled: true,
                                 created_at_ms,
-                            }
+                            )
                         },
                     )
                     .collect())
             }
             StorePoolRef::Postgres(pool) => {
-                let rows = sqlx::query_as::<
-                    _,
-                    (String, String, String, Option<String>, bool, i64),
-                >(
-                    "SELECT agent_id, runtime_kind, display_name, description, enabled, created_at_ms \
-                     FROM agents WHERE enabled = true ORDER BY created_at_ms ASC",
+                let rows = sqlx::query_as::<_, (String, String, String, String, i64)>(
+                    "SELECT agent_id, runtime_agent, name, description, created_at_ms \
+                     FROM agents ORDER BY created_at_ms ASC",
                 )
                 .fetch_all(pool)
                 .await
@@ -1384,22 +1400,14 @@ impl AgentsRepository for StoreBackedAgentsRepository {
                 Ok(rows
                     .into_iter()
                     .map(
-                        |(
-                            agent_id,
-                            runtime_kind,
-                            display_name,
-                            description,
-                            enabled,
-                            created_at_ms,
-                        )| {
-                            AgentRow {
+                        |(agent_id, runtime_agent, name, description, created_at_ms)| {
+                            map_social_agent_row(
                                 agent_id,
-                                runtime_kind,
-                                display_name,
+                                runtime_agent,
+                                name,
                                 description,
-                                enabled,
                                 created_at_ms,
-                            }
+                            )
                         },
                     )
                     .collect())
@@ -1410,7 +1418,7 @@ impl AgentsRepository for StoreBackedAgentsRepository {
     async fn find(&self, agent_id: &str) -> Result<Option<AgentRow>, BackendError> {
         match self.store.as_store_pool() {
             StorePoolRef::Sqlite(pool) => {
-                let row = sqlx::query_as::<_, (String, String, String, Option<String>, i64)>(
+                let row = sqlx::query_as::<_, (String, String, String, String, i64)>(
                     "SELECT agent_id, runtime_agent, name, description, created_at_ms \
                      FROM agents WHERE agent_id = ?",
                 )
@@ -1422,22 +1430,20 @@ impl AgentsRepository for StoreBackedAgentsRepository {
                     message: e.to_string(),
                 })?;
                 Ok(row.map(
-                    |(agent_id, runtime_kind, display_name, description, created_at_ms)| AgentRow {
-                        agent_id,
-                        runtime_kind,
-                        display_name,
-                        description,
-                        enabled: true,
-                        created_at_ms,
+                    |(agent_id, runtime_agent, name, description, created_at_ms)| {
+                        map_social_agent_row(
+                            agent_id,
+                            runtime_agent,
+                            name,
+                            description,
+                            created_at_ms,
+                        )
                     },
                 ))
             }
             StorePoolRef::Postgres(pool) => {
-                let row = sqlx::query_as::<
-                    _,
-                    (String, String, String, Option<String>, bool, i64),
-                >(
-                    "SELECT agent_id, runtime_kind, display_name, description, enabled, created_at_ms \
+                let row = sqlx::query_as::<_, (String, String, String, String, i64)>(
+                    "SELECT agent_id, runtime_agent, name, description, created_at_ms \
                      FROM agents WHERE agent_id = $1",
                 )
                 .bind(agent_id)
@@ -1448,22 +1454,14 @@ impl AgentsRepository for StoreBackedAgentsRepository {
                     message: e.to_string(),
                 })?;
                 Ok(row.map(
-                    |(
-                        agent_id,
-                        runtime_kind,
-                        display_name,
-                        description,
-                        enabled,
-                        created_at_ms,
-                    )| {
-                        AgentRow {
+                    |(agent_id, runtime_agent, name, description, created_at_ms)| {
+                        map_social_agent_row(
                             agent_id,
-                            runtime_kind,
-                            display_name,
+                            runtime_agent,
+                            name,
                             description,
-                            enabled,
                             created_at_ms,
-                        }
+                        )
                     },
                 ))
             }

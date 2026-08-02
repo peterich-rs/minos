@@ -1,5 +1,7 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
+import 'package:minos/ui/core/widgets/minos_button.dart';
+import 'package:minos/ui/theme/theme.dart';
 
 class AgentQuestionRequestData {
   const AgentQuestionRequestData({
@@ -155,14 +157,15 @@ class _AgentQuestionSheetState extends State<_AgentQuestionSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = ShadTheme.of(context);
+    final colors = context.minosColors;
+    final textTheme = Theme.of(context).textTheme;
     return SafeArea(
       child: Container(
         constraints: BoxConstraints(
           maxHeight: MediaQuery.sizeOf(context).height * 0.86,
         ),
         decoration: BoxDecoration(
-          color: theme.colorScheme.background,
+          color: colors.canvas,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
         ),
         child: Column(
@@ -172,9 +175,15 @@ class _AgentQuestionSheetState extends State<_AgentQuestionSheet> {
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
               child: Row(
                 children: [
-                  const Icon(LucideIcons.messageCircle, size: 22),
+                  Icon(
+                    CupertinoIcons.chat_bubble,
+                    size: 22,
+                    color: colors.textPrimary,
+                  ),
                   const SizedBox(width: 10),
-                  Expanded(child: Text('Agent 提问', style: theme.textTheme.h4)),
+                  Expanded(
+                    child: Text('Agent 提问', style: textTheme.titleLarge),
+                  ),
                 ],
               ),
             ),
@@ -195,14 +204,12 @@ class _AgentQuestionSheetState extends State<_AgentQuestionSheet> {
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-              child: SizedBox(
-                width: double.infinity,
-                child: ShadButton(
-                  onPressed: _canSubmit
-                      ? () => Navigator.of(context).pop(_answers())
-                      : null,
-                  child: const Text('提交答案'),
-                ),
+              child: MinosButton(
+                expanded: true,
+                onPressed: _canSubmit
+                    ? () => Navigator.of(context).pop(_answers())
+                    : null,
+                child: const Text('提交答案'),
               ),
             ),
           ],
@@ -227,15 +234,19 @@ class _QuestionBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = ShadTheme.of(context);
+    final colors = context.minosColors;
+    final textTheme = Theme.of(context).textTheme;
     final title = question.header.isEmpty ? question.question : question.header;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: theme.textTheme.large),
+        Text(title, style: textTheme.titleMedium),
         if (question.header.isNotEmpty) ...[
           const SizedBox(height: 4),
-          Text(question.question, style: theme.textTheme.muted),
+          Text(
+            question.question,
+            style: textTheme.bodyMedium?.copyWith(color: colors.textSecondary),
+          ),
         ],
         const SizedBox(height: 10),
         if (question.multiple)

@@ -5,9 +5,8 @@
  * - Supabase session: IdP UX only (managed by @supabase/supabase-js when configured)
  * - Minos session: access/refresh tokens for all product API (this module)
  *
- * Storage: app-scoped localStorage. Tokens never ship in git; keys are
- * namespaced under `minos.desktop.*`. Device id is a stable UUID for
- * `X-Device-Id` / `desktop-console` installation binding.
+ * Host bind cache is **account-scoped** and internal only (auto-connect after
+ * login). Users never manage Link/Unlink in the UI.
  */
 
 export type MinosSession = {
@@ -21,31 +20,45 @@ export type MinosSession = {
   expiresInSec: number;
 };
 
-/** Host Link state for this Mac (plane B). Independent of human login UX. */
-export type HostLinkState = {
-  linked: boolean;
+/** Internal bind snapshot for this Mac under one Minos account. */
+export type HostBindState = {
+  bound: boolean;
   hostInstallationId: string | null;
   hostDisplayName: string | null;
-  linkedAtMs: number | null;
+  boundAtMs: number | null;
   pairId: string | null;
 };
 
-export const EMPTY_HOST_LINK: HostLinkState = {
-  linked: false,
+export const EMPTY_HOST_BIND: HostBindState = {
+  bound: false,
   hostInstallationId: null,
   hostDisplayName: null,
-  linkedAtMs: null,
+  boundAtMs: null,
   pairId: null,
 };
 
+/** @deprecated Use HostBindState / EMPTY_HOST_BIND */
+export type HostLinkState = HostBindState;
+/** @deprecated */
+export const EMPTY_HOST_LINK = EMPTY_HOST_BIND;
+
 const SESSION_KEY = "minos.desktop.session";
 const DEVICE_ID_KEY = "minos.desktop.device-id";
-const HOST_LINK_KEY = "minos.desktop.host-link";
+/** Account-scoped map: `{ [accountId]: HostBindState }`. */
+const HOST_BINDS_KEY = "minos.desktop.host-binds";
+/** Legacy keys (dropped on access). */
+const LEGACY_HOST_LINKS_KEY = "minos.desktop.host-links";
+const LEGACY_HOST_LINK_KEY = "minos.desktop.host-link";
 
 function storageAvailable(): boolean {
   return (
     typeof window !== "undefined" && typeof window.localStorage !== "undefined"
   );
+}
+
+function normalizeAccountId(accountId: string | null | undefined): string | null {
+  const trimmed = accountId?.trim();
+  return trimmed ? trimmed : null;
 }
 
 export function ensureDesktopDeviceId(): string {
@@ -104,40 +117,140 @@ export function clearStoredSession(): void {
   window.localStorage.removeItem(SESSION_KEY);
 }
 
-export function loadStoredHostLink(): HostLinkState {
-  if (!storageAvailable()) return { ...EMPTY_HOST_LINK };
-  const raw = window.localStorage.getItem(HOST_LINK_KEY);
-  if (!raw) return { ...EMPTY_HOST_LINK };
+function parseHostBind(raw: unknown): HostBindState | null {
+  if (!raw || typeof raw !== "object") return null;
+  const parsed = raw as Record<string, unknown>;
+  // Accept legacy { linked } shape.
+  const bound = parsed.bound === true || parsed.linked === true;
+  const hostInstallationId =
+    typeof parsed.hostInstallationId === "string"
+      ? parsed.hostInstallationId
+      : null;
+  const hostDisplayName =
+    typeof parsed.hostDisplayName === "string" ? parsed.hostDisplayName : null;
+  const boundAtMs =
+    typeof parsed.boundAtMs === "number"
+      ? parsed.boundAtMs
+      : typeof parsed.linkedAtMs === "number"
+        ? parsed.linkedAtMs
+        : null;
+  const pairId = typeof parsed.pairId === "string" ? parsed.pairId : null;
+  return {
+    bound,
+    hostInstallationId,
+    hostDisplayName,
+    boundAtMs,
+    pairId,
+  };
+}
+
+function dropLegacyHostKeys(): void {
+  if (!storageAvailable()) return;
+  window.localStorage.removeItem(LEGACY_HOST_LINK_KEY);
+  window.localStorage.removeItem(LEGACY_HOST_LINKS_KEY);
+}
+
+function readHostBindsMap(): Record<string, HostBindState> {
+  if (!storageAvailable()) return {};
+  dropLegacyHostKeys();
+  const raw = window.localStorage.getItem(HOST_BINDS_KEY);
+  if (!raw) return {};
   try {
-    const parsed = JSON.parse(raw) as Partial<HostLinkState>;
-    return {
-      linked: parsed.linked === true,
-      hostInstallationId:
-        typeof parsed.hostInstallationId === "string"
-          ? parsed.hostInstallationId
-          : null,
-      hostDisplayName:
-        typeof parsed.hostDisplayName === "string"
-          ? parsed.hostDisplayName
-          : null,
-      linkedAtMs:
-        typeof parsed.linkedAtMs === "number" ? parsed.linkedAtMs : null,
-      pairId: typeof parsed.pairId === "string" ? parsed.pairId : null,
-    };
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      window.localStorage.removeItem(HOST_BINDS_KEY);
+      return {};
+    }
+    const out: Record<string, HostBindState> = {};
+    for (const [key, value] of Object.entries(
+      parsed as Record<string, unknown>,
+    )) {
+      const accountId = normalizeAccountId(key);
+      const bind = parseHostBind(value);
+      if (accountId && bind) out[accountId] = bind;
+    }
+    return out;
   } catch {
-    window.localStorage.removeItem(HOST_LINK_KEY);
-    return { ...EMPTY_HOST_LINK };
+    window.localStorage.removeItem(HOST_BINDS_KEY);
+    return {};
   }
 }
 
-export function saveStoredHostLink(link: HostLinkState): void {
+function writeHostBindsMap(map: Record<string, HostBindState>): void {
   if (!storageAvailable()) return;
-  window.localStorage.setItem(HOST_LINK_KEY, JSON.stringify(link));
+  if (Object.keys(map).length === 0) {
+    window.localStorage.removeItem(HOST_BINDS_KEY);
+    return;
+  }
+  window.localStorage.setItem(HOST_BINDS_KEY, JSON.stringify(map));
 }
 
-export function clearStoredHostLink(): void {
-  if (!storageAvailable()) return;
-  window.localStorage.removeItem(HOST_LINK_KEY);
+export function loadStoredHostBind(
+  accountId: string | null | undefined,
+): HostBindState {
+  const id = normalizeAccountId(accountId);
+  if (!id) return { ...EMPTY_HOST_BIND };
+  const map = readHostBindsMap();
+  const bind = map[id];
+  return bind ? { ...bind } : { ...EMPTY_HOST_BIND };
+}
+
+/** @deprecated Use loadStoredHostBind */
+export function loadStoredHostLink(
+  accountId: string | null | undefined,
+): HostBindState {
+  return loadStoredHostBind(accountId);
+}
+
+export function saveStoredHostBind(
+  accountId: string,
+  bind: HostBindState,
+): void {
+  const id = normalizeAccountId(accountId);
+  if (!id || !storageAvailable()) return;
+  const map = readHostBindsMap();
+  map[id] = {
+    bound: bind.bound === true,
+    hostInstallationId: bind.hostInstallationId,
+    hostDisplayName: bind.hostDisplayName,
+    boundAtMs: bind.boundAtMs,
+    pairId: bind.pairId,
+  };
+  writeHostBindsMap(map);
+}
+
+/** @deprecated Use saveStoredHostBind */
+export function saveStoredHostLink(
+  accountId: string,
+  link: HostBindState,
+): void {
+  saveStoredHostBind(accountId, {
+    bound: link.bound === true || (link as { linked?: boolean }).linked === true,
+    hostInstallationId: link.hostInstallationId,
+    hostDisplayName: link.hostDisplayName,
+    boundAtMs:
+      link.boundAtMs ??
+      (link as { linkedAtMs?: number | null }).linkedAtMs ??
+      null,
+    pairId: link.pairId,
+  });
+}
+
+export function clearStoredHostBind(accountId: string): void {
+  const id = normalizeAccountId(accountId);
+  if (!id || !storageAvailable()) return;
+  const map = readHostBindsMap();
+  if (!(id in map)) {
+    dropLegacyHostKeys();
+    return;
+  }
+  delete map[id];
+  writeHostBindsMap(map);
+}
+
+/** @deprecated Use clearStoredHostBind */
+export function clearStoredHostLink(accountId: string): void {
+  clearStoredHostBind(accountId);
 }
 
 /** True when access token is still usable with a 60s skew buffer. */

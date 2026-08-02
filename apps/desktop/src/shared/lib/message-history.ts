@@ -17,9 +17,14 @@ export const MESSAGE_AUTOFILL_SLACK_PX = 96;
 export type MessageHistoryMeta = {
   /**
    * Lowest durable `messageSeq` currently loaded (inclusive).
-   * Used as `before_seq` for the next older page. Null when empty/unknown.
+   * Used as `before_seq` for the next older page (local daemon). Null when empty/unknown.
    */
   firstLoadedSeq: number | null;
+  /**
+   * Lowest Hub `created_at_ms` in the window (Linked gap API).
+   * Used as `before_ts_ms` for Hub older pages. Null when empty/unknown.
+   */
+  firstLoadedCreatedAtMs?: number | null;
   /** True when the last older/tail fetch reported more history above. */
   hasOlder: boolean;
   /** Quiet older-page fetch in flight. */
@@ -28,6 +33,7 @@ export type MessageHistoryMeta = {
 
 export const EMPTY_MESSAGE_HISTORY: MessageHistoryMeta = Object.freeze({
   firstLoadedSeq: null,
+  firstLoadedCreatedAtMs: null,
   hasOlder: false,
   loadingOlder: false,
 });
@@ -96,12 +102,27 @@ export function firstMessageSeq(
 export function metaAfterMessageTail(
   messages: readonly TimelineMessage[],
   hasMore: boolean,
+  firstLoadedCreatedAtMs?: number | null,
 ): MessageHistoryMeta {
   return {
     firstLoadedSeq: firstMessageSeq(messages),
+    firstLoadedCreatedAtMs: firstLoadedCreatedAtMs ?? null,
     hasOlder: hasMore,
     loadingOlder: false,
   };
+}
+
+/** Lowest createdAtMs in a list (Hub before_ts_ms cursor). */
+export function firstMessageCreatedAtMs(
+  messages: readonly TimelineMessage[],
+): number | null {
+  let min: number | null = null;
+  for (const m of messages) {
+    const ts = m.createdAtMs;
+    if (ts == null || !Number.isFinite(ts)) continue;
+    if (min == null || ts < min) min = ts;
+  }
+  return min;
 }
 
 /**

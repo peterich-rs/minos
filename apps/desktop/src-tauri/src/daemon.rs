@@ -59,6 +59,9 @@ pub struct ConnectionDto {
     /// without a handle (cannot observe relay link).
     #[serde(default)]
     pub hub_online: bool,
+    /// Local `hit_` present (host can dial hub). Not a product "Link" flag.
+    #[serde(default)]
+    pub has_host_token: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -643,6 +646,10 @@ impl DaemonBridge {
                 minos_domain::RelayLinkState::Connected
             )
         });
+        let has_host_token = minos_daemon::device_secret_store::read()
+            .ok()
+            .flatten()
+            .is_some();
         ConnectionDto {
             connected: guard.client.is_some(),
             endpoint: guard.endpoint.clone(),
@@ -650,6 +657,7 @@ impl DaemonBridge {
             source: guard.source.clone(),
             managed: guard.managed.is_some(),
             hub_online,
+            has_host_token,
         }
     }
 

@@ -80,23 +80,63 @@ CREATE TABLE host_links (
 
 CREATE INDEX idx_host_links_account ON host_links(account_id);
 
-CREATE TABLE agents (
-    agent_id         TEXT PRIMARY KEY,
-    runtime_kind     TEXT NOT NULL,
-    display_name     TEXT NOT NULL,
-    description      TEXT,
-    enabled          BOOLEAN NOT NULL DEFAULT TRUE,
-    workspace_path   TEXT,
-    created_at_ms    BIGINT NOT NULL
+-- Social graph (aligned with SQLite social store; latest-only).
+CREATE TABLE friend_requests (
+    request_id        TEXT PRIMARY KEY,
+    from_account_id   TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    to_account_id     TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    status            TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'rejected', 'canceled')),
+    created_at_ms     BIGINT NOT NULL,
+    resolved_at_ms    BIGINT,
+    CHECK (from_account_id <> to_account_id)
 );
 
-INSERT INTO agents (agent_id, runtime_kind, display_name, created_at_ms)
-VALUES
-    ('agent_codex', 'codex', 'Codex', (EXTRACT(EPOCH FROM now()) * 1000)::BIGINT),
-    ('agent_claude', 'claude', 'Claude', (EXTRACT(EPOCH FROM now()) * 1000)::BIGINT),
-    ('agent_gemini', 'gemini', 'Gemini', (EXTRACT(EPOCH FROM now()) * 1000)::BIGINT),
-    ('agent_grok', 'grok', 'Grok', (EXTRACT(EPOCH FROM now()) * 1000)::BIGINT)
-ON CONFLICT (agent_id) DO NOTHING;
+CREATE UNIQUE INDEX idx_friend_requests_pending_pair
+    ON friend_requests(from_account_id, to_account_id)
+    WHERE status = 'pending';
+CREATE INDEX idx_friend_requests_to_status
+    ON friend_requests(to_account_id, status, created_at_ms DESC);
+CREATE INDEX idx_friend_requests_from_status
+    ON friend_requests(from_account_id, status, created_at_ms DESC);
+
+CREATE TABLE friendships (
+    friendship_id      TEXT PRIMARY KEY,
+    account_low_id     TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    account_high_id    TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    created_at_ms      BIGINT NOT NULL,
+    CHECK (account_low_id < account_high_id)
+);
+
+CREATE UNIQUE INDEX idx_friendships_pair
+    ON friendships(account_low_id, account_high_id);
+CREATE INDEX idx_friendships_low
+    ON friendships(account_low_id, created_at_ms DESC);
+CREATE INDEX idx_friendships_high
+    ON friendships(account_high_id, created_at_ms DESC);
+
+-- Social / host-runtime agents (SSOT shape shared with SQLite).
+-- No global seed agents: host_runtime rows are created via ensure-host-runtime.
+CREATE TABLE agents (
+    agent_id          TEXT PRIMARY KEY,
+    owner_account_id  TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    name              TEXT NOT NULL,
+    description       TEXT NOT NULL DEFAULT '',
+    -- user | host_runtime | system
+    source            TEXT NOT NULL DEFAULT 'user'
+                        CHECK (source IN ('user', 'host_runtime', 'system')),
+    runtime_agent     TEXT NOT NULL CHECK (runtime_agent IN ('codex', 'claude', 'gemini', 'opencode', 'grok')),
+    model             TEXT NOT NULL DEFAULT '',
+    workspace_path    TEXT,
+    created_at_ms     BIGINT NOT NULL,
+    updated_at_ms     BIGINT NOT NULL
+);
+
+CREATE INDEX idx_agents_owner
+    ON agents(owner_account_id, created_at_ms DESC);
+
+CREATE UNIQUE INDEX idx_agents_host_runtime_unique
+    ON agents(owner_account_id, runtime_agent)
+    WHERE source = 'host_runtime';
 
 CREATE TABLE projects (
     project_id       TEXT PRIMARY KEY,
@@ -116,13 +156,6 @@ CREATE TABLE project_members (
     role         TEXT NOT NULL CHECK (role IN ('owner', 'editor', 'viewer')),
     joined_at_ms BIGINT NOT NULL,
     PRIMARY KEY (project_id, account_id)
-);
-
-CREATE TABLE project_default_agents (
-    project_id  TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
-    agent_id    TEXT NOT NULL REFERENCES agents(agent_id),
-    priority    INT NOT NULL DEFAULT 0,
-    PRIMARY KEY (project_id, agent_id)
 );
 
 CREATE TYPE conversation_kind AS ENUM ('direct', 'group');
@@ -159,29 +192,48 @@ CREATE TABLE conversation_members (
 CREATE INDEX idx_conv_members_account
     ON conversation_members(account_id, joined_at_ms DESC);
 
-CREATE TABLE conversation_messages (
-    message_id           TEXT PRIMARY KEY,
-    conversation_id      TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
-    sender_kind          TEXT NOT NULL CHECK (sender_kind IN ('user', 'agent', 'system')),
-    sender_account_id    TEXT REFERENCES accounts(account_id) ON DELETE SET NULL,
-    sender_agent_id      TEXT REFERENCES agents(agent_id),
-    body_json            JSONB NOT NULL,
-    reply_to_message_id  TEXT REFERENCES conversation_messages(message_id) ON DELETE SET NULL,
-    agent_session_id     TEXT,
-    created_at_ms        BIGINT NOT NULL,
-    recalled_at_ms       BIGINT,
-    CONSTRAINT message_sender_consistency CHECK (
-        (sender_kind = 'user' AND sender_account_id IS NOT NULL AND sender_agent_id IS NULL) OR
-        (sender_kind = 'agent' AND sender_agent_id IS NOT NULL) OR
-        (sender_kind = 'system' AND sender_account_id IS NULL AND sender_agent_id IS NULL)
-    )
+CREATE TABLE conversation_agent_members (
+    conversation_id     TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+    agent_id            TEXT NOT NULL REFERENCES agents(agent_id) ON DELETE CASCADE,
+    added_by_account_id TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    joined_at_ms        BIGINT NOT NULL,
+    PRIMARY KEY (conversation_id, agent_id)
 );
 
-CREATE INDEX idx_conv_msgs_conv_created
-    ON conversation_messages(conversation_id, created_at_ms DESC);
-CREATE INDEX idx_conv_msgs_session
-    ON conversation_messages(agent_session_id)
+CREATE INDEX idx_conversation_agent_members_agent
+    ON conversation_agent_members(agent_id, joined_at_ms DESC);
+
+-- Collaboration chat bubbles (social store SSOT; not the legacy body_json table).
+CREATE TABLE chat_messages (
+    message_id           TEXT PRIMARY KEY,
+    conversation_id      TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+    sender_account_id    TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    text                 TEXT NOT NULL,
+    created_at_ms        BIGINT NOT NULL,
+    reply_to_message_id  TEXT REFERENCES chat_messages(message_id) ON DELETE SET NULL,
+    recalled_at_ms       BIGINT,
+    sender_type          TEXT NOT NULL DEFAULT 'user' CHECK (sender_type IN ('user', 'agent')),
+    sender_agent_id      TEXT REFERENCES agents(agent_id) ON DELETE CASCADE,
+    agent_session_id     TEXT
+);
+
+CREATE INDEX idx_chat_messages_conversation_created
+    ON chat_messages(conversation_id, created_at_ms DESC);
+CREATE INDEX idx_chat_messages_reply_to
+    ON chat_messages(reply_to_message_id)
+    WHERE reply_to_message_id IS NOT NULL;
+CREATE INDEX idx_chat_messages_agent_session
+    ON chat_messages(agent_session_id)
     WHERE agent_session_id IS NOT NULL;
+
+CREATE TABLE chat_message_mentions (
+    message_id            TEXT NOT NULL REFERENCES chat_messages(message_id) ON DELETE CASCADE,
+    mentioned_account_id  TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    PRIMARY KEY (message_id, mentioned_account_id)
+);
+
+CREATE INDEX idx_chat_message_mentions_account
+    ON chat_message_mentions(mentioned_account_id, message_id);
 
 CREATE TABLE conversation_reads (
     conversation_id  TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
@@ -201,12 +253,6 @@ CREATE TABLE conversation_deletions (
 CREATE INDEX idx_conversation_deletions_account
     ON conversation_deletions(account_id, deleted_at_ms DESC);
 
-CREATE TABLE message_mentions (
-    message_id            TEXT NOT NULL REFERENCES conversation_messages(message_id) ON DELETE CASCADE,
-    mentioned_account_id  TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    PRIMARY KEY (message_id, mentioned_account_id)
-);
-
 CREATE TYPE agent_session_status AS ENUM ('pending', 'running', 'stopping', 'stopped', 'ended', 'failed');
 
 CREATE TABLE agent_sessions (
@@ -214,7 +260,8 @@ CREATE TABLE agent_sessions (
     conversation_id          TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
     project_id               TEXT REFERENCES projects(project_id) ON DELETE SET NULL,
     host_installation_id     TEXT REFERENCES device_installations(installation_id) ON DELETE SET NULL,
-    agent_id                 TEXT NOT NULL REFERENCES agents(agent_id),
+    -- Optional cloud agent id (host-runtime or user agent); matches SQLite nullability.
+    agent_id                 TEXT REFERENCES agents(agent_id) ON DELETE SET NULL,
     status                   agent_session_status NOT NULL,
     started_at_ms            BIGINT NOT NULL,
     ended_at_ms              BIGINT,
@@ -278,6 +325,63 @@ CREATE INDEX idx_approval_session_state
     ON approval_requests(agent_session_id, state);
 CREATE INDEX idx_approval_deadline_state
     ON approval_requests(deadline_at_ms, state);
+
+-- Host ingest thread ledger (aligned with SQLite; used by TurnCompletionProjector).
+CREATE TABLE sessions (
+    session_id        TEXT PRIMARY KEY,
+    agent             TEXT NOT NULL CHECK (agent IN ('codex', 'claude', 'gemini', 'opencode', 'grok')),
+    owner_device_id   TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
+    title             TEXT,
+    first_ts_ms       BIGINT NOT NULL,
+    last_ts_ms        BIGINT NOT NULL,
+    ended_at_ms       BIGINT,
+    end_reason        TEXT,
+    message_count     INT NOT NULL DEFAULT 0,
+    project_id        TEXT REFERENCES projects(project_id) ON DELETE SET NULL
+);
+
+CREATE INDEX idx_sessions_last_ts ON sessions(last_ts_ms DESC);
+CREATE INDEX idx_sessions_owner
+    ON sessions(owner_device_id, last_ts_ms DESC);
+CREATE INDEX idx_sessions_project_last
+    ON sessions(project_id, last_ts_ms DESC)
+    WHERE project_id IS NOT NULL;
+
+CREATE TABLE raw_events (
+    host_device_id   TEXT NOT NULL DEFAULT '',
+    session_id       TEXT NOT NULL,
+    seq              BIGINT NOT NULL,
+    event_id         TEXT NOT NULL DEFAULT '',
+    kind             TEXT NOT NULL DEFAULT 'agent_event',
+    agent            TEXT NOT NULL CHECK (agent IN ('codex', 'claude', 'gemini', 'opencode', 'grok')),
+    payload_json     TEXT NOT NULL,
+    ts_ms            BIGINT NOT NULL,
+    checksum_sha256  TEXT NOT NULL DEFAULT '',
+    byte_len         BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (host_device_id, session_id, seq)
+);
+
+CREATE INDEX idx_raw_events_thread_seq
+    ON raw_events(session_id, seq);
+CREATE UNIQUE INDEX idx_raw_events_event_id
+    ON raw_events(event_id)
+    WHERE event_id <> '';
+
+CREATE TABLE thread_sync_state (
+    host_device_id       TEXT NOT NULL,
+    session_id           TEXT NOT NULL,
+    backend_acked_seq    BIGINT NOT NULL DEFAULT 0,
+    local_from_seq       BIGINT,
+    local_to_seq         BIGINT,
+    missing_ranges_json  TEXT NOT NULL DEFAULT '[]',
+    bytes                BIGINT NOT NULL DEFAULT 0,
+    event_count          BIGINT NOT NULL DEFAULT 0,
+    first_ts_ms          BIGINT NOT NULL DEFAULT 0,
+    last_ts_ms           BIGINT NOT NULL DEFAULT 0,
+    running              BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at_ms        BIGINT NOT NULL,
+    PRIMARY KEY (host_device_id, session_id)
+);
 
 CREATE TYPE host_command_status AS ENUM ('pending', 'acked', 'succeeded', 'failed');
 

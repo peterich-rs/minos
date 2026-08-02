@@ -349,6 +349,123 @@ pub async fn ensure_group_conversation_with_id(
         })
 }
 
+/// Create or update a group conversation with a client-owned id (Desktop → Hub).
+///
+/// - Missing: create with title + members (includes creator).
+/// - Existing: update title, ensure membership for creator + `member_account_ids`.
+///
+/// Does not delete messages or remove existing members.
+pub async fn upsert_group_conversation(
+    store: &impl AsStorePool,
+    conversation_id: &str,
+    creator_account_id: &str,
+    title: &str,
+    member_account_ids: &[String],
+    now_ms: i64,
+) -> Result<ConversationRow, BackendError> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(BackendError::StoreQuery {
+            operation: "social::upsert_group_conversation.title".into(),
+            message: "group title is required".into(),
+        });
+    }
+
+    let mut members = member_account_ids.to_vec();
+    if !members.iter().any(|m| m == creator_account_id) {
+        members.push(creator_account_id.to_string());
+    }
+    members.sort();
+    members.dedup();
+
+    if get_conversation(store, conversation_id).await?.is_some() {
+        match store.as_store_pool() {
+            StorePoolRef::Sqlite(pool) => {
+                let mut tx = pool
+                    .begin()
+                    .await
+                    .map_err(store_err("social::upsert_group_conversation.begin"))?;
+                sqlx::query(
+                    "UPDATE conversations
+                        SET title = ?, updated_at_ms = ?
+                      WHERE conversation_id = ?",
+                )
+                .bind(title)
+                .bind(now_ms)
+                .bind(conversation_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(store_err("social::upsert_group_conversation.update_title"))?;
+                for member in &members {
+                    sqlx::query(
+                        "INSERT OR IGNORE INTO conversation_members (conversation_id, account_id, joined_at_ms)
+                         VALUES (?, ?, ?)",
+                    )
+                    .bind(conversation_id)
+                    .bind(member)
+                    .bind(now_ms)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(store_err("social::upsert_group_conversation.insert_member"))?;
+                }
+                tx.commit()
+                    .await
+                    .map_err(store_err("social::upsert_group_conversation.commit"))?;
+            }
+            StorePoolRef::Postgres(pool) => {
+                let mut tx = pool
+                    .begin()
+                    .await
+                    .map_err(store_err("social::upsert_group_conversation.begin"))?;
+                sqlx::query(
+                    "UPDATE conversations
+                        SET title = $1, updated_at_ms = $2
+                      WHERE conversation_id = $3",
+                )
+                .bind(title)
+                .bind(now_ms)
+                .bind(conversation_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(store_err("social::upsert_group_conversation.update_title"))?;
+                for member in &members {
+                    sqlx::query(
+                        "INSERT INTO conversation_members (conversation_id, account_id, joined_at_ms)
+                         VALUES ($1, $2, $3)
+                         ON CONFLICT DO NOTHING",
+                    )
+                    .bind(conversation_id)
+                    .bind(member)
+                    .bind(now_ms)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(store_err("social::upsert_group_conversation.insert_member"))?;
+                }
+                tx.commit()
+                    .await
+                    .map_err(store_err("social::upsert_group_conversation.commit"))?;
+            }
+        }
+    } else {
+        ensure_group_conversation_with_id(
+            store,
+            conversation_id,
+            creator_account_id,
+            title,
+            &members,
+            now_ms,
+        )
+        .await?;
+    }
+
+    get_conversation(store, conversation_id)
+        .await?
+        .ok_or_else(|| BackendError::StoreQuery {
+            operation: "social::upsert_group_conversation.load".into(),
+            message: "conversation missing after upsert".into(),
+        })
+}
+
 pub async fn get_conversation(
     store: &impl AsStorePool,
     conversation_id: &str,

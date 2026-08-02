@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -10,9 +11,9 @@ import 'package:minos/application/thread_commands.dart';
 import 'package:minos/application/ui_state_providers.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:minos/ui/core/widgets/error_feedback.dart';
+import 'package:minos/ui/core/widgets/minos_toast.dart';
 import 'package:minos/ui/features/chat/views/thread_view_page.dart';
 import 'package:minos/ui/features/shell/router.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
 
 /// Discord-style project detail page.
 /// Shows a sidebar-like thread/channel list on the left with the project name
@@ -176,7 +177,7 @@ class ProjectDetailPage extends ConsumerWidget {
         'project thread deleted projectId=$projectId sessionId=$sessionId',
       );
       if (!context.mounted) return;
-      ShadToaster.maybeOf(context)?.show(const ShadToast(title: Text('会话已删除')));
+      showMinosToast(context, title: '会话已删除');
     } catch (error) {
       if (!context.mounted) return;
       showLoggedErrorToast(
@@ -234,7 +235,7 @@ class _ChannelSidebar extends ConsumerWidget {
                 GestureDetector(
                   onTap: () => Navigator.of(context).maybePop(),
                   child: Icon(
-                    LucideIcons.chevronLeft,
+                    CupertinoIcons.chevron_back,
                     size: 20,
                     color: colorScheme.onSurface,
                   ),
@@ -251,7 +252,7 @@ class _ChannelSidebar extends ConsumerWidget {
                   ),
                 ),
                 IconButton(
-                  icon: const Icon(LucideIcons.plus, size: 20),
+                  icon: const Icon(CupertinoIcons.plus, size: 20),
                   onPressed: onNewThread,
                   tooltip: '新建会话',
                 ),
@@ -264,7 +265,11 @@ class _ChannelSidebar extends ConsumerWidget {
             padding: const .fromLTRB(16, 16, 16, 8),
             child: Row(
               children: [
-                Icon(LucideIcons.hash, size: 14, color: colorScheme.outline),
+                Icon(
+                  CupertinoIcons.number,
+                  size: 14,
+                  color: colorScheme.outline,
+                ),
                 const SizedBox(width: 6),
                 Text(
                   '会话',
@@ -334,7 +339,7 @@ class _ChannelSidebar extends ConsumerWidget {
                                 borderRadius: .circular(6),
                               ),
                               child: Icon(
-                                LucideIcons.trash2,
+                                CupertinoIcons.trash,
                                 size: 16,
                                 color: Theme.of(context).colorScheme.error,
                               ),
@@ -399,7 +404,7 @@ class _ThreadChannelTile extends StatelessWidget {
             child: Row(
               children: [
                 Icon(
-                  isEnded ? LucideIcons.messageSquare : LucideIcons.hash,
+                  isEnded ? CupertinoIcons.chat_bubble : CupertinoIcons.number,
                   size: 16,
                   color: isSelected ? colorScheme.primary : colorScheme.outline,
                 ),
@@ -473,7 +478,7 @@ class _EmptyThreads extends StatelessWidget {
         mainAxisSize: .min,
         children: [
           Icon(
-            LucideIcons.messageSquarePlus,
+            CupertinoIcons.square_pencil,
             size: 48,
             color: Theme.of(context).colorScheme.outline,
           ),
@@ -487,7 +492,7 @@ class _EmptyThreads extends StatelessWidget {
           const SizedBox(height: 16),
           TextButton.icon(
             onPressed: onNewThread,
-            icon: const Icon(LucideIcons.plus, size: 16),
+            icon: const Icon(CupertinoIcons.plus, size: 16),
             label: const Text('新建会话'),
           ),
         ],
@@ -506,7 +511,7 @@ class _NoThreadSelected extends StatelessWidget {
         mainAxisSize: .min,
         children: [
           Icon(
-            LucideIcons.messageSquare,
+            CupertinoIcons.chat_bubble,
             size: 48,
             color: Theme.of(context).colorScheme.outline,
           ),

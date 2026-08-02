@@ -1200,14 +1200,54 @@ async fn ensure_formal_session_for_host_ingest(
     )
     .await?;
 
-    let agent_id = format!("agent_{}", chunk.agent.bin_name());
+    // Prefer cloud host-runtime agent id so Mobile roster + session match.
+    let runtime = chunk.agent.bin_name();
+    let cloud_agent_id = match social::ensure_host_runtime_agent(
+        &state.store,
+        &creator,
+        runtime,
+        &{
+            let mut chars = runtime.chars();
+            match chars.next() {
+                Some(c) => format!("{}{}", c.to_uppercase(), chars.as_str()),
+                None => runtime.to_string(),
+            }
+        },
+        "",
+        None,
+        now_ms,
+    )
+    .await
+    {
+        Ok(agent) => {
+            let _ = social::add_agent_to_conversation(
+                &state.store,
+                &conv_id,
+                &agent.agent_id,
+                &creator,
+                now_ms,
+            )
+            .await;
+            agent.agent_id
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "minos_backend::realtime::gateway",
+                error = %error,
+                runtime = %runtime,
+                "failed to ensure host-runtime agent for formal session; using synthetic id",
+            );
+            format!("agent_{runtime}")
+        }
+    };
+
     match agent_sessions::create(
         &state.store,
         &chunk.session_id,
         &conv_id,
         None,
         Some(&upgrade.device_id.to_string()),
-        Some(&agent_id),
+        Some(&cloud_agent_id),
         "running",
         now_ms,
         None,
@@ -1220,6 +1260,7 @@ async fn ensure_formal_session_for_host_ingest(
                 session_id = %chunk.session_id,
                 conversation_id = %conv_id,
                 host_device_id = %upgrade.device_id,
+                agent_id = %cloud_agent_id,
                 "auto-registered formal agent session from host ingest",
             );
             Ok(Some(row))

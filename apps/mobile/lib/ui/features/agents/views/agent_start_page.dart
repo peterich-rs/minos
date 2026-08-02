@@ -11,10 +11,12 @@ import 'package:minos/application/ui_state_providers.dart';
 import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:minos/ui/core/widgets/error_feedback.dart';
+import 'package:minos/ui/core/widgets/minos_button.dart';
+import 'package:minos/ui/core/widgets/minos_progress.dart';
 import 'package:minos/ui/features/agents/views/agents_hub_page.dart'
     show AgentEditorSheet;
 import 'package:minos/ui/features/shell/router.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
+import 'package:minos/ui/theme/theme.dart';
 
 class AgentStartPage extends ConsumerWidget {
   const AgentStartPage({super.key});
@@ -28,16 +30,16 @@ class AgentStartPage extends ConsumerWidget {
         ref.watch(runtimeAgentDescriptorsProvider).asData?.value ??
         const <AgentDescriptor>[];
     final pageState = ref.watch(agentStartPageStateControllerProvider);
-    final shadTheme = ShadTheme.of(context);
+    final colors = context.minosColors;
 
     return Scaffold(
-      backgroundColor: shadTheme.colorScheme.background,
+      backgroundColor: colors.canvas,
       appBar: AppBar(
         title: const Text('开始 Agent 对话'),
         surfaceTintColor: Colors.transparent,
       ),
       body: profilesAsync.when(
-        loading: () => const Center(child: ShadProgress()),
+        loading: () => const Center(child: MinosProgress()),
         error: (error, _) => _AgentStartError(
           error: error,
           onRetry: () => ref.invalidate(agentProfilesControllerProvider),
@@ -60,14 +62,14 @@ class AgentStartPage extends ConsumerWidget {
               children: <Widget>[
                 Text(
                   '先选择一个现有 Agent，然后创建一条新的对话。',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: colors.textSecondary),
                 ),
                 const SizedBox(height: 16),
                 _PickerSection(
                   title: 'Agent',
-                  trailing: ShadButton.ghost(
+                  trailing: MinosButton.ghost(
                     onPressed: () => _openEditor(
                       context,
                       hosts: hosts,
@@ -117,7 +119,7 @@ class AgentStartPage extends ConsumerWidget {
                         ),
                 ),
                 const SizedBox(height: 20),
-                ShadButton(
+                MinosButton(
                   onPressed: selectedProfile == null || pageState.isSubmitting
                       ? null
                       : () =>
@@ -229,7 +231,7 @@ class _AgentStartError extends StatelessWidget {
           children: <Widget>[
             Text('加载 Agent 失败: $error', textAlign: .center),
             const SizedBox(height: 12),
-            ShadButton(onPressed: onRetry, child: const Text('重试')),
+            MinosButton(onPressed: onRetry, child: const Text('重试')),
           ],
         ),
       ),
@@ -313,7 +315,7 @@ class _EmptySelectionState extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          ShadButton(onPressed: onAction, child: Text(actionLabel)),
+          MinosButton(onPressed: onAction, child: Text(actionLabel)),
         ],
       ),
     );

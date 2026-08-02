@@ -1,5 +1,5 @@
 /**
- * Minos backend HTTP client for Desktop account session + Host Link.
+ * Minos backend HTTP client for Desktop account session + host cloud bind.
  *
  * Mirrors `apps/web/src/lib/minos.ts` auth/host paths (D01 dual session,
  * D02 same-account host link). Device role is `desktop-console`.
@@ -52,9 +52,12 @@ export class MinosCloudError extends Error {
 }
 
 export function backendHttpBase(): string {
-  const raw =
-    (import.meta.env.VITE_MINOS_BACKEND_URL as string | undefined) ??
-    DEFAULT_BACKEND_URL;
+  // import.meta.env is Vite-only; node:test has no env bag.
+  const viteEnv =
+    typeof import.meta !== "undefined"
+      ? (import.meta as { env?: { VITE_MINOS_BACKEND_URL?: string } }).env
+      : undefined;
+  const raw = viteEnv?.VITE_MINOS_BACKEND_URL ?? DEFAULT_BACKEND_URL;
   return raw.replace(/\/+$/, "");
 }
 
@@ -248,4 +251,376 @@ export async function listHosts(
     online: h.online,
     lastSeenAtMs: h.last_seen_at_ms ?? 0,
   }));
+}
+
+// ─── Multi-end IM (Desktop workbench → Hub) ─────────────────────────────
+
+export async function upsertConversation(
+  deviceId: string,
+  accessToken: string,
+  input: {
+    conversationId: string;
+    title: string;
+    memberAccountIds?: string[];
+    agentIds?: string[];
+  },
+): Promise<{ conversationId: string }> {
+  return requestJson<{ conversation_id: string }>("/v1/conversations/upsert", {
+    method: "POST",
+    headers: deviceHeaders(deviceId, accessToken),
+    body: JSON.stringify({
+      conversation_id: input.conversationId,
+      title: input.title,
+      member_account_ids: input.memberAccountIds ?? [],
+      agent_ids: input.agentIds ?? [],
+    }),
+  }).then((r) => ({ conversationId: r.conversation_id }));
+}
+
+export async function sendConversationMessage(
+  deviceId: string,
+  accessToken: string,
+  conversationId: string,
+  input: {
+    text: string;
+    clientMessageId?: string;
+    replyToMessageId?: string;
+    /** Client clock for display/debug only (not ordering authority). */
+    clientSentAtMs?: number;
+    /** @deprecated Prefer clientSentAtMs. */
+    createdAtMs?: number;
+    /**
+     * host_projection = dual-write of already-run Host messages (no agent dispatch).
+     * Defaults server-side to client_live.
+     */
+    messageSource?: "client_live" | "host_projection" | "system";
+  },
+): Promise<{ messageId: string }> {
+  const body: Record<string, unknown> = { text: input.text };
+  if (input.clientMessageId) body.client_message_id = input.clientMessageId;
+  if (input.replyToMessageId) body.reply_to_message_id = input.replyToMessageId;
+  if (input.messageSource) body.message_source = input.messageSource;
+  const clientTs = input.clientSentAtMs ?? input.createdAtMs;
+  if (clientTs != null && clientTs > 0) {
+    body.client_sent_at_ms = clientTs;
+  }
+  const resp = await requestJson<{ message_id: string }>(
+    `/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
+    {
+      method: "POST",
+      headers: deviceHeaders(deviceId, accessToken),
+      body: JSON.stringify(body),
+    },
+  );
+  return { messageId: resp.message_id };
+}
+
+export type CloudAgentSummary = {
+  agentId: string;
+  ownerAccountId: string;
+  name: string;
+  description: string;
+  runtimeAgent: string;
+  model: string;
+  workspacePath?: string | null;
+  createdAtMs: number;
+  updatedAtMs: number;
+};
+
+function mapAgentSummary(raw: {
+  agent_id: string;
+  owner_account_id: string;
+  name: string;
+  description: string;
+  runtime_agent: string;
+  model: string;
+  workspace_path?: string | null;
+  created_at_ms: number;
+  updated_at_ms: number;
+}): CloudAgentSummary {
+  return {
+    agentId: raw.agent_id,
+    ownerAccountId: raw.owner_account_id,
+    name: raw.name,
+    description: raw.description,
+    runtimeAgent: raw.runtime_agent,
+    model: raw.model,
+    workspacePath: raw.workspace_path,
+    createdAtMs: raw.created_at_ms,
+    updatedAtMs: raw.updated_at_ms,
+  };
+}
+
+/** List cloud agents owned by the account. */
+export async function listCloudAgents(
+  deviceId: string,
+  accessToken: string,
+): Promise<CloudAgentSummary[]> {
+  const resp = await requestJson<{ agents: Array<Parameters<typeof mapAgentSummary>[0]> }>(
+    "/v1/agents/query",
+    {
+      method: "POST",
+      headers: deviceHeaders(deviceId, accessToken),
+      body: JSON.stringify({}),
+    },
+  );
+  return (resp.agents ?? []).map(mapAgentSummary);
+}
+
+/**
+ * Ensure a stable Host/Desktop runtime agent exists for local bin → cloud id.
+ * Idempotent per (account, runtime_agent) with description `minos:host-runtime`.
+ */
+export async function ensureHostRuntimeAgent(
+  deviceId: string,
+  accessToken: string,
+  input: {
+    runtimeAgent: string;
+    name?: string;
+    model?: string;
+    workspacePath?: string | null;
+  },
+): Promise<CloudAgentSummary> {
+  const raw = await requestJson<Parameters<typeof mapAgentSummary>[0]>(
+    "/v1/agents/ensure-host-runtime",
+    {
+      method: "POST",
+      headers: deviceHeaders(deviceId, accessToken),
+      body: JSON.stringify({
+        runtime_agent: input.runtimeAgent,
+        name: input.name,
+        model: input.model ?? "",
+        workspace_path: input.workspacePath ?? undefined,
+      }),
+    },
+  );
+  return mapAgentSummary(raw);
+}
+
+export async function addAgentToConversation(
+  deviceId: string,
+  accessToken: string,
+  conversationId: string,
+  agentId: string,
+): Promise<void> {
+  await requestJson<void>(
+    `/v1/conversations/${encodeURIComponent(conversationId)}/agents/add`,
+    {
+      method: "POST",
+      headers: deviceHeaders(deviceId, accessToken),
+      body: JSON.stringify({ agent_id: agentId }),
+    },
+  );
+}
+
+export type HubChatMessage = {
+  messageId: string;
+  conversationId: string;
+  text: string;
+  createdAtMs: number;
+  senderType: "user" | "agent";
+  senderAccountId: string;
+  senderMinosId: string;
+  senderDisplayName: string;
+  replyToMessageId?: string | null;
+  recalledAtMs?: number | null;
+};
+
+function mapHubChatMessage(raw: {
+  message_id: string;
+  conversation_id: string;
+  text: string;
+  created_at_ms: number;
+  sender_type?: string;
+  sender: {
+    account_id: string;
+    minos_id: string;
+    display_name: string;
+  };
+  reply_to?: { message_id: string } | null;
+  recalled_at_ms?: number | null;
+}): HubChatMessage {
+  return {
+    messageId: raw.message_id,
+    conversationId: raw.conversation_id,
+    text: raw.text,
+    createdAtMs: raw.created_at_ms,
+    senderType: raw.sender_type === "agent" ? "agent" : "user",
+    senderAccountId: raw.sender.account_id,
+    senderMinosId: raw.sender.minos_id,
+    senderDisplayName: raw.sender.display_name,
+    replyToMessageId: raw.reply_to?.message_id ?? null,
+    recalledAtMs: raw.recalled_at_ms ?? null,
+  };
+}
+
+/** Page result for Hub cold-path messages/query (gap fill / older pages). */
+export type HubMessagePage = {
+  messages: HubChatMessage[];
+  /** Cursor for next older page; null when no more history. */
+  nextBeforeTsMs: number | null;
+};
+
+/**
+ * Cold-read hub conversation timeline (Mobile / multi-end).
+ * Gap API: `before_ts_ms` pages older (ASC-of-page is newest-first from server).
+ * `after_seq` / `before_seq` not yet on wire — use timestamps + Durable resume.
+ */
+export async function listHubConversationMessages(
+  deviceId: string,
+  accessToken: string,
+  conversationId: string,
+  opts?: { beforeTsMs?: number; limit?: number },
+): Promise<HubMessagePage> {
+  const resp = await requestJson<{
+    messages: Array<Parameters<typeof mapHubChatMessage>[0]>;
+    next_before_ts_ms?: number | null;
+  }>(
+    `/v1/conversations/${encodeURIComponent(conversationId)}/messages/query`,
+    {
+      method: "POST",
+      headers: deviceHeaders(deviceId, accessToken),
+      body: JSON.stringify({
+        before_ts_ms: opts?.beforeTsMs,
+        limit: opts?.limit ?? 100,
+      }),
+    },
+  );
+  const messages = (resp.messages ?? []).map(mapHubChatMessage);
+  return {
+    messages,
+    // Server sets next_before only when page was full (more older rows).
+    nextBeforeTsMs:
+      resp.next_before_ts_ms === undefined
+        ? null
+        : resp.next_before_ts_ms,
+  };
+}
+
+/** Hub mark-read (Linked inbox unread). */
+export async function markHubConversationRead(
+  deviceId: string,
+  accessToken: string,
+  conversationId: string,
+): Promise<{ lastReadAtMs: number | null }> {
+  const resp = await requestJson<{ last_read_at_ms?: number | null }>(
+    `/v1/conversations/${encodeURIComponent(conversationId)}/read`,
+    {
+      method: "POST",
+      headers: deviceHeaders(deviceId, accessToken),
+      body: JSON.stringify({}),
+    },
+  );
+  return { lastReadAtMs: resp.last_read_at_ms ?? null };
+}
+
+/** Hub multi-end recall (sender within window). */
+export async function recallHubMessage(
+  deviceId: string,
+  accessToken: string,
+  conversationId: string,
+  messageId: string,
+): Promise<HubChatMessage> {
+  const resp = await requestJson<Parameters<typeof mapHubChatMessage>[0]>(
+    `/v1/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/recall`,
+    {
+      method: "POST",
+      headers: deviceHeaders(deviceId, accessToken),
+      body: JSON.stringify({}),
+    },
+  );
+  return mapHubChatMessage(resp);
+}
+
+export async function createWsTicket(
+  deviceId: string,
+  accessToken: string,
+): Promise<{ ticket: string; gatewayUrl: string; expiresAtMs: number }> {
+  // Backend wraps as { data: { ticket, gateway_url, expires_at_ms }, meta }.
+  const envelope = await requestJson<{
+    data: {
+      ticket: string;
+      gateway_url: string;
+      expires_at_ms: number;
+    };
+  }>("/v1/realtime/ws-ticket", {
+    method: "POST",
+    headers: deviceHeaders(deviceId, accessToken),
+    body: JSON.stringify({ installation_id: deviceId }),
+  });
+  const data = envelope.data;
+  // gateway_url is often a path like `/ws/client?ticket=…` (ticket already embedded).
+  return {
+    ticket: data.ticket,
+    gatewayUrl: data.gateway_url,
+    expiresAtMs: data.expires_at_ms,
+  };
+}
+
+/** Absolute WS URL for formal client gateway from ticket response + HTTP base. */
+export function hubClientWsUrl(gatewayUrl: string, ticket: string): string {
+  const httpBase = backendHttpBase();
+  let pathOrUrl = gatewayUrl.trim();
+  // Relative path → absolute against backend origin.
+  if (pathOrUrl.startsWith("/")) {
+    const origin = httpBase
+      .replace(/^https:/i, "wss:")
+      .replace(/^http:/i, "ws:");
+    pathOrUrl = `${origin.replace(/\/+$/, "")}${pathOrUrl}`;
+  } else if (pathOrUrl.startsWith("https://")) {
+    pathOrUrl = `wss://${pathOrUrl.slice("https://".length)}`;
+  } else if (pathOrUrl.startsWith("http://")) {
+    pathOrUrl = `ws://${pathOrUrl.slice("http://".length)}`;
+  } else if (!pathOrUrl.startsWith("ws://") && !pathOrUrl.startsWith("wss://")) {
+    const origin = httpBase
+      .replace(/^https:/i, "wss:")
+      .replace(/^http:/i, "ws:");
+    pathOrUrl = `${origin.replace(/\/+$/, "")}/ws/client?ticket=${encodeURIComponent(ticket)}`;
+  }
+  // If ticket not already in query, append it.
+  if (!/[?&]ticket=/.test(pathOrUrl)) {
+    const sep = pathOrUrl.includes("?") ? "&" : "?";
+    pathOrUrl = `${pathOrUrl}${sep}ticket=${encodeURIComponent(ticket)}`;
+  }
+  return pathOrUrl;
+}
+
+/** Dual-write an agent chat bubble (idempotent via client_message_id). */
+export async function sendAgentConversationMessage(
+  deviceId: string,
+  accessToken: string,
+  conversationId: string,
+  input: {
+    agentId: string;
+    text: string;
+    clientMessageId?: string;
+    replyToMessageId?: string | null;
+    agentSessionId?: string | null;
+    clientSentAtMs?: number;
+    /** @deprecated Prefer clientSentAtMs. */
+    createdAtMs?: number;
+    messageSource?: "client_live" | "host_projection" | "system";
+  },
+): Promise<{ messageId: string }> {
+  const body: Record<string, unknown> = {
+    agent_id: input.agentId,
+    text: input.text,
+  };
+  if (input.clientMessageId) body.client_message_id = input.clientMessageId;
+  if (input.replyToMessageId) body.reply_to_message_id = input.replyToMessageId;
+  if (input.agentSessionId) body.agent_session_id = input.agentSessionId;
+  if (input.messageSource) body.message_source = input.messageSource;
+  const clientTs = input.clientSentAtMs ?? input.createdAtMs;
+  if (clientTs != null && clientTs > 0) {
+    body.client_sent_at_ms = clientTs;
+  }
+  const resp = await requestJson<{ message_id: string }>(
+    `/v1/conversations/${encodeURIComponent(conversationId)}/agents/message`,
+    {
+      method: "POST",
+      headers: deviceHeaders(deviceId, accessToken),
+      body: JSON.stringify(body),
+    },
+  );
+  return { messageId: resp.message_id };
 }

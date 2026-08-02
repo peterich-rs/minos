@@ -19,6 +19,8 @@ pub struct StartAgentSessionInput {
     pub initial_user_message: Option<String>,
     pub client_request_id: String,
     pub caller_account_id: String,
+    /// Optional display title for Host local conversation upsert.
+    pub conversation_title: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

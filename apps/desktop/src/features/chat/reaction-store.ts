@@ -1,3 +1,14 @@
+/**
+ * Desktop message reactions (local-device store).
+ *
+ * ## Phase 5.2 — no multi-end reaction SSOT
+ *
+ * Hub has **no** cloud reaction API yet (`POST …/reactions/toggle` not shipped).
+ * Linked Hub chat bubbles must **not** dual-write reactions or pretend cross-device
+ * sync: toggles persist only via local daemon SQLite for Host-local message ids.
+ * When a Hub reaction API lands, Linked conversations should switch to Hub and
+ * retire local aggregates for those message ids (latest-only, no dual SSOT).
+ */
 import { create } from "zustand";
 import { daemonApi, isTauriRuntime } from "@/shared/lib/daemon";
 import { toast } from "@/shared/lib/toast";
@@ -56,8 +67,8 @@ type ReactionState = {
   ) => void;
   /**
    * Toggle emoji for the current user.
-   * Optimistic update; when durableMode + Tauri, persists via daemon RPC
-   * and replaces with server groups (rollback + toast on failure).
+   * Optimistic update; when durableMode + Tauri, persists via **local daemon**
+   * RPC only (not Hub). Multi-end reaction SSOT is deferred until cloud API.
    * Apply/rollback are generation-gated so only the latest toggle wins.
    */
   toggleReaction: (messageId: string, emoji: string) => void;

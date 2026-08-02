@@ -12,6 +12,7 @@ import { daemonApi } from "@/shared/lib/daemon";
 import { singleFlightLoad } from "@/shared/lib/desktop-inflight";
 import { minosQueryClient } from "@/shared/api/queryClient";
 import { queryKeys } from "@/shared/api/queryKeys";
+import { syncConversationToCloud } from "@/shared/lib/im-cloud-sync";
 
 
 export function createConversationListActions(
@@ -90,6 +91,20 @@ export function createConversationListActions(
               conversations,
             ),
           }));
+
+          // Multi-end IM: backfill conversation shells + agent roster to hub
+          // so Mobile inbox lists Desktop work conversations (messages project
+          // on timeline open / agent-result). Best-effort; never block list.
+          if (!quiet) {
+            for (const row of list) {
+              if (!row.id || !row.title?.trim()) continue;
+              void syncConversationToCloud({
+                conversationId: row.id,
+                title: row.title,
+                agentRuntimes: row.participatingAgents,
+              });
+            }
+          }
         } catch (e) {
           if (isStale()) return;
           const message = e instanceof Error ? e.message : String(e);

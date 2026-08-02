@@ -170,6 +170,7 @@ async fn start_session(
             initial_user_message: request.initial_user_message,
             client_request_id: request.client_request_id,
             caller_account_id: account_id,
+            conversation_title: None,
         })
         .await
         .map_err(map_agent_session_error)?;
@@ -324,12 +325,18 @@ fn agent_session_summary_response(
 }
 
 fn agent_name_from_agent_id(agent_id: &str) -> Option<AgentName> {
-    match agent_id {
-        "agent_codex" | "codex" => Some(AgentName::Codex),
-        "agent_claude" | "claude" => Some(AgentName::Claude),
-        "agent_gemini" | "gemini" => Some(AgentName::Gemini),
-        "agent_opencode" | "opencode" => Some(AgentName::Opencode),
-        "agent_grok" | "grok" => Some(AgentName::Grok),
+    // Synthetic host ids (`agent_codex`) + bare runtimes. Cloud host-runtime
+    // agents use `bot-*` ids; agent name then comes from thread summary.
+    let key = agent_id
+        .strip_prefix("agent_")
+        .unwrap_or(agent_id)
+        .to_ascii_lowercase();
+    match key.as_str() {
+        "codex" => Some(AgentName::Codex),
+        "claude" => Some(AgentName::Claude),
+        "gemini" => Some(AgentName::Gemini),
+        "opencode" => Some(AgentName::Opencode),
+        "grok" => Some(AgentName::Grok),
         _ => None,
     }
 }
