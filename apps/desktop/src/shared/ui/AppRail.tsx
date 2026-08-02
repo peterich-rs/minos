@@ -199,7 +199,7 @@ export function AppRailProjectRow({
 
 export function AppRailAccountFooter({
   email,
-  statusLabel = "Linked · cloud",
+  statusLabel = "Online",
   onSignOut,
   extra,
 }: {

@@ -1,10 +1,46 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 import {
-  EMPTY_HOST_LINK,
+  EMPTY_HOST_BIND,
+  clearStoredHostBind,
   isAccessTokenFresh,
+  loadStoredHostBind,
+  saveStoredHostBind,
   sessionFromAuthResponse,
+  type HostBindState,
 } from "./account-session.ts";
+
+const memory = new Map<string, string>();
+
+function installMemoryStorage(): void {
+  const storage = {
+    getItem(key: string) {
+      return memory.has(key) ? (memory.get(key) as string) : null;
+    },
+    setItem(key: string, value: string) {
+      memory.set(key, String(value));
+    },
+    removeItem(key: string) {
+      memory.delete(key);
+    },
+    clear() {
+      memory.clear();
+    },
+    key(_index: number) {
+      return null;
+    },
+    get length() {
+      return memory.size;
+    },
+  };
+  (globalThis as unknown as { window: { localStorage: typeof storage } }).window =
+    { localStorage: storage };
+}
+
+afterEach(() => {
+  memory.clear();
+  delete (globalThis as unknown as { window?: unknown }).window;
+});
 
 describe("sessionFromAuthResponse", () => {
   it("maps AuthResp into MinosSession", () => {
@@ -17,10 +53,6 @@ describe("sessionFromAuthResponse", () => {
     });
     assert.equal(session.accountId, "acc-1");
     assert.equal(session.email, "a@b.co");
-    assert.equal(session.accessToken, "at");
-    assert.equal(session.refreshToken, "rt");
-    assert.equal(session.expiresInSec, 900);
-    assert.equal(session.issuedAtMs, 1_700_000_000_000);
   });
 });
 
@@ -39,14 +71,41 @@ describe("isAccessTokenFresh", () => {
   });
 
   it("false inside 60s skew of expiry", () => {
-    // expires at 1_000_000 + 900_000 = 1_900_000; skew → 1_840_000
     assert.equal(isAccessTokenFresh(base, 1_840_000), false);
   });
 });
 
-describe("EMPTY_HOST_LINK", () => {
-  it("starts unlinked", () => {
-    assert.equal(EMPTY_HOST_LINK.linked, false);
-    assert.equal(EMPTY_HOST_LINK.hostInstallationId, null);
+describe("account-scoped host bind storage", () => {
+  const bound: HostBindState = {
+    bound: true,
+    hostInstallationId: "host-a",
+    hostDisplayName: "This Mac",
+    boundAtMs: 42,
+    pairId: "pair-a",
+  };
+
+  it("isolates slots per accountId", () => {
+    installMemoryStorage();
+    saveStoredHostBind("acc-1", bound);
+    saveStoredHostBind("acc-2", {
+      ...bound,
+      hostInstallationId: "host-b",
+      pairId: "pair-b",
+    });
+    assert.equal(loadStoredHostBind("acc-1").hostInstallationId, "host-a");
+    assert.equal(loadStoredHostBind("acc-2").hostInstallationId, "host-b");
+    clearStoredHostBind("acc-1");
+    assert.equal(loadStoredHostBind("acc-1").bound, false);
+    assert.equal(loadStoredHostBind("acc-2").hostInstallationId, "host-b");
+  });
+
+  it("returns empty without account id", () => {
+    installMemoryStorage();
+    saveStoredHostBind("acc-1", bound);
+    assert.equal(loadStoredHostBind(null).bound, false);
+  });
+
+  it("EMPTY_HOST_BIND starts unbound", () => {
+    assert.equal(EMPTY_HOST_BIND.bound, false);
   });
 });

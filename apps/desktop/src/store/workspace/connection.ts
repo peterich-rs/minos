@@ -8,7 +8,7 @@ import {
   KNOWN_AGENTS_FALLBACK,
   mockBundle,
   setBootstrapInFlight,
-  toUiProject,
+  toUiProjects,
 } from "./helpers";
 import { quietHydrateAllConversationLists } from "./projection";
 import { daemonApi, isTauriRuntime } from "@/shared/lib/daemon";
@@ -131,7 +131,7 @@ export function createConnectionActions(
           connection,
         });
 
-        const projects = (await daemonApi.listProjects()).map(toUiProject);
+        const projects = toUiProjects(await daemonApi.listProjects());
 
         set({ bootPhase: "Loading agents…", bootProgress: 72 });
         let clis = KNOWN_AGENTS_FALLBACK;
@@ -192,6 +192,11 @@ export function createConnectionActions(
         // §6.5: quietly hydrate ConversationList for all known projects so badge
         // aggregates (unread + approvalCount from DTO) cover the project index.
         void quietHydrateAllConversationLists(get);
+
+        // Hub IM bridge (Mobile → Desktop) if account already authenticated.
+        void import("@/shared/lib/im-hub-bridge").then(({ ensureImHubBridge }) =>
+          ensureImHubBridge(),
+        );
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         resetWorkspaceModuleState({
@@ -230,7 +235,7 @@ export function createConnectionActions(
   refreshProjects: async () => {
     if (get().source !== "daemon") return;
     try {
-      const projects = (await daemonApi.listProjects()).map(toUiProject);
+      const projects = toUiProjects(await daemonApi.listProjects());
       // Preserve aggregates computed from conversation lists.
       const prev = get().projects;
       const merged = projects.map((p) => {

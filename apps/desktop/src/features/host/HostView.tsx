@@ -1,16 +1,16 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Check,
   ChevronDown,
   Circle,
   Download,
-  Link2,
   LogOut,
   Palette,
   RefreshCw,
   Server,
-  Unlink,
   UserRound,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { useAccountStore } from "@/store/account-store";
@@ -31,7 +31,6 @@ import {
   PageHeader,
   PageHeaderPrimaryButton,
 } from "@/shared/ui/PageHeader";
-import { presentHostAccount } from "@/features/host/lib/host-account-presenter";
 import { backendHttpBase } from "@/shared/lib/minos-cloud";
 
 /**
@@ -54,7 +53,6 @@ export function HostView() {
   const refreshDaemonStatus = useWorkspaceStore((s) => s.refreshDaemonStatus);
   const [diagOpen, setDiagOpen] = useState(false);
 
-  // Poll hubOnline (live /ws/host) so Mobile device-online stays aligned.
   useEffect(() => {
     if (source !== "daemon") return;
     void refreshDaemonStatus();
@@ -63,6 +61,7 @@ export function HostView() {
     }, 5000);
     return () => window.clearInterval(id);
   }, [source, refreshDaemonStatus]);
+
   const {
     themeName,
     themes,
@@ -74,52 +73,25 @@ export function HostView() {
   } = useTheme();
 
   const session = useAccountStore((s) => s.session);
-  const hostLink = useAccountStore((s) => s.hostLink);
+  const hostBind = useAccountStore((s) => s.hostBind);
+  const cloudStatus = useAccountStore((s) => s.cloudStatus);
+  const cloudError = useAccountStore((s) => s.cloudError);
   const accountBusy = useAccountStore((s) => s.busy);
   const accountError = useAccountStore((s) => s.error);
   const signOut = useAccountStore((s) => s.signOut);
-  const linkThisMac = useAccountStore((s) => s.linkThisMac);
-  const unlinkThisMac = useAccountStore((s) => s.unlinkThisMac);
-  const isCloudConfigured = useAccountStore((s) => s.isCloudConfigured);
+  const retryCloud = useAccountStore((s) => s.retryCloudConnection);
 
   const daemonReady =
     source === "daemon" && connection?.connected === true;
-  const relayLinked = hostLink.linked === true;
 
-  const hubOnline = connection?.hubOnline;
   const presence = deriveHostPresence({
     source,
     daemonConnected: daemonReady,
-    relayLinked,
-    hubOnline,
+    cloud: session ? cloudStatus : "unknown",
   });
 
-  const accountVm = useMemo(
-    () =>
-      presentHostAccount({
-        signedIn: session != null,
-        email: session?.email ?? null,
-        daemonReady,
-        relayLinked,
-        hubOnline,
-        hostDisplayName: hostLink.hostDisplayName,
-        busy: accountBusy,
-        error: accountError,
-        cloudConfigured: isCloudConfigured(),
-      }),
-    [
-      session,
-      daemonReady,
-      relayLinked,
-      hubOnline,
-      hostLink.hostDisplayName,
-      accountBusy,
-      accountError,
-      isCloudConfigured,
-    ],
-  );
-
-  const lastError = connection?.error || error || actionError || null;
+  const lastError =
+    connection?.error || error || actionError || cloudError || accountError || null;
   const processLabel = !presence.runtimeReady
     ? "Not connected"
     : connection?.managed
@@ -130,16 +102,24 @@ export function HostView() {
     <div className="flex min-h-0 flex-1 flex-col bg-canvas-soft/40">
       <PageHeader
         title="Host"
-        description={`${PROJECT_HOST_THIS_MAC} · link this Mac for phone and web remote control`}
+        description={`${PROJECT_HOST_THIS_MAC} · signed-in Desktop is this machine's host`}
         badge={
           <span
             className={cn(
               "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-2xs font-medium",
-              presence.tone === "ready" && "bg-status-done/15 text-status-done",
+              presence.tone === "ready" &&
+                presence.cloud === "online" &&
+                "bg-status-done/15 text-status-done",
+              presence.tone === "ready" &&
+                presence.cloud === "offline" &&
+                "bg-status-failed/15 text-status-failed",
               presence.tone === "unavailable" &&
                 "bg-status-failed/15 text-status-failed",
-              presence.tone === "preview" &&
+              (presence.tone === "preview" || presence.tone === "connecting") &&
                 "bg-status-running/15 text-status-running",
+              presence.tone === "ready" &&
+                presence.cloud === "unknown" &&
+                "bg-surface-muted text-ink-muted",
             )}
           >
             <Circle
@@ -152,7 +132,12 @@ export function HostView() {
           </span>
         }
         action={
-          <PageHeaderPrimaryButton onClick={() => void bootstrap()}>
+          <PageHeaderPrimaryButton
+            onClick={() => {
+              void bootstrap();
+              void retryCloud();
+            }}
+          >
             <RefreshCw className="h-3.5 w-3.5" strokeWidth={2} />
             {presence.runtimeReady ? "Reconnect" : "Connect"}
           </PageHeaderPrimaryButton>
@@ -169,14 +154,14 @@ export function HostView() {
             <dl className="divide-y divide-ink/[0.05]">
               <Row label="Machine" value={PROJECT_HOST_THIS_MAC} />
               <Row
-                label="Status"
+                label="Local"
                 value={
                   <span
                     className={cn(
                       "font-medium",
-                      presence.tone === "ready" && "text-status-done",
-                      presence.tone === "unavailable" && "text-status-failed",
-                      presence.tone === "preview" && "text-status-running",
+                      presence.runtimeReady
+                        ? "text-status-done"
+                        : "text-status-failed",
                     )}
                   >
                     {presence.readinessLabel}
@@ -184,17 +169,35 @@ export function HostView() {
                 }
               />
               <Row
-                label="Link"
+                label="Server"
                 value={
-                  <span className="inline-flex items-center gap-1.5">
-                    <Link2 className="h-3 w-3 text-ink-muted" strokeWidth={2} />
-                    {presence.linkLabel}
+                  <span className="inline-flex items-center gap-1.5 font-medium">
+                    {presence.cloud === "online" ? (
+                      <Wifi
+                        className="h-3 w-3 text-status-done"
+                        strokeWidth={2}
+                      />
+                    ) : (
+                      <WifiOff
+                        className="h-3 w-3 text-ink-muted"
+                        strokeWidth={2}
+                      />
+                    )}
+                    <span
+                      className={cn(
+                        presence.cloud === "online" && "text-status-done",
+                        presence.cloud === "offline" && "text-status-failed",
+                        presence.cloud === "connecting" && "text-status-running",
+                      )}
+                    >
+                      {presence.cloudLabel}
+                    </span>
                   </span>
                 }
                 hint={
-                  presence.linkMode === "linked"
-                    ? "Remote clients can reach this Mac"
-                    : "Backend not linked — phone control unavailable"
+                  presence.cloud === "online"
+                    ? "Phone and web can reach this Mac"
+                    : "Remote control unavailable until connected"
                 }
               />
               <Row
@@ -212,110 +215,51 @@ export function HostView() {
                   className="h-3.5 w-3.5 shrink-0 text-ink-muted"
                   strokeWidth={1.8}
                 />
-                <h2 className="text-xs font-semibold text-ink">
-                  Account &amp; remote
-                </h2>
+                <h2 className="text-xs font-semibold text-ink">Account</h2>
               </div>
               <span
                 className={cn(
                   "shrink-0 rounded-md px-1.5 py-0.5 text-3xs font-medium uppercase tracking-wide",
-                  accountVm.statusKind === "linked" &&
-                    "bg-status-done/15 text-status-done",
-                  accountVm.statusKind === "local_only" &&
-                    "bg-surface-muted text-ink-muted",
-                  accountVm.statusKind === "signed_out" &&
-                    "bg-surface-muted text-ink-muted",
-                  accountVm.statusKind === "error" &&
-                    "bg-status-failed/15 text-status-failed",
+                  session
+                    ? "bg-status-done/15 text-status-done"
+                    : "bg-surface-muted text-ink-muted",
                 )}
               >
-                {accountVm.statusLabel}
+                {session ? "Signed in" : "Signed out"}
               </span>
             </div>
 
             <div className="space-y-3 px-3.5 py-3">
               <p className="text-2xs leading-snug text-ink-muted">
-                {accountVm.statusHint}
+                Signing in on this Mac automatically connects it as your host.
+                No separate link step.
               </p>
 
-              {accountVm.emailLabel ? (
+              {session?.email ? (
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <p className="text-2xs font-medium text-ink-muted">
                       Signed in
                     </p>
                     <p className="truncate text-sm font-medium text-ink">
-                      {accountVm.emailLabel}
-                    </p>
-                  </div>
-                  {accountVm.showSignOut ? (
-                    <button
-                      type="button"
-                      disabled={accountBusy}
-                      onClick={() => void signOut()}
-                      className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-surface-muted px-2.5 py-1.5 text-2xs font-semibold text-ink-secondary transition-colors hover:bg-surface-hover hover:text-ink disabled:opacity-50"
-                    >
-                      <LogOut className="h-3 w-3" strokeWidth={2} />
-                      Sign out
-                    </button>
-                  ) : null}
-                </div>
-              ) : null}
-
-              {accountVm.showLinkCta ? (
-                <div className="flex flex-col gap-2 border-t border-ink/[0.06] pt-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-ink">Link this Mac</p>
-                    <p className="mt-0.5 text-2xs leading-snug text-ink-muted">
-                      Proves local daemon control and binds this host to your
-                      account. No QR code.
-                    </p>
-                    {accountVm.linkCtaDisabledReason ? (
-                      <p className="mt-1 text-3xs text-ink-muted">
-                        {accountVm.linkCtaDisabledReason}
-                      </p>
-                    ) : null}
-                  </div>
-                  <button
-                    type="button"
-                    disabled={accountVm.linkCtaDisabled}
-                    onClick={() => void linkThisMac(PROJECT_HOST_THIS_MAC)}
-                    className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-2xs font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-40"
-                  >
-                    <Link2 className="h-3.5 w-3.5" strokeWidth={2} />
-                    {accountVm.linkCtaLabel}
-                  </button>
-                </div>
-              ) : null}
-
-              {accountVm.showUnlink ? (
-                <div className="flex flex-col gap-2 border-t border-ink/[0.06] pt-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-ink">
-                      {hostLink.hostDisplayName ?? PROJECT_HOST_THIS_MAC}
-                    </p>
-                    <p className="mt-0.5 text-2xs leading-snug text-ink-muted">
-                      Linked to your account
-                      {hostLink.linkedAtMs
-                        ? ` · ${new Date(hostLink.linkedAtMs).toLocaleString()}`
-                        : ""}
+                      {session.email}
                     </p>
                   </div>
                   <button
                     type="button"
-                    disabled={accountVm.unlinkDisabled}
-                    onClick={() => void unlinkThisMac()}
-                    className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-surface-muted px-3 py-2 text-2xs font-semibold text-ink-secondary transition-colors hover:bg-surface-hover hover:text-ink disabled:opacity-40"
+                    disabled={accountBusy}
+                    onClick={() => void signOut()}
+                    className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-surface-muted px-2.5 py-1.5 text-2xs font-semibold text-ink-secondary transition-colors hover:bg-surface-hover hover:text-ink disabled:opacity-50"
                   >
-                    <Unlink className="h-3.5 w-3.5" strokeWidth={2} />
-                    Unlink
+                    <LogOut className="h-3 w-3" strokeWidth={2} />
+                    Sign out
                   </button>
                 </div>
               ) : null}
 
-              {accountVm.errorMessage ? (
+              {cloudError || accountError ? (
                 <div className="rounded-lg bg-status-failed/10 px-3 py-2 text-2xs text-status-failed ring-1 ring-inset ring-status-failed/25">
-                  {accountVm.errorMessage}
+                  {cloudError || accountError}
                 </div>
               ) : null}
             </div>
@@ -467,25 +411,19 @@ export function HostView() {
                   value={connection?.managed ? "yes" : "no"}
                   mono
                 />
-                <Row
-                  label="Backend"
-                  value={backendHttpBase()}
-                  mono
-                />
+                <Row label="Backend" value={backendHttpBase()} mono />
                 <Row
                   label="Account"
                   value={session?.email || "signed out"}
                   mono
                 />
                 <Row
-                  label="Host link"
-                  value={
-                    hostLink.linked
-                      ? hostLink.hostInstallationId ?? "linked"
-                      : "local only"
-                  }
+                  label="Host id"
+                  value={hostBind.hostInstallationId ?? "—"}
                   mono
                 />
+                <Row label="Hub online" value={String(!!connection?.hubOnline)} mono />
+                <Row label="Cloud" value={cloudStatus} mono />
                 <Row label="Last error" value={lastError ?? "—"} mono />
               </dl>
             ) : (

@@ -52,11 +52,13 @@ export function Sidebar() {
   const connection = useWorkspaceStore((s) => s.connection);
   const source = useWorkspaceStore((s) => s.source);
   const refreshDaemonStatus = useWorkspaceStore((s) => s.refreshDaemonStatus);
-  const relayLinked = useAccountStore((s) => s.hostLink.linked === true);
+  const cloudStatus = useAccountStore((s) => s.cloudStatus);
+  const session = useAccountStore((s) => s.session);
+  const syncCloudFromHub = useAccountStore((s) => s.syncCloudFromHub);
   const [updateDismissed, setUpdateDismissed] = useState(false);
   const attention = projects.reduce((sum, p) => sum + p.needsAttention, 0);
 
-  // Keep hubOnline fresh for the brand presence line.
+  // Keep hubOnline fresh for the brand presence line + cloud status.
   useEffect(() => {
     if (source !== "daemon") return;
     void refreshDaemonStatus();
@@ -66,11 +68,14 @@ export function Sidebar() {
     return () => window.clearInterval(id);
   }, [source, refreshDaemonStatus]);
 
+  useEffect(() => {
+    syncCloudFromHub(connection?.hubOnline);
+  }, [connection?.hubOnline, syncCloudFromHub]);
+
   const presence = deriveHostPresence({
     source,
     daemonConnected: source === "daemon" && connection?.connected === true,
-    relayLinked,
-    hubOnline: connection?.hubOnline,
+    cloud: session ? cloudStatus : "unknown",
   });
 
   return (

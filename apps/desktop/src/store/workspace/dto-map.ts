@@ -61,6 +61,24 @@ export function bumpStatus(
   };
 }
 
+/**
+ * Synthetic host-only project created by legacy agent start without Hub
+ * conversation_id (`ensure_workspace_conversation`). Hide from the main
+ * project rail so Hub collab does not appear as a second "Direct agent
+ * sessions" project.
+ */
+export function isSyntheticDirectAgentProject(p: {
+  id: string;
+  name: string;
+}): boolean {
+  const name = p.name.trim();
+  const id = p.id.trim();
+  return (
+    name === "Direct agent sessions" &&
+    (id.startsWith("workspace-") || id.startsWith("project-"))
+  );
+}
+
 export function toUiProject(p: DaemonProject): Project {
   return {
     id: p.id,
@@ -74,6 +92,13 @@ export function toUiProject(p: DaemonProject): Project {
     hasUnread: false,
     lastAttentionMs: 0,
   };
+}
+
+/** Map daemon projects and drop synthetic Direct-agent shells. */
+export function toUiProjects(projects: DaemonProject[]): Project[] {
+  return projects
+    .filter((p) => !isSyntheticDirectAgentProject(p))
+    .map(toUiProject);
 }
 
 export function normalizeDaemonConversation(

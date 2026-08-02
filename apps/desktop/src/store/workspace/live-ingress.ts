@@ -29,8 +29,9 @@ import { useReactionStore } from "@/features/chat/reaction-store";
  * Debounced quiet re-list of conversation timeline (+ rail preview).
  *
  * Shared by conversation message push and session turn-end (idle/done):
- * daemon `conversation_completion` writes `agent-result:…` then emits
- * ConversationMessageAppended — either path can lag; one refresh covers both.
+ * daemon `conversation_completion` writes local `agent-result:…` (workbench);
+ * Linked Hub-first also refreshes so TurnCompletionProjector agent bubbles
+ * appear via Hub merge. Either path can lag; one quiet load covers both.
  */
 function scheduleConversationTimelineRefresh(
   get: WorkspaceGet,

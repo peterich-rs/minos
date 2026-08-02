@@ -6,6 +6,7 @@ import {
   patchLocalConversation,
   toUiConversation,
   toUiProject,
+  toUiProjects,
 } from "./helpers";
 import { quietHydrateAllConversationLists } from "./projection";
 import { daemonApi } from "@/shared/lib/daemon";
@@ -19,6 +20,7 @@ import {
   progressForBoardColumn,
 } from "@/shared/lib/conversation-meta";
 import type { Conversation, Project } from "@/shared/lib/mock-data";
+import { syncConversationToCloud } from "@/shared/lib/im-cloud-sync";
 
 export function createConversationMutationActions(
   set: WorkspaceSet,
@@ -91,6 +93,13 @@ export function createConversationMutationActions(
       });
       set({ actionError: null });
 
+      // Multi-end IM: project shell + agent roster (local runtimes → cloud ids).
+      void syncConversationToCloud({
+        conversationId: created.id,
+        title: created.title || title,
+        agentRuntimes: agents.map((a) => a.agent),
+      });
+
       await minosQueryClient.invalidateQueries({
         queryKey: queryKeys.conversations(projectId),
       });
@@ -152,6 +161,12 @@ export function createConversationMutationActions(
       }
       const updated = await daemonApi.updateConversation(conversationId, {
         title: trimmed,
+      });
+      void syncConversationToCloud({
+        conversationId,
+        title: trimmed,
+        agentRuntimes: get().conversations.find((c) => c.id === conversationId)
+          ?.participatingAgents,
       });
       set((s) => ({
         conversations: patchLocalConversation(s.conversations, conversationId, {
@@ -277,7 +292,7 @@ export function createConversationMutationActions(
 
       try {
         const created = toUiProject(await daemonApi.createProject(trimmed));
-        const projects = (await daemonApi.listProjects()).map(toUiProject);
+        const projects = toUiProjects(await daemonApi.listProjects());
         set({ projects, actionError: null });
         void quietHydrateAllConversationLists(get);
         return created.id;
