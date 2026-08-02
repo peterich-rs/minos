@@ -102,7 +102,9 @@ abstract final class MinosTheme {
           disabledBackgroundColor: colors.accent.withValues(alpha: 0.35),
           disabledForegroundColor: colors.textOnAccent.withValues(alpha: 0.7),
           elevation: 0,
-          minimumSize: const Size.fromHeight(48),
+          // Prefer finite min width. Size.fromHeight(48) is (∞, 48) and
+          // crashes buttons laid out in unbounded horizontal space (Rows).
+          minimumSize: const Size(64, 48),
           shape: const RoundedRectangleBorder(borderRadius: MinosRadii.smAll),
           textStyle: textTheme.labelLarge,
         ),
@@ -110,7 +112,7 @@ abstract final class MinosTheme {
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           foregroundColor: colors.textPrimary,
-          minimumSize: const Size.fromHeight(48),
+          minimumSize: const Size(64, 48),
           side: BorderSide(color: colors.border),
           shape: const RoundedRectangleBorder(borderRadius: MinosRadii.smAll),
           textStyle: textTheme.labelLarge,

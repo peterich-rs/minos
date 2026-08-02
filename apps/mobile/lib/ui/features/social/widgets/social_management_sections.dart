@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,7 +6,11 @@ import 'package:minos/application/social_actions.dart';
 import 'package:minos/application/social_providers.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:minos/ui/core/widgets/error_feedback.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
+import 'package:minos/ui/core/widgets/minos_button.dart';
+import 'package:minos/ui/core/widgets/minos_progress.dart';
+import 'package:minos/ui/core/widgets/minos_text_field.dart';
+import 'package:minos/ui/core/widgets/minos_toast.dart';
+import 'package:minos/ui/theme/theme.dart';
 
 class SocialProfileSection extends ConsumerWidget {
   const SocialProfileSection({super.key});
@@ -17,37 +22,49 @@ class SocialProfileSection extends ConsumerWidget {
   ) async {
     final controller = TextEditingController(text: profile.minosId);
     final rootContext = context;
-    await showShadDialog<void>(
+    await showCupertinoDialog<void>(
       context: rootContext,
-      builder: (context) => ShadDialog.alert(
-        title: const Text('设置 Minos ID'),
-        description: const Text('仅允许数字和英文字母，区分大小写。'),
-        actions: [
-          ShadButton.outline(
-            child: const Text('取消'),
-            onPressed: () => Navigator.of(context).pop(),
+      builder: (dialogContext) {
+        final colors = dialogContext.minosColors;
+        return CupertinoAlertDialog(
+          title: const Text('设置 Minos ID'),
+          content: Column(
+            children: <Widget>[
+              const SizedBox(height: 8),
+              const Text('仅允许数字和英文字母，区分大小写。'),
+              const SizedBox(height: 12),
+              Material(
+                color: Colors.transparent,
+                child: MinosTextField(controller: controller),
+              ),
+            ],
           ),
-          ShadButton(
-            child: const Text('保存'),
-            onPressed: () async {
-              try {
-                await ref
-                    .read(socialActionsProvider)
-                    .setMinosId(minosId: controller.text.trim());
-                ref.invalidate(socialProfileProvider);
-                if (context.mounted) Navigator.of(context).pop();
-              } catch (error) {
-                if (!rootContext.mounted) return;
-                showSocialFeedbackError(rootContext, '设置失败', error);
-              }
-            },
-          ),
-        ],
-        child: Padding(
-          padding: const EdgeInsets.only(top: 12),
-          child: ShadInput(controller: controller),
-        ),
-      ),
+          actions: <Widget>[
+            CupertinoDialogAction(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text('取消', style: TextStyle(color: colors.textSecondary)),
+            ),
+            CupertinoDialogAction(
+              isDefaultAction: true,
+              onPressed: () async {
+                try {
+                  await ref
+                      .read(socialActionsProvider)
+                      .setMinosId(minosId: controller.text.trim());
+                  ref.invalidate(socialProfileProvider);
+                  if (dialogContext.mounted) {
+                    Navigator.of(dialogContext).pop();
+                  }
+                } catch (error) {
+                  if (!rootContext.mounted) return;
+                  showSocialFeedbackError(rootContext, '设置失败', error);
+                }
+              },
+              child: Text('保存', style: TextStyle(color: colors.accent)),
+            ),
+          ],
+        );
+      },
     );
     controller.dispose();
   }
@@ -66,13 +83,14 @@ class SocialProfileSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final profileAsync = ref.watch(socialProfileProvider);
-    final shadTheme = ShadTheme.of(context);
+    final colors = context.minosColors;
+    final theme = Theme.of(context);
     return profileAsync.when(
       loading: () => const SocialSectionCard(
         title: '账户 ID',
         child: Padding(
           padding: EdgeInsets.all(16),
-          child: Center(child: ShadProgress()),
+          child: Center(child: MinosProgress()),
         ),
       ),
       error: (error, _) => SocialSectionCard(
@@ -88,7 +106,7 @@ class SocialProfileSection extends ConsumerWidget {
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              ShadButton.ghost(
+              MinosButton.ghost(
                 onPressed: profile.minosId.trim().isEmpty
                     ? null
                     : () => _copyText(
@@ -98,7 +116,7 @@ class SocialProfileSection extends ConsumerWidget {
                       ),
                 child: const Text('邀请'),
               ),
-              ShadButton.ghost(
+              MinosButton.ghost(
                 onPressed: () => _editMinosId(context, ref, profile),
                 child: const Text('编辑'),
               ),
@@ -113,7 +131,12 @@ class SocialProfileSection extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text(profile.email, style: shadTheme.textTheme.small),
+                  Text(
+                    profile.email,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colors.textSecondary,
+                    ),
+                  ),
                   const SizedBox(height: 10),
                   _ProfileValueRow(label: 'Minos ID', value: minosId),
                   const SizedBox(height: 10),
@@ -155,9 +178,9 @@ class _FriendSearchSectionState extends ConsumerState<FriendSearchSection> {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: <Widget>[
-            ShadInput(
+            MinosTextField(
               controller: _controller,
-              placeholder: const Text('输入 Minos ID 或邀请链接'),
+              placeholder: '输入 Minos ID 或邀请链接',
               onChanged: (value) {
                 ref
                     .read(socialSearchQueryProvider.notifier)
@@ -167,7 +190,7 @@ class _FriendSearchSectionState extends ConsumerState<FriendSearchSection> {
             if (query.isNotEmpty) ...<Widget>[
               const SizedBox(height: 12),
               searchAsync.when(
-                loading: () => const Center(child: ShadProgress()),
+                loading: () => const Center(child: MinosProgress()),
                 error: (error, _) =>
                     SocialSectionMessage(text: error.toString()),
                 data: (users) => users.isEmpty
@@ -179,7 +202,7 @@ class _FriendSearchSectionState extends ConsumerState<FriendSearchSection> {
                               contentPadding: EdgeInsets.zero,
                               title: Text(user.displayName),
                               subtitle: Text('@${user.minosId}'),
-                              trailing: ShadButton.outline(
+                              trailing: MinosButton.outline(
                                 onPressed: () async {
                                   try {
                                     await ref
@@ -234,7 +257,7 @@ class FriendRequestsSection extends ConsumerWidget {
         title: '好友请求',
         child: Padding(
           padding: EdgeInsets.all(16),
-          child: Center(child: ShadProgress()),
+          child: Center(child: MinosProgress()),
         ),
       ),
       error: (error, _) => SocialSectionCard(
@@ -257,7 +280,7 @@ class FriendRequestsSection extends ConsumerWidget {
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
-                            ShadButton.outline(
+                            MinosButton.outline(
                               onPressed: () async {
                                 try {
                                   await ref
@@ -279,7 +302,7 @@ class FriendRequestsSection extends ConsumerWidget {
                               child: const Text('拒绝'),
                             ),
                             const SizedBox(width: 8),
-                            ShadButton(
+                            MinosButton(
                               onPressed: () async {
                                 try {
                                   await ref
@@ -336,7 +359,8 @@ class SocialSectionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final shadTheme = ShadTheme.of(context);
+    final colors = context.minosColors;
+    final theme = Theme.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -347,8 +371,8 @@ class SocialSectionCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   title,
-                  style: shadTheme.textTheme.small.copyWith(
-                    color: shadTheme.colorScheme.mutedForeground,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colors.textSecondary,
                   ),
                 ),
               ),
@@ -358,7 +382,7 @@ class SocialSectionCard extends StatelessWidget {
         ),
         DecoratedBox(
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerLow,
+            color: colors.surfaceMuted,
             borderRadius: BorderRadius.circular(16),
           ),
           child: child,
@@ -387,17 +411,23 @@ class _ProfileValueRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final shadTheme = ShadTheme.of(context);
+    final colors = context.minosColors;
+    final theme = Theme.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Text(label, style: shadTheme.textTheme.muted),
+        Text(
+          label,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: colors.textSecondary,
+          ),
+        ),
         const SizedBox(height: 4),
         Text(
           value,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: shadTheme.textTheme.h4,
+          style: theme.textTheme.titleLarge,
         ),
       ],
     );
@@ -428,5 +458,5 @@ void showSocialFeedbackError(BuildContext context, String title, Object error) {
 }
 
 void showSocialInfoToast(BuildContext context, String title) {
-  ShadToaster.maybeOf(context)?.show(ShadToast(title: Text(title)));
+  showMinosToast(context, title: title);
 }

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:minos/application/agent_activity_provider.dart';
+import 'package:minos/application/conversations_sort.dart';
 import 'package:minos/data/repositories/social_repository.dart';
 import 'package:minos/domain/social_message.dart';
 import 'package:minos/src/rust/api/minos.dart';
@@ -449,14 +450,14 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
     final cached = await repository.loadConversations();
     if (cached != null && cached.conversations.isNotEmpty) {
       unawaited(_refreshFromRemote());
-      return cached;
+      return conversationsSortedByLastActive(cached);
     }
 
     try {
       return await _fetchRemoteConversations();
     } catch (_) {
       if (cached != null) {
-        return cached;
+        return conversationsSortedByLastActive(cached);
       }
       rethrow;
     }
@@ -471,12 +472,15 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
     final current = previous.asData?.value;
     if (current != null) {
       state = AsyncValue.data(
-        ConversationsResponse(
-          conversations: current.conversations
-              .where(
-                (conversation) => conversation.conversationId != conversationId,
-              )
-              .toList(growable: false),
+        conversationsSortedByLastActive(
+          ConversationsResponse(
+            conversations: current.conversations
+                .where(
+                  (conversation) =>
+                      conversation.conversationId != conversationId,
+                )
+                .toList(growable: false),
+          ),
         ),
       );
     }
@@ -496,7 +500,7 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
     final repository = ref.read(socialRepositoryProvider);
     final response = await repository.conversations();
     await repository.saveConversations(response.conversations);
-    return response;
+    return conversationsSortedByLastActive(response);
   }
 
   Future<void> _refreshFromRemote() async {

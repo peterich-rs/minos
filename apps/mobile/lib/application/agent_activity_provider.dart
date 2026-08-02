@@ -376,17 +376,43 @@ AgentSessionSummaryDto? _latestRunnableSession(
   return runnable.first;
 }
 
+/// Statuses that mean a live turn is (or may still be) executing.
+///
+/// `idle` is **not** runnable: the session may still be @-able for a new turn,
+/// but the activity ticker must hide when the agent is waiting for input.
 bool _isRunnableStatus(String status) {
-  final normalized = status.toLowerCase();
-  return !{
+  final normalized = status.toLowerCase().trim();
+  if (normalized.isEmpty) return false;
+  // Explicit non-running terminal / waiting states.
+  const notRunnable = {
+    'idle',
     'ended',
     'stopped',
     'failed',
     'completed',
     'cancelled',
     'canceled',
-  }.contains(normalized);
+    'closed',
+    'pending', // formal session registered but host not executing yet
+  };
+  if (notRunnable.contains(normalized)) return false;
+  // Positive allow-list for known active statuses (avoids treating unknown
+  // idle-like strings as running forever).
+  const runnable = {
+    'running',
+    'streaming',
+    'thinking',
+    'tool',
+    'working',
+    'busy',
+    'stopping', // still winding down — keep ticker until MessageCompleted
+  };
+  return runnable.contains(normalized);
 }
+
+/// Exposed for unit tests.
+@visibleForTesting
+bool debugIsRunnableSessionStatus(String status) => _isRunnableStatus(status);
 
 String? _statusPreview(String raw) {
   final collapsed = raw.replaceAll(RegExp(r'\s+'), ' ').trim();

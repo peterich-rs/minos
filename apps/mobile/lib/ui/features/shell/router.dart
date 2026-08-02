@@ -10,16 +10,17 @@ import 'package:minos/ui/features/auth/views/login_page.dart';
 import 'package:minos/ui/features/chat/views/thread_view_page.dart';
 import 'package:minos/ui/features/debug/views/log_viewer_page.dart';
 import 'package:minos/ui/features/projects/views/project_detail_page.dart';
+import 'package:minos/ui/features/sessions/views/sessions_page.dart';
 import 'package:minos/ui/features/shell/views/app_shell_page.dart';
 import 'package:minos/ui/features/social/views/group_members_page.dart';
 import 'package:minos/ui/features/social/views/social_chat_page.dart';
-import 'package:minos/ui/features/social/views/social_hub_page.dart';
 
 /// Route path constants for the app.
 abstract final class AppRoutes {
   static const String splash = '/splash';
   static const String login = '/login';
   static const String shell = '/';
+  static const String sessions = '/sessions';
   static const String thread = '/thread/:sessionId';
   static const String newThread = '/thread/new';
   static const String agentStart = '/agent-start';
@@ -124,8 +125,13 @@ GoRouter createAppRouter(Ref ref) {
         },
       ),
       GoRoute(
+        path: AppRoutes.sessions,
+        builder: (context, state) => const SessionsPage(),
+      ),
+      // Legacy deep link: conversation inbox is now the shell Messages tab.
+      GoRoute(
         path: AppRoutes.socialHub,
-        builder: (context, state) => const SocialHubPage(),
+        redirect: (context, state) => AppRoutes.shell,
       ),
       GoRoute(
         path: AppRoutes.socialChat,

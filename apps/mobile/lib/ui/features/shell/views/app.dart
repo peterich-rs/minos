@@ -10,13 +10,10 @@ import 'package:minos/application/thread_list_provider.dart';
 import 'package:minos/src/rust/api/minos.dart' as core;
 import 'package:minos/ui/features/shell/router_provider.dart';
 import 'package:minos/ui/theme/theme.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
 
 /// Root of the Minos app.
 ///
-/// Golden-path surfaces use [MinosTheme] tokens. A residual [ShadTheme] is
-/// layered for legacy screens (agent editor, social) that still read
-/// `ShadTheme.of` until they are migrated or removed.
+/// Golden-path surfaces use [MinosTheme] tokens only (no shadcn).
 class MinosApp extends ConsumerStatefulWidget {
   const MinosApp({super.key});
 
@@ -83,23 +80,6 @@ class _MinosAppState extends ConsumerState<MinosApp>
       theme: MinosTheme.light(),
       darkTheme: MinosTheme.dark(),
       routerConfig: router,
-      builder: (context, child) {
-        final brightness = Theme.of(context).brightness;
-        final shadData = brightness == Brightness.dark
-            ? ShadThemeData(
-                brightness: Brightness.dark,
-                colorScheme: const ShadZincColorScheme.dark(),
-              )
-            : ShadThemeData(
-                brightness: Brightness.light,
-                colorScheme: const ShadZincColorScheme.light(),
-              );
-        // ShadToaster supports residual toast call sites (error_feedback).
-        return ShadTheme(
-          data: shadData,
-          child: ShadToaster(child: child ?? const SizedBox.shrink()),
-        );
-      },
     );
   }
 }

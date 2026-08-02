@@ -16,7 +16,7 @@ import 'package:minos/ui/features/sessions/widgets/session_tile.dart';
 import 'package:minos/ui/features/shell/router.dart';
 import 'package:minos/ui/theme/theme.dart';
 
-/// Golden-path Sessions inbox: flat list of agent sessions.
+/// Secondary Agent Sessions inbox (demoted from primary tab).
 class SessionsPage extends ConsumerWidget {
   const SessionsPage({super.key});
 
@@ -26,26 +26,46 @@ class SessionsPage extends ConsumerWidget {
     final hosts = ref.watch(pairedMacsProvider).asData?.value ?? const [];
     final hasHosts = hosts.isNotEmpty;
     final colors = context.minosColors;
+    final canPop = context.canPop();
 
-    return ColoredBox(
-      color: colors.canvas,
-      child: SafeArea(
+    return Scaffold(
+      backgroundColor: colors.canvas,
+      body: SafeArea(
         bottom: false,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
             MinosPageHeader(
-              title: 'Sessions',
+              title: 'Agent 会话',
               subtitle: hasHosts
-                  ? '从 Linked Host 同步的对话'
+                  ? '从 Linked Host 同步的 Agent session'
                   : '先在 Hosts 查看 Linked Mac',
-              trailing: IconButton(
-                tooltip: '新建对话',
-                onPressed: () {
-                  ref.read(activeSessionControllerProvider.notifier).reset();
-                  unawaited(context.push(AppRoutes.agentStart));
-                },
-                icon: Icon(CupertinoIcons.square_pencil, color: colors.accent),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  IconButton(
+                    tooltip: '新建对话',
+                    onPressed: () {
+                      ref
+                          .read(activeSessionControllerProvider.notifier)
+                          .reset();
+                      unawaited(context.push(AppRoutes.agentStart));
+                    },
+                    icon: Icon(
+                      CupertinoIcons.square_pencil,
+                      color: colors.accent,
+                    ),
+                  ),
+                  if (canPop)
+                    IconButton(
+                      tooltip: '关闭',
+                      onPressed: () => context.pop(),
+                      icon: Icon(
+                        CupertinoIcons.xmark_circle_fill,
+                        color: colors.textTertiary,
+                      ),
+                    ),
+                ],
               ),
             ),
             Expanded(

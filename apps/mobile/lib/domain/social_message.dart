@@ -45,6 +45,21 @@ class SocialChatMessage {
       !isRecalled &&
       serverMessageId != null;
 
+  /// Best-effort session id for agent bubbles.
+  ///
+  /// Dual-written Desktop results use
+  /// `agent-result:{conversationId}:{sessionId}:{turnId}`. Hub-native agent
+  /// messages may lack this shape — callers should fall back to session list.
+  String? get agentSessionIdFromMessageId {
+    final id = (serverMessageId ?? localId).trim();
+    if (!id.startsWith('agent-result:')) return null;
+    final parts = id.split(':');
+    // agent-result + conversation + session + durable (+ optional extra)
+    if (parts.length < 4) return null;
+    final sessionId = parts[2].trim();
+    return sessionId.isEmpty ? null : sessionId;
+  }
+
   SocialChatMessage copyWith({
     String? localId,
     String? conversationId,

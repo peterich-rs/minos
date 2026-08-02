@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:minos/application/log_records_provider.dart';
 import 'package:minos/src/rust/api/minos.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
+import 'package:minos/ui/core/widgets/minos_toast.dart';
 
 final _logPanelFilterProvider = NotifierProvider.autoDispose
     .family<_LogPanelFilterController, LogPanelFilter, String>(
@@ -203,9 +203,7 @@ class _LogRow extends StatelessWidget {
     return InkWell(
       onLongPress: () {
         unawaited(Clipboard.setData(ClipboardData(text: line)));
-        ShadToaster.of(
-          context,
-        ).show(const ShadToast(description: Text('已复制到剪贴板')));
+        showMinosToast(context, title: '已复制到剪贴板');
       },
       child: Padding(
         padding: const .symmetric(horizontal: 8, vertical: 2),

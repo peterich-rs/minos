@@ -125,6 +125,22 @@ void main() {
     });
   });
 
+  group('debugIsRunnableSessionStatus', () {
+    test('idle is not runnable for the activity ticker', () {
+      expect(debugIsRunnableSessionStatus('idle'), isFalse);
+      expect(debugIsRunnableSessionStatus('Idle'), isFalse);
+      expect(debugIsRunnableSessionStatus('completed'), isFalse);
+      expect(debugIsRunnableSessionStatus('ended'), isFalse);
+      expect(debugIsRunnableSessionStatus('pending'), isFalse);
+    });
+
+    test('running / streaming / stopping are runnable', () {
+      expect(debugIsRunnableSessionStatus('running'), isTrue);
+      expect(debugIsRunnableSessionStatus('streaming'), isTrue);
+      expect(debugIsRunnableSessionStatus('stopping'), isTrue);
+    });
+  });
+
   group('debugSessionAgentHostOnline', () {
     test('returns false when the matched agent host is offline', () {
       final session = _session(agentId: 'agent-1');

@@ -183,7 +183,19 @@ class SocialCacheStore {
       whereArgs: <Object>[conversationId],
       orderBy: 'COALESCE(server_order_key, created_at_ms) ASC, client_seq ASC',
     );
-    return rows.map(_messageFromRow).toList(growable: false);
+    // Dedupe by local_id (and prefer server id when both exist) so list keys stay unique.
+    final byLocalId = <String, SocialChatMessage>{};
+    for (final row in rows) {
+      final message = _messageFromRow(row);
+      byLocalId[message.localId] = message;
+    }
+    final deduped = byLocalId.values.toList(growable: false)
+      ..sort((a, b) {
+        final byTime = a.createdAtMs.compareTo(b.createdAtMs);
+        if (byTime != 0) return byTime;
+        return a.clientSeq.compareTo(b.clientSeq);
+      });
+    return deduped;
   }
 
   Future<void> upsertRemoteMessages({

@@ -9,11 +9,15 @@ part of 'minos_providers.dart';
 // GENERATED CODE - DO NOT MODIFY BY HAND
 // ignore_for_file: type=lint, type=warning
 /// Hot stream of connection-state transitions sourced from the Rust core.
+///
+/// This is IM **account online** for this phone: live `/ws/client` to the hub.
 
 @ProviderFor(connectionState)
 final connectionStateProvider = ConnectionStateProvider._();
 
 /// Hot stream of connection-state transitions sourced from the Rust core.
+///
+/// This is IM **account online** for this phone: live `/ws/client` to the hub.
 
 final class ConnectionStateProvider
     extends
@@ -24,6 +28,8 @@ final class ConnectionStateProvider
         >
     with $FutureModifier<ConnectionState>, $StreamProvider<ConnectionState> {
   /// Hot stream of connection-state transitions sourced from the Rust core.
+  ///
+  /// This is IM **account online** for this phone: live `/ws/client` to the hub.
   ConnectionStateProvider._()
     : super(
         from: null,

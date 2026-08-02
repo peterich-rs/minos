@@ -18,9 +18,11 @@ import 'package:minos/src/rust/api/minos.dart'
     show ConnectionState;
 import 'package:minos/src/rust/api/minos.dart' hide ConnectionState;
 import 'package:minos/ui/core/widgets/error_feedback.dart';
+import 'package:minos/ui/core/widgets/minos_button.dart';
+import 'package:minos/ui/core/widgets/minos_text_field.dart';
 import 'package:minos/ui/core/widgets/shimmer_box.dart';
 import 'package:minos/ui/features/shell/router.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
+import 'package:minos/ui/theme/theme.dart';
 
 class AgentsHubTab extends ConsumerWidget {
   const AgentsHubTab({super.key});
@@ -169,11 +171,13 @@ class _SectionActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ShadIconButton.ghost(
-      icon: const Icon(LucideIcons.plus, size: 18),
+    return IconButton(
+      tooltip: tooltip,
+      icon: const Icon(CupertinoIcons.plus, size: 18),
       onPressed: onPressed,
-      width: 38,
-      height: 38,
+      constraints: const BoxConstraints.tightFor(width: 38, height: 38),
+      padding: EdgeInsets.zero,
+      visualDensity: VisualDensity.compact,
     );
   }
 }
@@ -289,19 +293,25 @@ class _CompactErrorPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final shadTheme = ShadTheme.of(context);
+    final colors = context.minosColors;
+    final textTheme = Theme.of(context).textTheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         Row(
           children: <Widget>[
             Icon(
-              LucideIcons.circleAlert,
+              CupertinoIcons.exclamationmark_triangle,
               size: 18,
-              color: shadTheme.colorScheme.mutedForeground,
+              color: colors.textSecondary,
             ),
             const SizedBox(width: 8),
-            Expanded(child: Text(title, style: shadTheme.textTheme.small)),
+            Expanded(
+              child: Text(
+                title,
+                style: textTheme.bodySmall?.copyWith(color: colors.textPrimary),
+              ),
+            ),
           ],
         ),
         const SizedBox(height: 6),
@@ -309,10 +319,10 @@ class _CompactErrorPanel extends StatelessWidget {
           description,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
-          style: shadTheme.textTheme.muted,
+          style: textTheme.bodyMedium?.copyWith(color: colors.textSecondary),
         ),
         const SizedBox(height: 10),
-        ShadButton.outline(onPressed: onAction, child: Text(actionLabel)),
+        MinosButton.outline(onPressed: onAction, child: Text(actionLabel)),
       ],
     );
   }
@@ -1013,13 +1023,9 @@ class _AgentEditorSheetState extends ConsumerState<AgentEditorSheet> {
                               style: Theme.of(context).textTheme.labelLarge,
                             ),
                             const SizedBox(height: 8),
-                            ShadInput(
+                            MinosTextField(
                               controller: _nameController,
-                              placeholder: const Text('例如：codex'),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 14,
-                              ),
+                              placeholder: '例如：codex',
                             ),
                             const SizedBox(height: 14),
                             Text(
@@ -1027,12 +1033,11 @@ class _AgentEditorSheetState extends ConsumerState<AgentEditorSheet> {
                               style: Theme.of(context).textTheme.labelLarge,
                             ),
                             const SizedBox(height: 8),
-                            ShadInput(
+                            MinosTextField(
                               controller: _descriptionController,
                               minLines: 3,
                               maxLines: 5,
-                              placeholder: const Text('简短描述这个 Agent 擅长什么。'),
-                              padding: const EdgeInsets.all(14),
+                              placeholder: '简短描述这个 Agent 擅长什么。',
                             ),
                           ],
                         ),
@@ -1303,14 +1308,14 @@ class _AgentEditorSheetState extends ConsumerState<AgentEditorSheet> {
               Row(
                 children: <Widget>[
                   Expanded(
-                    child: ShadButton.outline(
+                    child: MinosButton.outline(
                       onPressed: navigator.pop,
                       child: const Text('取消'),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: ShadButton(
+                    child: MinosButton(
                       onPressed: canSave ? _saveProfile : null,
                       child: Text(isEditing ? '保存' : '创建'),
                     ),
@@ -1368,17 +1373,14 @@ class _EditorWorkspacePathPicker extends StatelessWidget {
                 IconButton(
                   tooltip: '刷新文件夹',
                   onPressed: onRefresh,
-                  icon: const Icon(LucideIcons.refreshCw, size: 18),
+                  icon: const Icon(CupertinoIcons.arrow_clockwise, size: 18),
                 ),
             ],
           ),
           const SizedBox(height: 8),
-          ShadInput(
+          MinosTextField(
             controller: controller,
-            placeholder: const Text(
-              '/Users/you/develop/project 或 ~/develop/project',
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            placeholder: '/Users/you/develop/project 或 ~/develop/project',
           ),
           const SizedBox(height: 12),
           if (asyncValue == null)
@@ -1395,7 +1397,7 @@ class _EditorWorkspacePathPicker extends StatelessWidget {
                 alignment: Alignment.centerLeft,
                 child: TextButton.icon(
                   onPressed: onRefresh,
-                  icon: const Icon(LucideIcons.refreshCw, size: 16),
+                  icon: const Icon(CupertinoIcons.arrow_clockwise, size: 16),
                   label: const Text('重新加载 Host 文件夹'),
                 ),
               ),
@@ -1405,7 +1407,7 @@ class _EditorWorkspacePathPicker extends StatelessWidget {
                     alignment: Alignment.centerLeft,
                     child: TextButton.icon(
                       onPressed: onRefresh,
-                      icon: const Icon(LucideIcons.folderOpen, size: 16),
+                      icon: const Icon(CupertinoIcons.folder_open, size: 16),
                       label: const Text('Host 文件夹为空'),
                     ),
                   );
@@ -1424,8 +1426,8 @@ class _EditorWorkspacePathPicker extends StatelessWidget {
                         contentPadding: EdgeInsets.zero,
                         leading: Icon(
                           workspace.isGitRepo
-                              ? LucideIcons.gitBranch
-                              : LucideIcons.folder,
+                              ? CupertinoIcons.arrow_branch
+                              : CupertinoIcons.folder,
                           size: 18,
                         ),
                         title: Text(
@@ -1713,18 +1715,19 @@ class _ProfilesSection extends ConsumerWidget {
                         .setPreferredProfile(ordered[index].id),
                     onDelete: () {
                       unawaited(
-                        showShadDialog<void>(
+                        showCupertinoDialog<void>(
                           context: context,
-                          builder: (context) => ShadDialog.alert(
+                          builder: (dialogContext) => CupertinoAlertDialog(
                             title: const Text('删除 Agent'),
-                            description: const Text('确定要删除这个 Agent 吗？此操作无法撤销。'),
+                            content: const Text('确定要删除这个 Agent 吗？此操作无法撤销。'),
                             actions: [
-                              ShadButton.outline(
+                              CupertinoDialogAction(
+                                onPressed: () =>
+                                    Navigator.of(dialogContext).pop(),
                                 child: const Text('取消'),
-                                onPressed: () => Navigator.of(context).pop(),
                               ),
-                              ShadButton.destructive(
-                                child: const Text('删除'),
+                              CupertinoDialogAction(
+                                isDestructiveAction: true,
                                 onPressed: () async {
                                   await ref
                                       .read(
@@ -1732,10 +1735,11 @@ class _ProfilesSection extends ConsumerWidget {
                                             .notifier,
                                       )
                                       .deleteProfile(ordered[index].id);
-                                  if (context.mounted) {
-                                    Navigator.of(context).pop();
+                                  if (dialogContext.mounted) {
+                                    Navigator.of(dialogContext).pop();
                                   }
                                 },
+                                child: const Text('删除'),
                               ),
                             ],
                           ),
@@ -1823,18 +1827,19 @@ class _HostRuntimeCard extends ConsumerWidget {
                       .setActive(hosts[index].hostDeviceId),
                   onDelete: () {
                     unawaited(
-                      showShadDialog<void>(
+                      showCupertinoDialog<void>(
                         context: context,
-                        builder: (context) => ShadDialog.alert(
+                        builder: (dialogContext) => CupertinoAlertDialog(
                           title: const Text('移除设备'),
-                          description: const Text('确定要移除此设备吗？此操作无法撤销。'),
+                          content: const Text('确定要移除此设备吗？此操作无法撤销。'),
                           actions: [
-                            ShadButton.outline(
+                            CupertinoDialogAction(
+                              onPressed: () =>
+                                  Navigator.of(dialogContext).pop(),
                               child: const Text('取消'),
-                              onPressed: () => Navigator.of(context).pop(),
                             ),
-                            ShadButton.destructive(
-                              child: const Text('移除'),
+                            CupertinoDialogAction(
+                              isDestructiveAction: true,
                               onPressed: () async {
                                 await ref
                                     .read(runtimeActionsProvider)
@@ -1847,10 +1852,11 @@ class _HostRuntimeCard extends ConsumerWidget {
                                 await ref
                                     .read(activeMacProvider.notifier)
                                     .refresh();
-                                if (context.mounted) {
-                                  Navigator.of(context).pop();
+                                if (dialogContext.mounted) {
+                                  Navigator.of(dialogContext).pop();
                                 }
                               },
+                              child: const Text('移除'),
                             ),
                           ],
                         ),
@@ -1958,12 +1964,15 @@ class _AgentProfileTile extends StatelessWidget {
                 ),
                 if (onDelete != null) ...[
                   const SizedBox(height: 8),
-                  ShadButton.ghost(
-                    width: 32,
-                    height: 32,
-                    padding: EdgeInsets.zero,
+                  IconButton(
                     onPressed: onDelete,
-                    child: const Icon(CupertinoIcons.trash, size: 16),
+                    icon: const Icon(CupertinoIcons.trash, size: 16),
+                    constraints: const BoxConstraints.tightFor(
+                      width: 32,
+                      height: 32,
+                    ),
+                    padding: EdgeInsets.zero,
+                    visualDensity: VisualDensity.compact,
                   ),
                 ],
               ],
@@ -2052,12 +2061,15 @@ class _DeviceRosterTile extends StatelessWidget {
                 ),
                 if (onDelete != null) ...[
                   const SizedBox(height: 8),
-                  ShadButton.ghost(
-                    width: 32,
-                    height: 32,
-                    padding: EdgeInsets.zero,
+                  IconButton(
                     onPressed: onDelete,
-                    child: const Icon(CupertinoIcons.trash, size: 16),
+                    icon: const Icon(CupertinoIcons.trash, size: 16),
+                    constraints: const BoxConstraints.tightFor(
+                      width: 32,
+                      height: 32,
+                    ),
+                    padding: EdgeInsets.zero,
+                    visualDensity: VisualDensity.compact,
                   ),
                 ],
               ],
@@ -2191,7 +2203,7 @@ class _HumanFriendTile extends ConsumerWidget {
             ),
             const SizedBox(width: 12),
             Icon(
-              LucideIcons.messageCircle,
+              CupertinoIcons.chat_bubble,
               size: 18,
               color: theme.colorScheme.onSurfaceVariant,
             ),

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,7 +8,6 @@ import 'package:minos/application/minos_providers.dart';
 import 'package:minos/application/project_providers.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:minos/ui/features/shell/router.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
 
 /// Full-screen project list — the app's home after login.
 /// Tapping a project navigates to [ProjectDetailPage] (Discord-style).
@@ -241,7 +241,7 @@ class _WorkspacePickerList extends StatelessWidget {
         alignment: Alignment.centerLeft,
         child: TextButton.icon(
           onPressed: onRefresh,
-          icon: const Icon(LucideIcons.refreshCw, size: 16),
+          icon: const Icon(CupertinoIcons.arrow_clockwise, size: 16),
           label: const Text('重新加载 Host 文件夹'),
         ),
       ),
@@ -251,7 +251,7 @@ class _WorkspacePickerList extends StatelessWidget {
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
               onPressed: onRefresh,
-              icon: const Icon(LucideIcons.folderOpen, size: 16),
+              icon: const Icon(CupertinoIcons.folder_open, size: 16),
               label: const Text('Host 文件夹为空'),
             ),
           );
@@ -269,8 +269,8 @@ class _WorkspacePickerList extends StatelessWidget {
                 contentPadding: EdgeInsets.zero,
                 leading: Icon(
                   workspace.isGitRepo
-                      ? LucideIcons.gitBranch
-                      : LucideIcons.folder,
+                      ? CupertinoIcons.arrow_branch
+                      : CupertinoIcons.folder,
                   size: 18,
                 ),
                 title: Text(
@@ -313,7 +313,7 @@ class _Header extends StatelessWidget {
           ),
           const Spacer(),
           IconButton(
-            icon: const Icon(LucideIcons.plus, size: 22),
+            icon: const Icon(CupertinoIcons.plus, size: 22),
             onPressed: onAdd,
           ),
         ],
@@ -335,7 +335,7 @@ class _EmptyState extends StatelessWidget {
         mainAxisSize: .min,
         children: [
           Icon(
-            LucideIcons.folderOpen,
+            CupertinoIcons.folder_open,
             size: 64,
             color: Theme.of(context).colorScheme.outline,
           ),
@@ -356,7 +356,7 @@ class _EmptyState extends StatelessWidget {
           const SizedBox(height: 24),
           FilledButton.icon(
             onPressed: onAdd,
-            icon: const Icon(LucideIcons.plus, size: 16),
+            icon: const Icon(CupertinoIcons.plus, size: 16),
             label: const Text('新建项目'),
           ),
         ],
@@ -469,7 +469,7 @@ class _ProjectCard extends ConsumerWidget {
                 ),
               ),
               Icon(
-                LucideIcons.chevronRight,
+                CupertinoIcons.chevron_right,
                 size: 18,
                 color: colorScheme.outline,
               ),
@@ -489,7 +489,7 @@ class _ProjectCard extends ConsumerWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               ListTile(
-                leading: const Icon(LucideIcons.pencil),
+                leading: const Icon(CupertinoIcons.pencil),
                 title: const Text('重命名'),
                 onTap: () {
                   Navigator.pop(ctx);
@@ -498,7 +498,7 @@ class _ProjectCard extends ConsumerWidget {
               ),
               ListTile(
                 leading: Icon(
-                  LucideIcons.trash2,
+                  CupertinoIcons.trash,
                   color: Theme.of(context).colorScheme.error,
                 ),
                 title: Text(

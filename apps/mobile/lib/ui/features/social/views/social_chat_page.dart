@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart' hide ConnectionState;
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_list_view/flutter_list_view.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,12 +9,21 @@ import 'package:minos/application/agent_activity_provider.dart';
 import 'package:minos/application/group_agent_provider.dart';
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/application/social_providers.dart';
+import 'package:minos/data/repositories/social_repository.dart';
 import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/domain/social_message.dart';
+import 'package:minos/infrastructure/platform_int64.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:minos/ui/core/widgets/error_feedback.dart';
+import 'package:minos/ui/core/widgets/minos_button.dart';
+import 'package:minos/ui/core/widgets/minos_text_field.dart';
+import 'package:minos/ui/core/widgets/minos_toast.dart';
 import 'package:minos/ui/features/shell/router.dart';
-import 'package:shadcn_ui/shadcn_ui.dart';
+import 'package:minos/ui/features/social/lib/message_grouping.dart';
+import 'package:minos/ui/features/social/widgets/conversation_day_divider.dart';
+import 'package:minos/ui/features/social/widgets/conversation_message_actions.dart';
+import 'package:minos/ui/features/social/widgets/conversation_message_row.dart';
+import 'package:minos/ui/theme/theme.dart';
 
 class SocialChatPage extends ConsumerStatefulWidget {
   const SocialChatPage({
@@ -48,13 +58,27 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
       FlutterListViewController();
   double _lastKeyboardInsetBottom = 0;
   int _bottomAnchorGeneration = 0;
+  bool _following = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScrollPositionChanged);
+  }
 
   @override
   void dispose() {
+    _scrollController.removeListener(_onScrollPositionChanged);
     _controller.dispose();
     _composerFocusNode.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _onScrollPositionChanged() {
+    final near = _isNearBottom();
+    if (near == _following) return;
+    setState(() => _following = near);
   }
 
   Future<void> _send() async {
@@ -118,58 +142,61 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     final selected = await showModalBottomSheet<_MentionSelection>(
       context: context,
       useSafeArea: true,
-      builder: (context) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: <Widget>[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Text(
-                '选择要艾特的成员',
-                style: ShadTheme.of(context).textTheme.h4,
-              ),
-            ),
-            if (groupAgents.isNotEmpty) ...<Widget>[
+      builder: (context) {
+        final colors = context.minosColors;
+        final theme = Theme.of(context);
+        return SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            children: <Widget>[
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                child: Text(
-                  'Agents',
-                  style: ShadTheme.of(context).textTheme.small.copyWith(
-                    color: ShadTheme.of(context).colorScheme.mutedForeground,
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text('选择要艾特的成员', style: theme.textTheme.titleLarge),
+              ),
+              if (groupAgents.isNotEmpty) ...<Widget>[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                  child: Text(
+                    'Agents',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colors.textSecondary,
+                    ),
                   ),
                 ),
-              ),
-              for (final agent in groupAgents)
-                ListTile(
-                  leading: const Icon(LucideIcons.bot, size: 20),
-                  title: Text('🤖 ${agent.name}'),
-                  subtitle: Text('@${agent.agentId}'),
-                  onTap: () =>
-                      Navigator.of(context).pop(_MentionSelection.agent(agent)),
-                ),
-              const Divider(),
-            ],
-            if (members.isNotEmpty) ...<Widget>[
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                child: Text(
-                  '成员',
-                  style: ShadTheme.of(context).textTheme.small.copyWith(
-                    color: ShadTheme.of(context).colorScheme.mutedForeground,
+                for (final agent in groupAgents)
+                  ListTile(
+                    leading: const Icon(CupertinoIcons.gear_alt_fill, size: 20),
+                    title: Text('🤖 ${agent.name}'),
+                    subtitle: Text('@${agent.agentId}'),
+                    onTap: () => Navigator.of(
+                      context,
+                    ).pop(_MentionSelection.agent(agent)),
+                  ),
+                const Divider(),
+              ],
+              if (members.isNotEmpty) ...<Widget>[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                  child: Text(
+                    '成员',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colors.textSecondary,
+                    ),
                   ),
                 ),
-              ),
-              for (final member in members)
-                ListTile(
-                  title: Text(member.displayName),
-                  subtitle: Text('@${member.minosId}'),
-                  onTap: () =>
-                      Navigator.of(context).pop(_MentionSelection.user(member)),
-                ),
+                for (final member in members)
+                  ListTile(
+                    title: Text(member.displayName),
+                    subtitle: Text('@${member.minosId}'),
+                    onTap: () => Navigator.of(
+                      context,
+                    ).pop(_MentionSelection.user(member)),
+                  ),
+              ],
             ],
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
     if (selected != null) {
       switch (selected) {
@@ -183,6 +210,9 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
 
   void _jumpToBottom({int? messageCount, bool settle = false}) {
     final generation = ++_bottomAnchorGeneration;
+    if (!_following) {
+      setState(() => _following = true);
+    }
 
     void jump() {
       if (!mounted || !_scrollController.hasClients) return;
@@ -234,7 +264,7 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
 
   @override
   Widget build(BuildContext context) {
-    final shadTheme = ShadTheme.of(context);
+    final colors = context.minosColors;
     final keyboardInsetBottom = MediaQuery.of(context).viewInsets.bottom;
     final conversationSummary = _findConversationSummary(
       ref.watch(conversationsProvider).asData?.value,
@@ -251,7 +281,8 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
       socialConversationProvider(widget.conversationId),
       (previous, next) {
         final previousCount = previous?.messages.length ?? 0;
-        if (next.messages.length > previousCount) {
+        if (next.messages.length > previousCount &&
+            (_following || previousCount == 0)) {
           _jumpToBottom(
             messageCount: next.messages.length,
             settle: previousCount == 0,
@@ -260,9 +291,15 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
       },
     );
 
+    final messageCount = ref.watch(
+      socialConversationProvider(
+        widget.conversationId,
+      ).select((SocialConversationState s) => s.messages.length),
+    );
+
     return Scaffold(
       resizeToAvoidBottomInset: false,
-      backgroundColor: shadTheme.colorScheme.background,
+      backgroundColor: colors.canvas,
       appBar: AppBar(
         toolbarHeight: 64,
         centerTitle: true,
@@ -281,7 +318,7 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
             width: kToolbarHeight,
             child: effectiveKind == ConversationKind.group
                 ? IconButton(
-                    icon: const Icon(LucideIcons.users),
+                    icon: const Icon(CupertinoIcons.person_2),
                     tooltip: '群成员',
                     onPressed: () => context.push(
                       '/social/chat/${widget.conversationId}/members',
@@ -297,14 +334,28 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
         child: Column(
           children: <Widget>[
             Expanded(
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: _composerFocusNode.unfocus,
-                child: _ConversationMessagePane(
-                  conversationId: widget.conversationId,
-                  kind: effectiveKind,
-                  scrollController: _scrollController,
-                ),
+              child: Stack(
+                children: <Widget>[
+                  GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onTap: _composerFocusNode.unfocus,
+                    child: _ConversationMessagePane(
+                      conversationId: widget.conversationId,
+                      scrollController: _scrollController,
+                    ),
+                  ),
+                  if (!_following && messageCount > 0)
+                    Positioned(
+                      right: MinosSpacing.lg,
+                      bottom: MinosSpacing.lg,
+                      child: _JumpToLatestButton(
+                        onPressed: () => _jumpToBottom(
+                          messageCount: messageCount,
+                          settle: true,
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
             AnimatedPadding(
@@ -330,6 +381,36 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
   }
 }
 
+class _JumpToLatestButton extends StatelessWidget {
+  const _JumpToLatestButton({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.minosColors;
+    return Material(
+      elevation: 2,
+      shadowColor: colors.scrim.withValues(alpha: 0.2),
+      color: colors.surface,
+      shape: const CircleBorder(),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onPressed,
+        child: SizedBox(
+          width: 44,
+          height: 44,
+          child: Icon(
+            CupertinoIcons.arrow_down,
+            size: 20,
+            color: colors.textPrimary,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ConversationTitle extends ConsumerWidget {
   const _ConversationTitle({
     required this.conversationId,
@@ -343,7 +424,7 @@ class _ConversationTitle extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final shadTheme = ShadTheme.of(context);
+    final colors = context.minosColors;
     final conversation = ref.watch(socialConversationProvider(conversationId));
     final conversationSummary = _findConversationSummary(
       ref.watch(conversationsProvider).asData?.value,
@@ -382,7 +463,7 @@ class _ConversationTitle extends ConsumerWidget {
           overflow: TextOverflow.ellipsis,
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.titleLarge?.copyWith(
-            color: Theme.of(context).colorScheme.onSurface,
+            color: colors.textPrimary,
             fontWeight: FontWeight.w700,
             fontSize: 18,
             height: 1.1,
@@ -402,7 +483,7 @@ class _ConversationTitle extends ConsumerWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center,
-              style: shadTheme.textTheme.small.copyWith(
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: color,
                 fontSize: 11,
                 fontWeight: FontWeight.w700,
@@ -494,13 +575,67 @@ String _firstNonEmpty(List<String?> candidates) {
 class _ConversationMessagePane extends ConsumerWidget {
   const _ConversationMessagePane({
     required this.conversationId,
-    required this.kind,
     required this.scrollController,
   });
 
   final String conversationId;
-  final ConversationKind? kind;
   final FlutterListViewController scrollController;
+
+  Future<void> _openAgentSession(
+    BuildContext context,
+    WidgetRef ref, {
+    required String conversationId,
+    required SocialChatMessage message,
+  }) async {
+    final fromId = message.agentSessionIdFromMessageId;
+    String? sessionId = fromId;
+    if (sessionId == null || sessionId.isEmpty) {
+      try {
+        final sessions = await ref
+            .read(socialRepositoryProvider)
+            .listAgentSessions(conversationId: conversationId, limit: 20);
+        final agentKey = message.sender.accountId.trim();
+        final matched = sessions.where((s) {
+          final id = s.agentId?.trim();
+          return id != null &&
+              id.isNotEmpty &&
+              (id == agentKey || id.toLowerCase() == agentKey.toLowerCase());
+        }).toList();
+        final pool = matched.isNotEmpty ? matched : sessions;
+        if (pool.isNotEmpty) {
+          pool.sort((a, b) {
+            return platformInt64ToInt(
+              b.lastActivityAtMs,
+            ).compareTo(platformInt64ToInt(a.lastActivityAtMs));
+          });
+          sessionId = pool.first.sessionId;
+        }
+      } catch (error) {
+        if (!context.mounted) return;
+        showMinosToast(
+          context,
+          title: '无法打开 session',
+          description: error.toString(),
+          destructive: true,
+        );
+        return;
+      }
+    }
+    if (!context.mounted) return;
+    if (sessionId == null || sessionId.isEmpty) {
+      showMinosToast(context, title: '暂无该 Agent 的执行 session');
+      return;
+    }
+    // Subscribe so ThreadView has a live topic when opened from chat.
+    unawaited(
+      ref
+          .read(socialRepositoryProvider)
+          .subscribeAgentSession(sessionId: sessionId),
+    );
+    unawaited(
+      context.push(AppRoutes.thread.replaceFirst(':sessionId', sessionId)),
+    );
+  }
 
   Future<void> _showMessageActions(
     BuildContext context,
@@ -508,64 +643,39 @@ class _ConversationMessagePane extends ConsumerWidget {
     required SocialChatMessage message,
     required bool isMine,
   }) async {
-    final canReply = message.canReply;
-    final canRecall = isMine && message.canRecall;
-    if (!canReply && !canRecall) {
-      return;
-    }
-
-    final action = await showModalBottomSheet<_MessageAction>(
-      context: context,
-      useSafeArea: true,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            if (canReply)
-              ListTile(
-                leading: const Icon(LucideIcons.reply),
-                title: const Text('引用消息'),
-                onTap: () => Navigator.of(context).pop(_MessageAction.reply),
-              ),
-            if (canRecall)
-              ListTile(
-                leading: const Icon(LucideIcons.undo2),
-                title: const Text('撤回消息'),
-                onTap: () => Navigator.of(context).pop(_MessageAction.recall),
-              ),
-          ],
-        ),
-      ),
+    final action = await showConversationMessageActions(
+      context,
+      message: message,
+      isMine: isMine,
     );
     if (!context.mounted || action == null) {
       return;
     }
 
     switch (action) {
-      case _MessageAction.reply:
+      case ConversationMessageAction.reply:
         ref
             .read(socialReplyDraftProvider(conversationId).notifier)
             .select(message.localId);
         return;
-      case _MessageAction.recall:
-        final confirmed = await showDialog<bool>(
-          context: context,
-          builder: (dialogContext) => AlertDialog(
-            title: const Text('撤回这条消息？'),
-            content: const Text('撤回后，对话中会显示该消息已被撤回。'),
-            actions: <Widget>[
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(false),
-                child: const Text('取消'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(true),
-                child: const Text('撤回'),
-              ),
-            ],
-          ),
-        );
-        if (confirmed != true || !context.mounted) {
+      case ConversationMessageAction.copy:
+        await copyMessageText(message.text);
+        if (!context.mounted) return;
+        showMinosToast(context, title: '已复制');
+        return;
+      case ConversationMessageAction.retry:
+        try {
+          await ref
+              .read(socialConversationProvider(conversationId).notifier)
+              .retryMessage(message.localId);
+        } catch (error) {
+          if (!context.mounted) return;
+          _showError(context, '重试失败', error);
+        }
+        return;
+      case ConversationMessageAction.recall:
+        final confirmed = await confirmRecallMessage(context);
+        if (!confirmed || !context.mounted) {
           return;
         }
         try {
@@ -622,9 +732,9 @@ class _ConversationMessagePane extends ConsumerWidget {
                   final previous = index == 0
                       ? null
                       : state.messages[index - 1];
-                  final showTimeSeparator = _shouldShowTimeSeparator(
-                    previous?.createdAtMs,
-                    message.createdAtMs,
+                  final showDayDivider = shouldShowDayDivider(
+                    previous,
+                    message,
                   );
                   final isMine = message.sender.accountId == state.myAccountId;
                   final isAgent = message.senderType == SenderType.agent;
@@ -632,6 +742,10 @@ class _ConversationMessagePane extends ConsumerWidget {
                       !isMine &&
                       state.myAccountId != null &&
                       message.mentionedAccountIds.contains(state.myAccountId);
+                  final groupedWithPrevious = isMessageGroupContinuation(
+                    previous,
+                    message,
+                  );
                   final retryAction =
                       message.deliveryState == SocialMessageDeliveryState.failed
                       ? () => ref
@@ -642,8 +756,15 @@ class _ConversationMessagePane extends ConsumerWidget {
                             )
                             .retryMessage(message.localId)
                       : null;
-                  final actionHandler =
-                      message.canReply || (isMine && message.canRecall)
+                  final canShowActions =
+                      !message.isRecalled &&
+                      (message.canReply ||
+                          (isMine && message.canRecall) ||
+                          (isMine &&
+                              message.deliveryState ==
+                                  SocialMessageDeliveryState.failed) ||
+                          message.text.trim().isNotEmpty);
+                  final actionHandler = canShowActions
                       ? () => _showMessageActions(
                           context,
                           ref,
@@ -652,40 +773,43 @@ class _ConversationMessagePane extends ConsumerWidget {
                         )
                       : null;
                   return Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      12,
-                      index == 0 ? 12 : 0,
-                      12,
-                      index == state.messages.length - 1 ? 20 : 0,
+                    padding: EdgeInsets.only(
+                      top: index == 0 ? MinosSpacing.sm : 0,
+                      bottom: index == state.messages.length - 1
+                          ? MinosSpacing.xl
+                          : 0,
                     ),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
-                        if (showTimeSeparator)
-                          _ChatTimeSeparator(
-                            label: _formatTimelineLabel(message.createdAtMs),
+                        if (showDayDivider)
+                          ConversationDayDivider(
+                            label: formatDayDividerLabel(message.createdAtMs),
                           ),
-                        _ChatBubble(
-                          title: kind == ConversationKind.group || isAgent
-                              ? message.sender.displayName
-                              : null,
-                          senderName: message.sender.displayName,
-                          text: message.text,
+                        ConversationMessageRow(
+                          message: message,
                           isMine: isMine,
-                          isAgent: isAgent,
+                          groupedWithPrevious: groupedWithPrevious,
                           mentionsMe: mentionsMe,
-                          replyTo: message.replyTo,
-                          recalledAtMs: message.recalledAtMs,
-                          deliveryState: message.deliveryState,
                           onRetry: retryAction,
                           onLongPress: actionHandler,
+                          onOpenAgentSession: !isAgent
+                              ? null
+                              : () => _openAgentSession(
+                                  context,
+                                  ref,
+                                  conversationId: conversationId,
+                                  message: message,
+                                ),
                         ),
                       ],
                     ),
                   );
                 },
                 childCount: state.messages.length,
-                onItemKey: (index) => state.messages[index].localId,
+                // Include index so rare localId collisions (hub merge / pending)
+                // cannot crash FlutterListView with "Duplicate keys".
+                onItemKey: (index) => '${state.messages[index].localId}#$index',
                 keepPosition: true,
                 keepPositionOffset: 80,
               ),
@@ -713,7 +837,7 @@ class _ConversationComposer extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final shadTheme = ShadTheme.of(context);
+    final colors = context.minosColors;
     final replyTarget = ref.watch(socialReplyMessageProvider(conversationId));
     final myAccountId = ref.watch(
       socialConversationProvider(
@@ -741,8 +865,8 @@ class _ConversationComposer extends ConsumerWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: shadTheme.colorScheme.background,
-        border: Border(top: BorderSide(color: shadTheme.colorScheme.border)),
+        color: colors.canvas,
+        border: Border(top: BorderSide(color: colors.border)),
       ),
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       child: Column(
@@ -766,7 +890,7 @@ class _ConversationComposer extends ConsumerWidget {
           Row(
             children: <Widget>[
               if (kind == ConversationKind.group) ...<Widget>[
-                ShadButton.outline(
+                MinosButton.outline(
                   onPressed: !hasMentionable
                       ? null
                       : () => onShowMentionPicker(mentionable),
@@ -775,17 +899,17 @@ class _ConversationComposer extends ConsumerWidget {
                 const SizedBox(width: 8),
               ],
               Expanded(
-                child: ShadInput(
+                child: MinosTextField(
                   controller: controller,
                   focusNode: focusNode,
                   minLines: 1,
                   maxLines: 4,
-                  placeholder: const Text('发送消息...'),
+                  placeholder: '发送消息...',
                   onSubmitted: (_) => onSend(),
                 ),
               ),
               const SizedBox(width: 10),
-              ShadButton(onPressed: onSend, child: const Text('发送')),
+              MinosButton(onPressed: onSend, child: const Text('发送')),
             ],
           ),
         ],
@@ -801,10 +925,10 @@ class _AgentActivityTicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final shadTheme = ShadTheme.of(context);
+    final colors = context.minosColors;
     final toneColor = _activityToneColor(context, activity.tone);
     final textStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
-      color: shadTheme.colorScheme.foreground,
+      color: colors.textPrimary,
       fontWeight: FontWeight.w600,
       height: 1.1,
     );
@@ -812,12 +936,15 @@ class _AgentActivityTicker extends StatelessWidget {
       duration: const Duration(milliseconds: 180),
       switchInCurve: Curves.easeOutCubic,
       switchOutCurve: Curves.easeInCubic,
+      // Key by session only — label changes every stream token and must not
+      // recreate the ticker (or collide when labels match across frames).
       child: SizedBox(
-        key: ValueKey('${activity.sessionId}:${activity.label}'),
+        key: ValueKey(activity.sessionId),
         height: 34,
+        width: double.infinity,
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: shadTheme.colorScheme.secondary.withValues(alpha: 0.72),
+            color: colors.surfaceMuted.withValues(alpha: 0.72),
             borderRadius: BorderRadius.circular(8),
             border: Border.all(color: toneColor.withValues(alpha: 0.28)),
           ),
@@ -831,6 +958,7 @@ class _AgentActivityTicker extends StatelessWidget {
                   child: DefaultTextStyle.merge(
                     style: textStyle,
                     maxLines: 1,
+                    softWrap: false,
                     overflow: TextOverflow.clip,
                     child: _MarqueeText(text: activity.label),
                   ),
@@ -846,20 +974,20 @@ class _AgentActivityTicker extends StatelessWidget {
 
 IconData _activityIcon(AgentActivityKind kind) {
   return switch (kind) {
-    AgentActivityKind.reasoning => LucideIcons.sparkles,
-    AgentActivityKind.tool => LucideIcons.terminal,
-    AgentActivityKind.success => LucideIcons.bot,
-    AgentActivityKind.error => LucideIcons.circleAlert,
-    AgentActivityKind.running => LucideIcons.bot,
+    AgentActivityKind.reasoning => CupertinoIcons.sparkles,
+    AgentActivityKind.tool => CupertinoIcons.chevron_left_slash_chevron_right,
+    AgentActivityKind.success => CupertinoIcons.gear_alt_fill,
+    AgentActivityKind.error => CupertinoIcons.exclamationmark_triangle,
+    AgentActivityKind.running => CupertinoIcons.gear_alt_fill,
   };
 }
 
 Color _activityToneColor(BuildContext context, AgentActivityTone tone) {
-  final shadTheme = ShadTheme.of(context);
+  final colors = context.minosColors;
   return switch (tone) {
-    AgentActivityTone.info => shadTheme.colorScheme.primary,
-    AgentActivityTone.success => shadTheme.colorScheme.primary,
-    AgentActivityTone.error => shadTheme.colorScheme.destructive,
+    AgentActivityTone.info => colors.accent,
+    AgentActivityTone.success => colors.accent,
+    AgentActivityTone.error => colors.danger,
   };
 }
 
@@ -903,17 +1031,29 @@ class _MarqueeTextState extends State<_MarqueeText>
   @override
   Widget build(BuildContext context) {
     final style = DefaultTextStyle.of(context).style;
+    // Cap display length so stream previews cannot explode layout.
+    final display = _marqueeDisplayText(widget.text);
     return LayoutBuilder(
       builder: (context, constraints) {
+        final maxW = constraints.maxWidth;
+        if (!maxW.isFinite || maxW <= 0) {
+          return Text(
+            display,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            softWrap: false,
+          );
+        }
+
         final painter = TextPainter(
-          text: TextSpan(text: widget.text, style: style),
+          text: TextSpan(text: display, style: style),
           maxLines: 1,
           textDirection: Directionality.of(context),
         )..layout(maxWidth: double.infinity);
         final textWidth = painter.width;
-        if (textWidth <= constraints.maxWidth) {
+        if (textWidth <= maxW) {
           return Text(
-            widget.text,
+            display,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             softWrap: false,
@@ -922,28 +1062,48 @@ class _MarqueeTextState extends State<_MarqueeText>
 
         const gap = 42.0;
         final distance = textWidth + gap;
+        // OverflowBox lets the scrolling Row size itself beyond the viewport;
+        // ClipRect hides the excess. Without this, Flutter asserts Row overflow
+        // even though the marquee is intentionally wider than the slot.
         return ClipRect(
-          child: AnimatedBuilder(
-            animation: _controller,
-            builder: (context, child) {
-              return Transform.translate(
-                offset: Offset(-distance * _controller.value, 0),
-                child: child,
-              );
-            },
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Text(widget.text, maxLines: 1, softWrap: false),
-                const SizedBox(width: gap),
-                Text(widget.text, maxLines: 1, softWrap: false),
-              ],
+          child: OverflowBox(
+            alignment: Alignment.centerLeft,
+            minWidth: 0,
+            maxWidth: double.infinity,
+            minHeight: 0,
+            maxHeight: constraints.maxHeight.isFinite
+                ? constraints.maxHeight
+                : null,
+            child: AnimatedBuilder(
+              animation: _controller,
+              builder: (context, child) {
+                return Transform.translate(
+                  offset: Offset(-distance * _controller.value, 0),
+                  child: child,
+                );
+              },
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Text(display, maxLines: 1, softWrap: false),
+                  const SizedBox(width: gap),
+                  Text(display, maxLines: 1, softWrap: false),
+                ],
+              ),
             ),
           ),
         );
       },
     );
   }
+}
+
+String _marqueeDisplayText(String raw) {
+  final collapsed = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+  if (collapsed.isEmpty) return '…';
+  const maxChars = 80;
+  if (collapsed.length <= maxChars) return collapsed;
+  return '${collapsed.substring(0, maxChars - 1)}…';
 }
 
 class _ComposerReplyBanner extends StatelessWidget {
@@ -961,12 +1121,13 @@ class _ComposerReplyBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final shadTheme = ShadTheme.of(context);
+    final colors = context.minosColors;
+    final theme = Theme.of(context);
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: shadTheme.colorScheme.secondary,
+        color: colors.surfaceMuted,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: shadTheme.colorScheme.border),
+        border: Border.all(color: colors.border),
       ),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
@@ -979,7 +1140,7 @@ class _ComposerReplyBanner extends StatelessWidget {
                 children: <Widget>[
                   Text(
                     '回复 $senderName',
-                    style: shadTheme.textTheme.small.copyWith(
+                    style: theme.textTheme.bodySmall?.copyWith(
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -988,14 +1149,16 @@ class _ComposerReplyBanner extends StatelessWidget {
                     isRecalled ? '原消息已撤回' : text,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: shadTheme.textTheme.muted,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: colors.textSecondary,
+                    ),
                   ),
                 ],
               ),
             ),
             IconButton(
               onPressed: onClear,
-              icon: const Icon(LucideIcons.x, size: 18),
+              icon: const Icon(CupertinoIcons.xmark, size: 18),
             ),
           ],
         ),
@@ -1012,320 +1175,30 @@ class _ChatInlineError extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final shadTheme = ShadTheme.of(context);
+    final colors = context.minosColors;
+    final theme = Theme.of(context);
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
         Icon(
-          LucideIcons.circleAlert,
+          CupertinoIcons.exclamationmark_triangle,
           size: 36,
-          color: shadTheme.colorScheme.mutedForeground,
+          color: colors.textSecondary,
         ),
         const SizedBox(height: 10),
-        Text(title, style: shadTheme.textTheme.h4),
+        Text(title, style: theme.textTheme.titleLarge),
         const SizedBox(height: 6),
         Text(
           description,
           textAlign: TextAlign.center,
-          style: shadTheme.textTheme.muted,
-        ),
-      ],
-    );
-  }
-}
-
-class _SenderHeader extends StatelessWidget {
-  const _SenderHeader({
-    required this.title,
-    required this.isAgent,
-    required this.color,
-  });
-
-  final String title;
-  final bool isAgent;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    final shadTheme = ShadTheme.of(context);
-    if (!isAgent) {
-      return Text(
-        title,
-        style: shadTheme.textTheme.small.copyWith(color: color),
-      );
-    }
-
-    return Row(
-      mainAxisSize: .min,
-      children: <Widget>[
-        Icon(LucideIcons.bot, size: 14, color: color),
-        const SizedBox(width: 5),
-        Flexible(
-          child: Text(
-            title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: shadTheme.textTheme.small.copyWith(
-              color: color,
-              fontWeight: .w700,
-            ),
-          ),
-        ),
-        const SizedBox(width: 6),
-        DecoratedBox(
-          decoration: BoxDecoration(
-            color: Theme.of(
-              context,
-            ).colorScheme.tertiary.withValues(alpha: 0.14),
-            borderRadius: .circular(999),
-          ),
-          child: Padding(
-            padding: const .symmetric(horizontal: 6, vertical: 2),
-            child: Text(
-              'Agent',
-              style: shadTheme.textTheme.small.copyWith(
-                color: Theme.of(context).colorScheme.tertiary,
-                fontWeight: .w700,
-              ),
-            ),
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: colors.textSecondary,
           ),
         ),
       ],
     );
   }
 }
-
-class _ChatBubble extends StatelessWidget {
-  const _ChatBubble({
-    required this.text,
-    required this.isMine,
-    required this.isAgent,
-    required this.senderName,
-    this.title,
-    this.mentionsMe = false,
-    this.replyTo,
-    this.recalledAtMs,
-    this.deliveryState = SocialMessageDeliveryState.sent,
-    this.onRetry,
-    this.onLongPress,
-  });
-
-  final String? title;
-  final String senderName;
-  final String text;
-  final bool isMine;
-  final bool isAgent;
-  final bool mentionsMe;
-  final ChatMessageReplySummary? replyTo;
-  final int? recalledAtMs;
-  final SocialMessageDeliveryState deliveryState;
-  final VoidCallback? onRetry;
-  final VoidCallback? onLongPress;
-
-  @override
-  Widget build(BuildContext context) {
-    final shadTheme = ShadTheme.of(context);
-    final theme = Theme.of(context);
-    final isRecalled = recalledAtMs != null;
-    final bubbleColor = isAgent
-        ? theme.colorScheme.surfaceContainerHigh
-        : isMine
-        ? shadTheme.colorScheme.primary
-        : shadTheme.colorScheme.secondary;
-    final foreground = isAgent
-        ? theme.colorScheme.onSurface
-        : isMine
-        ? shadTheme.colorScheme.primaryForeground
-        : shadTheme.colorScheme.secondaryForeground;
-    final mentionAccent = isMine
-        ? foreground.withValues(alpha: 0.88)
-        : isAgent
-        ? theme.colorScheme.tertiary
-        : shadTheme.colorScheme.primary;
-
-    return Padding(
-      padding: EdgeInsets.fromLTRB(isMine ? 52 : 0, 0, isMine ? 0 : 52, 12),
-      child: Align(
-        alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-        child: GestureDetector(
-          onLongPress: onLongPress,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: MediaQuery.of(context).size.width * 0.76,
-            ),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: isRecalled ? shadTheme.colorScheme.muted : bubbleColor,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: mentionsMe
-                      ? const Color(0xFFF59E0B)
-                      : isAgent
-                      ? theme.colorScheme.tertiary.withValues(alpha: 0.42)
-                      : isMine
-                      ? bubbleColor
-                      : shadTheme.colorScheme.border.withValues(alpha: 0.9),
-                ),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    if (mentionsMe) ...<Widget>[
-                      DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: const Color(
-                            0xFFF59E0B,
-                          ).withValues(alpha: 0.16),
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 3,
-                          ),
-                          child: Text(
-                            '提到了你',
-                            style: shadTheme.textTheme.small.copyWith(
-                              color: const Color(0xFFB45309),
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                    ],
-                    if (title != null) ...<Widget>[
-                      _SenderHeader(
-                        title: title!,
-                        isAgent: isAgent,
-                        color: foreground.withValues(alpha: 0.82),
-                      ),
-                      const SizedBox(height: 4),
-                    ],
-                    if (!isRecalled && replyTo != null) ...<Widget>[
-                      _ReplyPreviewBlock(
-                        senderName: replyTo!.sender.displayName,
-                        text: replyTo!.text,
-                        isRecalled: replyTo!.recalledAtMs != null,
-                        foreground: foreground,
-                        borderColor: foreground.withValues(alpha: 0.22),
-                      ),
-                      const SizedBox(height: 8),
-                    ],
-                    if (isRecalled)
-                      Text(
-                        isMine ? '你撤回了一条消息' : '$senderName 撤回了一条消息',
-                        style: shadTheme.textTheme.small.copyWith(
-                          color: shadTheme.colorScheme.mutedForeground,
-                          fontStyle: FontStyle.italic,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      )
-                    else
-                      RichText(
-                        text: TextSpan(
-                          style: TextStyle(color: foreground, height: 1.35),
-                          children: _buildMentionSpans(
-                            text,
-                            foreground,
-                            mentionAccent,
-                          ),
-                        ),
-                      ),
-                    if (isMine &&
-                        !isRecalled &&
-                        deliveryState !=
-                            SocialMessageDeliveryState.sent) ...<Widget>[
-                      const SizedBox(height: 6),
-                      GestureDetector(
-                        onTap: onRetry,
-                        child: Text(
-                          switch (deliveryState) {
-                            SocialMessageDeliveryState.sending => '发送中...',
-                            SocialMessageDeliveryState.failed => '发送失败，点击重试',
-                            SocialMessageDeliveryState.sent => '',
-                          },
-                          style: shadTheme.textTheme.small.copyWith(
-                            color:
-                                deliveryState ==
-                                    SocialMessageDeliveryState.failed
-                                ? const Color(0xFFFCA5A5)
-                                : foreground.withValues(alpha: 0.82),
-                            fontWeight:
-                                deliveryState ==
-                                    SocialMessageDeliveryState.failed
-                                ? FontWeight.w700
-                                : FontWeight.w500,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ReplyPreviewBlock extends StatelessWidget {
-  const _ReplyPreviewBlock({
-    required this.senderName,
-    required this.text,
-    required this.isRecalled,
-    required this.foreground,
-    required this.borderColor,
-  });
-
-  final String senderName;
-  final String text;
-  final bool isRecalled;
-  final Color foreground;
-  final Color borderColor;
-
-  @override
-  Widget build(BuildContext context) {
-    final shadTheme = ShadTheme.of(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: borderColor),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text(
-              senderName,
-              style: shadTheme.textTheme.small.copyWith(
-                color: foreground.withValues(alpha: 0.82),
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              isRecalled ? '原消息已撤回' : text,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: shadTheme.textTheme.small.copyWith(
-                color: foreground.withValues(alpha: 0.82),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-enum _MessageAction { reply, recall }
 
 /// Sealed class for mention picker selection result.
 sealed class _MentionSelection {
@@ -1342,63 +1215,6 @@ class _MentionSelectionUser extends _MentionSelection {
 class _MentionSelectionAgent extends _MentionSelection {
   const _MentionSelectionAgent(this.agent);
   final AgentProfile agent;
-}
-
-List<InlineSpan> _buildMentionSpans(
-  String text,
-  Color foreground,
-  Color accent,
-) {
-  final pattern = RegExp(r'@[A-Za-z0-9]+');
-  final matches = pattern.allMatches(text);
-  if (matches.isEmpty) {
-    return <InlineSpan>[TextSpan(text: text)];
-  }
-
-  final spans = <InlineSpan>[];
-  var cursor = 0;
-  for (final match in matches) {
-    if (match.start > cursor) {
-      spans.add(TextSpan(text: text.substring(cursor, match.start)));
-    }
-    spans.add(
-      TextSpan(
-        text: match.group(0),
-        style: TextStyle(color: accent, fontWeight: FontWeight.w700),
-      ),
-    );
-    cursor = match.end;
-  }
-  if (cursor < text.length) {
-    spans.add(TextSpan(text: text.substring(cursor)));
-  }
-  return spans;
-}
-
-class _ChatTimeSeparator extends StatelessWidget {
-  const _ChatTimeSeparator({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final shadTheme = ShadTheme.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 14),
-      child: Center(
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: shadTheme.colorScheme.muted,
-            borderRadius: BorderRadius.circular(999),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            child: Text(label, style: shadTheme.textTheme.muted),
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 enum _ConversationStatus { online, offline, busy, executing }
@@ -1508,45 +1324,13 @@ Color _conversationStatusColor(
   BuildContext context,
   _ConversationStatus status,
 ) {
-  final scheme = Theme.of(context).colorScheme;
+  final colors = context.minosColors;
   return switch (status) {
-    _ConversationStatus.online => const Color(0xFF16A34A),
-    _ConversationStatus.offline => scheme.onSurfaceVariant.withValues(
-      alpha: 0.76,
-    ),
-    _ConversationStatus.busy => const Color(0xFFD97706),
-    _ConversationStatus.executing => const Color(0xFF2563EB),
+    _ConversationStatus.online => colors.success,
+    _ConversationStatus.offline => colors.textSecondary.withValues(alpha: 0.76),
+    _ConversationStatus.busy => colors.warning,
+    _ConversationStatus.executing => colors.accent,
   };
-}
-
-bool _shouldShowTimeSeparator(int? previousTsMs, int currentTsMs) {
-  if (previousTsMs == null) return true;
-  return currentTsMs - previousTsMs >=
-      const Duration(minutes: 1).inMilliseconds;
-}
-
-String _formatTimelineLabel(int tsMs) {
-  final date = DateTime.fromMillisecondsSinceEpoch(tsMs, isUtc: false);
-  final now = DateTime.now();
-  if (_isSameDay(date, now)) {
-    return _formatClock(date);
-  }
-
-  if (date.year == now.year) {
-    return '${date.month}月${date.day}日 ${_formatClock(date)}';
-  }
-
-  return '${date.year}年${date.month}月${date.day}日 ${_formatClock(date)}';
-}
-
-String _formatClock(DateTime date) {
-  final hh = date.hour.toString().padLeft(2, '0');
-  final mm = date.minute.toString().padLeft(2, '0');
-  return '$hh:$mm';
-}
-
-bool _isSameDay(DateTime lhs, DateTime rhs) {
-  return lhs.year == rhs.year && lhs.month == rhs.month && lhs.day == rhs.day;
 }
 
 void _showError(BuildContext context, String title, Object error) {

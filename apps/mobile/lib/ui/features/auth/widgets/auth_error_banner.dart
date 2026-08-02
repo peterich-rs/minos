@@ -1,46 +1,33 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:minos/domain/minos_error_display.dart';
 import 'package:minos/src/rust/api/minos.dart' show MinosError;
 import 'package:minos/ui/theme/theme.dart';
 
-final _authErrorBannerVisibleProvider = NotifierProvider.autoDispose
-    .family<_AuthErrorBannerVisibleController, bool, String>(
-      _AuthErrorBannerVisibleController.new,
-    );
-
-class _AuthErrorBannerVisibleController extends Notifier<bool> {
-  _AuthErrorBannerVisibleController(String _);
-
-  @override
-  bool build() => false;
-
-  void setVisible(bool visible) {
-    if (state == visible) return;
-    state = visible;
-  }
-}
-
 /// Auto-dismissing destructive banner for auth errors.
-class AuthErrorBanner extends ConsumerStatefulWidget {
+///
+/// Visibility is local widget state (not a Riverpod provider) so arming from
+/// [initState] / [didUpdateWidget] cannot hit "modify provider while building".
+class AuthErrorBanner extends StatefulWidget {
   const AuthErrorBanner({super.key, required this.error});
 
   final Object? error;
 
   @override
-  ConsumerState<AuthErrorBanner> createState() => _AuthErrorBannerState();
+  State<AuthErrorBanner> createState() => _AuthErrorBannerState();
 }
 
-class _AuthErrorBannerState extends ConsumerState<AuthErrorBanner> {
-  late final String _bannerId = 'auth-error-banner-${identityHashCode(this)}';
+class _AuthErrorBannerState extends State<AuthErrorBanner> {
   Timer? _timer;
+  bool _visible = false;
 
   @override
   void initState() {
     super.initState();
-    if (widget.error != null) _arm();
+    if (widget.error != null) {
+      _arm();
+    }
   }
 
   @override
@@ -64,10 +51,13 @@ class _AuthErrorBannerState extends ConsumerState<AuthErrorBanner> {
     });
   }
 
+  /// Defer state writes out of the build/update pipeline.
   void _setVisible(bool visible) {
-    ref
-        .read(_authErrorBannerVisibleProvider(_bannerId).notifier)
-        .setVisible(visible);
+    if (_visible == visible) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _visible == visible) return;
+      setState(() => _visible = visible);
+    });
   }
 
   @override
@@ -78,9 +68,8 @@ class _AuthErrorBannerState extends ConsumerState<AuthErrorBanner> {
 
   @override
   Widget build(BuildContext context) {
-    final visible = ref.watch(_authErrorBannerVisibleProvider(_bannerId));
     final err = widget.error;
-    if (!visible || err == null) return const SizedBox.shrink();
+    if (!_visible || err == null) return const SizedBox.shrink();
 
     final title = switch (err) {
       final MinosError typed => typed.userMessage(),

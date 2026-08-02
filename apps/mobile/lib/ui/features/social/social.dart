@@ -1,7 +1,7 @@
 /// Feature: Social (People & Conversations)
 ///
 /// Friend management, direct messaging, and group conversations.
-/// Includes friend search, friend requests, and the social chat surface.
+/// Collaboration IM uses Slack/Buzz full-width rows (aligned with Desktop).
 ///
 /// View Models:
 ///   - [SocialConversation] (application/social_providers.dart)
