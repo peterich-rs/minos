@@ -6,8 +6,6 @@ import {
   Cpu,
   FolderTree,
   Laptop2,
-  Plus,
-  QrCode,
   RefreshCw,
   Trash2,
 } from 'lucide-react'
@@ -21,17 +19,6 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -40,7 +27,6 @@ import {
   type HostSummary,
   type ListHostSkillsResponse,
   type WriteHostSkillConfigResponse,
-  pairHost,
   listHosts,
   runWithSessionRefresh,
 } from '@/lib/minos'
@@ -69,9 +55,6 @@ export function DevicesWorkspace() {
   } = useAppStore()
   const activeSession = session!
 
-  const [pairDialogOpen, setPairDialogOpen] = useState(false)
-  const [pairToken, setPairToken] = useState('')
-  const [pairBusy, setPairBusy] = useState(false)
   const [hostsRefreshing, setHostsRefreshing] = useState(false)
   const [skillsByHost, setSkillsByHost] = useState<Record<string, HostSkillsEntry[]>>({})
   const [skillsError, setSkillsError] = useState<Record<string, string>>({})
@@ -150,33 +133,15 @@ export function DevicesWorkspace() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveHost, connectionState])
 
-  async function handlePair() {
-    if (!pairToken.trim()) return
-    try {
-      setPairBusy(true)
-      await runWithSessionRefresh(activeSession, deviceId, setSession, (current) =>
-        pairHost(deviceId, current.accessToken, pairToken.trim(), 'Browser admin'),
-      )
-      toast.success('配对成功')
-      setPairToken('')
-      setPairDialogOpen(false)
-      await refreshHosts()
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e))
-    } finally {
-      setPairBusy(false)
-    }
-  }
-
   return (
     <div className="flex h-full flex-col gap-4 overflow-hidden p-4">
       {/* Hosts list */}
       <Card className="flex flex-col">
         <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
           <div>
-            <CardTitle>已配对 Mac</CardTitle>
+            <CardTitle>已链接 Mac</CardTitle>
             <CardDescription>
-              所有配对到当前账户的主机,可在此切换当前运行上下文。
+              同账号在 Desktop 上 Link 的主机。可在此切换当前运行上下文。
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
@@ -189,43 +154,6 @@ export function DevicesWorkspace() {
               <RefreshCw size={14} className={cn(hostsRefreshing && 'animate-spin')} />
               刷新
             </Button>
-            <Dialog open={pairDialogOpen} onOpenChange={setPairDialogOpen}>
-              <DialogTrigger asChild>
-                <Button size="sm">
-                  <Plus size={14} />
-                  配对新 Mac
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>输入配对码</DialogTitle>
-                  <DialogDescription>
-                    在 Mac 端的 Minos 菜单栏里 "显示配对码",将完整字符串粘贴到此处。
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="flex flex-col gap-3">
-                  <Label>配对码</Label>
-                  <Input
-                    value={pairToken}
-                    onChange={(e) => setPairToken(e.target.value)}
-                    placeholder="pair_xxxxxxxxx"
-                    className="mono"
-                  />
-                  <div className="flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                    <QrCode size={14} />
-                    <span>Mac 生成的 JSON QR 码内包含 pairing_token 字段。</span>
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button variant="secondary" onClick={() => setPairDialogOpen(false)}>
-                    取消
-                  </Button>
-                  <Button onClick={handlePair} disabled={pairBusy || !pairToken.trim()}>
-                    {pairBusy ? '配对中…' : '完成配对'}
-                  </Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
           </div>
         </CardHeader>
         <CardContent className="pt-0">
@@ -235,9 +163,9 @@ export function DevicesWorkspace() {
                 <Laptop2 size={22} />
               </div>
               <div>
-                <p className="text-sm font-medium">还没有配对 Mac</p>
+                <p className="text-sm font-medium">还没有链接的 Mac</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  在 Mac 端运行 Minos 并使用上方的 "配对新 Mac" 按钮添加。
+                  在 Desktop 登录同一账号后执行 “Link this Mac”。
                 </p>
               </div>
             </div>

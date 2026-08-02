@@ -96,20 +96,19 @@
 | `jwt.rs` | JWT 签发/验证 | `Claims`, `sign()`, `verify()`, `sign_ws_ticket()`, `verify_ws_ticket()` |
 | `bearer.rs` | Bearer token 提取 | `require()`, `require_account()` |
 | `passwords.rs` | Argon2id 密码哈希 | hash/verify |
-| `use_case.rs` | 认证业务逻辑 | `AuthUseCase` — register, login, refresh, logout, change_password |
-| `host_bootstrap.rs` | Host 初始认证 | `BootstrapNonceStore` |
+| `use_case.rs` | 认证业务逻辑 | `AuthUseCase` — supabase_exchange, refresh, logout, ws-ticket |
+| `host_bootstrap.rs` | Host Ed25519 初始证明 | `BootstrapNonceStore`（Redis 或 in-memory；`GETDEL` 单次消费） |
 | `host_installation.rs` | Host 安装令牌 | `hit_*` 令牌验证 |
 | `realtime_ticket.rs` | WS 票据存储 | `RealtimeTicketStore` — 一次性票据 |
 | `rate_limit.rs` | 速率限制 | `RateLimiter` — 固定窗口 |
 
 ### 认证流程
 
-1. **注册** (`POST /v1/auth/register`): Argon2id 哈希密码 → 插入 account → 返回 JWT + refresh token
-2. **登录** (`POST /v1/auth/login`): 验证密码 → 签发 JWT
+1. **Supabase 交换** (`POST /v1/auth/supabase`): 校验 IdP JWT → upsert account by `supabase_sub` → 签发 Minos JWT + refresh
 3. **Supabase 交换** (`POST /v1/auth/supabase`): 校验 Supabase access JWT（JWKS）→ 按 `sub`/verified email 合并或创建 account → 签发 **Minos** JWT + refresh（不经 device-secret `authenticate()`）
 4. **刷新** (`POST /v1/auth/refresh`): 验证 refresh token → 轮转签发新 JWT + refresh token
-4. **Bearer 认证**: `Authorization: Bearer <jwt>` → `jwt::verify()` → 提取 account_id/device_id
-5. **WS 票据**: Bearer 认证后签发 60s 一次性 JWT → WS 升级时消费
+5. **Bearer 认证**: `Authorization: Bearer <jwt>` → `jwt::verify()` → 提取 account_id/device_id
+6. **WS 票据**: Bearer 认证后签发 60s 一次性 JWT → WS 升级时消费
 
 ### 速率限制
 
@@ -117,21 +116,37 @@
 - 登录: 10次/分钟/email, 5次/分钟/IP
 - 刷新: 60次/小时/account
 
-## 配对模块 (`src/pairing/`)
+## Host Link（同账户绑定，主路径）
 
-### 核心类型: `PairingService`
+**Primary path** for account↔host binding (D02). Host Link coexists until Phase D cleanup.
 
-### 配对流程（正式/代码模式）
+| Endpoint | Auth | 作用 |
+|----------|------|------|
+| `POST /v1/hosts/link` | account bearer + host Ed25519 proof | upsert `host_links` + 签发 `hit_*` |
+| `POST /v1/hosts/unlink` | account bearer | 删 link、**始终**撤销 host tokens、kill `/ws/host`、清 peer cache |
+| `GET /v1/hosts` | account bearer | 列出本账户 hosts（`online` 来自 connection registry） |
 
-1. **Mac 请求配对码**: `POST /v1/host/pairing/request-code` → 返回配对码
-2. **手机确认**: `POST /v1/pairing/confirm` 带配对码 → 创建 `account_host_pairings` 关联
-3. **Mac 赎回**: `POST /v1/host/pairing/redeem` → 获得 `hit_*` host 安装令牌
+Link proof 签名载荷：`"{installation_id}:{nonce}:v1/hosts/link"`（无 leading slash）。Nonce 经 `POST /v1/host/bootstrap/nonce` 获取；多实例部署时 `BootstrapNonceStore` 走 Redis（与 `RealtimeTicketStore` 同 `MINOS_REDIS_URL`）。
+
+`host already linked elsewhere` → **409** `host_linked_elsewhere`（Host Link 路径单 account↔host）。
+
+实现：`http/v1/hosts.rs` + `HostLinkService::link_host` / `unlink_host`。
+
+## 配对模块 (`src/pairing/`) — QR（遗留，Phase D 删除）
+
+### 核心类型: `HostLinkService`
+
+### QR 配对流程（仍挂载）
+
+1. **Mac 请求配对码**: `POST /v1/hosts/link` → 返回配对码
+2. **手机确认**: `POST /v1/hosts/link` 带配对码 → 创建 `host_links` 关联
+3. **Mac 赎回**: `POST /v1/hosts/link` → 获得 `hit_*` host 安装令牌
 4. **Mac 连接**: 用安装令牌签发 WS ticket → 连接 `/ws/host`
 
 ### 安全措施
 
 - 配对码/令牌存储前 SHA-256 哈希
-- Device secret 使用 Argon2id 哈希（PHC 字符串格式）
+- Host installation token 明文仅返回一次，库中只存 SHA-256
 - 禁止自我配对
 - 所有变更使用 `BEGIN IMMEDIATE`（SQLite）或 `SERIALIZABLE`（Postgres）事务
 
@@ -178,13 +193,13 @@ Migrations 为 latest-only 单一初始 schema（`sqlx::migrate!`）：
 
 | 表 | 用途 |
 |----|------|
-| `accounts` | 账户（email, password_hash, minos_id, display_name） |
-| `devices` | 设备（role: agent-host/mobile-client/browser-admin, secret_hash, account_id） |
+| `accounts` | 账户（email, supabase_sub, minos_id, display_name）— 无本地密码 |
+| `device_installations` | 安装（kind: mobile/browser/desktop/host, public_key, account_id） |
 | `pairing_tokens` | 配对令牌（token_hash, issuer_device_id, expires_at） |
-| `pairing_codes` | 配对码（code_hash, host_installation_id, status） |
+| `host_links` | 配对码（code_hash, host_installation_id, status） |
 | `host_installation_tokens` | Host 安装令牌 |
 | `refresh_tokens` | 刷新令牌 |
-| `account_host_pairings` | 账户-Host 关联 |
+| `host_links` | 账户-Host 关联 |
 | `friend_requests` | 好友请求 |
 | `friendships` | 好友关系 |
 | `conversations` | 对话（直接/群组） |
@@ -203,7 +218,7 @@ Migrations 为 latest-only 单一初始 schema（`sqlx::migrate!`）：
 
 ### 30 个 Store 子模块
 
-涵盖: accounts, devices, tokens, pairing_codes, host_installation_tokens, refresh_tokens, account_host_pairings, agent_sessions, agent_turns, agent_turn_events, approval_requests, host_commands, durable_event_log, outbox_events, sessions, raw_events, thread_sync_state, projects, push_tokens, notification_preferences, notification_cooldowns 等。
+涵盖: accounts, device_installations, tokens, host_links, host_installation_tokens, refresh_tokens, host_links, agent_sessions, agent_turns, agent_turn_events, approval_requests, host_commands, durable_event_log, outbox_events, sessions, raw_events, thread_sync_state, projects, push_tokens, notification_preferences, notification_cooldowns 等。
 
 ## Agent 会话管理 (`src/agent_sessions/`)
 
@@ -220,6 +235,14 @@ Migrations 为 latest-only 单一初始 schema（`sqlx::migrate!`）：
 
 - `/ws/host` 接收 `HostIngestLiveBatch`、`HostGapManifest`、`HostIngestPullResponse`。
 - live 和 pull chunk 共用严格幂等写入：同 `(host_device_id, session_id, seq)` 且同 checksum 视为重复；同 key 不同 checksum 报不变量错误，不重新分配 backend seq。
+- **未知 formal session**：若 `agent_sessions` 无对应 `session_id`，chunk 被丢弃（不自动从 Desktop-local-only 会话创建 hub 投影）。云端可见 session 必须先经 start API（或等价注册）落库。
+- **首次成功 insert 副作用**（golden path）：
+  1. `agent_sessions.status` 若为 `pending` 则提升为 `running`
+  2. 从 payload 识别 `approval/request` / `approval/timeout`，写入/解决 `approval_requests`（支撑远程 `POST /v1/approvals/respond`）
+  3. 若 formal `agent_sessions` 不存在但 host 已 Link：用 chunk 上的 `conversation_id`（或 `host-local-session:{id}`）**自动登记** formal session（必要时 ensure 云端 group conversation），再 accept ingest
+  4. **server** 用 `SessionTranslators`（`minos-ui-protocol::translate_*`）把 raw 投成 `UiEventMessage`，同步 formal turn/session 状态并 fanout；host 自带 `projection` 忽略
+  4. 向 `agent_session:{id}` 的 `/ws/client` 订阅者 fanout `StreamEvent{kind: ui_event}`
+- 旧 envelope 路径的 peer-target 解析：`host_links` → 同 account 下 mobile/browser/desktop installations（带缓存；Host Link/unlink 时 invalidate）
 - `HostGapManifest` 落 `thread_sync_state` 后，backend 立即按 manifest range 通过同一条 host WS 发 `PullIngestRange`。
 - host 从本地 SQLite 读取 range 并回 `HostIngestPullResponse`；backend 持久化后只按连续 raw event 前缀发送 `PullAck`。
 - `agent_sessions.host_device_id` 为空时，新 handler 允许当前 host 认领该 session，避免 session 创建与 host 绑定之间的流式事件窗口丢失。
@@ -239,7 +262,7 @@ RuntimeShell           -- 拥有 AppContext、后台任务、集群监听
   └── AppContext       -- 组合所有服务
         ├── SessionRegistry           -- 内存中的活跃 WS 会话
         ├── SubscriptionManager       -- topic 订阅管理
-        ├── PairingService            -- 配对业务逻辑
+        ├── HostLinkService            -- 配对业务逻辑
         ├── AuthUseCase               -- 认证业务逻辑
         ├── IngestUseCase             -- 原始事件摄取
         ├── RealtimeFanout            -- 事件扇出引擎

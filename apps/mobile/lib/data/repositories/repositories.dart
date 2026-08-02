@@ -12,6 +12,7 @@ library;
 export 'package:minos/data/repositories/agent_profile_repository.dart';
 export 'package:minos/data/repositories/auth_repository.dart';
 export 'package:minos/data/repositories/group_agent_repository.dart';
+export 'package:minos/data/repositories/hosts_repository.dart';
 export 'package:minos/data/repositories/project_repository.dart';
 export 'package:minos/data/repositories/runtime_repository.dart';
 export 'package:minos/data/repositories/social_repository.dart';

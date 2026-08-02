@@ -16,7 +16,7 @@
 //! slot. A Mac can be paired to multiple iOS accounts, so a single
 //! `Option<DeviceId>` field cannot represent live pairing. iOS callers
 //! stamp `target_device_id` on the wire (`Envelope::Forward`) and the
-//! envelope dispatcher validates against `account_host_pairings::exists`
+//! envelope dispatcher validates against `host_links::exists`
 //! for the caller's account.
 //!
 //! Values are cheap to clone (one `Arc` + one `mpsc::Sender` bump), so the
@@ -120,7 +120,7 @@ pub struct SessionHandle {
     /// promising async borrow semantics — stays sync because no caller
     /// `.await`s while holding the guard.
     pub account_id: Arc<Mutex<Option<String>>>,
-    /// For multi-iOS pairing, Mac replies cannot be routed by deriving
+    /// For multi-iOS host_link, Mac replies cannot be routed by deriving
     /// the original requester from a single per-session slot. When an
     /// iOS request is forwarded to this Mac, the backend records
     /// JSON-RPC id -> requester here so the response with the same id is

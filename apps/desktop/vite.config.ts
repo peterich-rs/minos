@@ -8,6 +8,8 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [react()],
+  // Load VITE_* from monorepo root `.env.local` (SSOT with `just` / backend).
+  envDir: path.resolve(__dirname, "../.."),
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

@@ -138,6 +138,8 @@ export type WorkspaceState = {
   focusedConversationId: string | null;
 
   bootstrap: () => Promise<void>;
+  /** Refresh daemon IPC + hubOnline without full bootstrap. */
+  refreshDaemonStatus: () => Promise<void>;
   refreshProjects: () => Promise<void>;
   loadConversations: (
     projectId: string,

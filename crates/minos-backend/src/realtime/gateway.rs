@@ -16,16 +16,23 @@ use tokio::sync::mpsc;
 use tracing::Instrument;
 use uuid::Uuid;
 
+use std::time::Instant;
+
 use crate::auth::realtime_ticket::RealtimeTicketConsumeError;
 use crate::error::BackendError;
 use crate::http::BackendState;
 use crate::ingest::use_case::IngestCommand;
 use crate::realtime::auth::{self, SubscriptionAuthError, SubscriptionDenied};
+use crate::realtime::liveness::{
+    self, CLOSE_CODE_HEARTBEAT_TIMEOUT, HEARTBEAT_INTERVAL_MS, HEARTBEAT_TICK, HEARTBEAT_TIMEOUT,
+    LAST_SEEN_DB_MIN_INTERVAL,
+};
+use crate::realtime::presence;
 use crate::realtime::subscription::ConnectionState;
 use crate::session::{ServerFrame as LegacySessionFrame, SessionHandle, SessionRevocation};
 use crate::store::{
-    agent_sessions, agent_turn_events, agent_turns, durable_event_log, host_commands,
-    outbox_events, raw_events, sessions, thread_sync_state,
+    agent_sessions, agent_turn_events, agent_turns, durable_event_log, host_commands, host_links,
+    outbox_events, raw_events, sessions, social, thread_sync_state,
 };
 use minos_protocol::realtime::{
     ClientFrame, ConnectionPrincipal, HostGapManifest, HostIngestChunk, HostIngestLiveBatch,
@@ -38,7 +45,6 @@ const SUBSCRIBE_LIMIT_PER_REQUEST: usize = 32;
 const LIVE_SUBSCRIPTION_LIMIT: usize = 128;
 const REPLAY_BATCH_SIZE: u32 = 256;
 const PULL_INGEST_MAX_BYTES: u64 = 0;
-const HEARTBEAT_INTERVAL_MS: i64 = 25_000;
 const CLOSE_CODE_AUTH_REVOKED: u16 = 4401;
 const CLOSE_CODE_INTERNAL_ERROR: u16 = 1011;
 
@@ -225,7 +231,7 @@ async fn revalidate_ws_ticket_auth(
     let device_id = Uuid::parse_str(&claims.did)
         .map(DeviceId)
         .map_err(|_| ActivationAuthError::Unauthorized("invalid ws_ticket device_id".into()))?;
-    let row = crate::store::devices::get_device(store, device_id)
+    let row = crate::store::device_installations::get_device(store, device_id)
         .await
         .map_err(|error| ActivationAuthError::Internal(error.to_string()))?
         .ok_or_else(|| {
@@ -315,7 +321,16 @@ pub async fn run_session(mut ws: WebSocket, state: BackendState, upgrade: Gatewa
     }
     let mut revocation_rx = legacy_handle.subscribe_revocation();
 
-    touch_connection_last_seen(&state, &upgrade.device_id, "ws.open").await;
+    // Online = this socket is registered. Fanout is ephemeral StreamEvent;
+    // last_seen is durable for cold-path HTTP lists.
+    presence::publish_connection_presence(
+        &state,
+        upgrade.device_id,
+        upgrade.role,
+        &upgrade.principal,
+        true,
+    )
+    .await;
 
     let close_reason = run_session_inner(
         &mut ws,
@@ -330,6 +345,19 @@ pub async fn run_session(mut ws: WebSocket, state: BackendState, upgrade: Gatewa
 
     state.subscription_mgr.remove_connection(conn.conn_id);
     let _ = state.registry.remove_current(&legacy_handle);
+    // Skip offline fanout when a newer connection already owns the device
+    // (session superseded / reconnect race). Unlink/auth revoke that already
+    // cleared the registry still publishes offline (get is None).
+    if state.registry.get(upgrade.device_id).is_none() {
+        presence::publish_connection_presence(
+            &state,
+            upgrade.device_id,
+            upgrade.role,
+            &upgrade.principal,
+            false,
+        )
+        .await;
+    }
     crate::telemetry::record_ws_close(role_label, close_reason);
     crate::telemetry::record_session_role_close(role_label);
 }
@@ -368,6 +396,13 @@ async fn run_session_inner(
         let _ = send_error_frame(ws, conn, "internal", error.to_string()).await;
     }
 
+    let mut last_activity = Instant::now();
+    let mut last_db_touch = Instant::now();
+    let mut heartbeat = tokio::time::interval(HEARTBEAT_TICK);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // First tick is immediate; skip so we do not probe right after Hello.
+    heartbeat.tick().await;
+
     loop {
         let current_revocation = { *revocation_rx.borrow() };
         if let Some(reason) = current_revocation {
@@ -386,9 +421,39 @@ async fn run_session_inner(
         }
 
         tokio::select! {
+            biased;
+
+            changed = revocation_rx.changed() => {
+                if changed.is_ok() {
+                    let updated_revocation = { *revocation_rx.borrow_and_update() };
+                    if let Some(reason) = updated_revocation {
+                        let directive = match reason {
+                            SessionRevocation::Superseded => CloseDirective {
+                                code: CLOSE_CODE_AUTH_REVOKED,
+                                reason: "session_superseded",
+                            },
+                            SessionRevocation::AuthRevoked => CloseDirective {
+                                code: CLOSE_CODE_AUTH_REVOKED,
+                                reason: "auth_revoked",
+                            },
+                        };
+                        close_with_directive(ws, upgrade.role, directive).await;
+                        return directive.reason;
+                    }
+                }
+            }
+
             maybe_msg = ws.next() => {
                 match maybe_msg {
                     Some(Ok(Message::Text(text))) => {
+                        note_connection_activity(
+                            state,
+                            upgrade,
+                            &mut last_activity,
+                            &mut last_db_touch,
+                            "ws.text",
+                        )
+                        .await;
                         match handle_text_frame(ws, state, upgrade, conn, &text).await {
                             Ok(Some(directive)) => {
                                 close_with_directive(ws, upgrade.role, directive).await;
@@ -410,12 +475,28 @@ async fn run_session_inner(
                         let _ = send_error_frame(ws, conn, "validation_format", "binary frames are not supported").await;
                     }
                     Some(Ok(Message::Ping(payload))) => {
-                        touch_connection_last_seen(state, &upgrade.device_id, "ws.ping").await;
+                        note_connection_activity(
+                            state,
+                            upgrade,
+                            &mut last_activity,
+                            &mut last_db_touch,
+                            "ws.ping",
+                        )
+                        .await;
                         if ws.send(Message::Pong(payload)).await.is_err() {
                             return "write_failed";
                         }
                     }
-                    Some(Ok(Message::Pong(_))) => {}
+                    Some(Ok(Message::Pong(_))) => {
+                        note_connection_activity(
+                            state,
+                            upgrade,
+                            &mut last_activity,
+                            &mut last_db_touch,
+                            "ws.pong",
+                        )
+                        .await;
+                    }
                     Some(Ok(Message::Close(_))) => return "client_close",
                     Some(Err(error)) => {
                         if websocket_read_error_is_client_reset(&error) {
@@ -457,37 +538,51 @@ async fn run_session_inner(
                     "dropping legacy session-registry frame on topic gateway"
                 );
             }
-            changed = revocation_rx.changed() => {
-                if changed.is_ok() {
-                    let updated_revocation = { *revocation_rx.borrow_and_update() };
-                    if let Some(reason) = updated_revocation {
-                        let directive = match reason {
-                            SessionRevocation::Superseded => CloseDirective {
-                                code: CLOSE_CODE_AUTH_REVOKED,
-                                reason: "session_superseded",
-                            },
-                            SessionRevocation::AuthRevoked => CloseDirective {
-                                code: CLOSE_CODE_AUTH_REVOKED,
-                                reason: "auth_revoked",
-                            },
-                        };
-                        close_with_directive(ws, upgrade.role, directive).await;
-                        return directive.reason;
-                    }
+            _ = heartbeat.tick() => {
+                if liveness::is_heartbeat_expired(last_activity.elapsed(), HEARTBEAT_TIMEOUT) {
+                    let elapsed_ms =
+                        u64::try_from(last_activity.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    tracing::info!(
+                        target: "minos_backend::realtime",
+                        device_id = %upgrade.device_id,
+                        elapsed_ms,
+                        limit_ms = HEARTBEAT_TIMEOUT.as_millis() as u64,
+                        "formal gateway heartbeat timeout; closing"
+                    );
+                    close_with_directive(
+                        ws,
+                        upgrade.role,
+                        CloseDirective {
+                            code: CLOSE_CODE_HEARTBEAT_TIMEOUT,
+                            reason: "heartbeat_timeout",
+                        },
+                    )
+                    .await;
+                    return "heartbeat_timeout";
+                }
+                if ws.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    return "write_failed";
                 }
             }
         }
     }
 }
 
-async fn touch_connection_last_seen(
+/// Mark socket activity and optionally throttle durable `last_seen` writes.
+async fn note_connection_activity(
     state: &BackendState,
-    device_id: &DeviceId,
+    upgrade: &GatewayUpgrade,
+    last_activity: &mut Instant,
+    last_db_touch: &mut Instant,
     operation: &'static str,
 ) {
-    if let Err(error) = crate::store::devices::touch_last_seen(
+    *last_activity = Instant::now();
+    if !liveness::should_persist_last_seen(last_db_touch.elapsed(), LAST_SEEN_DB_MIN_INTERVAL) {
+        return;
+    }
+    if let Err(error) = crate::store::device_installations::touch_last_seen(
         &state.store,
-        device_id,
+        &upgrade.device_id,
         chrono::Utc::now().timestamp_millis(),
     )
     .await
@@ -495,11 +590,13 @@ async fn touch_connection_last_seen(
         tracing::debug!(
             target: "minos_backend::realtime",
             error = %error,
-            device_id = %device_id,
+            device_id = %upgrade.device_id,
             operation,
             "failed to touch device last_seen_at",
         );
+        return;
     }
+    *last_db_touch = Instant::now();
 }
 
 async fn auto_subscribe_default_topic(
@@ -562,7 +659,7 @@ async fn handle_formal_frame(
             Ok(None)
         }
         ClientFrame::Ping { ts } => {
-            touch_connection_last_seen(state, &upgrade.device_id, "ws.client_ping").await;
+            // Activity / last_seen already noted on the inbound text frame.
             let _ = send_server_frame(
                 ws,
                 &ServerFrame::Pong {
@@ -1059,18 +1156,115 @@ fn pull_requests_for_manifest(manifest: &HostGapManifest) -> Vec<ServerFrame> {
     frames
 }
 
+/// Ensure a formal `agent_sessions` row exists for host-originated local sessions.
+///
+/// Desktop/daemon often mint session ids locally without cloud start. When the
+/// host is Linked, auto-register so `HostIngestLiveBatch` is not dropped.
+/// Creates a cloud group conversation if needed (uses host-local conversation
+/// id when provided, else `host-local-session:{session_id}`).
+async fn ensure_formal_session_for_host_ingest(
+    state: &BackendState,
+    upgrade: &GatewayUpgrade,
+    chunk: &HostIngestChunk,
+) -> Result<Option<agent_sessions::AgentSessionRow>, BackendError> {
+    if let Some(existing) = agent_sessions::get(&state.store, &chunk.session_id).await? {
+        return Ok(Some(existing));
+    }
+
+    let pairs = host_links::list_accounts_for_host(&state.store, upgrade.device_id).await?;
+    if pairs.is_empty() {
+        return Ok(None);
+    }
+    let member_ids: Vec<String> = pairs.iter().map(|p| p.mobile_account_id.clone()).collect();
+    let creator = member_ids
+        .first()
+        .cloned()
+        .expect("pairs non-empty implies at least one account");
+
+    let conv_id = chunk
+        .conversation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("host-local-session:{}", chunk.session_id));
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    social::ensure_group_conversation_with_id(
+        &state.store,
+        &conv_id,
+        &creator,
+        "Host projected session",
+        &member_ids,
+        now_ms,
+    )
+    .await?;
+
+    let agent_id = format!("agent_{}", chunk.agent.bin_name());
+    match agent_sessions::create(
+        &state.store,
+        &chunk.session_id,
+        &conv_id,
+        None,
+        Some(&upgrade.device_id.to_string()),
+        Some(&agent_id),
+        "running",
+        now_ms,
+        None,
+    )
+    .await
+    {
+        Ok(row) => {
+            tracing::info!(
+                target: "minos_backend::realtime::gateway",
+                session_id = %chunk.session_id,
+                conversation_id = %conv_id,
+                host_device_id = %upgrade.device_id,
+                "auto-registered formal agent session from host ingest",
+            );
+            Ok(Some(row))
+        }
+        Err(error) => {
+            // Race: another chunk may have created the row.
+            if let Some(existing) = agent_sessions::get(&state.store, &chunk.session_id).await? {
+                return Ok(Some(existing));
+            }
+            tracing::warn!(
+                target: "minos_backend::realtime::gateway",
+                error = %error,
+                session_id = %chunk.session_id,
+                "failed to auto-register formal agent session for host ingest",
+            );
+            Ok(None)
+        }
+    }
+}
+
 async fn persist_host_ingest_chunk(
     state: &BackendState,
     upgrade: &GatewayUpgrade,
     chunk: HostIngestChunk,
 ) -> Result<bool, BackendError> {
     let expected_host_id = upgrade.device_id.to_string();
-    let Some(session) = agent_sessions::get(&state.store, &chunk.session_id).await? else {
-        tracing::warn!(
-            target: "minos_backend::realtime::gateway",
-            session_id = %chunk.session_id,
-            "dropping host ingest chunk for unknown agent session",
-        );
+    let Some(session) = ensure_formal_session_for_host_ingest(state, upgrade, &chunk).await? else {
+        // Rate-limit: one warn per session_id per process (avoid log storms).
+        static UNKNOWN_SESSIONS: std::sync::OnceLock<
+            std::sync::Mutex<std::collections::HashSet<String>>,
+        > = std::sync::OnceLock::new();
+        let seen = UNKNOWN_SESSIONS
+            .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::default()));
+        let mut first = false;
+        if let Ok(mut guard) = seen.lock() {
+            first = guard.insert(chunk.session_id.clone());
+        }
+        if first {
+            tracing::warn!(
+                target: "minos_backend::realtime::gateway",
+                session_id = %chunk.session_id,
+                host_device_id = %upgrade.device_id,
+                "dropping host ingest chunk for unknown agent session (host not linked or conversation ensure failed; further drops for this session suppressed)",
+            );
+        }
         return Ok(false);
     };
     match session.host_device_id.as_deref() {
@@ -1116,22 +1310,100 @@ async fn persist_host_ingest_chunk(
     .await?;
 
     if inserted == raw_events::HostIngestInsert::Inserted {
-        fanout_host_ingest_projection(state, &chunk);
+        // Side effects that must land before clients can act on the stream:
+        // 1) promote pending formal sessions so list APIs show live activity
+        // 2) server-side translate raw → UiEventMessage (ignore host projection)
+        // 3) approval_requests rows so /v1/approvals/respond works remotely
+        // 4) fanout projected ui_event to subscribed viewers
+        if session.status == "pending" {
+            let _ = agent_sessions::update_status(&state.store, &chunk.session_id, "running", None)
+                .await?;
+        }
+        ensure_raw_approval_turn(state, &chunk.session_id, &chunk.payload, chunk.last_ts_ms)
+            .await?;
+        if let Err(error) = crate::ingest::apply_approval_side_effects_from_payload(
+            state.approvals.as_ref(),
+            &chunk.session_id,
+            &chunk.payload,
+            chunk.last_ts_ms,
+        )
+        .await
+        {
+            tracing::warn!(
+                target: "minos_backend::realtime::gateway",
+                error = %error,
+                session_id = %chunk.session_id,
+                "failed to apply approval side effects from host ingest chunk",
+            );
+        }
+
+        // Cloud projection SSOT: host raw payload → SessionTranslators (same
+        // minos-ui-protocol stack as Envelope::Ingest). Host `projection` is
+        // ignored so viewer UI is not locked to daemon version skew.
+        let translated =
+            match state
+                .translators
+                .translate(chunk.agent, &chunk.session_id, &chunk.payload)
+            {
+                Ok(events) => events,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "minos_backend::realtime::gateway",
+                        error = %error,
+                        session_id = %chunk.session_id,
+                        "host ingest translation failed; emitting synthetic Error",
+                    );
+                    vec![UiEventMessage::Error {
+                        code: "translation_failed".into(),
+                        message: format!("{error}"),
+                        message_id: None,
+                    }]
+                }
+            };
+
+        if let Err(error) = crate::ingest::sync_formal_agent_session_from_ui_events(
+            &state.store,
+            &chunk.session_id,
+            &translated,
+            chunk.last_ts_ms,
+        )
+        .await
+        {
+            tracing::warn!(
+                target: "minos_backend::realtime::gateway",
+                error = %error,
+                session_id = %chunk.session_id,
+                "failed to sync formal agent session from server-translated UI events",
+            );
+        }
+
+        for ui in &translated {
+            if matches!(ui, UiEventMessage::SessionClosed { .. }) {
+                state.translators.drop_thread(&chunk.session_id);
+            }
+        }
+
+        fanout_host_ingest_ui_events(state, &chunk.session_id, chunk.seq, &translated);
     }
     Ok(true)
 }
 
-fn fanout_host_ingest_projection(state: &BackendState, chunk: &HostIngestChunk) {
-    let topic = RealtimeTopic::AgentSession(chunk.session_id.clone());
-    for ui in &chunk.projection {
+fn fanout_host_ingest_ui_events(
+    state: &BackendState,
+    session_id: &str,
+    seq: u64,
+    events: &[UiEventMessage],
+) {
+    let topic = RealtimeTopic::AgentSession(session_id.to_owned());
+    for ui in events {
         let payload = match serde_json::to_value(ui) {
             Ok(payload) => payload,
             Err(error) => {
                 tracing::warn!(
                     target: "minos_backend::realtime::gateway",
                     error = %error,
-                    session_id = %chunk.session_id,
-                    "failed to encode host ingest projection",
+                    session_id,
+                    "failed to encode server-translated host ingest UI event",
                 );
                 continue;
             }
@@ -1139,7 +1411,7 @@ fn fanout_host_ingest_projection(state: &BackendState, chunk: &HostIngestChunk) 
         let frame = ServerFrame::StreamEvent {
             topic: topic.topic_string(),
             kind: "ui_event".to_string(),
-            seq: i64::try_from(chunk.seq).ok(),
+            seq: i64::try_from(seq).ok(),
             payload,
         };
         for target in state.subscription_mgr.fanout_targets(&topic) {
@@ -1222,6 +1494,38 @@ async fn handle_projected_ingest_host_stream_event(
     else {
         return Ok(());
     };
+
+    ensure_raw_approval_turn(state, session_id, &payload, ts_ms).await?;
+    if let Err(error) = crate::ingest::apply_approval_side_effects_from_payload(
+        state.approvals.as_ref(),
+        session_id,
+        &payload,
+        ts_ms,
+    )
+    .await
+    {
+        tracing::warn!(
+            target: "minos_backend::realtime::gateway",
+            error = %error,
+            session_id,
+            "failed to apply approval side effects from projected host stream event",
+        );
+    }
+    if let Err(error) = crate::ingest::sync_formal_agent_session_from_ui_events(
+        &state.store,
+        session_id,
+        &projection,
+        ts_ms,
+    )
+    .await
+    {
+        tracing::warn!(
+            target: "minos_backend::realtime::gateway",
+            error = %error,
+            session_id,
+            "failed to sync formal agent session from projected host stream event",
+        );
+    }
 
     for ui in projection {
         let payload = match serde_json::to_value(&ui) {

@@ -10,11 +10,7 @@ import {
 
 import { cn } from '@/shared/lib/utils'
 import { useAppStore } from '@/lib/store'
-import {
-  exchangeSupabaseSession,
-  loginBrowserAccount,
-  registerBrowserAccount,
-} from '@/lib/minos'
+import { exchangeSupabaseSession } from '@/lib/minos'
 import {
   getSupabaseAccessToken,
   isSupabaseConfigured,
@@ -54,6 +50,7 @@ export function AuthScreen() {
   const confirmReady = password === confirmPassword && passwordReady
   const disabled =
     authBusy ||
+    !supabaseReady ||
     !email.includes('@') ||
     !passwordReady ||
     (authMode === 'register' && !confirmReady)
@@ -104,27 +101,20 @@ export function AuthScreen() {
 
   async function handleSubmit() {
     if (disabled) return
+    if (!supabaseReady) {
+      setAuthError(
+        'Supabase is required (set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY).',
+      )
+      return
+    }
     setAuthBusy(true)
     setAuthError(null)
     try {
-      if (supabaseReady) {
-        const supabaseToken =
-          authMode === 'register'
-            ? await signUpWithSupabasePassword(email, password)
-            : await signInWithSupabasePassword(email, password)
-        await applyMinosSessionFromSupabaseToken(supabaseToken)
-      } else {
-        const response =
-          authMode === 'register'
-            ? await registerBrowserAccount(deviceId, email, password)
-            : await loginBrowserAccount(deviceId, email, password)
-        setSession({
-          accountId: response.account.account_id,
-          email: response.account.email,
-          accessToken: response.access_token,
-          refreshToken: response.refresh_token,
-        })
-      }
+      const supabaseToken =
+        authMode === 'register'
+          ? await signUpWithSupabasePassword(email, password)
+          : await signInWithSupabasePassword(email, password)
+      await applyMinosSessionFromSupabaseToken(supabaseToken)
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : String(error))
     } finally {
@@ -194,7 +184,7 @@ export function AuthScreen() {
             <p className="mt-1 text-sm text-ink-muted">
               {supabaseReady
                 ? 'Supabase 身份 → Minos 业务会话'
-                : '本地密码登录'}
+                : '需要配置 Supabase（VITE_SUPABASE_URL / ANON_KEY）'}
             </p>
           </div>
 

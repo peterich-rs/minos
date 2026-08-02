@@ -22,12 +22,9 @@ final class AppStateBootTests: XCTestCase {
             peerName: "Existing iPhone",
             online: true
         )
-        appState.currentQr = MockDaemon.makeQrPayload(hostDisplayName: "Old Mac")
-        appState.currentQrGeneratedAt = Date(timeIntervalSince1970: 123)
         appState.trustedDevice = MockDaemon.makeTrustedDevice(name: "Existing Device")
         appState.bootError = .StoreIo(path: "/tmp/state.json", message: "missing")
         appState.displayError = .RpcCallFailed(method: "pairing.qr", message: "boom")
-        appState.isShowingQr = true
         appState.phase = .running
 
         appState.beginBoot()
@@ -39,13 +36,9 @@ final class AppStateBootTests: XCTestCase {
         XCTAssertNil(appState.peerSubscription)
         XCTAssertEqual(appState.relayLink, .disconnected)
         XCTAssertEqual(appState.peer, .unpaired)
-        XCTAssertNil(appState.currentQr)
-        XCTAssertNil(appState.currentQrGeneratedAt)
         XCTAssertNil(appState.trustedDevice)
         XCTAssertNil(appState.bootError)
         XCTAssertNil(appState.displayError)
-        XCTAssertFalse(appState.isShowingQr)
-        XCTAssertFalse(appState.canShowQr)
         XCTAssertFalse(appState.canForgetPeer)
         XCTAssertEqual(appState.phase, .booting)
     }
@@ -67,7 +60,6 @@ final class AppStateBootTests: XCTestCase {
         XCTAssertEqual(appState.phase, .running)
         XCTAssertEqual(appState.relayLink, .connected)
         XCTAssertEqual(appState.peer, .unpaired)
-        XCTAssertTrue(appState.canShowQr)
         XCTAssertFalse(appState.canForgetPeer)
         XCTAssertNil(appState.trustedDevice)
         XCTAssertNil(appState.bootError)
@@ -98,7 +90,6 @@ final class AppStateBootTests: XCTestCase {
             peers: [summary]
         )
 
-        XCTAssertTrue(appState.canShowQr)
         XCTAssertTrue(appState.canForgetPeer)
         XCTAssertEqual(appState.peers, [summary])
     }
@@ -114,7 +105,6 @@ final class AppStateBootTests: XCTestCase {
         appState.peerSubscription = peerSub
         appState.relayLink = .connecting(attempt: 2)
         appState.peer = .pairing
-        appState.isShowingQr = true
 
         let error = MinosError.Unauthorized(reason: "backend rejected bootstrap")
         appState.failBoot(with: error)
@@ -126,7 +116,6 @@ final class AppStateBootTests: XCTestCase {
         XCTAssertNil(appState.daemon)
         XCTAssertEqual(appState.relayLink, .disconnected)
         XCTAssertEqual(appState.peer, .unpaired)
-        XCTAssertFalse(appState.isShowingQr)
     }
 
     func testDaemonBootstrapRelayConfigReadsFromInfoPlist() throws {

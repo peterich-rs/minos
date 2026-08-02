@@ -159,9 +159,10 @@ pub async fn update_title(
     Ok(())
 }
 
-/// Check whether a session exists and belongs to a device owned by the
-/// given `account_id`. Used for authorization checks on thread-scoped
-/// endpoints.
+/// Check whether a session exists and is visible to `account_id`.
+///
+/// Visibility: owner installation bound to the account, **or** owner is a
+/// host linked via `host_links` (hosts keep `account_id` NULL).
 pub async fn exists_for_account(
     store: &impl AsStorePool,
     session_id: &str,
@@ -172,13 +173,21 @@ pub async fn exists_for_account(
             "SELECT COUNT(*)
                    FROM sessions t
                   WHERE t.session_id = ?
-                    AND EXISTS (
-                        SELECT 1 FROM devices d
-                         WHERE d.device_id = t.owner_device_id
-                           AND d.account_id = ?
+                    AND (
+                        EXISTS (
+                            SELECT 1 FROM device_installations d
+                             WHERE d.installation_id = t.owner_device_id
+                               AND d.account_id = ?
+                        )
+                        OR EXISTS (
+                            SELECT 1 FROM host_links hl
+                             WHERE hl.host_installation_id = t.owner_device_id
+                               AND hl.account_id = ?
+                        )
                     )",
         )
         .bind(session_id)
+        .bind(account_id)
         .bind(account_id)
         .fetch_one(pool)
         .await
@@ -189,10 +198,17 @@ pub async fn exists_for_account(
                     SELECT 1
                       FROM sessions t
                      WHERE t.session_id = $1
-                       AND EXISTS (
-                           SELECT 1 FROM devices d
-                            WHERE d.device_id = t.owner_device_id
-                              AND d.account_id = $2
+                       AND (
+                           EXISTS (
+                               SELECT 1 FROM device_installations d
+                                WHERE d.installation_id = t.owner_device_id
+                                  AND d.account_id = $2
+                           )
+                           OR EXISTS (
+                               SELECT 1 FROM host_links hl
+                                WHERE hl.host_installation_id = t.owner_device_id
+                                  AND hl.account_id = $2
+                           )
                        )
                 )",
             )
@@ -215,10 +231,9 @@ pub async fn exists_for_account(
 /// - `agent`            — restrict to a single CLI agent.
 /// - `before_ts_ms`     — only sessions whose `last_ts_ms` is strictly less
 ///   than this (exclusive cursor for pagination).
-/// - `account_id`       — restrict to sessions whose `owner_device_id`
-///   belongs to a device row with this `account_id`. Spec §5.5; Phase 2
-///   Task 2.6. The check uses an `EXISTS` clause against `devices` rather
-///   than a `JOIN` so the optional-cursor + ordering plan stays simple.
+/// - `account_id`       — restrict to sessions visible to this account:
+///   owner installation bound to the account, or host linked via
+///   `host_links` (hosts keep `account_id` NULL).
 ///
 /// Ordering: `last_ts_ms DESC` — most-recently-active first. Capped at
 /// `limit` rows; the caller pins the upper bound in the dispatch layer.
@@ -242,9 +257,14 @@ pub async fn list(
                      AND (
                          ?5 IS NULL
                          OR EXISTS (
-                             SELECT 1 FROM devices d
-                             WHERE d.device_id = sessions.owner_device_id
+                             SELECT 1 FROM device_installations d
+                             WHERE d.installation_id = sessions.owner_device_id
                                AND d.account_id = ?5
+                         )
+                         OR EXISTS (
+                             SELECT 1 FROM host_links hl
+                             WHERE hl.host_installation_id = sessions.owner_device_id
+                               AND hl.account_id = ?5
                          )
                      )
                    ORDER BY last_ts_ms DESC
@@ -268,9 +288,14 @@ pub async fn list(
                      AND (
                          $5::TEXT IS NULL
                          OR EXISTS (
-                             SELECT 1 FROM devices d
-                             WHERE d.device_id = sessions.owner_device_id
+                             SELECT 1 FROM device_installations d
+                             WHERE d.installation_id = sessions.owner_device_id
                                AND d.account_id = $5
+                         )
+                         OR EXISTS (
+                             SELECT 1 FROM host_links hl
+                             WHERE hl.host_installation_id = sessions.owner_device_id
+                               AND hl.account_id = $5
                          )
                      )
                    ORDER BY last_ts_ms DESC
@@ -316,13 +341,21 @@ pub async fn summaries_for_ids(
                 }
             }
             query.push(
-                ") AND EXISTS (\
-                    SELECT 1 FROM devices d \
-                    WHERE d.device_id = sessions.owner_device_id \
-                      AND d.account_id = ",
+                ") AND (\
+                    EXISTS (\
+                        SELECT 1 FROM device_installations d \
+                        WHERE d.installation_id = sessions.owner_device_id \
+                          AND d.account_id = ",
             );
             query.push_bind(account_id);
-            query.push(")");
+            query.push(
+                ") OR EXISTS (\
+                        SELECT 1 FROM host_links hl \
+                        WHERE hl.host_installation_id = sessions.owner_device_id \
+                          AND hl.account_id = ",
+            );
+            query.push_bind(account_id);
+            query.push("))");
 
             query.build_query_as().fetch_all(pool).await
         }
@@ -338,13 +371,21 @@ pub async fn summaries_for_ids(
                 }
             }
             query.push(
-                ") AND EXISTS (\
-                    SELECT 1 FROM devices d \
-                    WHERE d.device_id = sessions.owner_device_id \
-                      AND d.account_id = ",
+                ") AND (\
+                    EXISTS (\
+                        SELECT 1 FROM device_installations d \
+                        WHERE d.installation_id = sessions.owner_device_id \
+                          AND d.account_id = ",
             );
             query.push_bind(account_id);
-            query.push(")");
+            query.push(
+                ") OR EXISTS (\
+                        SELECT 1 FROM host_links hl \
+                        WHERE hl.host_installation_id = sessions.owner_device_id \
+                          AND hl.account_id = ",
+            );
+            query.push_bind(account_id);
+            query.push("))");
 
             query.build_query_as().fetch_all(pool).await
         }
@@ -454,8 +495,8 @@ mod tests {
 
     async fn seed_agent_host(pool: &SqlitePool) {
         sqlx::query(
-            r"INSERT INTO devices (device_id, display_name, role, created_at, last_seen_at)
-               VALUES ('dev1','Dev','agent-host',0,0)",
+            r"INSERT INTO device_installations (installation_id, kind, display_name, created_at_ms, last_seen_at_ms)
+               VALUES ('dev1','host','Dev',0,0)",
         )
         .execute(pool)
         .await
@@ -579,8 +620,8 @@ mod tests {
         let pool = memory_pool().await;
         seed_agent_host(&pool).await;
         sqlx::query(
-            r"INSERT INTO devices (device_id, display_name, role, created_at, last_seen_at)
-               VALUES ('dev2','Other','agent-host',0,0)",
+            r"INSERT INTO device_installations (installation_id, kind, display_name, created_at_ms, last_seen_at_ms)
+               VALUES ('dev2','host','Other',0,0)",
         )
         .execute(&pool)
         .await
@@ -602,46 +643,47 @@ mod tests {
 
     #[tokio::test]
     async fn list_filters_by_account_id() {
-        // Phase 2 Task 2.6: when an `account_id` is supplied, only
-        // sessions whose owner device row carries that account_id are
-        // returned. Threads owned by devices on a different account, or
-        // by devices with no account_id, must be excluded.
+        // When an `account_id` is supplied, only sessions whose owner
+        // installation carries that account_id are returned. Hosts keep
+        // account_id NULL; use client installations as owners here.
         let pool = memory_pool().await;
-        // Account A + device owning thread "mine".
-        let acct_a = crate::store::accounts::create(&pool, "alice@example.com", "phc")
+        let acct_a = crate::store::accounts::create(&pool, "alice@example.com")
             .await
             .unwrap();
-        let acct_b = crate::store::accounts::create(&pool, "bob@example.com", "phc")
+        let acct_b = crate::store::accounts::create(&pool, "bob@example.com")
             .await
             .unwrap();
         sqlx::query(
-            r"INSERT INTO devices (device_id, display_name, role, created_at, last_seen_at, account_id)
-               VALUES ('a-mac','Mac-A','agent-host',0,0,?1)",
+            r"INSERT INTO device_installations
+                (installation_id, kind, display_name, created_at_ms, last_seen_at_ms, account_id)
+               VALUES ('a-phone','mobile','Phone-A',0,0,?1)",
         )
         .bind(&acct_a.account_id)
         .execute(&pool)
         .await
         .unwrap();
         sqlx::query(
-            r"INSERT INTO devices (device_id, display_name, role, created_at, last_seen_at, account_id)
-               VALUES ('b-mac','Mac-B','agent-host',0,0,?1)",
+            r"INSERT INTO device_installations
+                (installation_id, kind, display_name, created_at_ms, last_seen_at_ms, account_id)
+               VALUES ('b-phone','mobile','Phone-B',0,0,?1)",
         )
         .bind(&acct_b.account_id)
         .execute(&pool)
         .await
         .unwrap();
         sqlx::query(
-            r"INSERT INTO devices (device_id, display_name, role, created_at, last_seen_at)
-               VALUES ('orphan','Mac-O','agent-host',0,0)",
+            r"INSERT INTO device_installations
+                (installation_id, kind, display_name, created_at_ms, last_seen_at_ms)
+               VALUES ('orphan','mobile','Phone-O',0,0)",
         )
         .execute(&pool)
         .await
         .unwrap();
 
-        upsert(&pool, "thr-a", AgentName::Codex, "a-mac", 1000)
+        upsert(&pool, "thr-a", AgentName::Codex, "a-phone", 1000)
             .await
             .unwrap();
-        upsert(&pool, "thr-b", AgentName::Codex, "b-mac", 2000)
+        upsert(&pool, "thr-b", AgentName::Codex, "b-phone", 2000)
             .await
             .unwrap();
         upsert(&pool, "thr-orphan", AgentName::Codex, "orphan", 3000)

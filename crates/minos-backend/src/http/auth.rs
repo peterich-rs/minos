@@ -1,20 +1,21 @@
 //! Shared header extraction + auth classification for HTTP handlers.
 //!
 //! The remaining header-auth flows call [`authenticate`] to resolve
-//! `(device_id, role)` from the `X-Device-*` header bundle. First-connect
-//! devices are inserted into the `devices` table with `secret_hash = NULL`;
-//! existing rows are verified against the supplied secret if one is stored.
+//! `(device_id, role)` from the `X-Device-*` header bundle.
+//!
+//! Installation rows are **not** created here: Postgres CHECK requires
+//! `account_id` for clients and `public_key` for hosts. Clients are
+//! inserted at login/register/exchange via `insert_client_for_account`;
+//! hosts at bootstrap via `insert_host_with_public_key`. Device-secret
+//! verification has been removed (hosts use `host_installation_tokens`;
+//! clients use bearer access tokens).
 
 use axum::http::{HeaderMap, StatusCode};
 use minos_domain::{DeviceId, DeviceRole};
 use std::str::FromStr;
 use uuid::Uuid;
 
-use crate::pairing::secret::verify_secret;
-use crate::store::{
-    self,
-    devices::{insert_device, DeviceRow},
-};
+use crate::store::{self, device_installations::DeviceRow};
 
 pub const HDR_DEVICE_ID: &str = "x-device-id";
 pub const HDR_DEVICE_ROLE: &str = "x-device-role";
@@ -53,9 +54,12 @@ impl AuthError {
     }
 }
 
-/// Parse headers, look up the device row, classify, insert on first
-/// connect, and return the resolved `(device_id, role)`. Side-effecting:
-/// may insert into `devices`.
+/// Parse headers, look up the installation row, classify, and return the
+/// resolved `(device_id, role)`.
+///
+/// Does **not** insert missing rows (Postgres CHECK forbids null-account
+/// clients and null-public_key hosts). Callers that create sessions must
+/// insert via CHECK-compliant helpers once account / host key is known.
 pub async fn authenticate(
     store: &impl store::AsStorePool,
     headers: &HeaderMap,
@@ -66,11 +70,8 @@ pub async fn authenticate(
     let provided_display_name = extract_device_name(headers)
         .map(|name| name.trim().to_owned())
         .filter(|name| !name.is_empty());
-    let display_name = provided_display_name
-        .clone()
-        .unwrap_or_else(|| DEFAULT_DISPLAY_NAME.into());
 
-    let existing = store::devices::get_device(store, device_id)
+    let existing = store::device_installations::get_device(store, device_id)
         .await
         .map_err(|e| AuthError::Internal(e.to_string()))?;
     let should_backfill_display_name = existing.as_ref().is_some_and(|row| {
@@ -82,20 +83,11 @@ pub async fn authenticate(
     let classification = classify(existing, device_secret.as_deref(), role)?;
     let authenticated_with_secret = matches!(classification, Classification::Authenticated);
 
-    if matches!(classification, Classification::FirstConnect) {
-        let now = chrono::Utc::now().timestamp_millis();
-        if let Err(e) = insert_device(store, device_id, &display_name, role, now).await {
-            tracing::warn!(
-                target: "minos_backend::http::auth",
-                error = %e,
-                device_id = %device_id,
-                "first-connect insert_device failed (race?)",
-            );
-        }
-    } else if should_backfill_display_name {
+    if should_backfill_display_name {
         if let Some(new_display_name) = provided_display_name.as_deref() {
             if let Err(e) =
-                store::devices::set_display_name(store, &device_id, new_display_name).await
+                store::device_installations::set_display_name(store, &device_id, new_display_name)
+                    .await
             {
                 tracing::warn!(
                     target: "minos_backend::http::auth",
@@ -143,32 +135,12 @@ pub fn classify(
     provided_secret: Option<&str>,
     role: DeviceRole,
 ) -> Result<Classification, AuthError> {
-    let _ = role; // documents that this fn is now aware of role; iOS rail
-                  // (secret_hash NULL) collapses to UnpairedExisting per ADR-0020.
+    // Device-secret rail removed with `secret_hash` column. Provided secrets
+    // are ignored; host steady-state auth uses host_installation_tokens.
+    let _ = (provided_secret, role);
     match row {
         None => Ok(Classification::FirstConnect),
-        Some(r) => match r.secret_hash {
-            None => {
-                // iOS rail: bearer-only after ADR-0020. A NULL secret_hash
-                // is the steady state for iOS rows. Mac rows would only
-                // be NULL pre-pair (FirstConnect-like).
-                Ok(Classification::UnpairedExisting)
-            }
-            Some(hash) => {
-                let Some(secret) = provided_secret else {
-                    return Err(AuthError::Unauthorized(
-                        "X-Device-Secret required for authenticated device".into(),
-                    ));
-                };
-                match verify_secret(secret, &hash) {
-                    Ok(true) => Ok(Classification::Authenticated),
-                    Ok(false) => Err(AuthError::Unauthorized(
-                        "X-Device-Secret does not match stored hash".into(),
-                    )),
-                    Err(e) => Err(AuthError::Internal(e.to_string())),
-                }
-            }
-        },
+        Some(_) => Ok(Classification::UnpairedExisting),
     }
 }
 
@@ -233,8 +205,6 @@ pub fn extract_device_name(headers: &HeaderMap) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{devices::insert_device, test_support::memory_pool};
-    use pretty_assertions::assert_eq;
 
     // ── header extraction ─────────────────────────────────────────────
 
@@ -298,7 +268,6 @@ mod tests {
             device_id: DeviceId::new(),
             display_name: "mac".to_string(),
             role: DeviceRole::AgentHost,
-            secret_hash: None,
             public_key: None,
             created_at: 0,
             last_seen_at: 0,
@@ -335,7 +304,6 @@ mod tests {
             device_id: DeviceId::new(),
             display_name: "x".to_string(),
             role: DeviceRole::MobileClient,
-            secret_hash: None,
             public_key: None,
             created_at: 0,
             last_seen_at: 0,
@@ -346,134 +314,17 @@ mod tests {
     }
 
     #[test]
-    fn classify_row_with_hash_missing_secret_is_401() {
+    fn classify_existing_row_ignores_provided_secret() {
         let row = DeviceRow {
             device_id: DeviceId::new(),
             display_name: "x".to_string(),
-            role: DeviceRole::MobileClient,
-            secret_hash: Some("$argon2id$v=19$m=19456,t=2,p=1$abc$def".to_string()),
-            public_key: None,
-            created_at: 0,
-            last_seen_at: 0,
-            account_id: None,
-        };
-        let err = classify(Some(row), None, DeviceRole::MobileClient).unwrap_err();
-        assert!(
-            matches!(err, AuthError::Unauthorized(ref m) if m.contains("X-Device-Secret required"))
-        );
-    }
-
-    #[tokio::test]
-    async fn classify_row_with_hash_matching_secret_is_authenticated() {
-        // Produce a real argon2id hash so verify_secret returns Ok(true).
-        let plain = minos_domain::DeviceSecret::generate();
-        let hash = crate::pairing::secret::hash_secret(&plain).unwrap();
-        let row = DeviceRow {
-            device_id: DeviceId::new(),
-            display_name: "x".to_string(),
-            role: DeviceRole::MobileClient,
-            secret_hash: Some(hash),
-            public_key: None,
-            created_at: 0,
-            last_seen_at: 0,
-            account_id: None,
-        };
-        let out = classify(Some(row), Some(plain.as_str()), DeviceRole::MobileClient).unwrap();
-        assert!(matches!(out, Classification::Authenticated));
-    }
-
-    #[tokio::test]
-    async fn classify_row_with_hash_wrong_secret_is_401() {
-        let plain = minos_domain::DeviceSecret::generate();
-        let hash = crate::pairing::secret::hash_secret(&plain).unwrap();
-        let row = DeviceRow {
-            device_id: DeviceId::new(),
-            display_name: "x".to_string(),
-            role: DeviceRole::MobileClient,
-            secret_hash: Some(hash),
-            public_key: None,
-            created_at: 0,
-            last_seen_at: 0,
-            account_id: None,
-        };
-        let err = classify(Some(row), Some("wrong-secret"), DeviceRole::MobileClient).unwrap_err();
-        assert!(matches!(err, AuthError::Unauthorized(ref m) if m.contains("does not match")));
-    }
-
-    #[tokio::test]
-    async fn classify_smoke_via_real_store_row() {
-        // End-to-end smoke with a real pool: insert a row, fetch it, feed
-        // through `classify` — exercises the DeviceRow shape from sqlx.
-        let pool = memory_pool().await;
-        let id = DeviceId::new();
-        insert_device(&pool, id, "smoke", DeviceRole::AgentHost, 0)
-            .await
-            .unwrap();
-        let row = store::devices::get_device(&pool, id)
-            .await
-            .unwrap()
-            .unwrap();
-        let out = classify(Some(row), None, DeviceRole::AgentHost).unwrap();
-        assert!(matches!(out, Classification::UnpairedExisting));
-    }
-
-    #[tokio::test]
-    async fn authenticate_backfills_existing_unnamed_device_name() {
-        let pool = memory_pool().await;
-        let device_id = DeviceId::new();
-        insert_device(
-            &pool,
-            device_id,
-            DEFAULT_DISPLAY_NAME,
-            DeviceRole::MobileClient,
-            0,
-        )
-        .await
-        .unwrap();
-
-        let mut headers = HeaderMap::new();
-        headers.insert(HDR_DEVICE_ID, device_id.to_string().parse().unwrap());
-        headers.insert(HDR_DEVICE_ROLE, "mobile-client".parse().unwrap());
-        headers.insert(HDR_DEVICE_NAME, "Fan's iPhone".parse().unwrap());
-
-        authenticate(&pool, &headers).await.unwrap();
-
-        let row = store::devices::get_device(&pool, device_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(row.display_name, "Fan's iPhone");
-    }
-
-    #[test]
-    fn classify_ios_with_null_secret_hash_passes_without_secret() {
-        let row = DeviceRow {
-            device_id: DeviceId::new(),
-            display_name: "x".to_string(),
-            role: DeviceRole::MobileClient,
-            secret_hash: None,
-            public_key: None,
-            created_at: 0,
-            last_seen_at: 0,
-            account_id: None,
-        };
-        let res = classify(Some(row), None, DeviceRole::MobileClient).unwrap();
-        assert!(matches!(res, Classification::UnpairedExisting));
-    }
-
-    #[test]
-    fn classify_mac_with_secret_hash_but_no_secret_provided_returns_401() {
-        let row = DeviceRow {
-            device_id: DeviceId::new(),
-            display_name: "mac".to_string(),
             role: DeviceRole::AgentHost,
-            secret_hash: Some("$argon2id$v=19$m=19456,t=2,p=1$abc$def".to_string()),
             public_key: None,
             created_at: 0,
             last_seen_at: 0,
             account_id: None,
         };
-        let err = classify(Some(row), None, DeviceRole::AgentHost).unwrap_err();
-        assert!(matches!(err, AuthError::Unauthorized(_)));
+        let out = classify(Some(row), Some("any-secret"), DeviceRole::AgentHost).unwrap();
+        assert!(matches!(out, Classification::UnpairedExisting));
     }
 }

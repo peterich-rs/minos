@@ -1,6 +1,7 @@
 -- Canonical Postgres schema (latest-only).
 -- Incremental migration history has been collapsed; wipe local DBs on upgrade.
 
+-- Human accounts are IdP-bound via supabase_sub (no local password / no account_credentials).
 CREATE EXTENSION IF NOT EXISTS citext;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -9,20 +10,14 @@ CREATE TABLE accounts (
     email             CITEXT NOT NULL UNIQUE,
     minos_id          TEXT UNIQUE,
     display_name      TEXT,
-    -- Supabase Auth subject (JWT `sub`). NULL for password-only accounts
-    -- that have not yet been linked via OIDC exchange.
+    -- Supabase Auth subject (JWT `sub`). Required for new users via
+    -- POST /v1/auth/supabase exchange. NULL only for rare unbound fixtures.
     supabase_sub      TEXT UNIQUE,
     created_at_ms     BIGINT NOT NULL,
     last_login_at_ms  BIGINT
 );
 
-CREATE TABLE account_credentials (
-    account_id      TEXT PRIMARY KEY REFERENCES accounts(account_id) ON DELETE CASCADE,
-    password_hash   TEXT NOT NULL,
-    updated_at_ms   BIGINT NOT NULL
-);
-
-CREATE TYPE installation_kind AS ENUM ('mobile', 'browser', 'host');
+CREATE TYPE installation_kind AS ENUM ('mobile', 'browser', 'desktop', 'host');
 
 CREATE TABLE device_installations (
     installation_id   TEXT PRIMARY KEY,
@@ -33,8 +28,10 @@ CREATE TABLE device_installations (
     display_name      TEXT,
     created_at_ms     BIGINT NOT NULL,
     last_seen_at_ms   BIGINT NOT NULL,
+    -- desktop behaves like mobile/browser: account_id required, public_key null.
+    -- host: account_id null + public_key required (insert with key at TOFU register).
     CONSTRAINT installation_kind_account_consistency CHECK (
-        (kind IN ('mobile', 'browser') AND account_id IS NOT NULL AND public_key IS NULL) OR
+        (kind IN ('mobile', 'browser', 'desktop') AND account_id IS NOT NULL AND public_key IS NULL) OR
         (kind = 'host' AND account_id IS NULL AND public_key IS NOT NULL)
     )
 );
@@ -69,40 +66,19 @@ CREATE INDEX idx_host_token_active
     ON host_installation_tokens(host_installation_id)
     WHERE revoked_at_ms IS NULL;
 
-CREATE TYPE pairing_status AS ENUM ('pending', 'confirmed', 'redeemed', 'expired');
-
-CREATE TABLE pairing_codes (
-    code_hash                  TEXT PRIMARY KEY,
-    host_installation_id       TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
-    account_id                 TEXT REFERENCES accounts(account_id) ON DELETE CASCADE,
-    linked_via_installation_id TEXT REFERENCES device_installations(installation_id) ON DELETE SET NULL,
-    status                     pairing_status NOT NULL,
-    client_request_id          TEXT,
-    created_at_ms              BIGINT NOT NULL,
-    expires_at_ms              BIGINT NOT NULL,
-    confirmed_at_ms            BIGINT,
-    redeemed_at_ms             BIGINT
-);
-
-CREATE INDEX idx_pairing_codes_host_status_created
-    ON pairing_codes(host_installation_id, status, created_at_ms DESC);
-CREATE INDEX idx_pairing_codes_expires
-    ON pairing_codes(expires_at_ms)
-    WHERE status IN ('pending', 'confirmed');
 
 CREATE TABLE host_links (
     pair_id                    TEXT PRIMARY KEY,
     account_id                 TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    host_installation_id       TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
+    -- Exclusive host ownership: one account per host installation (Host Link).
+    host_installation_id       TEXT NOT NULL UNIQUE REFERENCES device_installations(installation_id) ON DELETE CASCADE,
     linked_via_installation_id TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
     link_display_name          TEXT,
     acl_json                   JSONB NOT NULL DEFAULT '{}'::jsonb,
-    paired_at_ms               BIGINT NOT NULL,
-    UNIQUE (account_id, host_installation_id)
+    paired_at_ms               BIGINT NOT NULL
 );
 
 CREATE INDEX idx_host_links_account ON host_links(account_id);
-CREATE INDEX idx_host_links_host ON host_links(host_installation_id);
 
 CREATE TABLE agents (
     agent_id         TEXT PRIMARY KEY,

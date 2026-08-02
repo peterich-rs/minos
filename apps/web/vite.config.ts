@@ -42,6 +42,8 @@ if (process.env.VITE_ALLOWED_HOSTS) {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  // Load VITE_* from monorepo root `.env.local` (SSOT with `just` / backend).
+  envDir: path.resolve(__dirname, '../..'),
   resolve: {
     // Shared chrome is source-aliased from apps/desktop; pin React so we do not
     // load a second copy if desktop node_modules is also present locally.

@@ -517,76 +517,6 @@
         "x-minos-surface": "account_api"
       }
     },
-    "/v1/auth/change-password": {
-      "post": {
-        "description": "Generated from the mounted route inventory for the `account_api` surface with `account_bearer` auth semantics.",
-        "operationId": "post_v1_auth_change_password",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": true
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": true
-              }
-            },
-            "description": "Success"
-          },
-          "401": {
-            "description": "Authentication required or rejected"
-          }
-        },
-        "security": [
-          {
-            "AccountBearer": []
-          }
-        ],
-        "summary": "POST /v1/auth/change-password",
-        "tags": [
-          "account_api"
-        ],
-        "x-minos-auth": "account_bearer",
-        "x-minos-probe-path": "/v1/auth/change-password",
-        "x-minos-surface": "account_api"
-      }
-    },
-    "/v1/auth/login": {
-      "post": {
-        "description": "Generated from the mounted route inventory for the `account_api` surface with `public` auth semantics.",
-        "operationId": "post_v1_auth_login",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": true
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": true
-              }
-            },
-            "description": "Success"
-          }
-        },
-        "summary": "POST /v1/auth/login",
-        "tags": [
-          "account_api"
-        ],
-        "x-minos-auth": "public",
-        "x-minos-probe-path": "/v1/auth/login",
-        "x-minos-surface": "account_api"
-      }
-    },
     "/v1/auth/logout": {
       "post": {
         "description": "Generated from the mounted route inventory for the `account_api` surface with `account_bearer` auth semantics.",
@@ -654,37 +584,6 @@
         ],
         "x-minos-auth": "public",
         "x-minos-probe-path": "/v1/auth/refresh",
-        "x-minos-surface": "account_api"
-      }
-    },
-    "/v1/auth/register": {
-      "post": {
-        "description": "Generated from the mounted route inventory for the `account_api` surface with `public` auth semantics.",
-        "operationId": "post_v1_auth_register",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": true
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": true
-              }
-            },
-            "description": "Success"
-          }
-        },
-        "summary": "POST /v1/auth/register",
-        "tags": [
-          "account_api"
-        ],
-        "x-minos-auth": "public",
-        "x-minos-probe-path": "/v1/auth/register",
         "x-minos-surface": "account_api"
       }
     },
@@ -1892,74 +1791,6 @@
         "x-minos-surface": "host_api"
       }
     },
-    "/v1/host/pairing/redeem": {
-      "post": {
-        "description": "Generated from the mounted route inventory for the `host_api` surface with `host_bootstrap` auth semantics.",
-        "operationId": "post_v1_host_pairing_redeem",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": true
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": true
-              }
-            },
-            "description": "Success"
-          },
-          "401": {
-            "description": "Authentication required or rejected"
-          }
-        },
-        "summary": "POST /v1/host/pairing/redeem",
-        "tags": [
-          "host_api"
-        ],
-        "x-minos-auth": "host_bootstrap",
-        "x-minos-probe-path": "/v1/host/pairing/redeem",
-        "x-minos-surface": "host_api"
-      }
-    },
-    "/v1/host/pairing/request-code": {
-      "post": {
-        "description": "Generated from the mounted route inventory for the `host_api` surface with `host_bootstrap` auth semantics.",
-        "operationId": "post_v1_host_pairing_request_code",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": true
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": true
-              }
-            },
-            "description": "Success"
-          },
-          "401": {
-            "description": "Authentication required or rejected"
-          }
-        },
-        "summary": "POST /v1/host/pairing/request-code",
-        "tags": [
-          "host_api"
-        ],
-        "x-minos-auth": "host_bootstrap",
-        "x-minos-probe-path": "/v1/host/pairing/request-code",
-        "x-minos-surface": "host_api"
-      }
-    },
     "/v1/host/realtime/ws-ticket": {
       "post": {
         "description": "Generated from the mounted route inventory for the `host_api` surface with `host_installation` auth semantics.",
@@ -1992,6 +1823,115 @@
         "x-minos-auth": "host_installation",
         "x-minos-probe-path": "/v1/host/realtime/ws-ticket",
         "x-minos-surface": "host_api"
+      }
+    },
+    "/v1/hosts": {
+      "get": {
+        "description": "Generated from the mounted route inventory for the `account_api` surface with `account_bearer` auth semantics.",
+        "operationId": "get_v1_hosts",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": true
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required or rejected"
+          }
+        },
+        "security": [
+          {
+            "AccountBearer": []
+          }
+        ],
+        "summary": "GET /v1/hosts",
+        "tags": [
+          "account_api"
+        ],
+        "x-minos-auth": "account_bearer",
+        "x-minos-probe-path": "/v1/hosts",
+        "x-minos-surface": "account_api"
+      }
+    },
+    "/v1/hosts/link": {
+      "post": {
+        "description": "Generated from the mounted route inventory for the `account_api` surface with `account_bearer` auth semantics.",
+        "operationId": "post_v1_hosts_link",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": true
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": true
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required or rejected"
+          }
+        },
+        "security": [
+          {
+            "AccountBearer": []
+          }
+        ],
+        "summary": "POST /v1/hosts/link",
+        "tags": [
+          "account_api"
+        ],
+        "x-minos-auth": "account_bearer",
+        "x-minos-probe-path": "/v1/hosts/link",
+        "x-minos-surface": "account_api"
+      }
+    },
+    "/v1/hosts/unlink": {
+      "post": {
+        "description": "Generated from the mounted route inventory for the `account_api` surface with `account_bearer` auth semantics.",
+        "operationId": "post_v1_hosts_unlink",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": true
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": true
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required or rejected"
+          }
+        },
+        "security": [
+          {
+            "AccountBearer": []
+          }
+        ],
+        "summary": "POST /v1/hosts/unlink",
+        "tags": [
+          "account_api"
+        ],
+        "x-minos-auth": "account_bearer",
+        "x-minos-probe-path": "/v1/hosts/unlink",
+        "x-minos-surface": "account_api"
       }
     },
     "/v1/notifications/preferences/get": {
@@ -2188,164 +2128,6 @@
         "x-minos-probe-path": "/v1/notifications/tokens/unregister",
         "x-minos-surface": "account_api"
       }
-    },
-    "/v1/pairing/confirm": {
-      "post": {
-        "description": "Generated from the mounted route inventory for the `account_api` surface with `account_bearer` auth semantics.",
-        "operationId": "post_v1_pairing_confirm",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": true
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": true
-              }
-            },
-            "description": "Success"
-          },
-          "401": {
-            "description": "Authentication required or rejected"
-          }
-        },
-        "security": [
-          {
-            "AccountBearer": []
-          }
-        ],
-        "summary": "POST /v1/pairing/confirm",
-        "tags": [
-          "account_api"
-        ],
-        "x-minos-auth": "account_bearer",
-        "x-minos-probe-path": "/v1/pairing/confirm",
-        "x-minos-surface": "account_api"
-      }
-    },
-    "/v1/pairing/list-hosts": {
-      "post": {
-        "description": "Generated from the mounted route inventory for the `account_api` surface with `account_bearer` auth semantics.",
-        "operationId": "post_v1_pairing_list_hosts",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": true
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": true
-              }
-            },
-            "description": "Success"
-          },
-          "401": {
-            "description": "Authentication required or rejected"
-          }
-        },
-        "security": [
-          {
-            "AccountBearer": []
-          }
-        ],
-        "summary": "POST /v1/pairing/list-hosts",
-        "tags": [
-          "account_api"
-        ],
-        "x-minos-auth": "account_bearer",
-        "x-minos-probe-path": "/v1/pairing/list-hosts",
-        "x-minos-surface": "account_api"
-      }
-    },
-    "/v1/pairing/revoke": {
-      "post": {
-        "description": "Generated from the mounted route inventory for the `account_api` surface with `account_bearer` auth semantics.",
-        "operationId": "post_v1_pairing_revoke",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": true
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": true
-              }
-            },
-            "description": "Success"
-          },
-          "401": {
-            "description": "Authentication required or rejected"
-          }
-        },
-        "security": [
-          {
-            "AccountBearer": []
-          }
-        ],
-        "summary": "POST /v1/pairing/revoke",
-        "tags": [
-          "account_api"
-        ],
-        "x-minos-auth": "account_bearer",
-        "x-minos-probe-path": "/v1/pairing/revoke",
-        "x-minos-surface": "account_api"
-      }
-    },
-    "/v1/pairings/{host_device_id}": {
-      "delete": {
-        "description": "Generated from the mounted route inventory for the `account_api` surface with `account_bearer` auth semantics.",
-        "operationId": "delete_v1_pairings_host_device_id",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": true
-              }
-            },
-            "description": "Success"
-          },
-          "401": {
-            "description": "Authentication required or rejected"
-          }
-        },
-        "security": [
-          {
-            "AccountBearer": []
-          }
-        ],
-        "summary": "DELETE /v1/pairings/:host_device_id",
-        "tags": [
-          "account_api"
-        ],
-        "x-minos-auth": "account_bearer",
-        "x-minos-probe-path": "/v1/pairings/00000000-0000-0000-0000-000000000001",
-        "x-minos-surface": "account_api"
-      },
-      "parameters": [
-        {
-          "in": "path",
-          "name": "host_device_id",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        }
-      ]
     },
     "/v1/profiles/display-name": {
       "post": {

@@ -88,7 +88,7 @@ pub fn kind_message(kind: ErrorKind, lang: Lang) -> String {
 
 pub use minos_daemon::{
     AgentSessionSnapshot, AgentStateObserver, DaemonHandle, PeerRecord, PeerStateObserver,
-    RelayConfig, RelayLinkStateObserver, RelayQrPayload, Subscription,
+    RelayConfig, RelayLinkStateObserver, Subscription,
 };
 pub use minos_domain::{
     AgentDescriptor, AgentName, AgentStatus, DeviceId, DeviceSecret, PeerState, RelayLinkState,

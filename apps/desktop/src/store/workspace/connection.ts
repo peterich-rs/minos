@@ -23,9 +23,21 @@ export function createConnectionActions(
   WorkspaceState,
   | "bootstrap"
   | "refreshProjects"
+  | "refreshDaemonStatus"
   | "clearActionError"
 > {
   return {
+  /** Refresh IPC + hubOnline without full bootstrap (IM device presence). */
+  refreshDaemonStatus: async () => {
+    if (!isTauriRuntime()) return;
+    if (get().source !== "daemon") return;
+    try {
+      const connection = await daemonApi.status();
+      set({ connection });
+    } catch {
+      /* keep last snapshot */
+    }
+  },
   bootstrap: async () => {
     // Single-flight: all concurrent callers (React StrictMode double mount)
     // await the same promise instead of wiping emptyWorkspace twice mid-load.

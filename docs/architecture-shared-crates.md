@@ -9,14 +9,13 @@
 | `minos-domain` | 核心域类型 | 无 |
 | `minos-protocol` | 线协议定义 | domain, ui-protocol |
 | `minos-transport` | 传输层 | domain, protocol |
-| `minos-pairing` | 配对状态机 | domain |
 | `minos-cli-detect` | CLI agent 检测 | domain |
 | `minos-agent-runtime` | Agent 运行时 | domain, codex-protocol, acp-protocol, chat-store |
 | `minos-chat-store` | 聊天持久化 | domain, protocol |
 | `minos-acp-protocol` | ACP 协议类型 | 无 |
 | `minos-codex-protocol` | Codex 协议类型 | 无 |
 | `minos-ui-protocol` | UI 事件协议 | domain |
-| `minos-ffi-uniffi` | UniFFI 绑定 shim | daemon, domain, protocol, ui-protocol, agent-runtime, pairing |
+| `minos-ffi-uniffi` | UniFFI 绑定 shim | daemon, domain, protocol, ui-protocol, agent-runtime |
 | `minos-ffi-frb` | FRB 绑定 shim | mobile, domain, protocol, ui-protocol |
 
 ---
@@ -74,22 +73,7 @@
 
 ---
 
-## 4. `minos-pairing` — 配对状态机
-
-**路径**: `crates/minos-pairing/`
-**特性**: 配对状态机和持久化端口。
-
-### 关键类型
-
-| 类型 | 描述 |
-|------|------|
-| `Pairing` struct | 状态机: `begin_awaiting()`, `accept_peer()`, `forget()`, `replace()`。非法转换返回 `MinosError::PairingStateMismatch` |
-| `TrustedDevice` | device_id, name, host_device_id, paired_at |
-| `PairingStore` trait | `load()`/`save()` 持久化端口（iOS Keychain 实现、内存实现用于测试） |
-
----
-
-## 5. `minos-cli-detect` — CLI Agent 检测
+## 4. `minos-cli-detect` — CLI Agent 检测
 
 **路径**: `crates/minos-cli-detect/`
 **特性**: 探测本地安装的 CLI agent。
@@ -241,7 +225,7 @@ Grok file edits (`SearchReplace` / write / `ApplyPatch`) arrive as ACP `ToolCall
 
 | 来源 | 导出类型 |
 |------|---------|
-| `minos-daemon` | `DaemonHandle`, observer 协议, `RelayQrPayload`, `PeerRecord`, `Subscription` |
+| `minos-daemon` | `DaemonHandle`, observer 协议, Host Link RPC, `PeerRecord`, `Subscription` |
 | `minos-domain` | `AgentDescriptor`, `AgentName`, `DeviceId`, `PeerState`, `RelayLinkState` |
 | `minos-agent-runtime` | `SessionState`, `PauseReason`, `CloseReason` |
 | `minos-protocol` | `AgentLaunchMode`, `StartAgentRequest`, `SendUserMessageRequest` 等 |

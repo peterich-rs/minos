@@ -241,6 +241,114 @@ pub async fn create_group_conversation(
     }
 }
 
+/// Ensure a group conversation exists with the given id (host-local projection).
+///
+/// When missing, creates it with `creator_account_id` and all `member_account_ids`.
+/// Idempotent: concurrent inserts are treated as success if the row appears.
+pub async fn ensure_group_conversation_with_id(
+    store: &impl AsStorePool,
+    conversation_id: &str,
+    creator_account_id: &str,
+    title: &str,
+    member_account_ids: &[String],
+    now_ms: i64,
+) -> Result<ConversationRow, BackendError> {
+    if let Some(existing) = get_conversation(store, conversation_id).await? {
+        return Ok(existing);
+    }
+
+    let mut members = member_account_ids.to_vec();
+    if !members.iter().any(|m| m == creator_account_id) {
+        members.push(creator_account_id.to_string());
+    }
+    members.sort();
+    members.dedup();
+
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(store_err("social::ensure_group_conversation_with_id.begin"))?;
+            let insert = sqlx::query(
+                "INSERT OR IGNORE INTO conversations
+                    (conversation_id, kind, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms)
+                 VALUES (?, 'group', ?, ?, NULL, NULL, ?, ?)",
+            )
+            .bind(conversation_id)
+            .bind(title)
+            .bind(creator_account_id)
+            .bind(now_ms)
+            .bind(now_ms)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err("social::ensure_group_conversation_with_id.insert_conversation"))?;
+            if insert.rows_affected() > 0 {
+                for member in &members {
+                    sqlx::query(
+                        "INSERT OR IGNORE INTO conversation_members (conversation_id, account_id, joined_at_ms)
+                         VALUES (?, ?, ?)",
+                    )
+                    .bind(conversation_id)
+                    .bind(member)
+                    .bind(now_ms)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(store_err("social::ensure_group_conversation_with_id.insert_member"))?;
+                }
+            }
+            tx.commit().await.map_err(store_err(
+                "social::ensure_group_conversation_with_id.commit",
+            ))?;
+        }
+        StorePoolRef::Postgres(pool) => {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(store_err("social::ensure_group_conversation_with_id.begin"))?;
+            let insert = sqlx::query(
+                "INSERT INTO conversations
+                    (conversation_id, kind, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms)
+                 VALUES ($1, 'group', $2, $3, NULL, NULL, $4, $5)
+                 ON CONFLICT (conversation_id) DO NOTHING",
+            )
+            .bind(conversation_id)
+            .bind(title)
+            .bind(creator_account_id)
+            .bind(now_ms)
+            .bind(now_ms)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err("social::ensure_group_conversation_with_id.insert_conversation"))?;
+            if insert.rows_affected() > 0 {
+                for member in &members {
+                    sqlx::query(
+                        "INSERT INTO conversation_members (conversation_id, account_id, joined_at_ms)
+                         VALUES ($1, $2, $3)
+                         ON CONFLICT DO NOTHING",
+                    )
+                    .bind(conversation_id)
+                    .bind(member)
+                    .bind(now_ms)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(store_err("social::ensure_group_conversation_with_id.insert_member"))?;
+                }
+            }
+            tx.commit().await.map_err(store_err(
+                "social::ensure_group_conversation_with_id.commit",
+            ))?;
+        }
+    }
+
+    get_conversation(store, conversation_id)
+        .await?
+        .ok_or_else(|| BackendError::StoreQuery {
+            operation: "social::ensure_group_conversation_with_id.load".into(),
+            message: "conversation missing after ensure".into(),
+        })
+}
+
 pub async fn get_conversation(
     store: &impl AsStorePool,
     conversation_id: &str,

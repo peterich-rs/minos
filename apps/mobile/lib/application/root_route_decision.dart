@@ -1,8 +1,8 @@
 import 'package:minos/domain/auth_state.dart';
 import 'package:minos/src/rust/api/minos.dart' as core;
 
-/// Top-level navigation surface enum. The router watches three providers
-/// (auth, connection, persisted-pairing) and routes via [decideRootRoute].
+/// Top-level navigation surface enum. The router evaluates auth via
+/// [decideRootRoute]; online vs offline both map to the shell path.
 enum RootRoute {
   /// Pre-stream / refresh-in-flight. Show a spinner so the UI doesn't
   /// flash login during normal cold-launch hydration.

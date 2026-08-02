@@ -10,12 +10,12 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use futures::{SinkExt, StreamExt};
 use minos_backend::{
     auth::use_case::AuthUseCase,
+    host_link::HostLinkService,
     http::{router, BackendState},
-    pairing::{secret::hash_secret, PairingService},
     session::SessionRegistry,
     store,
 };
-use minos_domain::{AgentName, DeviceId, DeviceRole, DeviceSecret};
+use minos_domain::{AgentName, DeviceId, DeviceRole};
 use minos_protocol::{Envelope, EventKind};
 use minos_ui_protocol::UiEventMessage;
 use sqlx::SqlitePool;
@@ -55,7 +55,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
     let registry = Arc::new(SessionRegistry::new());
     let mut state = BackendState::new(
         registry,
-        Arc::new(PairingService::new(pool.clone())),
+        Arc::new(HostLinkService::new(pool.clone())),
         pool.clone(),
         Duration::from_mins(5),
         TEST_JWT_SECRET.to_string(),
@@ -207,17 +207,20 @@ async fn ingest_translates_and_fans_out_to_paired_mobile() -> anyhow::Result<()>
     // find the iOS receivers, so the iOS row needs `account_id` set and no
     // secret hash.
     let host_id = DeviceId::new();
-    let host_secret = DeviceSecret::generate();
-    let host_hash = hash_secret(&host_secret)?;
-    store::devices::insert_device(&relay.pool, host_id, "mac", DeviceRole::AgentHost, 0).await?;
-    store::devices::upsert_secret_hash(&relay.pool, host_id, &host_hash).await?;
+    store::device_installations::insert_device(
+        &relay.pool,
+        host_id,
+        "mac",
+        DeviceRole::AgentHost,
+        0,
+    )
+    .await?;
 
-    let account_id = store::accounts::create(&relay.pool, "ingest@example.com", "phc")
+    let account_id = store::accounts::create(&relay.pool, "ingest@example.com")
         .await?
         .account_id;
     let phone_id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
-    store::account_host_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
-        .await?;
+    store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
 
     // Phone connects first so it has a live session by the time the host
     // sends Ingest.
@@ -291,11 +294,15 @@ async fn ingest_retransmit_is_no_op() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
     let host_id = DeviceId::new();
-    let host_secret = DeviceSecret::generate();
-    let host_hash = hash_secret(&host_secret)?;
 
-    store::devices::insert_device(&relay.pool, host_id, "mac", DeviceRole::AgentHost, 0).await?;
-    store::devices::upsert_secret_hash(&relay.pool, host_id, &host_hash).await?;
+    store::device_installations::insert_device(
+        &relay.pool,
+        host_id,
+        "mac",
+        DeviceRole::AgentHost,
+        0,
+    )
+    .await?;
 
     let mut host = connect_client(&relay, host_id, DeviceRole::AgentHost, None).await?;
     // Drain Unpaired presence frame.
@@ -331,17 +338,20 @@ async fn ingest_derives_title_from_first_user_message_and_fans_out_synthetic_upd
     let relay = spawn_relay().await?;
 
     let host_id = DeviceId::new();
-    let host_secret = DeviceSecret::generate();
-    let host_hash = hash_secret(&host_secret)?;
-    store::devices::insert_device(&relay.pool, host_id, "mac", DeviceRole::AgentHost, 0).await?;
-    store::devices::upsert_secret_hash(&relay.pool, host_id, &host_hash).await?;
+    store::device_installations::insert_device(
+        &relay.pool,
+        host_id,
+        "mac",
+        DeviceRole::AgentHost,
+        0,
+    )
+    .await?;
 
-    let account_id = store::accounts::create(&relay.pool, "title@example.com", "phc")
+    let account_id = store::accounts::create(&relay.pool, "title@example.com")
         .await?
         .account_id;
     let phone_id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
-    store::account_host_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
-        .await?;
+    store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
 
     let mut phone = connect_client(
         &relay,

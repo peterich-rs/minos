@@ -1065,7 +1065,17 @@ fn require_generated_text(path: &Path, needle: &str, context: &str) -> Result<()
 }
 
 fn prune_unexpected_uniffi_outputs(out_dir: &Path) {
-    let _ = out_dir;
+    // Host Link replaced QR pairing; `minos-pairing` is no longer a UniFFI
+    // surface. Stale bindgen artifacts must not stay under Minos/Generated or
+    // they collide with `DateTimeUtc` / converters also emitted by minos-daemon.
+    const RETIRED: &[&str] = &["minos_pairing.swift", "minos_pairingFFI.h"];
+    for name in RETIRED {
+        let path = out_dir.join(name);
+        if path.exists() {
+            let _ = fs::remove_file(&path);
+            eprintln!("==> pruned retired UniFFI artifact {}", path.display());
+        }
+    }
 }
 
 #[allow(clippy::too_many_lines)] // Sequential drift guards; splitting them would obscure the per-needle context.
@@ -1082,7 +1092,7 @@ fn normalize_generated_uniffi_imports(out_dir: &Path) -> Result<()> {
     const MODULEMAP_DECL: &str = "framework module MinosCore {";
     const MODULEMAP_DECL_NORMALIZED: &str = "module MinosCoreFFI {";
     const MODULEMAP_DECL_ALREADY_NORMALIZED: &str = "framework module MinosCoreFFI {";
-    // Each cross-crate newtype that minos-daemon and minos-pairing both
+    // Each cross-crate newtype that minos-daemon and related crates both
     // register as a `remote` UniFFI custom_type emits an identical typealias
     // + FfiConverter block in `minos_daemon.swift` and `minos_pairing.swift`.
     // The two files share a Swift module, so we strip the daemon copy and

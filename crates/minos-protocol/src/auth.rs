@@ -16,17 +16,16 @@ pub struct AuthSummary {
     pub email: String,
 }
 
-/// Body for `POST /v1/auth/register` and `POST /v1/auth/login`. Both
-/// endpoints share this shape because register-then-login symmetry is a
-/// hard requirement of the auth flow.
+/// Body for `POST /v1/auth/supabase` token exchange.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AuthRequest {
-    pub email: String,
-    pub password: String,
+pub struct SupabaseExchangeRequest {
+    pub access_token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_name: Option<String>,
 }
 
-/// Successful response from `register` and `login`. Field names are
-/// fixed to match the backend's `AuthResp` JSON shape — do not rename.
+/// Successful response from Supabase exchange. Field names are fixed to
+/// match the backend's `AuthResp` JSON shape — do not rename.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AuthResponse {
     pub account: AuthSummary,
@@ -106,13 +105,13 @@ mod tests {
     }
 
     #[test]
-    fn auth_request_round_trip() {
-        let r = AuthRequest {
-            email: "a@b.com".into(),
-            password: "hunter22".into(),
+    fn supabase_exchange_request_round_trip() {
+        let r = SupabaseExchangeRequest {
+            access_token: "jwt".into(),
+            device_name: Some("phone".into()),
         };
         let s = serde_json::to_string(&r).unwrap();
-        let back: AuthRequest = serde_json::from_str(&s).unwrap();
+        let back: SupabaseExchangeRequest = serde_json::from_str(&s).unwrap();
         assert_eq!(r, back);
     }
 

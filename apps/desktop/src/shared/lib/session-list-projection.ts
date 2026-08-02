@@ -71,6 +71,34 @@ function patchMembershipLists(
 }
 
 /**
+ * Ensure the session appears under its conversation inspector list.
+ *
+ * Live manager events only know `sessionId` + status. Hydrate may have placed
+ * the row already; if not (race after SessionAdded shell), invent membership
+ * for `row.conversationId` so Running→Idle does not stay stuck until the user
+ * remounts Sessions / Inspector.
+ */
+function upsertConversationMembership(
+  lists: Record<string, SessionListRow[]>,
+  sessionId: string,
+  row: SessionListRow,
+): Record<string, SessionListRow[]> {
+  const patched = patchMembershipLists(lists, sessionId, row);
+  const convId = row.conversationId?.trim();
+  if (!convId) return patched;
+
+  const current = patched[convId] ?? lists[convId] ?? [];
+  if (current.some((x) => x.id === sessionId)) {
+    // patchMembershipLists already rewrote the row when present.
+    return patched;
+  }
+  return {
+    ...patched,
+    [convId]: [row, ...current],
+  };
+}
+
+/**
  * Re-derive Attention queue from Entity map (sorted by lastTsMs desc).
  * Only entities that currently need attention appear.
  */
@@ -87,8 +115,10 @@ export function rederiveAttentionFromEntities(
  * Project one SessionEntity into Inspector / SessionList / Attention caches.
  * Entity must already be written to sessionsById before calling this.
  *
- * Does not invent membership in Inspector or SessionList — only refreshes
- * rows already present. Attention: re-derive when ready; else update/drop only.
+ * Inspector (`sessionsByConversation`): upserts when `conversationId` is known
+ * so live SessionStateChanged can surface without a full re-list.
+ * Project SessionList: still membership-only (hydrate owns project scope).
+ * Attention: re-derive when ready; else update/drop only.
  */
 export function projectEntityIntoLists(
   s: SessionListProjectionInput,
@@ -104,7 +134,7 @@ export function projectEntityIntoLists(
   }
   const row = rowFromEntity(entity);
 
-  const sessionsByConversation = patchMembershipLists(
+  const sessionsByConversation = upsertConversationMembership(
     s.sessionsByConversation,
     sessionId,
     row,

@@ -32,7 +32,7 @@ pub async fn create(
         StorePoolRef::Sqlite(pool) => {
             sqlx::query(
                 "INSERT INTO agent_sessions
-                    (session_id, conversation_id, project_id, host_device_id, agent_id, status, started_at_ms, ended_at_ms)
+                    (session_id, conversation_id, project_id, host_installation_id, agent_id, status, started_at_ms, ended_at_ms)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(session_id)
@@ -50,7 +50,7 @@ pub async fn create(
         StorePoolRef::Postgres(pool) => {
             sqlx::query(
                 "INSERT INTO agent_sessions
-                    (session_id, conversation_id, project_id, host_device_id, agent_id, status, started_at_ms, ended_at_ms)
+                    (session_id, conversation_id, project_id, host_installation_id, agent_id, status, started_at_ms, ended_at_ms)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             )
             .bind(session_id)
@@ -83,7 +83,7 @@ pub async fn get(
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, AgentSessionRow>(
-                "SELECT session_id, conversation_id, project_id, host_device_id, agent_id, status, started_at_ms, ended_at_ms
+                "SELECT session_id, conversation_id, project_id, host_installation_id AS host_device_id, agent_id, status, started_at_ms, ended_at_ms
                    FROM agent_sessions
                   WHERE session_id = ?",
             )
@@ -93,7 +93,7 @@ pub async fn get(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, AgentSessionRow>(
-                "SELECT session_id, conversation_id, project_id, host_device_id, agent_id, status, started_at_ms, ended_at_ms
+                "SELECT session_id, conversation_id, project_id, host_installation_id AS host_device_id, agent_id, status, started_at_ms, ended_at_ms
                    FROM agent_sessions
                   WHERE session_id = $1",
             )
@@ -113,7 +113,7 @@ pub async fn get_for_account(
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, AgentSessionRow>(
-                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
                    FROM agent_sessions s
                    JOIN conversation_members cm
                      ON cm.conversation_id = s.conversation_id
@@ -127,7 +127,7 @@ pub async fn get_for_account(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, AgentSessionRow>(
-                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
                    FROM agent_sessions s
                    JOIN conversation_members cm
                      ON cm.conversation_id = s.conversation_id
@@ -151,7 +151,7 @@ pub async fn latest_for_account_conversation(
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, AgentSessionRow>(
-                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
                    FROM agent_sessions s
                    JOIN conversation_members cm
                      ON cm.conversation_id = s.conversation_id
@@ -167,7 +167,7 @@ pub async fn latest_for_account_conversation(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, AgentSessionRow>(
-                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
                    FROM agent_sessions s
                    JOIN conversation_members cm
                      ON cm.conversation_id = s.conversation_id
@@ -194,7 +194,7 @@ pub async fn list_for_account(
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, AgentSessionRow>(
-                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
                    FROM agent_sessions s
                    JOIN conversation_members cm
                      ON cm.conversation_id = s.conversation_id
@@ -212,7 +212,7 @@ pub async fn list_for_account(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, AgentSessionRow>(
-                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
                    FROM agent_sessions s
                    JOIN conversation_members cm
                      ON cm.conversation_id = s.conversation_id
@@ -242,7 +242,7 @@ pub async fn list_for_account_conversation(
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, AgentSessionRow>(
-                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
                    FROM agent_sessions s
                    JOIN conversation_members cm
                      ON cm.conversation_id = s.conversation_id
@@ -262,7 +262,7 @@ pub async fn list_for_account_conversation(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, AgentSessionRow>(
-                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
                    FROM agent_sessions s
                    JOIN conversation_members cm
                      ON cm.conversation_id = s.conversation_id
@@ -294,7 +294,7 @@ pub async fn list_for_account_project(
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, AgentSessionRow>(
-                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
                    FROM agent_sessions s
                    JOIN conversation_members cm
                      ON cm.conversation_id = s.conversation_id
@@ -314,7 +314,7 @@ pub async fn list_for_account_project(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, AgentSessionRow>(
-                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
                    FROM agent_sessions s
                    JOIN conversation_members cm
                      ON cm.conversation_id = s.conversation_id
@@ -432,9 +432,9 @@ pub async fn claim_host_if_empty(
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query(
             "UPDATE agent_sessions
-                    SET host_device_id = ?
+                    SET host_installation_id = ?
                   WHERE session_id = ?
-                    AND host_device_id IS NULL",
+                    AND host_installation_id IS NULL",
         )
         .bind(host_device_id)
         .bind(session_id)
@@ -443,9 +443,9 @@ pub async fn claim_host_if_empty(
         .map(|_| ()),
         StorePoolRef::Postgres(pool) => sqlx::query(
             "UPDATE agent_sessions
-                    SET host_device_id = $1
+                    SET host_installation_id = $1
                   WHERE session_id = $2
-                    AND host_device_id IS NULL",
+                    AND host_installation_id IS NULL",
         )
         .bind(host_device_id)
         .bind(session_id)

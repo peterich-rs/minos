@@ -1,6 +1,6 @@
 //! Minos JSON-RPC 2.0 contract.
 //!
-//! - `auth`:     HTTP DTOs for `/v1/auth/*` (register / login / refresh / logout)
+//! - `auth`:     HTTP DTOs for `/v1/auth/*` (supabase / refresh / logout)
 //! - `envelope`: relay WebSocket frame (`Envelope` + sub-enums)
 //! - `messages`: typed request / response payloads
 //! - `rpc`:      jsonrpsee `#[rpc]` trait shared by daemon (server) and mobile (client)

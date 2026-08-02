@@ -110,7 +110,7 @@ pub async fn authorize_subscription(
 mod tests {
     use super::*;
     use crate::store::test_support::{insert_account, insert_ios_device, memory_pool};
-    use crate::store::{account_host_pairings, agent_sessions, devices, social};
+    use crate::store::{agent_sessions, device_installations, host_links, social};
     use minos_domain::{DeviceId, DeviceRole};
 
     #[tokio::test]
@@ -181,7 +181,7 @@ mod tests {
         let account_id = insert_account(&pool, "realtime-host-auth@example.com").await;
         let phone = insert_ios_device(&pool, &account_id).await;
         let host_id = DeviceId::new();
-        devices::insert_device(&pool, host_id, "Mac", DeviceRole::AgentHost, 0)
+        device_installations::insert_device(&pool, host_id, "Mac", DeviceRole::AgentHost, 0)
             .await
             .unwrap();
         let members = vec![account_id.clone()];
@@ -189,7 +189,7 @@ mod tests {
             social::create_group_conversation(&pool, &account_id, "Host Scope", &members, 100)
                 .await
                 .unwrap();
-        account_host_pairings::insert_pair(&pool, host_id, &account_id, phone, 0)
+        host_links::insert_pair(&pool, host_id, &account_id, phone, 0)
             .await
             .unwrap();
         agent_sessions::create(

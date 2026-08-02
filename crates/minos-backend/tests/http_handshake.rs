@@ -10,12 +10,12 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use minos_backend::{
     auth::use_case::AuthUseCase,
+    host_link::HostLinkService,
     http::{router, BackendState},
-    pairing::{secret::hash_secret, PairingService},
     session::SessionRegistry,
     store,
 };
-use minos_domain::{DeviceId, DeviceRole, DeviceSecret};
+use minos_domain::{DeviceId, DeviceRole};
 use minos_protocol::realtime::ServerFrame;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::{
@@ -43,7 +43,7 @@ async fn spawn_relay() -> (
     let registry = Arc::new(SessionRegistry::new());
     let mut state = BackendState::new(
         registry,
-        Arc::new(PairingService::new(pool.clone())),
+        Arc::new(HostLinkService::new(pool.clone())),
         pool.clone(),
         Duration::from_mins(5),
         TEST_JWT_SECRET.to_string(),
@@ -202,7 +202,7 @@ async fn ws_client_ticket_connect_emits_hello_frame() {
     use futures::StreamExt;
 
     let (base, _task, pool, auth) = spawn_relay().await;
-    let account_id = store::accounts::create(&pool, "handshake-client@example.com", "phc")
+    let account_id = store::accounts::create(&pool, "handshake-client@example.com")
         .await
         .unwrap()
         .account_id;
@@ -229,16 +229,12 @@ async fn ws_client_ticket_connect_emits_hello_frame() {
         other => panic!("expected Hello, got {other:?}"),
     }
 
-    let row = store::devices::get_device(&pool, id)
+    let row = store::device_installations::get_device(&pool, id)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(row.role, DeviceRole::MobileClient);
     assert_eq!(row.account_id.as_deref(), Some(account_id.as_str()));
-    assert!(
-        row.secret_hash.is_none(),
-        "formal client rows must stay bearer-only"
-    );
 }
 
 // ── /ws/host: paired reconnect legacy presence model removed ────────────
@@ -253,21 +249,16 @@ async fn devices_authenticated_connect_emits_hello_frame_when_peer_is_not_live()
     let (base, _task, pool, auth) = spawn_relay().await;
 
     let mac_id = DeviceId::new();
-    let mac_secret = DeviceSecret::generate();
-    let mac_hash = hash_secret(&mac_secret).unwrap();
 
-    store::devices::insert_device(&pool, mac_id, "mac", DeviceRole::AgentHost, 0)
+    store::device_installations::insert_device(&pool, mac_id, "mac", DeviceRole::AgentHost, 0)
         .await
         .unwrap();
-    store::devices::upsert_secret_hash(&pool, mac_id, &mac_hash)
-        .await
-        .unwrap();
-    let account_id = store::accounts::create(&pool, "presence@example.com", "phc")
+    let account_id = store::accounts::create(&pool, "presence@example.com")
         .await
         .unwrap()
         .account_id;
     let ios_id = store::test_support::insert_ios_device(&pool, &account_id).await;
-    store::account_host_pairings::insert_pair(&pool, mac_id, &account_id, ios_id, 0)
+    store::host_links::insert_pair(&pool, mac_id, &account_id, ios_id, 0)
         .await
         .unwrap();
 
@@ -295,12 +286,7 @@ async fn ws_client_rejects_host_ticket_with_401() {
     let (base, _task, pool, auth) = spawn_relay().await;
 
     let id = DeviceId::new();
-    let secret = DeviceSecret::generate();
-    let secret_hash = hash_secret(&secret).unwrap();
-    store::devices::insert_device(&pool, id, "mac", DeviceRole::AgentHost, 0)
-        .await
-        .unwrap();
-    store::devices::upsert_secret_hash(&pool, id, &secret_hash)
+    store::device_installations::insert_device(&pool, id, "mac", DeviceRole::AgentHost, 0)
         .await
         .unwrap();
 
@@ -317,7 +303,7 @@ async fn ws_client_rejects_host_ticket_with_401() {
 async fn ws_host_rejects_client_ticket_with_401() {
     let (base, _task, pool, auth) = spawn_relay().await;
 
-    let account_id = store::accounts::create(&pool, "wrong-rail@example.com", "phc")
+    let account_id = store::accounts::create(&pool, "wrong-rail@example.com")
         .await
         .unwrap()
         .account_id;
@@ -365,7 +351,7 @@ async fn ws_client_invalid_ticket_rejects_with_401() {
 async fn ws_client_reused_ticket_rejects_with_401() {
     let (base, _task, pool, auth) = spawn_relay().await;
 
-    let account_id = store::accounts::create(&pool, "reuse-ticket@example.com", "phc")
+    let account_id = store::accounts::create(&pool, "reuse-ticket@example.com")
         .await
         .unwrap()
         .account_id;

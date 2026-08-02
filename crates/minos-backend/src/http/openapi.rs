@@ -20,11 +20,9 @@ use utoipa::OpenApi;
     ),
     paths(
         // Auth
-        crate::http::v1::auth::post_register,
-        crate::http::v1::auth::post_login,
         crate::http::v1::auth::post_refresh,
         crate::http::v1::auth::post_logout,
-        crate::http::v1::auth::post_change_password,
+        crate::http::v1::auth::post_supabase_exchange,
         // Health
         crate::http::health::live,
         crate::http::health::ready,
@@ -32,10 +30,9 @@ use utoipa::OpenApi;
     ),
     components(schemas(
         // Auth schemas
-        crate::http::v1::auth::RegisterReq,
-        crate::http::v1::auth::LoginReq,
         crate::http::v1::auth::RefreshReq,
         crate::http::v1::auth::LogoutReq,
+        crate::http::v1::auth::SupabaseExchangeReq,
         crate::http::v1::auth::AuthResp,
         crate::http::v1::auth::RefreshResp,
         crate::http::v1::auth::AccountSummary,
@@ -44,11 +41,11 @@ use utoipa::OpenApi;
         crate::http::error_response::ErrorBody,
     )),
     tags(
-        (name = "auth", description = "Account registration, login, token refresh, logout"),
+        (name = "auth", description = "Supabase exchange, token refresh, logout"),
         (name = "agent-sessions", description = "Agent session lifecycle management"),
         (name = "health", description = "Health and readiness probes"),
-        (name = "host", description = "Host (Mac) bootstrap and pairing"),
-        (name = "pairing", description = "Account-host pairing management"),
+        (name = "host", description = "Host (Mac) bootstrap and installation tokens"),
+        (name = "hosts", description = "Same-account host link management"),
         (name = "projects", description = "Project CRUD and agent-session linking"),
         (name = "social", description = "Conversations, friends, and messaging"),
     )

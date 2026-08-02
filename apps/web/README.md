@@ -15,7 +15,7 @@ talks to the same backend contract:
 
 - `POST /v1/auth/{register,login,refresh,logout,supabase}`
 - `POST /v1/realtime/ws-ticket`
-- `POST /v1/pairing/list-hosts`
+- `GET /v1/hosts` (Host Link list; bind hosts from Desktop)
 - `POST /v1/agent-sessions/list`
 - `POST /v1/agent-sessions/read-turns`
 - `GET /ws/client?ticket=...`

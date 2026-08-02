@@ -26,8 +26,8 @@ part 'auth_provider.g.dart';
 /// so the chat surface lights up without a separate trigger.
 ///
 /// Phase 11.3 + ADR-0020 — cross-account migration sequence:
-///   1. `register` / `login` go through [MinosCore.register] /
-///      [MinosCore.login], which compare the freshly minted
+///   1. `register` / `login` go through Supabase IdP then
+///      [MinosCore.loginWithSupabase], which adopt the freshly minted
 ///      `account_id` against the prior persisted snapshot.
 ///   2. If the prior `account_id` differs, `MinosCore` clears the
 ///      cached peer display name so a stale label from the previous
@@ -66,8 +66,8 @@ class AuthController extends _$AuthController {
     };
     if (frame is AuthStateFrame_Authenticated && !_wsResumed) {
       _wsResumed = true;
-      // Best-effort: a missing pairing snapshot or an unreachable Mac
-      // surfaces on connectionStateProvider — don't block the auth flow.
+      // Best-effort: missing host link / offline Mac surfaces via
+      // connectionStateProvider — don't block the auth flow.
       unawaited(_repository.resumePersistedSession().catchError((_) {}));
     } else if (frame is AuthStateFrame_Unauthenticated) {
       _wsResumed = false;
@@ -83,13 +83,17 @@ class AuthController extends _$AuthController {
   }
 
   /// Log into an existing account. See [register] for state-update
-  /// semantics.
+  /// semantics. When Supabase is configured, uses IdP → Minos exchange.
   Future<void> login(String email, String password) async {
     await _repository.login(email, password);
   }
 
-  /// Best-effort logout: revoke server-side, wipe local secrets, and let
-  /// the Rust core flip [authStates] to `Unauthenticated`.
+  /// Exchange a raw Supabase access token (OAuth / deep-link path).
+  Future<void> loginWithSupabaseToken(String supabaseAccessToken) async {
+    await _repository.loginWithSupabaseToken(supabaseAccessToken);
+  }
+
+  /// Dual-session logout: Minos revoke + local wipe + best-effort Supabase.
   Future<void> logout() async {
     await _repository.logout();
   }

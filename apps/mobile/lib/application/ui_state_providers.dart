@@ -1,3 +1,5 @@
+import 'package:minos/application/auth_provider.dart';
+import 'package:minos/domain/auth_state.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'ui_state_providers.g.dart';
@@ -16,14 +18,21 @@ class ShellTabIndex extends _$ShellTabIndex {
   }
 }
 
+/// Form UX for [LoginPage] (mode / in-flight / banner error).
+///
+/// Initial banner error is taken from [authControllerProvider] **inside**
+/// [build] (not from a widget `initState`). Writing a provider from
+/// `initState` trips Riverpod's "modify while the widget tree is building"
+/// assert when go_router mounts [LoginPage] after [AuthRefreshFailed].
 @Riverpod(keepAlive: false)
 class LoginPageStateController extends _$LoginPageStateController {
   @override
-  LoginPageState build() => const LoginPageState();
-
-  void seedInitialError(Object? error) {
-    if (state.didHydrateInitialError) return;
-    state = state.copyWith(error: error, didHydrateInitialError: true);
+  LoginPageState build() {
+    final authState = ref.read(authControllerProvider);
+    final initialError = authState is AuthRefreshFailed
+        ? authState.error
+        : null;
+    return LoginPageState(error: initialError);
   }
 
   void setMode(LoginPageMode mode) {
@@ -53,26 +62,21 @@ class LoginPageState {
     this.mode = LoginPageMode.login,
     this.inFlight = false,
     this.error,
-    this.didHydrateInitialError = false,
   });
 
   final LoginPageMode mode;
   final bool inFlight;
   final Object? error;
-  final bool didHydrateInitialError;
 
   LoginPageState copyWith({
     LoginPageMode? mode,
     bool? inFlight,
     Object? error = _loginPageErrorUnchanged,
-    bool? didHydrateInitialError,
   }) {
     return LoginPageState(
       mode: mode ?? this.mode,
       inFlight: inFlight ?? this.inFlight,
       error: identical(error, _loginPageErrorUnchanged) ? this.error : error,
-      didHydrateInitialError:
-          didHydrateInitialError ?? this.didHydrateInitialError,
     );
   }
 }

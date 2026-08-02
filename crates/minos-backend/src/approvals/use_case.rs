@@ -200,9 +200,7 @@ impl DefaultApprovalService {
             },
         };
 
-        match store::account_host_pairings::list_accounts_for_host(&self.store, host_device_id)
-            .await
-        {
+        match store::host_links::list_accounts_for_host(&self.store, host_device_id).await {
             Ok(accounts) => {
                 for account in accounts {
                     let _ = self
@@ -299,19 +297,18 @@ impl ApprovalService for DefaultApprovalService {
             return Ok(());
         }
 
-        let mut hosts =
-            store::account_host_pairings::list_hosts_for_account(&self.store, account_id)
-                .await?
-                .into_iter()
-                .map(|row| row.host_device_id)
-                .collect::<Vec<_>>();
+        let mut hosts = store::host_links::list_hosts_for_account(&self.store, account_id)
+            .await?
+            .into_iter()
+            .map(|row| row.host_device_id)
+            .collect::<Vec<_>>();
         hosts.sort_unstable_by_key(|host| host.to_string());
         hosts.dedup();
 
         let mut fully_disconnected_hosts = Vec::with_capacity(hosts.len());
         for host_device_id in hosts {
             let still_online =
-                store::account_host_pairings::list_accounts_for_host(&self.store, host_device_id)
+                store::host_links::list_accounts_for_host(&self.store, host_device_id)
                     .await?
                     .into_iter()
                     .any(|row| {

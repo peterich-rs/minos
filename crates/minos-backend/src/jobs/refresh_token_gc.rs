@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use super::job_trait::{Job, JobContext, JobError, JobOutcome};
 use crate::config::RuntimeMode;
 
-/// Garbage-collects expired pairing tokens.
+/// Garbage-collects expired refresh tokens (and long-revoked rows).
 pub struct RefreshTokenGcJob;
 
 #[async_trait]
@@ -24,7 +24,7 @@ impl Job for RefreshTokenGcJob {
 
     async fn tick(&self, ctx: &JobContext) -> Result<JobOutcome, JobError> {
         let now = chrono::Utc::now().timestamp_millis();
-        let rows = crate::store::tokens::gc_expired(&ctx.store, now)
+        let rows = crate::store::refresh_tokens::gc_expired(&ctx.store, now)
             .await
             .map_err(|e| JobError::Transient(e.to_string()))?;
 
@@ -33,7 +33,7 @@ impl Job for RefreshTokenGcJob {
                 target: "minos_backend::jobs",
                 job = self.name(),
                 rows,
-                "token GC removed expired rows"
+                "refresh token GC removed expired rows"
             );
             Ok(JobOutcome::DidWork(rows as u32))
         } else {

@@ -7,8 +7,8 @@
 | 项 | 值 |
 |----|-----|
 | 源码路径 | `apps/desktop/` |
-| 产品定位 | Host 本机指挥台（对标 TUI，不做登录/移动端） |
-| 当前阶段 | **Daemon-backed**：Tauri 宿主嵌 daemon；bootstrap 经 `daemonApi` 拉 projects / CLIs / live push。浏览器 `vite` 直开时 fallback mock 数据 |
+| 产品定位 | **Conversation 协作工作台**（Project → Timeline 为主舞台；Session/Approval 为对话内能力与 Attention）。本机对标 TUI 能力；**account-first** + Host Link 供手机/Web 远程；Host 页是连接/身份能力面而非主场景 |
+| 当前阶段 | **Daemon-backed**：Tauri 宿主嵌 daemon；bootstrap 经 `daemonApi` 拉 projects / CLIs / live push。浏览器 `vite` 直开时 fallback mock 数据。**根门禁 account-first**：冷启动 `hydrateAuth`（localStorage session → 必要时 `POST /v1/auth/refresh`）→ 无有效 Minos session 则全屏 `LoginPage`（Supabase IdP → `/v1/auth/supabase`）；有 session 再 daemon bootstrap 进 `AppShell`。**Link this Mac**（daemon prepare/sign/apply + `POST /v1/hosts/link`）仍在 Host 页，与登录解耦 |
 | 视觉 | 暖色多栏（参考 `res/desktop.jpeg` 气质，非客服 Inbox 语义） |
 | 产品 spec | [2026-07-18-desktop-product-experience.md](superpowers/specs/2026-07-18-desktop-product-experience.md) |
 | 状态拆分 spec | [2026-07-21-desktop-state-by-consumption.md](superpowers/specs/2026-07-21-desktop-state-by-consumption.md)（**P0–P4 done**；P5 cleanup reviewed；编码入口 §18） |
@@ -44,7 +44,7 @@
 | Markdown | `react-markdown` + `remark-gfm` + Shiki `CodeBlock` | 完成态 GFM；streaming 纯文本；fenced code 懒加载 Shiki 高亮 |
 | 主题 | Shiki theme JSON → CSS vars（`ThemeProvider`） | Host → Appearance 选主题/强调色；FOUC 用 localStorage 缓存 vars；默认 `minos`（warm） |
 | 长列表 | `@tanstack/react-virtual`（侧栏）+ `virtua`（conversation timeline） | ConversationList + **Sessions 左栏**（`SessionListPane` + flatten 树）用 `VirtualizedList`；主时间线 `VList` + stick-to-bottom/`shift` prepend；session **transcript** 仍分页 DOM（硬上限 2000），避免与审批/流式测高互殴 |
-| 状态 | Zustand 5 + TanStack Query 5 | **混合**：RQ 管 catalog/index 只读列表（projects/conversations/**projectSessions**/inspectorSessions/clis/profiles/models）；Zustand 管 timeline/transcript/SessionEntity/乐观发送/UI 指针（L0–L6） |
+| 状态 | Zustand 5 + TanStack Query 5 | **混合**：RQ 管 catalog/index 只读列表（projects/conversations/**projectSessions**/inspectorSessions/clis/profiles/models）；Zustand 管 timeline/transcript/SessionEntity/乐观发送/UI 指针（L0–L6）。**SessionEntity** 是 session status 的 live SSOT（manager `sessionStateChanged` → Entity → inspector/list projection）；Inspector 在 live session 上 quiet re-list 兜底。Timeline 在 `messageCount>0` 但本地空窗时即使 `livePush` 也会 quiet 补拉。 |
 | 图标 | Lucide React | 导航与工具栏 |
 | 本机 API | `@tauri-apps/api` | `invoke` → Rust |
 | 自动更新 | `tauri-plugin-updater` + `plugin-process` | 仅 release 构建启用；见 [desktop-auto-update.md](./desktop-auto-update.md) |
@@ -74,7 +74,7 @@ Work → Project
 | Board | 四列派生状态 | 非独立任务系统 |
 | Attention | needs_approval | approvals |
 | Agents | CLI inventory + personalized profiles | `list_clis` (runtime set + capability flags from Rust SSOT), `list_models` (honest per-model efforts), agent profile CRUD; **profile `description` = peer-facing role brief** (≤500, seeds conversation roster when member brief empty); start session accepts optional `profile_id` (daemon resolves model/effort/instructions; explicit fields override) |
-| Host | Ready / Local only / Linked + 诊断 | status + pairing |
+| Host | Ready / Local only / Linked + 诊断；Account & remote（身份 / Link this Mac / Unlink / Sign out） | `deriveHostPresence` + `account-store.hostLink.linked`；daemon `host_prepare_link` / `sign` / `apply`。登录表单在根 `LoginPage`，不在 Host |
 
 ### Agents capability SSOT
 
@@ -95,7 +95,7 @@ Feature-slice 布局（Wave 1 Phase 1–2）：按 **app 壳 / features / shared
 | 命令 | 作用 |
 |------|------|
 | `pnpm check` | `tsc --noEmit` |
-| `pnpm test` | `src/shared/{lib,api,hooks,ui}/*.test.ts` + `src/store/workspace/*.test.ts` + `src/features/{chat,agents,work}/lib/*.test.ts` |
+| `pnpm test` | `src/shared/{lib,api,hooks,ui}/*.test.ts` + `src/store/workspace/*.test.ts` + `src/features/{chat,agents,work,host}/lib/*.test.ts` |
 | `pnpm check:biome` | Biome **lint errors only**（format 不进 gate；warnings 可残留） |
 | `pnpm check:file-sizes` | `src/**/*.{ts,tsx}` 行数：warn `>400` / hard `>800`（ALLOWLIST 当前为空） |
 | `pnpm check:px-text` | 禁止 `text-[Npx]` / `font-size: Npx`；**allowlist 已清空**，新增即失败 |
@@ -146,6 +146,7 @@ apps/desktop/
       CommandPalette.tsx · ConnectionToasts.tsx · SidebarConnectionCard.tsx
       useWebviewZoomShortcuts.ts # Cmd±/0 → root rem scale; webview zoom pinned to 1
     features/
+      auth/                      # Full-screen LoginPage (root gate; Supabase → Minos)
       work/                      # Project → Conversations / Sessions / Board
         WorkView.tsx · ProjectHeader.tsx · ConversationList.tsx
         SessionInspector.tsx · SessionsView.tsx · SessionListPane.tsx
@@ -161,7 +162,9 @@ apps/desktop/
       attention/                 # AttentionView.tsx
       agents/                    # AgentsView.tsx · AGENTS.md (capability SSOT rule)
         lib/agentConfigProjection.ts  # pure map: list_clis/list_models → UI options
-      host/                      # HostView.tsx
+      host/                      # HostView.tsx · identity + Link this Mac (no login form)
+        lib/host-link-flow.ts    # pure prepare→sign→cloud→apply orchestration
+        lib/host-account-presenter.ts  # Local only / Linked / Error (+ defensive signed out)
       chat/                      # Conversation chat UI (Wave 1–2)
         Timeline.tsx             # thin container: load/poll + compose children
         TimelineEmpty.tsx        # no-conversation selected shell
@@ -194,9 +197,13 @@ apps/desktop/
         chromeLayout.ts          # sidebar / aux panel CSS vars + breakpoints
         AuxiliaryPanel.tsx       # split | rail | overlay right panel shell
       lib/
+        desktop-root-gate.ts     # decideDesktopRoot: boot | login | app
         platform.ts              # hasPrimaryShortcutModifier (⌘/Ctrl)
         connection-card-policy.ts # when to show sidebar daemon offline card
         host-status.ts           # Ready · Local only / Linked / This Mac
+        account-session.ts       # MinosSession + HostLinkState localStorage
+        minos-cloud.ts           # /v1/auth/* + /v1/hosts/* HTTP (desktop-console)
+        supabase.ts              # optional Supabase email/password IdP
         mock-data.ts
         toast.ts                 # sonner wrappers
         use-stick-to-bottom.ts
@@ -213,6 +220,7 @@ apps/desktop/
         daemon.ts · agent-route.ts · …
     store/                       # L0–L6 工作区契约不变；chat reactions 不进 workspace
       ui-store.ts                # nav + drafts + replyTo + commandPaletteOpen
+      account-store.ts           # Minos session + Host Link actions (sign-in / link / unlink)
       workspace-store.ts         # thin create() + re-export useWorkspaceStore
       workspace/
         types.ts                 # WorkspaceState / ResourceFetchStatus / ProjectSession

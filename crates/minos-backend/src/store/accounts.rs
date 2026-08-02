@@ -1,6 +1,9 @@
 //! `accounts` table CRUD. Account ids are UUIDv4 strings; emails are
 //! lowercased before lookup (the table is `COLLATE NOCASE` for defence).
 //!
+//! Accounts are IdP-bound via `supabase_sub` (created through
+//! `POST /v1/auth/supabase` exchange). There is no local password storage.
+//!
 //! Uses runtime `sqlx::query` / `sqlx::query_as` rather than the macro
 //! form deliberately. The macro variants need a populated dev DB during
 //! `cargo build` and add a `cargo sqlx prepare` step to every CI run per
@@ -20,56 +23,45 @@ pub struct AccountRow {
     pub email: String,
     pub minos_id: String,
     pub display_name: Option<String>,
-    pub password_hash: String,
     pub supabase_sub: Option<String>,
     pub created_at: i64,
     pub last_login_at: Option<i64>,
 }
 
-const ACCOUNT_SELECT_SQLITE: &str = "SELECT account_id, email, minos_id, display_name, password_hash, supabase_sub, created_at, last_login_at
+const ACCOUNT_SELECT_SQLITE: &str =
+    "SELECT account_id, email, minos_id, display_name, supabase_sub, created_at, last_login_at
                    FROM accounts";
 
 const ACCOUNT_SELECT_POSTGRES: &str = "SELECT account_id, email, minos_id, display_name,
-                   COALESCE(
-                       (SELECT password_hash FROM account_credentials c WHERE c.account_id = accounts.account_id),
-                       '!'
-                   ) AS password_hash,
                    supabase_sub,
                    created_at_ms AS created_at,
                    last_login_at_ms AS last_login_at
                    FROM accounts";
 
-pub async fn create<S>(
-    store: &S,
-    email: &str,
-    password_hash: &str,
-) -> Result<AccountRow, BackendError>
+/// Create an account without a Supabase subject (test fixtures / rare
+/// unbound rows that later bind via exchange).
+pub async fn create<S>(store: &S, email: &str) -> Result<AccountRow, BackendError>
 where
     S: AsStorePool + ?Sized,
 {
-    create_inner(store, email, password_hash, None).await
+    create_inner(store, email, None).await
 }
 
 /// Create an account bound to a Supabase Auth subject.
-///
-/// `password_hash` should be an unusable Argon2 hash for OAuth-only
-/// accounts (password login will fail verification).
 pub async fn create_with_supabase_sub<S>(
     store: &S,
     email: &str,
-    password_hash: &str,
     supabase_sub: &str,
 ) -> Result<AccountRow, BackendError>
 where
     S: AsStorePool + ?Sized,
 {
-    create_inner(store, email, password_hash, Some(supabase_sub)).await
+    create_inner(store, email, Some(supabase_sub)).await
 }
 
 async fn create_inner<S>(
     store: &S,
     email: &str,
-    password_hash: &str,
     supabase_sub: Option<&str>,
 ) -> Result<AccountRow, BackendError>
 where
@@ -82,28 +74,10 @@ where
         let minos_id = Uuid::new_v4().simple().to_string()[..12].to_string();
         let result = match store.as_store_pool() {
             StorePoolRef::Sqlite(pool) => {
-                create_sqlite(
-                    pool,
-                    &account_id,
-                    &email_norm,
-                    &minos_id,
-                    password_hash,
-                    supabase_sub,
-                    now,
-                )
-                .await
+                create_sqlite(pool, &account_id, &email_norm, &minos_id, supabase_sub, now).await
             }
             StorePoolRef::Postgres(pool) => {
-                create_postgres(
-                    pool,
-                    &account_id,
-                    &email_norm,
-                    &minos_id,
-                    password_hash,
-                    supabase_sub,
-                    now,
-                )
-                .await
+                create_postgres(pool, &account_id, &email_norm, &minos_id, supabase_sub, now).await
             }
         };
 
@@ -114,7 +88,6 @@ where
                     email: email_norm,
                     minos_id,
                     display_name: None,
-                    password_hash: password_hash.into(),
                     supabase_sub: supabase_sub.map(str::to_owned),
                     created_at: now,
                     last_login_at: None,
@@ -318,47 +291,6 @@ where
     Ok(())
 }
 
-pub async fn set_password_hash<S>(
-    store: &S,
-    account_id: &str,
-    password_hash: &str,
-) -> Result<(), BackendError>
-where
-    S: AsStorePool + ?Sized,
-{
-    match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => {
-            sqlx::query("UPDATE accounts SET password_hash = ? WHERE account_id = ?")
-                .bind(password_hash)
-                .bind(account_id)
-                .execute(pool)
-                .await
-                .map(|_| ())
-        }
-        StorePoolRef::Postgres(pool) => {
-            let now = Utc::now().timestamp_millis();
-            sqlx::query(
-                "INSERT INTO account_credentials (account_id, password_hash, updated_at_ms)
-                 VALUES ($1, $2, $3)
-                 ON CONFLICT (account_id) DO UPDATE
-                 SET password_hash = EXCLUDED.password_hash,
-                     updated_at_ms = EXCLUDED.updated_at_ms",
-            )
-            .bind(account_id)
-            .bind(password_hash)
-            .bind(now)
-            .execute(pool)
-            .await
-            .map(|_| ())
-        }
-    }
-    .map_err(|e| BackendError::StoreQuery {
-        operation: "accounts::set_password_hash".into(),
-        message: e.to_string(),
-    })?;
-    Ok(())
-}
-
 pub async fn find_by_minos_id<S>(
     store: &S,
     minos_id: &str,
@@ -396,18 +328,16 @@ async fn create_sqlite(
     account_id: &str,
     email_norm: &str,
     minos_id: &str,
-    password_hash: &str,
     supabase_sub: Option<&str>,
     now: i64,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO accounts (account_id, email, minos_id, display_name, password_hash, supabase_sub, created_at)
-           VALUES (?, ?, ?, NULL, ?, ?, ?)",
+        "INSERT INTO accounts (account_id, email, minos_id, display_name, supabase_sub, created_at)
+           VALUES (?, ?, ?, NULL, ?, ?)",
     )
     .bind(account_id)
     .bind(email_norm)
     .bind(minos_id)
-    .bind(password_hash)
     .bind(supabase_sub)
     .bind(now)
     .execute(pool)
@@ -420,11 +350,9 @@ async fn create_postgres(
     account_id: &str,
     email_norm: &str,
     minos_id: &str,
-    password_hash: &str,
     supabase_sub: Option<&str>,
     now: i64,
 ) -> Result<(), sqlx::Error> {
-    let mut tx = pool.begin().await?;
     sqlx::query(
         "INSERT INTO accounts (account_id, email, minos_id, display_name, supabase_sub, created_at_ms)
            VALUES ($1, $2, $3, NULL, $4, $5)",
@@ -434,21 +362,9 @@ async fn create_postgres(
     .bind(minos_id)
     .bind(supabase_sub)
     .bind(now)
-    .execute(&mut *tx)
-    .await?;
-    // OAuth-only accounts still get a credentials row with an unusable hash so
-    // password login paths fail cleanly rather than 500 on missing rows.
-    sqlx::query(
-        "INSERT INTO account_credentials (account_id, password_hash, updated_at_ms)
-           VALUES ($1, $2, $3)",
-    )
-    .bind(account_id)
-    .bind(password_hash)
-    .bind(now)
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
-    Ok(())
+    .execute(pool)
+    .await
+    .map(|_| ())
 }
 
 fn is_email_unique_violation(db: &dyn DatabaseError) -> bool {
@@ -477,11 +393,8 @@ mod tests {
     #[tokio::test]
     async fn create_then_find_by_email_round_trips() {
         let pool = memory_pool().await;
-        let row = create(&pool, "Alice@Example.com", "phc-string")
-            .await
-            .unwrap();
+        let row = create(&pool, "Alice@Example.com").await.unwrap();
         assert_eq!(row.email, "alice@example.com");
-        assert_eq!(row.password_hash, "phc-string");
         assert!(row.supabase_sub.is_none());
         assert!(row.last_login_at.is_none());
 
@@ -496,10 +409,8 @@ mod tests {
     #[tokio::test]
     async fn create_with_duplicate_email_returns_email_taken() {
         let pool = memory_pool().await;
-        create(&pool, "alice@example.com", "phc1").await.unwrap();
-        let err = create(&pool, "ALICE@example.com", "phc2")
-            .await
-            .unwrap_err();
+        create(&pool, "alice@example.com").await.unwrap();
+        let err = create(&pool, "ALICE@example.com").await.unwrap_err();
         assert!(matches!(err, BackendError::EmailTaken));
     }
 
@@ -513,7 +424,7 @@ mod tests {
     #[tokio::test]
     async fn touch_last_login_updates_timestamp() {
         let pool = memory_pool().await;
-        let row = create(&pool, "alice@example.com", "phc").await.unwrap();
+        let row = create(&pool, "alice@example.com").await.unwrap();
         touch_last_login(&pool, &row.account_id).await.unwrap();
         let got = find_by_email(&pool, "alice@example.com")
             .await
@@ -525,7 +436,7 @@ mod tests {
     #[tokio::test]
     async fn create_with_supabase_sub_and_find() {
         let pool = memory_pool().await;
-        let row = create_with_supabase_sub(&pool, "oidc@example.com", "phc", "sub-abc")
+        let row = create_with_supabase_sub(&pool, "oidc@example.com", "sub-abc")
             .await
             .unwrap();
         assert_eq!(row.supabase_sub.as_deref(), Some("sub-abc"));
@@ -537,9 +448,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bind_supabase_sub_links_password_account() {
+    async fn bind_supabase_sub_links_unbound_account() {
         let pool = memory_pool().await;
-        let row = create(&pool, "merge@example.com", "phc").await.unwrap();
+        let row = create(&pool, "merge@example.com").await.unwrap();
         bind_supabase_sub(&pool, &row.account_id, "sub-merge")
             .await
             .unwrap();

@@ -104,14 +104,49 @@ SELECT account_id FROM host_links WHERE host_installation_id = $1;
 
 ## 8. Exit criteria
 
-- [ ] Gap audit 文档完成并链接到此
-- [ ] Golden path：Desktop Linked session 在 Mobile 和 Web 可见
-- [ ] Offline host：viewers 显示 offline；不 silent hang
-- [ ] 至少一个自动化测试覆盖 projection 或 fanout invariant
-- [ ] ingest peer target lookup 使用 `host_links` 而非 `account_host_pairings`
+- [x] Gap audit 文档完成并链接到此 → [projection-gap-audit.md](projection-gap-audit.md)
+- [x] Golden path（hub 已注册 session）：start/stream/send/stop + live-batch fanout 有自动化覆盖
+- [ ] Offline host：viewers 显示 offline；不 silent hang（`T-proj-05` UX）
+- [x] 至少一个自动化测试覆盖 projection 或 fanout invariant
+  - `host_ingest_live_batch_fans_out_projection_to_subscribed_client`
+  - `host_ingest_live_batch_records_approval_request`
+  - unit: `peer_targets_*` in `ingest::tests` (via `host_links`)
+- [x] ingest peer target lookup 使用 `host_links` 而非 `account_host_pairings`
+- [ ] 三端 manual E2E（`T-proj-03`，依赖 Mobile/Web ports）
 
 ---
 
-## 9. Task slice
+## 9. Phase G implementation notes (2026-08-01)
+
+Formal gateway path for golden stream:
+
+1. Daemon online → `HostIngestLiveBatch` chunks with host-side `projection`.
+2. Backend accepts only when `agent_sessions` exists and `host_installation_id` matches (or claims empty).
+3. On first insert: promote `pending → running`, record approval side effects from payload, sync formal turn/session from projection, then fan out `StreamEvent{kind: ui_event}` to topic subscribers on `/ws/client`.
+4. Peer targets for legacy envelope fanout: `host_links::list_account_client_targets_for_host`.
+
+**Not projected without hub registration:** Desktop-local-only agent sessions (no cloud `agent_sessions` row) — intentional until host registration/backfill; honesty UX is `T-proj-04`.
+
+---
+
+## 10. Manual E2E checklist (Desktop Link → Mobile same account)
+
+Use when hub + Linked host + Mobile cloud login are available:
+
+1. [ ] Desktop: account login + **Link this Mac** succeeds; host shows Linked.
+2. [ ] Mobile: same account; `GET /v1/hosts` shows the host (online when daemon WS up).
+3. [ ] From Mobile (or API): start agent session on that `host_installation_id` with a conversation the account can access.
+4. [ ] Mobile: subscribe to `agent_session:{session_id}` (app open thread); observe stream deltas while host agent runs.
+5. [ ] Mobile: send follow-up input; host receives `agent_session.send_input` and continues.
+6. [ ] If agent requests approval: Mobile sheet appears; respond; host continues / stops accordingly.
+7. [ ] Stop session from Mobile; host stops; status no longer running.
+8. [ ] Kill host WS (quit Desktop / network): Mobile host list or command path shows offline / peer_offline — no infinite hang.
+9. [ ] Two hosts (optional): start with explicit `host_installation_id`; command hits intended host only.
+
+Automated substitute for steps 3–6 stream/approval: `cargo test -p minos-backend --test ws_gateway host_ingest_live_batch`.
+
+---
+
+## 11. Task slice
 
 `T-proj-01` … `T-proj-09` in [tasks/TASKS.md](tasks/TASKS.md).

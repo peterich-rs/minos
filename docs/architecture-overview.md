@@ -4,7 +4,9 @@
 
 ## 项目定位
 
-Minos 是一个远程 AI 编码控制系统：在 Mac 上运行 host 端，通过手机（iOS/Android）或浏览器远程驱动 `codex` / `claude` / `gemini` / `opencode` 等 CLI agent。
+Minos 是一个 **以 Conversation 协作为核心** 的远程 AI 编码协作产品：在 Project 下的对话时间线中，人与人、人与 Agent、Agent 与 Agent 协作；Agent 在用户 Mac/Linux Host 上执行 `codex` / `claude` / `gemini` / `opencode` 等 CLI，手机 / 浏览器 / Desktop 通过云端 IM 中枢同步消息、@、审批 Attention 与投影。
+
+技术上仍包含 Host 守护进程与远程驱动能力，但 **产品主轴是聊天协作 IM**，Agent 是对话内可执行能力，而不是「运维台外挂聊天」。消息体系 SSOT 见 [architecture-messaging.md](architecture-messaging.md)。
 
 ## 顶层架构
 
@@ -35,19 +37,18 @@ Minos 是一个远程 AI 编码控制系统：在 Mac 上运行 host 端，通�
 
 ```
 Minos/
-├── crates/                          # Rust workspace (12 个 crate)
+├── crates/                          # Rust workspace crates
 │   ├── minos-domain/                # 核心域类型（ID、错误、枚举）
 │   ├── minos-protocol/              # 线协议（JSON-RPC、Envelope、Realtime）
 │   ├── minos-transport/             # 传输层（WS client、backoff）
-│   ├── minos-pairing/               # 配对状态机
 │   ├── minos-cli-detect/            # CLI agent 检测
 │   ├── minos-agent-runtime/         # Agent 运行时（多进程管理）
 │   ├── minos-chat-store/            # 聊天持久化（SQLite）
 │   ├── minos-acp-protocol/          # ACP 协议类型（Gemini）
 │   ├── minos-codex-protocol/        # Codex app-server 协议类型
 │   ├── minos-ui-protocol/           # UI 事件协议（统一事件形状）
-│   ├── minos-backend/               # 后端服务（HTTP + WS + Worker）
-│   ├── minos-daemon/                # Host 守护进程
+│   ├── minos-backend/               # 后端服务（HTTP + WS + Worker；含 host_link）
+│   ├── minos-daemon/                # Host 守护进程（Host Link RPC）
 │   ├── minos-mobile/                # 移动端 Rust 核心
 │   ├── minos-tui/                   # 终端 UI
 │   ├── minos-ffi-uniffi/            # UniFFI 绑定（→ Swift）
@@ -72,16 +73,16 @@ Minos/
                     minos-domain  (叶节点: ID、错误、Agent枚举、角色)
                    /     |     \     \      \        \
                   /      |      \     \      \        \
-    minos-pairing   minos-cli-detect  minos-ui-protocol  minos-chat-store
-         |                    |              |                   |
-         |                    |              |                   |
-         |              minos-agent-runtime <--------------------+
-         |              /      |       \
-    minos-ffi-uniffi <-+-- minos-codex-protocol
-         |             \-- minos-acp-protocol
-         |
-    minos-protocol ----> minos-transport
-         |                    |
+    minos-cli-detect  minos-ui-protocol  minos-chat-store
+            |              |                   |
+            |              |                   |
+      minos-agent-runtime <--------------------+
+      /      |       \
+minos-ffi-uniffi <-+-- minos-codex-protocol
+      |             \-- minos-acp-protocol
+      |
+minos-protocol ----> minos-transport
+      |                    |
          +--> minos-ffi-frb --> minos-mobile
          |
     minos-backend
@@ -108,6 +109,7 @@ Minos/
 | Desktop 自动更新 | [docs/desktop-auto-update.md](desktop-auto-update.md) |
 | Grok ACP 投影 | [docs/architecture-grok-acp-projection.md](architecture-grok-acp-projection.md) |
 | 共享 Crate | [docs/architecture-shared-crates.md](architecture-shared-crates.md) |
+| 消息架构体系（Server + 全端） | [docs/architecture-messaging.md](architecture-messaging.md) |
 | 业务流程 | [docs/architecture-business-flow.md](architecture-business-flow.md) |
 | CI / 本地门禁 | [docs/ci-gates.md](ci-gates.md) |
 
@@ -119,8 +121,7 @@ Minos/
 |------|------|
 | `/health/live` | 进程存活探针 |
 | `/health/ready` | 依赖就绪探针 |
-| `/v1/auth/register` | 用户注册 |
-| `/v1/auth/login` | 用户登录 |
+| `/v1/auth/supabase` | Supabase JWT → Minos session（唯一人类账户入口） |
 | `/v1/agent-sessions` | Agent 会话列表/创建 |
 
 ## 技术栈

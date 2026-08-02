@@ -47,19 +47,20 @@ async fn post_ws_ticket(
         Err(_) => return (StatusCode::BAD_REQUEST, err("bad_request")).into_response(),
     };
 
-    let row = match crate::store::devices::get_device(&state.store, installation_id).await {
-        Ok(Some(row)) => row,
-        Ok(None) => return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response(),
-        Err(error) => {
-            tracing::warn!(
-                target: "minos_backend::v1::realtime",
-                error = %error,
-                installation_id = %req.installation_id,
-                "get_device failed while issuing formal ws ticket",
-            );
-            return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
-        }
-    };
+    let row =
+        match crate::store::device_installations::get_device(&state.store, installation_id).await {
+            Ok(Some(row)) => row,
+            Ok(None) => return (StatusCode::UNAUTHORIZED, err("unauthorized")).into_response(),
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_backend::v1::realtime",
+                    error = %error,
+                    installation_id = %req.installation_id,
+                    "get_device failed while issuing formal ws ticket",
+                );
+                return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
+            }
+        };
 
     if row.account_id.as_deref() != Some(&bearer_outcome.account_id)
         || !row.role.is_account_client()

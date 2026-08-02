@@ -9,7 +9,7 @@
 //! # State plumbing
 //!
 //! [`BackendState`] bundles the three runtime Arcs (`SessionRegistry`,
-//! `PairingService`, `SqlitePool`) plus the backend version string. It is
+//! `HostLinkService`, `SqlitePool`) plus the backend version string. It is
 //! [`Clone`] so axum's [`axum::extract::State`] can hand it to every
 //! handler without borrowing; inner fields are either `Arc`-wrapped,
 //! cheap-to-clone (`SqlitePool`), or `&'static str`.
@@ -44,7 +44,7 @@ use tower_http::request_id::{
 use tower_http::trace::TraceLayer;
 
 use crate::{
-    pairing::PairingService,
+    host_link::HostLinkService,
     realtime::{MessageBusBackend, PeerTargetCacheBackend},
     runtime::{AppContext, AppRuntimeConfig},
     session::SessionRegistry,
@@ -207,20 +207,6 @@ const ROUTE_INVENTORY: &[RouteContract] = &[
     ),
     RouteContract::new(
         "POST",
-        "/v1/auth/register",
-        "/v1/auth/register",
-        "account_api",
-        "public",
-    ),
-    RouteContract::new(
-        "POST",
-        "/v1/auth/login",
-        "/v1/auth/login",
-        "account_api",
-        "public",
-    ),
-    RouteContract::new(
-        "POST",
         "/v1/auth/refresh",
         "/v1/auth/refresh",
         "account_api",
@@ -230,13 +216,6 @@ const ROUTE_INVENTORY: &[RouteContract] = &[
         "POST",
         "/v1/auth/logout",
         "/v1/auth/logout",
-        "account_api",
-        "account_bearer",
-    ),
-    RouteContract::new(
-        "POST",
-        "/v1/auth/change-password",
-        "/v1/auth/change-password",
         "account_api",
         "account_bearer",
     ),
@@ -256,17 +235,24 @@ const ROUTE_INVENTORY: &[RouteContract] = &[
     ),
     RouteContract::new(
         "POST",
-        "/v1/host/pairing/request-code",
-        "/v1/host/pairing/request-code",
-        "host_api",
-        "host_bootstrap",
+        "/v1/hosts/link",
+        "/v1/hosts/link",
+        "account_api",
+        "account_bearer",
     ),
     RouteContract::new(
         "POST",
-        "/v1/host/pairing/redeem",
-        "/v1/host/pairing/redeem",
-        "host_api",
-        "host_bootstrap",
+        "/v1/hosts/unlink",
+        "/v1/hosts/unlink",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "GET",
+        "/v1/hosts",
+        "/v1/hosts",
+        "account_api",
+        "account_bearer",
     ),
     RouteContract::new(
         "POST",
@@ -309,34 +295,6 @@ const ROUTE_INVENTORY: &[RouteContract] = &[
         "/v1/host/realtime/ws-ticket",
         "host_api",
         "host_installation",
-    ),
-    RouteContract::new(
-        "POST",
-        "/v1/pairing/confirm",
-        "/v1/pairing/confirm",
-        "account_api",
-        "account_bearer",
-    ),
-    RouteContract::new(
-        "POST",
-        "/v1/pairing/revoke",
-        "/v1/pairing/revoke",
-        "account_api",
-        "account_bearer",
-    ),
-    RouteContract::new(
-        "POST",
-        "/v1/pairing/list-hosts",
-        "/v1/pairing/list-hosts",
-        "account_api",
-        "account_bearer",
-    ),
-    RouteContract::new(
-        "DELETE",
-        "/v1/pairings/:host_device_id",
-        "/v1/pairings/00000000-0000-0000-0000-000000000001",
-        "account_api",
-        "account_bearer",
     ),
     RouteContract::new(
         "POST",
@@ -670,7 +628,7 @@ impl BackendState {
     #[must_use]
     pub fn new(
         registry: Arc<SessionRegistry>,
-        pairing: Arc<PairingService>,
+        host_link: Arc<HostLinkService>,
         store: SqlitePool,
         token_ttl: Duration,
         jwt_secret: String,
@@ -679,7 +637,7 @@ impl BackendState {
     ) -> Self {
         Self::new_with_runtime(
             registry,
-            pairing,
+            host_link,
             store,
             token_ttl,
             jwt_secret,
@@ -706,7 +664,7 @@ impl BackendState {
     #[must_use]
     pub fn new_with_runtime(
         registry: Arc<SessionRegistry>,
-        pairing: Arc<PairingService>,
+        host_link: Arc<HostLinkService>,
         store: SqlitePool,
         token_ttl: Duration,
         jwt_secret: String,
@@ -727,7 +685,7 @@ impl BackendState {
                 cluster_channel: crate::config::DEFAULT_CLUSTER_CHANNEL.to_string(),
             },
             registry,
-            pairing,
+            host_link,
             store.into(),
             token_ttl,
             jwt_secret,
@@ -735,6 +693,7 @@ impl BackendState {
             message_bus,
             peer_target_cache,
             Arc::new(crate::auth::realtime_ticket::RealtimeTicketStore::default()),
+            None,
             None,
         );
         Self::from_app_context(app, cors_origins, env!("CARGO_PKG_VERSION"))
@@ -897,7 +856,7 @@ async fn touch_device_last_seen(
     device_id: minos_domain::DeviceId,
     operation: &'static str,
 ) {
-    if let Err(error) = crate::store::devices::touch_last_seen(
+    if let Err(error) = crate::store::device_installations::touch_last_seen(
         &state.store,
         &device_id,
         chrono::Utc::now().timestamp_millis(),
@@ -947,7 +906,7 @@ pub mod test_support {
     use super::BackendState;
     use crate::auth::realtime_ticket::RealtimeTicketStore;
     use crate::auth::supabase::SupabaseTokenVerifier;
-    use crate::pairing::PairingService;
+    use crate::host_link::HostLinkService;
     use crate::realtime::{MessageBusBackend, PeerTargetCacheBackend};
     use crate::runtime::{AppContext, AppRuntimeConfig};
     use crate::session::SessionRegistry;
@@ -967,14 +926,14 @@ pub mod test_support {
     pub const TEST_SUPABASE_AUD: &str = "authenticated";
 
     /// Build a `BackendState` against a fresh in-memory pool, with a
-    /// 5-minute pairing-token TTL and the deterministic test JWT secret.
+    /// 5-minute token TTL and the deterministic test JWT secret.
     pub async fn backend_state() -> BackendState {
         let pool = memory_pool().await;
         let registry = Arc::new(SessionRegistry::new());
-        let pairing = Arc::new(PairingService::new(pool.clone()));
+        let host_link = Arc::new(HostLinkService::new(pool.clone()));
         BackendState::new(
             registry,
-            pairing,
+            host_link,
             pool,
             Duration::from_mins(5),
             TEST_JWT_SECRET.to_string(),
@@ -988,7 +947,7 @@ pub mod test_support {
     pub async fn backend_state_with_supabase() -> BackendState {
         let pool = memory_pool().await;
         let registry = Arc::new(SessionRegistry::new());
-        let pairing = Arc::new(PairingService::new(pool.clone()));
+        let host_link = Arc::new(HostLinkService::new(pool.clone()));
         let verifier = SupabaseTokenVerifier::for_tests(
             TEST_SUPABASE_ISS,
             TEST_SUPABASE_AUD,
@@ -1006,7 +965,7 @@ pub mod test_support {
                 cluster_channel: crate::config::DEFAULT_CLUSTER_CHANNEL.to_string(),
             },
             registry,
-            pairing,
+            host_link,
             pool.into(),
             Duration::from_mins(5),
             TEST_JWT_SECRET.to_string(),
@@ -1015,6 +974,7 @@ pub mod test_support {
             PeerTargetCacheBackend::in_memory(Duration::from_secs(5)),
             Arc::new(RealtimeTicketStore::default()),
             Some(verifier),
+            None,
         );
         BackendState::from_app_context(app, None, "test")
     }
@@ -1032,7 +992,7 @@ mod tests {
     use tower::util::ServiceExt;
 
     use crate::config::{Environment, RuntimeMode, StorageMode, DEFAULT_CLUSTER_CHANNEL};
-    use crate::pairing::PairingService;
+    use crate::host_link::HostLinkService;
     use crate::realtime::{
         CacheBackendKind, MessageBusBackend, MessageBusBackendKind, PeerTargetCacheBackend,
     };
@@ -1097,7 +1057,7 @@ mod tests {
                 cluster_channel: DEFAULT_CLUSTER_CHANNEL.to_string(),
             },
             Arc::new(SessionRegistry::new()),
-            Arc::new(PairingService::new(pool.clone())),
+            Arc::new(HostLinkService::new(pool.clone())),
             pool.into(),
             Duration::from_mins(5),
             "test-jwt-secret-32-bytes-padding".to_string(),
@@ -1105,6 +1065,7 @@ mod tests {
             MessageBusBackend::inline(),
             PeerTargetCacheBackend::in_memory(Duration::from_secs(5)),
             Arc::new(crate::auth::realtime_ticket::RealtimeTicketStore::default()),
+            None,
             None,
         );
         let app = router(super::BackendState::from_app_context(app, None, "test"));
@@ -1127,16 +1088,16 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
-                    .uri("/v1/auth/register")
+                    .uri("/v1/auth/supabase")
                     .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"email":"alice@example.com","password":"testpass1"}"#,
-                    ))
+                    .header("x-device-id", "00000000-0000-0000-0000-0000000000aa")
+                    .body(Body::from(r#"{"access_token":"not-a-jwt"}"#))
                     .expect("request builder"),
             )
             .await
             .unwrap();
-        assert_eq!(auth_route.status(), StatusCode::UNAUTHORIZED);
+        // No Supabase verifier in this fixture → not configured.
+        assert_eq!(auth_route.status(), StatusCode::SERVICE_UNAVAILABLE);
 
         let host_nonce_route = app
             .clone()
@@ -1154,19 +1115,21 @@ mod tests {
             .unwrap();
         assert_eq!(host_nonce_route.status(), StatusCode::OK);
 
-        let confirm_route = app
+        let hosts_link_route = app
             .clone()
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
-                    .uri("/v1/pairing/confirm")
+                    .uri("/v1/hosts/link")
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"pairing_code":"PAIR1234"}"#))
+                    .body(Body::from(
+                        r#"{"installation_id":"00000000-0000-0000-0000-000000000001","nonce":"nonce_x","signature":"ed25519-sig:x"}"#,
+                    ))
                     .expect("request builder"),
             )
             .await
             .unwrap();
-        assert_eq!(confirm_route.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(hosts_link_route.status(), StatusCode::UNAUTHORIZED);
 
         let realtime_route = app
             .clone()
@@ -1284,7 +1247,7 @@ mod tests {
                 cluster_channel: DEFAULT_CLUSTER_CHANNEL.to_string(),
             },
             Arc::new(SessionRegistry::new()),
-            Arc::new(PairingService::new(pool.clone())),
+            Arc::new(HostLinkService::new(pool.clone())),
             pool.into(),
             Duration::from_mins(5),
             "test-jwt-secret-32-bytes-padding".to_string(),
@@ -1292,6 +1255,7 @@ mod tests {
             MessageBusBackend::inline(),
             PeerTargetCacheBackend::in_memory(Duration::from_secs(5)),
             Arc::new(crate::auth::realtime_ticket::RealtimeTicketStore::default()),
+            None,
             None,
         );
         let app = router(super::BackendState::from_app_context(app, None, "test"));

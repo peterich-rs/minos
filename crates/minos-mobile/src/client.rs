@@ -6,16 +6,15 @@
 //!
 //! Responsibilities:
 //!
-//! - Parse a scanned QR v2 payload (`PairingQrPayload` from
-//!   `minos_protocol::messages`) and persist its fields into the
-//!   [`MobilePairingStore`].
+//! - Hold account auth (access/refresh) and active-host routing target in
+//!   [`MobilePairingStore`] (session snapshot; Host Link is Desktop-side).
 //! - Maintain a single WebSocket via [`RealtimeSession`]; expose
 //!   `ConnectionState` via a `watch::Receiver` and live `UiEventFrame`
 //!   over a `broadcast::Sender`.
 //!
 //! For FFI use, [`MobileClient::new_with_in_memory_store`] avoids exposing
 //! the `Arc<dyn MobilePairingStore>` trait object across the frb boundary
-//! (real Keychain persistence lives on the Dart side; see plan D5).
+//! (real Keychain persistence lives on the Dart side).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -30,10 +29,10 @@ use minos_protocol::{
     EnsureDirectConversationRequest, FriendRequestSummary, FriendRequestsResponse, FriendsResponse,
     GetSessionLastSeqParams, GetSessionLastSeqResponse, HostSummary, ListAgentsResponse,
     ListChatMessagesResponse, ListClisResponse, ListHostSkillsResponse, ListSessionsParams,
-    ListSessionsResponse, MyProfileResponse, PairingQrPayload, ReadSessionParams,
-    ReadSessionResponse, RefreshResponse, RegisterAgentRequest, RemoveAgentFromGroupRequest,
-    RemoveGroupMemberRequest, SendChatMessageRequest, SetMinosIdRequest, UpdateAgentRequest,
-    UserSummary, WriteHostSkillConfigResponse,
+    ListSessionsResponse, MyProfileResponse, ReadSessionParams, ReadSessionResponse,
+    RefreshResponse, RegisterAgentRequest, RemoveAgentFromGroupRequest, RemoveGroupMemberRequest,
+    SendChatMessageRequest, SetMinosIdRequest, UpdateAgentRequest, UserSummary,
+    WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::UiEventMessage;
 use openwire::websocket::WebSocket;
@@ -359,132 +358,23 @@ impl MobileClient {
         }
     }
 
-    // ─────────────────────────── pairing flow ────────────────────────────
+    // ─────────────────────────── host link (account↔host) ────────────────
 
-    /// Test/dev override: drive the same flow as `pair_with_qr_json` but
-    /// against an explicit `backend_url` instead of the compile-time
-    /// `build_config::BACKEND_URL`. Used by integration tests and the
-    /// `fake-peer` dev binary; production code paths must use
-    /// [`Self::pair_with_qr_json`] so the URL stays compile-time pinned.
-    #[doc(hidden)]
-    pub async fn pair_with_qr_json_at(
-        &self,
-        qr_json: String,
-        backend_url: &str,
-    ) -> Result<(), MinosError> {
-        self.pair_with_qr_json_inner(qr_json, backend_url).await
-    }
-
-    /// Scan a QR v2 payload (raw JSON). Calls `POST /v1/pairing/confirm`
-    /// over HTTP at the compile-time `BACKEND_URL`, records the paired
-    /// Mac as the active forward target, opens the authenticated
-    /// WebSocket, and transitions [`ConnectionState`] through
-    /// `Pairing → Connected`. Bearer-only post ADR-0020.
-    ///
-    /// The QR carries only `host_display_name`, `pairing_token`, and the
-    /// expiry; backend routing stays in the mobile crate's
-    /// [`crate::build_config`]. Older QR builds may still carry extra
-    /// fields in the JSON — they are silently ignored by `serde` and never
-    /// enter durable storage.
-    ///
-    /// Errors:
-    /// - `StoreCorrupt { path: "qr_payload", .. }` when the JSON doesn't
-    ///   parse.
-    /// - `PairingQrVersionUnsupported` when `qr.v != 2`.
-    /// - `ConnectFailed` / `Disconnected` on WS or RPC round-trip failures.
-    pub async fn pair_with_qr_json(&self, qr_json: String) -> Result<(), MinosError> {
-        self.pair_with_qr_json_inner(qr_json, crate::build_config::BACKEND_URL)
-            .await
-    }
-
-    /// Shared implementation for `pair_with_qr_json` (production) and
-    /// `pair_with_qr_json_at` (test/dev).
-    async fn pair_with_qr_json_inner(
-        &self,
-        qr_json: String,
-        backend_url: &str,
-    ) -> Result<(), MinosError> {
-        let qr: PairingQrPayload =
-            serde_json::from_str(&qr_json).map_err(|e| MinosError::StoreCorrupt {
-                path: "qr_payload".into(),
-                message: e.to_string(),
-            })?;
-        if qr.v != 2 {
-            return Err(MinosError::PairingQrVersionUnsupported { version: qr.v });
-        }
-        let _ = self.state_tx.send(ConnectionState::Pairing);
-
-        // Formal account pairing is bearer-gated for mobile clients.
-        // Caller must already be authenticated (register/login set
-        // auth_session). Surface the missing-bearer case as Unauthorized
-        // rather than a raw HTTP 401, since UI hint is the same.
-        let access = {
-            let guard = self.auth_session.read().await;
-            guard
-                .as_ref()
-                .map(|s| s.access_token.clone())
-                .ok_or_else(|| MinosError::Unauthorized {
-                    reason: "pair_with_qr_json requires login".into(),
-                })?
-        };
-
-        // Step 1: confirm the formal pairing code over HTTP. The backend
-        // records the account-host link and returns the host installation id.
-        let http = crate::http::MobileHttpClient::new(
-            backend_url,
-            self.device_id,
-            self.self_name.clone(),
-        )?;
-        let pair_resp = match http.pair_confirm(&qr.pairing_token, &access).await {
-            Ok(resp) => resp,
-            Err(error @ MinosError::Unauthorized { .. }) => {
-                self.clear_auth_session_and_disconnect().await;
-                return Err(error);
-            }
-            Err(error) => return Err(error),
-        };
-        let host_id = Uuid::parse_str(&pair_resp.host_installation_id)
-            .map(minos_domain::DeviceId)
-            .map_err(|error| MinosError::BackendInternal {
-                message: format!("pair_confirm returned invalid host_installation_id: {error}"),
-            })?;
-
-        // Persist the device id (rebound across runs) and remember the
-        // newly-paired Mac as the active forward target. Bearer-only post
-        // ADR-0020 — no DeviceSecret is minted to the iOS rail.
-        self.store.save_device(&self.device_id).await?;
-        self.store.save_active_host(&host_id).await?;
-
-        // Step 2: open the WS bearer-authenticated. The reconnect loop
-        // re-uses the same auth_session.
-        self.connect(backend_url, Some(&access)).await?;
-
-        let _ = self.state_tx.send(ConnectionState::Connected);
-        Ok(())
-    }
-
-    /// Tear down a specific paired Mac. The path-bound `host` is the Mac
-    /// to forget. Idempotent. Clears the active-mac slot only when it
-    /// matches the deleted Mac so a concurrent `set_active_host` to a
-    /// different Mac is preserved.
+    /// Unlink a host from the caller's account (`POST /v1/hosts/unlink`) and
+    /// clear the local active-host slot when it matches. Idempotent.
     pub async fn forget_host(&self, host: DeviceId) -> Result<(), MinosError> {
         let backend_url = crate::build_config::BACKEND_URL;
         let access = self.access_token_or_unauthorized().await?;
 
-        // Best-effort delete on the backend. Failure here must not block
-        // local cleanup — the user re-pairs to recover.
+        // Best-effort server unlink. Failure must not block local cleanup —
+        // the user re-links from Desktop to recover.
         if let Ok(http) =
             crate::http::MobileHttpClient::new(backend_url, self.device_id, self.self_name.clone())
         {
-            let _ = http.delete_pair(&access, host).await;
+            let _ = http.unlink_host(&access, host).await;
         }
 
         self.store.clear_active_if(&host).await?;
-
-        // If we forgot the *active* mac and the WS is currently up, the
-        // backend will emit Unpaired and the recv loop will tear the WS
-        // down via the existing path. Don't preemptively shut it down
-        // here — multiple Macs may still be paired.
         Ok(())
     }
 
@@ -552,9 +442,9 @@ impl MobileClient {
         })
     }
 
-    /// List every Mac paired to the caller's account.
+    /// List every Mac linked to the caller's account (`GET /v1/hosts`).
     pub async fn list_paired_hosts(&self) -> Result<Vec<HostSummary>, MinosError> {
-        let resp = auth_http_call!(self, |http, access| http.list_paired_hosts(&access))?;
+        let resp = auth_http_call!(self, |http, access| http.list_hosts(&access))?;
         Ok(resp.hosts)
     }
 
@@ -1084,31 +974,18 @@ impl MobileClient {
 
     // ─────────────────────────── auth surface ──────────────────────────────
 
-    /// Register a new account on the backend. On success the bearer +
-    /// refresh tokens are stored both in memory (via `auth_session`) and
-    /// in the durable store. The auth-state watch transitions to
-    /// `Authenticated` and the reconnect loop starts. Spec §5.4 / §6.1.
-    pub async fn register(
+    /// Exchange a Supabase Auth access token for a Minos session.
+    ///
+    /// Durable auth tuple, auth-state `Authenticated` frame, and reconnect
+    /// loop. Only human account create/login path (Supabase IdP).
+    pub async fn login_with_supabase(
         &self,
-        email: String,
-        password: String,
+        supabase_access_token: String,
     ) -> Result<AuthSummary, MinosError> {
         let http = self.http_client_no_secret()?;
-        let resp = http.register(&email, &password).await?;
-        // Persist the device id pre-pair so cold-launch resumes against
-        // the same JWT-bound id.
-        self.store.save_device(&self.device_id).await?;
-        let summary = self.adopt_auth_response(resp).await;
-        self.ensure_reconnect_loop().await;
-        Ok(summary)
-    }
-
-    /// Log into an existing account on the backend. Same shape as
-    /// `register` modulo the create-vs-find behaviour on the server. Spec
-    /// §5.4.
-    pub async fn login(&self, email: String, password: String) -> Result<AuthSummary, MinosError> {
-        let http = self.http_client_no_secret()?;
-        let resp = http.login(&email, &password).await?;
+        let resp = http
+            .exchange_supabase(&supabase_access_token, Some(self.self_name.as_str()))
+            .await?;
         self.store.save_device(&self.device_id).await?;
         let summary = self.adopt_auth_response(resp).await;
         self.ensure_reconnect_loop().await;
@@ -2075,38 +1952,6 @@ mod tests {
         );
 
         assert_eq!(url, "wss://edge.example/ws/client?ticket=edge-ticket");
-    }
-
-    #[tokio::test]
-    async fn pair_with_qr_json_rejects_invalid_json_as_store_corrupt() {
-        let client = MobileClient::new_with_in_memory_store("test".into());
-        let err = client
-            .pair_with_qr_json("not json".into())
-            .await
-            .expect_err("invalid JSON must not parse into PairingQrPayload");
-        assert!(
-            matches!(&err, MinosError::StoreCorrupt { path, .. } if path == "qr_payload"),
-            "expected StoreCorrupt {{ path: \"qr_payload\", .. }}, got {err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn pair_with_qr_json_rejects_wrong_version() {
-        let client = MobileClient::new_with_in_memory_store("test".into());
-        let qr = serde_json::json!({
-            "v": 1,
-            "host_display_name": "Mac",
-            "pairing_token": "tok",
-            "expires_at_ms": 1_i64,
-        });
-        let err = client
-            .pair_with_qr_json(qr.to_string())
-            .await
-            .expect_err("v=1 must be rejected");
-        assert!(
-            matches!(err, MinosError::PairingQrVersionUnsupported { version: 1 }),
-            "unexpected error: {err:?}"
-        );
     }
 
     #[tokio::test]

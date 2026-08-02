@@ -1,79 +1,47 @@
-//! `fake-peer` — dev tool that impersonates an `ios-client` role
-//! against the backend broker so the Mac app's pairing + dispatch flow
-//! can be smoke-tested without an actual iPhone.
+//! `fake-peer` — dev tool that impersonates a mobile client against the
+//! backend so Host Link + session dispatch can be smoke-tested without a phone.
 //!
-//! Plan 05 Phase L.1 / spec §10.3 / plan 08b Phase 12 Task 12.1.
+//! Host binding is **Desktop "Link this Mac"** (account↔host). This binary only
+//! authenticates as a mobile client and drives sessions against already-linked
+//! hosts.
 //!
-//! Phase 2 Task 2.3 made pairing bearer-gated for the `ios-client` role,
-//! so every subcommand must establish auth before it pairs. Phase 12 Task
-//! 12.1 split the binary into three subcommands:
+//! Human accounts are **Supabase IdP only**. Minos password register/login is
+//! gone. Provide a Supabase access token (from the IdP / dashboard / SDK) and
+//! this tool exchanges it via `POST /v1/auth/supabase`.
 //!
-//! - `pair` — register a throwaway account if necessary then redeem a
-//!   pairing token. Inbound WS frames are printed to stderr until the
-//!   socket closes.
-//! - `register` — explicit register-then-pair flow. Same wire shape as
-//!   `pair` but with a clear "this is a fresh account" intent in the
-//!   subcommand name.
-//! - `smoke-session` — full register-or-login → pair → `start_agent` →
-//!   tail UiEvents loop. Drives the agent dispatch surface that Wave 2
-//!   landed on the mobile Rust side, end-to-end against a real backend.
+//! Subcommands:
 //!
-//! Usage:
+//! - `exchange` — Supabase JWT → Minos session; print account id
+//! - `list-hosts` — exchange + `GET /v1/hosts`
+//! - `smoke-session` — exchange → pick linked host → resume WS → send message
 //!
 //! ```text
-//! # 1. Start a local backend
-//! cargo run -p minos-backend -- --listen 127.0.0.1:8787 --db /tmp/relay.db
+//! cargo run -p minos-mobile --bin fake-peer --features cli -- list-hosts \
+//!     --backend http://127.0.0.1:8787 \
+//!     --supabase-access-token "$SUPABASE_ACCESS_TOKEN"
 //!
-//! # 2. Show the QR in the Mac app, decode it, copy the pairing token
-//!
-//! # 3a. Pair-only (account created on demand, default credentials)
-//! cargo run -p minos-mobile --bin fake-peer --features cli -- pair \
-//!     --backend ws://127.0.0.1:8787/devices \
-//!     --token <token-from-qr> \
-//!     --device-name "Fan's fake iPhone"
-//!
-//! # 3b. Register a new account first, then pair
-//! cargo run -p minos-mobile --bin fake-peer --features cli -- register \
-//!     --backend ws://127.0.0.1:8787/devices \
-//!     --email fan+smoke@example.com \
-//!     --password Sup3rSecret! \
-//!     --token <token-from-qr> \
-//!     --device-name "Fan's fake iPhone"
-//!
-//! # 3c. Drive a full smoke session: register-or-login, pair, start_agent
 //! cargo run -p minos-mobile --bin fake-peer --features cli -- smoke-session \
-//!     --backend ws://127.0.0.1:8787/devices \
-//!     --email fan+smoke@example.com \
-//!     --password Sup3rSecret! \
-//!     --token <token-from-qr> \
-//!     --prompt "Hello from fake-peer" \
-//!     --device-name "Fan's fake iPhone"
+//!     --backend http://127.0.0.1:8787 \
+//!     --supabase-access-token "$SUPABASE_ACCESS_TOKEN" \
+//!     --prompt "Hello from fake-peer"
 //! ```
 //!
-//! No retry logic, no Keychain persistence — this is dev-only.
+//! Account creation (email/password/OAuth) is IdP-side only (Supabase Auth).
+//! Backend integration tests mint synthetic Supabase JWTs with a test HMAC.
 
 use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
-use futures_util::StreamExt;
-use http::{Method, Request};
 use minos_domain::defaults::DEV_BACKEND_URL;
-use minos_domain::{AgentName, ConnectionState, DeviceId, DeviceRole, MinosError};
+use minos_domain::{AgentName, DeviceId, MinosError};
 use minos_mobile::http::MobileHttpClient;
 use minos_mobile::{MobileClient, PersistedPairingState};
-use minos_protocol::Envelope;
-use openwire::{Client as OpenwireClient, RequestBody};
-use openwire_core::websocket::Message;
 use std::time::Duration;
 use tokio::time::sleep;
 
 #[derive(Parser, Debug)]
 #[command(
     name = "fake-peer",
-    about = "Smoke-test Mac pairing + agent dispatch without iOS by impersonating an ios-client.",
-    long_about = "Three subcommands cover the dev smoke surfaces: `pair` to \
-                  redeem a single pairing token, `register` to create an \
-                  account before pairing, and `smoke-session` to drive the \
-                  full register-or-login → pair → start_agent loop."
+    about = "Smoke-test mobile auth + linked hosts without QR pairing (Supabase exchange)."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -82,61 +50,39 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Cmd {
-    /// Pair-only flow: register a throwaway account on demand and
-    /// redeem the supplied pairing token. Inbound frames stream to
-    /// stderr until the socket closes.
-    Pair {
-        /// Relay backend URL (the `/devices` WebSocket endpoint).
+    /// Exchange a Supabase access token for a Minos session and print account metadata.
+    Exchange {
         #[arg(long, default_value_t = DEV_BACKEND_URL.to_string())]
         backend: String,
-        /// Pairing token captured from the Mac's QR payload.
-        #[arg(long)]
-        token: String,
-        /// Display name announced to the host during pair.
-        #[arg(long, default_value = "fake-peer")]
-        device_name: String,
-        /// Email used to register the throwaway account.
-        #[arg(long, default_value = "fake-peer@example.com")]
-        email: String,
-        /// Password for the throwaway account.
-        #[arg(long, default_value = "fake-peer-pw-12345")]
-        password: String,
-    },
-    /// Register a fresh account then pair. Same wire shape as `pair`,
-    /// but exits as soon as the WS handshake completes; use this when
-    /// you only need to warm up an account before driving traffic by
-    /// other means.
-    Register {
-        #[arg(long, default_value_t = DEV_BACKEND_URL.to_string())]
-        backend: String,
-        #[arg(long)]
-        email: String,
-        #[arg(long)]
-        password: String,
-        #[arg(long)]
-        token: String,
+        #[arg(long, env = "SUPABASE_ACCESS_TOKEN")]
+        supabase_access_token: String,
         #[arg(long, default_value = "fake-peer")]
         device_name: String,
     },
-    /// Full smoke session: try login, fall back to register, pair if
-    /// needed, then call `start_agent` and stream `UiEventFrame`s to
-    /// stderr until the user interrupts.
+    /// Exchange and list linked hosts (`GET /v1/hosts`).
+    ListHosts {
+        #[arg(long, default_value_t = DEV_BACKEND_URL.to_string())]
+        backend: String,
+        #[arg(long, env = "SUPABASE_ACCESS_TOKEN")]
+        supabase_access_token: String,
+        #[arg(long, default_value = "fake-peer")]
+        device_name: String,
+    },
+    /// Exchange, select a linked host, open WS, send a prompt, tail UI events.
     SmokeSession {
         #[arg(long, default_value_t = DEV_BACKEND_URL.to_string())]
         backend: String,
-        #[arg(long)]
-        email: String,
-        #[arg(long)]
-        password: String,
-        #[arg(long)]
-        token: String,
+        #[arg(long, env = "SUPABASE_ACCESS_TOKEN")]
+        supabase_access_token: String,
         #[arg(long)]
         prompt: String,
         #[arg(long, default_value = "fake-peer")]
         device_name: String,
-        /// Agent to start. Mirrors the Mac-side AgentName variants.
         #[arg(long, default_value = "codex")]
         agent: String,
+        /// Optional host installation id; default = first online, else first linked.
+        #[arg(long)]
+        host_installation_id: Option<String>,
     },
 }
 
@@ -144,49 +90,56 @@ enum Cmd {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Pair {
+        Cmd::Exchange {
             backend,
-            token,
+            supabase_access_token,
             device_name,
-            email,
-            password,
         } => {
-            // Pair-only: try login first so the same throwaway email can
-            // be reused across runs without colliding on EmailTaken.
-            let auth = login_or_register(&backend, &email, &password).await?;
-            run_pair_then_tail(&backend, &token, &device_name, auth).await
+            let auth = exchange_account(&backend, &supabase_access_token, &device_name).await?;
+            eprintln!(
+                "exchange ok account_id={} email={}",
+                auth.account_id, auth.account_email
+            );
+            Ok(())
         }
-        Cmd::Register {
+        Cmd::ListHosts {
             backend,
-            email,
-            password,
-            token,
+            supabase_access_token,
             device_name,
         } => {
-            // Register-only: surface EmailTaken back to the operator so a
-            // typo on a reused email doesn't silently fall through to
-            // login.
-            let auth = register_account(&backend, &email, &password).await?;
-            run_pair_then_tail(&backend, &token, &device_name, auth).await
+            let auth = exchange_account(&backend, &supabase_access_token, &device_name).await?;
+            let http = MobileHttpClient::new(&backend, auth.device_id, device_name)
+                .context("build MobileHttpClient")?;
+            let hosts = http
+                .list_hosts(&auth.access_token)
+                .await
+                .context("GET /v1/hosts")?;
+            if hosts.hosts.is_empty() {
+                eprintln!("no linked hosts — use Desktop “Link this Mac” first");
+            }
+            for h in hosts.hosts {
+                eprintln!(
+                    "host={} name={} online={} linked_at_ms={}",
+                    h.host_device_id, h.host_display_name, h.online, h.paired_at_ms
+                );
+            }
+            Ok(())
         }
         Cmd::SmokeSession {
             backend,
-            email,
-            password,
-            token,
+            supabase_access_token,
             prompt,
             device_name,
             agent,
+            host_installation_id,
         } => {
-            let agent_name = parse_agent(&agent)?;
+            let _agent = parse_agent(&agent)?;
             run_smoke_session(
                 &backend,
-                &email,
-                &password,
-                &token,
+                &supabase_access_token,
                 &prompt,
                 &device_name,
-                agent_name,
+                host_installation_id.as_deref(),
             )
             .await
         }
@@ -206,7 +159,6 @@ fn parse_agent(s: &str) -> Result<AgentName> {
     }
 }
 
-/// Register an account via HTTP. Returns the freshly issued auth tuple.
 struct RegisteredAuth {
     device_id: DeviceId,
     access_token: String,
@@ -215,19 +167,19 @@ struct RegisteredAuth {
     account_email: String,
 }
 
-async fn register_account(backend: &str, email: &str, password: &str) -> Result<RegisteredAuth> {
+async fn exchange_account(
+    backend: &str,
+    supabase_access_token: &str,
+    device_name: &str,
+) -> Result<RegisteredAuth> {
     let device_id = DeviceId::new();
     let http =
-        MobileHttpClient::new(backend, device_id, "fake-peer").context("build MobileHttpClient")?;
-    eprintln!("→ POST /v1/auth/register email={email}");
+        MobileHttpClient::new(backend, device_id, device_name).context("build MobileHttpClient")?;
+    eprintln!("→ POST /v1/auth/supabase (exchange)");
     let resp = http
-        .register(email, password)
+        .exchange_supabase(supabase_access_token, Some(device_name))
         .await
-        .context("POST /v1/auth/register")?;
-    eprintln!(
-        "← account_id={} email={}",
-        resp.account.account_id, resp.account.email
-    );
+        .context("POST /v1/auth/supabase")?;
     Ok(RegisteredAuth {
         device_id,
         access_token: resp.access_token,
@@ -237,139 +189,29 @@ async fn register_account(backend: &str, email: &str, password: &str) -> Result<
     })
 }
 
-/// Try login first; fall back to register on UnknownAccount /
-/// InvalidCredentials so the same command works whether the account
-/// already exists or not.
-async fn login_or_register(backend: &str, email: &str, password: &str) -> Result<RegisteredAuth> {
-    let device_id = DeviceId::new();
-    let http =
-        MobileHttpClient::new(backend, device_id, "fake-peer").context("build MobileHttpClient")?;
-    eprintln!("→ POST /v1/auth/login email={email}");
-    match http.login(email, password).await {
-        Ok(resp) => {
-            eprintln!(
-                "← login OK account_id={} email={}",
-                resp.account.account_id, resp.account.email
-            );
-            Ok(RegisteredAuth {
-                device_id,
-                access_token: resp.access_token,
-                refresh_token: resp.refresh_token,
-                account_id: resp.account.account_id,
-                account_email: resp.account.email,
-            })
-        }
-        Err(e) => {
-            eprintln!("← login failed ({e:?}); falling back to register");
-            register_account(backend, email, password).await
-        }
-    }
-}
-
-/// Pair via HTTP, open the authenticated WS, and tail inbound frames to
-/// stderr. Used by both the `pair` and `register` subcommands.
-async fn run_pair_then_tail(
-    backend: &str,
-    token: &str,
-    device_name: &str,
-    auth: RegisteredAuth,
-) -> Result<()> {
-    let device_id = auth.device_id;
-    let http =
-        MobileHttpClient::new(backend, device_id, device_name).context("build MobileHttpClient")?;
-    eprintln!("→ POST /v1/pairing/confirm token={token}");
-    let pair_resp = http
-        .pair_confirm(token, &auth.access_token)
-        .await
-        .context("POST /v1/pairing/confirm")?;
-    eprintln!(
-        "← host_installation_id={} status={}",
-        pair_resp.host_installation_id, pair_resp.status
-    );
-
-    let mut request = Request::builder()
-        .method(Method::GET)
-        .uri(backend)
-        .body(RequestBody::empty())
-        .context("parse backend URL")?;
-    request.headers_mut().insert(
-        "X-Device-Id",
-        device_id
-            .to_string()
-            .parse()
-            .context("encode device-id header")?,
-    );
-    request.headers_mut().insert(
-        "X-Device-Role",
-        DeviceRole::MobileClient
-            .to_string()
-            .parse()
-            .context("encode device-role header")?,
-    );
-    request.headers_mut().insert(
-        "X-Device-Name",
-        device_name.parse().context("encode device-name header")?,
-    );
-    request.headers_mut().insert(
-        "Authorization",
-        format!("Bearer {}", auth.access_token)
-            .parse()
-            .context("encode authorization header")?,
-    );
-
-    eprintln!("connecting as {device_id} (role=ios-client) to {backend}");
-    let websocket = OpenwireClient::builder()
-        .build()
-        .context("build openwire websocket client")?
-        .new_websocket(request)
-        .handshake_timeout(Duration::from_secs(10))
-        .execute()
-        .await
-        .context("ws handshake")?;
-    eprintln!("← websocket status={}", websocket.handshake().status());
-    let (_sender, mut stream) = websocket.split();
-
-    while let Some(msg) = stream.next().await {
-        match msg.context("ws read")? {
-            Message::Text(text) => match serde_json::from_str::<Envelope>(&text) {
-                Ok(envelope) => print_envelope(&envelope, &text),
-                Err(e) => eprintln!("← (unparsed) {text} | parse err: {e}"),
-            },
-            Message::Close { code, reason } => {
-                eprintln!("← close: code={code} reason={reason}");
-                break;
-            }
-            Message::Binary(_) | Message::Ping(_) | Message::Pong(_) => {}
-        }
-    }
-
-    Ok(())
-}
-
-/// Drive the SmokeSession flow end-to-end via the real `MobileClient`.
-/// This exercises the same code path the iOS client takes, so any
-/// regression in the Wave 2 agent-dispatch surface lights up here.
 async fn run_smoke_session(
     backend: &str,
-    email: &str,
-    password: &str,
-    token: &str,
+    supabase_access_token: &str,
     prompt: &str,
     device_name: &str,
-    agent: AgentName,
+    host_installation_id: Option<&str>,
 ) -> Result<()> {
-    // Establish auth via the dedicated HTTP client first so the
-    // MobileClient is built with the live tuple already in place.
-    // login-then-register lets the same invocation work for both
-    // first-launch and subsequent runs.
-    let auth = login_or_register(backend, email, password).await?;
+    let auth = exchange_account(backend, supabase_access_token, device_name).await?;
+    let http = MobileHttpClient::new(backend, auth.device_id, device_name)
+        .context("build MobileHttpClient")?;
+    let hosts = http
+        .list_hosts(&auth.access_token)
+        .await
+        .context("GET /v1/hosts")?;
+    let host = pick_host(&hosts.hosts, host_installation_id)?;
+    eprintln!(
+        "using host={} online={} name={}",
+        host.host_device_id, host.online, host.host_display_name
+    );
 
-    // Seed the MobileClient via the persisted-state ctor so the auth
-    // tuple is in place before we call `pair_with_qr_json_at` (the pair
-    // path looks the access token up from `auth_session`).
     let now_ms = chrono::Utc::now().timestamp_millis();
     let persisted = PersistedPairingState {
-        device_id: None,
+        device_id: Some(auth.device_id.to_string()),
         access_token: Some(auth.access_token),
         access_expires_at_ms: Some(now_ms + 15 * 60 * 1000),
         refresh_token: Some(auth.refresh_token),
@@ -377,40 +219,24 @@ async fn run_smoke_session(
         account_email: Some(auth.account_email),
     };
     let client = MobileClient::new_with_persisted_state(device_name.to_string(), persisted);
-
-    let mut ui_events = client.ui_events_stream();
-
-    // Build a fresh QR JSON envelope around the supplied pairing token
-    // so we don't have to ask the user to paste full JSON.
-    let qr_json = serde_json::json!({
-        "v": 2,
-        "host_display_name": "FakeMac",
-        "pairing_token": token,
-        "expires_at_ms": i64::MAX,
-    })
-    .to_string();
-    eprintln!("→ pair_with_qr_json_at backend={backend}");
     client
-        .pair_with_qr_json_at(qr_json, backend)
+        .set_active_host(host.host_device_id.clone())
         .await
-        .context("pair_with_qr_json_at")?;
-    eprintln!("← paired; current_state={:?}", client.current_state());
-
-    // Wait for the WS to land in `Connected` so the outbox is registered
-    // before we call `send_user_message` (which requires an outbox).
+        .context("set_active_host")?;
+    client
+        .resume_persisted_session()
+        .await
+        .context("resume_persisted_session")?;
     wait_for_connected(&client).await?;
 
-    eprintln!("→ send_user_message agent={agent:?} prompt={prompt:?}");
-    // In the refactored architecture, mobile sends messages directly via
-    // send_user_message. The daemon/host auto-creates a session when
-    // session_id is empty.
+    let mut ui_events = client.ui_events_stream();
+    eprintln!("→ send_user_message prompt={prompt:?}");
     client
         .send_user_message(String::new(), prompt.to_string())
         .await
         .context("send_user_message")?;
-    eprintln!("← send_user_message ok");
+    eprintln!("← send ok; tailing ui_events — Ctrl-C to exit");
 
-    eprintln!("tailing ui_events_stream — Ctrl-C to exit");
     loop {
         match ui_events.recv().await {
             Ok(frame) => eprintln!("← ui_event seq={} ui={:?}", frame.seq, frame.ui),
@@ -426,29 +252,43 @@ async fn run_smoke_session(
     Ok(())
 }
 
-async fn wait_for_connected(client: &MobileClient) -> Result<(), MinosError> {
-    // Pair with QR transitions to Connected before returning, but the
-    // outbox handshake is processed on the recv loop's first frame; a
-    // brief retry window protects against the race.
-    for _ in 0..50 {
-        if matches!(client.current_state(), ConnectionState::Connected) {
-            return Ok(());
-        }
-        sleep(Duration::from_millis(20)).await;
+fn pick_host(
+    hosts: &[minos_protocol::HostSummary],
+    preferred: Option<&str>,
+) -> Result<minos_protocol::HostSummary> {
+    if hosts.is_empty() {
+        anyhow::bail!("no linked hosts — Link this Mac on Desktop first");
     }
-    Err(MinosError::NotConnected)
+    if let Some(id) = preferred {
+        return hosts
+            .iter()
+            .find(|h| h.host_device_id.to_string() == id)
+            .cloned()
+            .with_context(|| format!("host_installation_id {id} not in GET /v1/hosts"));
+    }
+    Ok(hosts
+        .iter()
+        .find(|h| h.online)
+        .or_else(|| hosts.first())
+        .cloned()
+        .expect("hosts non-empty"))
 }
 
-fn print_envelope(envelope: &Envelope, raw: &str) {
-    match envelope {
-        Envelope::Event { event, .. } => {
-            eprintln!("← event: {event:?}");
+async fn wait_for_connected(client: &MobileClient) -> Result<(), MinosError> {
+    for _ in 0..50 {
+        if matches!(
+            client.current_state(),
+            minos_domain::ConnectionState::Connected
+        ) {
+            return Ok(());
         }
-        Envelope::Forwarded { from, payload, .. } => {
-            eprintln!("← forwarded from={from} payload={payload}");
-        }
-        Envelope::Forward { .. } | Envelope::Ingest { .. } => {
-            eprintln!("← unexpected client→relay envelope mirrored back: {raw}");
-        }
+        sleep(Duration::from_millis(100)).await;
     }
+    Err(MinosError::ConnectFailed {
+        url: "ws".into(),
+        message: format!(
+            "timed out waiting for Connected; state={:?}",
+            client.current_state()
+        ),
+    })
 }

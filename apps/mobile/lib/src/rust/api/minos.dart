@@ -109,9 +109,8 @@ abstract class MobileClient implements RustOpaqueInterface {
     required String friendAccountId,
   });
 
-  /// Forget a specific paired Mac. The path-bound `host_device_id` is
-  /// the Mac to forget. Idempotent. ADR-0020 supersedes the old
-  /// `forget_peer` (single-peer) call.
+  /// Unlink a host installation from the account and clear local active-host
+  /// when it matches. Idempotent.
   Future<void> forgetHost({required String hostDeviceId});
 
   Future<FriendRequestsResponse> friendRequests();
@@ -155,7 +154,7 @@ abstract class MobileClient implements RustOpaqueInterface {
     required int limit,
   });
 
-  /// List every Mac paired to the caller's account.
+  /// List every Mac linked to the caller's account (`GET /v1/hosts`).
   Future<List<HostSummaryDto>> listPairedHosts();
 
   /// List sessions within a project.
@@ -169,9 +168,9 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// Request a page of thread summaries.
   Future<ListSessionsResponse> listSessions({required ListSessionsParams req});
 
-  /// Log into an existing account on the backend. Same shape as
-  /// `register` modulo the create-vs-find behaviour on the server.
-  Future<AuthSummary> login({required String email, required String password});
+  /// Exchange a Supabase access token for Minos access/refresh tokens and
+  /// adopt the resulting session.
+  Future<AuthSummary> loginWithSupabase({required String supabaseAccessToken});
 
   /// Log out of the current session. Best-effort `stop_agent`, then
   /// revoke the refresh token server-side, then wipe local state.
@@ -183,12 +182,12 @@ abstract class MobileClient implements RustOpaqueInterface {
 
   Future<MyProfileResponse> myProfile();
 
-  /// Construct a client backed by the built-in in-memory pairing store.
-  /// Synchronous — no I/O happens until a pairing method is called.
+  /// Construct a client backed by the built-in in-memory session store.
+  /// Synchronous — no I/O happens until an auth/session method is called.
   factory MobileClient({required String selfName}) =>
       RustLib.instance.api.crateApiMinosMobileClientNew(selfName: selfName);
 
-  /// Construct a client preloaded with a durable pairing snapshot from the
+  /// Construct a client preloaded with a durable session snapshot from the
   /// Dart-side secure store.
   static MobileClient newWithPersistedState({
     required String selfName,
@@ -206,10 +205,6 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// next connect attempt happens promptly.
   void notifyForegrounded();
 
-  /// Pair using the raw JSON payload extracted from the scanned QR v2
-  /// code. Delegates to `MobileClient::pair_with_qr_json`.
-  Future<void> pairWithQrJson({required String qrJson});
-
   /// Export the current pairing snapshot so Dart can mirror it into secure
   /// storage after pairing succeeds.
   Future<PersistedPairingState> persistedPairingState();
@@ -226,14 +221,6 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// `Authenticated` / `RefreshFailed` transitions on the auth-state
   /// stream.
   Future<void> refreshSession();
-
-  /// Register a new account on the backend. On success the bearer +
-  /// refresh tokens are held in memory and surfaced via the auth-state
-  /// stream; the reconnect loop then drives the WS back to `Connected`.
-  Future<AuthSummary> register({
-    required String email,
-    required String password,
-  });
 
   Future<AgentSummary> registerAgent({
     required String name,
@@ -262,7 +249,7 @@ abstract class MobileClient implements RustOpaqueInterface {
     required String answersJson,
   });
 
-  /// Reconnect using the durable pairing snapshot already loaded from the
+  /// Reconnect using the durable session snapshot already loaded from the
   /// Dart-side secure store.
   Future<void> resumePersistedSession();
 
@@ -1152,7 +1139,7 @@ class HostSkillsEntry {
 }
 
 /// Dart-visible mirror of `minos_protocol::HostSummary`. One row returned by
-/// `/v1/pairing/list-hosts`.
+/// `GET /v1/hosts`.
 class HostSummaryDto {
   final String hostDeviceId;
   final String hostDisplayName;

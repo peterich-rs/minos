@@ -651,7 +651,7 @@ fn store_err(operation: &'static str) -> impl FnOnce(sqlx::Error) -> BackendErro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::devices;
+    use crate::store::device_installations;
     use crate::store::durable_event_log;
     use crate::store::host_commands;
     use crate::store::test_support::{memory_pool, T0};
@@ -740,7 +740,7 @@ mod tests {
     async fn ack_refuses_host_command_until_command_is_observed() {
         let pool = memory_pool().await;
         let host_id = DeviceId::new();
-        devices::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
+        device_installations::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
             .await
             .unwrap();
         durable_event_log::append(
@@ -800,7 +800,7 @@ mod tests {
     async fn ack_allows_expired_host_command_to_clear_outbox() {
         let pool = memory_pool().await;
         let host_id = DeviceId::new();
-        devices::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
+        device_installations::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
             .await
             .unwrap();
         durable_event_log::append(
@@ -851,7 +851,7 @@ mod tests {
     async fn ack_pending_host_command_events_marks_observed_command_outbox() {
         let pool = memory_pool().await;
         let host_id = DeviceId::new();
-        devices::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
+        device_installations::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
             .await
             .unwrap();
         durable_event_log::append(
@@ -925,7 +925,7 @@ mod tests {
     async fn ack_pending_host_command_events_marks_claimed_observed_command_outbox() {
         let pool = memory_pool().await;
         let host_id = DeviceId::new();
-        devices::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
+        device_installations::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
             .await
             .unwrap();
         durable_event_log::append(

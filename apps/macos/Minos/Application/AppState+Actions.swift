@@ -1,34 +1,13 @@
 import AppKit
 import Foundation
 
-/// User-driven actions on AppState (QR mint/refresh, peer forget,
-/// shutdown, log reveal). Lives in its own file so the core AppState
-/// type body stays under the swiftlint type-body-length cap.
+/// User-driven actions on AppState (peer forget, reconnect, shutdown,
+/// log reveal). Lives in its own file so the core AppState type body
+/// stays under the swiftlint type-body-length cap.
 extension AppState {
-    static let qrLifetimeSeconds: TimeInterval = 300
-
-    var currentQrExpiresAt: Date? {
-        currentQrGeneratedAt?.addingTimeInterval(Self.qrLifetimeSeconds)
-    }
-
     @MainActor
     func requestTermination() {
         terminator()
-    }
-
-    @MainActor
-    func showQr() async {
-        await loadQr(showing: true)
-    }
-
-    @MainActor
-    func regenerateQr() async {
-        await loadQr(showing: true)
-    }
-
-    @MainActor
-    func dismissQr() {
-        isShowingQr = false
     }
 
     @MainActor
@@ -119,9 +98,6 @@ extension AppState {
         agentSubscription = nil
         agentState = .idle
         currentSession = nil
-        currentQr = nil
-        currentQrGeneratedAt = nil
-        isShowingQr = false
         agentError = nil
 
         currentRelayLinkSubscription?.cancel()
@@ -155,7 +131,7 @@ extension AppState {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "忘记已配对设备"
-        alert.informativeText = "忘记 \(peer.name) 后需要重新扫码才能再次配对。继续吗？"
+        alert.informativeText = "忘记 \(peer.name) 后需要在 Desktop 上重新 Link this Mac。继续吗？"
         alert.addButton(withTitle: "取消")
         alert.addButton(withTitle: "忘记")
         return alert.runModal() == .alertSecondButtonReturn
@@ -166,26 +142,5 @@ extension AppState {
         let remainingPeers = resolvedPeers.filter { $0.mobileDeviceId != mobileDeviceId }
         applyPeersSnapshot(remainingPeers)
         peer = Self.aggregatePeerState(from: remainingPeers)
-        currentQr = nil
-        currentQrGeneratedAt = nil
-        isShowingQr = false
-    }
-
-    @MainActor
-    private func loadQr(showing: Bool) async {
-        guard canShowQr, let daemon else { return }
-
-        do {
-            let pairingPayload = try await daemon.pairingQr()
-            currentQr = pairingPayload
-            currentQrGeneratedAt = Date()
-            isShowingQr = showing
-            displayErrorTask?.cancel()
-            displayError = nil
-        } catch let error as MinosError {
-            presentTransientError(error)
-        } catch {
-            AppLog.error("appState.actions", "Unexpected QR error: \(String(describing: error))")
-        }
     }
 }

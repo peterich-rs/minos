@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -7,7 +8,7 @@ use minos_domain::{DeviceId, DeviceRole};
 use uuid::Uuid;
 
 use crate::error::BackendError;
-use crate::store::{devices, AsStorePool};
+use crate::store::{device_installations, AsStorePool};
 
 pub const BOOTSTRAP_NONCE_TTL: Duration = Duration::from_secs(60);
 const PUBLIC_KEY_PREFIX: &str = "ed25519:";
@@ -25,43 +26,142 @@ struct NonceEntry {
     expires_at_ms: i64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone)]
+enum BootstrapNonceBackend {
+    InMemory(Arc<DashMap<String, NonceEntry>>),
+    Redis { client: redis::Client },
+}
+
+/// Single-use bootstrap nonces for host Ed25519 proofs.
+///
+/// Production multi-instance deployments back this with Redis (`GETDEL` on
+/// consume). Dev/tests use an in-memory map. Both share the same issue/consume
+/// contract so callers do not branch on backend kind.
+#[derive(Debug, Clone)]
 pub struct BootstrapNonceStore {
-    entries: DashMap<String, NonceEntry>,
+    backend: BootstrapNonceBackend,
+}
+
+impl Default for BootstrapNonceStore {
+    fn default() -> Self {
+        Self::in_memory()
+    }
 }
 
 impl BootstrapNonceStore {
     #[must_use]
-    pub fn issue(&self, installation_id: &str, now_ms: i64) -> BootstrapNonce {
-        let nonce = generate_nonce();
-        let expires_at_ms = now_ms + BOOTSTRAP_NONCE_TTL.as_millis() as i64;
-        self.entries.insert(
-            nonce.clone(),
-            NonceEntry {
-                installation_id: installation_id.to_string(),
-                expires_at_ms,
-            },
-        );
-        BootstrapNonce {
-            nonce,
-            expires_at_ms,
+    pub fn in_memory() -> Self {
+        Self {
+            backend: BootstrapNonceBackend::InMemory(Arc::new(DashMap::new())),
         }
     }
 
-    pub fn consume(
+    pub fn redis(redis_url: &str) -> Result<Self, BackendError> {
+        let client = redis::Client::open(redis_url).map_err(|error| BackendError::Cache {
+            operation: "bootstrap_nonce.redis_client".into(),
+            message: error.to_string(),
+        })?;
+        Ok(Self {
+            backend: BootstrapNonceBackend::Redis { client },
+        })
+    }
+
+    pub async fn issue(
+        &self,
+        installation_id: &str,
+        now_ms: i64,
+    ) -> Result<BootstrapNonce, BackendError> {
+        let nonce = generate_nonce();
+        let expires_at_ms = now_ms + BOOTSTRAP_NONCE_TTL.as_millis() as i64;
+        match &self.backend {
+            BootstrapNonceBackend::InMemory(entries) => {
+                entries.insert(
+                    nonce.clone(),
+                    NonceEntry {
+                        installation_id: installation_id.to_string(),
+                        expires_at_ms,
+                    },
+                );
+            }
+            BootstrapNonceBackend::Redis { client } => {
+                let mut conn =
+                    client
+                        .get_multiplexed_async_connection()
+                        .await
+                        .map_err(|error| BackendError::Cache {
+                            operation: "bootstrap_nonce.redis_connect".into(),
+                            message: error.to_string(),
+                        })?;
+                let ttl_secs = BOOTSTRAP_NONCE_TTL.as_secs().max(1);
+                let _: () = redis::cmd("SET")
+                    .arg(nonce_key(&nonce))
+                    .arg(installation_id)
+                    .arg("EX")
+                    .arg(ttl_secs)
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(|error| BackendError::Cache {
+                        operation: "bootstrap_nonce.redis_set".into(),
+                        message: error.to_string(),
+                    })?;
+            }
+        }
+        Ok(BootstrapNonce {
+            nonce,
+            expires_at_ms,
+        })
+    }
+
+    pub async fn consume(
         &self,
         installation_id: &str,
         nonce: &str,
         now_ms: i64,
     ) -> Result<(), HostBootstrapError> {
-        let Some((_, entry)) = self.entries.remove(nonce) else {
-            return Err(HostBootstrapError::NonceInvalid);
+        let entry_installation_id = match &self.backend {
+            BootstrapNonceBackend::InMemory(entries) => {
+                let Some((_, entry)) = entries.remove(nonce) else {
+                    return Err(HostBootstrapError::NonceInvalid);
+                };
+                if entry.expires_at_ms <= now_ms {
+                    return Err(HostBootstrapError::NonceInvalid);
+                }
+                entry.installation_id
+            }
+            BootstrapNonceBackend::Redis { client } => {
+                let mut conn =
+                    client
+                        .get_multiplexed_async_connection()
+                        .await
+                        .map_err(|error| {
+                            HostBootstrapError::Store(BackendError::Cache {
+                                operation: "bootstrap_nonce.redis_connect".into(),
+                                message: error.to_string(),
+                            })
+                        })?;
+                let payload: Option<String> = redis::cmd("GETDEL")
+                    .arg(nonce_key(nonce))
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(|error| {
+                        HostBootstrapError::Store(BackendError::Cache {
+                            operation: "bootstrap_nonce.redis_getdel".into(),
+                            message: error.to_string(),
+                        })
+                    })?;
+                payload.ok_or(HostBootstrapError::NonceInvalid)?
+            }
         };
-        if entry.installation_id != installation_id || entry.expires_at_ms <= now_ms {
+
+        if entry_installation_id != installation_id {
             return Err(HostBootstrapError::NonceInvalid);
         }
         Ok(())
     }
+}
+
+fn nonce_key(nonce: &str) -> String {
+    format!("minos:bootstrap_nonce:{nonce}")
 }
 
 pub struct HostBootstrapProof<'a> {
@@ -97,9 +197,11 @@ where
     let installation_id = Uuid::parse_str(proof.installation_id)
         .map(DeviceId)
         .map_err(|_| HostBootstrapError::ProofInvalid)?;
-    nonce_store.consume(proof.installation_id, proof.nonce, now_ms)?;
+    nonce_store
+        .consume(proof.installation_id, proof.nonce, now_ms)
+        .await?;
 
-    let existing = devices::get_device(store, installation_id).await?;
+    let existing = device_installations::get_device(store, installation_id).await?;
     if let Some(row) = existing.as_ref() {
         if row.role != DeviceRole::AgentHost {
             return Err(HostBootstrapError::ProofInvalid);
@@ -125,17 +227,19 @@ where
     )?;
 
     if existing.is_none() {
-        devices::insert_device(
+        // Postgres CHECK requires host rows to have public_key NOT NULL.
+        // Insert key atomically at TOFU register rather than insert-then-patch.
+        device_installations::insert_host_with_public_key(
             store,
             installation_id,
             display_name,
-            DeviceRole::AgentHost,
+            public_key_text,
             now_ms,
         )
         .await?;
-    }
-    if stored_public_key.is_none() {
-        devices::set_public_key_if_absent(store, &installation_id, public_key_text).await?;
+    } else if stored_public_key.is_none() {
+        device_installations::set_public_key_if_absent(store, &installation_id, public_key_text)
+            .await?;
     }
 
     Ok(installation_id)
@@ -192,7 +296,7 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
 
-    const REQUEST_CODE_PATH: &str = "/v1/host/pairing/request-code";
+    const LINK_PATH: &str = "v1/hosts/link";
 
     fn keypair() -> SigningKey {
         SigningKey::from_bytes(&[7_u8; 32])
@@ -206,7 +310,7 @@ mod tests {
     }
 
     fn signature(signing_key: &SigningKey, installation_id: &str, nonce: &str) -> String {
-        let payload = format!("{installation_id}:{nonce}:{REQUEST_CODE_PATH}");
+        let payload = format!("{installation_id}:{nonce}:{LINK_PATH}");
         format!(
             "{SIGNATURE_PREFIX}{}",
             URL_SAFE_NO_PAD.encode(signing_key.sign(payload.as_bytes()).to_bytes())
@@ -218,7 +322,7 @@ mod tests {
         let pool = crate::store::test_support::memory_pool().await;
         let store = BootstrapNonceStore::default();
         let installation_id = DeviceId::new().to_string();
-        let nonce = store.issue(&installation_id, 100).nonce;
+        let nonce = store.issue(&installation_id, 100).await.unwrap().nonce;
         let host_signing_key = keypair();
         let host_public_key = public_key(&host_signing_key);
         let host_signature = signature(&host_signing_key, &installation_id, &nonce);
@@ -232,14 +336,17 @@ mod tests {
                 public_key: Some(&host_public_key),
                 signature: &host_signature,
             },
-            REQUEST_CODE_PATH,
+            LINK_PATH,
             "host",
             100,
         )
         .await
         .unwrap();
 
-        let row = devices::get_device(&pool, id).await.unwrap().unwrap();
+        let row = device_installations::get_device(&pool, id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(row.public_key.as_deref(), Some(host_public_key.as_str()));
         assert_eq!(row.role, DeviceRole::AgentHost);
     }
@@ -249,7 +356,7 @@ mod tests {
         let pool = crate::store::test_support::memory_pool().await;
         let store = BootstrapNonceStore::default();
         let installation_id = DeviceId::new().to_string();
-        let nonce = store.issue(&installation_id, 100).nonce;
+        let nonce = store.issue(&installation_id, 100).await.unwrap().nonce;
         let host_signing_key = keypair();
         let host_public_key = public_key(&host_signing_key);
         let host_signature = signature(&host_signing_key, &installation_id, &nonce);
@@ -263,7 +370,7 @@ mod tests {
                 public_key: Some(&host_public_key),
                 signature: &host_signature,
             },
-            REQUEST_CODE_PATH,
+            LINK_PATH,
             "host",
             100,
         )
@@ -279,7 +386,7 @@ mod tests {
                 public_key: Some(&host_public_key),
                 signature: &host_signature,
             },
-            REQUEST_CODE_PATH,
+            LINK_PATH,
             "host",
             100,
         )
@@ -295,7 +402,7 @@ mod tests {
         let installation_id = DeviceId::new().to_string();
         let host_signing_key = keypair();
         let host_public_key = public_key(&host_signing_key);
-        let nonce = store.issue(&installation_id, 100).nonce;
+        let nonce = store.issue(&installation_id, 100).await.unwrap().nonce;
         let host_signature = signature(&host_signing_key, &installation_id, &nonce);
 
         verify_and_register(
@@ -307,7 +414,7 @@ mod tests {
                 public_key: Some(&host_public_key),
                 signature: &host_signature,
             },
-            REQUEST_CODE_PATH,
+            LINK_PATH,
             "host",
             100,
         )
@@ -316,7 +423,7 @@ mod tests {
 
         let different_key = SigningKey::from_bytes(&[9_u8; 32]);
         let different_public_key = public_key(&different_key);
-        let nonce = store.issue(&installation_id, 200).nonce;
+        let nonce = store.issue(&installation_id, 200).await.unwrap().nonce;
         let signature = signature(&different_key, &installation_id, &nonce);
 
         let err = verify_and_register(
@@ -328,7 +435,7 @@ mod tests {
                 public_key: Some(&different_public_key),
                 signature: &signature,
             },
-            REQUEST_CODE_PATH,
+            LINK_PATH,
             "host",
             200,
         )

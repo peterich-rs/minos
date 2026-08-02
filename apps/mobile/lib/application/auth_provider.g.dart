@@ -21,8 +21,8 @@ part of 'auth_provider.dart';
 /// so the chat surface lights up without a separate trigger.
 ///
 /// Phase 11.3 + ADR-0020 — cross-account migration sequence:
-///   1. `register` / `login` go through [MinosCore.register] /
-///      [MinosCore.login], which compare the freshly minted
+///   1. `register` / `login` go through Supabase IdP then
+///      [MinosCore.loginWithSupabase], which adopt the freshly minted
 ///      `account_id` against the prior persisted snapshot.
 ///   2. If the prior `account_id` differs, `MinosCore` clears the
 ///      cached peer display name so a stale label from the previous
@@ -53,8 +53,8 @@ final authControllerProvider = AuthControllerProvider._();
 /// so the chat surface lights up without a separate trigger.
 ///
 /// Phase 11.3 + ADR-0020 — cross-account migration sequence:
-///   1. `register` / `login` go through [MinosCore.register] /
-///      [MinosCore.login], which compare the freshly minted
+///   1. `register` / `login` go through Supabase IdP then
+///      [MinosCore.loginWithSupabase], which adopt the freshly minted
 ///      `account_id` against the prior persisted snapshot.
 ///   2. If the prior `account_id` differs, `MinosCore` clears the
 ///      cached peer display name so a stale label from the previous
@@ -83,8 +83,8 @@ final class AuthControllerProvider
   /// so the chat surface lights up without a separate trigger.
   ///
   /// Phase 11.3 + ADR-0020 — cross-account migration sequence:
-  ///   1. `register` / `login` go through [MinosCore.register] /
-  ///      [MinosCore.login], which compare the freshly minted
+  ///   1. `register` / `login` go through Supabase IdP then
+  ///      [MinosCore.loginWithSupabase], which adopt the freshly minted
   ///      `account_id` against the prior persisted snapshot.
   ///   2. If the prior `account_id` differs, `MinosCore` clears the
   ///      cached peer display name so a stale label from the previous
@@ -125,7 +125,7 @@ final class AuthControllerProvider
   }
 }
 
-String _$authControllerHash() => r'61dd6de9a76cbeb897e47e974e77a7dfb1614756';
+String _$authControllerHash() => r'984259c9c2d825c7d93ad41a088ddd4a198ea0f1';
 
 /// Mirrors the Rust-side `AuthState` watch-channel into the Dart UI tier.
 ///
@@ -140,8 +140,8 @@ String _$authControllerHash() => r'61dd6de9a76cbeb897e47e974e77a7dfb1614756';
 /// so the chat surface lights up without a separate trigger.
 ///
 /// Phase 11.3 + ADR-0020 — cross-account migration sequence:
-///   1. `register` / `login` go through [MinosCore.register] /
-///      [MinosCore.login], which compare the freshly minted
+///   1. `register` / `login` go through Supabase IdP then
+///      [MinosCore.loginWithSupabase], which adopt the freshly minted
 ///      `account_id` against the prior persisted snapshot.
 ///   2. If the prior `account_id` differs, `MinosCore` clears the
 ///      cached peer display name so a stale label from the previous

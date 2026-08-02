@@ -26,26 +26,31 @@ lib/
     minos_core.dart                  # FRB 实现（599 行）
     secure_pairing_store.dart        # iOS Keychain 持久化
   data/                              # 仓库 + 服务
-    repositories/                    # 各功能仓库
+    cloud/                           # 纯 Dart 云控制面（exchange / hosts mapper）
+    repositories/                    # 各功能仓库（含 HostsRepository）
     services/                        # 服务
   application/                       # Riverpod providers / ViewModels
     auth_provider.dart               # 认证状态
     active_session_provider.dart     # Agent 会话
     thread_events_provider.dart      # 线程事件
-    minos_providers.dart             # 连接/配对/设备
+    minos_providers.dart             # 连接 / linked hosts / 设备
     project_providers.dart           # 项目
     social_providers.dart            # 社交
     thread_commands.dart             # 命令门面
     root_route_decision.dart         # 根路由决策
   ui/                                # 功能组织 UI
-    core/widgets/                    # 共享交互组件（审批、Agent question sheet 等）
+    theme/                           # Minos design tokens（color/spacing/radius/type）
+    core/widgets/                    # 共享交互组件（审批、empty state、surface 等）
     features/
-      shell/                         # 应用壳（Tab 导航）
-      chat/                          # Agent 对话
-      pairing/                       # QR 配对
-      social/                        # 社交（好友/对话）
-      projects/                      # 项目
-      profile/                       # 个人资料
+      shell/                         # 应用壳（Sessions / Hosts / 账户）
+      sessions/                      # Golden-path 会话 inbox
+      hosts/                         # Linked hosts 列表
+      account/                       # 账户 / 退出登录
+      auth/                          # 登录注册
+      chat/                          # Agent 对话 stream + composer
+      social/                        # 社交（好友/对话，次级路由）
+      projects/                      # 项目（次级路由）
+      agents/                        # Agent profile（次级路由）
   src/rust/                          # 自动生成的 FRB 代码（勿手改）
 ```
 
@@ -68,8 +73,8 @@ lib/
 | `activeSessionControllerProvider` | `@Riverpod(keepAlive: true)` | Agent 会话状态机 |
 | `threadEventsProvider(sessionId)` | `@Riverpod(keepAlive: true)` | 线程事件 |
 | `connectionStateProvider` | `@Riverpod(keepAlive: true)` | 连接状态 |
-| `pairedMacsProvider` | `AsyncNotifierProvider` | 已配对 Mac 列表 |
-| `pairingControllerProvider` | `@riverpod` | QR 配对生命周期 |
+| `pairedMacsProvider` | `AsyncNotifierProvider` | Linked hosts（`GET /v1/hosts`） |
+| `hostsRepositoryProvider` | `Provider` | 纯 Dart hosts 列表 + FRB fallback |
 | `projectListProvider` | `@Riverpod(keepAlive: true)` | 项目 CRUD |
 | `conversationsProvider` | `AsyncNotifierProvider` | 对话列表 |
 | `friendsProvider` | `AsyncNotifierProvider` | 好友列表 |
@@ -84,14 +89,13 @@ lib/
 |------|------|------|
 | `/splash` | `_SplashScreen` | 启动加载 |
 | `/login` | `LoginPage` | 登录/注册 |
-| `/` | `AppShellPage` | 主壳（3 Tab） |
+| `/` | `AppShellPage` | 主壳（Sessions / Hosts / 账户） |
 | `/thread/:sessionId` | `ThreadViewPage` | Agent 线程对话 |
 | `/thread/new` | `ThreadViewPage` | 新线程 |
-| `/agent-start` | `AgentStartPage` | Agent 选择 |
-| `/pairing` | `PairingPage` | QR 扫描配对 |
-| `/project/:projectId` | `ProjectDetailPage` | 项目详情 |
-| `/social` | `SocialHubPage` | 社交中心 |
-| `/social/chat/:conversationId` | `SocialChatPage` | 社交聊天 |
+| `/agent-start` | `AgentStartPage` | Agent 选择（次级） |
+| `/project/:projectId` | `ProjectDetailPage` | 项目详情（次级） |
+| `/social` | `SocialHubPage` | 社交中心（次级，非主导航） |
+| `/social/chat/:conversationId` | `SocialChatPage` | 社交聊天（次级） |
 
 ### 根路由决策 (`root_route_decision.dart`)
 
@@ -102,11 +106,17 @@ AuthAuthenticated + Connected → projectList
 AuthAuthenticated + offline → projectListOffline
 ```
 
+`createAppRouter` redirect only reads synchronous `authControllerProvider`.
+`projectList` and `projectListOffline` both map to shell `/` (offline chrome is
+in-shell). Do not seed login-page provider state from widget `initState` —
+`LoginPageStateController.build` reads `AuthRefreshFailed` once when the
+provider is created.
+
 ### App Shell（3 个 Tab）
 
-- **Tab 0 (消息)**: `SocialHubPage` — 对话列表 + 未读数
-- **Tab 1 (Agents)**: `AgentsHubTab` — Agent 配置管理
-- **Tab 2 (我的)**: 个人信息、社交功能、开发工具、登出、配对
+- **Tab 0 (Sessions)**: `SessionsPage` — session inbox
+- **Tab 1 (Hosts)**: `HostsPage` — linked hosts
+- **Tab 2 (账户)**: `AccountPage` — profile / logout
 
 ## Rust FFI 桥接
 
@@ -137,8 +147,8 @@ Rust crate (minos-mobile::MobileClient)
 
 `MobileClient` 暴露约 80 个异步方法:
 
-- **认证**: `register`, `login`, `refreshSession`, `logout`, `subscribeAuthState`
-- **配对**: `pairWithQrJson`, `forgetHost`, `listPairedHosts`, `activeHost`, `setActiveHost`
+- **认证**: `register`, `login`, `loginWithSupabase`, `refreshSession`, `logout`, `subscribeAuthState`
+- **Hosts**: `listPairedHosts`（内部 `GET /v1/hosts`）, `activeHost`, `setActiveHost`, `forgetHost`（`POST /v1/hosts/unlink`）
 - **社交**: `conversations`, `sendChatMessage`, `friends`, `friendRequests`, `searchUsers`
 - **项目**: `createProject`, `listProjects`, `updateProject`, `deleteProject`
 - **线程**: `listThreads`, `readThread`, `sendUserMessage`, `interruptThread`, `closeThread`
@@ -160,12 +170,23 @@ AuthBootstrapping → AuthUnauthenticated → AuthAuthenticated
 
 ### 流程
 
-1. **登录/注册**: `LoginPage` → `AuthController` → `AuthRepository` → `MinosCore.login/register` → `MobileClient.login/register`
-2. Rust HTTP POST 到 `/v1/auth/login` 或 `/v1/auth/register`
-3. 成功后存储 `AuthSession`（access_token, refresh_token, account info）
-4. Rust 发布 `AuthStateFrame::Authenticated` 到 watch channel
-5. Dart 的 `AuthController` 映射为 `AuthAuthenticated`
-6. 首次 `Authenticated` 后启动 WebSocket
+1. **登录/注册**: `LoginPage` → `AuthController` → `AuthRepository`
+2. **优先路径（Supabase 已配置）**:
+   - `supabase_flutter` email/password → Supabase access token
+   - `MobileClient.loginWithSupabase` → `POST /v1/auth/supabase`（`X-Device-Id` + JWT body）
+3. **无过渡密码路径**: 未配置 Supabase 时 AuthRepository 直接失败（`SUPABASE_URL` / `ANON_KEY` 必填）
+4. 成功后存储 `AuthSession`（access_token, refresh_token, account info）到 Rust + Keychain
+5. Rust 发布 `AuthStateFrame::Authenticated`；Dart 映射为 `AuthAuthenticated`
+6. 首次 `Authenticated` 后 `resumePersistedSession()` 启动 `/ws/client`
+7. **登出**: Minos logout + Keychain auth wipe + best-effort Supabase `signOut`
+
+### 配置（dart-define）
+
+| Define | 用途 |
+|--------|------|
+| `MINOS_BACKEND_URL` | ws(s)/http(s) hub；纯 Dart cloud client 归一化为 HTTP origin |
+| `SUPABASE_URL` | Supabase project URL（必填；空则 AuthRepository 失败） |
+| `SUPABASE_ANON_KEY` | Supabase anon key |
 
 ### 持久化（iOS Keychain）
 
@@ -178,17 +199,16 @@ AuthBootstrapping → AuthUnauthenticated → AuthAuthenticated
 
 所有 5 个认证字段必须同时存在或同时缺失（原子元组）。
 
-## 配对流程
+## Linked Hosts（Host Link）
 
-1. 用户在 Profile Tab 点击 "添加伙伴" → 导航到 `/pairing`
-2. 检查相机权限
-3. QR 扫描器（`mobile_scanner`）读取 QR payload
-4. 解析 v2 JSON（`host_display_name`, `pairing_token`, `expires_at_ms`）
-5. 确认界面显示检测到的信息
-6. 用户确认 → `MobileClient.pairWithQrJson()` → HTTP POST `/v1/pairing/confirm`
-7. 后端创建 `account_host_pairings` 行
-8. 保存设备 ID + 活跃 host → 打开认证 WebSocket
-9. 发布 `ConnectionState::Connected`
+QR pairing is removed (Phase D). Desktop links the Mac with the same account; Mobile only lists hosts:
+
+1. `HostsRepository.listLinkedHosts` prefers pure Dart `GET /v1/hosts` (Keychain bearer)
+2. On failure, falls back to FRB `listPairedHosts` (Rust also uses `GET /v1/hosts`)
+3. `pairedMacsProvider` drives Hosts UI; empty state points users to Desktop **Link this Mac**
+4. If no active host is set, auto-select the first online host (else first listed) as routing target
+5. Session list / stream / send stay on `/v1/agent-sessions/*` + `/ws/client` (account bearer)
+6. Forget host uses `POST /v1/hosts/unlink`
 
 ## Agent 会话管理
 

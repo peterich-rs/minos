@@ -9,14 +9,14 @@ import 'package:minos/application/thread_events_provider.dart';
 import 'package:minos/application/thread_list_provider.dart';
 import 'package:minos/src/rust/api/minos.dart' as core;
 import 'package:minos/ui/features/shell/router_provider.dart';
+import 'package:minos/ui/theme/theme.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 
-/// Root of the Minos app. Provides the Shad theme, uses [GoRouter] for
-/// declarative routing between splash / login / shell surfaces based on
-/// the joint state of auth, connection, and pairing providers, and bridges
-/// [WidgetsBindingObserver.didChangeAppLifecycleState] into the Rust
-/// core's `notifyForegrounded` / `notifyBackgrounded` hooks so the WS
-/// reconnect loop respects the OS lifecycle (Phase 11.2).
+/// Root of the Minos app.
+///
+/// Golden-path surfaces use [MinosTheme] tokens. A residual [ShadTheme] is
+/// layered for legacy screens (agent editor, social) that still read
+/// `ShadTheme.of` until they are migrated or removed.
 class MinosApp extends ConsumerStatefulWidget {
   const MinosApp({super.key});
 
@@ -45,6 +45,9 @@ class _MinosAppState extends ConsumerState<MinosApp>
 
   @override
   Widget build(BuildContext context) {
+    // Side-effect listen is the Riverpod-supported pattern (not initState).
+    // fireImmediately is false, so the first AsyncValue does not run here
+    // during mount — only later Connected transitions invalidate caches.
     ref.listen<AsyncValue<core.ConnectionState>>(connectionStateProvider, (
       previous,
       next,
@@ -73,21 +76,30 @@ class _MinosAppState extends ConsumerState<MinosApp>
 
     final router = ref.watch(routerProvider);
 
-    return ShadApp.router(
+    return MaterialApp.router(
       title: 'Minos',
+      debugShowCheckedModeBanner: false,
       themeMode: ThemeMode.system,
-      theme: ShadThemeData(
-        brightness: Brightness.light,
-        colorScheme: const ShadZincColorScheme.light(),
-      ),
-      darkTheme: ShadThemeData(
-        brightness: Brightness.dark,
-        colorScheme: const ShadZincColorScheme.dark(),
-      ),
-      // Passing a builder activates the toaster/sonner wrapping that
-      // [ShadToaster.of] requires.
-      builder: (context, child) => child ?? const SizedBox.shrink(),
+      theme: MinosTheme.light(),
+      darkTheme: MinosTheme.dark(),
       routerConfig: router,
+      builder: (context, child) {
+        final brightness = Theme.of(context).brightness;
+        final shadData = brightness == Brightness.dark
+            ? ShadThemeData(
+                brightness: Brightness.dark,
+                colorScheme: const ShadZincColorScheme.dark(),
+              )
+            : ShadThemeData(
+                brightness: Brightness.light,
+                colorScheme: const ShadZincColorScheme.light(),
+              );
+        // ShadToaster supports residual toast call sites (error_feedback).
+        return ShadTheme(
+          data: shadData,
+          child: ShadToaster(child: child ?? const SizedBox.shrink()),
+        );
+      },
     );
   }
 }

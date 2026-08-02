@@ -257,6 +257,36 @@ pub enum ServerFrame {
     },
 }
 
+// ─── Presence (IM steady-state online / offline / last_seen) ─────────────
+
+/// StreamEvent `kind` for installation presence updates.
+pub const PRESENCE_STREAM_KIND: &str = "presence";
+
+/// Recommended client application/WS heartbeat interval advertised in `Hello`.
+pub const DEFAULT_HEARTBEAT_INTERVAL_MS: i64 = 25_000;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PresencePrincipalKind {
+    Host,
+    AccountClient,
+}
+
+/// Live presence of one installation. Delivered as
+/// `StreamEvent { kind: "presence", payload }` on interested topics
+/// (`account:{id}` for host presence, `host:{id}` for account-client presence).
+/// Ephemeral: cold path is HTTP list with `online` + `last_seen_at_ms`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PresencePayload {
+    pub installation_id: String,
+    pub principal_kind: PresencePrincipalKind,
+    pub online: bool,
+    pub last_seen_at_ms: i64,
+    pub at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+}
+
 // ─── Host ingest sync ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -290,6 +320,12 @@ pub struct HostIngestChunk {
     pub agent: minos_domain::AgentName,
     pub kind: String,
     pub payload: Value,
+    /// Host-local conversation id (daemon). Used by hub to auto-register a
+    /// formal `agent_sessions` row when the session is first projected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    /// Deprecated for cloud SSOT: hub re-translates from `payload`. Kept for
+    /// wire compatibility; receivers should ignore.
     #[serde(default)]
     pub projection: Vec<minos_ui_protocol::UiEventMessage>,
     pub first_ts_ms: i64,
@@ -660,6 +696,7 @@ mod tests {
                 "method": "item/agentMessage/delta",
                 "params": {"delta": "hello"}
             }),
+            conversation_id: Some("conv-local-1".into()),
             projection: vec![minos_ui_protocol::UiEventMessage::Raw {
                 kind: "agent_event".into(),
                 payload_json: "{}".into(),

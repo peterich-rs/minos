@@ -1,6 +1,6 @@
 //! Request and response payload types.
 
-use minos_domain::{AgentDescriptor, AgentName, DeviceId, PairingToken};
+use minos_domain::{AgentDescriptor, AgentName, DeviceId};
 use minos_ui_protocol::{SessionEndReason, UiEventMessage};
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +40,9 @@ pub struct HostSummary {
     pub paired_via_device_id: DeviceId,
     #[serde(default)]
     pub online: bool,
+    /// Best-effort last activity from hub (`device_installations.last_seen_at_ms`).
+    #[serde(default)]
+    pub last_seen_at_ms: i64,
 }
 
 /// Response body for `GET /v1/me/peers`. Host callers receive every
@@ -104,13 +107,6 @@ pub struct SetMinosIdRequest {
 pub struct SetDisplayNameRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
-}
-
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct ChangePasswordRequest {
-    pub current_password: String,
-    pub new_password: String,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -393,37 +389,40 @@ pub struct SendAgentMessageRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PairRequest {
-    pub device_id: DeviceId,
-    pub name: String,
-    /// One-shot pairing token presented in the QR. Validated server-side
-    /// against the daemon's currently-active token before any state is
-    /// mutated; spec §6.4. Required by MVP.
-    pub token: PairingToken,
-}
-
-/// Result of `POST /v1/pairings` (consume). iOS no longer receives a
-/// device secret — the rail is bearer-only post ADR-0020. Mac-side
-/// pair state is delivered separately via `EventKind::Paired`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PairResponse {
-    pub peer_device_id: DeviceId,
-    pub peer_name: String,
-}
-
-/// Request body for `POST /v1/pairing/consume`. Distinct from
-/// [`PairRequest`] because the HTTP route derives `device_id` from the
-/// `X-Device-Id` header, not the body.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PairConsumeRequest {
-    pub token: PairingToken,
-    pub device_name: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HealthResponse {
     pub version: String,
     pub uptime_secs: u64,
+}
+
+/// Daemon local RPC: prepare same-account host link proof material.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostPrepareLinkResponse {
+    pub installation_id: String,
+    pub public_key: String,
+    pub nonce: String,
+}
+
+/// Daemon local RPC: sign the Host Link Ed25519 proof.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostSignLinkProofParams {
+    pub installation_id: String,
+    pub nonce: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostSignLinkProofResponse {
+    pub signature: String,
+}
+
+/// Daemon local RPC: persist host installation token and wake `/ws/host`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostApplyLinkTokenParams {
+    pub host_installation_token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostApplyLinkTokenResponse {
+    pub linked: bool,
 }
 
 /// Account-side request to target one paired host for a CLI scan.
@@ -735,41 +734,6 @@ pub enum CloseReason {
 pub struct GetSessionResponse {
     pub thread: SessionSummary,
     pub state: SessionState,
-}
-
-/// Deep-link QR payload minted by the Mac and scanned by iOS. Carries a
-/// display name for the host, a short-lived one-shot `pairing_token`, and
-/// its RFC-3339-ish epoch-ms expiry. The backend URL lives in the mobile
-/// client's compile-time build config (see `minos_mobile::build_config`);
-/// it is not a transit value and never enters the QR payload, durable
-/// storage, or the post-pair business logic.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct PairingQrPayload {
-    #[serde(default = "default_pairing_qr_version")]
-    pub v: u8,
-    pub host_display_name: String,
-    #[serde(alias = "token")]
-    pub pairing_token: String,
-    #[serde(default)]
-    pub expires_at_ms: i64,
-}
-
-const fn default_pairing_qr_version() -> u8 {
-    2
-}
-
-/// Parameters for `request_pairing_qr` — the Mac tells the backend which
-/// display name to embed so the iPhone UI can say "Pair with <name>?".
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct RequestPairingQrParams {
-    pub host_display_name: String,
-}
-
-/// Response from `request_pairing_qr`; wraps a [`PairingQrPayload`] for
-/// the Mac to render directly as a QR code.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct RequestPairingQrResponse {
-    pub qr_payload: PairingQrPayload,
 }
 
 /// Compact summary of one persisted session, returned by `list_sessions`
@@ -1557,52 +1521,6 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn pair_request_round_trip() {
-        let req = PairRequest {
-            device_id: DeviceId::new(),
-            name: "iPhone of fan".into(),
-            token: PairingToken::generate(),
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        let back: PairRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(req, back);
-    }
-
-    #[test]
-    fn pair_response_round_trip() {
-        let resp = PairResponse {
-            peer_device_id: DeviceId::new(),
-            peer_name: "MacBook".into(),
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(
-            value["peer_device_id"],
-            serde_json::to_value(resp.peer_device_id).unwrap()
-        );
-        assert_eq!(value["peer_name"], serde_json::json!("MacBook"));
-        assert!(value.get("your_device_secret").is_none());
-        let back: PairResponse = serde_json::from_str(&json).unwrap();
-        assert_eq!(resp, back);
-    }
-
-    #[test]
-    fn pair_response_no_secret_field_round_trip() {
-        let resp = PairResponse {
-            peer_device_id: DeviceId::new(),
-            peer_name: "iPhone".into(),
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert!(
-            value.get("your_device_secret").is_none(),
-            "secret must not appear"
-        );
-        let back: PairResponse = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, resp);
-    }
-
-    #[test]
     fn me_hosts_response_round_trips() {
         let hosts = MeHostsResponse {
             hosts: vec![HostSummary {
@@ -1611,6 +1529,7 @@ mod tests {
                 paired_at_ms: 1_714_000_000_000,
                 paired_via_device_id: DeviceId::new(),
                 online: true,
+                last_seen_at_ms: 1_714_000_000_100,
             }],
         };
         let json = serde_json::to_string(&hosts).unwrap();
@@ -1923,51 +1842,6 @@ mod tests {
 mod new_type_tests {
     use super::*;
     use pretty_assertions::assert_eq;
-
-    #[test]
-    fn pairing_qr_payload_ignores_legacy_unknown_fields() {
-        // Legacy QR payloads may still carry `backend_url` and CF Access
-        // fields — `serde` ignores unknown fields by default, so this is
-        // a forward-compat read of older Mac builds. The struct itself no
-        // longer carries them. The legacy display-name alias was dropped
-        // in Phase B; new payloads must use `host_display_name`.
-        let back: PairingQrPayload = serde_json::from_value(serde_json::json!({
-            "backend_url": "wss://minos.fan-nn.top/devices",
-            "host_display_name": "Mac",
-            "token": "tok"
-        }))
-        .unwrap();
-
-        assert_eq!(back.v, 2);
-        assert_eq!(back.host_display_name, "Mac");
-        assert_eq!(back.pairing_token, "tok");
-        assert_eq!(back.expires_at_ms, 0);
-    }
-
-    #[test]
-    fn request_pairing_qr_params_round_trip() {
-        let p = RequestPairingQrParams {
-            host_display_name: "Fan's Mac".into(),
-        };
-        let back: RequestPairingQrParams =
-            serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
-        assert_eq!(p, back);
-    }
-
-    #[test]
-    fn request_pairing_qr_response_round_trip() {
-        let r = RequestPairingQrResponse {
-            qr_payload: PairingQrPayload {
-                v: 1,
-                host_display_name: "Mac".into(),
-                pairing_token: "tok".into(),
-                expires_at_ms: 42,
-            },
-        };
-        let back: RequestPairingQrResponse =
-            serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
-        assert_eq!(r, back);
-    }
 
     #[test]
     fn thread_summary_round_trip_with_end_reason() {

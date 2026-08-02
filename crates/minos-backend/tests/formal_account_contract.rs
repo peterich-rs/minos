@@ -3,7 +3,7 @@ use axum::http::{Request, StatusCode};
 use minos_backend::auth::jwt;
 use minos_backend::http;
 use minos_backend::http::test_support::{backend_state, TEST_JWT_SECRET};
-use minos_backend::store::{account_host_pairings, devices};
+use minos_backend::store::{device_installations, host_links};
 use minos_domain::{DeviceId, DeviceRole};
 use serde_json::json;
 
@@ -35,26 +35,28 @@ async fn formal_realtime_ws_ticket_uses_account_bearer_without_device_headers() 
     let state = backend_state().await;
     let mut app = http::router(state.clone());
     let installation_id = uuid::Uuid::new_v4().to_string();
-
-    let (status, body) = post_json(
-        &mut app,
-        "/v1/auth/register",
-        &[
-            ("x-device-id", &installation_id),
-            ("x-device-role", "browser-admin"),
-        ],
-        json!({"email": "formal-ticket@example.com", "password": "testpass1"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "body={body}");
-    let access = body["access_token"].as_str().unwrap().to_string();
-    let account_id = body["account"]["account_id"].as_str().unwrap().to_string();
     let device_id = uuid::Uuid::parse_str(&installation_id)
         .map(DeviceId)
         .unwrap();
-    devices::touch_last_seen(&state.store, &device_id, 100)
+
+    let account = minos_backend::store::accounts::create(&state.store, "formal-ticket@example.com")
         .await
         .unwrap();
+    let account_id = account.account_id.clone();
+    device_installations::insert_client_for_account(
+        &state.store,
+        device_id,
+        "browser",
+        DeviceRole::BrowserAdmin,
+        &account_id,
+        0,
+    )
+    .await
+    .unwrap();
+    device_installations::touch_last_seen(&state.store, &device_id, 100)
+        .await
+        .unwrap();
+    let access = jwt::sign(TEST_JWT_SECRET.as_bytes(), &account_id, &installation_id).unwrap();
 
     let auth_header = format!("Bearer {access}");
     let (status, body) = post_json(
@@ -76,7 +78,7 @@ async fn formal_realtime_ws_ticket_uses_account_bearer_without_device_headers() 
     let claims = jwt::verify_ws_ticket(TEST_JWT_SECRET.as_bytes(), ticket).unwrap();
     assert_eq!(claims.sub, account_id);
     assert_eq!(claims.did, installation_id);
-    let row = devices::get_device(&state.store, device_id)
+    let row = device_installations::get_device(&state.store, device_id)
         .await
         .unwrap()
         .unwrap();
@@ -84,19 +86,24 @@ async fn formal_realtime_ws_ticket_uses_account_bearer_without_device_headers() 
 }
 
 #[tokio::test]
-async fn formal_pairing_list_hosts_uses_account_bearer_without_device_headers() {
+async fn formal_hosts_list_uses_account_bearer_without_device_headers() {
     let state = backend_state().await;
-    let account =
-        minos_backend::store::accounts::create(&state.store, "formal-hosts@example.com", "phc")
-            .await
-            .unwrap();
+    let account = minos_backend::store::accounts::create(&state.store, "formal-hosts@example.com")
+        .await
+        .unwrap();
     let host = DeviceId::new();
     let mobile = DeviceId::new();
 
-    devices::insert_device(&state.store, host, "Mac Studio", DeviceRole::AgentHost, 100)
-        .await
-        .unwrap();
-    devices::insert_device(
+    device_installations::insert_device(
+        &state.store,
+        host,
+        "Mac Studio",
+        DeviceRole::AgentHost,
+        100,
+    )
+    .await
+    .unwrap();
+    device_installations::insert_device(
         &state.store,
         mobile,
         "iPhone",
@@ -105,10 +112,10 @@ async fn formal_pairing_list_hosts_uses_account_bearer_without_device_headers() 
     )
     .await
     .unwrap();
-    devices::set_account_id(&state.store, &mobile, &account.account_id)
+    device_installations::set_account_id(&state.store, &mobile, &account.account_id)
         .await
         .unwrap();
-    account_host_pairings::insert_pair(&state.store, host, &account.account_id, mobile, 123)
+    host_links::insert_pair(&state.store, host, &account.account_id, mobile, 123)
         .await
         .unwrap();
 
@@ -121,11 +128,15 @@ async fn formal_pairing_list_hosts_uses_account_bearer_without_device_headers() 
     let auth_header = format!("Bearer {token}");
     let mut app = http::router(state);
 
-    let (status, body) = post_json(
+    let (status, body) = common::send(
         &mut app,
-        "/v1/pairing/list-hosts",
-        &[("authorization", &auth_header)],
-        json!({}),
+        Request::builder()
+            .method("GET")
+            .uri("/v1/hosts")
+            .header("authorization", &auth_header)
+            .header("x-request-id", "req_contract_test")
+            .body(Body::empty())
+            .unwrap(),
     )
     .await;
 
@@ -135,7 +146,6 @@ async fn formal_pairing_list_hosts_uses_account_bearer_without_device_headers() 
     assert_eq!(hosts.len(), 1);
     assert_eq!(hosts[0]["host_installation_id"], host.to_string());
     assert_eq!(hosts[0]["host_display_name"], "Mac Studio");
-    assert_eq!(hosts[0]["paired_at_ms"], 123);
-    assert_eq!(hosts[0]["linked_via_installation_id"], mobile.to_string());
+    assert_eq!(hosts[0]["linked_at_ms"], 123);
     assert_eq!(hosts[0]["online"], false);
 }

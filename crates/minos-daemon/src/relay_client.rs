@@ -34,8 +34,8 @@ use std::time::{Duration, Instant};
 
 use chrono::{TimeZone, Utc};
 use futures_util::{SinkExt, StreamExt};
-use minos_domain::{DeviceId, DeviceSecret, MinosError, PairingToken, PeerState, RelayLinkState};
-use minos_protocol::realtime::{ClientFrame, ServerFrame};
+use minos_domain::{DeviceId, DeviceSecret, MinosError, PeerState, RelayLinkState};
+use minos_protocol::realtime::{ClientFrame, ServerFrame, PRESENCE_STREAM_KIND};
 use minos_protocol::HostPeerSummary;
 use minos_transport::backoff::delay_for_attempt;
 use serde_json::Value;
@@ -46,8 +46,8 @@ use tokio_tungstenite::tungstenite::Error as WsError;
 
 use crate::config::RelayConfig;
 use crate::ingest_sync::IngestSyncHandle;
-use crate::relay_http::{PairingRedeemOutcome, RelayHttpClient};
-use crate::relay_pairing::{PeerRecord, RelayQrPayload};
+use crate::relay_http::RelayHttpClient;
+use crate::relay_pairing::PeerRecord;
 use crate::rpc_server::{invoke_host_command, RpcServerImpl};
 
 /// Bounded queue for outbound client frames — deep enough to absorb a brief
@@ -60,8 +60,6 @@ const RELAY_PING_INTERVAL: Duration = Duration::from_secs(30);
 const RELAY_PONG_TIMEOUT: Duration = Duration::from_secs(45);
 const HOST_COMMAND_RESULT_CACHE_CAPACITY: usize = 512;
 const TOKEN_WAIT_POLL_INTERVAL: Duration = Duration::from_secs(5);
-const PAIRING_REDEEM_POLL_INTERVAL: Duration = Duration::from_secs(2);
-const PEER_PRESENCE_REFRESH_INTERVAL: Duration = Duration::from_secs(15);
 
 type HostCommandCache = Arc<Mutex<HashMap<String, HostCommandCacheEntry>>>;
 
@@ -85,6 +83,7 @@ enum HostCommandRouteAction {
     Replay(HostCommandResultSnapshot),
 }
 
+#[allow(dead_code)]
 struct Inner {
     /// Shutdown signal — one-shot, captured behind a `Mutex` so a repeat
     /// `stop()` after the first call is a benign no-op.
@@ -109,7 +108,6 @@ struct Inner {
     peer_store: Arc<StdMutex<Option<PeerRecord>>>,
     peers_store: Arc<StdMutex<Vec<HostPeerSummary>>>,
     last_error: Arc<StdMutex<Option<MinosError>>>,
-    pairing_task: Mutex<Option<JoinHandle<()>>>,
     /// Cloneable producer side of the dispatcher's control outbound queue.
     out_tx: mpsc::Sender<ClientFrame>,
     live_tx: mpsc::Sender<ClientFrame>,
@@ -217,7 +215,6 @@ impl RelayClient {
             peer_store,
             peers_store,
             last_error,
-            pairing_task: Mutex::new(None),
             out_tx,
             live_tx,
             backfill_tx,
@@ -226,56 +223,55 @@ impl RelayClient {
         (Arc::new(Self { inner }), link_rx, peer_rx)
     }
 
-    /// Issue `request_pairing_qr` against the backend's HTTP control plane
-    /// and wrap the response into the Mac-side QR payload shape.
-    pub async fn request_pairing_token(&self) -> Result<RelayQrPayload, MinosError> {
-        let qr = self
-            .inner
-            .http
-            .request_pairing_qr(self.inner.mac_name.clone())
-            .await?;
-
-        let payload = RelayQrPayload {
-            v: qr.v,
-            host_display_name: qr.host_display_name,
-            pairing_token: minos_domain::PairingToken(qr.pairing_token),
-            expires_at_ms: qr.expires_at_ms,
-        };
-        self.start_pairing_redeem_loop(payload.pairing_token.clone(), payload.expires_at_ms)
-            .await;
-        Ok(payload)
+    /// Prepare Host Link proof material: installation id, public key, nonce.
+    pub async fn prepare_link(
+        &self,
+    ) -> Result<minos_protocol::HostPrepareLinkResponse, MinosError> {
+        let nonce = self.inner.http.fetch_bootstrap_nonce().await?;
+        Ok(minos_protocol::HostPrepareLinkResponse {
+            installation_id: self.inner.http.device_id().to_string(),
+            public_key: self.inner.http.host_public_key(),
+            nonce,
+        })
     }
 
-    async fn start_pairing_redeem_loop(&self, pairing_code: PairingToken, expires_at_ms: i64) {
-        let _ = self.inner.peer_tx.send(PeerState::Pairing);
-
-        let mut task = self.inner.pairing_task.lock().await;
-        if let Some(existing) = task.take() {
-            existing.abort();
+    /// Sign Host Link proof for the local installation.
+    pub fn sign_link_proof(
+        &self,
+        installation_id: &str,
+        nonce: &str,
+    ) -> Result<minos_protocol::HostSignLinkProofResponse, MinosError> {
+        if installation_id != self.inner.http.device_id().to_string() {
+            return Err(MinosError::BackendInternal {
+                message: "installation_id does not match this host".into(),
+            });
         }
+        Ok(minos_protocol::HostSignLinkProofResponse {
+            signature: self.inner.http.host_link_signature(nonce),
+        })
+    }
 
-        let http = self.inner.http.clone();
-        let secret = self.inner.secret.clone();
-        let secret_notify = self.inner.secret_notify.clone();
-        let peer_tx = self.inner.peer_tx.clone();
-        let peer_store = self.inner.peer_store.clone();
-        let peers_store = self.inner.peers_store.clone();
-        let last_error = self.inner.last_error.clone();
-
-        *task = Some(tokio::spawn(async move {
-            run_pairing_redeem_loop(
-                http,
-                pairing_code,
-                expires_at_ms,
-                secret,
-                secret_notify,
-                peer_tx,
-                peer_store,
-                peers_store,
-                last_error,
-            )
-            .await;
-        }));
+    /// Persist a host installation token and wake the realtime dial loop.
+    pub fn apply_link_token(
+        &self,
+        host_installation_token: &str,
+    ) -> Result<minos_protocol::HostApplyLinkTokenResponse, MinosError> {
+        if !host_installation_token.starts_with("hit_") {
+            return Err(MinosError::BackendInternal {
+                message: "host_installation_token must start with hit_".into(),
+            });
+        }
+        let token = DeviceSecret(host_installation_token.to_string());
+        crate::device_secret_store::write(&token)?;
+        if let Ok(mut guard) = self.inner.secret.lock() {
+            *guard = Some(token);
+        }
+        self.inner.secret_notify.notify_waiters();
+        tracing::info!(
+            target: "minos_daemon::relay_client",
+            "host installation token applied for Host Link; waking /ws/host dialer"
+        );
+        Ok(minos_protocol::HostApplyLinkTokenResponse { linked: true })
     }
 
     /// Back-compat helper for callers that still think in terms of a
@@ -348,9 +344,6 @@ impl RelayClient {
     /// Signal the dispatch task to exit and await its join. Idempotent:
     /// calling twice is a benign no-op after the first success.
     pub async fn stop(&self) {
-        if let Some(task) = self.inner.pairing_task.lock().await.take() {
-            task.abort();
-        }
         if let Some(tx) = self.inner.shutdown_tx.lock().await.take() {
             let _ = tx.send(());
         }
@@ -386,101 +379,6 @@ struct DispatchCtx {
     peers_store: Arc<StdMutex<Vec<HostPeerSummary>>>,
     last_error: Arc<StdMutex<Option<MinosError>>>,
     ingest_sync: Arc<StdMutex<Option<IngestSyncHandle>>>,
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn run_pairing_redeem_loop(
-    http: Arc<RelayHttpClient>,
-    pairing_code: PairingToken,
-    expires_at_ms: i64,
-    secret: Arc<StdMutex<Option<DeviceSecret>>>,
-    secret_notify: Arc<Notify>,
-    peer_tx: watch::Sender<PeerState>,
-    peer_store: Arc<StdMutex<Option<PeerRecord>>>,
-    peers_store: Arc<StdMutex<Vec<HostPeerSummary>>>,
-    last_error: Arc<StdMutex<Option<MinosError>>>,
-) {
-    tracing::info!(
-        target: "minos_daemon::relay_client",
-        expires_at_ms,
-        "host pairing redeem polling started"
-    );
-
-    loop {
-        let now_ms = Utc::now().timestamp_millis();
-        if now_ms >= expires_at_ms {
-            let error = MinosError::PairingTokenExpired;
-            tracing::warn!(
-                target: "minos_daemon::relay_client",
-                "host pairing redeem expired before mobile confirmation"
-            );
-            store_last_error(&last_error, error);
-            clear_peer_snapshot(&peer_store, &peers_store, &peer_tx);
-            return;
-        }
-
-        match http.redeem_pairing_code(&pairing_code).await {
-            Ok(PairingRedeemOutcome::Pending) => {
-                tracing::debug!(
-                    target: "minos_daemon::relay_client",
-                    "host pairing redeem pending mobile confirmation"
-                );
-            }
-            Ok(PairingRedeemOutcome::Redeemed {
-                host_installation_id,
-                token,
-                issued_at_ms,
-            }) => {
-                if let Err(error) = crate::device_secret_store::write(&token) {
-                    tracing::error!(
-                        target: "minos_daemon::relay_client",
-                        error = %error,
-                        "failed to persist host installation token"
-                    );
-                    store_last_error(&last_error, error);
-                    clear_peer_snapshot(&peer_store, &peers_store, &peer_tx);
-                    return;
-                }
-                if let Ok(mut guard) = secret.lock() {
-                    *guard = Some(token);
-                }
-                clear_last_error(&last_error);
-                tracing::info!(
-                    target: "minos_daemon::relay_client",
-                    host_installation_id,
-                    issued_at_ms,
-                    "host installation token redeemed and persisted"
-                );
-                secret_notify.notify_waiters();
-                return;
-            }
-            Err(error @ MinosError::PairingTokenInvalid)
-            | Err(error @ MinosError::PairingTokenExpired)
-            | Err(error @ MinosError::Unauthorized { .. }) => {
-                tracing::warn!(
-                    target: "minos_daemon::relay_client",
-                    error = %error,
-                    "host pairing redeem failed permanently"
-                );
-                store_last_error(&last_error, error);
-                clear_peer_snapshot(&peer_store, &peers_store, &peer_tx);
-                return;
-            }
-            Err(error) => {
-                tracing::warn!(
-                    target: "minos_daemon::relay_client",
-                    error = %error,
-                    "host pairing redeem failed transiently; will retry until QR expiry"
-                );
-            }
-        }
-
-        let remaining_ms = expires_at_ms.saturating_sub(Utc::now().timestamp_millis());
-        let sleep_for = PAIRING_REDEEM_POLL_INTERVAL.min(Duration::from_millis(
-            u64::try_from(remaining_ms).unwrap_or(0),
-        ));
-        tokio::time::sleep(sleep_for).await;
-    }
 }
 
 fn clear_peer_snapshot(
@@ -677,6 +575,9 @@ async fn run_once(
     Box::pin(dispatch_loop(ws, ctx, shutdown_rx)).await
 }
 
+/// Cold snapshot of linked account clients (online / last_active).
+/// Call sites: WS upgrade, presence StreamEvent, host-command path that
+/// needs fresh peer routing — never on a timer.
 async fn refresh_peers_from_backend(ctx: &DispatchCtx, secret: Option<&DeviceSecret>) {
     let Some(secret) = secret else {
         apply_peers_snapshot(ctx, Vec::new());
@@ -688,7 +589,7 @@ async fn refresh_peers_from_backend(ctx: &DispatchCtx, secret: Option<&DeviceSec
             tracing::warn!(
                 target: "minos_daemon::relay_client",
                 error = %e,
-                "failed to refresh paired peers after relay connect/event",
+                "failed to refresh paired peers",
             );
         }
     }
@@ -743,12 +644,14 @@ async fn dispatch_loop(
     let (mut sink, mut stream) = ws.split();
     let mut heartbeat = tokio::time::interval(RELAY_PING_INTERVAL);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut peer_refresh = tokio::time::interval(PEER_PRESENCE_REFRESH_INTERVAL);
-    peer_refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_pong_at = Instant::now();
+    // First tick is immediate; skip so we do not probe right after Hello.
     heartbeat.tick().await;
-    peer_refresh.tick().await;
 
+    // Peer presence is event-driven only:
+    // - snapshot once after WS upgrade (caller)
+    // - StreamEvent kind=presence → refresh_peers_from_backend
+    // No periodic poll (avoids dual SSOT with live presence pushes).
     loop {
         tokio::select! {
             biased;
@@ -849,10 +752,6 @@ async fn dispatch_loop(
                     );
                     return CycleOutcome::Reconnect;
                 }
-            }
-            _ = peer_refresh.tick() => {
-                let secret = ctx.secret.lock().ok().and_then(|guard| guard.clone());
-                refresh_peers_from_backend(ctx, secret.as_ref()).await;
             }
         }
     }
@@ -978,13 +877,30 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
                 "server force-closed the connection"
             );
         }
-        ServerFrame::StreamEvent { kind, topic, .. } => {
-            tracing::debug!(
-                target: "minos_daemon::relay_client",
-                kind,
-                topic,
-                "ignoring stream event on host side"
-            );
+        ServerFrame::StreamEvent {
+            kind,
+            topic,
+            payload,
+            ..
+        } => {
+            if kind == PRESENCE_STREAM_KIND {
+                tracing::info!(
+                    target: "minos_daemon::relay_client",
+                    topic,
+                    payload = %payload,
+                    "presence stream event; refreshing peer snapshot"
+                );
+                // Account-client online/offline on host:{id}; refresh HTTP list.
+                let secret = ctx.secret.lock().ok().and_then(|g| g.clone());
+                refresh_peers_from_backend(ctx, secret.as_ref()).await;
+            } else {
+                tracing::debug!(
+                    target: "minos_daemon::relay_client",
+                    kind,
+                    topic,
+                    "ignoring stream event on host side"
+                );
+            }
         }
         ServerFrame::SnapshotRequired { topic, .. } => {
             tracing::warn!(
@@ -1247,12 +1163,6 @@ fn classify_close(frame: Option<CloseFrame>, ctx: &DispatchCtx) -> CycleOutcome 
 fn store_last_error(slot: &Arc<StdMutex<Option<MinosError>>>, err: MinosError) {
     if let Ok(mut guard) = slot.lock() {
         *guard = Some(err);
-    }
-}
-
-fn clear_last_error(slot: &Arc<StdMutex<Option<MinosError>>>) {
-    if let Ok(mut guard) = slot.lock() {
-        *guard = None;
     }
 }
 

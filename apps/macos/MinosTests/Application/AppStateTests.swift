@@ -2,9 +2,8 @@ import XCTest
 
 @testable import Minos
 
-/// Action-side coverage of `AppState`: gate computed properties (canShowQr /
-/// canForgetPeer) and the round-trip pairing/forget paths. Boot-side
-/// scenarios live in `AppStateBootTests`.
+/// Gate predicates (`canForgetPeer`) and the forget-peer round-trip.
+/// Boot-side scenarios live in `AppStateBootTests`.
 final class AppStateTests: XCTestCase {
     func testPeerActivityDateUsesEpochMilliseconds() throws {
         let date = try XCTUnwrap(
@@ -24,15 +23,6 @@ final class AppStateTests: XCTestCase {
     }
 
     // ── Gates ──
-
-    @MainActor
-    func testCanShowQrTrueWhenDaemonRunningEvenIfLinkDown() async {
-        let (appState, daemon) = AppStateFixtures.runningState()
-        daemon.emitRelayLink(.disconnected)
-        await AppStateFixtures.drainMainActor()
-
-        XCTAssertTrue(appState.canShowQr)
-    }
 
     @MainActor
     func testCanForgetPeerFalseWhenLinkDown() async {
@@ -55,76 +45,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(appState.canForgetPeer)
     }
 
-    @MainActor
-    func testCanShowQrTrueWhenPairedAndConnected() async {
-        let (appState, daemon) = AppStateFixtures.runningState()
-        let did = "00000000-0000-0000-0000-000000000889"
-        daemon.emitPeer(.paired(peerId: did, peerName: "iPhone", online: true))
-        await AppStateFixtures.drainMainActor()
-
-        XCTAssertTrue(appState.canShowQr)
-    }
-
-    // ── QR / forget round-trips ──
-
-    @MainActor
-    func testShowQrStoresPayloadAndMarksShowingQr() async throws {
-        let expected = MockDaemon.makeQrPayload(hostDisplayName: "Office Mac")
-        let daemon = MockDaemon(
-            currentRelayLink: .disconnected,
-            currentPeer: .unpaired,
-            pairingQrResult: .success(expected)
-        )
-        let appState = AppState()
-
-        appState.finishBoot(
-            daemon: daemon,
-            relayLinkSubscription: MockSubscription(),
-            peerSubscription: MockSubscription(),
-            relayLink: .disconnected,
-            peer: .unpaired,
-            trustedDevice: nil
-        )
-
-        await appState.showQr()
-
-        XCTAssertEqual(daemon.pairingQrCallCount, 1)
-        XCTAssertEqual(appState.currentQr, expected)
-        XCTAssertTrue(appState.isShowingQr)
-        XCTAssertNil(appState.displayError)
-
-        let generatedAt = try XCTUnwrap(appState.currentQrGeneratedAt)
-        let expiresAt = try XCTUnwrap(appState.currentQrExpiresAt)
-        XCTAssertEqual(expiresAt.timeIntervalSince(generatedAt), 300, accuracy: 0.001)
-    }
-
-    @MainActor
-    func testQrStaysVisibleWhenUnpairedRefreshArrivesDuringPairing() async throws {
-        let expected = MockDaemon.makeQrPayload(hostDisplayName: "Office Mac")
-        let daemon = MockDaemon(
-            currentRelayLink: .disconnected,
-            currentPeer: .unpaired,
-            currentPeers: [],
-            pairingQrResult: .success(expected)
-        )
-        let appState = AppState()
-
-        appState.finishBoot(
-            daemon: daemon,
-            relayLinkSubscription: MockSubscription(),
-            peerSubscription: MockSubscription(),
-            relayLink: .disconnected,
-            peer: .unpaired,
-            trustedDevice: nil
-        )
-
-        await appState.showQr()
-        await appState.applyPeer(.unpaired)
-
-        XCTAssertEqual(appState.currentQr, expected)
-        XCTAssertTrue(appState.isShowingQr)
-        XCTAssertNil(appState.displayError)
-    }
+    // ── Forget round-trip ──
 
     @MainActor
     func testForgetPeerSuccessClearsLocalAndCallsMock() async {
@@ -147,21 +68,13 @@ final class AppStateTests: XCTestCase {
             peer: .paired(peerId: trusted.deviceId, peerName: trusted.name, online: true),
             trustedDevice: trusted
         )
-        appState.currentQr = MockDaemon.makeQrPayload()
-        appState.currentQrGeneratedAt = Date(timeIntervalSince1970: 456)
-        appState.isShowingQr = true
 
         XCTAssertTrue(appState.canForgetPeer)
-        XCTAssertTrue(appState.canShowQr)
 
         await appState.forgetPeer()
 
         XCTAssertEqual(daemon.forgetPeerCallCount, 1)
         XCTAssertEqual(appState.peer, .unpaired)
         XCTAssertNil(appState.trustedDevice)
-        XCTAssertNil(appState.currentQr)
-        XCTAssertNil(appState.currentQrGeneratedAt)
-        XCTAssertFalse(appState.isShowingQr)
     }
-
 }

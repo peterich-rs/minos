@@ -29,11 +29,11 @@ Minos/
     DaemonBootstrap.swift         # 生产引导
     DaemonHandle+DaemonDriving.swift
     DiagnosticsReveal.swift       # Finder 中打开日志
-    QRCodeRenderer.swift          # CoreImage QR 渲染
+    (removed).swift          # CoreImage QR 渲染
   Presentation/                   # SwiftUI 视图
     MenuBarView.swift             # 主弹出视图
     AgentSegmentView.swift        # Agent 运行时子视图
-    PairingQRView.swift           # QR 配对流程
+    Host status (Host Link).swift           # QR 配对流程
     StatusIcon.swift              # 菜单栏图标
   Generated/                      # UniFFI 自动生成（13 文件）
   Resources/                      # 资源文件
@@ -109,7 +109,7 @@ Rust daemon 的 Swift 侧抽象。定义:
 - Relay Disconnected → 红色闪电斜线
 - 其他组合有对应图标和颜色
 
-### `PairingQRView`
+### `Host status (Host Link)`
 
 完整 QR 配对流程:
 - QR 图像 + 5 分钟倒计时
@@ -140,7 +140,7 @@ Agent 运行时子视图:
 | `AppStateBootTests.swift` | 启动阶段转换 |
 | `AgentStateTests.swift` | Agent 运行时状态机 |
 | `StartupLogCleanerTests.swift` | 日志目录清理 |
-| `QRCodeRendererTests.swift` | QR 码生成 |
+| `(removed)Tests.swift` | QR 码生成 |
 
 ## 与系统的连接
 

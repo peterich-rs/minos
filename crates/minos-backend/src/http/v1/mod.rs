@@ -1,9 +1,7 @@
 //! Versioned `/v1` HTTP routes.
 //!
-//! Public `/v1` only exposes the formal account and host rails plus the
-//! retained pairing teardown endpoint. Legacy caller-scoped `/v1/me/*`,
-//! `/v1/sessions/*`, `/v1/pairing/tokens`, and `/v1/pairing/consume` routes are
-//! retired.
+//! Public `/v1` exposes the formal account and host rails. Account↔host
+//! binding is Host Link only (`/v1/hosts/*`); QR pairing routes are removed.
 
 use axum::http::{HeaderMap, StatusCode};
 use axum::{Json, Router};
@@ -22,8 +20,8 @@ pub mod conversations;
 pub mod friends;
 pub mod host;
 pub mod host_commands;
+pub mod hosts;
 pub mod notifications;
-pub mod pairing;
 pub mod profiles;
 pub mod projects;
 pub mod realtime;
@@ -46,8 +44,8 @@ fn router_with_social(social_router: Router<BackendState>) -> Router<BackendStat
         .merge(friends::router())
         .merge(host::router())
         .merge(host_commands::router())
+        .merge(hosts::router())
         .merge(notifications::router())
-        .merge(pairing::router())
         .merge(profiles::router())
         .merge(projects::router())
         .merge(realtime::router())

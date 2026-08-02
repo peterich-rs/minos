@@ -41,7 +41,6 @@ enum Command {
     /// Connect to the relay once and print the current daemon status.
     Status(ConnectArgs),
     /// Connect once and print a fresh pairing QR payload as JSON.
-    PairingQr(ConnectArgs),
     /// Connect once and list paired mobile/account rows for this host.
     Peers(OutputArgs),
     /// Forget one paired mobile/account row, or the first row when omitted.
@@ -60,8 +59,6 @@ struct StartArgs {
     #[arg(long)]
     mac_name: Option<String>,
     /// Print a fresh pairing QR payload as JSON after startup.
-    #[arg(long)]
-    print_qr: bool,
     /// Enable local JSON-RPC server for TUI communication.
     #[arg(long)]
     local_rpc: bool,
@@ -270,7 +267,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::HostSkills(args) => host_skills(args, &resolved_paths).await,
         Command::SetHostSkill(args) => set_host_skill(args, &resolved_paths).await,
         Command::Status(args) => status(args, &resolved_paths).await,
-        Command::PairingQr(args) => pairing_qr(args, &resolved_paths).await,
         Command::Peers(args) => peers(args, &resolved_paths).await,
         Command::ForgetPeer(args) => forget_peer(args, &resolved_paths).await,
         Command::Threads(args) => sessions(args, &resolved_paths).await,
@@ -428,12 +424,6 @@ async fn start(args: StartArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn std
     )
     .await?;
 
-    if args.print_qr {
-        let qr = handle.pairing_qr().await?;
-        println!("pairing_qr:");
-        println!("{}", serde_json::to_string_pretty(&qr)?);
-    }
-
     if args.local_rpc {
         let discovery = paths::run_dir()?.join("tui-daemon-rpc.json");
         println!("local rpc:  {}", discovery.display());
@@ -466,22 +456,6 @@ async fn status(
         } else {
             print_status_snapshot(&snapshot);
         }
-        Ok::<(), Box<dyn std::error::Error>>(())
-    }
-    .await;
-    stop_ephemeral(started.handle).await?;
-    action
-}
-
-async fn pairing_qr(
-    args: ConnectArgs,
-    paths: &ResolvedPaths,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let started = start_ephemeral(paths, args.mac_name.clone()).await?;
-    let action = async {
-        wait_for_connected(&started.handle, args.timeout_s).await?;
-        let qr = started.handle.pairing_qr().await?;
-        println!("{}", serde_json::to_string_pretty(&qr)?);
         Ok::<(), Box<dyn std::error::Error>>(())
     }
     .await;

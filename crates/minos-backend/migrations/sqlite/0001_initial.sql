@@ -1,14 +1,14 @@
 -- Canonical SQLite schema (latest-only).
 -- Incremental migration history has been collapsed; wipe local DBs on upgrade.
 
+-- Human accounts are IdP-bound via supabase_sub (no local password).
 CREATE TABLE accounts (
     account_id     TEXT PRIMARY KEY,
     email          TEXT NOT NULL UNIQUE COLLATE NOCASE,
     minos_id       TEXT,
     display_name   TEXT,
-    password_hash  TEXT NOT NULL,
-    -- Supabase Auth subject (JWT `sub`). NULL for password-only accounts
-    -- that have not yet been linked via OIDC exchange.
+    -- Supabase Auth subject (JWT `sub`). Required for new users via
+    -- POST /v1/auth/supabase exchange. NULL only for rare unbound fixtures.
     supabase_sub   TEXT,
     created_at     INTEGER NOT NULL,
     last_login_at  INTEGER
@@ -20,52 +20,35 @@ CREATE UNIQUE INDEX idx_accounts_supabase_sub
     ON accounts(supabase_sub)
     WHERE supabase_sub IS NOT NULL;
 
-CREATE TABLE devices (
-    device_id      TEXT PRIMARY KEY,
-    display_name   TEXT NOT NULL,
-    role           TEXT NOT NULL CHECK (role IN ('agent-host', 'mobile-client', 'browser-admin')),
-    secret_hash    TEXT,
-    public_key     TEXT,
-    created_at     INTEGER NOT NULL,
-    last_seen_at   INTEGER NOT NULL,
-    account_id     TEXT REFERENCES accounts(account_id)
+-- Client/host installations. `kind` mirrors Postgres installation_kind
+-- (mobile|browser|desktop|host). Wire DeviceRole maps:
+--   mobile-client→mobile, browser-admin→browser, desktop-console→desktop, agent-host→host.
+-- secret_hash removed (device-secret rail retired; host uses host_installation_tokens).
+CREATE TABLE device_installations (
+    installation_id   TEXT PRIMARY KEY,
+    kind              TEXT NOT NULL CHECK (kind IN ('mobile', 'browser', 'desktop', 'host')),
+    platform          TEXT,
+    public_key        TEXT,
+    account_id        TEXT REFERENCES accounts(account_id) ON DELETE CASCADE,
+    display_name      TEXT,
+    created_at_ms     INTEGER NOT NULL,
+    last_seen_at_ms   INTEGER NOT NULL,
+    -- Bootstrap-friendly consistency (host may lack public_key until TOFU;
+    -- client may lack account_id until login/exchange bind).
+    -- Steady-state: clients have account_id + null public_key; host has null account_id.
+    CONSTRAINT installation_kind_account_consistency CHECK (
+        (kind IN ('mobile', 'browser', 'desktop') AND public_key IS NULL) OR
+        (kind = 'host' AND account_id IS NULL)
+    )
 ) STRICT;
 
-CREATE INDEX idx_devices_account ON devices(account_id) WHERE account_id IS NOT NULL;
-
-CREATE TABLE pairing_tokens (
-    token_hash        TEXT PRIMARY KEY,
-    issuer_device_id  TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
-    created_at        INTEGER NOT NULL,
-    expires_at        INTEGER NOT NULL,
-    consumed_at       INTEGER
-) STRICT;
-
-CREATE INDEX idx_pairing_tokens_expires
-    ON pairing_tokens(expires_at)
-    WHERE consumed_at IS NULL;
-
-CREATE TABLE pairing_codes (
-    code_hash                   TEXT PRIMARY KEY,
-    host_installation_id        TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
-    account_id                  TEXT REFERENCES accounts(account_id) ON DELETE CASCADE,
-    linked_via_installation_id  TEXT REFERENCES devices(device_id) ON DELETE SET NULL,
-    status                      TEXT NOT NULL CHECK (status IN ('pending', 'confirmed', 'redeemed', 'expired')),
-    client_request_id           TEXT,
-    created_at_ms               INTEGER NOT NULL,
-    expires_at_ms               INTEGER NOT NULL,
-    confirmed_at_ms             INTEGER,
-    redeemed_at_ms              INTEGER
-) STRICT;
-
-CREATE UNIQUE INDEX idx_pairing_codes_code_hash
-    ON pairing_codes(code_hash);
-CREATE INDEX idx_pairing_codes_host_status_created
-    ON pairing_codes(host_installation_id, status, created_at_ms DESC);
+CREATE INDEX idx_installations_account
+    ON device_installations(account_id)
+    WHERE account_id IS NOT NULL;
 
 CREATE TABLE host_installation_tokens (
     token_hash            TEXT PRIMARY KEY,
-    host_installation_id  TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+    host_installation_id  TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
     issued_at_ms          INTEGER NOT NULL,
     last_used_at_ms       INTEGER,
     revoked_at_ms         INTEGER
@@ -77,34 +60,33 @@ CREATE INDEX idx_host_installation_tokens_host_active
     ON host_installation_tokens(host_installation_id, revoked_at_ms);
 
 CREATE TABLE refresh_tokens (
-    token_hash     TEXT PRIMARY KEY,
-    account_id     TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    device_id      TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
-    issued_at      INTEGER NOT NULL,
-    expires_at     INTEGER NOT NULL,
-    revoked_at     INTEGER
+    token_hash        TEXT PRIMARY KEY,
+    account_id        TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    installation_id   TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
+    issued_at         INTEGER NOT NULL,
+    expires_at        INTEGER NOT NULL,
+    revoked_at        INTEGER
 ) STRICT;
 
 CREATE INDEX idx_refresh_tokens_account
     ON refresh_tokens(account_id)
     WHERE revoked_at IS NULL;
 CREATE INDEX idx_refresh_tokens_device
-    ON refresh_tokens(device_id)
+    ON refresh_tokens(installation_id)
     WHERE revoked_at IS NULL;
 
-CREATE TABLE account_host_pairings (
-    pair_id               TEXT NOT NULL PRIMARY KEY,
-    host_device_id        TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
-    mobile_account_id     TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    paired_via_device_id  TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
-    paired_at_ms          INTEGER NOT NULL,
-    UNIQUE (host_device_id, mobile_account_id)
+CREATE TABLE host_links (
+    pair_id                    TEXT NOT NULL PRIMARY KEY,
+    account_id                 TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    -- Exclusive host ownership: one account per host installation (Host Link).
+    host_installation_id       TEXT NOT NULL UNIQUE REFERENCES device_installations(installation_id) ON DELETE CASCADE,
+    linked_via_installation_id TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
+    link_display_name          TEXT,
+    acl_json                   TEXT NOT NULL DEFAULT '{}',
+    paired_at_ms               INTEGER NOT NULL
 ) STRICT;
 
-CREATE INDEX idx_account_host_pairings_account
-    ON account_host_pairings(mobile_account_id);
-CREATE INDEX idx_account_host_pairings_host
-    ON account_host_pairings(host_device_id);
+CREATE INDEX idx_host_links_account ON host_links(account_id);
 
 CREATE TABLE friend_requests (
     request_id        TEXT PRIMARY KEY,
@@ -266,7 +248,7 @@ CREATE TABLE agent_sessions (
     session_id        TEXT PRIMARY KEY,
     conversation_id   TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
     project_id        TEXT REFERENCES projects(project_id) ON DELETE SET NULL,
-    host_device_id    TEXT REFERENCES devices(device_id) ON DELETE SET NULL,
+    host_installation_id TEXT REFERENCES device_installations(installation_id) ON DELETE SET NULL,
     agent_id          TEXT,
     status            TEXT NOT NULL CHECK (status IN ('pending', 'running', 'stopping', 'stopped', 'ended', 'failed')),
     started_at_ms     INTEGER NOT NULL,
@@ -332,7 +314,7 @@ CREATE INDEX idx_approval_deadline_state
 CREATE TABLE sessions (
     session_id        TEXT PRIMARY KEY,
     agent            TEXT NOT NULL CHECK (agent IN ('codex', 'claude', 'gemini', 'opencode', 'grok')),
-    owner_device_id  TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+    owner_device_id  TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
     title            TEXT,
     first_ts_ms      INTEGER NOT NULL,
     last_ts_ms       INTEGER NOT NULL,
@@ -421,7 +403,7 @@ CREATE INDEX idx_pending_approvals_thread
 
 CREATE TABLE host_commands (
     command_id                TEXT PRIMARY KEY,
-    host_installation_id      TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+    host_installation_id      TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
     agent_session_id          TEXT,
     method                    TEXT NOT NULL,
     params_json               TEXT NOT NULL,

@@ -241,7 +241,15 @@ export function WorkTimelineShell({
   return (
     <section className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-canvas-soft/25">
       {header}
-      <div className="relative min-h-0 flex-1">{children}</div>
+      {/*
+        flex + flex-basis:0 so the message list (virtua VList) gets a definite
+        height in Tauri/WKWebView. A bare min-h-0 flex-1 wrapper without
+        flex-col leaves MessageList's h-full unresolved → empty viewport +
+        orphan scrollbar (items measure but never paint in view).
+      */}
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        {children}
+      </div>
       {composer}
     </section>
   );

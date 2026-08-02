@@ -149,7 +149,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-schema-01 · SQLite dev migration 对齐 Postgres 形态
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done |
 | lane | backend |
 | depends_on | — (soft: T-p0-03) |
 | exit | SQLite `devices` → `device_installations`（`kind` enum）；`account_host_pairings` → `host_links`（加 `acl_json`/`link_display_name`）；移除 `secret_hash`；移除 `pairing_codes`；加 CHECK 约束 |
@@ -157,7 +157,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-schema-02 · Rust store 层迁移到新表名
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done |
 | lane | backend |
 | depends_on | T-schema-01 |
 | exit | `store::devices` → `store::device_installations`；`store::account_host_pairings` → `store::host_links`；所有 SQL 查询更新；`cargo test` 绿 |
@@ -169,7 +169,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-auth-01 · Migration `accounts.supabase_sub` + `installation_kind` add `desktop`
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done |
 | lane | backend |
 | depends_on | — (soft: T-p0-03) |
 | exit | Postgres: `accounts.supabase_sub TEXT NULL UNIQUE`；`ALTER TYPE installation_kind ADD VALUE 'desktop'`；CHECK 约束更新；backend boots |
@@ -217,7 +217,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-auth-07 · Mobile: Supabase + exchange
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done (Phase E) |
 | lane | mobile |
 | depends_on | T-auth-04 |
 | exit | `supabase_flutter` → exchange → Keychain session；cold start resumes |
@@ -225,10 +225,11 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-auth-08 · Desktop: system browser OAuth + deep link
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done (Phase C: email/password + exchange; OAuth/deep-link deferred) |
 | lane | desktop |
 | depends_on | T-auth-04 |
 | exit | 系统浏览器打开 Supabase OAuth → `minos://auth-callback#access_token=...` → exchange → Tauri secure store；account session 可用于 host link |
+| notes | Phase C ships Supabase email/password → `/v1/auth/supabase` only (Minos password removed) + localStorage session. OAuth + `minos://` deep link still open for a follow-up when deep-link plugin is wired. |
 
 ### T-auth-09 · Dual-session logout/refresh contract
 | Field | Value |
@@ -285,7 +286,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-ui-06 · Desktop account chrome (login/logout entry)
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done |
 | lane | desktop |
 | depends_on | T-auth-08 |
 | exit | User can sign in/out from Desktop UI；connection card (Local/Linked) |
@@ -329,7 +330,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-nonce-01 · Bootstrap nonce 迁移 Redis
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done |
 | lane | backend |
 | depends_on | — |
 | exit | `BootstrapNonceStore` 从 DashMap 迁到 Redis（`SET nonce:<value> EX 60` + `GETDEL` consume）；dev 用 Inline Redis；multi-instance safe |
@@ -337,7 +338,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-host-01 · Link/unlink API design locked
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done |
 | lane | backend |
 | depends_on | T-auth-04 |
 | exit | OpenAPI/sketch in D02；threat model satisfied；wire shape locked |
@@ -345,7 +346,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-host-02 · Backend implement link/unlink/list
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done |
 | lane | backend |
 | depends_on | T-host-01, T-nonce-01, T-schema-02 |
 | exit | `POST /v1/hosts/link` + `POST /v1/hosts/unlink` + `GET /v1/hosts`；tests: link / unlink / multi-host list / host proof / host_linked_elsewhere 409 |
@@ -353,7 +354,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-host-03 · Daemon link RPC + persist + ws/host
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done |
 | lane | daemon |
 | depends_on | T-host-02 |
 | exit | `host.prepare_link` / `host.sign_link_proof` / `host.apply_link_token` RPC；daemon 持久化 token；Linked 时连接 `/ws/host` |
@@ -361,7 +362,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-host-04 · Desktop "Link this Mac" UX
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done |
 | lane | desktop |
 | depends_on | T-host-03, T-auth-08, T-ui-06 |
 | exit | 登录后一键 Link（调 daemon RPC → backend）；无需 QR；connection card 显示 Linked |
@@ -405,7 +406,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-mob-01 · Supabase auth dependency + config
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done (Phase E) |
 | lane | mobile |
 | depends_on | — |
 | exit | `supabase_flutter` added；config slots in `pubspec.yaml` / dart-define |
@@ -413,7 +414,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-mob-02 · Exchange + session store
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done (Phase E) |
 | lane | mobile |
 | depends_on | T-mob-01, T-auth-07 |
 | exit | Cold start resumes Minos session；exchange path works；Keychain storage |
@@ -421,7 +422,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-mob-03 · Hosts list UI against account pairs
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done (Phase E) |
 | lane | mobile |
 | depends_on | T-mob-02, T-host-02 |
 | exit | `GET /v1/hosts`；shows hosts；empty/offline states clear |
@@ -429,7 +430,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-mob-04 · Session stream + send golden path
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done (Phase E: wire existing cloud path + auto-select linked host) |
 | lane | mobile |
 | depends_on | T-mob-03 |
 | exit | Matches T-p0 checklist remote half |
@@ -437,7 +438,7 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-mob-05 · Hide non-golden nav items
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done (Phase F: Sessions / Hosts / 账户 shell; social/projects secondary routes only) |
 | lane | mobile |
 | depends_on | T-mob-04 |
 | exit | Primary nav only golden-path features |
@@ -473,18 +474,20 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-proj-01 · Gap audit document
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done (2026-08-01) |
 | lane | daemon / backend |
 | depends_on | — (soft: T-p0-03) |
 | exit | Markdown table: local action → cloud path → gap Y/N |
+| artifact | [projection-gap-audit.md](../projection-gap-audit.md) |
 
 ### T-proj-02 · Fix golden-path ingest/fanout gaps
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done (2026-08-01) |
 | lane | daemon / backend |
 | depends_on | T-proj-01, T-host-04, T-schema-02 |
 | exit | Start/stream/send/stop projected for Linked host；ingest peer target lookup 使用 `host_links` |
+| notes | Live-batch approval recording + formal status promote; peer targets already on host_links |
 
 ### T-proj-03 · Three-client viewer E2E
 | Field | Value |
@@ -513,10 +516,11 @@ Solid edges = hard dependency. Dotted = soft (start earlier OK).
 ### T-proj-06 · Regression test for projection invariant
 | Field | Value |
 |-------|--------|
-| status | pending |
+| status | done (2026-08-01) |
 | lane | backend |
 | depends_on | T-proj-02 |
 | exit | Automated test would fail if fanout broken |
+| notes | `ws_gateway`: `host_ingest_live_batch_fans_out_projection_to_subscribed_client`, `host_ingest_live_batch_records_approval_request` |
 
 ### T-proj-07 · Job/schema WARN triage
 | Field | Value |

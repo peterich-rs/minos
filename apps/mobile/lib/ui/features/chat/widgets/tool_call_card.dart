@@ -1,17 +1,14 @@
 import 'dart:convert';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_highlight/flutter_highlight.dart';
+import 'package:flutter_highlight/themes/atom-one-dark.dart';
 import 'package:flutter_highlight/themes/atom-one-light.dart';
+import 'package:minos/ui/theme/theme.dart';
 
-/// Visualises one `UiEventMessage_ToolCallPlaced` (+ its later
-/// `ToolCallCompleted`). Collapsed by default — the user only opens it
-/// to inspect args/output. The status icon flips through:
-///
-///   - in-progress  → spinner (no [output], not [isError])
-///   - success      → check
-///   - failure      → x
-class ToolCallCard extends StatelessWidget {
+/// Collapsed-by-default tool call card for the transcript stream.
+class ToolCallCard extends StatefulWidget {
   const ToolCallCard({
     super.key,
     required this.toolCallId,
@@ -24,75 +21,131 @@ class ToolCallCard extends StatelessWidget {
   final String toolCallId;
   final String toolName;
   final String argsJson;
-
-  /// Null while the call is still in flight (no
-  /// `ToolCallCompleted` seen yet).
   final String? output;
-
-  /// True iff the matching `ToolCallCompleted` carried `isError=true`.
   final bool isError;
 
-  bool get _inFlight => output == null;
+  @override
+  State<ToolCallCard> createState() => _ToolCallCardState();
+}
+
+class _ToolCallCardState extends State<ToolCallCard> {
+  bool _expanded = false;
+
+  bool get _inFlight => widget.output == null;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final colors = context.minosColors;
+    final statusLabel = _inFlight
+        ? 'running…'
+        : (widget.isError ? 'failed' : 'done');
+    final statusColor = _inFlight
+        ? colors.accent
+        : (widget.isError ? colors.danger : colors.success);
+
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      child: Card(
-        margin: EdgeInsets.zero,
-        elevation: 0,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
-          side: BorderSide(color: theme.colorScheme.outlineVariant),
+      padding: const EdgeInsets.symmetric(
+        horizontal: MinosSpacing.md,
+        vertical: MinosSpacing.xs,
+      ),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: MinosRadii.smAll,
+          border: Border.all(color: colors.borderSubtle),
         ),
-        child: Theme(
-          data: theme.copyWith(dividerColor: Colors.transparent),
-          child: ExpansionTile(
-            tilePadding: const EdgeInsets.symmetric(horizontal: 12),
-            childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-            leading: _StatusIcon(inFlight: _inFlight, isError: isError),
-            title: Text(
-              toolName,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            subtitle: Text(
-              _inFlight ? 'running…' : (isError ? 'failed' : 'done'),
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            children: [
-              _LabeledBlock(
-                label: 'args',
-                child: HighlightView(
-                  _prettyJson(argsJson),
-                  language: 'json',
-                  theme: atomOneLightTheme,
-                  padding: const EdgeInsets.all(8),
-                  textStyle: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 12,
+        child: Column(
+          children: <Widget>[
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: MinosRadii.smAll,
+                onTap: () => setState(() => _expanded = !_expanded),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: MinosSpacing.md,
+                    vertical: MinosSpacing.md,
+                  ),
+                  child: Row(
+                    children: <Widget>[
+                      _StatusIcon(inFlight: _inFlight, isError: widget.isError),
+                      const SizedBox(width: MinosSpacing.sm),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            Text(
+                              widget.toolName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.titleSmall,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              statusLabel,
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: statusColor,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Icon(
+                        _expanded
+                            ? CupertinoIcons.chevron_up
+                            : CupertinoIcons.chevron_down,
+                        size: 14,
+                        color: colors.textTertiary,
+                      ),
+                    ],
                   ),
                 ),
               ),
-              if (output != null) ...[
-                const SizedBox(height: 8),
-                _LabeledBlock(
-                  label: isError ? 'error' : 'output',
-                  child: SelectableText(
-                    output!,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      fontFamily: 'monospace',
-                      color: isError ? theme.colorScheme.error : null,
+            ),
+            if (_expanded)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  MinosSpacing.md,
+                  0,
+                  MinosSpacing.md,
+                  MinosSpacing.md,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    _LabeledBlock(
+                      label: 'args',
+                      child: HighlightView(
+                        _prettyJson(widget.argsJson),
+                        language: 'json',
+                        theme: colors.isDark
+                            ? atomOneDarkTheme
+                            : atomOneLightTheme,
+                        padding: const EdgeInsets.all(MinosSpacing.sm),
+                        textStyle: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                        ),
+                      ),
                     ),
-                  ),
+                    if (widget.output != null) ...<Widget>[
+                      const SizedBox(height: MinosSpacing.sm),
+                      _LabeledBlock(
+                        label: widget.isError ? 'error' : 'output',
+                        child: SelectableText(
+                          widget.output!,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            fontFamily: 'monospace',
+                            color: widget.isError ? colors.danger : null,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
-              ],
-            ],
-          ),
+              ),
+          ],
         ),
       ),
     );
@@ -115,18 +168,26 @@ class _StatusIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final colors = context.minosColors;
     if (inFlight) {
-      return const SizedBox(
+      return SizedBox(
         width: 18,
         height: 18,
-        child: CircularProgressIndicator(strokeWidth: 2),
+        child: CircularProgressIndicator(strokeWidth: 2, color: colors.accent),
       );
     }
     if (isError) {
-      return Icon(Icons.close, size: 18, color: scheme.error);
+      return Icon(
+        CupertinoIcons.xmark_circle_fill,
+        size: 18,
+        color: colors.danger,
+      );
     }
-    return Icon(Icons.check, size: 18, color: scheme.primary);
+    return Icon(
+      CupertinoIcons.checkmark_circle_fill,
+      size: 18,
+      color: colors.success,
+    );
   }
 }
 
@@ -138,22 +199,23 @@ class _LabeledBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final colors = context.minosColors;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
+      children: <Widget>[
         Text(
           label,
           style: theme.textTheme.labelSmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
+            color: colors.textTertiary,
           ),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: MinosSpacing.xs),
         Container(
           decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(6),
+            color: colors.surfaceMuted,
+            borderRadius: MinosRadii.xsAll,
           ),
-          padding: const EdgeInsets.all(4),
+          padding: const EdgeInsets.all(MinosSpacing.xs),
           child: child,
         ),
       ],

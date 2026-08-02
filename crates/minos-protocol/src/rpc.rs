@@ -6,19 +6,14 @@ use crate::{
     ApprovalDecisionRequest, CloseSessionRequest, GetSessionParams, GetSessionResponse,
     HealthResponse, InterruptSessionRequest, ListClisResponse, ListHostSkillsRequest,
     ListHostSkillsResponse, ListHostWorkspacesRequest, ListHostWorkspacesResponse,
-    ListSessionsParams, ListSessionsResponse, PairRequest, PairResponse,
-    RespondOpencodeQuestionRequest, SendUserMessageRequest, StartAgentRequest, StartAgentResponse,
-    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
+    ListSessionsParams, ListSessionsResponse, RespondOpencodeQuestionRequest,
+    SendUserMessageRequest, StartAgentRequest, StartAgentResponse, WriteHostSkillConfigRequest,
+    WriteHostSkillConfigResponse,
 };
 use jsonrpsee::proc_macros::rpc;
 
 #[rpc(server, client, namespace = "minos")]
 pub trait MinosRpc {
-    /// Confirm a fresh pairing handshake. Idempotent only when the same
-    /// (token, `device_id`) tuple is supplied.
-    #[method(name = "pair")]
-    async fn pair(&self, req: PairRequest) -> jsonrpsee::core::RpcResult<PairResponse>;
-
     /// Cheap liveness probe.
     #[method(name = "health")]
     async fn health(&self) -> jsonrpsee::core::RpcResult<HealthResponse>;

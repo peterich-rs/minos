@@ -1,10 +1,8 @@
 //! HTTP client for the backend's `/v1/*` control plane.
 //!
-//! The mobile client uses this for the pre-WS pairing handshake (POST
-//! `/v1/pairing/confirm`), for POST-first query reads such as
-//! `/v1/pairing/list-hosts`, and for tearing a specific pair down
-//! (`DELETE /v1/pairings/:host_device_id`). The post-pair `Forward` /
-//! `Forwarded` and event push traffic still flows over the WebSocket.
+//! The mobile client uses this for account auth (Supabase exchange), linked-host discovery (`GET /v1/hosts`), host unlink
+//! (`POST /v1/hosts/unlink`), and agent-session control-plane calls.
+//! Live event push still flows over the WebSocket.
 //!
 //! ADR-0020 removed the iOS device-secret rail; every iOS-originated
 //! request authenticates with the bearer alone.
@@ -17,7 +15,7 @@ use http::{Method, Request, Response, StatusCode};
 use minos_domain::{AgentName, DeviceId, MinosError};
 use minos_protocol::{
     AddAgentToGroupRequest, AddGroupMemberRequest, AgentSummary, ApprovalDecisionRequest,
-    AssignProjectThreadRequest, AuthRequest, AuthResponse, ConversationAgentMembersResponse,
+    AssignProjectThreadRequest, AuthResponse, ConversationAgentMembersResponse,
     ConversationMembersResponse, ConversationReadResponse, ConversationResponse,
     ConversationsResponse, CreateFriendRequestRequest, CreateGroupConversationRequest,
     CreateProjectRequest, CreateProjectResponse, DeleteProjectRequest,
@@ -65,26 +63,6 @@ struct WsTicketData {
     gateway_url: String,
 }
 
-#[derive(Debug, Serialize)]
-struct PairConfirmRequest<'a> {
-    pairing_code: &'a str,
-    client_request_id: &'a str,
-}
-
-#[derive(Debug, Deserialize)]
-struct PairConfirmEnvelope {
-    data: PairConfirmData,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct PairConfirmData {
-    pub host_installation_id: String,
-    #[allow(dead_code)]
-    pub status: String,
-    #[allow(dead_code)]
-    pub already_confirmed: bool,
-}
-
 #[derive(Debug, Deserialize)]
 struct ListHostsEnvelope {
     data: ListHostsData,
@@ -95,14 +73,29 @@ struct ListHostsData {
     hosts: Vec<FormalHostSummary>,
 }
 
+/// Wire row for `GET /v1/hosts` (Host Link list). `linked_via` is no longer
+/// returned; callers that still need a `paired_via_device_id` get a nil id.
 #[derive(Debug, Deserialize)]
 struct FormalHostSummary {
     host_installation_id: String,
     host_display_name: String,
-    paired_at_ms: i64,
-    linked_via_installation_id: String,
+    linked_at_ms: i64,
     #[serde(default)]
     online: bool,
+    #[serde(default)]
+    last_seen_at_ms: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct SupabaseExchangeRequest<'a> {
+    access_token: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device_name: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+struct UnlinkHostRequest {
+    host_installation_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -344,66 +337,27 @@ impl MobileHttpClient {
         })
     }
 
-    /// Confirm a formal host pairing code with the logged-in account bearer.
-    pub async fn pair_confirm(
-        &self,
-        pairing_code: &str,
-        access_token: &str,
-    ) -> Result<PairConfirmData, MinosError> {
-        let path = "/v1/pairing/confirm";
-        let url = format!("{}{path}", self.base);
-        let trace_id = start_http_trace(
-            Method::POST.as_str(),
-            path,
-            None,
-            Some("formal-pair-confirm".into()),
-        );
-        let req = PairConfirmRequest {
-            pairing_code,
-            client_request_id: "mobile-pair-confirm",
-        };
-        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
-        let resp = self.execute_with_trace(trace_id, &url, request).await?;
-        let status = resp.status();
-        if status.is_success() {
-            let envelope: PairConfirmEnvelope =
-                decode_success_json(resp, "PairConfirmEnvelope").await?;
-            request_trace::finish_success(
-                trace_id,
-                Some(status.as_u16()),
-                Some(format!(
-                    "host_installation_id={}",
-                    envelope.data.host_installation_id
-                )),
-                None,
-            );
-            Ok(envelope.data)
-        } else {
-            let error = decode_error(resp).await;
-            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
-            Err(error)
-        }
-    }
-
-    /// Tear down a specific account_host_pairings row. The path-bound
-    /// `host_device_id` is the Mac to forget; bearer-only auth post
-    /// ADR-0020.
-    pub async fn delete_pair(
+    /// Unlink a host from the caller's account (`POST /v1/hosts/unlink`).
+    /// Bearer-only.
+    pub async fn unlink_host(
         &self,
         access_token: &str,
         host_device_id: DeviceId,
     ) -> Result<(), MinosError> {
-        let path = format!("/v1/pairings/{host_device_id}");
+        let path = "/v1/hosts/unlink";
         let url = format!("{}{path}", self.base);
-        let trace_id = start_http_trace(Method::DELETE.as_str(), &path, None, None);
-        let request = self.request_without_body(Method::DELETE, &url, Some(access_token))?;
+        let trace_id = start_http_trace(Method::POST.as_str(), path, None, None);
+        let body = UnlinkHostRequest {
+            host_installation_id: host_device_id.to_string(),
+        };
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &body)?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status == StatusCode::NO_CONTENT || status == StatusCode::NOT_FOUND {
             request_trace::finish_success(
                 trace_id,
                 Some(status.as_u16()),
-                Some("pairing cleared".into()),
+                Some("host unlinked".into()),
                 None,
             );
             Ok(())
@@ -414,15 +368,13 @@ impl MobileHttpClient {
         }
     }
 
-    /// List every Mac paired to the caller's account. Bearer-only.
-    pub async fn list_paired_hosts(
-        &self,
-        access_token: &str,
-    ) -> Result<MeHostsResponse, MinosError> {
-        let path = "/v1/pairing/list-hosts";
+    /// List every Mac linked to the caller's account (`GET /v1/hosts`).
+    /// Bearer-only.
+    pub async fn list_hosts(&self, access_token: &str) -> Result<MeHostsResponse, MinosError> {
+        let path = "/v1/hosts";
         let url = format!("{}{path}", self.base);
-        let trace_id = start_http_trace(Method::POST.as_str(), path, None, None);
-        let request = self.request_without_body(Method::POST, &url, Some(access_token))?;
+        let trace_id = start_http_trace(Method::GET.as_str(), path, None, None);
+        let request = self.request_without_body(Method::GET, &url, Some(access_token))?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {
@@ -1979,39 +1931,24 @@ impl MobileHttpClient {
 
     // ─────────────────────────── auth endpoints ───────────────────────────
 
-    /// `POST /v1/auth/register` — create an account on the backend.
-    /// Bearer-only post ADR-0020; the iOS rail no longer carries
-    /// `X-Device-Secret`. Spec §5.2.
-    pub async fn register(&self, email: &str, password: &str) -> Result<AuthResponse, MinosError> {
-        let url = format!("{}/v1/auth/register", self.base);
+    /// `POST /v1/auth/supabase` — exchange a Supabase access token for Minos
+    /// access/refresh tokens. Requires `X-Device-Id` (always stamped by this
+    /// client).
+    pub async fn exchange_supabase(
+        &self,
+        supabase_access_token: &str,
+        device_name: Option<&str>,
+    ) -> Result<AuthResponse, MinosError> {
+        let url = format!("{}/v1/auth/supabase", self.base);
         let trace_id = start_http_trace(
             Method::POST.as_str(),
-            "/v1/auth/register",
+            "/v1/auth/supabase",
             None,
-            Some(format!("email={email}")),
+            Some("supabase exchange".into()),
         );
-        let body = AuthRequest {
-            email: email.into(),
-            password: password.into(),
-        };
-        let request = self.request_with_json(Method::POST, &url, None, &body)?;
-        let resp = self.execute_with_trace(trace_id, &url, request).await?;
-        decode_auth_response(resp, trace_id).await
-    }
-
-    /// `POST /v1/auth/login` — authenticate an existing account.
-    /// Bearer-only post ADR-0020. Spec §5.2.
-    pub async fn login(&self, email: &str, password: &str) -> Result<AuthResponse, MinosError> {
-        let url = format!("{}/v1/auth/login", self.base);
-        let trace_id = start_http_trace(
-            Method::POST.as_str(),
-            "/v1/auth/login",
-            None,
-            Some(format!("email={email}")),
-        );
-        let body = AuthRequest {
-            email: email.into(),
-            password: password.into(),
+        let body = SupabaseExchangeRequest {
+            access_token: supabase_access_token,
+            device_name,
         };
         let request = self.request_with_json(Method::POST, &url, None, &body)?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
@@ -2177,12 +2114,13 @@ fn formal_hosts_to_me_hosts(data: ListHostsData) -> Result<MeHostsResponse, Mino
                 &host.host_installation_id,
             )?,
             host_display_name: host.host_display_name,
-            paired_at_ms: host.paired_at_ms,
-            paired_via_device_id: parse_device_id_field(
-                "linked_via_installation_id",
-                &host.linked_via_installation_id,
-            )?,
+            paired_at_ms: host.linked_at_ms,
+            // Host Link list does not report the linking client installation.
+            // Keep the protocol field populated with a stable nil id so older
+            // UI that reads `paired_via_device_id` does not crash.
+            paired_via_device_id: DeviceId(uuid::Uuid::nil()),
             online: host.online,
+            last_seen_at_ms: host.last_seen_at_ms,
         });
     }
     Ok(MeHostsResponse { hosts })
@@ -2554,7 +2492,6 @@ async fn decode_kind_error(resp: Response<ResponseBody>) -> MinosError {
         .unwrap_or("unknown")
         .to_string();
     match (parts.status.as_u16(), kind.as_str()) {
-        (400, "weak_password") => MinosError::WeakPassword,
         (401, "invalid_credentials") => MinosError::InvalidCredentials,
         (401, "invalid_refresh") => MinosError::AuthRefreshFailed {
             message: "invalid refresh token".into(),
@@ -2752,15 +2689,14 @@ mod tests {
     #[test]
     fn formal_hosts_response_maps_to_existing_host_summary_shape() {
         let host_id = DeviceId::new();
-        let mobile_id = DeviceId::new();
 
         let response = formal_hosts_to_me_hosts(ListHostsData {
             hosts: vec![FormalHostSummary {
                 host_installation_id: host_id.to_string(),
                 host_display_name: "Mac Studio".into(),
-                paired_at_ms: 123,
-                linked_via_installation_id: mobile_id.to_string(),
+                linked_at_ms: 123,
                 online: true,
+                last_seen_at_ms: 456,
             }],
         })
         .unwrap();
@@ -2769,8 +2705,12 @@ mod tests {
         assert_eq!(response.hosts[0].host_device_id, host_id);
         assert_eq!(response.hosts[0].host_display_name, "Mac Studio");
         assert_eq!(response.hosts[0].paired_at_ms, 123);
-        assert_eq!(response.hosts[0].paired_via_device_id, mobile_id);
+        assert_eq!(
+            response.hosts[0].paired_via_device_id,
+            DeviceId(uuid::Uuid::nil())
+        );
         assert!(response.hosts[0].online);
+        assert_eq!(response.hosts[0].last_seen_at_ms, 456);
     }
 
     #[test]
@@ -2779,9 +2719,9 @@ mod tests {
             hosts: vec![FormalHostSummary {
                 host_installation_id: "not-a-uuid".into(),
                 host_display_name: "Mac Studio".into(),
-                paired_at_ms: 123,
-                linked_via_installation_id: DeviceId::new().to_string(),
+                linked_at_ms: 123,
                 online: false,
+                last_seen_at_ms: 0,
             }],
         })
         .expect_err("invalid host id must not be silently accepted");

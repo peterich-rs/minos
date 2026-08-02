@@ -24,6 +24,7 @@ import 'package:minos/ui/features/chat/widgets/message_bubble.dart';
 import 'package:minos/ui/features/chat/widgets/reasoning_section.dart';
 import 'package:minos/ui/features/chat/widgets/streaming_text.dart';
 import 'package:minos/ui/features/chat/widgets/tool_call_card.dart';
+import 'package:minos/ui/theme/theme.dart';
 import 'package:shadcn_ui/shadcn_ui.dart';
 
 /// Chat surface for a single thread. Renders the translated
@@ -564,8 +565,8 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
           );
 
     final theme = Theme.of(context);
-    final shadTheme = ShadTheme.of(context);
-    final scaffoldBg = shadTheme.colorScheme.background;
+    final colors = context.minosColors;
+    final scaffoldBg = colors.canvas;
     final liveAgent = _sessionAgent(viewSession);
     final titleAgent = liveAgent ?? widget.agent;
     final subtitle = _sessionSubtitle(
@@ -582,20 +583,20 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
       resizeToAvoidBottomInset: false,
       backgroundColor: scaffoldBg,
       appBar: AppBar(
-        backgroundColor: shadTheme.colorScheme.background,
+        backgroundColor: colors.surface,
         surfaceTintColor: Colors.transparent,
         scrolledUnderElevation: 0,
         elevation: 0,
         shape: Border(
-          bottom: BorderSide(color: shadTheme.colorScheme.border, width: 1),
+          bottom: BorderSide(color: colors.borderSubtle, width: 0.5),
         ),
         centerTitle: true,
         titleSpacing: 0,
         title: SizedBox(
           width: double.infinity,
           child: Column(
-            crossAxisAlignment: .center,
-            mainAxisSize: .min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
             children: <Widget>[
               Text(
                 sessionId == null
@@ -609,7 +610,7 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
                 textAlign: TextAlign.center,
                 style: theme.textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w600,
-                  color: shadTheme.colorScheme.foreground,
+                  color: colors.textPrimary,
                 ),
               ),
               if (subtitle != null)
@@ -618,7 +619,9 @@ class _ThreadViewPageState extends ConsumerState<ThreadViewPage> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.center,
-                  style: shadTheme.textTheme.muted,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colors.textSecondary,
+                  ),
                 ),
             ],
           ),
@@ -699,31 +702,33 @@ class _NewChatEmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final shadTheme = ShadTheme.of(context);
+    final colors = context.minosColors;
     return Center(
       child: Padding(
-        padding: const .all(24),
+        padding: const EdgeInsets.all(MinosSpacing.xxl),
         child: Column(
-          mainAxisSize: .min,
+          mainAxisSize: MainAxisSize.min,
           children: <Widget>[
             Icon(
-              LucideIcons.messageCircle,
+              Icons.chat_bubble_outline_rounded,
               size: 44,
-              color: shadTheme.colorScheme.mutedForeground,
+              color: colors.textTertiary,
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: MinosSpacing.md),
             Text(
               '开始新对话',
               style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: .w600,
-                color: shadTheme.colorScheme.foreground,
+                fontWeight: FontWeight.w600,
+                color: colors.textPrimary,
               ),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: MinosSpacing.xs),
             Text(
               '在下方输入消息，Agent 会立刻接管。',
-              style: shadTheme.textTheme.muted,
-              textAlign: .center,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: colors.textSecondary,
+              ),
+              textAlign: TextAlign.center,
             ),
           ],
         ),
@@ -733,7 +738,14 @@ class _NewChatEmptyState extends StatelessWidget {
 }
 
 void _showThreadInfo(BuildContext context, String title) {
-  ShadToaster.maybeOf(context)?.show(ShadToast(title: Text(title)));
+  final toaster = ShadToaster.maybeOf(context);
+  if (toaster != null) {
+    toaster.show(ShadToast(title: Text(title)));
+    return;
+  }
+  ScaffoldMessenger.maybeOf(
+    context,
+  )?.showSnackBar(SnackBar(content: Text(title)));
 }
 
 class _ThreadEventStream extends ConsumerWidget {

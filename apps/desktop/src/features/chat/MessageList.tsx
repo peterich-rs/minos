@@ -131,10 +131,20 @@ export function MessageList({ conversationId }: { conversationId: string }) {
   );
 
   // Stick to bottom when following and tail content changes.
+  // Double-rAF: first layout after flex height resolves (Tauri/WKWebView), then
+  // scroll — a single pass often runs while VList clientHeight is still 0.
   useLayoutEffect(() => {
     if (!followingRef.current) return;
     if (virtualItems.length === 0) return;
-    listRef.current?.scrollToIndex(virtualItems.length - 1, { align: "end" });
+    const index = virtualItems.length - 1;
+    listRef.current?.scrollToIndex(index, { align: "end" });
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!followingRef.current) return;
+        listRef.current?.scrollToIndex(index, { align: "end" });
+      });
+    });
+    return () => cancelAnimationFrame(id);
   }, [contentKey, conversationId, virtualItems.length]);
 
   // After older page prepends (firstLoadedSeq decreases), keep shift for one frame.
@@ -284,59 +294,66 @@ export function MessageList({ conversationId }: { conversationId: string }) {
     ) : null;
 
   return (
-    <>
-      <div className="relative min-h-0 flex-1">
-        {emptyOrStatus ? (
-          <div className="px-5 py-5">{emptyOrStatus}</div>
-        ) : (
-          <VList
-            ref={listRef}
-            className="scrollbar-thin h-full px-3 py-4 sm:px-5"
-            shift={shift}
-            onScroll={handleScroll}
-            // Extra buffer so day dividers + tall agent turns stay smooth (px).
-            bufferSize={480}
-          >
-            {hasOlder || loadingOlder ? (
-              <div
-                className="flex items-center justify-center gap-2 py-3"
-                key="__older-head"
-              >
-                {loadingOlder ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-primary/60" />
-                    <span className="text-2xs font-medium text-ink-muted">
-                      Loading earlier messages…
-                    </span>
-                  </>
-                ) : (
-                  <span
-                    className="h-px w-16 rounded-full bg-ink/10"
-                    aria-hidden
-                  />
-                )}
-              </div>
-            ) : null}
-            {virtualItems.map((item) => renderVirtualItem(item))}
-            {/* Bottom spacer so last bubble clears jump FAB + composer shadow */}
-            <div className="h-2 shrink-0" aria-hidden key="__tail-pad" />
-          </VList>
-        )}
-
-        {showJumpToLatest ? (
-          <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center">
-            <button
-              type="button"
-              onClick={jumpToLatest}
-              className="pointer-events-auto inline-flex animate-message-in items-center gap-1.5 rounded-full border border-ink/10 bg-surface/95 px-3.5 py-2 text-xs font-semibold text-ink shadow-lg backdrop-blur-md transition-colors hover:bg-primary hover:text-white hover:border-primary motion-reduce:animate-none"
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      {emptyOrStatus ? (
+        <div
+          className="min-h-0 flex-1 overflow-y-auto px-5 py-5"
+          style={{ flex: "1 1 0%" }}
+        >
+          {emptyOrStatus}
+        </div>
+      ) : (
+        <VList
+          ref={listRef}
+          // virtua requires a definite viewport height. flex-basis:0 matches
+          // TranscriptPane (Tauri/WKWebView); plain h-full often resolves to 0
+          // and yields a scrollbar with no visible rows.
+          className="scrollbar-thin min-h-0 px-3 py-4 sm:px-5"
+          style={{ flex: "1 1 0%", height: "100%", minHeight: 0 }}
+          shift={shift}
+          onScroll={handleScroll}
+          // Extra buffer so day dividers + tall agent turns stay smooth (px).
+          bufferSize={480}
+        >
+          {hasOlder || loadingOlder ? (
+            <div
+              className="flex items-center justify-center gap-2 py-3"
+              key="__older-head"
             >
-              <ArrowDown className="h-3.5 w-3.5" />
-              Jump to latest
-            </button>
-          </div>
-        ) : null}
-      </div>
-    </>
+              {loadingOlder ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-primary/60" />
+                  <span className="text-2xs font-medium text-ink-muted">
+                    Loading earlier messages…
+                  </span>
+                </>
+              ) : (
+                <span
+                  className="h-px w-16 rounded-full bg-ink/10"
+                  aria-hidden
+                />
+              )}
+            </div>
+          ) : null}
+          {virtualItems.map((item) => renderVirtualItem(item))}
+          {/* Bottom spacer so last bubble clears jump FAB + composer shadow */}
+          <div className="h-2 shrink-0" aria-hidden key="__tail-pad" />
+        </VList>
+      )}
+
+      {showJumpToLatest ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center">
+          <button
+            type="button"
+            onClick={jumpToLatest}
+            className="pointer-events-auto inline-flex animate-message-in items-center gap-1.5 rounded-full border border-ink/10 bg-surface/95 px-3.5 py-2 text-xs font-semibold text-ink shadow-lg backdrop-blur-md transition-colors hover:bg-primary hover:text-white hover:border-primary motion-reduce:animate-none"
+          >
+            <ArrowDown className="h-3.5 w-3.5" />
+            Jump to latest
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

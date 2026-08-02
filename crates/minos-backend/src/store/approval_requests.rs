@@ -109,7 +109,7 @@ pub async fn get(
 ) -> Result<Option<ApprovalRequestRow>, BackendError> {
     let row = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query_as::<_, ApprovalRequestDbRow>(
-            "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_device_id, t.owner_device_id), ar.method,
+            "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_installation_id, t.owner_device_id), ar.method,
                         ar.params_json, ar.state, ar.deadline_at_ms, ar.created_at_ms,
                         ar.resolved_at_ms, ar.resolution_json
                    FROM approval_requests ar
@@ -198,7 +198,7 @@ pub async fn list_expired_pending(
 ) -> Result<Vec<ApprovalRequestRow>, BackendError> {
     let rows = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query_as::<_, ApprovalRequestDbRow>(
-            "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_device_id, t.owner_device_id), ar.method,
+            "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_installation_id, t.owner_device_id), ar.method,
                         ar.params_json, ar.state, ar.deadline_at_ms, ar.created_at_ms,
                         ar.resolved_at_ms, ar.resolution_json
                    FROM approval_requests ar
@@ -278,7 +278,7 @@ pub async fn list_pending_for_hosts(
     let rows = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             let mut builder = QueryBuilder::<Sqlite>::new(
-                "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_device_id, t.owner_device_id), ar.method,
+                "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_installation_id, t.owner_device_id), ar.method,
                         ar.params_json, ar.state, ar.deadline_at_ms, ar.created_at_ms,
                         ar.resolved_at_ms, ar.resolution_json
                    FROM approval_requests ar
@@ -289,7 +289,7 @@ pub async fn list_pending_for_hosts(
                   WHERE ar.state = ",
             );
             builder.push_bind(ApprovalRequestState::Pending.as_str());
-            builder.push(" AND COALESCE(s.host_device_id, t.owner_device_id) IN (");
+            builder.push(" AND COALESCE(s.host_installation_id, t.owner_device_id) IN (");
             {
                 let mut separated = builder.separated(", ");
                 for host_device_id in host_device_ids {
@@ -363,7 +363,7 @@ fn decode_row(row: ApprovalRequestDbRow) -> Result<ApprovalRequestRow, BackendEr
     ) = row;
 
     let host_device_id = host_device_id.ok_or_else(|| BackendError::StoreDecode {
-        column: "approval_requests.host_device_id".into(),
+        column: "approval_requests.host_installation_id".into(),
         message: "NULL host installation on approval session".into(),
     })?;
 
@@ -374,7 +374,7 @@ fn decode_row(row: ApprovalRequestDbRow) -> Result<ApprovalRequestRow, BackendEr
         host_device_id: Uuid::parse_str(&host_device_id)
             .map(DeviceId)
             .map_err(|error| BackendError::StoreDecode {
-                column: "approval_requests.host_device_id".into(),
+                column: "approval_requests.host_installation_id".into(),
                 message: error.to_string(),
             })?,
         method,

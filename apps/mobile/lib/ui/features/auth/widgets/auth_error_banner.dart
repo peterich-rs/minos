@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:minos/domain/minos_error_display.dart';
 import 'package:minos/src/rust/api/minos.dart' show MinosError;
-import 'package:shadcn_ui/shadcn_ui.dart';
+import 'package:minos/ui/theme/theme.dart';
 
 final _authErrorBannerVisibleProvider = NotifierProvider.autoDispose
     .family<_AuthErrorBannerVisibleController, bool, String>(
@@ -23,14 +23,7 @@ class _AuthErrorBannerVisibleController extends Notifier<bool> {
   }
 }
 
-/// Auto-dismissing destructive [ShadAlert] driven by an externally-owned
-/// auth error object. The 6-second timer matches the Remodex iOS clone — long
-/// enough for the user to read the title + detail, short enough not to
-/// linger after a successful retry.
-///
-/// Typed [MinosError] values use the localized Rust-owned copy; unexpected
-/// FRB / Dart exceptions fall back to a generic title plus a normalized
-/// description so the page never crashes back to Flutter's red error UI.
+/// Auto-dismissing destructive banner for auth errors.
 class AuthErrorBanner extends ConsumerStatefulWidget {
   const AuthErrorBanner({super.key, required this.error});
 
@@ -53,9 +46,6 @@ class _AuthErrorBannerState extends ConsumerState<AuthErrorBanner> {
   @override
   void didUpdateWidget(AuthErrorBanner old) {
     super.didUpdateWidget(old);
-    // Re-arm on every transition into a non-null error, even if the typed
-    // variant is identical to the previous one — repeated identical errors
-    // (e.g. two failed login attempts) should re-show the banner.
     if (widget.error != null && widget.error != old.error) {
       _arm();
     } else if (widget.error == null && old.error != null) {
@@ -91,6 +81,7 @@ class _AuthErrorBannerState extends ConsumerState<AuthErrorBanner> {
     final visible = ref.watch(_authErrorBannerVisibleProvider(_bannerId));
     final err = widget.error;
     if (!visible || err == null) return const SizedBox.shrink();
+
     final title = switch (err) {
       final MinosError typed => typed.userMessage(),
       _ when _normalizedFallbackDetail(err).contains('CryptoProvider') =>
@@ -101,10 +92,48 @@ class _AuthErrorBannerState extends ConsumerState<AuthErrorBanner> {
       final MinosError typed => typed.detail,
       _ => _normalizedFallbackDetail(err),
     };
-    return ShadAlert.destructive(
-      icon: const Icon(Icons.error_outline),
-      title: Text(title),
-      description: detail == null ? null : Text(detail),
+
+    final colors = context.minosColors;
+    final theme = Theme.of(context);
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: colors.dangerSoft,
+        borderRadius: MinosRadii.smAll,
+        border: Border.all(color: colors.danger.withValues(alpha: 0.25)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(MinosSpacing.md),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Icon(Icons.error_outline_rounded, size: 20, color: colors.danger),
+            const SizedBox(width: MinosSpacing.sm),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    title,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      color: colors.danger,
+                    ),
+                  ),
+                  if (detail != null && detail.isNotEmpty) ...<Widget>[
+                    const SizedBox(height: MinosSpacing.xs),
+                    Text(
+                      detail,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

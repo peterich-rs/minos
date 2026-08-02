@@ -5,8 +5,8 @@ use minos_backend::{
     agent_sessions::{SendInputInput, StartAgentSessionInput},
     auth::use_case::AuthUseCase,
     conversations::{ConversationService, DefaultConversationService},
+    host_link::HostLinkService,
     http::{router, BackendState},
-    pairing::PairingService,
     realtime::wire::{ClientFrame, ServerFrame},
     session::SessionRegistry,
     store,
@@ -51,7 +51,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
     let registry = Arc::new(SessionRegistry::new());
     let mut state = BackendState::new(
         registry,
-        Arc::new(PairingService::new(pool.clone())),
+        Arc::new(HostLinkService::new(pool.clone())),
         pool.clone(),
         Duration::from_mins(5),
         TEST_JWT_SECRET.to_string(),
@@ -118,6 +118,13 @@ async fn recv_server_frame(ws: &mut WsClient) -> anyhow::Result<ServerFrame> {
         match next {
             Some(Ok(Message::Text(text))) => {
                 if let Ok(frame) = serde_json::from_str::<ServerFrame>(&text) {
+                    // IM presence is fanout noise for most golden-path assertions.
+                    if matches!(
+                        &frame,
+                        ServerFrame::StreamEvent { kind, .. } if kind == "presence"
+                    ) {
+                        continue;
+                    }
                     return Ok(frame);
                 }
             }
@@ -144,7 +151,7 @@ async fn send_client_frame(ws: &mut WsClient, frame: &ClientFrame) -> anyhow::Re
 }
 
 async fn seed_client_account(relay: &Relay, email: &str) -> anyhow::Result<(String, DeviceId)> {
-    let account_id = store::accounts::create(&relay.pool, email, "phc")
+    let account_id = store::accounts::create(&relay.pool, email)
         .await?
         .account_id;
     let device_id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
@@ -153,7 +160,14 @@ async fn seed_client_account(relay: &Relay, email: &str) -> anyhow::Result<(Stri
 
 async fn seed_host(relay: &Relay) -> anyhow::Result<DeviceId> {
     let host_id = DeviceId::new();
-    store::devices::insert_device(&relay.pool, host_id, "Mac", DeviceRole::AgentHost, 0).await?;
+    store::device_installations::insert_device(
+        &relay.pool,
+        host_id,
+        "Mac",
+        DeviceRole::AgentHost,
+        0,
+    )
+    .await?;
     Ok(host_id)
 }
 
@@ -266,8 +280,7 @@ async fn client_subscribe_replays_agent_session_durable_events() -> anyhow::Resu
         100,
     )
     .await?;
-    store::account_host_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
-        .await?;
+    store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
 
     let output = seed_session(
         &relay,
@@ -491,8 +504,7 @@ async fn host_replays_durable_command_and_accepts_ack_result() -> anyhow::Result
         100,
     )
     .await?;
-    store::account_host_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
-        .await?;
+    store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
 
     let output = seed_session(
         &relay,
@@ -696,8 +708,7 @@ async fn host_stream_event_persists_slice_and_fanouts_to_subscribed_client() -> 
         100,
     )
     .await?;
-    store::account_host_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
-        .await?;
+    store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
 
     let output = seed_session(
         &relay,
@@ -790,8 +801,7 @@ async fn orphan_raw_host_stream_event_does_not_create_legacy_conversation() -> a
     let relay = spawn_relay().await?;
     let (account_id, phone_id) = seed_client_account(&relay, "ws-raw-orphan@example.com").await?;
     let host_id = seed_host(&relay).await?;
-    store::account_host_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
-        .await?;
+    store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
 
     let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
     let mut host_ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
@@ -832,12 +842,11 @@ async fn raw_host_stream_event_updates_formal_turn_cold_replay() -> anyhow::Resu
     let relay = spawn_relay().await?;
     let (account_id, phone_id) =
         seed_client_account(&relay, "ws-raw-formal-replay@example.com").await?;
-    let bob = store::accounts::create(&relay.pool, "ws-raw-formal-replay-bob@example.com", "phc")
+    let bob = store::accounts::create(&relay.pool, "ws-raw-formal-replay-bob@example.com")
         .await?
         .account_id;
     let host_id = seed_host(&relay).await?;
-    store::account_host_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
-        .await?;
+    store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
     let members = vec![bob];
     let conversation = store::social::create_group_conversation(
         &relay.pool,
@@ -1007,8 +1016,7 @@ async fn live_durable_events_flow_from_outbox_to_subscribed_host_and_client() ->
         100,
     )
     .await?;
-    store::account_host_pairings::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0)
-        .await?;
+    store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
 
     let output = seed_session(
         &relay,
@@ -1124,4 +1132,364 @@ async fn live_durable_events_flow_from_outbox_to_subscribed_host_and_client() ->
     }
 
     Ok(())
+}
+
+/// Golden path: host live ingest batch → StreamEvent fanout on /ws/client.
+#[tokio::test]
+async fn host_ingest_live_batch_fans_out_projection_to_subscribed_client() -> anyhow::Result<()> {
+    let relay = spawn_relay().await?;
+    let (account_id, phone_id) =
+        seed_client_account(&relay, "ws-host-ingest-live@example.com").await?;
+    let host_id = seed_host(&relay).await?;
+    let members = vec![account_id.clone()];
+    let conversation = store::social::create_group_conversation(
+        &relay.pool,
+        &account_id,
+        "Host Ingest Live",
+        &members,
+        100,
+    )
+    .await?;
+    store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
+
+    let output = seed_session(
+        &relay,
+        &account_id,
+        host_id,
+        &conversation.conversation_id,
+        "host-ingest-live-seed",
+        Some("seed"),
+    )
+    .await?;
+
+    let client_ticket =
+        issue_client_ws_ticket(&relay, &account_id, phone_id, DeviceRole::MobileClient).await?;
+    let mut client_ws = connect_client(&relay, "/ws/client", &client_ticket).await?;
+    match recv_server_frame(&mut client_ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
+    }
+    send_client_frame(
+        &mut client_ws,
+        &ClientFrame::Subscribe {
+            topics: vec![format!("agent_session:{}", output.session_id)],
+            resume_after: None,
+            client_request_id: Some("host-ingest-live-sub".into()),
+        },
+    )
+    .await?;
+    match recv_server_frame(&mut client_ws).await? {
+        ServerFrame::SubscribeAck { .. } => {}
+        other => panic!("expected SubscribeAck, got {other:?}"),
+    }
+    // Drain durable replay of agent_session_started.
+    match recv_server_frame(&mut client_ws).await? {
+        ServerFrame::DurableEvent { .. } => {}
+        other => panic!("expected DurableEvent replay, got {other:?}"),
+    }
+
+    let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
+    let mut host_ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
+    match recv_server_frame(&mut host_ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
+    }
+    // Drain host command durable replay.
+    match recv_server_frame(&mut host_ws).await? {
+        ServerFrame::DurableEvent { .. } => {}
+        other => panic!("expected host DurableEvent replay, got {other:?}"),
+    }
+
+    // Server translates raw Codex payloads; host projection is empty / ignored.
+    // item/started opens the assistant message; delta requires that state.
+    send_client_frame(
+        &mut host_ws,
+        &ClientFrame::HostIngestLiveBatch {
+            batch: minos_protocol::realtime::HostIngestLiveBatch {
+                batch_id: "batch-live-1".into(),
+                host_id,
+                chunks: vec![
+                    minos_protocol::realtime::HostIngestChunk {
+                        event_id: format!("{host_id}:{}:1", output.session_id),
+                        session_id: output.session_id.clone(),
+                        seq: 1,
+                        agent: minos_domain::AgentName::Codex,
+                        kind: "agent_event".into(),
+                        payload: serde_json::json!({
+                            "method": "item/started",
+                            "params": {
+                                "item": {
+                                    "type": "agentMessage",
+                                    "id": "msg-live-1"
+                                }
+                            }
+                        }),
+                        conversation_id: Some(conversation.conversation_id.clone()),
+                        projection: vec![],
+                        first_ts_ms: 2_000,
+                        last_ts_ms: 2_000,
+                        byte_len: 64,
+                        checksum_sha256: "a".repeat(64),
+                    },
+                    minos_protocol::realtime::HostIngestChunk {
+                        event_id: format!("{host_id}:{}:2", output.session_id),
+                        session_id: output.session_id.clone(),
+                        seq: 2,
+                        agent: minos_domain::AgentName::Codex,
+                        kind: "agent_event".into(),
+                        payload: serde_json::json!({
+                            "method": "item/agentMessage/delta",
+                            "params": {
+                                "itemId": "msg-live-1",
+                                "delta": "hello remote"
+                            }
+                        }),
+                        conversation_id: Some(conversation.conversation_id.clone()),
+                        projection: vec![],
+                        first_ts_ms: 2_001,
+                        last_ts_ms: 2_001,
+                        byte_len: 48,
+                        checksum_sha256: "b".repeat(64),
+                    },
+                ],
+            },
+        },
+    )
+    .await?;
+
+    // One ack per accepted session (max seq across chunks in batch).
+    match recv_server_frame(&mut host_ws).await? {
+        ServerFrame::HostIngestAck {
+            session_id,
+            accepted_to_seq,
+            batch_id,
+        } => {
+            assert_eq!(session_id, output.session_id);
+            assert_eq!(accepted_to_seq, 2);
+            assert_eq!(batch_id.as_deref(), Some("batch-live-1"));
+        }
+        other => panic!("expected HostIngestAck, got {other:?}"),
+    }
+
+    // Client receives server-translated UI events (not host-supplied projection).
+    let mut kinds = Vec::new();
+    for _ in 0..2 {
+        match recv_server_frame(&mut client_ws).await? {
+            ServerFrame::StreamEvent {
+                topic,
+                kind,
+                seq,
+                payload,
+            } => {
+                assert_eq!(topic, format!("agent_session:{}", output.session_id));
+                assert_eq!(kind, "ui_event");
+                assert!(seq == Some(1) || seq == Some(2));
+                kinds.push(payload["kind"].as_str().unwrap_or_default().to_string());
+            }
+            other => panic!("expected StreamEvent fanout, got {other:?}"),
+        }
+    }
+    assert!(
+        kinds.iter().any(|k| k == "message_started"),
+        "kinds={kinds:?}"
+    );
+    assert!(kinds.iter().any(|k| k == "text_delta"), "kinds={kinds:?}");
+
+    let session = store::agent_sessions::get(&relay.pool, &output.session_id)
+        .await?
+        .expect("session row");
+    assert_eq!(session.status, "running");
+
+    Ok(())
+}
+
+/// Golden path: approval/request inside HostIngestLiveBatch is recorded so
+/// remote `/v1/approvals/respond` can resolve it.
+#[tokio::test]
+async fn host_ingest_live_batch_records_approval_request() -> anyhow::Result<()> {
+    let relay = spawn_relay().await?;
+    let (account_id, phone_id) =
+        seed_client_account(&relay, "ws-host-ingest-approval@example.com").await?;
+    let host_id = seed_host(&relay).await?;
+    let members = vec![account_id.clone()];
+    let conversation = store::social::create_group_conversation(
+        &relay.pool,
+        &account_id,
+        "Host Ingest Approval",
+        &members,
+        100,
+    )
+    .await?;
+    store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
+
+    let output = seed_session(
+        &relay,
+        &account_id,
+        host_id,
+        &conversation.conversation_id,
+        "host-ingest-approval-seed",
+        Some("seed"),
+    )
+    .await?;
+
+    let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
+    let mut host_ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
+    match recv_server_frame(&mut host_ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
+    }
+    match recv_server_frame(&mut host_ws).await? {
+        ServerFrame::DurableEvent { .. } => {}
+        other => panic!("expected host DurableEvent replay, got {other:?}"),
+    }
+
+    let request_id = "perm-live-1";
+    // Use wall-clock ts so the approval timeout poller does not immediately
+    // expire a synthetic epoch timestamp.
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    send_client_frame(
+        &mut host_ws,
+        &ClientFrame::HostIngestLiveBatch {
+            batch: minos_protocol::realtime::HostIngestLiveBatch {
+                batch_id: "batch-approval-1".into(),
+                host_id,
+                chunks: vec![minos_protocol::realtime::HostIngestChunk {
+                    event_id: format!("{host_id}:{}:1", output.session_id),
+                    session_id: output.session_id.clone(),
+                    seq: 1,
+                    agent: minos_domain::AgentName::Codex,
+                    kind: "agent_event".into(),
+                    payload: serde_json::json!({
+                        "method": "approval/request",
+                        "params": {
+                            "request_id": request_id,
+                            "turn_id": "turn-approve-1",
+                            "method": "session/request_permission",
+                            "params": { "toolCall": { "title": "ls" } },
+                            // 0 = no host/backend auto-timeout (wait for user).
+                            "timeout_ms": 0
+                        }
+                    }),
+                    conversation_id: Some(conversation.conversation_id.clone()),
+                    // Host projection ignored; approvals come from raw payload.
+                    projection: vec![],
+                    first_ts_ms: now_ms,
+                    last_ts_ms: now_ms,
+                    byte_len: 64,
+                    checksum_sha256: "b".repeat(64),
+                }],
+            },
+        },
+    )
+    .await?;
+
+    match recv_server_frame(&mut host_ws).await? {
+        ServerFrame::HostIngestAck {
+            accepted_to_seq, ..
+        } => {
+            assert_eq!(accepted_to_seq, 1);
+        }
+        other => panic!("expected HostIngestAck, got {other:?}"),
+    }
+
+    // Allow async approval side effects to settle.
+    let row = wait_for_approval_row(&relay, request_id).await?;
+    assert_eq!(row.agent_session_id, output.session_id);
+    assert_eq!(
+        row.state,
+        store::approval_requests::ApprovalRequestState::Pending
+    );
+    assert_eq!(row.host_device_id, host_id);
+
+    Ok(())
+}
+
+/// Host-local session id (not cloud-started) is auto-registered when host is Linked.
+#[tokio::test]
+async fn host_ingest_auto_registers_unknown_session_when_linked() -> anyhow::Result<()> {
+    let relay = spawn_relay().await?;
+    let (account_id, phone_id) =
+        seed_client_account(&relay, "ws-host-ingest-autoreg@example.com").await?;
+    let host_id = seed_host(&relay).await?;
+    store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
+
+    let local_session_id = "57776df1-db66-4e7d-a2db-177a11f53c20";
+    let local_conversation_id = "desktop-local-conv-1";
+
+    let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
+    let mut host_ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
+    match recv_server_frame(&mut host_ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
+    }
+
+    send_client_frame(
+        &mut host_ws,
+        &ClientFrame::HostIngestLiveBatch {
+            batch: minos_protocol::realtime::HostIngestLiveBatch {
+                batch_id: "batch-autoreg-1".into(),
+                host_id,
+                chunks: vec![minos_protocol::realtime::HostIngestChunk {
+                    event_id: format!("{host_id}:{local_session_id}:1"),
+                    session_id: local_session_id.into(),
+                    seq: 1,
+                    agent: minos_domain::AgentName::Codex,
+                    kind: "agent_event".into(),
+                    payload: serde_json::json!({
+                        "method": "item/started",
+                        "params": {
+                            "item": { "type": "agentMessage", "id": "msg-auto-1" }
+                        }
+                    }),
+                    conversation_id: Some(local_conversation_id.into()),
+                    projection: vec![],
+                    first_ts_ms: 3_000,
+                    last_ts_ms: 3_000,
+                    byte_len: 80,
+                    checksum_sha256: "c".repeat(64),
+                }],
+            },
+        },
+    )
+    .await?;
+
+    match recv_server_frame(&mut host_ws).await? {
+        ServerFrame::HostIngestAck {
+            session_id,
+            accepted_to_seq,
+            ..
+        } => {
+            assert_eq!(session_id, local_session_id);
+            assert_eq!(accepted_to_seq, 1);
+        }
+        other => panic!("expected HostIngestAck after auto-register, got {other:?}"),
+    }
+
+    let session = store::agent_sessions::get(&relay.pool, local_session_id)
+        .await?
+        .expect("formal session auto-registered");
+    assert_eq!(session.conversation_id, local_conversation_id);
+    assert_eq!(
+        session.host_device_id.as_deref(),
+        Some(host_id.to_string().as_str())
+    );
+    assert_eq!(session.status, "running");
+
+    Ok(())
+}
+
+async fn wait_for_approval_row(
+    relay: &Relay,
+    request_id: &str,
+) -> anyhow::Result<store::approval_requests::ApprovalRequestRow> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Some(row) = store::approval_requests::get(&relay.pool, request_id).await? {
+            return Ok(row);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for approval_requests row {request_id}");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }

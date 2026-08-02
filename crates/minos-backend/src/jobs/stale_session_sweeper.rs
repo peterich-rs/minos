@@ -42,7 +42,7 @@ impl Job for StaleSessionSweeperJob {
                 let count = sqlx::query_scalar::<_, i64>(
                     "SELECT COUNT(*) FROM agent_sessions
                       WHERE status IN ('pending', 'active')
-                        AND host_device_id IS NOT NULL",
+                        AND host_installation_id IS NOT NULL",
                 )
                 .fetch_one(pool)
                 .await
@@ -58,7 +58,7 @@ impl Job for StaleSessionSweeperJob {
                 let count = sqlx::query_scalar::<_, i64>(
                     "SELECT COUNT(*) FROM agent_sessions
                       WHERE status IN ('pending', 'active')
-                        AND host_device_id IS NOT NULL",
+                        AND host_installation_id IS NOT NULL",
                 )
                 .fetch_one(pool)
                 .await

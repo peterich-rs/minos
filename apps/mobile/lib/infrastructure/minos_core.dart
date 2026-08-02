@@ -58,7 +58,7 @@ class MinosCore implements MinosCoreProtocol {
   /// AuthController's stream listener will trigger the WS resume after
   /// the user logs in (`AuthAuthenticated`).
   ///
-  /// Auth-only snapshots are valid too: login/register happens before QR
+  /// Auth-only snapshots are valid too: exchange happens before QR
   /// pairing, so cold launch must keep the bearer tuple and stable device id.
   @visibleForTesting
   static Future<MobileClient> resolveClient({
@@ -98,17 +98,6 @@ class MinosCore implements MinosCoreProtocol {
         return buildFresh();
       }
       return client;
-    }
-  }
-
-  @override
-  Future<void> pairWithQrJson(String qrJson) async {
-    await _client.pairWithQrJson(qrJson: qrJson);
-    try {
-      await _secure.saveState(await _client.persistedPairingState());
-    } catch (error, stackTrace) {
-      await _rollbackFailedPersistedPairSave();
-      Error.throwWithStackTrace(error, stackTrace);
     }
   }
 
@@ -386,21 +375,14 @@ class MinosCore implements MinosCoreProtocol {
   // ---- Auth forwarders ----
 
   @override
-  Future<AuthSummary> register({
-    required String email,
-    required String password,
-  }) async {
-    final summary = await _client.register(email: email, password: password);
-    await _onAuthLanded(summary.accountId);
-    return summary;
-  }
-
   @override
-  Future<AuthSummary> login({
-    required String email,
-    required String password,
+  @override
+  Future<AuthSummary> loginWithSupabase({
+    required String supabaseAccessToken,
   }) async {
-    final summary = await _client.login(email: email, password: password);
+    final summary = await _client.loginWithSupabase(
+      supabaseAccessToken: supabaseAccessToken,
+    );
     await _onAuthLanded(summary.accountId);
     return summary;
   }
@@ -422,7 +404,7 @@ class MinosCore implements MinosCoreProtocol {
 
   /// Post-auth persistence (Phase 11.3 + ADR-0020).
   ///
-  /// After a successful `register` / `login` we mirror the freshly minted
+  /// After a successful Supabase exchange we mirror the freshly minted
   /// auth tuple from the Rust core into the Dart keychain so a cold
   /// relaunch can rehydrate `auth_session` synchronously and the
   /// AuthController's first frame is already `Authenticated`.
@@ -564,22 +546,6 @@ class MinosCore implements MinosCoreProtocol {
     questionId: questionId,
     answersJson: jsonEncode(answers),
   );
-
-  Future<void> _rollbackFailedPersistedPairSave() async {
-    // ADR-0020: with bearer-only auth the server's `account_host_pairings`
-    // row is the source of truth for the pairing — we can't atomically
-    // un-pair without the just-minted host_device_id, which the failed
-    // persistedPairingState() may not have surfaced. Best-effort: drop
-    // any partial keychain snapshot so the next launch starts clean. The
-    // user can forget the Mac explicitly from the Partners tab if the
-    // server-side pairing turns out to be stale.
-    try {
-      await _secure.clearAll();
-    } catch (_) {
-      // Preserve the original persistence failure; the next launch will still
-      // treat any leftover partial snapshot as non-resumable.
-    }
-  }
 
   static bool _shouldDiscardPersistedState(Object error) {
     return error is MinosError_DeviceNotTrusted ||

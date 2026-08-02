@@ -71,6 +71,14 @@ dependencies:
   flutter_list_view: ^1.1.29
   go_router: ^17.2.3
 
+  # Pure-Dart cloud control plane (GET /v1/hosts, POST /v1/auth/supabase).
+  http: ^1.2.2
+
+  # Supabase Auth IdP for exchange login (T-mob-01 / T-auth-07). Optional at
+  # runtime when SUPABASE_URL + SUPABASE_ANON_KEY dart-defines are unset —
+  # password Minos login remains the transitional fallback.
+  supabase_flutter: ^2.9.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

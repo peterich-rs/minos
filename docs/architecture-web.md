@@ -125,7 +125,7 @@ src/
 
 | 类别 | 端点 |
 |------|------|
-| 认证 | register, login, refresh, logout, change-password |
+| 认证 | supabase exchange, refresh, logout |
 | 实时 | ws-ticket |
 | 配对 | list-hosts, confirm |
 | 资料 | self, minos-id, display-name, search |

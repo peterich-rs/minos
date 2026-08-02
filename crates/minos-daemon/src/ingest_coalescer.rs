@@ -52,9 +52,15 @@ impl IngestCoalescer {
             *next += 1;
             seq
         };
+        let conversation_id = self
+            .store
+            .get_session(&ingest.session_id)
+            .await?
+            .map(|row| row.conversation_id)
+            .filter(|id| !id.is_empty());
         let mut inner = self.inner.lock().await;
         let projection = inner.projector.translate(&ingest, ingest.inline_bytes());
-        Ok(IngestChunk::new(ingest, seq, projection))
+        Ok(IngestChunk::new(ingest, seq, projection, conversation_id))
     }
 
     async fn take_next_seq(&self, session_id: &str) -> Option<u64> {

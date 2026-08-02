@@ -18,11 +18,12 @@ use minos_protocol::local_rpc::{
 };
 use minos_protocol::{
     AppendConversationMessageParams, ApprovalDecisionRequest, CreateConversationParams,
-    CreateProjectRequest, ListClisResponse, ListConversationAgentSessionsParams,
-    ListConversationMessagesParams, ListConversationsParams, ListProjectsResponse,
-    LocalConversationMessage, LocalConversationSummary, LocalReactionGroup, ProjectSummary,
-    ReadSessionParams, RemoveConversationAgentParams, SendUserMessageRequest, SessionState,
-    SessionSummary, StartAgentInConversationRequest, StartAgentResponse,
+    CreateProjectRequest, HostApplyLinkTokenParams, HostApplyLinkTokenResponse,
+    HostPrepareLinkResponse, HostSignLinkProofParams, HostSignLinkProofResponse, ListClisResponse,
+    ListConversationAgentSessionsParams, ListConversationMessagesParams, ListConversationsParams,
+    ListProjectsResponse, LocalConversationMessage, LocalConversationSummary, LocalReactionGroup,
+    ProjectSummary, ReadSessionParams, RemoveConversationAgentParams, SendUserMessageRequest,
+    SessionState, SessionSummary, StartAgentInConversationRequest, StartAgentResponse,
     ToggleConversationMessageReactionParams, ToggleConversationMessageReactionResponse,
     UpdateConversationParams,
 };
@@ -53,6 +54,11 @@ pub struct ConnectionDto {
     pub source: String,
     /// True when this process owns a managed DaemonHandle.
     pub managed: bool,
+    /// IM **device online**: managed daemon has live `/ws/host` to the hub.
+    /// False when disconnected, connecting, or non-managed external daemon
+    /// without a handle (cannot observe relay link).
+    #[serde(default)]
+    pub hub_online: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -353,6 +359,27 @@ pub struct PushStatusDto {
     pub live: bool,
 }
 
+/// Host Link prepare material (D02 §7.2 / daemon `host_prepare_link`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostPrepareLinkDto {
+    pub installation_id: String,
+    pub public_key: String,
+    pub nonce: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostSignLinkProofDto {
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostApplyLinkTokenDto {
+    pub linked: bool,
+}
+
 pub struct DaemonBridge {
     inner: Mutex<BridgeInner>,
     /// Serialize connect/bootstrap so React StrictMode double-mount cannot
@@ -610,12 +637,19 @@ impl DaemonBridge {
     }
 
     fn status_locked(guard: &BridgeInner) -> ConnectionDto {
+        let hub_online = guard.managed.as_ref().is_some_and(|h| {
+            matches!(
+                h.current_relay_link(),
+                minos_domain::RelayLinkState::Connected
+            )
+        });
         ConnectionDto {
             connected: guard.client.is_some(),
             endpoint: guard.endpoint.clone(),
             error: guard.last_error.clone(),
             source: guard.source.clone(),
             managed: guard.managed.is_some(),
+            hub_online,
         }
     }
 
@@ -1141,6 +1175,58 @@ impl DaemonBridge {
             .await
             .context("minos_local_send_user_message")?;
         Ok(())
+    }
+
+    /// Host Link: fetch host installation identity + bootstrap nonce.
+    pub async fn host_prepare_link(&self) -> Result<HostPrepareLinkDto> {
+        let client = self.client().await?;
+        let response: HostPrepareLinkResponse = client
+            .request("minos_local_host_prepare_link", ArrayParams::new())
+            .await
+            .context("minos_local_host_prepare_link")?;
+        Ok(HostPrepareLinkDto {
+            installation_id: response.installation_id,
+            public_key: response.public_key,
+            nonce: response.nonce,
+        })
+    }
+
+    /// Host Link: Ed25519 sign `"{installation_id}:{nonce}:v1/hosts/link"`.
+    pub async fn host_sign_link_proof(
+        &self,
+        installation_id: String,
+        nonce: String,
+    ) -> Result<HostSignLinkProofDto> {
+        let client = self.client().await?;
+        let req = HostSignLinkProofParams {
+            installation_id,
+            nonce,
+        };
+        let response: HostSignLinkProofResponse = client
+            .request("minos_local_host_sign_link_proof", [req])
+            .await
+            .context("minos_local_host_sign_link_proof")?;
+        Ok(HostSignLinkProofDto {
+            signature: response.signature,
+        })
+    }
+
+    /// Host Link: persist `hit_*` and wake `/ws/host` dialer.
+    pub async fn host_apply_link_token(
+        &self,
+        host_installation_token: String,
+    ) -> Result<HostApplyLinkTokenDto> {
+        let client = self.client().await?;
+        let req = HostApplyLinkTokenParams {
+            host_installation_token,
+        };
+        let response: HostApplyLinkTokenResponse = client
+            .request("minos_local_host_apply_link_token", [req])
+            .await
+            .context("minos_local_host_apply_link_token")?;
+        Ok(HostApplyLinkTokenDto {
+            linked: response.linked,
+        })
     }
 
     /// Reattach a suspended/persisted session. When `auto_continue` is true and

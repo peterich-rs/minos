@@ -1,6 +1,8 @@
 pub mod auth;
 pub mod event;
 pub mod gateway;
+pub mod liveness;
+pub mod presence;
 pub mod subscription;
 pub mod topic;
 pub mod wire;

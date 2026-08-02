@@ -14,6 +14,12 @@ Primary production path for Minos cloud hub.
 
 Optional alternate ingress (tunnel instead of public 443): [cloudflare-tunnel-setup.md](./cloudflare-tunnel-setup.md).
 
+### Dev/agent binary bypass
+
+For urgent agent/local deploys that **only replace the `minos-backend` process** (Postgres, Redis, and Caddy stay), use the binary path documented in **[vps-dev-binary.md](./vps-dev-binary.md)**. That flow builds a linux/amd64 binary off-box, rsyncs to `/opt/minos/releases/<sha>/`, and runs under systemd on `127.0.0.1:8787`.
+
+**Do not** run the Docker `minos-backend` container and the systemd binary unit on port 8787 at the same time. Docker + GHCR remains the production SSOT; the binary path is a coexistence bypass, not a replacement for this document.
+
 ---
 
 ## Traffic path
@@ -223,3 +229,4 @@ Local dev defaults remain `127.0.0.1:8787`.
 - Secrets rotation: [secrets-rotation.md](./secrets-rotation.md)
 - Image workflow: `.github/workflows/backend-image.yml`
 - Compose SSOT: `deploy/prod/docker-compose.yml`
+- Dev/agent binary bypass: [vps-dev-binary.md](./vps-dev-binary.md)

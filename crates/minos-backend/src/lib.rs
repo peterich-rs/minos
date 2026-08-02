@@ -5,7 +5,7 @@
 //! - `error` — backend-local error type (mapped to `MinosError` at API boundary
 //!   in step 10; see spec §10.1).
 //! - `store` — SQLite pool + embedded migrations.
-//! - `pairing` — broker-side pairing service (token issue/consume, forget).
+//! - `host_link` — same-account host link (bind/unbind host installations).
 //! - `session` — in-memory registry of live WebSocket sessions with bounded
 //!   per-peer outboxes (step 7; consumed by the WS dispatcher in step 8).
 //! - `envelope` — WebSocket envelope dispatcher + local-RPC handlers
@@ -29,11 +29,11 @@ pub mod envelope;
 pub mod error;
 pub mod friends;
 pub mod host_commands;
+pub mod host_link;
 pub mod http;
 pub mod ingest;
 pub mod jobs;
 pub mod notifications;
-pub mod pairing;
 pub mod profiles;
 pub mod project;
 pub mod realtime;

@@ -4,39 +4,27 @@ import 'package:minos/src/rust/api/minos.dart';
 /// the application / presentation layers depend on this protocol (rather than
 /// the Rust-owned opaque class) keeps the layers mockable in unit tests.
 abstract class MinosCoreProtocol {
-  /// Submit a raw QR v2 JSON payload to the Rust core. Completes when the
-  /// `Pair` RPC returns; the Rust side persists the minted device id
-  /// in its pairing store before this future resolves.
-  Future<void> pairWithQrJson(String qrJson);
-
-  /// Forget a specific paired Mac (by `host_device_id`). After ADR-0020 the
-  /// pairing is account-scoped on the server: this drops the
-  /// `account_host_pairings` row and tears down the WS to that Mac.
+  /// Unlink a host installation from the account and clear local active host
+  /// when it matches (`POST /v1/hosts/unlink`).
   Future<void> forgetHost(String hostDeviceId);
 
-  /// Paired Mac partners for the current account. Returns an empty list
-  /// when no Macs are paired or the WS hasn't synced yet.
+  /// Linked hosts for the current account (`GET /v1/hosts`).
   Future<List<HostSummaryDto>> listPairedHosts();
 
   /// `host_device_id` of the Mac currently selected as the routing target,
   /// or `null` when no active Mac is set.
   Future<String?> activeHost();
 
-  /// Set the routing target. Subsequent `Forward` envelopes will be
-  /// `target_device_id`-stamped to this Mac.
+  /// Set the routing target. Subsequent host commands go to this Mac.
   Future<void> setActiveHost(String hostDeviceId);
 
-  /// Whether the durable store contains enough state to represent an
-  /// authenticated device, even if the current WebSocket is offline.
+  /// Whether the durable store has enough auth state for a cold-start resume.
   Future<bool> hasPersistedPairing();
 
-  /// Display name of the currently paired peer, sourced from the QR's
-  /// `host_display_name` at pair time. Returns `null` when no pairing
-  /// is persisted or the name was never recorded.
+  /// Optional display label for the active host (local preference).
   Future<String?> peerDisplayName();
 
-  /// Persist the paired peer's display name. Pass `null` or empty to
-  /// clear the stored value.
+  /// Persist the active host display name. Pass `null` or empty to clear.
   Future<void> setPeerDisplayName(String? name);
 
   Future<MyProfileResponse> myProfile();
@@ -193,17 +181,10 @@ abstract class MinosCoreProtocol {
 
   // ---- Auth (Phase 8) ----
 
-  /// Register a new account on the backend. On success the Rust core
-  /// surfaces `Authenticated` on [authStates] and starts the WS reconnect
-  /// loop.
-  Future<AuthSummary> register({
-    required String email,
-    required String password,
-  });
-
-  /// Log into an existing account. Same effect on [authStates] as
-  /// [register].
-  Future<AuthSummary> login({required String email, required String password});
+  /// Exchange a Supabase Auth access token for a Minos session (only human
+  /// account create/login path). Surfaces `Authenticated` on [authStates]
+  /// and starts the WS reconnect loop.
+  Future<AuthSummary> loginWithSupabase({required String supabaseAccessToken});
 
   /// Rotate the bearer + refresh tokens. Surfaces `Refreshing` /
   /// `Authenticated` / `RefreshFailed` transitions on [authStates].

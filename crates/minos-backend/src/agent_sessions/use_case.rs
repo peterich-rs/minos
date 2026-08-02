@@ -102,7 +102,7 @@ impl DefaultAgentSessionService {
         &self,
         account_id: &str,
     ) -> Result<DeviceId, AgentSessionError> {
-        crate::store::account_host_pairings::list_hosts_for_account(&self.store, account_id)
+        crate::store::host_links::list_hosts_for_account(&self.store, account_id)
             .await?
             .into_iter()
             .map(|row| row.host_device_id)
@@ -805,7 +805,7 @@ async fn insert_agent_session_in_tx(
         DbTx::Sqlite(tx) => {
             sqlx::query(
                 "INSERT INTO agent_sessions
-                    (session_id, conversation_id, project_id, host_device_id, agent_id, status, started_at_ms, ended_at_ms, idempotency_account_id, idempotency_key)
+                    (session_id, conversation_id, project_id, host_installation_id, agent_id, status, started_at_ms, ended_at_ms, idempotency_account_id, idempotency_key)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(session_id)
@@ -825,7 +825,7 @@ async fn insert_agent_session_in_tx(
         DbTx::Postgres(tx) => {
             sqlx::query(
                 "INSERT INTO agent_sessions
-                    (session_id, conversation_id, project_id, host_device_id, agent_id, status, started_at_ms, ended_at_ms, idempotency_account_id, idempotency_key)
+                    (session_id, conversation_id, project_id, host_installation_id, agent_id, status, started_at_ms, ended_at_ms, idempotency_account_id, idempotency_key)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
             )
             .bind(session_id)

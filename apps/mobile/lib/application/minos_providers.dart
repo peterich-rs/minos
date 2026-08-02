@@ -1,17 +1,62 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart'
-    show AsyncNotifier, AsyncNotifierProvider, FutureProvider;
+    show AsyncNotifier, AsyncNotifierProvider, FutureProvider, Provider;
+import 'package:minos/data/repositories/hosts_repository.dart';
 import 'package:minos/data/repositories/runtime_repository.dart';
+import 'package:minos/data/repositories/thread_repository.dart';
+import 'package:minos/domain/linked_host.dart';
 import 'package:minos/src/rust/api/minos.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'minos_providers.g.dart';
 
 /// Hot stream of connection-state transitions sourced from the Rust core.
+///
+/// This is IM **account online** for this phone: live `/ws/client` to the hub.
 @Riverpod(keepAlive: true)
 Stream<ConnectionState> connectionState(Ref ref) {
   return ref.watch(runtimeRepositoryProvider).connectionStates;
 }
+
+/// Keep [pairedMacsProvider] in sync with hub presence StreamEvents
+/// (`UiEventMessage.raw(kind: presence)`). Device online = host WS on server.
+final hostPresenceSyncProvider = Provider<void>((ref) {
+  final repo = ref.watch(threadRepositoryProvider);
+  final sub = repo.uiEvents.listen((frame) {
+    final ui = frame.ui;
+    if (ui is! UiEventMessage_Raw || ui.kind != 'presence') return;
+    try {
+      final map = jsonDecode(ui.payloadJson);
+      if (map is! Map) return;
+      final kind = map['principal_kind']?.toString();
+      // Only host device rows live in pairedMacs; account_client is for hosts.
+      if (kind != null && kind != 'host') return;
+      final id = map['installation_id']?.toString().trim() ?? '';
+      if (id.isEmpty) return;
+      final online = map['online'] == true;
+      final lastSeen = map['last_seen_at_ms'];
+      final lastSeenMs = lastSeen is int
+          ? lastSeen
+          : lastSeen is num
+          ? lastSeen.toInt()
+          : int.tryParse(lastSeen?.toString() ?? '') ?? 0;
+      unawaited(
+        ref
+            .read(pairedMacsProvider.notifier)
+            .applyHostPresence(
+              installationId: id,
+              online: online,
+              lastSeenAtMs: lastSeenMs > 0 ? lastSeenMs : null,
+            ),
+      );
+    } catch (_) {
+      // Malformed presence payload — ignore; next list refresh corrects.
+    }
+  });
+  ref.onDispose(sub.cancel);
+});
 
 final hasPersistedPairingProvider = FutureProvider<bool>((ref) {
   return ref.watch(runtimeRepositoryProvider).hasPersistedPairing();
@@ -55,31 +100,108 @@ final hostWorkspacesProvider =
           .listHostWorkspaces(hostDeviceId: hostDeviceId);
     });
 
-/// Paired Macs for the current account. Drives the Partners list. Refresh
-/// happens via `ref.invalidate(pairedMacsProvider)` after a forget /
-/// successful pair — there is no polling stream yet, the user can pull
-/// the partners tab to refresh.
+/// Linked hosts for the current account (`GET /v1/hosts` via
+/// [HostsRepository]). Drives the Partners / Hosts list. Refresh happens
+/// via `ref.invalidate(pairedMacsProvider)` or pull-to-refresh.
 final pairedMacsProvider =
     AsyncNotifierProvider<PairedMacs, List<HostSummaryDto>>(PairedMacs.new);
 
 class PairedMacs extends AsyncNotifier<List<HostSummaryDto>> {
+  /// last_seen_at_ms by host installation id (not on FRB DTO).
+  final Map<String, int> _lastSeenByHost = {};
+
   @override
-  Future<List<HostSummaryDto>> build() {
-    return ref.watch(runtimeRepositoryProvider).listPairedHosts();
+  Future<List<HostSummaryDto>> build() async {
+    // Arm presence listener for the app lifetime.
+    ref.watch(hostPresenceSyncProvider);
+    final linked = await ref.watch(hostsRepositoryProvider).listLinkedHosts();
+    _ingestLastSeen(linked);
+    final hosts = linked.map(linkedHostToDto).toList(growable: false);
+    await _ensureActiveHost(hosts);
+    return hosts;
   }
 
   Future<void> refresh() async {
     final previous = state;
     try {
-      state = AsyncValue.data(
-        await ref.read(runtimeRepositoryProvider).listPairedHosts(),
-      );
+      final linked = await ref.read(hostsRepositoryProvider).listLinkedHosts();
+      _ingestLastSeen(linked);
+      final hosts = linked.map(linkedHostToDto).toList(growable: false);
+      await _ensureActiveHost(hosts);
+      state = AsyncValue.data(hosts);
     } catch (error, stackTrace) {
       if (previous.hasValue) {
         state = previous;
         Error.throwWithStackTrace(error, stackTrace);
       }
       state = AsyncValue.error(error, stackTrace);
+    }
+  }
+
+  /// Live hub presence for a host device (IM friend-device online).
+  Future<void> applyHostPresence({
+    required String installationId,
+    required bool online,
+    int? lastSeenAtMs,
+  }) async {
+    if (lastSeenAtMs != null && lastSeenAtMs > 0) {
+      _lastSeenByHost[installationId] = lastSeenAtMs;
+    }
+    final current = state.asData?.value;
+    if (current == null) {
+      // No list yet — full refresh when possible.
+      try {
+        await refresh();
+      } catch (_) {}
+      return;
+    }
+    var changed = false;
+    final next = current
+        .map((h) {
+          if (h.hostDeviceId != installationId) return h;
+          if (h.online == online) return h;
+          changed = true;
+          return HostSummaryDto(
+            hostDeviceId: h.hostDeviceId,
+            hostDisplayName: h.hostDisplayName,
+            pairedAtMs: h.pairedAtMs,
+            pairedViaDeviceId: h.pairedViaDeviceId,
+            online: online,
+          );
+        })
+        .toList(growable: false);
+    if (changed) {
+      state = AsyncValue.data(next);
+    }
+  }
+
+  int? lastSeenAtMs(String hostInstallationId) =>
+      _lastSeenByHost[hostInstallationId];
+
+  void _ingestLastSeen(List<LinkedHost> linked) {
+    for (final h in linked) {
+      if (h.lastSeenAtMs > 0) {
+        _lastSeenByHost[h.hostInstallationId] = h.lastSeenAtMs;
+      }
+    }
+  }
+
+  /// Golden path: if no active routing target is set but the account has
+  /// linked hosts, prefer the first online host (else first listed).
+  Future<void> _ensureActiveHost(List<HostSummaryDto> hosts) async {
+    if (hosts.isEmpty) return;
+    final runtime = ref.read(runtimeRepositoryProvider);
+    final current = await runtime.activeHost();
+    if (current != null && hosts.any((h) => h.hostDeviceId == current)) {
+      return;
+    }
+    final online = hosts.where((h) => h.online);
+    final preferred = online.isNotEmpty ? online.first : hosts.first;
+    try {
+      await runtime.setActiveHost(preferred.hostDeviceId);
+      ref.invalidate(activeMacProvider);
+    } catch (_) {
+      // Best-effort: session list still works; forwards may need manual select.
     }
   }
 }
@@ -122,71 +244,6 @@ class ActiveMac extends _$ActiveMac {
         await ref.read(runtimeRepositoryProvider).activeHost(),
       );
     } catch (e, st) {
-      state = AsyncValue.error(e, st);
-    }
-  }
-}
-
-/// Camera permission status + action helpers. The notifier is the single
-/// source of truth for the permission state driving the pairing UI.
-@riverpod
-class CameraPermission extends _$CameraPermission {
-  @override
-  Future<PermissionStatus> build() => check();
-
-  /// Re-read the current permission status from the OS.
-  Future<PermissionStatus> check() async {
-    final status = await Permission.camera.status;
-    state = AsyncValue.data(status);
-    return status;
-  }
-
-  /// Trigger the OS permission prompt.
-  Future<PermissionStatus> request() async {
-    state = const AsyncValue.loading();
-    final status = await Permission.camera.request();
-    state = AsyncValue.data(status);
-    return status;
-  }
-
-  /// Open the iOS Settings app so the user can grant a permanently-denied
-  /// permission.
-  Future<bool> openSettings() => openAppSettings();
-}
-
-/// Owns the pairing submission lifecycle. The outcome is a plain
-/// `AsyncValue<bool>` (true on successful pair) — v2 pairing does not
-/// return a typed response body to the caller.
-@riverpod
-class PairingController extends _$PairingController {
-  @override
-  FutureOr<bool> build() => false;
-
-  /// Submit a raw QR JSON payload to the Rust core, updating [state] with
-  /// loading / data / error as the call resolves. `displayName` is the
-  /// `host_display_name` already extracted from the QR by the scanner UI;
-  /// it is mirrored into the Dart secure store on success so the partners
-  /// list can show the peer name instead of a generic "Agent Runtime".
-  Future<void> submit(String qrJson, {String? displayName}) async {
-    state = const AsyncValue.loading();
-    try {
-      final repository = ref.read(runtimeRepositoryProvider);
-      await repository.pairWithQrJson(qrJson);
-      try {
-        await repository.setPeerDisplayName(displayName);
-      } catch (_) {
-        // Best-effort: a keychain write failure here should not undo the
-        // successful pair — the partner row will fall back to a generic
-        // label until the name can be resolved another way.
-      }
-      ref.invalidate(hasPersistedPairingProvider);
-      ref.invalidate(peerDisplayNameProvider);
-      state = const AsyncValue.data(true);
-    } on MinosError catch (e, st) {
-      state = AsyncValue.error(e, st);
-    } catch (e, st) {
-      // Non-MinosError (e.g. frb PanicException, raw StateError on missing
-      // RustLib.init). Keep the UI out of the stuck-loading state.
       state = AsyncValue.error(e, st);
     }
   }

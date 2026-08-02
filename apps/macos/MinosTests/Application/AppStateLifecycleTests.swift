@@ -126,9 +126,6 @@ final class AppStateLifecycleTests: XCTestCase {
             peer: .unpaired,
             trustedDevice: nil
         )
-        appState.currentQr = MockDaemon.makeQrPayload()
-        appState.currentQrGeneratedAt = Date(timeIntervalSince1970: 999)
-        appState.isShowingQr = true
 
         await appState.shutdown()
 
@@ -139,9 +136,6 @@ final class AppStateLifecycleTests: XCTestCase {
         XCTAssertNil(appState.daemon)
         XCTAssertNil(appState.relayLinkSubscription)
         XCTAssertNil(appState.peerSubscription)
-        XCTAssertNil(appState.currentQr)
-        XCTAssertNil(appState.currentQrGeneratedAt)
-        XCTAssertFalse(appState.isShowingQr)
     }
 
     @MainActor
