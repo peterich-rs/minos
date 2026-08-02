@@ -191,6 +191,7 @@ async fn seed_session(
             initial_user_message: initial_user_message.map(str::to_string),
             client_request_id: client_request_id.to_string(),
             caller_account_id: account_id.to_string(),
+            conversation_title: None,
         })
         .await
         .map_err(|error| anyhow::anyhow!("start session failed: {error}"))
@@ -466,6 +467,9 @@ async fn account_topic_delivers_social_message_payloads() -> anyhow::Result<()> 
             &account_id,
             &conversation.conversation_id,
             "hello while chat is open",
+            None,
+            None,
+            minos_protocol::MessageSource::ClientLive,
             None,
         )
         .await?;

@@ -202,6 +202,22 @@ pub struct CreateGroupConversationRequest {
     pub member_account_ids: Vec<String>,
 }
 
+/// Upsert a work/group conversation with a client-owned id (Desktop → Hub IM).
+///
+/// Creates the conversation when missing; updates title and ensures membership
+/// when present. Does not wipe messages.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct UpsertConversationRequest {
+    pub conversation_id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub member_account_ids: Vec<String>,
+    /// Optional cloud agent ids to attach (`conversation_agent_members`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_ids: Vec<String>,
+}
+
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ConversationResponse {
@@ -268,12 +284,50 @@ pub struct ListChatMessagesRequest {
     pub limit: Option<u32>,
 }
 
+/// Who authored a chat write and whether Hub may dispatch agents.
+///
+/// `client_message_id` is **only** for idempotency — it must not gate dispatch.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageSource {
+    /// Human client live send (default). May @-dispatch agents.
+    #[default]
+    ClientLive,
+    /// Host / Desktop projection of an already-executed local message.
+    /// Never dispatches agents on the hub.
+    HostProjection,
+    /// Server-generated system row. Never dispatches.
+    System,
+}
+
+impl MessageSource {
+    /// Whether Hub should run `@agent` dispatch after inserting this user message.
+    #[must_use]
+    pub fn allows_agent_dispatch(self) -> bool {
+        matches!(self, Self::ClientLive)
+    }
+}
+
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SendChatMessageRequest {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to_message_id: Option<String>,
+    /// Client-owned message id for multi-end **idempotency** only (not dispatch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_message_id: Option<String>,
+    /// Write provenance; defaults to `client_live`. Use `host_projection` when
+    /// dual-writing already-run Host/Desktop bubbles so Hub skips agent dispatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_source: Option<MessageSource>,
+    /// Client clock for display/debug only. Hub assigns authoritative `created_at_ms`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_sent_at_ms: Option<i64>,
+    /// @deprecated Prefer `client_sent_at_ms`. Accepted but not used as ordering authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at_ms: Option<i64>,
 }
 
 // ─── Agent in Group Chat ───────────────────────────────────────────────
@@ -386,6 +440,39 @@ pub struct SendAgentMessageRequest {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to_message_id: Option<String>,
+    /// Client-owned message id for multi-end **idempotency** only
+    /// (Desktop/Daemon `agent-result:…` rows).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_message_id: Option<String>,
+    /// Write provenance; agent dual-write should use `host_projection`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_source: Option<MessageSource>,
+    /// Optional formal/local agent session id bound to this chat row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_session_id: Option<String>,
+    /// Client clock for display/debug only. Hub assigns authoritative `created_at_ms`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_sent_at_ms: Option<i64>,
+    /// @deprecated Prefer `client_sent_at_ms`. Not used as ordering authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at_ms: Option<i64>,
+}
+
+/// Ensure a Host/Desktop runtime agent exists for the caller's account.
+///
+/// Stable identity: one cloud agent per `(owner, source=host_runtime, runtime_agent)`.
+/// Used for Desktop → Hub roster projection so Mobile can list agents without
+/// treating bin names as agent_ids.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct EnsureHostRuntimeAgentRequest {
+    pub runtime_agent: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

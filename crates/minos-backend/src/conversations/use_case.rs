@@ -57,6 +57,16 @@ pub trait ConversationService: Send + Sync {
         member_account_ids: &[String],
     ) -> Result<ConversationResponse, ConversationError>;
 
+    /// Upsert a work conversation with a client-owned id (Desktop → Hub IM).
+    async fn upsert_conversation(
+        &self,
+        account_id: &str,
+        conversation_id: &str,
+        title: &str,
+        member_account_ids: &[String],
+        agent_ids: &[String],
+    ) -> Result<ConversationResponse, ConversationError>;
+
     async fn list_members(
         &self,
         account_id: &str,
@@ -83,6 +93,9 @@ pub trait ConversationService: Send + Sync {
         conversation_id: &str,
         text: &str,
         reply_to_message_id: Option<&str>,
+        client_message_id: Option<&str>,
+        message_source: minos_protocol::MessageSource,
+        client_sent_at_ms: Option<i64>,
     ) -> Result<(ChatMessageSummary, Vec<social::ProfileRow>), ConversationError>;
 
     async fn recall_message(
@@ -210,6 +223,89 @@ impl ConversationService for DefaultConversationService {
         })
     }
 
+    async fn upsert_conversation(
+        &self,
+        account_id: &str,
+        conversation_id: &str,
+        title: &str,
+        member_account_ids: &[String],
+        agent_ids: &[String],
+    ) -> Result<ConversationResponse, ConversationError> {
+        let conversation_id = conversation_id.trim();
+        if conversation_id.is_empty() {
+            return Err(ConversationError::ValidationFormat(
+                "conversation_id is required".into(),
+            ));
+        }
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(ConversationError::TitleRequired);
+        }
+
+        // Work conversations: members must be friends (or self). Peers may be empty.
+        for member in member_account_ids {
+            if member == account_id {
+                continue;
+            }
+            if !social::are_friends(&self.store, account_id, member).await? {
+                return Err(ConversationError::NotFriends);
+            }
+        }
+
+        // If conversation already exists, caller must already be a member (or become one
+        // via this upsert as creator path on first create only).
+        if let Some(existing) = social::get_conversation(&self.store, conversation_id).await? {
+            if existing.kind != "group" {
+                return Err(ConversationError::InvalidKind(existing.kind));
+            }
+            if !social::is_conversation_member(&self.store, conversation_id, account_id).await? {
+                return Err(ConversationError::Forbidden);
+            }
+        }
+
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let conversation = social::upsert_group_conversation(
+            &self.store,
+            conversation_id,
+            account_id,
+            title,
+            member_account_ids,
+            now_ms,
+        )
+        .await
+        .map_err(|error| match error {
+            BackendError::StoreQuery { message, .. }
+                if message.contains("group title is required") =>
+            {
+                ConversationError::TitleRequired
+            }
+            other => ConversationError::Internal(other),
+        })?;
+
+        for agent_id in agent_ids {
+            let agent_id = agent_id.trim();
+            if agent_id.is_empty() {
+                continue;
+            }
+            // Ignore unknown agents; attach only registered cloud agents.
+            if social::get_agent(&self.store, agent_id).await?.is_none() {
+                continue;
+            }
+            social::add_agent_to_conversation(
+                &self.store,
+                conversation_id,
+                agent_id,
+                account_id,
+                now_ms,
+            )
+            .await?;
+        }
+
+        Ok(ConversationResponse {
+            conversation_id: conversation.conversation_id,
+        })
+    }
+
     async fn list_members(
         &self,
         account_id: &str,
@@ -279,38 +375,56 @@ impl ConversationService for DefaultConversationService {
         conversation_id: &str,
         text: &str,
         reply_to_message_id: Option<&str>,
+        client_message_id: Option<&str>,
+        message_source: minos_protocol::MessageSource,
+        client_sent_at_ms: Option<i64>,
     ) -> Result<(ChatMessageSummary, Vec<social::ProfileRow>), ConversationError> {
         if !social::is_conversation_member(&self.store, conversation_id, account_id).await? {
             return Err(ConversationError::NotFound);
         }
-        let reply_target = match reply_to_message_id {
-            Some(message_id) => {
-                let reply_target = social::get_message(&self.store, message_id)
-                    .await?
-                    .ok_or_else(|| {
-                        ConversationError::ValidationFormat("reply target not found".into())
-                    })?;
-                if reply_target.conversation_id != conversation_id {
-                    return Err(ConversationError::ValidationFormat(
-                        "reply target not in conversation".into(),
-                    ));
+        // reply_to: client_live hard-fails; host_projection / system soft-drop.
+        let reply_to_id = match reply_to_message_id {
+            Some(message_id) => match social::get_message(&self.store, message_id).await? {
+                Some(reply_target) if reply_target.conversation_id == conversation_id => {
+                    Some(reply_target.message_id)
                 }
-                Some(reply_target)
-            }
+                _ => match message_source {
+                    minos_protocol::MessageSource::ClientLive => {
+                        return Err(ConversationError::ValidationFormat(
+                            "reply_to_message_id not found in this conversation".into(),
+                        ));
+                    }
+                    minos_protocol::MessageSource::HostProjection
+                    | minos_protocol::MessageSource::System => {
+                        tracing::warn!(
+                            target: "minos_backend::conversations",
+                            conversation_id = %conversation_id,
+                            reply_to_message_id = %message_id,
+                            ?message_source,
+                            "dropping invalid reply_to for non-client message source"
+                        );
+                        None
+                    }
+                },
+            },
             None => None,
         };
-        let reply_to_id = reply_target.as_ref().map(|row| row.message_id.clone());
         let members =
             social::list_conversation_member_profiles(&self.store, conversation_id).await?;
         let mentioned_account_ids = extract_mentioned_account_ids(text, account_id, &members);
-        let row = social::insert_message(
+        // Hub server clock is the sole ordering authority for created_at_ms.
+        // client_sent_at_ms is accepted for future display/debug only.
+        let _ = client_sent_at_ms;
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let row = social::insert_message_with_id(
             &self.store,
             conversation_id,
             account_id,
             text,
-            chrono::Utc::now().timestamp_millis(),
+            now_ms,
             reply_to_id.as_deref(),
             &mentioned_account_ids,
+            client_message_id,
         )
         .await?;
         let mut hydrated = hydrate_messages(&self.store, vec![row]).await?;

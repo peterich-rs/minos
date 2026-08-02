@@ -419,6 +419,86 @@ impl LocalStore {
         )
     }
 
+    /// Find a project by exact workspace path (Hub collab bind to Desktop project).
+    pub async fn find_project_by_workspace_path(
+        &self,
+        workspace_path: &str,
+    ) -> anyhow::Result<Option<ProjectRow>> {
+        let path = workspace_path.trim();
+        if path.is_empty() {
+            return Ok(None);
+        }
+        Ok(sqlx::query_as::<_, ProjectRow>(
+            "SELECT * FROM projects WHERE workspace_path = ? ORDER BY updated_at DESC LIMIT 1",
+        )
+        .bind(path)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    /// Ensure a project row exists (idempotent). Used when Hub passes a project_id
+    /// that Desktop has not yet created locally, or when binding by workspace path.
+    pub async fn ensure_project(
+        &self,
+        project_id: &str,
+        name: &str,
+        workspace_slug: &str,
+        workspace_path: Option<&str>,
+        ts_ms: i64,
+    ) -> anyhow::Result<()> {
+        if self.get_project(project_id).await?.is_some() {
+            return Ok(());
+        }
+        match self
+            .create_project(project_id, name, workspace_slug, workspace_path, ts_ms)
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(error)
+                if error
+                    .chain()
+                    .any(|c| c.to_string().contains("UNIQUE constraint failed")) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Ensure a conversation row exists under `project_id` with the **same** id
+    /// as the Hub conversation (no synthetic conversation-{slug} rewrite).
+    pub async fn ensure_conversation(
+        &self,
+        conversation_id: &str,
+        project_id: &str,
+        title: &str,
+        ts_ms: i64,
+    ) -> anyhow::Result<()> {
+        if let Some(existing) = self.get_conversation(conversation_id).await? {
+            // Keep existing project binding; refresh title if empty / placeholder.
+            if existing.title.trim().is_empty() || existing.title == "Direct agent sessions" {
+                let _ = self
+                    .update_conversation_fields(conversation_id, Some(title), None, None, ts_ms)
+                    .await?;
+            }
+            return Ok(());
+        }
+        match self
+            .create_conversation(conversation_id, project_id, title, ts_ms)
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(error)
+                if error
+                    .chain()
+                    .any(|c| c.to_string().contains("UNIQUE constraint failed")) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Update a project's name and bump `updated_at`.
     pub async fn update_project_name(
         &self,

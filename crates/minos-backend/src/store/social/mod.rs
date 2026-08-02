@@ -104,6 +104,8 @@ pub struct AgentRow {
     pub owner_account_id: String,
     pub name: String,
     pub description: String,
+    /// `user` | `host_runtime` | `system`
+    pub source: String,
     pub runtime_agent: String,
     pub model: String,
     pub workspace_path: Option<String>,
@@ -167,23 +169,25 @@ pub use conversations::{
     ensure_direct_conversation, ensure_group_conversation_with_id, get_conversation,
     is_conversation_member, list_conversation_member_profiles, list_conversation_members,
     list_conversations_for, mark_conversation_deleted_for_account,
-    mark_conversation_read_to_latest, remove_member_from_group,
+    mark_conversation_read_to_latest, remove_member_from_group, upsert_group_conversation,
 };
 
 // Conversation message functions
 pub use conversation_messages::{
     bind_session_to_message, bind_session_to_message_for_agent, get_message,
-    has_bound_message_for_session, insert_message, list_message_mentions, list_messages,
-    list_messages_by_ids, lookup_latest_session_id_for_conversation,
+    has_bound_message_for_session, insert_message, insert_message_with_id, list_message_mentions,
+    list_messages, list_messages_by_ids, lookup_latest_session_id_for_conversation,
     lookup_latest_session_id_for_conversation_agent, lookup_session_id_for_message, recall_message,
     suppress_live_ui_fanout_for_session,
 };
 
 // Agent functions
 pub use agents::{
-    add_agent_to_conversation, agents_by_ids, delete_agent, get_agent, insert_agent_message,
-    insert_agent_message_with_session, is_agent_in_conversation, list_agents_for_owner,
-    list_conversation_agents, register_agent, remove_agent_from_conversation, update_agent,
+    add_agent_to_conversation, agents_by_ids, delete_agent, ensure_host_runtime_agent,
+    find_host_runtime_agent, get_agent, insert_agent_message, insert_agent_message_with_session,
+    is_agent_in_conversation, list_agents_for_owner, list_conversation_agents, register_agent,
+    remove_agent_from_conversation, update_agent, AGENT_SOURCE_HOST_RUNTIME, AGENT_SOURCE_SYSTEM,
+    AGENT_SOURCE_USER, HOST_RUNTIME_AGENT_DESCRIPTION,
 };
 
 // ─── Tests ────────────────────────────────────────────────────────────
@@ -427,5 +431,155 @@ mod tests {
         assert!(!suppress_live_ui_fanout_for_session(&pool, "thr-direct-1")
             .await
             .unwrap());
+    }
+
+    #[tokio::test]
+    async fn upsert_group_conversation_creates_and_updates_title() {
+        let pool = memory_pool().await;
+        let alice = insert_account(&pool, "alice@example.com").await;
+        let conv_id = "work-conv-1";
+
+        let created = upsert_group_conversation(&pool, conv_id, &alice, "First Title", &[], T0)
+            .await
+            .unwrap();
+        assert_eq!(created.conversation_id, conv_id);
+        assert_eq!(created.title.as_deref(), Some("First Title"));
+        assert!(is_conversation_member(&pool, conv_id, &alice)
+            .await
+            .unwrap());
+
+        let updated =
+            upsert_group_conversation(&pool, conv_id, &alice, "Renamed Title", &[], T0 + 1)
+                .await
+                .unwrap();
+        assert_eq!(updated.title.as_deref(), Some("Renamed Title"));
+
+        // Messages survive title upsert.
+        insert_message(&pool, conv_id, &alice, "keep me", T0 + 2, None, &[])
+            .await
+            .unwrap();
+        upsert_group_conversation(&pool, conv_id, &alice, "Again", &[], T0 + 3)
+            .await
+            .unwrap();
+        let messages = list_messages(&pool, conv_id, None, 10).await.unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].text, "keep me");
+    }
+
+    #[tokio::test]
+    async fn insert_message_with_client_id_is_idempotent() {
+        let pool = memory_pool().await;
+        let alice = insert_account(&pool, "alice@example.com").await;
+        let conversation = create_group_conversation(&pool, &alice, "Sync", &[], T0)
+            .await
+            .unwrap();
+        let client_id = "msg_client_abc";
+
+        let first = insert_message_with_id(
+            &pool,
+            &conversation.conversation_id,
+            &alice,
+            "hello",
+            T0 + 1,
+            None,
+            &[],
+            Some(client_id),
+        )
+        .await
+        .unwrap();
+        let second = insert_message_with_id(
+            &pool,
+            &conversation.conversation_id,
+            &alice,
+            "hello again ignored",
+            T0 + 2,
+            None,
+            &[],
+            Some(client_id),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(first.message_id, client_id);
+        assert_eq!(second.message_id, first.message_id);
+        assert_eq!(second.text, "hello");
+        let messages = list_messages(&pool, &conversation.conversation_id, None, 10)
+            .await
+            .unwrap();
+        assert_eq!(messages.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn ensure_host_runtime_agent_is_stable_per_owner_runtime() {
+        let pool = memory_pool().await;
+        let alice = insert_account(&pool, "alice@example.com").await;
+        let first = ensure_host_runtime_agent(&pool, &alice, "codex", "Codex", "", None, T0)
+            .await
+            .unwrap();
+        let second =
+            ensure_host_runtime_agent(&pool, &alice, "codex", "Codex", "gpt", None, T0 + 1)
+                .await
+                .unwrap();
+        assert_eq!(first.agent_id, second.agent_id);
+        assert_eq!(first.source, AGENT_SOURCE_HOST_RUNTIME);
+        assert_eq!(first.runtime_agent, "codex");
+    }
+
+    #[tokio::test]
+    async fn insert_agent_message_with_client_id_is_idempotent() {
+        let pool = memory_pool().await;
+        let alice = insert_account(&pool, "alice@example.com").await;
+        let conversation = create_group_conversation(&pool, &alice, "Agents", &[], T0)
+            .await
+            .unwrap();
+        let agent = ensure_host_runtime_agent(&pool, &alice, "claude", "Claude", "", None, T0)
+            .await
+            .unwrap();
+        add_agent_to_conversation(
+            &pool,
+            &conversation.conversation_id,
+            &agent.agent_id,
+            &alice,
+            T0,
+        )
+        .await
+        .unwrap();
+        let client_id = "agent-result:conv:sess:turn1";
+        let first = insert_agent_message_with_session(
+            &pool,
+            &conversation.conversation_id,
+            &agent.agent_id,
+            "done",
+            T0 + 1,
+            None,
+            Some("sess-1"),
+            &[],
+            Some(client_id),
+        )
+        .await
+        .unwrap();
+        let second = insert_agent_message_with_session(
+            &pool,
+            &conversation.conversation_id,
+            &agent.agent_id,
+            "ignored",
+            T0 + 2,
+            None,
+            Some("sess-1"),
+            &[],
+            Some(client_id),
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.message_id, client_id);
+        assert_eq!(second.message_id, first.message_id);
+        assert_eq!(second.text, "done");
+        assert_eq!(
+            list_messages(&pool, &conversation.conversation_id, None, 10)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

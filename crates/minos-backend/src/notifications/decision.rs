@@ -182,6 +182,7 @@ mod tests {
                 account_id: "other".into(),
             },
             at_ms: 1000,
+            message: None,
         };
         let prefs = default_prefs();
         let result = decide(&event, &prefs, 1000);
@@ -197,6 +198,7 @@ mod tests {
                 account_id: "other".into(),
             },
             at_ms: 1000,
+            message: None,
         };
         let mut prefs = default_prefs();
         prefs.direct_message_enabled = false;
@@ -236,6 +238,7 @@ mod tests {
                 account_id: "other".into(),
             },
             at_ms: 1000,
+            message: None,
         };
         let mut prefs = default_prefs();
         prefs.quiet_hours_start_minute = Some(0);

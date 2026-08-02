@@ -370,6 +370,7 @@ impl AgentSessionService for DefaultAgentSessionService {
                         "runtime_agent": runtime_agent,
                         "project_id": input.project_id.clone(),
                         "conversation_id": input.conversation_id.clone(),
+                        "conversation_title": input.conversation_title.clone(),
                         "workspace": workspace_path.clone().unwrap_or_default(),
                         "workspace_path": workspace_path,
                         "initial_user_message": input.initial_user_message.clone(),

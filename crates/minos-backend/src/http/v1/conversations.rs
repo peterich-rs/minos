@@ -6,7 +6,7 @@ use minos_protocol::{
     ChatMessageSummary, ConversationMembersResponse, ConversationReadResponse,
     ConversationResponse, ConversationsResponse, CreateGroupConversationRequest,
     EnsureDirectConversationRequest, ListChatMessagesRequest, ListChatMessagesResponse,
-    SendChatMessageRequest,
+    SendChatMessageRequest, UpsertConversationRequest,
 };
 
 use crate::conversations::{ConversationError, ConversationService, DefaultConversationService};
@@ -19,6 +19,7 @@ pub fn router() -> Router<BackendState> {
         .route("/conversations/list", post(list_conversations))
         .route("/conversations/direct", post(ensure_direct_conversation))
         .route("/conversations/group", post(create_group_conversation))
+        .route("/conversations/upsert", post(upsert_conversation))
         .route(
             "/conversations/:conversation_id",
             delete(delete_conversation),
@@ -113,6 +114,26 @@ async fn create_group_conversation(
     let conversations_svc = DefaultConversationService::new(state.store.clone());
     let response = conversations_svc
         .create_group(&account_id, &req.title, &req.member_account_ids)
+        .await
+        .map_err(map_conversation_error)?;
+    Ok(Json(response))
+}
+
+async fn upsert_conversation(
+    State(state): State<BackendState>,
+    headers: HeaderMap,
+    Json(req): Json<UpsertConversationRequest>,
+) -> Result<Json<ConversationResponse>, (StatusCode, Json<ErrorEnvelope>)> {
+    let account_id = super::social::require_account_id_from_state(&state, &headers)?;
+    let conversations_svc = DefaultConversationService::new(state.store.clone());
+    let response = conversations_svc
+        .upsert_conversation(
+            &account_id,
+            &req.conversation_id,
+            &req.title,
+            &req.member_account_ids,
+            &req.agent_ids,
+        )
         .await
         .map_err(map_conversation_error)?;
     Ok(Json(response))
@@ -257,6 +278,9 @@ async fn send_message(
         conversation_id,
         req.text,
         req.reply_to_message_id,
+        req.client_message_id,
+        req.message_source.unwrap_or_default(),
+        req.client_sent_at_ms.or(req.created_at_ms),
     )
     .await
 }
@@ -272,6 +296,9 @@ async fn send_message_command(
         req.conversation_id,
         req.text,
         req.reply_to_message_id,
+        req.client_message_id,
+        req.message_source.unwrap_or_default(),
+        req.client_sent_at_ms.or(req.created_at_ms),
     )
     .await
 }
@@ -282,6 +309,9 @@ async fn send_message_inner(
     conversation_id: String,
     text: String,
     reply_to_message_id: Option<String>,
+    client_message_id: Option<String>,
+    message_source: minos_protocol::MessageSource,
+    client_sent_at_ms: Option<i64>,
 ) -> Result<Json<ChatMessageSummary>, (StatusCode, Json<ErrorEnvelope>)> {
     let account_id = super::social::require_account_id_from_state(&state, &headers)?;
     let trimmed = text.trim().to_string();
@@ -296,29 +326,37 @@ async fn send_message_inner(
             &conversation_id,
             &trimmed,
             reply_to_message_id.as_deref(),
+            client_message_id.as_deref(),
+            message_source,
+            client_sent_at_ms,
         )
         .await
         .map_err(map_conversation_error)?;
 
     super::social::fan_out_social_message(&state, &message).await;
 
-    // Agent dispatch logic (delegated to the social handler)
-    if let Err(e) = super::social::try_agent_dispatch(
-        &state,
-        &account_id,
-        &conversation_id,
-        &message,
-        reply_to_message_id.as_deref(),
-        &trimmed,
-    )
-    .await
-    {
-        tracing::warn!(
-            target: "minos_backend::conversations",
-            error = %e,
-            conversation_id = %conversation_id,
-            "agent dispatch failed after message send"
-        );
+    // Dispatch only for live client sends (Mobile / multi-end). Desktop uses
+    // host_projection after native local execution so Hub never double-starts.
+    // Failures are user-visible (timeline bubble + StreamEvent agent_error).
+    if message_source.allows_agent_dispatch() {
+        if let Err(e) = super::social::try_agent_dispatch(
+            &state,
+            &account_id,
+            &conversation_id,
+            &message,
+            reply_to_message_id.as_deref(),
+            &trimmed,
+        )
+        .await
+        {
+            tracing::warn!(
+                target: "minos_backend::conversations",
+                error = %e,
+                conversation_id = %conversation_id,
+                message_id = %message.message_id,
+                "agent dispatch pipeline error after message send"
+            );
+        }
     }
 
     Ok(Json(message))

@@ -182,27 +182,55 @@ pub async fn invoke_host_command(
                 #[serde(default)]
                 workspace: String,
                 #[serde(default)]
+                workspace_path: Option<String>,
+                #[serde(default)]
                 initial_user_message: Option<String>,
                 #[serde(default)]
                 model: Option<String>,
                 #[serde(default)]
                 reasoning_effort: Option<String>,
+                /// Hub collaboration conversation id (must be preserved).
+                #[serde(default)]
+                conversation_id: Option<String>,
+                /// Optional Desktop/local project id when known.
+                #[serde(default)]
+                project_id: Option<String>,
+                #[serde(default)]
+                conversation_title: Option<String>,
+                #[serde(default)]
+                title: Option<String>,
             }
             let req: StartAgentSessionParams = parse_params(&params)?;
             let agent_label = req.runtime_agent.as_deref().unwrap_or(&req.agent_id);
             let agent = parse_agent_name(agent_label)?;
+            let workspace = if req.workspace.trim().is_empty() {
+                req.workspace_path.unwrap_or_default()
+            } else {
+                req.workspace
+            };
             let start_req = StartAgentRequest {
                 agent,
-                workspace: req.workspace,
+                workspace,
                 mode: None,
                 profile_id: None,
                 model: req.model,
                 reasoning_effort: req.reasoning_effort,
                 instructions: None,
             };
+            let conversation_title = req
+                .conversation_title
+                .or(req.title)
+                .filter(|s| !s.trim().is_empty());
             server
                 .agent
-                .start_agent_with_session_id(req.session_id, start_req, req.initial_user_message)
+                .start_agent_with_session_id_in_conversation(
+                    req.session_id,
+                    start_req,
+                    req.initial_user_message,
+                    req.conversation_id,
+                    req.project_id,
+                    conversation_title,
+                )
                 .await
                 .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
                 .map_err(rpc_err_value)
@@ -531,13 +559,17 @@ mod tests {
             )),
         });
 
+        let hub_conversation_id = "hub-conv-formal-1";
         let result = invoke_host_command(
             "agent_session.start",
             json!({
                 "session_id": "sess-formal-1",
                 "agent_id": "agent_codex",
                 "runtime_agent": "codex",
-                "workspace": workspace.display().to_string()
+                "workspace": workspace.display().to_string(),
+                "conversation_id": hub_conversation_id,
+                "project_id": "proj-formal-1",
+                "conversation_title": "Hub collab thread",
             }),
             &server,
         )
@@ -554,6 +586,20 @@ mod tests {
         );
         let row = store.get_session("sess-formal-1").await.unwrap().unwrap();
         assert_eq!(row.workspace_root, value["cwd"].as_str().unwrap());
+        assert_eq!(row.conversation_id, hub_conversation_id);
+        let conv = store
+            .get_conversation(hub_conversation_id)
+            .await
+            .unwrap()
+            .expect("hub conversation must be upserted with same id");
+        assert_eq!(conv.project_id, "proj-formal-1");
+        assert_eq!(conv.title, "Hub collab thread");
+        // Must not invent Direct agent sessions for Hub-dispatched starts.
+        assert!(store
+            .get_conversation("conversation-formal-workspace")
+            .await
+            .unwrap()
+            .is_none());
 
         fake.stop().await;
     }
