@@ -147,6 +147,12 @@ abstract class MinosCoreProtocol {
   /// Subscribe the live WebSocket to one agent session topic.
   Future<void> subscribeAgentSession({required String sessionId});
 
+  /// Open-chat live path (R3a): subscribe `conversation:{id}` for full messages.
+  Future<void> subscribeConversation({required String conversationId});
+
+  /// Leave open-chat conversation topic (R3a).
+  Future<void> unsubscribeConversation({required String conversationId});
+
   /// Translated UI event history for one session.
   Future<ReadSessionResponse> readThread(ReadSessionParams params);
 

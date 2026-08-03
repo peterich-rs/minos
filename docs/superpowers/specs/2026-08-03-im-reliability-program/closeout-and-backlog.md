@@ -61,7 +61,7 @@
 | C6.4 | **V3** | **PARTIAL**（自动化升级；设备仍 runbook） | EVIDENCE V3 |
 | C6.5 | **V3** | **NOT_RUN** live 多端（runbook） | EVIDENCE V3 |
 | G4 | **V4** | **PARTIAL** DoD（未全勾） | EVIDENCE V4 + README §3 |
-| R0–R2/R4 | Layer R | **PASS**（R3 BLOCKED design） | realtime-surface-audit.md |
+| R0–R4 | Layer R | **PASS**（R3 thin digest shipped） | realtime-surface-audit.md · EVIDENCE R3 |
 
 ### 1.3 为何必须「一并规划」
 
@@ -203,7 +203,7 @@ P 项 **单独 TASKS 区或 issue**；不阻挡 V4，除非产品强制。
 | **R0** | DurableEvent × HTTP 写 审计矩阵 | 可与 V **并行**（只读审计） |
 | **R1** | HostLinked/Unlinked 全链路（名册样板） | **V 后**或旁路分支；不改 V 证据语义 |
 | **R2** | 好友/群成员等 T2/T3 按 R0 批量补 | 依赖 R0/R1 模板 |
-| **R3** | Account thin digest（breaking） | 独立 breaking 里程碑 |
+| **R3** | Account thin digest（breaking） | **DONE** — audit §3 + EVIDENCE R3 |
 | **R4** | Subscribe 批限 / hint coalesce | 体验 |
 
 **规划原则：**  

@@ -109,7 +109,7 @@ pub fn decide(input: &DecisionInput<'_>) -> Decision {
         DurableEvent::AccountConversationMessageAppended {
             conversation_id,
             message_id,
-            message,
+            preview,
             ..
         } => {
             if !input.prefs.direct_message_enabled && !input.prefs.group_mention_enabled {
@@ -118,10 +118,11 @@ pub fn decide(input: &DecisionInput<'_>) -> Decision {
                 };
             }
 
-            let body = if message.text.is_empty() {
+            // R3: push uses account digest preview — never full message body.
+            let body = if preview.trim().is_empty() {
                 "You have a new message".into()
             } else {
-                truncate_body(&message.text, 120)
+                truncate_body(preview, 120)
             };
 
             Decision::Send {
@@ -261,6 +262,7 @@ mod tests {
     }
 
     fn account_message_event() -> DurableEvent {
+        let msg = sample_message();
         DurableEvent::AccountConversationMessageAppended {
             account_id: "acc1".into(),
             conversation_id: "conv1".into(),
@@ -269,7 +271,10 @@ mod tests {
                 account_id: "other".into(),
             },
             at_ms: 1000,
-            message: sample_message(),
+            preview: msg.text.clone(),
+            sender_display_name: msg.sender.display_name,
+            mentioned: false,
+            message_seq: Some(msg.message_seq),
         }
     }
 

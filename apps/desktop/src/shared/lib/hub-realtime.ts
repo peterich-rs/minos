@@ -45,11 +45,22 @@ type DurableMessagePayload = {
   conversation_id?: string;
   message_id?: string;
   at_ms?: number;
+  /** R3 account thin digest fields (no nested full message). */
+  preview?: string;
+  sender_display_name?: string;
+  mentioned?: boolean;
+  message_seq?: number;
+  sender?: {
+    kind?: string;
+    account_id?: string;
+    agent_id?: string;
+  };
   message?: {
     message_id: string;
     conversation_id: string;
     text: string;
     created_at_ms: number;
+    message_seq?: number;
     sender_type?: string;
     sender: {
       account_id: string;
@@ -61,10 +72,27 @@ type DurableMessagePayload = {
   };
 };
 
+/** Account-topic T2 digest for rail/inbox only (R3). */
+export type HubInboxDigest = {
+  conversationId: string;
+  messageId: string;
+  preview: string;
+  atMs: number;
+  senderAccountId: string;
+  senderDisplayName: string;
+  mentioned: boolean;
+  messageSeq?: number;
+  isRecall: boolean;
+};
+
 export type HubRealtimeHandlers = {
   onChatMessage: (message: HubChatMessage) => void;
   /** Multi-end recall: remove or mark recalled in Hub timeline. */
   onChatMessageRecalled?: (message: HubChatMessage) => void;
+  /**
+   * Account T2 thin digest — patch rail/inbox only; never full timeline body.
+   */
+  onAccountInboxDigest?: (digest: HubInboxDigest) => void;
   /**
    * Conversation reaction aggregate update. Clients apply `reactions` as full
    * replace; `action` is animation-only and must not drive state.
@@ -113,6 +141,7 @@ function mapMessage(
     conversationId: raw.conversation_id,
     text: raw.text,
     createdAtMs: raw.created_at_ms,
+    messageSeq: raw.message_seq,
     senderType: raw.sender_type === "agent" ? "agent" : "user",
     senderAccountId: raw.sender.account_id,
     senderMinosId: raw.sender.minos_id,
@@ -122,24 +151,59 @@ function mapMessage(
   };
 }
 
-const APPEND_KINDS = new Set([
-  "account_conversation_message_appended",
-  "AccountConversationMessageAppended",
+/** Conversation topic T1 full message (open chat). */
+const CONVERSATION_APPEND_KINDS = new Set([
   "conversation_message_appended",
   "ConversationMessageAppended",
 ]);
 
-const RECALL_KINDS = new Set([
-  "account_conversation_message_recalled",
-  "AccountConversationMessageRecalled",
+const CONVERSATION_RECALL_KINDS = new Set([
   "conversation_message_recalled",
   "ConversationMessageRecalled",
+]);
+
+/** Account topic T2 thin digest (inbox/rail only). */
+const ACCOUNT_APPEND_KINDS = new Set([
+  "account_conversation_message_appended",
+  "AccountConversationMessageAppended",
+]);
+
+const ACCOUNT_RECALL_KINDS = new Set([
+  "account_conversation_message_recalled",
+  "AccountConversationMessageRecalled",
 ]);
 
 const REACTION_KINDS = new Set([
   "conversation_message_reaction_updated",
   "ConversationMessageReactionUpdated",
 ]);
+
+function mapAccountDigest(
+  payload: DurableMessagePayload,
+  isRecall: boolean,
+): HubInboxDigest | null {
+  const conversationId = payload.conversation_id?.trim();
+  const messageId = payload.message_id?.trim();
+  if (!conversationId || !messageId) return null;
+  const sender = payload.sender;
+  const senderAccountId =
+    sender?.account_id?.trim() || sender?.agent_id?.trim() || "";
+  const preview = isRecall
+    ? (payload.preview?.trim() || "Message recalled")
+    : (payload.preview?.trim() ?? "");
+  return {
+    conversationId,
+    messageId,
+    preview,
+    atMs: payload.at_ms ?? Date.now(),
+    senderAccountId,
+    senderDisplayName: payload.sender_display_name?.trim() || "",
+    mentioned: Boolean(payload.mentioned),
+    messageSeq:
+      typeof payload.message_seq === "number" ? payload.message_seq : undefined,
+    isRecall,
+  };
+}
 
 export class HubRealtimeSession {
   private ws: WebSocket | null = null;
@@ -541,7 +605,22 @@ export class HubRealtimeSession {
     const eventKind = kind ?? payload.kind;
     if (!eventKind) return false;
 
-    if (APPEND_KINDS.has(eventKind)) {
+    // R3 account thin digest → rail/inbox only (never full timeline body).
+    if (ACCOUNT_APPEND_KINDS.has(eventKind)) {
+      const digest = mapAccountDigest(payload, false);
+      if (!digest) return false;
+      this.handlers.onAccountInboxDigest?.(digest);
+      return true;
+    }
+    if (ACCOUNT_RECALL_KINDS.has(eventKind)) {
+      const digest = mapAccountDigest(payload, true);
+      if (!digest) return false;
+      this.handlers.onAccountInboxDigest?.(digest);
+      return true;
+    }
+
+    // Conversation T1 full frames → open-chat timeline.
+    if (CONVERSATION_APPEND_KINDS.has(eventKind)) {
       if (!payload.message) return false;
       try {
         const msg = mapMessage(payload.message);
@@ -557,7 +636,7 @@ export class HubRealtimeSession {
       }
     }
 
-    if (RECALL_KINDS.has(eventKind)) {
+    if (CONVERSATION_RECALL_KINDS.has(eventKind)) {
       try {
         if (payload.message) {
           this.handlers.onChatMessageRecalled?.(mapMessage(payload.message));

@@ -292,6 +292,9 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// once Dart drops the stream (detected via `sink.add(...).is_err()`).
   Stream<AuthStateFrame> subscribeAuthState();
 
+  /// Open-chat live path (R3a): subscribe `conversation:{id}` for full T1 frames.
+  Future<void> subscribeConversation({required String conversationId});
+
   /// Subscribe to live `SocialEventFrame`s fanned out from the backend.
   Stream<SocialEventFrame> subscribeSocialEvents();
 
@@ -312,6 +315,9 @@ abstract class MobileClient implements RustOpaqueInterface {
     required String emoji,
     required String clientOpId,
   });
+
+  /// Leave open-chat conversation topic (R3a).
+  Future<void> unsubscribeConversation({required String conversationId});
 
   Future<AgentSummary> updateAgent({
     required String agentId,

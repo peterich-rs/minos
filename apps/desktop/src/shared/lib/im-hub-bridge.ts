@@ -217,22 +217,43 @@ function patchRailFromHubMessage(
   message: HubChatMessage,
   opts: { isRecall: boolean },
 ): void {
-  const conversationId = message.conversationId;
+  patchRailFromDigest({
+    conversationId: message.conversationId,
+    preview: opts.isRecall
+      ? "Message recalled"
+      : message.text?.trim() || null,
+    lastAt: message.createdAtMs || Date.now(),
+    senderAccountId: message.senderAccountId,
+    isRecall: opts.isRecall,
+  });
+}
+
+/**
+ * R3: account-topic thin digest → rail/inbox only (no timeline body).
+ * Conversation full frames still call {@link patchRailFromHubMessage}.
+ */
+function patchRailFromDigest(input: {
+  conversationId: string;
+  preview: string | null;
+  lastAt: number;
+  senderAccountId: string;
+  isRecall: boolean;
+}): void {
+  const conversationId = input.conversationId?.trim();
   if (!conversationId) return;
   const focused =
     useWorkspaceStore.getState().focusedConversationId === conversationId;
   const prevDigest = hubDigestCache.get(conversationId);
-  const preview = opts.isRecall
-    ? "Message recalled"
-    : message.text?.trim() || prevDigest?.preview || null;
-  const lastAt = message.createdAtMs || prevDigest?.lastMessageAtMs || Date.now();
+  const preview =
+    input.preview?.trim() || prevDigest?.preview || null;
+  const lastAt = input.lastAt || prevDigest?.lastMessageAtMs || Date.now();
   const myAccountId =
     useAccountStore.getState().session?.accountId?.trim() ?? "";
   const isOwn =
-    Boolean(myAccountId) && message.senderAccountId === myAccountId;
+    Boolean(myAccountId) && input.senderAccountId === myAccountId;
   let unread = prevDigest?.unreadCount ?? 0;
   // Own multi-end sends must not inflate local unread.
-  if (!focused && !opts.isRecall && !isOwn) {
+  if (!focused && !input.isRecall && !isOwn) {
     unread = unread + 1;
   }
   if (focused) {
@@ -281,6 +302,43 @@ function patchRailFromHubMessage(
     };
     return { conversations: next };
   });
+}
+
+function onAccountInboxDigest(digest: {
+  conversationId: string;
+  messageId: string;
+  preview: string;
+  atMs: number;
+  senderAccountId: string;
+  isRecall: boolean;
+}): void {
+  const conversationId = digest.conversationId?.trim();
+  if (!conversationId || !digest.messageId?.trim()) return;
+  // Digest is rail-only: mark timeline dirty so next open rehydrates full body.
+  const focused =
+    useWorkspaceStore.getState().focusedConversationId === conversationId;
+  const hasWindow = Object.prototype.hasOwnProperty.call(
+    useWorkspaceStore.getState().messagesByConversation,
+    conversationId,
+  );
+  if (!focused && !hasWindow) {
+    useWorkspaceStore.setState((s) => ({
+      timelineDirtyByConversation: {
+        ...s.timelineDirtyByConversation,
+        [conversationId]: true,
+      },
+    }));
+  }
+  patchRailFromDigest({
+    conversationId,
+    preview: digest.preview,
+    lastAt: digest.atMs,
+    senderAccountId: digest.senderAccountId,
+    isRecall: digest.isRecall,
+  });
+  if (focused) {
+    scheduleFocusedMarkRead(conversationId);
+  }
 }
 
 async function onHubChatMessageRecalled(message: HubChatMessage): Promise<void> {
@@ -474,6 +532,9 @@ export function ensureImHubBridge(): void {
     },
     onChatMessageRecalled: (msg) => {
       void onHubChatMessageRecalled(msg);
+    },
+    onAccountInboxDigest: (digest) => {
+      onAccountInboxDigest(digest);
     },
     onMessageReactions: ({ messageId, reactions }) => {
       void import("@/features/chat/reaction-store").then(({ useReactionStore }) => {

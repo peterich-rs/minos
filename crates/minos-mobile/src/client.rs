@@ -73,9 +73,14 @@ pub struct UiEventFrame {
 /// One live social-chat event pushed from backend fan-out.
 ///
 /// `kind`:
-/// - `"message"` — append/recall; `message` is full payload
+/// - `"message"` — open-conversation T1 full append/recall (`conversation:`)
+/// - `"inbox_digest"` — account T2 thin append for inbox/rail only
+/// - `"inbox_recall"` — account T2 thin recall for inbox/rail only
 /// - `"reaction_updated"` — aggregate replace; `message.message_id` +
 ///   `message.reactions` are authoritative (other fields may be stubs)
+///
+/// For `inbox_digest` / `inbox_recall`, `message` is a **stub** built from
+/// digest fields (`text` = preview); do not treat as timeline-authoritative.
 #[derive(Debug, Clone)]
 pub struct SocialEventFrame {
     pub conversation_id: String,
@@ -424,6 +429,67 @@ impl MobileClient {
                     target: "minos_mobile::client",
                     error = %error,
                     "failed to send realtime subscribe frame",
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Open-chat live path (R3a): subscribe `conversation:{id}` for full T1
+    /// message/reaction frames. Account topic remains digest-only for inbox.
+    pub async fn subscribe_conversation(&self, conversation_id: String) -> Result<(), MinosError> {
+        let id = conversation_id.trim();
+        if id.is_empty() {
+            return Ok(());
+        }
+        let topic = format!("conversation:{id}");
+        let added = self.subscription_mgr.add_topic(&topic, 0).await;
+        if !added || !matches!(*self.state_rx.borrow(), ConnectionState::Connected) {
+            return Ok(());
+        }
+
+        let frame = ClientFrame::Subscribe {
+            topics: vec![topic],
+            resume_after: Some(self.subscription_mgr.resume_after_map().await),
+            client_request_id: None,
+        };
+        let sender = self.outbound_tx.lock().await.clone();
+        if let Some(sender) = sender {
+            if let Err(error) = sender.send(frame).await {
+                tracing::warn!(
+                    target: "minos_mobile::client",
+                    error = %error,
+                    "failed to send conversation subscribe frame",
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Leave open-chat conversation topic (R3a). Safe if not currently subscribed.
+    pub async fn unsubscribe_conversation(
+        &self,
+        conversation_id: String,
+    ) -> Result<(), MinosError> {
+        let id = conversation_id.trim();
+        if id.is_empty() {
+            return Ok(());
+        }
+        let topic = format!("conversation:{id}");
+        self.subscription_mgr.remove_topic(&topic).await;
+        if !matches!(*self.state_rx.borrow(), ConnectionState::Connected) {
+            return Ok(());
+        }
+        let frame = ClientFrame::Unsubscribe {
+            topics: vec![topic],
+        };
+        let sender = self.outbound_tx.lock().await.clone();
+        if let Some(sender) = sender {
+            if let Err(error) = sender.send(frame).await {
+                tracing::warn!(
+                    target: "minos_mobile::client",
+                    error = %error,
+                    "failed to send conversation unsubscribe frame",
                 );
             }
         }

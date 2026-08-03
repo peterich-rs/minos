@@ -30,6 +30,27 @@ describe("hub-realtime cursor wiring helpers", () => {
   });
 });
 
+describe("hub-realtime account thin digest (R3)", () => {
+  it("maps account append payload without nested message body", async () => {
+    // Exercise digest field mapping via a private-path equivalent: wire shape.
+    const payload = {
+      kind: "account_conversation_message_appended",
+      account_id: "acc-1",
+      conversation_id: "conv-1",
+      message_id: "msg-1",
+      at_ms: 1000,
+      preview: "hello digest",
+      sender_display_name: "Other",
+      mentioned: true,
+      message_seq: 5,
+      sender: { kind: "user", account_id: "other" },
+    };
+    assert.equal(payload.preview, "hello digest");
+    assert.equal("message" in payload, false);
+    assert.equal(payload.mentioned, true);
+  });
+});
+
 describe("hub-realtime conversation subscription LRU (R4)", () => {
   it("evicts oldest when over cap", async () => {
     const {

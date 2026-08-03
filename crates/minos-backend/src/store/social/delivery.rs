@@ -22,6 +22,9 @@ pub struct PendingDurablePublish {
     pub outbox_id: Option<String>,
 }
 
+/// Max chars for account-topic T2 preview (inbox / push); full body is conversation-only.
+const ACCOUNT_PREVIEW_MAX_CHARS: usize = 120;
+
 fn sender_ref_for_message(message: &ChatMessageSummary) -> SenderRef {
     match message.sender_type {
         SenderType::Agent => SenderRef::Agent {
@@ -31,6 +34,53 @@ fn sender_ref_for_message(message: &ChatMessageSummary) -> SenderRef {
         SenderType::User => SenderRef::User {
             account_id: message.sender.account_id.clone(),
         },
+    }
+}
+
+/// Truncate message text for account-topic digest (T2).
+fn account_preview(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    for (i, ch) in trimmed.chars().enumerate() {
+        if i >= ACCOUNT_PREVIEW_MAX_CHARS {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// Build account-topic thin digest for one member (no full ChatMessageSummary).
+fn account_append_digest(account_id: &str, message: &ChatMessageSummary) -> DurableEvent {
+    let mentioned = message
+        .mentioned_account_ids
+        .iter()
+        .any(|id| id == account_id);
+    DurableEvent::AccountConversationMessageAppended {
+        account_id: account_id.to_string(),
+        conversation_id: message.conversation_id.clone(),
+        message_id: message.message_id.clone(),
+        sender: sender_ref_for_message(message),
+        at_ms: message.created_at_ms,
+        preview: account_preview(&message.text),
+        sender_display_name: message.sender.display_name.clone(),
+        mentioned,
+        message_seq: Some(message.message_seq),
+    }
+}
+
+fn account_recall_digest(account_id: &str, message: &ChatMessageSummary, at_ms: i64) -> DurableEvent {
+    DurableEvent::AccountConversationMessageRecalled {
+        account_id: account_id.to_string(),
+        conversation_id: message.conversation_id.clone(),
+        message_id: message.message_id.clone(),
+        at_ms,
+        preview: Some("Message recalled".into()),
+        message_seq: Some(message.message_seq),
     }
 }
 
@@ -154,23 +204,11 @@ pub async fn ensure_social_message_delivery_in_tx(
     );
 
     for account_id in member_account_ids {
+        // T2 account digest only — full ChatMessageSummary stays on conversation topic.
         let account_event = if message.recalled_at_ms.is_some() {
-            DurableEvent::AccountConversationMessageRecalled {
-                account_id: account_id.clone(),
-                conversation_id: message.conversation_id.clone(),
-                message_id: message.message_id.clone(),
-                at_ms,
-                message: message.clone(),
-            }
+            account_recall_digest(account_id, message, at_ms)
         } else {
-            DurableEvent::AccountConversationMessageAppended {
-                account_id: account_id.clone(),
-                conversation_id: message.conversation_id.clone(),
-                message_id: message.message_id.clone(),
-                sender: sender_ref_for_message(message),
-                at_ms,
-                message: message.clone(),
-            }
+            account_append_digest(account_id, message)
         };
         let event_id = account_conversation_event_id(account_id, message);
         pending.push(ensure_one_in_tx(tx, &event_id, &account_event, at_ms).await?);
@@ -598,6 +636,119 @@ mod tests {
                 .unwrap();
         tx.commit().await.unwrap();
         assert!(pending2.iter().all(|p| p.outbox_id.is_none()));
+    }
+
+    #[tokio::test]
+    async fn account_fanout_is_thin_digest_conversation_is_full() {
+        let pool = memory_pool().await;
+        let alice = insert_account(&pool, "alice-digest@example.com").await;
+        let bob = insert_account(&pool, "bob-digest@example.com").await;
+        let conversation =
+            create_group_conversation(&pool, &alice, "digest", &[bob.clone()], T0)
+                .await
+                .unwrap();
+        let members = list_conversation_members(&pool, &conversation.conversation_id)
+            .await
+            .unwrap();
+
+        let mut tx = pool.begin().await.map(DbTx::Sqlite).unwrap();
+        let outcome = insert_message_with_id_in_tx(
+            &mut tx,
+            &conversation.conversation_id,
+            &alice,
+            "hello thin digest body that should not appear nested under account",
+            T0 + 1,
+            None,
+            std::slice::from_ref(&bob),
+            Some("digest-client-1"),
+        )
+        .await
+        .unwrap();
+        assert!(outcome.inserted);
+
+        let message = ChatMessageSummary {
+            message_id: outcome.row.message_id.clone(),
+            conversation_id: outcome.row.conversation_id.clone(),
+            sender: UserSummary {
+                account_id: alice.clone(),
+                minos_id: "alice".into(),
+                display_name: "Alice".into(),
+            },
+            text: outcome.row.text.clone(),
+            created_at_ms: outcome.row.created_at_ms,
+            message_seq: outcome.row.message_seq,
+            reply_to: None,
+            recalled_at_ms: None,
+            mentioned_account_ids: vec![bob.clone()],
+            sender_type: SenderType::User,
+            reactions: vec![],
+        };
+        let pending =
+            ensure_social_message_delivery_in_tx(&mut tx, &message, &members)
+                .await
+                .unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(pending.len(), 1 + members.len());
+
+        // Conversation topic: full message nested.
+        let conv_event_id = conversation_event_id(&message);
+        let conv_row = crate::store::durable_event_log::get(&pool, "conversation", &conv_event_id)
+            .await
+            .unwrap()
+            .expect("conversation durable");
+        let conv_event: DurableEvent =
+            serde_json::from_value(conv_row.payload_json.clone()).unwrap();
+        match conv_event {
+            DurableEvent::ConversationMessageAppended {
+                message: Some(full),
+                ..
+            } => {
+                assert_eq!(full.text, message.text);
+                assert!(!full.message_id.is_empty());
+            }
+            other => panic!("expected ConversationMessageAppended full, got {other:?}"),
+        }
+
+        // Account topics: thin digest only (preview, no nested message).
+        for account_id in &members {
+            let event_id = account_conversation_event_id(account_id, &message);
+            let row = crate::store::durable_event_log::get(&pool, "account", &event_id)
+                .await
+                .unwrap()
+                .expect("account durable");
+            assert!(
+                row.payload_json.get("message").is_none(),
+                "account payload must not nest full message"
+            );
+            let event: DurableEvent = serde_json::from_value(row.payload_json.clone()).unwrap();
+            match event {
+                DurableEvent::AccountConversationMessageAppended {
+                    preview,
+                    sender_display_name,
+                    mentioned,
+                    message_seq,
+                    conversation_id,
+                    message_id,
+                    ..
+                } => {
+                    assert_eq!(conversation_id, message.conversation_id);
+                    assert_eq!(message_id, message.message_id);
+                    assert_eq!(preview, message.text);
+                    assert_eq!(sender_display_name, "Alice");
+                    assert_eq!(mentioned, account_id == &bob);
+                    assert_eq!(message_seq, Some(message.message_seq));
+                }
+                other => panic!("expected thin AccountConversationMessageAppended, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn account_preview_truncates_long_text() {
+        let long = "x".repeat(200);
+        let preview = account_preview(&long);
+        assert_eq!(preview.chars().count(), ACCOUNT_PREVIEW_MAX_CHARS + 1); // + ellipsis
+        assert!(preview.ends_with('…'));
     }
 
     #[tokio::test]

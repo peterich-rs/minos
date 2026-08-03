@@ -157,7 +157,7 @@ Backend spec: [../2026-08-03-backend-im-delivery-orchestration.md](../2026-08-03
 - [x] **R0** DurableEvent × HTTP 写审计表
 - [x] **R1** HostLinked/HostUnlinked 全链路（backend same-tx + Mobile/Desktop arm + 单测）
 - [x] **R2** FriendRequestUpdated T2 发射 + Mobile refresh arm
-- [ ] **R3** Account thin digest — **BLOCKED**（需 Mobile conversation subscribe FRB；设计见 audit §3）
+- [x] **R3** Account thin digest — **DONE**（R3a Mobile conversation subscribe FRB + R3b wire + R3c clients + R3d delivery/push）
 - [x] **R4** Desktop conversation subscription LRU (16) + Mobile SubscriptionLimitExceeded 非静默丢弃
 
 ### Honest residuals（deferrals）
@@ -165,12 +165,12 @@ Backend spec: [../2026-08-03-backend-im-delivery-orchestration.md](../2026-08-03
 | 项 | 状态 |
 |----|------|
 | Hub digest 单轨未读（C6.3 状态债） | Desktop 仍可能存在 local `readMessageCountById` vs Hub digest 双轨；本轨只交付 badge + forceReconnect，未强并 digest 单轨 |
-| 订阅 LRU（C6.3 / R4） | **R4 DONE** — Desktop `conversation-sub-lru` + `subscribeConversation` 驱逐；Mobile 仍无 conversation 订阅 API |
+| 订阅 LRU（C6.3 / R4） | **R4 DONE** — Desktop `conversation-sub-lru` + `subscribeConversation` 驱逐；**Mobile R3a** conversation subscribe/unsubscribe on open chat |
 | Desktop approval Hub HTTP | Desktop resolve 仍走 **local daemon**（reachability outbox）；Hub `/v1/approvals/respond` + `client_request_id` 由 **Mobile** 全链路使用 |
 | Multi-instance CompletionWatch / presence | in-memory registry；单实例假设 |
 | TUI origin_message_id | local-only None；非 collab |
 | Public HTTP `/v1/agent-sessions/*` | **origin_message_id 已透传**（可选字段）；无 origin 时仍为非 collab 调用方责任 |
 | Desktop 会话列表 Hub SSOT | 仍以 daemon 为主 |
 | C6.4 / C6.5 多端 live | 自动化见 EVIDENCE V3；设备联调矩阵 **NOT_RUN**（runbook） |
-| R3 account thin digest | BLOCKED on Mobile conversation topic subscribe |
-| G4 full DoD | 依赖 C6.4/C6.5 设备证据；后端 B7 + G3 已 PASS |
+| R3 account thin digest | **DONE** — audit §3 + EVIDENCE R3 |
+| G4 full DoD | 依赖 C6.4/C6.5 设备证据；后端 B7 + G3 已 PASS；**Layer R complete** |

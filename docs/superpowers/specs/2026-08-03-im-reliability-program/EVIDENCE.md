@@ -31,8 +31,31 @@
 | **R0** | **PASS** | [realtime-surface-audit.md](realtime-surface-audit.md) |
 | **R1** | **PASS** | host_link same-tx HostLinked/Unlinked; Mobile + Desktop arms; unit tests |
 | **R2** | **PASS** | FriendRequestUpdated emit + Mobile refresh arm |
-| **R3** | **BLOCKED** | Design in audit §3; needs Mobile conversation subscribe FRB |
+| **R3** | **PASS** | Thin account digest + Mobile conversation subscribe FRB; see audit §3 |
 | **R4** | **PASS** | Desktop LRU + Mobile SubscriptionLimitExceeded UiEvent |
+
+### R3 evidence (commands)
+
+```text
+cargo test -p minos-protocol --lib thin_digest
+# → account_conversation_message_appended_is_thin_digest ok
+
+cargo test -p minos-backend --lib account_fanout_is_thin
+# → account_fanout_is_thin_digest_conversation_is_full ok
+
+cargo test -p minos-backend --lib account_message
+# → decision tests (push uses preview) ok
+
+cargo test -p minos-mobile --lib parse_account_inbox
+# → digest + recall stub frames ok
+
+cargo test -p minos-backend --lib
+# → 272 passed (includes delivery + notifications)
+
+# Desktop
+cd apps/desktop && pnpm test
+# → 381+ passed
+```
 
 ---
 

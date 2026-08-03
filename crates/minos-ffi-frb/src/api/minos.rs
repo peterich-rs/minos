@@ -528,6 +528,19 @@ impl MobileClient {
         self.0.subscribe_agent_session(session_id).await
     }
 
+    /// Open-chat live path (R3a): subscribe `conversation:{id}` for full T1 frames.
+    pub async fn subscribe_conversation(&self, conversation_id: String) -> Result<(), MinosError> {
+        self.0.subscribe_conversation(conversation_id).await
+    }
+
+    /// Leave open-chat conversation topic (R3a).
+    pub async fn unsubscribe_conversation(
+        &self,
+        conversation_id: String,
+    ) -> Result<(), MinosError> {
+        self.0.unsubscribe_conversation(conversation_id).await
+    }
+
     /// Read a window of translated UI events for one session.
     pub async fn read_session(
         &self,

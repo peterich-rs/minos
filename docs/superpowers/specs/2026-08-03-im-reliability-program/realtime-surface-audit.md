@@ -4,7 +4,7 @@
 |-------|--------|
 | Date | 2026-08-03 |
 | Spec | [2026-08-03-realtime-surface-model.md](../2026-08-03-realtime-surface-model.md) |
-| Status | **Audit + R1/R2/R4 implement** (R3 design BLOCKED — see §3) |
+| Status | **Audit + R1/R2/R3/R4 implement** (Layer R complete) |
 
 ---
 
@@ -22,11 +22,11 @@
 | `AgentTurnAppended` | ✅ send_input | stream/ui path | — | T1 session | existing |
 | `ApprovalRequested` | ✅ approvals | ✅ Raw UI | daemon/hub | T1 + Push | existing |
 | `ApprovalResolved` | ✅ approvals | ✅ Raw UI | — | T1 | existing |
-| `ConversationMessageAppended` | ✅ social delivery | ✅ SocialEvent message | ✅ onChatMessage | **T1** conversation | existing |
-| `ConversationMessageRecalled` | ✅ social delivery | ✅ | ✅ | T1 | existing |
+| `ConversationMessageAppended` | ✅ social delivery (full) | ✅ SocialEvent `message` | ✅ onChatMessage | **T1** conversation | existing |
+| `ConversationMessageRecalled` | ✅ social delivery (full) | ✅ | ✅ | T1 | existing |
 | `ConversationMessageReactionUpdated` | ✅ reaction delivery | ✅ | ✅ | T1 conversation-only | existing (B6) |
-| `AccountConversationMessageAppended` | ✅ social delivery (**full body**) | ✅ same as message | ✅ same | **T2 digest** target | **R3 BLOCKED** |
-| `AccountConversationMessageRecalled` | ✅ full body | ✅ | ✅ | T2 digest target | **R3 BLOCKED** |
+| `AccountConversationMessageAppended` | ✅ social delivery (**thin digest**) | ✅ `inbox_digest` → rail only | ✅ `onAccountInboxDigest` | **T2 digest** | **R3 DONE** |
+| `AccountConversationMessageRecalled` | ✅ thin digest | ✅ `inbox_recall` | ✅ digest recall | T2 digest | **R3 DONE** |
 | `ProjectConversationLinked` | ❌ dead enum | ❌ | ❌ | T2/T3 | residual |
 | `ProjectArchived` | ❌ dead enum | ❌ | ❌ | T3/T4 | residual |
 | `HostForceClose` | ✅ host security | force close path | host | T1 host | existing |
@@ -43,38 +43,46 @@
 | `GET /v1/hosts` | n/a read | cold hydrate | OK |
 | `POST /v1/friends/requests` | ✅ FriendRequestUpdated | No (refresh on event) | **OK** |
 | accept/reject friend request | ✅ FriendRequestUpdated | No | **OK** |
-| send/recall/reaction social | ✅ conversation + account / reaction | live | OK (IM Reliability) |
+| send/recall/reaction social | ✅ conversation full + account thin / reaction | live | OK (IM Reliability + R3) |
 | project archive / link | ❌ | yes if multi-end | residual T3 |
 | agent config update | ❌ | T3/T4 ok if product accepts | residual |
 
 ---
 
-## 3. R3 Account thin digest — design (BLOCKED for code)
+## 3. R3 Account thin digest — **DONE**
 
-**Problem:** `AccountConversationMessageAppended.message: ChatMessageSummary` carries full body + reactions on the always-on account topic.
+**Problem (was):** `AccountConversationMessageAppended.message: ChatMessageSummary` carried full body + reactions on the always-on account topic.
 
-**Target shape (latest-only breaking):**
+**Shipped shape (latest-only breaking):**
 
 ```text
 AccountConversationMessageAppended {
   account_id, conversation_id, message_id,
   sender, at_ms,
-  preview: String,           // truncated
+  preview: String,              // truncated (~120 chars)
   sender_display_name: String,
-  mentioned: bool,
+  mentioned: bool,              // viewer-relative
   message_seq: Option<i64>,
 }
-// Full ChatMessageSummary ONLY on ConversationMessageAppended (open conversation topic).
+AccountConversationMessageRecalled {
+  account_id, conversation_id, message_id, at_ms,
+  preview: Option<String>,      // e.g. "Message recalled"
+  message_seq: Option<i64>,
+}
+// Full ChatMessageSummary ONLY on ConversationMessageAppended / Recalled
+// (conversation topic).
 ```
 
-**Prerequisites before shipping:**
+**Shipped sequence (R3a–R3d together):**
 
-1. Mobile must **subscribe `conversation:{id}` while chat open** (FRB `subscribe_conversation` / unsubscribe + Dart arm) — today Mobile relies on account frames for open-chat live.
-2. Desktop already conversation-subscribes focused chat — can patch inbox from account digest only.
-3. Push `notifications::decision` must read `preview` instead of `message.text`.
-4. Delete dual full-body account emission in `social/delivery.rs` same PR.
+| Step | Status | Notes |
+|------|--------|-------|
+| **R3a** Mobile conversation subscribe | ✅ | FRB `subscribe_conversation` / `unsubscribe_conversation`; `SocialConversation` open → subscribe, dispose → unsubscribe |
+| **R3b** Wire thin account | ✅ | `minos-protocol` DurableEvent; no dual payload |
+| **R3c** Clients | ✅ | Desktop: `onAccountInboxDigest` rail-only; Mobile: `inbox_digest`/`inbox_recall` for inbox; open chat uses T1 full only |
+| **R3d** Backend delivery + push | ✅ | `social/delivery.rs` builds digest; push uses `preview` |
 
-**Status:** **BLOCKED** on Mobile conversation subscription FRB surface. Documented; not half-thinned with dual payload.
+**Evidence:** `store::social::delivery::tests::account_fanout_is_thin_digest_conversation_is_full`; protocol round-trip; Mobile parse tests; Desktop tests green.
 
 ---
 
@@ -83,6 +91,7 @@ AccountConversationMessageAppended {
 | Item | Status |
 |------|--------|
 | Desktop conversation LRU (`MAX_OPEN_CONVERSATION_SUBSCRIPTIONS = 16`) | ✅ `conversation-sub-lru.ts` + `HubRealtimeSession.subscribeConversation` |
+| Mobile conversation subscribe/unsubscribe (R3a) | ✅ FRB + SocialConversation lifecycle |
 | Mobile `SubscriptionLimitExceeded` surface | ✅ UiEvent raw `subscription_limit_exceeded` (not silent drop) |
 | Hint coalesce | residual (P/R later) |
 
@@ -99,4 +108,4 @@ COMMIT
 wake_outbox()
 ```
 
-Clients: account topic arms Host* / Friend* / AccountConversation*; conversation topic arms message/reaction full.
+Clients: account topic arms Host* / Friend* / **AccountConversation* digests**; conversation topic arms message/reaction **full**.

@@ -166,10 +166,8 @@ fn dispatch_event(
                     .await;
             });
             match kind.as_str() {
-                "conversation_message_appended"
-                | "conversation_message_recalled"
-                | "account_conversation_message_appended"
-                | "account_conversation_message_recalled" => {
+                // T1 open conversation: full ChatMessageSummary for timeline.
+                "conversation_message_appended" | "conversation_message_recalled" => {
                     if let Some(conv_id) = payload.get("conversation_id").and_then(|v| v.as_str()) {
                         // Fail closed: never fan out empty-shell ChatMessageSummary.
                         if let Some(message) = parse_chat_message(payload) {
@@ -179,6 +177,17 @@ fn dispatch_event(
                                 message,
                             });
                         }
+                    }
+                }
+                // T2 account digest: inbox/rail only (preview stub, not timeline SSOT).
+                "account_conversation_message_appended" => {
+                    if let Some(frame) = parse_account_inbox_digest(payload, false) {
+                        let _ = social_events_tx.send(frame);
+                    }
+                }
+                "account_conversation_message_recalled" => {
+                    if let Some(frame) = parse_account_inbox_digest(payload, true) {
+                        let _ = social_events_tx.send(frame);
                     }
                 }
                 "conversation_message_reaction_updated" => {
@@ -352,6 +361,121 @@ fn parse_chat_message(payload: &serde_json::Value) -> Option<ChatMessageSummary>
             None
         }
     }
+}
+
+/// Parse R3 account thin digest into an inbox-only SocialEventFrame.
+///
+/// Builds a stub [`ChatMessageSummary`] (`text` = preview) so existing Dart
+/// inbox patch paths can reuse preview/unread without treating this as
+/// timeline-authoritative (kind is `inbox_digest` / `inbox_recall`).
+fn parse_account_inbox_digest(
+    payload: &serde_json::Value,
+    is_recall: bool,
+) -> Option<SocialEventFrame> {
+    use minos_protocol::{SenderType, UserSummary};
+
+    let conversation_id = payload
+        .get("conversation_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let message_id = payload
+        .get("message_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let at_ms = payload
+        .get("at_ms")
+        .and_then(|v| v.as_i64())
+        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+    let preview = if is_recall {
+        payload
+            .get("preview")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Message recalled")
+            .to_string()
+    } else {
+        payload
+            .get("preview")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let sender_display_name = payload
+        .get("sender_display_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let account_id = payload
+        .get("account_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let mentioned = payload
+        .get("mentioned")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let message_seq = payload
+        .get("message_seq")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+
+    // SenderRef on wire: { "kind": "user", "account_id": "..." } or agent.
+    let (sender_account_id, sender_type) = match payload.get("sender") {
+        Some(s) if s.get("agent_id").is_some() || s.get("kind").and_then(|k| k.as_str()) == Some("agent") => {
+            (
+                s.get("agent_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                SenderType::Agent,
+            )
+        }
+        Some(s) => (
+            s.get("account_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            SenderType::User,
+        ),
+        None => (String::new(), SenderType::User),
+    };
+
+    // When mentioned=true for this account, seed mentioned_account_ids so
+    // inbox mention badge can flip without full message body.
+    let mentioned_account_ids = if mentioned && !account_id.is_empty() {
+        vec![account_id]
+    } else {
+        Vec::new()
+    };
+
+    Some(SocialEventFrame {
+        conversation_id: conversation_id.clone(),
+        kind: if is_recall {
+            "inbox_recall".into()
+        } else {
+            "inbox_digest".into()
+        },
+        message: ChatMessageSummary {
+            message_id,
+            conversation_id,
+            sender: UserSummary {
+                account_id: sender_account_id,
+                minos_id: String::new(),
+                display_name: sender_display_name,
+            },
+            text: preview,
+            created_at_ms: at_ms,
+            message_seq,
+            reply_to: None,
+            recalled_at_ms: if is_recall { Some(at_ms) } else { None },
+            mentioned_account_ids,
+            sender_type,
+            reactions: vec![],
+        },
+    })
 }
 
 /// Parse reaction durable into a reaction_updated social frame.
@@ -580,6 +704,52 @@ mod tests {
         assert_eq!(msg.message_id, "m1");
         assert_eq!(msg.conversation_id, "c1");
         assert_eq!(msg.message_seq, 3);
+    }
+
+    #[test]
+    fn parse_account_inbox_digest_builds_preview_stub() {
+        let frame = parse_account_inbox_digest(
+            &serde_json::json!({
+                "account_id": "viewer",
+                "conversation_id": "c1",
+                "message_id": "m1",
+                "at_ms": 99,
+                "preview": "hi digest",
+                "sender_display_name": "Other",
+                "mentioned": true,
+                "message_seq": 7,
+                "sender": { "kind": "user", "account_id": "other" }
+            }),
+            false,
+        )
+        .expect("digest");
+        assert_eq!(frame.kind, "inbox_digest");
+        assert_eq!(frame.conversation_id, "c1");
+        assert_eq!(frame.message.text, "hi digest");
+        assert_eq!(frame.message.sender.display_name, "Other");
+        assert_eq!(frame.message.sender.account_id, "other");
+        assert_eq!(frame.message.message_seq, 7);
+        assert_eq!(frame.message.mentioned_account_ids, vec!["viewer".to_string()]);
+        assert!(frame.message.recalled_at_ms.is_none());
+    }
+
+    #[test]
+    fn parse_account_inbox_recall_sets_kind_and_recalled() {
+        let frame = parse_account_inbox_digest(
+            &serde_json::json!({
+                "account_id": "viewer",
+                "conversation_id": "c1",
+                "message_id": "m1",
+                "at_ms": 50,
+                "preview": "Message recalled",
+                "message_seq": 2
+            }),
+            true,
+        )
+        .expect("recall digest");
+        assert_eq!(frame.kind, "inbox_recall");
+        assert_eq!(frame.message.recalled_at_ms, Some(50));
+        assert_eq!(frame.message.text, "Message recalled");
     }
 
     #[test]

@@ -500,20 +500,33 @@ pub enum DurableEvent {
         /// clients resolve `reacted_by_me` from actors when needed).
         reactions: Vec<crate::ReactionGroup>,
     },
+    /// Account-topic T2 digest for inbox/rail (no full body / reactions).
+    /// Full [`ChatMessageSummary`] lives only on `ConversationMessageAppended`.
     AccountConversationMessageAppended {
         account_id: String,
         conversation_id: String,
         message_id: String,
         sender: SenderRef,
         at_ms: i64,
-        message: ChatMessageSummary,
+        /// Truncated text for preview / push (not full message body).
+        preview: String,
+        sender_display_name: String,
+        /// True when `account_id` is among the message's mentioned accounts.
+        mentioned: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_seq: Option<i64>,
     },
+    /// Account-topic T2 recall digest for inbox/rail.
     AccountConversationMessageRecalled {
         account_id: String,
         conversation_id: String,
         message_id: String,
         at_ms: i64,
-        message: ChatMessageSummary,
+        /// Short rail label (e.g. "Message recalled"); optional for older rows.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        preview: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_seq: Option<i64>,
     },
     ProjectConversationLinked {
         project_id: String,
@@ -674,6 +687,68 @@ mod tests {
         let json = serde_json::to_string(&frame).unwrap();
         let back: ServerFrame = serde_json::from_str(&json).unwrap();
         assert_eq!(frame, back);
+    }
+
+    #[test]
+    fn account_conversation_message_appended_is_thin_digest() {
+        let event = DurableEvent::AccountConversationMessageAppended {
+            account_id: "acc-1".into(),
+            conversation_id: "conv-1".into(),
+            message_id: "msg-1".into(),
+            sender: SenderRef::User {
+                account_id: "other".into(),
+            },
+            at_ms: 1_700_000_000_000,
+            preview: "hello preview".into(),
+            sender_display_name: "Other".into(),
+            mentioned: true,
+            message_seq: Some(42),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["kind"], "account_conversation_message_appended");
+        assert_eq!(json["preview"], "hello preview");
+        assert_eq!(json["sender_display_name"], "Other");
+        assert_eq!(json["mentioned"], true);
+        assert_eq!(json["message_seq"], 42);
+        // Must not carry full ChatMessageSummary nest.
+        assert!(json.get("message").is_none());
+        let back: DurableEvent = serde_json::from_value(json).unwrap();
+        assert_eq!(back.event_kind_str(), "account_conversation_message_appended");
+        assert_eq!(
+            back.topic(),
+            RealtimeTopic::Account("acc-1".into())
+        );
+    }
+
+    #[test]
+    fn conversation_message_appended_still_carries_optional_full_message() {
+        let event = DurableEvent::ConversationMessageAppended {
+            conversation_id: "conv-1".into(),
+            message_id: "msg-1".into(),
+            sender: SenderRef::User {
+                account_id: "other".into(),
+            },
+            at_ms: 1,
+            message: Some(ChatMessageSummary {
+                message_id: "msg-1".into(),
+                conversation_id: "conv-1".into(),
+                sender: crate::UserSummary {
+                    account_id: "other".into(),
+                    minos_id: "o".into(),
+                    display_name: "Other".into(),
+                },
+                text: "full body".into(),
+                created_at_ms: 1,
+                message_seq: 1,
+                reply_to: None,
+                recalled_at_ms: None,
+                mentioned_account_ids: vec![],
+                sender_type: crate::SenderType::User,
+                reactions: vec![],
+            }),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["message"]["text"], "full body");
     }
 
     #[test]

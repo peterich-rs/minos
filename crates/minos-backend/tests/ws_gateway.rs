@@ -743,8 +743,10 @@ async fn account_topic_delivers_social_message_payloads() -> anyhow::Result<()> 
             assert_eq!(topic, format!("account:{account_id}"));
             assert_eq!(kind, "account_conversation_message_appended");
             assert_eq!(payload["conversation_id"], conversation.conversation_id);
-            assert_eq!(payload["message"]["message_id"], message.message_id);
-            assert_eq!(payload["message"]["text"], "hello while chat is open");
+            // R3 thin account digest: ids + preview, not nested ChatMessageSummary.
+            assert_eq!(payload["message_id"], message.message_id);
+            assert_eq!(payload["preview"], "hello while chat is open");
+            assert!(payload.get("message").is_none());
         }
         other => panic!("expected social DurableEvent, got {other:?}"),
     }

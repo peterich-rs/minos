@@ -331,6 +331,14 @@ class MinosCore implements MinosCoreProtocol {
       _client.subscribeAgentSession(sessionId: sessionId);
 
   @override
+  Future<void> subscribeConversation({required String conversationId}) =>
+      _client.subscribeConversation(conversationId: conversationId);
+
+  @override
+  Future<void> unsubscribeConversation({required String conversationId}) =>
+      _client.unsubscribeConversation(conversationId: conversationId);
+
+  @override
   Future<ReadSessionResponse> readThread(ReadSessionParams params) =>
       _client.readSession(req: params);
 

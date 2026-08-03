@@ -238,8 +238,8 @@ created_at_ms, read_at_ms?, resolved_at_ms?
 POST send-message
   → extract_mentioned_account_ids(text, members)  // 仅成员可被 @
   → insert conversation_messages + message_mentions
-  → Durable ConversationMessageAppended (topic conversation:*)
-  → 对成员写 AccountConversationMessageAppended (topic account:*)  // 列表/inbox
+  → Durable ConversationMessageAppended (topic conversation:*)  // T1 full body
+  → 对成员写 AccountConversationMessageAppended thin digest (topic account:*)  // T2 列表/inbox
   → 未读：相对 conversation_reads 计算 unread_count / unread_mention_count
   → Push：偏好 direct_message / group_mention；在线则可不推
 ```

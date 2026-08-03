@@ -546,7 +546,7 @@ async fn conversation_command_aliases_list_and_send_message() {
 }
 
 #[tokio::test]
-async fn send_message_publishes_account_realtime_event_with_full_message() {
+async fn send_message_publishes_account_realtime_event_with_thin_digest() {
     let state = backend_state().await;
     let mut app = router(state.clone());
 
@@ -601,8 +601,11 @@ async fn send_message_publishes_account_realtime_event_with_full_message() {
             event.payload_json["conversation_id"],
             conversation.conversation_id
         );
-        assert_eq!(event.payload_json["message"]["text"], "live hello");
-        assert_eq!(event.payload_json["message"]["message_id"], message_id);
+        // R3: account topic carries thin digest only (no nested full message).
+        assert_eq!(event.payload_json["message_id"], message_id);
+        assert_eq!(event.payload_json["preview"], "live hello");
+        assert!(event.payload_json.get("message").is_none());
+        assert!(event.payload_json.get("sender_display_name").is_some());
     }
 }
 

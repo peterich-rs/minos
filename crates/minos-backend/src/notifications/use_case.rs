@@ -514,29 +514,8 @@ mod tests {
     use crate::notifications::channels::{PushChannel, PushPayload, PushSendOutcome};
     use crate::store::test_support::{insert_account, memory_pool, T0};
     use minos_domain::DeviceId;
-    use minos_protocol::{ChatMessageSummary, SenderType, UserSummary};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
-
-    fn message(sender_account_id: &str) -> ChatMessageSummary {
-        ChatMessageSummary {
-            message_id: "msg-1".into(),
-            conversation_id: "conv-1".into(),
-            sender: UserSummary {
-                account_id: sender_account_id.into(),
-                minos_id: "minos-user".into(),
-                display_name: "Test User".into(),
-            },
-            text: "hello".into(),
-            created_at_ms: 1_700_000_000_000,
-            message_seq: 1,
-            reply_to: None,
-            recalled_at_ms: None,
-            mentioned_account_ids: Vec::new(),
-            sender_type: SenderType::User,
-            reactions: vec![],
-        }
-    }
 
     struct CountingChannel {
         sent: AtomicUsize,
@@ -632,7 +611,10 @@ mod tests {
                     account_id: "sender-other".into(),
                 },
                 at_ms: T0,
-                message: message("sender-other"),
+                preview: "hello".into(),
+                sender_display_name: "Test User".into(),
+                mentioned: false,
+                message_seq: Some(1),
             },
         }
     }
@@ -845,7 +827,10 @@ mod tests {
                 account_id: "target-account".into(),
             },
             at_ms: T0,
-            message: message("target-account"),
+            preview: "hello".into(),
+            sender_display_name: "Test User".into(),
+            mentioned: false,
+            message_seq: Some(1),
         };
         // Self-sender: empty targets (resolved without DB).
         let rt = tokio::runtime::Builder::new_current_thread()

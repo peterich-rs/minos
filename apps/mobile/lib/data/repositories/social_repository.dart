@@ -237,6 +237,16 @@ class SocialRepository {
     return _core.subscribeAgentSession(sessionId: sessionId);
   }
 
+  /// R3a: open-chat `conversation:{id}` full T1 frames.
+  Future<void> subscribeConversation({required String conversationId}) {
+    return _core.subscribeConversation(conversationId: conversationId);
+  }
+
+  /// R3a: leave open-chat conversation topic.
+  Future<void> unsubscribeConversation({required String conversationId}) {
+    return _core.unsubscribeConversation(conversationId: conversationId);
+  }
+
   Future<SocialChatMessage?> markMessageSent({
     required String localId,
     required ChatMessageSummary message,

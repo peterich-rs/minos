@@ -224,9 +224,18 @@ class SocialConversation extends _$SocialConversation {
               ref.invalidateSelf(),
           onDone: ref.invalidateSelf,
         );
+    // R3a: open chat subscribes conversation topic for full T1 live frames.
+    // Account topic digests are inbox-only and must not drive this timeline.
+    final repository = ref.read(socialRepositoryProvider);
+    unawaited(
+      repository.subscribeConversation(conversationId: conversationId),
+    );
     ref.onDispose(() {
       unawaited(_eventsSub?.cancel() ?? Future<void>.value());
       _markReadTimer?.cancel();
+      unawaited(
+        repository.unsubscribeConversation(conversationId: conversationId),
+      );
     });
     unawaited(_load(seedState: initialState));
     return initialState;
@@ -507,10 +516,18 @@ class SocialConversation extends _$SocialConversation {
     if (frame.conversationId != _conversationId) {
       return;
     }
+    // Account T2 digests are for inbox only — never timeline.
+    if (frame.kind == 'inbox_digest' || frame.kind == 'inbox_recall') {
+      return;
+    }
     if (frame.kind == 'reaction_updated') {
       final mid = frame.message.messageId.trim();
       if (mid.isEmpty) return;
       unawaited(_applyRemoteReactions(mid, frame.message.reactions));
+      return;
+    }
+    // Full T1 conversation frames only.
+    if (frame.kind != 'message') {
       return;
     }
     // Empty shell already filtered in Rust; belt-and-suspenders here.
@@ -1009,6 +1026,13 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
   Future<void> _onSocialEvent(SocialEventFrame frame) async {
     // Reactions are conversation-only; do not bump sidebar unread (B6.2).
     if (frame.kind == 'reaction_updated') {
+      return;
+    }
+    // Inbox path: account T2 digests + conversation full (when open) both patch
+    // rail preview/unread. Digests carry preview in message.text stub.
+    if (frame.kind != 'message' &&
+        frame.kind != 'inbox_digest' &&
+        frame.kind != 'inbox_recall') {
       return;
     }
     if (frame.message.messageId.trim().isEmpty) {

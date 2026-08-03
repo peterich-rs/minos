@@ -50,7 +50,7 @@ Host 设备列表「只能手动刷新」只是 **类 R（名册成员变更）�
 | 端 | 今日倾向 |
 |----|----------|
 | Desktop | account 常驻 + **当前打开** conversation |
-| Mobile | account 常驻 + 按需 agent_session；会话全文多靠 HTTP + account 帧 |
+| Mobile | account 常驻 + **当前打开** conversation（R3a）+ 按需 agent_session |
 
 **Topic 上限（128 / 批 32）**：在上述拓扑下设备列表与 inbox **不是**瓶颈。  
 真正风险：错误地「打开过的会话永不 unsubscribe」→ LRU（见 IM Reliability residual）。
@@ -103,7 +103,7 @@ Q4: payload 是否 > ~1KB 且接收方未打开详情？
 | 变更 | 应选 | 今日 | 缺口 |
 |------|------|------|------|
 | 打开中会话新消息 | T1 full on `conversation:` | ✅ | — |
-| 未打开会话新消息 | T2 digest on `account:` | ⚠️ full body on account | 演进 thin digest |
+| 未打开会话新消息 | T2 digest on `account:` | ✅ thin digest on account | — |
 | 撤回 | T1 + T2 | ✅ | — |
 | Reaction | T1 conversation only | ✅（B6） | 故意不进 account（风暴） |
 | 已读 | HTTP + 可选 debounced；他人已读若产品要 | 本地 mark-read | 非必须多端实时 |
