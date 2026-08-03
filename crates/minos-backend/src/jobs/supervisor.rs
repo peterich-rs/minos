@@ -137,7 +137,21 @@ async fn run_job_loop(
 
                 match outcome {
                     JobOutcome::Idle => {
-                        tokio::time::sleep(idle_interval).await;
+                        // Outbox (and other wake-capable jobs): select between
+                        // idle floor and in-process Notify wake.
+                        if name == "outbox_dispatcher" || name == "host_command_outbox" {
+                            tokio::select! {
+                                _ = tokio::time::sleep(idle_interval) => {}
+                                _ = ctx.outbox_wake.notified() => {}
+                            }
+                        } else if name == "agent_dispatch_worker" {
+                            tokio::select! {
+                                _ = tokio::time::sleep(idle_interval) => {}
+                                _ = ctx.agent_dispatch_wake.notified() => {}
+                            }
+                        } else {
+                            tokio::time::sleep(idle_interval).await;
+                        }
                         continue;
                     }
                     JobOutcome::DidWork(n) => {

@@ -111,7 +111,8 @@ abstract class MinosCoreProtocol {
 
   Future<ListChatMessagesResponse> listChatMessages({
     required String conversationId,
-    int? beforeTsMs,
+    int? beforeSeq,
+    int? afterSeq,
     int limit = 50,
   });
 
@@ -119,11 +120,19 @@ abstract class MinosCoreProtocol {
     required String conversationId,
     required String text,
     String? replyToMessageId,
+    String? clientMessageId,
   });
 
   Future<ChatMessageSummary> recallChatMessage({
     required String conversationId,
     required String messageId,
+  });
+
+  Future<ToggleReactionResponse> toggleReaction({
+    required String conversationId,
+    required String messageId,
+    required String emoji,
+    required String clientOpId,
   });
 
   /// Paged thread summaries for the paired agent-host.
@@ -268,6 +277,8 @@ abstract class MinosCoreProtocol {
     required String requestId,
     required String sessionId,
     required Map<String, dynamic> decision,
+    /// Hub Intent Outbox id (C5.3). Stable across retries of the same intent.
+    String? clientRequestId,
   });
 
   /// Submit answers for a pending opencode question request.

@@ -170,7 +170,8 @@ Link proof 签名载荷：`"{installation_id}:{nonce}:v1/hosts/link"`（无 lead
 - 持有 `SessionRegistry`、`SubscriptionManager`、`StoreHandle`、`MessageBusBackend`
 - `fanout_ui_event()` — 推送到特定设备会话
 - `fanout_social_message()` — 推送到所有关联账户的移动端会话
-- `dispatch_outbox_batch()` — 从数据库认领 outbox 事件，分发到 topic 订阅者
+- `dispatch_outbox_batch()` — 认领 `social_durable` 车道 outbox，publish 后 ack（不阻塞 host 命令）
+- `dispatch_host_command_outbox_batch()` — 认领 `host_command` 车道；publish 后异步等待 host ack（过期 dead_letter，禁止假成功 ack）
 
 ### MessageBusBackend（多实例集群）
 
@@ -212,7 +213,7 @@ Migrations 为 latest-only 单一初始 schema（`sqlx::migrate!`）：
 | `approval_requests` | 审批请求 |
 | `host_commands` | 持久化命令队列 |
 | `durable_event_log` | 按 topic 排序的事件日志 |
-| `outbox_events` | 分发工作队列 |
+| `outbox_events` | 分发工作队列（`lane`: `social_durable` \| `host_command`） |
 | `raw_events` | Host-local `seq` 的 Agent 原始事件，按 `(host_device_id, session_id, seq)` 幂等 |
 | `thread_sync_state` | Host manifest、backend ack 水位、partial history metadata |
 
@@ -282,11 +283,13 @@ RuntimeShell           -- 拥有 AppContext、后台任务、集群监听
 | `ApprovalTimeoutJob` | 过期审批自动处理 |
 | `HostCommandTimeoutJob` | 超时 host 命令标记失败 |
 | `RetentionCleanerJob` | 清理旧事件/线程 |
-| `StaleSessionSweeperJob` | 清理过期 outbox 认领 |
+| `SessionLifecycleJob`（`stale_session_sweeper` 模块） | 失联 host → open `agent_sessions` → `failed` + durable end；CompletionWatch TTL → 失败气泡 + remove（**非** COUNT-only） |
 | `AuditIndexerJob` | 审计数据索引 |
-| `OutboxDispatcherJob` | 分发待处理 outbox 事件 |
+| `OutboxDispatcherJob` | 分发 `social_durable` 车道 outbox |
+| `HostCommandOutboxJob` | 分发 `host_command` 车道（与 social 隔离 claim/lease） |
+| `AgentDispatchWorkerJob` | 异步 drain `agent_dispatch_queue`；arm CompletionWatch |
 
-所有任务实现 `Job` trait（`run()`, `interval()`, `applies_to(runtime_mode)`）。
+所有任务实现 `Job` trait（`tick()`, `idle_interval()`, `applies_to(runtime_mode)`）。`SessionLifecycleJob` / `AgentDispatchWorkerJob` 需要 `AppContext`（registry + completion_watches）。
 
 ## 错误处理 (`src/error.rs`)
 

@@ -471,6 +471,19 @@ pub enum DurableEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         message: Option<ChatMessageSummary>,
     },
+    /// Conversation-only reaction aggregate update (no account fanout / rail unread).
+    ConversationMessageReactionUpdated {
+        conversation_id: String,
+        message_id: String,
+        emoji: String,
+        /// `"add"` | `"remove"` — animation hint only; not authoritative state.
+        action: String,
+        actor: crate::SenderRef,
+        at_ms: i64,
+        /// AUTHORITATIVE full aggregate for `message_id` (viewer-neutral wire shape;
+        /// clients resolve `reacted_by_me` from actors when needed).
+        reactions: Vec<crate::ReactionGroup>,
+    },
     AccountConversationMessageAppended {
         account_id: String,
         conversation_id: String,
@@ -542,6 +555,9 @@ impl DurableEvent {
             Self::ApprovalResolved { .. } => "approval_resolved",
             Self::ConversationMessageAppended { .. } => "conversation_message_appended",
             Self::ConversationMessageRecalled { .. } => "conversation_message_recalled",
+            Self::ConversationMessageReactionUpdated { .. } => {
+                "conversation_message_reaction_updated"
+            }
             Self::AccountConversationMessageAppended { .. } => {
                 "account_conversation_message_appended"
             }
@@ -573,6 +589,9 @@ impl DurableEvent {
                 conversation_id, ..
             }
             | Self::ConversationMessageRecalled {
+                conversation_id, ..
+            }
+            | Self::ConversationMessageReactionUpdated {
                 conversation_id, ..
             } => RealtimeTopic::Conversation(conversation_id.clone()),
             Self::AccountConversationMessageAppended { account_id, .. }

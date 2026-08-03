@@ -157,10 +157,12 @@ fn all_event_kind_variants_round_trip() {
                 },
                 text: "Hey there".into(),
                 created_at_ms: 1_717_000_000,
+                message_seq: 1,
                 reply_to: None,
                 recalled_at_ms: None,
                 mentioned_account_ids: vec!["acct-2".into()],
                 sender_type: SenderType::User,
+            reactions: vec![],
             },
         },
     ];

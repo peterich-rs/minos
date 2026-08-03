@@ -67,15 +67,9 @@ function scheduleConversationTimelineRefresh(
         // loadConversations above still updates rail preview/count.
         return;
       }
-      // conversation_completion may write a few hundred ms after Idle; burst
-      // re-list so agent-result lands without waiting for the next send.
+      // Single quiet re-list. Agent-result uses canonical Hub id + WS fanout /
+      // outbox uplink — no 0/400/1200 burst poll (C2).
       void get().loadTimeline(conversationId, { quiet: true });
-      window.setTimeout(() => {
-        void get().loadTimeline(conversationId, { quiet: true });
-      }, 400);
-      window.setTimeout(() => {
-        void get().loadTimeline(conversationId, { quiet: true });
-      }, 1200);
     }, 200),
   );
 }

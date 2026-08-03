@@ -5,6 +5,7 @@ import {
   firstMessageCreatedAtMs,
   firstMessageSeq,
   hasTimelineWorkingSet,
+  lastMessageSeq,
   mergeMessagesOlder,
   mergeMessagesQuietTail,
   metaAfterMessageTail,
@@ -23,7 +24,7 @@ function msg(
   };
 }
 
-describe("firstMessageSeq / metaAfterMessageTail", () => {
+describe("firstMessageSeq / lastMessageSeq / metaAfterMessageTail", () => {
   it("finds the lowest durable seq", () => {
     assert.equal(
       firstMessageSeq([
@@ -33,6 +34,18 @@ describe("firstMessageSeq / metaAfterMessageTail", () => {
       ]),
       10,
     );
+  });
+
+  it("finds the highest durable seq (maxLoadedSeq helper)", () => {
+    assert.equal(
+      lastMessageSeq([
+        msg({ id: "b", messageSeq: 20 }),
+        msg({ id: "a", messageSeq: 10 }),
+        msg({ id: "p" }),
+      ]),
+      20,
+    );
+    assert.equal(lastMessageSeq([msg({ id: "p" })]), null);
   });
 
   it("records hasOlder from the daemon flag", () => {

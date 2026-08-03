@@ -7,6 +7,7 @@ use minos_protocol::{
     ConversationSummary, SenderType, UserSummary,
 };
 
+use crate::app::tx::Storage;
 use crate::error::BackendError;
 use crate::profiles::use_case::to_user_summary;
 use crate::store::{social, StoreHandle};
@@ -34,7 +35,7 @@ pub enum ConversationError {
 #[derive(Debug, Clone)]
 pub struct ListMessagesResult {
     pub messages: Vec<ChatMessageSummary>,
-    pub next_before_ts_ms: Option<i64>,
+    pub next_before_seq: Option<i64>,
 }
 
 #[async_trait]
@@ -73,17 +74,19 @@ pub trait ConversationService: Send + Sync {
         conversation_id: &str,
     ) -> Result<Vec<UserSummary>, ConversationError>;
 
+    /// Returns `(last_read_seq, last_read_at_ms)` when messages exist.
     async fn mark_read(
         &self,
         account_id: &str,
         conversation_id: &str,
-    ) -> Result<Option<i64>, ConversationError>;
+    ) -> Result<Option<(i64, i64)>, ConversationError>;
 
     async fn list_messages(
         &self,
         account_id: &str,
         conversation_id: &str,
-        before_ts_ms: Option<i64>,
+        before_seq: Option<i64>,
+        after_seq: Option<i64>,
         limit: u32,
     ) -> Result<ListMessagesResult, ConversationError>;
 
@@ -104,6 +107,26 @@ pub trait ConversationService: Send + Sync {
         conversation_id: &str,
         message_id: &str,
     ) -> Result<ChatMessageSummary, ConversationError>;
+
+    /// Toggle cloud reaction; returns action, aggregates, and outbox publish handle.
+    ///
+    /// `client_op_id` is required (B6): becomes the durable event_id suffix and
+    /// must match the client Intent Outbox entry id (C5).
+    async fn toggle_reaction(
+        &self,
+        account_id: &str,
+        conversation_id: &str,
+        message_id: &str,
+        emoji: &str,
+        client_op_id: &str,
+    ) -> Result<
+        (
+            String,
+            Vec<minos_protocol::ReactionGroup>,
+            social::PendingDurablePublish,
+        ),
+        ConversationError,
+    >;
 
     async fn get_conversation(
         &self,
@@ -323,25 +346,26 @@ impl ConversationService for DefaultConversationService {
         &self,
         account_id: &str,
         conversation_id: &str,
-    ) -> Result<Option<i64>, ConversationError> {
+    ) -> Result<Option<(i64, i64)>, ConversationError> {
         if !social::is_conversation_member(&self.store, conversation_id, account_id).await? {
             return Err(ConversationError::NotFound);
         }
-        let last_read_at_ms = social::mark_conversation_read_to_latest(
+        let latest = social::mark_conversation_read_to_latest(
             &self.store,
             conversation_id,
             account_id,
             chrono::Utc::now().timestamp_millis(),
         )
         .await?;
-        Ok(last_read_at_ms)
+        Ok(latest)
     }
 
     async fn list_messages(
         &self,
         account_id: &str,
         conversation_id: &str,
-        before_ts_ms: Option<i64>,
+        before_seq: Option<i64>,
+        after_seq: Option<i64>,
         limit: u32,
     ) -> Result<ListMessagesResult, ConversationError> {
         if !social::is_conversation_member(&self.store, conversation_id, account_id).await? {
@@ -351,21 +375,29 @@ impl ConversationService for DefaultConversationService {
         let deleted_at_ms =
             social::conversation_deleted_at_for_account(&self.store, conversation_id, account_id)
                 .await?;
-        let mut messages =
-            social::list_messages(&self.store, conversation_id, before_ts_ms, limit).await?;
+        let mut messages = social::list_messages(
+            &self.store,
+            conversation_id,
+            before_seq,
+            after_seq,
+            limit,
+        )
+        .await?;
         if let Some(deleted_at_ms) = deleted_at_ms {
             messages.retain(|message| message.created_at_ms > deleted_at_ms);
         }
-        let next_before_ts_ms = if messages.len() as u32 == limit {
-            messages.last().map(|m| m.created_at_ms)
+        let next_before_seq = if messages.len() as u32 == limit {
+            messages.last().map(|m| m.message_seq)
         } else {
             None
         };
+        // list_messages returns DESC; reverse to chronological ASC for clients.
         messages.reverse();
-        let hydrated = hydrate_messages(&self.store, messages).await?;
+        let hydrated =
+            hydrate_messages_for_viewer(&self.store, messages, Some(account_id)).await?;
         Ok(ListMessagesResult {
             messages: hydrated,
-            next_before_ts_ms,
+            next_before_seq,
         })
     }
 
@@ -411,13 +443,57 @@ impl ConversationService for DefaultConversationService {
         };
         let members =
             social::list_conversation_member_profiles(&self.store, conversation_id).await?;
+        let member_ids = members
+            .iter()
+            .map(|m| m.account_id.clone())
+            .collect::<Vec<_>>();
         let mentioned_account_ids = extract_mentioned_account_ids(text, account_id, &members);
         // Hub server clock is the sole ordering authority for created_at_ms.
         // client_sent_at_ms is accepted for future display/debug only.
         let _ = client_sent_at_ms;
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let row = social::insert_message_with_id(
-            &self.store,
+
+        // Build reply summary before the write tx so durable payload is complete
+        // without reading uncommitted rows from a second connection.
+        let reply_to = match reply_to_id.as_deref() {
+            Some(id) => match social::get_message(&self.store, id).await? {
+                Some(reply_row) => {
+                    let profiles = members
+                        .iter()
+                        .map(|p| (p.account_id.clone(), p.clone()))
+                        .collect::<HashMap<_, _>>();
+                    let mut agents = HashMap::new();
+                    if reply_row.sender_type == "agent" {
+                        let agent_id = reply_row
+                            .sender_agent_id
+                            .clone()
+                            .unwrap_or_else(|| reply_row.sender_account_id.clone());
+                        if let Some(agent) = social::get_agent(&self.store, &agent_id).await? {
+                            agents.insert(agent_id, agent);
+                        }
+                    }
+                    Some(ChatMessageReplySummary {
+                        message_id: reply_row.message_id.clone(),
+                        sender: sender_summary(&reply_row, &profiles, &agents)?,
+                        text: reply_row.text.clone(),
+                        recalled_at_ms: reply_row.recalled_at_ms,
+                    })
+                }
+                None => None,
+            },
+            None => None,
+        };
+
+        let sender_profile = members
+            .iter()
+            .find(|m| m.account_id == account_id)
+            .ok_or_else(|| ConversationError::MissingProfile(account_id.to_string()))?;
+        let sender = to_user_summary(sender_profile);
+
+        // Transactional Outbox: chat_messages + durable + outbox in one commit.
+        let mut tx = self.store.begin().await?;
+        let outcome = social::insert_message_with_id_in_tx(
+            &mut tx,
             conversation_id,
             account_id,
             text,
@@ -427,8 +503,32 @@ impl ConversationService for DefaultConversationService {
             client_message_id,
         )
         .await?;
-        let mut hydrated = hydrate_messages(&self.store, vec![row]).await?;
-        let message = hydrated.remove(0);
+        let message = if outcome.inserted {
+            ChatMessageSummary {
+                message_id: outcome.row.message_id.clone(),
+                conversation_id: outcome.row.conversation_id.clone(),
+                sender,
+                text: outcome.row.text.clone(),
+                created_at_ms: outcome.row.created_at_ms,
+                message_seq: outcome.row.message_seq,
+                reply_to,
+                recalled_at_ms: None,
+                mentioned_account_ids: mentioned_account_ids.clone(),
+                sender_type: SenderType::User,
+            reactions: vec![],
+            }
+        } else {
+            // Idempotent hit: re-hydrate so durable repair uses current SSOT text.
+            drop(tx);
+            let mut hydrated = hydrate_messages(&self.store, vec![outcome.row]).await?;
+            let message = hydrated.remove(0);
+            let mut tx = self.store.begin().await?;
+            social::ensure_social_message_delivery_in_tx(&mut tx, &message, &member_ids).await?;
+            tx.commit().await?;
+            return Ok((message, members));
+        };
+        social::ensure_social_message_delivery_in_tx(&mut tx, &message, &member_ids).await?;
+        tx.commit().await?;
         Ok((message, members))
     }
 
@@ -458,12 +558,151 @@ impl ConversationService for DefaultConversationService {
                 "message recall window has expired (5 minutes)".into(),
             ));
         }
-        let recalled =
-            social::recall_message(&self.store, conversation_id, message_id, account_id, now_ms)
-                .await?
-                .ok_or(ConversationError::NotFound)?;
-        let mut hydrated = hydrate_messages(&self.store, vec![recalled]).await?;
-        Ok(hydrated.remove(0))
+        let member_ids =
+            social::list_conversation_members(&self.store, conversation_id).await?;
+
+        // Hydrate before mutating so sender/reply stay available for durable payload.
+        let mut hydrated = hydrate_messages(&self.store, vec![existing]).await?;
+        let mut message = hydrated.remove(0);
+
+        let mut tx = self.store.begin().await?;
+        social::recall_message_in_tx(
+            &mut tx,
+            conversation_id,
+            message_id,
+            account_id,
+            now_ms,
+        )
+        .await?;
+        message.text = "[message recalled]".to_string();
+        message.recalled_at_ms = Some(message.recalled_at_ms.unwrap_or(now_ms));
+        message.mentioned_account_ids.clear();
+        social::ensure_social_message_delivery_in_tx(&mut tx, &message, &member_ids).await?;
+        tx.commit().await?;
+        Ok(message)
+    }
+
+    async fn toggle_reaction(
+        &self,
+        account_id: &str,
+        conversation_id: &str,
+        message_id: &str,
+        emoji: &str,
+        client_op_id: &str,
+    ) -> Result<
+        (
+            String,
+            Vec<minos_protocol::ReactionGroup>,
+            social::PendingDurablePublish,
+        ),
+        ConversationError,
+    > {
+        let client_op_id = client_op_id.trim();
+        if client_op_id.is_empty() {
+            return Err(ConversationError::ValidationFormat(
+                "client_op_id is required".into(),
+            ));
+        }
+        if !social::is_conversation_member(&self.store, conversation_id, account_id).await? {
+            return Err(ConversationError::NotFound);
+        }
+        let existing = social::get_message(&self.store, message_id)
+            .await?
+            .ok_or(ConversationError::NotFound)?;
+        if existing.conversation_id != conversation_id {
+            return Err(ConversationError::NotFound);
+        }
+        if existing.recalled_at_ms.is_some() {
+            return Err(ConversationError::ValidationFormat(
+                "cannot react to a recalled message".into(),
+            ));
+        }
+
+        // Same client_op_id retry: return current aggregate without re-toggle.
+        if let Some(prior) = social::get_reaction_client_op(&self.store, client_op_id).await? {
+            if prior.conversation_id == conversation_id
+                && prior.message_id == message_id
+                && prior.account_id == account_id
+            {
+                let rows = social::list_for_messages(&self.store, &[message_id.to_string()]).await?;
+                let reactions = social::aggregate_groups(&rows, Some(account_id));
+                let event_id = social::reaction_event_id(
+                    conversation_id,
+                    message_id,
+                    prior.emoji.as_str(),
+                    &format!("user-{account_id}"),
+                    prior.action.as_str(),
+                    client_op_id,
+                );
+                return Ok((
+                    prior.action,
+                    reactions,
+                    social::PendingDurablePublish {
+                        topic_kind: "conversation".into(),
+                        event_id,
+                        outbox_id: None,
+                    },
+                ));
+            }
+            return Err(ConversationError::ValidationFormat(
+                "client_op_id already used for a different reaction".into(),
+            ));
+        }
+
+        let profile = social::profiles_by_accounts(&self.store, &[account_id.to_string()])
+            .await?
+            .remove(account_id)
+            .ok_or_else(|| ConversationError::MissingProfile(account_id.to_string()))?;
+        let display_name = profile
+            .display_name
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| profile.minos_id.clone());
+        let now_ms = chrono::Utc::now().timestamp_millis();
+
+        let mut tx = self.store.begin().await?;
+        let action = social::toggle_user_in_tx(
+            &mut tx,
+            conversation_id,
+            message_id,
+            account_id,
+            &display_name,
+            emoji,
+            now_ms,
+        )
+        .await?;
+        social::insert_reaction_client_op_in_tx(
+            &mut tx,
+            client_op_id,
+            conversation_id,
+            message_id,
+            emoji.trim(),
+            &action,
+            account_id,
+            now_ms,
+        )
+        .await?;
+        let rows = social::list_for_message_in_tx(&mut tx, message_id).await?;
+        // HTTP response: viewer-resolved for the toggling account.
+        let reactions = social::aggregate_groups(&rows, Some(account_id));
+        // Durable fanout: viewer-neutral (reacted_by_me=false); clients recompute.
+        let durable_reactions = social::aggregate_groups(&rows, None);
+        let pending = social::ensure_reaction_delivery_in_tx(
+            &mut tx,
+            conversation_id,
+            message_id,
+            emoji.trim(),
+            &action,
+            minos_protocol::SenderRef::User {
+                account_id: account_id.to_string(),
+            },
+            now_ms,
+            durable_reactions,
+            client_op_id,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok((action, reactions, pending))
     }
 
     async fn get_conversation(
@@ -611,11 +850,28 @@ pub async fn hydrate_messages(
     store: &StoreHandle,
     rows: Vec<social::ChatMessageRow>,
 ) -> Result<Vec<ChatMessageSummary>, ConversationError> {
+    hydrate_messages_for_viewer(store, rows, None).await
+}
+
+/// Hydrate messages with optional viewer for `reacted_by_me` resolution.
+pub async fn hydrate_messages_for_viewer(
+    store: &StoreHandle,
+    rows: Vec<social::ChatMessageRow>,
+    viewer_account_id: Option<&str>,
+) -> Result<Vec<ChatMessageSummary>, ConversationError> {
     let message_ids = rows
         .iter()
         .map(|row| row.message_id.clone())
         .collect::<Vec<_>>();
     let mut mentions_by_message = social::list_message_mentions(store, &message_ids).await?;
+    let reaction_rows = social::list_for_messages(store, &message_ids).await?;
+    let mut reactions_by_message: HashMap<String, Vec<social::MessageReactionRow>> = HashMap::new();
+    for row in reaction_rows {
+        reactions_by_message
+            .entry(row.message_id.clone())
+            .or_default()
+            .push(row);
+    }
 
     let mut reply_ids = rows
         .iter()
@@ -675,16 +931,22 @@ pub async fn hydrate_messages(
         } else {
             SenderType::User
         };
+        let reactions = reactions_by_message
+            .remove(&row.message_id)
+            .map(|rows| social::aggregate_groups(&rows, viewer_account_id))
+            .unwrap_or_default();
         output.push(ChatMessageSummary {
             message_id: row.message_id,
             conversation_id: row.conversation_id,
             sender,
             text: row.text,
             created_at_ms: row.created_at_ms,
+            message_seq: row.message_seq,
             reply_to,
             recalled_at_ms: row.recalled_at_ms,
             mentioned_account_ids,
             sender_type,
+            reactions,
         });
     }
     Ok(output)

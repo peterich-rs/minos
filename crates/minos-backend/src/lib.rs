@@ -43,4 +43,5 @@ pub mod session;
 pub mod social;
 pub mod store;
 pub mod telemetry;
+pub mod completion_watch;
 pub mod turn_completion;

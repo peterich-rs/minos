@@ -641,10 +641,12 @@ impl MobileHttpClient {
         }
     }
 
+    /// `client_request_id` is the Hub Intent Outbox id (C5.3); sent when non-empty.
     pub async fn submit_approval_decision(
         &self,
         access_token: &str,
         req: ApprovalDecisionRequest,
+        client_request_id: Option<&str>,
     ) -> Result<(), MinosError> {
         let path = "/v1/approvals/respond";
         let url = format!("{}{path}", self.base);
@@ -654,6 +656,9 @@ impl MobileHttpClient {
             Some(req.session_id.clone()),
             Some(format!("request_id={}", req.request_id)),
         );
+        let client_request_id = client_request_id
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         let request = self.request_with_json(
             Method::POST,
             &url,
@@ -661,7 +666,7 @@ impl MobileHttpClient {
             &ApprovalRespondRequest {
                 request_id: &req.request_id,
                 decision: &req.decision,
-                client_request_id: None,
+                client_request_id,
             },
         )?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
@@ -1537,7 +1542,8 @@ impl MobileHttpClient {
         &self,
         access_token: &str,
         conversation_id: &str,
-        before_ts_ms: Option<i64>,
+        before_seq: Option<i64>,
+        after_seq: Option<i64>,
         limit: u32,
     ) -> Result<ListChatMessagesResponse, MinosError> {
         let path = format!("/v1/conversations/{conversation_id}/messages/query");
@@ -1553,7 +1559,8 @@ impl MobileHttpClient {
             &url,
             Some(access_token),
             &ListChatMessagesRequest {
-                before_ts_ms,
+                before_seq,
+                after_seq,
                 limit: Some(limit),
             },
         )?;
@@ -1632,6 +1639,48 @@ impl MobileHttpClient {
                 trace_id,
                 Some(status.as_u16()),
                 Some("message recalled".into()),
+                Some(conversation_id.into()),
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    /// `POST …/reactions/toggle` — Hub reaction SSOT (B6 requires client_op_id).
+    pub async fn toggle_reaction(
+        &self,
+        access_token: &str,
+        conversation_id: &str,
+        message_id: &str,
+        emoji: &str,
+        client_op_id: &str,
+    ) -> Result<minos_protocol::ToggleReactionResponse, MinosError> {
+        let path = format!(
+            "/v1/conversations/{conversation_id}/messages/{message_id}/reactions/toggle"
+        );
+        let url = format!("{}{}", self.base, path);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            &path,
+            Some(conversation_id.into()),
+            Some(format!("react={emoji}")),
+        );
+        let req = minos_protocol::ToggleReactionRequest {
+            emoji: emoji.to_string(),
+            client_op_id: client_op_id.to_string(),
+        };
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body = decode_success_json(resp, "ToggleReactionResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some("reaction toggled".into()),
                 Some(conversation_id.into()),
             );
             Ok(body)

@@ -15,6 +15,8 @@ class RuntimeRepository {
 
   Stream<ConnectionState> get connectionStates => _core.connectionStates;
 
+  ConnectionState get currentConnectionState => _core.currentConnectionState;
+
   Future<bool> hasPersistedPairing() {
     return _core.hasPersistedPairing();
   }

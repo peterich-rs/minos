@@ -35,6 +35,9 @@ struct StartAgentSessionRequest {
     host_installation_id: Option<String>,
     workspace_path: Option<String>,
     initial_user_message: Option<String>,
+    /// Optional Hub user message id (collab agent-result suffix). Pass-through when present.
+    #[serde(default)]
+    origin_message_id: Option<String>,
     client_request_id: String,
 }
 
@@ -53,6 +56,9 @@ struct SendInputRequest {
     session_id: String,
     text: String,
     mentions: Option<Vec<String>>,
+    /// Optional Hub user message id (collab agent-result suffix). Pass-through when present.
+    #[serde(default)]
+    origin_message_id: Option<String>,
     client_request_id: String,
 }
 
@@ -168,6 +174,10 @@ async fn start_session(
             host_installation_id: request.host_installation_id,
             workspace_path: request.workspace_path,
             initial_user_message: request.initial_user_message,
+            origin_message_id: request
+                .origin_message_id
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             client_request_id: request.client_request_id,
             caller_account_id: account_id,
             conversation_title: None,
@@ -197,6 +207,10 @@ async fn send_input(
             session_id: request.session_id,
             text: request.text,
             mentions: request.mentions.unwrap_or_default(),
+            origin_message_id: request
+                .origin_message_id
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             client_request_id: request.client_request_id,
             caller_account_id: account_id,
         })

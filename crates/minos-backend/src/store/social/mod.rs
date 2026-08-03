@@ -6,7 +6,9 @@
 pub mod agents;
 pub mod conversation_messages;
 pub mod conversations;
+pub mod delivery;
 pub mod friendships;
+pub mod message_reactions;
 pub mod profiles;
 
 use minos_protocol::FriendRequestStatus;
@@ -87,6 +89,7 @@ pub struct ChatMessageRow {
     pub sender_agent_id: Option<String>,
     pub text: String,
     pub created_at_ms: i64,
+    pub message_seq: i64,
     pub reply_to_message_id: Option<String>,
     pub recalled_at_ms: Option<i64>,
     pub sender_type: String,
@@ -175,20 +178,36 @@ pub use conversations::{
 // Conversation message functions
 pub use conversation_messages::{
     bind_session_to_message, bind_session_to_message_for_agent, get_message,
-    has_bound_message_for_session, insert_message, insert_message_with_id, list_message_mentions,
-    list_messages, list_messages_by_ids, lookup_latest_session_id_for_conversation,
-    lookup_latest_session_id_for_conversation_agent, lookup_session_id_for_message, recall_message,
-    suppress_live_ui_fanout_for_session,
+    has_bound_message_for_session, insert_message, insert_message_with_id,
+    insert_message_with_id_in_tx, list_message_mentions, list_messages, list_messages_by_ids,
+    lookup_latest_session_id_for_conversation, lookup_latest_session_id_for_conversation_agent,
+    lookup_session_id_for_message, recall_message, recall_message_in_tx,
+    suppress_live_ui_fanout_for_session, InsertMessageOutcome,
 };
 
 // Agent functions
 pub use agents::{
     add_agent_to_conversation, agents_by_ids, delete_agent, ensure_host_runtime_agent,
     find_host_runtime_agent, get_agent, insert_agent_message, insert_agent_message_with_session,
-    is_agent_in_conversation, list_agents_for_owner, list_conversation_agents, register_agent,
-    remove_agent_from_conversation, update_agent, AGENT_SOURCE_HOST_RUNTIME, AGENT_SOURCE_SYSTEM,
-    AGENT_SOURCE_USER, HOST_RUNTIME_AGENT_DESCRIPTION,
+    insert_agent_message_with_session_in_tx, is_agent_in_conversation, list_agents_for_owner,
+    list_conversation_agents, register_agent, remove_agent_from_conversation, update_agent,
+    AGENT_SOURCE_HOST_RUNTIME, AGENT_SOURCE_SYSTEM, AGENT_SOURCE_USER,
+    HOST_RUNTIME_AGENT_DESCRIPTION,
 };
+
+// Transactional outbox delivery for social messages
+pub use delivery::{
+    ensure_reaction_delivery_in_tx, ensure_social_message_delivery_in_tx, PendingDurablePublish,
+};
+
+// Cloud reactions
+pub use message_reactions::{
+    aggregate_for_message, aggregate_groups, get_reaction_client_op, insert_reaction_client_op_in_tx,
+    list_for_message_in_tx, list_for_messages, toggle_user_in_tx, MessageReactionRow,
+    ReactionClientOpRow, ToggleReactionOutcome,
+};
+// B6 event_id helper
+pub use delivery::reaction_event_id;
 
 // ─── Tests ────────────────────────────────────────────────────────────
 
@@ -232,7 +251,7 @@ mod tests {
         let last_read = mark_conversation_read_to_latest(&pool, &conversation_id, &carol, T0 + 1)
             .await
             .unwrap();
-        assert_eq!(last_read, Some(T0 + 1));
+        assert_eq!(last_read, Some((1, T0 + 1)));
 
         insert_message(
             &pool,
@@ -309,7 +328,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = list_messages(&pool, &conversation_id, None, 20)
+        let rows = list_messages(&pool, &conversation_id, None, None, 20)
             .await
             .unwrap();
         let reply_row = rows
@@ -461,7 +480,7 @@ mod tests {
         upsert_group_conversation(&pool, conv_id, &alice, "Again", &[], T0 + 3)
             .await
             .unwrap();
-        let messages = list_messages(&pool, conv_id, None, 10).await.unwrap();
+        let messages = list_messages(&pool, conv_id, None, None, 10).await.unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].text, "keep me");
     }
@@ -503,7 +522,7 @@ mod tests {
         assert_eq!(first.message_id, client_id);
         assert_eq!(second.message_id, first.message_id);
         assert_eq!(second.text, "hello");
-        let messages = list_messages(&pool, &conversation.conversation_id, None, 10)
+        let messages = list_messages(&pool, &conversation.conversation_id, None, None, 10)
             .await
             .unwrap();
         assert_eq!(messages.len(), 1);
@@ -575,7 +594,7 @@ mod tests {
         assert_eq!(second.message_id, first.message_id);
         assert_eq!(second.text, "done");
         assert_eq!(
-            list_messages(&pool, &conversation.conversation_id, None, 10)
+            list_messages(&pool, &conversation.conversation_id, None, None, 10)
                 .await
                 .unwrap()
                 .len(),

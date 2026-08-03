@@ -212,6 +212,12 @@ async fn assert_agent_start_host_command(
     assert_eq!(row.params_json["runtime_agent"], "codex");
     assert_eq!(row.params_json["conversation_id"], expected_conversation_id);
     assert_eq!(row.params_json["initial_user_message"], expected_text);
+    // B4: origin_message_id must reach host so daemon pins agent-result suffix.
+    assert_eq!(
+        row.params_json["origin_message_id"],
+        _origin_message_id,
+        "agent_session.start must carry origin_message_id"
+    );
     assert_eq!(
         row.params_json["workspace"],
         expected_workspace_path.unwrap_or_default()
@@ -251,6 +257,11 @@ async fn assert_agent_send_host_command(
     assert_eq!(row.params_json["turn_id"], turn_id);
     assert_eq!(row.params_json["text"], expected_text);
     assert_eq!(row.params_json["mentions"], serde_json::json!([]));
+    assert_eq!(
+        row.params_json["origin_message_id"],
+        origin_message_id,
+        "agent_session.send_input must carry origin_message_id"
+    );
 }
 
 async fn assert_formal_agent_session(
@@ -282,7 +293,7 @@ async fn wait_for_message_count(
     // Must exceed GROUP_COMPLETION_SEQ_STABLE (2s) plus poll overhead.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let rows = social::list_messages(&state.store, conversation_id, None, 50)
+        let rows = social::list_messages(&state.store, conversation_id, None, None, 50)
             .await
             .unwrap();
         if rows.len() >= expected {
@@ -527,7 +538,7 @@ async fn conversation_command_aliases_list_and_send_message() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["text"], "hello via command route");
 
-    let rows = social::list_messages(&state.store, &conversation.conversation_id, None, 10)
+    let rows = social::list_messages(&state.store, &conversation.conversation_id, None, None, 10)
         .await
         .unwrap();
     assert_eq!(rows.len(), 1);
@@ -841,6 +852,10 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
     assert_eq!(status, StatusCode::OK);
 
     let user_message_id = body["message_id"].as_str().unwrap().to_string();
+    // Dispatch is async via AgentDispatchQueue — drain worker path for host RPC.
+    minos_backend::http::v1::social::process_agent_dispatch_batch(&state)
+        .await
+        .unwrap();
     let session_id = expected_social_start_session_id(&alice.account_id, &user_message_id);
     assert_eq!(
         social::lookup_session_id_for_message(&state.store, &user_message_id)
@@ -940,6 +955,13 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
     .await
     .unwrap();
 
+    // Completion is event-driven on host ingest; tests that seed raw_events
+    // directly must trigger projection (no poller).
+    minos_backend::http::v1::social::try_project_completion_for_session(&state, &session_id).await;
+    // Stable-seq path may re-check after GROUP_COMPLETION_SEQ_STABLE (2s).
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    minos_backend::http::v1::social::try_project_completion_for_session(&state, &session_id).await;
+
     let rows = wait_for_message_count(&state, &conversation.conversation_id, 2).await;
     let agent_reply = rows
         .iter()
@@ -956,6 +978,14 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
             .unwrap()
             .as_deref(),
         Some(session_id.as_str())
+    );
+    // B4 frozen id: agent-result:{conv}:{session}:{origin_message_id}
+    assert_eq!(
+        agent_reply.message_id,
+        format!(
+            "agent-result:{}:{}:{}",
+            conversation.conversation_id, session_id, user_message_id
+        )
     );
 
     let (status, body) = common::send(
@@ -980,6 +1010,9 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
     assert_eq!(status, StatusCode::OK);
 
     let followup_message_id = body["message_id"].as_str().unwrap().to_string();
+    minos_backend::http::v1::social::process_agent_dispatch_batch(&state)
+        .await
+        .unwrap();
     assert_eq!(
         social::lookup_session_id_for_message(&state.store, &followup_message_id)
             .await
@@ -1103,6 +1136,9 @@ async fn direct_agent_conversation_auto_routes_and_reuses_reply_session() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let first_user_message_id = body["message_id"].as_str().unwrap().to_string();
+    minos_backend::http::v1::social::process_agent_dispatch_batch(&state)
+        .await
+        .unwrap();
     let session_id = expected_social_start_session_id(&alice.account_id, &first_user_message_id);
     assert_eq!(
         social::lookup_session_id_for_message(&state.store, &first_user_message_id)
@@ -1157,6 +1193,9 @@ async fn direct_agent_conversation_auto_routes_and_reuses_reply_session() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let second_user_message_id = body["message_id"].as_str().unwrap().to_string();
+    minos_backend::http::v1::social::process_agent_dispatch_batch(&state)
+        .await
+        .unwrap();
     assert_eq!(
         social::lookup_session_id_for_message(&state.store, &second_user_message_id)
             .await
@@ -1265,6 +1304,9 @@ async fn group_reply_to_agent_message_reuses_session() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let user_message_id = body["message_id"].as_str().unwrap().to_string();
+    minos_backend::http::v1::social::process_agent_dispatch_batch(&state)
+        .await
+        .unwrap();
     let session_id = expected_social_start_session_id(&alice.account_id, &user_message_id);
 
     // Verify session binding on user message
@@ -1329,6 +1371,9 @@ async fn group_reply_to_agent_message_reuses_session() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let followup_message_id = body["message_id"].as_str().unwrap().to_string();
+    minos_backend::http::v1::social::process_agent_dispatch_batch(&state)
+        .await
+        .unwrap();
 
     // Verify session binding on the follow-up message
     assert_eq!(
@@ -1441,6 +1486,9 @@ async fn mobile_at_agent_reuses_desktop_formal_session_without_chat_bind() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let user_message_id = body["message_id"].as_str().unwrap().to_string();
+    minos_backend::http::v1::social::process_agent_dispatch_batch(&state)
+        .await
+        .unwrap();
 
     // Bound to the existing Desktop session — not a new social-start UUID.
     assert_eq!(
@@ -1477,5 +1525,431 @@ async fn mobile_at_agent_reuses_desktop_formal_session_without_chat_bind() {
         .unwrap()
         .is_none(),
         "must not start a new formal session when Desktop formal session exists"
+    );
+}
+
+/// B3: no live host → message HTTP 200 + queue row pending (no host command).
+#[tokio::test]
+async fn agent_dispatch_queues_when_host_offline() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    // Pair host but do not seed a live registry session.
+    let _host_device_id = seed_host_pair_for_account(&state, &alice.account_id, alice_device).await;
+
+    let conversation =
+        social::create_group_conversation(&state.store, &alice.account_id, "Agent DM", &[], 100)
+            .await
+            .unwrap();
+    let agent = social::register_agent(
+        &state.store,
+        &alice.account_id,
+        "Codex",
+        "Assistant",
+        "codex",
+        "gpt-5",
+        None,
+        100,
+    )
+    .await
+    .unwrap();
+    social::add_agent_to_conversation(
+        &state.store,
+        &conversation.conversation_id,
+        &agent.agent_id,
+        &alice.account_id,
+        100,
+    )
+    .await
+    .unwrap();
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(serde_json::json!({ "text": "hello agent" }).to_string()),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let origin = body["message_id"].as_str().unwrap().to_string();
+
+    let row = minos_backend::store::agent_dispatch_queue::get_by_origin(&state.store, &origin)
+        .await
+        .unwrap()
+        .expect("dispatch row should be pending after send");
+    assert_eq!(
+        row.status,
+        minos_backend::store::agent_dispatch_queue::STATUS_PENDING
+    );
+
+    // Worker drain without live host requeues (still pending, not terminal yet).
+    minos_backend::http::v1::social::process_agent_dispatch_batch(&state)
+        .await
+        .unwrap();
+    let after = minos_backend::store::agent_dispatch_queue::get_by_origin(&state.store, &origin)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        after.status,
+        minos_backend::store::agent_dispatch_queue::STATUS_PENDING
+    );
+    assert!(after.attempts >= 1);
+    assert!(after.next_attempt_at_ms >= after.updated_at_ms);
+
+    // No formal session bound until host is live.
+    assert!(
+        social::lookup_session_id_for_message(&state.store, &origin)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// B3: pending dispatch drains when host becomes online.
+#[tokio::test]
+async fn agent_dispatch_drains_when_host_comes_online() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let host_device_id = seed_host_pair_for_account(&state, &alice.account_id, alice_device).await;
+
+    let conversation =
+        social::create_group_conversation(&state.store, &alice.account_id, "Agent DM", &[], 100)
+            .await
+            .unwrap();
+    let agent = social::register_agent(
+        &state.store,
+        &alice.account_id,
+        "Codex",
+        "Assistant",
+        "codex",
+        "gpt-5",
+        None,
+        100,
+    )
+    .await
+    .unwrap();
+    social::add_agent_to_conversation(
+        &state.store,
+        &conversation.conversation_id,
+        &agent.agent_id,
+        &alice.account_id,
+        100,
+    )
+    .await
+    .unwrap();
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(serde_json::json!({ "text": "hello agent" }).to_string()),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let origin = body["message_id"].as_str().unwrap().to_string();
+
+    // Offline drain → pending with future next_attempt (backoff).
+    minos_backend::http::v1::social::process_agent_dispatch_batch(&state)
+        .await
+        .unwrap();
+    let pending = minos_backend::store::agent_dispatch_queue::get_by_origin(&state.store, &origin)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        pending.status,
+        minos_backend::store::agent_dispatch_queue::STATUS_PENDING
+    );
+    assert!(
+        pending.next_attempt_at_ms > pending.updated_at_ms,
+        "backoff should push next_attempt into the future"
+    );
+
+    // Production host-online edge: force due for linked accounts (no fake requeue).
+    let _host_rx = seed_live_host_session(&state, host_device_id, &alice.account_id);
+    let forced =
+        minos_backend::http::v1::social::on_host_online_force_agent_dispatch(&state, host_device_id)
+            .await
+            .unwrap();
+    assert!(forced >= 1, "host online must force-due pending dispatches");
+
+    minos_backend::http::v1::social::process_agent_dispatch_batch(&state)
+        .await
+        .unwrap();
+
+    let done = minos_backend::store::agent_dispatch_queue::get_by_origin(&state.store, &origin)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        done.status,
+        minos_backend::store::agent_dispatch_queue::STATUS_SUCCEEDED
+    );
+    let session_id = expected_social_start_session_id(&alice.account_id, &origin);
+    assert_agent_start_host_command(
+        &state.store,
+        host_device_id,
+        &alice.account_id,
+        &session_id,
+        &origin,
+        "hello agent",
+        &conversation.conversation_id,
+        &agent.agent_id,
+        None,
+    )
+    .await;
+}
+
+/// B4: two rapid dispatches on same session → two agent bubbles with distinct ids.
+#[tokio::test]
+async fn two_rapid_dispatches_project_two_agent_bubbles() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
+        .await
+        .unwrap();
+    let bob = minos_backend::store::accounts::create(&state.store, "bob@example.com")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let host_device_id = seed_host_pair_for_account(&state, &alice.account_id, alice_device).await;
+    let _host_rx = seed_live_host_session(&state, host_device_id, &alice.account_id);
+
+    let conversation = social::create_group_conversation(
+        &state.store,
+        &alice.account_id,
+        "Group",
+        &[bob.account_id.clone()],
+        100,
+    )
+    .await
+    .unwrap();
+    let agent = social::register_agent(
+        &state.store,
+        &alice.account_id,
+        "Codex",
+        "Assistant",
+        "codex",
+        "gpt-5",
+        None,
+        100,
+    )
+    .await
+    .unwrap();
+    social::add_agent_to_conversation(
+        &state.store,
+        &conversation.conversation_id,
+        &agent.agent_id,
+        &alice.account_id,
+        100,
+    )
+    .await
+    .unwrap();
+
+    // First mention → start session.
+    let (status, body1) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "text": format!("@{} first", agent.agent_id)
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let origin1 = body1["message_id"].as_str().unwrap().to_string();
+    minos_backend::http::v1::social::process_agent_dispatch_batch(&state)
+        .await
+        .unwrap();
+    let session_id = expected_social_start_session_id(&alice.account_id, &origin1);
+
+    // Second mention (reuse session via lookup) before first completion.
+    let (status, body2) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "text": format!("@{} second", agent.agent_id)
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let origin2 = body2["message_id"].as_str().unwrap().to_string();
+    minos_backend::http::v1::social::process_agent_dispatch_batch(&state)
+        .await
+        .unwrap();
+
+    // Two watches on the same session.
+    assert_eq!(
+        state.completion_watches.list_for_session(&session_id).len(),
+        2
+    );
+
+    sessions::upsert(
+        &state.store,
+        &session_id,
+        AgentName::Codex,
+        &host_device_id.to_string(),
+        199,
+    )
+    .await
+    .unwrap();
+
+    // Turn 1 events (seq 1-3), turn 2 events (seq 4-6).
+    for (seq, item_id, text, finished) in [
+        (1u64, "m1", "answer-one", 200i64),
+        (2, "m1", "answer-one", 201),
+        (3, "m1", "answer-one", 202),
+    ] {
+        let payload = if seq == 1 {
+            serde_json::json!({
+                "method": "item/started",
+                "params": {
+                    "item": { "type": "agentMessage", "id": item_id },
+                    "sessionId": session_id,
+                    "turnId": "t1"
+                }
+            })
+        } else if seq == 2 {
+            serde_json::json!({
+                "method": "item/agentMessage/delta",
+                "params": { "itemId": item_id, "delta": text }
+            })
+        } else {
+            serde_json::json!({
+                "method": "turn/completed",
+                "params": { "finishedAtMs": finished }
+            })
+        };
+        raw_events::insert_if_absent(
+            &state.store,
+            &session_id,
+            seq,
+            AgentName::Codex,
+            &payload,
+            finished,
+        )
+        .await
+        .unwrap();
+        let _ = (item_id, text);
+    }
+
+    minos_backend::http::v1::social::try_project_completion_for_session(&state, &session_id).await;
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    minos_backend::http::v1::social::try_project_completion_for_session(&state, &session_id).await;
+
+    // After turn1: second watch may still be pending (higher floor).
+    // Feed turn2 events.
+    for (seq, item_id, text, finished) in [
+        (4u64, "m2", "answer-two", 300i64),
+        (5, "m2", "answer-two", 301),
+        (6, "m2", "answer-two", 302),
+    ] {
+        let payload = if seq == 4 {
+            serde_json::json!({
+                "method": "item/started",
+                "params": {
+                    "item": { "type": "agentMessage", "id": item_id },
+                    "sessionId": session_id,
+                    "turnId": "t2"
+                }
+            })
+        } else if seq == 5 {
+            serde_json::json!({
+                "method": "item/agentMessage/delta",
+                "params": { "itemId": item_id, "delta": text }
+            })
+        } else {
+            serde_json::json!({
+                "method": "turn/completed",
+                "params": { "finishedAtMs": finished }
+            })
+        };
+        raw_events::insert_if_absent(
+            &state.store,
+            &session_id,
+            seq,
+            AgentName::Codex,
+            &payload,
+            finished,
+        )
+        .await
+        .unwrap();
+        let _ = (item_id, text);
+    }
+
+    minos_backend::http::v1::social::try_project_completion_for_session(&state, &session_id).await;
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    minos_backend::http::v1::social::try_project_completion_for_session(&state, &session_id).await;
+
+    let rows = wait_for_message_count(&state, &conversation.conversation_id, 4).await;
+    let agent_rows: Vec<_> = rows.iter().filter(|r| r.sender_type == "agent").collect();
+    assert_eq!(agent_rows.len(), 2, "expected two agent bubbles");
+    let ids: std::collections::HashSet<_> =
+        agent_rows.iter().map(|r| r.message_id.as_str()).collect();
+    let expected1 = format!(
+        "agent-result:{}:{}:{}",
+        conversation.conversation_id, session_id, origin1
+    );
+    let expected2 = format!(
+        "agent-result:{}:{}:{}",
+        conversation.conversation_id, session_id, origin2
+    );
+    assert!(ids.contains(expected1.as_str()), "missing {expected1}");
+    assert!(ids.contains(expected2.as_str()), "missing {expected2}");
+
+    // Re-project is idempotent (no third bubble).
+    minos_backend::http::v1::social::try_project_completion_for_session(&state, &session_id).await;
+    let rows2 = social::list_messages(&state.store, &conversation.conversation_id, None, None, 50)
+        .await
+        .unwrap();
+    assert_eq!(
+        rows2.iter().filter(|r| r.sender_type == "agent").count(),
+        2
     );
 }

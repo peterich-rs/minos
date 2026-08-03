@@ -64,8 +64,24 @@ export function createUseCasesActions(
   resolveApproval: async (sessionId, requestId, decision) => {
     if (get().source !== "daemon") return;
     const payload =
-      typeof decision === "string" ? { decision } : decision;
-    await daemonApi.resolveApproval(requestId, sessionId, payload);
+      typeof decision === "string" ? { decision } : { ...decision };
+    // Never inject client_request_id into agent decision (daemon strips it).
+    delete (payload as Record<string, unknown>).client_request_id;
+    // C5.3: Intent Outbox for daemon reachability only (local path).
+    // Logical op id is local; Hub client_request_id is Mobile/Hub path.
+    const clientOpId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? `approval-${crypto.randomUUID()}`
+        : `approval-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const { syncApprovalResolveToDaemon } = await import(
+      "@/shared/lib/im-cloud-sync"
+    );
+    await syncApprovalResolveToDaemon({
+      sessionId,
+      requestId,
+      decision: payload,
+      clientOpId,
+    });
     // Drop local approval/question cards for this request; re-list will converge.
     set((s) => {
       const items = (s.transcriptsBySession[sessionId] ?? []).map((it) =>
@@ -259,6 +275,8 @@ export function createUseCasesActions(
   markConversationRead: (conversationId) => {
     const conv = get().conversations.find((c) => c.id === conversationId);
     const count = conv?.messageCount ?? 0;
+    // Focus + local rail/digest clear immediately (focused ≠ hasWindow).
+    // Quiet loadTimeline must never set focus; only open / mark-read does.
     set((s) => ({
       focusedConversationId: conversationId,
       readMessageCountById: {
@@ -269,6 +287,12 @@ export function createUseCasesActions(
         c.id === conversationId ? { ...c, unread: undefined } : c,
       ),
     }));
+    void import("@/shared/lib/hub-digest-cache").then(({ hubDigestCache }) => {
+      hubDigestCache.patchOne(conversationId, {
+        unreadCount: 0,
+        unreadMentionCount: 0,
+      });
+    });
     // Phase 5.3: Linked / authenticated → Hub mark-read (multi-end inbox).
     void import("@/shared/lib/minos-cloud").then(async (cloud) => {
       const { isHubImMode } = await import("@/shared/lib/hub-timeline");
@@ -486,7 +510,8 @@ export function createUseCasesActions(
         } catch {
           /* not needed when already live */
         }
-        await daemonApi.sendUserMessage(sessionId, prompt);
+        // Frozen agent-result id suffix = user Hub/local message id.
+        await daemonApi.sendUserMessage(sessionId, prompt, resolvedId);
       }
 
       await quietRefreshConversationSlices(get, conversationId);
@@ -661,7 +686,7 @@ export function createUseCasesActions(
         } catch {
           /* not needed when already live */
         }
-        await daemonApi.sendUserMessage(sessionId, prompt);
+        await daemonApi.sendUserMessage(sessionId, prompt, messageId);
       }
 
       await quietRefreshConversationSlices(get, conversationId);

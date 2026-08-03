@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -660578791;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1278981169;
 
 // Section: executor
 
@@ -1252,7 +1252,8 @@ fn wire__crate__api__minos__MobileClient_list_chat_messages_impl(
                 flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MobileClient>,
             >>::sse_decode(&mut deserializer);
             let api_conversation_id = <String>::sse_decode(&mut deserializer);
-            let api_before_ts_ms = <Option<i64>>::sse_decode(&mut deserializer);
+            let api_before_seq = <Option<i64>>::sse_decode(&mut deserializer);
+            let api_after_seq = <Option<i64>>::sse_decode(&mut deserializer);
             let api_limit = <u32>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
@@ -1278,7 +1279,8 @@ fn wire__crate__api__minos__MobileClient_list_chat_messages_impl(
                         let output_ok = crate::api::minos::MobileClient::list_chat_messages(
                             &*api_that_guard,
                             api_conversation_id,
-                            api_before_ts_ms,
+                            api_before_seq,
+                            api_after_seq,
                             api_limit,
                         )
                         .await?;
@@ -2863,6 +2865,7 @@ fn wire__crate__api__minos__MobileClient_send_approval_decision_impl(
             let api_request_id = <String>::sse_decode(&mut deserializer);
             let api_session_id = <String>::sse_decode(&mut deserializer);
             let api_decision_json = <String>::sse_decode(&mut deserializer);
+            let api_client_request_id = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::minos::MinosError>(
@@ -2889,6 +2892,7 @@ fn wire__crate__api__minos__MobileClient_send_approval_decision_impl(
                             api_request_id,
                             api_session_id,
                             api_decision_json,
+                            api_client_request_id,
                         )
                         .await?;
                         Ok(output_ok)
@@ -2927,6 +2931,7 @@ fn wire__crate__api__minos__MobileClient_send_chat_message_impl(
             let api_conversation_id = <String>::sse_decode(&mut deserializer);
             let api_text = <String>::sse_decode(&mut deserializer);
             let api_reply_to_message_id = <Option<String>>::sse_decode(&mut deserializer);
+            let api_client_message_id = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::minos::MinosError>(
@@ -2953,6 +2958,7 @@ fn wire__crate__api__minos__MobileClient_send_chat_message_impl(
                             api_conversation_id,
                             api_text,
                             api_reply_to_message_id,
+                            api_client_message_id,
                         )
                         .await?;
                         Ok(output_ok)
@@ -3433,6 +3439,72 @@ fn wire__crate__api__minos__MobileClient_subscribe_ui_events_impl(
                     })?;
                     Ok(output_ok)
                 })())
+            }
+        },
+    )
+}
+fn wire__crate__api__minos__MobileClient_toggle_reaction_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "MobileClient_toggle_reaction",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MobileClient>,
+            >>::sse_decode(&mut deserializer);
+            let api_conversation_id = <String>::sse_decode(&mut deserializer);
+            let api_message_id = <String>::sse_decode(&mut deserializer);
+            let api_emoji = <String>::sse_decode(&mut deserializer);
+            let api_client_op_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, crate::api::minos::MinosError>(
+                    (move || async move {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => {
+                                    api_that_guard =
+                                        Some(api_that.lockable_decode_async_ref().await)
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok = crate::api::minos::MobileClient::toggle_reaction(
+                            &*api_that_guard,
+                            api_conversation_id,
+                            api_message_id,
+                            api_emoji,
+                            api_client_op_id,
+                        )
+                        .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
             }
         },
     )
@@ -5024,10 +5096,12 @@ const _: fn() = || {
         let _: crate::api::minos::UserSummary = ChatMessageSummary.sender;
         let _: String = ChatMessageSummary.text;
         let _: i64 = ChatMessageSummary.created_at_ms;
+        let _: i64 = ChatMessageSummary.message_seq;
         let _: Option<crate::api::minos::ChatMessageReplySummary> = ChatMessageSummary.reply_to;
         let _: Option<i64> = ChatMessageSummary.recalled_at_ms;
         let _: Vec<String> = ChatMessageSummary.mentioned_account_ids;
         let _: crate::api::minos::SenderType = ChatMessageSummary.sender_type;
+        let _: Vec<crate::api::minos::ReactionGroup> = ChatMessageSummary.reactions;
     }
     match None::<crate::api::minos::ConnectionState>.unwrap() {
         crate::api::minos::ConnectionState::Disconnected => {}
@@ -5049,6 +5123,7 @@ const _: fn() = || {
     }
     {
         let ConversationReadResponse = None::<crate::api::minos::ConversationReadResponse>.unwrap();
+        let _: Option<i64> = ConversationReadResponse.last_read_seq;
         let _: Option<i64> = ConversationReadResponse.last_read_at_ms;
     }
     {
@@ -5169,7 +5244,7 @@ const _: fn() = || {
     {
         let ListChatMessagesResponse = None::<crate::api::minos::ListChatMessagesResponse>.unwrap();
         let _: Vec<crate::api::minos::ChatMessageSummary> = ListChatMessagesResponse.messages;
-        let _: Option<i64> = ListChatMessagesResponse.next_before_ts_ms;
+        let _: Option<i64> = ListChatMessagesResponse.next_before_seq;
     }
     {
         let ListHostSkillsResponse = None::<crate::api::minos::ListHostSkillsResponse>.unwrap();
@@ -5339,6 +5414,19 @@ const _: fn() = || {
         let _: u32 = ProjectSummary.thread_count;
     }
     {
+        let ReactionActor = None::<crate::api::minos::ReactionActor>.unwrap();
+        let _: String = ReactionActor.actor_id;
+        let _: String = ReactionActor.actor_kind;
+        let _: String = ReactionActor.display_name;
+    }
+    {
+        let ReactionGroup = None::<crate::api::minos::ReactionGroup>.unwrap();
+        let _: String = ReactionGroup.emoji;
+        let _: u32 = ReactionGroup.count;
+        let _: bool = ReactionGroup.reacted_by_me;
+        let _: Vec<crate::api::minos::ReactionActor> = ReactionGroup.actors;
+    }
+    {
         let ReadSessionParams = None::<crate::api::minos::ReadSessionParams>.unwrap();
         let _: String = ReadSessionParams.session_id;
         let _: Option<u64> = ReadSessionParams.from_seq;
@@ -5358,6 +5446,13 @@ const _: fn() = || {
         }
         crate::api::minos::SessionEndReason::Timeout => {}
         crate::api::minos::SessionEndReason::HostDisconnected => {}
+    }
+    {
+        let ToggleReactionResponse = None::<crate::api::minos::ToggleReactionResponse>.unwrap();
+        let _: String = ToggleReactionResponse.message_id;
+        let _: String = ToggleReactionResponse.conversation_id;
+        let _: Vec<crate::api::minos::ReactionGroup> = ToggleReactionResponse.reactions;
+        let _: String = ToggleReactionResponse.action;
     }
     match None::<crate::api::minos::UiEventMessage>.unwrap() {
         crate::api::minos::UiEventMessage::SessionOpened {
@@ -5853,21 +5948,25 @@ impl SseDecode for crate::api::minos::ChatMessageSummary {
         let mut var_sender = <crate::api::minos::UserSummary>::sse_decode(deserializer);
         let mut var_text = <String>::sse_decode(deserializer);
         let mut var_createdAtMs = <i64>::sse_decode(deserializer);
+        let mut var_messageSeq = <i64>::sse_decode(deserializer);
         let mut var_replyTo =
             <Option<crate::api::minos::ChatMessageReplySummary>>::sse_decode(deserializer);
         let mut var_recalledAtMs = <Option<i64>>::sse_decode(deserializer);
         let mut var_mentionedAccountIds = <Vec<String>>::sse_decode(deserializer);
         let mut var_senderType = <crate::api::minos::SenderType>::sse_decode(deserializer);
+        let mut var_reactions = <Vec<crate::api::minos::ReactionGroup>>::sse_decode(deserializer);
         return crate::api::minos::ChatMessageSummary {
             message_id: var_messageId,
             conversation_id: var_conversationId,
             sender: var_sender,
             text: var_text,
             created_at_ms: var_createdAtMs,
+            message_seq: var_messageSeq,
             reply_to: var_replyTo,
             recalled_at_ms: var_recalledAtMs,
             mentioned_account_ids: var_mentionedAccountIds,
             sender_type: var_senderType,
+            reactions: var_reactions,
         };
     }
 }
@@ -5932,8 +6031,10 @@ impl SseDecode for crate::api::minos::ConversationMembersResponse {
 impl SseDecode for crate::api::minos::ConversationReadResponse {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_lastReadSeq = <Option<i64>>::sse_decode(deserializer);
         let mut var_lastReadAtMs = <Option<i64>>::sse_decode(deserializer);
         return crate::api::minos::ConversationReadResponse {
+            last_read_seq: var_lastReadSeq,
             last_read_at_ms: var_lastReadAtMs,
         };
     }
@@ -6381,10 +6482,10 @@ impl SseDecode for crate::api::minos::ListChatMessagesResponse {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_messages =
             <Vec<crate::api::minos::ChatMessageSummary>>::sse_decode(deserializer);
-        let mut var_nextBeforeTsMs = <Option<i64>>::sse_decode(deserializer);
+        let mut var_nextBeforeSeq = <Option<i64>>::sse_decode(deserializer);
         return crate::api::minos::ListChatMessagesResponse {
             messages: var_messages,
-            next_before_ts_ms: var_nextBeforeTsMs,
+            next_before_seq: var_nextBeforeSeq,
         };
     }
 }
@@ -6589,6 +6690,30 @@ impl SseDecode for crate::api::minos::ListProjectsResponse {
         return crate::api::minos::ListProjectsResponse {
             projects: var_projects,
         };
+    }
+}
+
+impl SseDecode for Vec<crate::api::minos::ReactionActor> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::minos::ReactionActor>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::api::minos::ReactionGroup> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::minos::ReactionGroup>::sse_decode(deserializer));
+        }
+        return ans_;
     }
 }
 
@@ -7122,6 +7247,36 @@ impl SseDecode for crate::api::minos::ProjectSummary {
     }
 }
 
+impl SseDecode for crate::api::minos::ReactionActor {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_actorId = <String>::sse_decode(deserializer);
+        let mut var_actorKind = <String>::sse_decode(deserializer);
+        let mut var_displayName = <String>::sse_decode(deserializer);
+        return crate::api::minos::ReactionActor {
+            actor_id: var_actorId,
+            actor_kind: var_actorKind,
+            display_name: var_displayName,
+        };
+    }
+}
+
+impl SseDecode for crate::api::minos::ReactionGroup {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_emoji = <String>::sse_decode(deserializer);
+        let mut var_count = <u32>::sse_decode(deserializer);
+        let mut var_reactedByMe = <bool>::sse_decode(deserializer);
+        let mut var_actors = <Vec<crate::api::minos::ReactionActor>>::sse_decode(deserializer);
+        return crate::api::minos::ReactionGroup {
+            emoji: var_emoji,
+            count: var_count,
+            reacted_by_me: var_reactedByMe,
+            actors: var_actors,
+        };
+    }
+}
+
 impl SseDecode for crate::api::minos::ReadSessionParams {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -7257,9 +7412,11 @@ impl SseDecode for crate::api::minos::SocialEventFrame {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_conversationId = <String>::sse_decode(deserializer);
+        let mut var_kind = <String>::sse_decode(deserializer);
         let mut var_message = <crate::api::minos::ChatMessageSummary>::sse_decode(deserializer);
         return crate::api::minos::SocialEventFrame {
             conversation_id: var_conversationId,
+            kind: var_kind,
             message: var_message,
         };
     }
@@ -7275,6 +7432,22 @@ impl SseDecode for crate::api::minos::SubagentStatus {
             2 => crate::api::minos::SubagentStatus::Failed,
             3 => crate::api::minos::SubagentStatus::Interrupted,
             _ => unreachable!("Invalid variant for SubagentStatus: {}", inner),
+        };
+    }
+}
+
+impl SseDecode for crate::api::minos::ToggleReactionResponse {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_messageId = <String>::sse_decode(deserializer);
+        let mut var_conversationId = <String>::sse_decode(deserializer);
+        let mut var_reactions = <Vec<crate::api::minos::ReactionGroup>>::sse_decode(deserializer);
+        let mut var_action = <String>::sse_decode(deserializer);
+        return crate::api::minos::ToggleReactionResponse {
+            message_id: var_messageId,
+            conversation_id: var_conversationId,
+            reactions: var_reactions,
+            action: var_action,
         };
     }
 }
@@ -7842,29 +8015,35 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        59 => wire__crate__api__minos__MobileClient_update_agent_impl(
+        59 => wire__crate__api__minos__MobileClient_toggle_reaction_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        60 => wire__crate__api__minos__MobileClient_update_project_impl(
+        60 => wire__crate__api__minos__MobileClient_update_agent_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        61 => wire__crate__api__minos__MobileClient_write_host_skill_config_impl(
+        61 => wire__crate__api__minos__MobileClient_update_project_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        86 => wire__crate__api__minos__init_logging_impl(port, ptr, rust_vec_len, data_len),
-        90 => {
+        62 => wire__crate__api__minos__MobileClient_write_host_skill_config_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        87 => wire__crate__api__minos__init_logging_impl(port, ptr, rust_vec_len, data_len),
+        91 => {
             wire__crate__api__minos__subscribe_log_records_impl(port, ptr, rust_vec_len, data_len)
         }
-        91 => wire__crate__api__minos__subscribe_request_traces_impl(
+        92 => wire__crate__api__minos__subscribe_request_traces_impl(
             port,
             ptr,
             rust_vec_len,
@@ -7899,121 +8078,121 @@ fn pde_ffi_dispatcher_sync_impl(
             rust_vec_len,
             data_len,
         ),
-        62 => wire__crate__api__minos__SessionSummary_auto_accessor_get_agent_impl(
+        63 => wire__crate__api__minos__SessionSummary_auto_accessor_get_agent_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        63 => wire__crate__api__minos__SessionSummary_auto_accessor_get_end_reason_impl(
+        64 => wire__crate__api__minos__SessionSummary_auto_accessor_get_end_reason_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        64 => wire__crate__api__minos__SessionSummary_auto_accessor_get_ended_at_ms_impl(
+        65 => wire__crate__api__minos__SessionSummary_auto_accessor_get_ended_at_ms_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        65 => wire__crate__api__minos__SessionSummary_auto_accessor_get_first_ts_ms_impl(
+        66 => wire__crate__api__minos__SessionSummary_auto_accessor_get_first_ts_ms_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        66 => wire__crate__api__minos__SessionSummary_auto_accessor_get_last_ts_ms_impl(
+        67 => wire__crate__api__minos__SessionSummary_auto_accessor_get_last_ts_ms_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        67 => wire__crate__api__minos__SessionSummary_auto_accessor_get_message_count_impl(
+        68 => wire__crate__api__minos__SessionSummary_auto_accessor_get_message_count_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        68 => wire__crate__api__minos__SessionSummary_auto_accessor_get_needs_continue_impl(
+        69 => wire__crate__api__minos__SessionSummary_auto_accessor_get_needs_continue_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        69 => wire__crate__api__minos__SessionSummary_auto_accessor_get_parent_session_id_impl(
+        70 => wire__crate__api__minos__SessionSummary_auto_accessor_get_parent_session_id_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        70 => wire__crate__api__minos__SessionSummary_auto_accessor_get_session_id_impl(
+        71 => wire__crate__api__minos__SessionSummary_auto_accessor_get_session_id_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        71 => wire__crate__api__minos__SessionSummary_auto_accessor_get_state_impl(
+        72 => wire__crate__api__minos__SessionSummary_auto_accessor_get_state_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        72 => wire__crate__api__minos__SessionSummary_auto_accessor_get_title_impl(
+        73 => wire__crate__api__minos__SessionSummary_auto_accessor_get_title_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        73 => wire__crate__api__minos__SessionSummary_auto_accessor_set_agent_impl(
+        74 => wire__crate__api__minos__SessionSummary_auto_accessor_set_agent_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        74 => wire__crate__api__minos__SessionSummary_auto_accessor_set_end_reason_impl(
+        75 => wire__crate__api__minos__SessionSummary_auto_accessor_set_end_reason_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        75 => wire__crate__api__minos__SessionSummary_auto_accessor_set_ended_at_ms_impl(
+        76 => wire__crate__api__minos__SessionSummary_auto_accessor_set_ended_at_ms_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        76 => wire__crate__api__minos__SessionSummary_auto_accessor_set_first_ts_ms_impl(
+        77 => wire__crate__api__minos__SessionSummary_auto_accessor_set_first_ts_ms_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        77 => wire__crate__api__minos__SessionSummary_auto_accessor_set_last_ts_ms_impl(
+        78 => wire__crate__api__minos__SessionSummary_auto_accessor_set_last_ts_ms_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        78 => wire__crate__api__minos__SessionSummary_auto_accessor_set_message_count_impl(
+        79 => wire__crate__api__minos__SessionSummary_auto_accessor_set_message_count_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        79 => wire__crate__api__minos__SessionSummary_auto_accessor_set_needs_continue_impl(
+        80 => wire__crate__api__minos__SessionSummary_auto_accessor_set_needs_continue_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        80 => wire__crate__api__minos__SessionSummary_auto_accessor_set_parent_session_id_impl(
+        81 => wire__crate__api__minos__SessionSummary_auto_accessor_set_parent_session_id_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        81 => wire__crate__api__minos__SessionSummary_auto_accessor_set_session_id_impl(
+        82 => wire__crate__api__minos__SessionSummary_auto_accessor_set_session_id_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        82 => wire__crate__api__minos__SessionSummary_auto_accessor_set_state_impl(
+        83 => wire__crate__api__minos__SessionSummary_auto_accessor_set_state_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        83 => wire__crate__api__minos__SessionSummary_auto_accessor_set_title_impl(
+        84 => wire__crate__api__minos__SessionSummary_auto_accessor_set_title_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        84 => wire__crate__api__minos__clear_request_traces_impl(ptr, rust_vec_len, data_len),
-        85 => wire__crate__api__minos__emit_log_impl(ptr, rust_vec_len, data_len),
-        87 => wire__crate__api__minos__kind_message_impl(ptr, rust_vec_len, data_len),
-        88 => wire__crate__api__minos__recent_log_records_impl(ptr, rust_vec_len, data_len),
-        89 => wire__crate__api__minos__recent_request_traces_impl(ptr, rust_vec_len, data_len),
+        85 => wire__crate__api__minos__clear_request_traces_impl(ptr, rust_vec_len, data_len),
+        86 => wire__crate__api__minos__emit_log_impl(ptr, rust_vec_len, data_len),
+        88 => wire__crate__api__minos__kind_message_impl(ptr, rust_vec_len, data_len),
+        89 => wire__crate__api__minos__recent_log_records_impl(ptr, rust_vec_len, data_len),
+        90 => wire__crate__api__minos__recent_request_traces_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -8308,10 +8487,12 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ChatMessage
             self.0.sender.into_into_dart().into_dart(),
             self.0.text.into_into_dart().into_dart(),
             self.0.created_at_ms.into_into_dart().into_dart(),
+            self.0.message_seq.into_into_dart().into_dart(),
             self.0.reply_to.into_into_dart().into_dart(),
             self.0.recalled_at_ms.into_into_dart().into_dart(),
             self.0.mentioned_account_ids.into_into_dart().into_dart(),
             self.0.sender_type.into_into_dart().into_dart(),
+            self.0.reactions.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -8416,7 +8597,11 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::Conversatio
 // Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ConversationReadResponse> {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
-        [self.0.last_read_at_ms.into_into_dart().into_dart()].into_dart()
+        [
+            self.0.last_read_seq.into_into_dart().into_dart(),
+            self.0.last_read_at_ms.into_into_dart().into_dart(),
+        ]
+        .into_dart()
     }
 }
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
@@ -8922,7 +9107,7 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ListChatMes
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.0.messages.into_into_dart().into_dart(),
-            self.0.next_before_ts_ms.into_into_dart().into_dart(),
+            self.0.next_before_seq.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -9393,6 +9578,51 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::ProjectSumm
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ReactionActor> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.0.actor_id.into_into_dart().into_dart(),
+            self.0.actor_kind.into_into_dart().into_dart(),
+            self.0.display_name.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::ReactionActor>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::ReactionActor>>
+    for crate::api::minos::ReactionActor
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::ReactionActor> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ReactionGroup> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.0.emoji.into_into_dart().into_dart(),
+            self.0.count.into_into_dart().into_dart(),
+            self.0.reacted_by_me.into_into_dart().into_dart(),
+            self.0.actors.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::ReactionGroup>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::ReactionGroup>>
+    for crate::api::minos::ReactionGroup
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::ReactionGroup> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ReadSessionParams> {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -9565,6 +9795,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::minos::SocialEventFrame {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.conversation_id.into_into_dart().into_dart(),
+            self.kind.into_into_dart().into_dart(),
             self.message.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -9601,6 +9832,29 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::SubagentSta
     for crate::api::minos::SubagentStatus
 {
     fn into_into_dart(self) -> FrbWrapper<crate::api::minos::SubagentStatus> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ToggleReactionResponse> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.0.message_id.into_into_dart().into_dart(),
+            self.0.conversation_id.into_into_dart().into_dart(),
+            self.0.reactions.into_into_dart().into_dart(),
+            self.0.action.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::ToggleReactionResponse>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::ToggleReactionResponse>>
+    for crate::api::minos::ToggleReactionResponse
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::ToggleReactionResponse> {
         self.into()
     }
 }
@@ -10134,10 +10388,12 @@ impl SseEncode for crate::api::minos::ChatMessageSummary {
         <crate::api::minos::UserSummary>::sse_encode(self.sender, serializer);
         <String>::sse_encode(self.text, serializer);
         <i64>::sse_encode(self.created_at_ms, serializer);
+        <i64>::sse_encode(self.message_seq, serializer);
         <Option<crate::api::minos::ChatMessageReplySummary>>::sse_encode(self.reply_to, serializer);
         <Option<i64>>::sse_encode(self.recalled_at_ms, serializer);
         <Vec<String>>::sse_encode(self.mentioned_account_ids, serializer);
         <crate::api::minos::SenderType>::sse_encode(self.sender_type, serializer);
+        <Vec<crate::api::minos::ReactionGroup>>::sse_encode(self.reactions, serializer);
     }
 }
 
@@ -10198,6 +10454,7 @@ impl SseEncode for crate::api::minos::ConversationMembersResponse {
 impl SseEncode for crate::api::minos::ConversationReadResponse {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Option<i64>>::sse_encode(self.last_read_seq, serializer);
         <Option<i64>>::sse_encode(self.last_read_at_ms, serializer);
     }
 }
@@ -10551,7 +10808,7 @@ impl SseEncode for crate::api::minos::ListChatMessagesResponse {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<crate::api::minos::ChatMessageSummary>>::sse_encode(self.messages, serializer);
-        <Option<i64>>::sse_encode(self.next_before_ts_ms, serializer);
+        <Option<i64>>::sse_encode(self.next_before_seq, serializer);
     }
 }
 
@@ -10700,6 +10957,26 @@ impl SseEncode for crate::api::minos::ListProjectsResponse {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<crate::api::minos::ProjectSummary>>::sse_encode(self.projects, serializer);
+    }
+}
+
+impl SseEncode for Vec<crate::api::minos::ReactionActor> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::minos::ReactionActor>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::minos::ReactionGroup> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::minos::ReactionGroup>::sse_encode(item, serializer);
+        }
     }
 }
 
@@ -11121,6 +11398,25 @@ impl SseEncode for crate::api::minos::ProjectSummary {
     }
 }
 
+impl SseEncode for crate::api::minos::ReactionActor {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.actor_id, serializer);
+        <String>::sse_encode(self.actor_kind, serializer);
+        <String>::sse_encode(self.display_name, serializer);
+    }
+}
+
+impl SseEncode for crate::api::minos::ReactionGroup {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.emoji, serializer);
+        <u32>::sse_encode(self.count, serializer);
+        <bool>::sse_encode(self.reacted_by_me, serializer);
+        <Vec<crate::api::minos::ReactionActor>>::sse_encode(self.actors, serializer);
+    }
+}
+
 impl SseEncode for crate::api::minos::ReadSessionParams {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -11241,6 +11537,7 @@ impl SseEncode for crate::api::minos::SocialEventFrame {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.conversation_id, serializer);
+        <String>::sse_encode(self.kind, serializer);
         <crate::api::minos::ChatMessageSummary>::sse_encode(self.message, serializer);
     }
 }
@@ -11260,6 +11557,16 @@ impl SseEncode for crate::api::minos::SubagentStatus {
             },
             serializer,
         );
+    }
+}
+
+impl SseEncode for crate::api::minos::ToggleReactionResponse {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.message_id, serializer);
+        <String>::sse_encode(self.conversation_id, serializer);
+        <Vec<crate::api::minos::ReactionGroup>>::sse_encode(self.reactions, serializer);
+        <String>::sse_encode(self.action, serializer);
     }
 }
 

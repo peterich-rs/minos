@@ -49,9 +49,9 @@ pub use minos_protocol::{
     ListChatMessagesResponse, ListHostSkillsResponse, ListHostWorkspacesResponse,
     ListProjectSessionsParams, ListProjectSessionsResponse, ListProjectsResponse,
     ListSessionsParams, ListSessionsResponse, MyProfileResponse, PauseReason, ProjectSummary,
-    ReadSessionParams, ReadSessionResponse, SearchUsersResponse, SenderType, SessionState,
-    SessionSummary, StartAgentResponse, UpdateProjectRequest, UserSummary,
-    WriteHostSkillConfigResponse,
+    ReactionActor, ReactionGroup, ReadSessionParams, ReadSessionResponse, SearchUsersResponse,
+    SenderType, SessionState, SessionSummary, StartAgentResponse, ToggleReactionResponse,
+    UpdateProjectRequest, UserSummary, WriteHostSkillConfigResponse,
 };
 pub use minos_ui_protocol::{
     ArtifactRef, DisplayPayload, MessageRole, SessionEndReason, SubagentStatus, UiEventMessage,
@@ -109,6 +109,8 @@ pub struct UiEventFrame {
 /// Dart-visible shape of `minos_mobile::SocialEventFrame`.
 pub struct SocialEventFrame {
     pub conversation_id: String,
+    /// `"message"` | `"reaction_updated"`.
+    pub kind: String,
     pub message: ChatMessageSummary,
 }
 
@@ -197,6 +199,7 @@ impl From<MobileSocialEventFrame> for SocialEventFrame {
     fn from(f: MobileSocialEventFrame) -> Self {
         Self {
             conversation_id: f.conversation_id,
+            kind: f.kind,
             message: f.message,
         }
     }
@@ -441,11 +444,12 @@ impl MobileClient {
     pub async fn list_chat_messages(
         &self,
         conversation_id: String,
-        before_ts_ms: Option<i64>,
+        before_seq: Option<i64>,
+        after_seq: Option<i64>,
         limit: u32,
     ) -> Result<ListChatMessagesResponse, MinosError> {
         self.0
-            .list_chat_messages(conversation_id, before_ts_ms, limit)
+            .list_chat_messages(conversation_id, before_seq, after_seq, limit)
             .await
     }
 
@@ -454,9 +458,15 @@ impl MobileClient {
         conversation_id: String,
         text: String,
         reply_to_message_id: Option<String>,
+        client_message_id: Option<String>,
     ) -> Result<ChatMessageSummary, MinosError> {
         self.0
-            .send_chat_message(conversation_id, text, reply_to_message_id)
+            .send_chat_message(
+                conversation_id,
+                text,
+                reply_to_message_id,
+                client_message_id,
+            )
             .await
     }
 
@@ -467,6 +477,19 @@ impl MobileClient {
     ) -> Result<ChatMessageSummary, MinosError> {
         self.0
             .recall_chat_message(conversation_id, message_id)
+            .await
+    }
+
+    /// Toggle Hub reaction; `client_op_id` is the Intent Outbox id (B6/C5).
+    pub async fn toggle_reaction(
+        &self,
+        conversation_id: String,
+        message_id: String,
+        emoji: String,
+        client_op_id: String,
+    ) -> Result<ToggleReactionResponse, MinosError> {
+        self.0
+            .toggle_reaction(conversation_id, message_id, emoji, client_op_id)
             .await
     }
 
@@ -656,11 +679,15 @@ impl MobileClient {
     }
 
     /// Submit a user approval decision for a pending host request.
+    ///
+    /// `client_request_id` is the Hub Intent Outbox id (C5.3). When omitted,
+    /// the mobile client generates one so the wire body never hardcodes null.
     pub async fn send_approval_decision(
         &self,
         request_id: String,
         session_id: String,
         decision_json: String,
+        client_request_id: Option<String>,
     ) -> Result<(), MinosError> {
         let decision =
             serde_json::from_str(&decision_json).map_err(|error| MinosError::RpcCallFailed {
@@ -668,7 +695,7 @@ impl MobileClient {
                 message: format!("invalid approval decision json: {error}"),
             })?;
         self.0
-            .send_approval_decision(request_id, session_id, decision)
+            .send_approval_decision(request_id, session_id, decision, client_request_id)
             .await
     }
 
@@ -1506,6 +1533,7 @@ pub struct _ConversationAgentMembersResponse {
 #[allow(dead_code)]
 #[frb(mirror(ConversationReadResponse))]
 pub struct _ConversationReadResponse {
+    pub last_read_seq: Option<i64>,
     pub last_read_at_ms: Option<i64>,
 }
 
@@ -1519,6 +1547,32 @@ pub struct _ChatMessageReplySummary {
 }
 
 #[allow(dead_code)]
+#[frb(mirror(ReactionActor))]
+pub struct _ReactionActor {
+    pub actor_id: String,
+    pub actor_kind: String,
+    pub display_name: String,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ReactionGroup))]
+pub struct _ReactionGroup {
+    pub emoji: String,
+    pub count: u32,
+    pub reacted_by_me: bool,
+    pub actors: Vec<ReactionActor>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ToggleReactionResponse))]
+pub struct _ToggleReactionResponse {
+    pub message_id: String,
+    pub conversation_id: String,
+    pub reactions: Vec<ReactionGroup>,
+    pub action: String,
+}
+
+#[allow(dead_code)]
 #[frb(mirror(ChatMessageSummary))]
 pub struct _ChatMessageSummary {
     pub message_id: String,
@@ -1526,10 +1580,12 @@ pub struct _ChatMessageSummary {
     pub sender: UserSummary,
     pub text: String,
     pub created_at_ms: i64,
+    pub message_seq: i64,
     pub reply_to: Option<ChatMessageReplySummary>,
     pub recalled_at_ms: Option<i64>,
     pub mentioned_account_ids: Vec<String>,
     pub sender_type: SenderType,
+    pub reactions: Vec<ReactionGroup>,
 }
 
 #[allow(dead_code)]
@@ -1543,7 +1599,7 @@ pub enum _SenderType {
 #[frb(mirror(ListChatMessagesResponse))]
 pub struct _ListChatMessagesResponse {
     pub messages: Vec<ChatMessageSummary>,
-    pub next_before_ts_ms: Option<i64>,
+    pub next_before_seq: Option<i64>,
 }
 
 #[allow(dead_code)]

@@ -271,11 +271,13 @@ class MinosCore implements MinosCoreProtocol {
   @override
   Future<ListChatMessagesResponse> listChatMessages({
     required String conversationId,
-    int? beforeTsMs,
+    int? beforeSeq,
+    int? afterSeq,
     int limit = 50,
   }) => _client.listChatMessages(
     conversationId: conversationId,
-    beforeTsMs: beforeTsMs == null ? null : platformInt64FromInt(beforeTsMs),
+    beforeSeq: beforeSeq == null ? null : platformInt64FromInt(beforeSeq),
+    afterSeq: afterSeq == null ? null : platformInt64FromInt(afterSeq),
     limit: limit,
   );
 
@@ -284,10 +286,12 @@ class MinosCore implements MinosCoreProtocol {
     required String conversationId,
     required String text,
     String? replyToMessageId,
+    String? clientMessageId,
   }) => _client.sendChatMessage(
     conversationId: conversationId,
     text: text,
     replyToMessageId: replyToMessageId,
+    clientMessageId: clientMessageId,
   );
 
   @override
@@ -297,6 +301,19 @@ class MinosCore implements MinosCoreProtocol {
   }) => _client.recallChatMessage(
     conversationId: conversationId,
     messageId: messageId,
+  );
+
+  @override
+  Future<ToggleReactionResponse> toggleReaction({
+    required String conversationId,
+    required String messageId,
+    required String emoji,
+    required String clientOpId,
+  }) => _client.toggleReaction(
+    conversationId: conversationId,
+    messageId: messageId,
+    emoji: emoji,
+    clientOpId: clientOpId,
   );
 
   @override
@@ -530,10 +547,12 @@ class MinosCore implements MinosCoreProtocol {
     required String requestId,
     required String sessionId,
     required Map<String, dynamic> decision,
+    String? clientRequestId,
   }) => _client.sendApprovalDecision(
     requestId: requestId,
     sessionId: sessionId,
     decisionJson: jsonEncode(decision),
+    clientRequestId: clientRequestId,
   );
 
   @override

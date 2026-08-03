@@ -18,6 +18,8 @@ impl SubscriptionManager {
         Arc::new(Self::default())
     }
 
+    /// Register a topic with an initial resume cursor. Existing topics keep
+    /// their advanced seq (reconnect must not reset account resume to 0).
     pub async fn add_topic(&self, topic: &str, resume_after: i64) -> bool {
         let mut state = self.inner.write().await;
         if state.topics.contains_key(topic) {
@@ -33,12 +35,23 @@ impl SubscriptionManager {
         state.topics.remove(topic);
     }
 
+    /// Clear cursor for a topic after SnapshotRequired (caller rebuilds via REST).
+    pub async fn clear_cursor(&self, topic: &str) {
+        let mut state = self.inner.write().await;
+        if let Some(existing) = state.topics.get_mut(topic) {
+            *existing = 0;
+        }
+    }
+
     pub async fn update_seq(&self, topic: &str, seq: i64) {
         let mut state = self.inner.write().await;
         if let Some(existing) = state.topics.get_mut(topic) {
             if seq > *existing {
                 *existing = seq;
             }
+        } else {
+            // Live event for a topic we track implicitly.
+            state.topics.insert(topic.to_string(), seq);
         }
     }
 

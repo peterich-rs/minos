@@ -185,6 +185,9 @@ pub async fn invoke_host_command(
                 workspace_path: Option<String>,
                 #[serde(default)]
                 initial_user_message: Option<String>,
+                /// User Hub message id that triggered this turn (agent-result suffix).
+                #[serde(default)]
+                origin_message_id: Option<String>,
                 #[serde(default)]
                 model: Option<String>,
                 #[serde(default)]
@@ -230,6 +233,7 @@ pub async fn invoke_host_command(
                     req.conversation_id,
                     req.project_id,
                     conversation_title,
+                    req.origin_message_id,
                 )
                 .await
                 .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
@@ -244,6 +248,8 @@ pub async fn invoke_host_command(
             struct SendAgentSessionInputParams {
                 session_id: String,
                 text: String,
+                #[serde(default)]
+                origin_message_id: Option<String>,
             }
             let req: SendAgentSessionInputParams = parse_params(&params)?;
             into_result(
@@ -251,6 +257,7 @@ pub async fn invoke_host_command(
                     .send_user_message(SendUserMessageRequest {
                         session_id: req.session_id,
                         text: req.text,
+                        origin_message_id: req.origin_message_id,
                     })
                     .await,
             )

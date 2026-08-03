@@ -1,6 +1,7 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:minos/application/social_providers.dart';
 import 'package:minos/application/ui_state_providers.dart';
 import 'package:minos/ui/features/account/views/account_page.dart';
 import 'package:minos/ui/features/hosts/views/hosts_page.dart';
@@ -22,6 +23,8 @@ class AppShellPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final tabIndex = ref.watch(shellTabIndexProvider).clamp(0, 2);
     final colors = context.minosColors;
+    // C6.3: Messages tab badge from Hub inbox unread sum.
+    final unread = ref.watch(socialUnreadCountProvider);
 
     return Scaffold(
       backgroundColor: colors.canvas,
@@ -34,18 +37,26 @@ class AppShellPage extends ConsumerWidget {
         onDestinationSelected: (index) {
           ref.read(shellTabIndexProvider.notifier).select(index);
         },
-        destinations: const <NavigationDestination>[
+        destinations: <NavigationDestination>[
           NavigationDestination(
-            icon: Icon(CupertinoIcons.chat_bubble_2),
-            selectedIcon: Icon(CupertinoIcons.chat_bubble_2_fill),
+            icon: Badge(
+              isLabelVisible: unread > 0,
+              label: Text(unread > 99 ? '99+' : '$unread'),
+              child: const Icon(CupertinoIcons.chat_bubble_2),
+            ),
+            selectedIcon: Badge(
+              isLabelVisible: unread > 0,
+              label: Text(unread > 99 ? '99+' : '$unread'),
+              child: const Icon(CupertinoIcons.chat_bubble_2_fill),
+            ),
             label: '消息',
           ),
-          NavigationDestination(
+          const NavigationDestination(
             icon: Icon(CupertinoIcons.desktopcomputer),
             selectedIcon: Icon(CupertinoIcons.desktopcomputer),
             label: 'Hosts',
           ),
-          NavigationDestination(
+          const NavigationDestination(
             icon: Icon(CupertinoIcons.person),
             selectedIcon: Icon(CupertinoIcons.person_fill),
             label: '账户',

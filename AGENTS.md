@@ -18,6 +18,12 @@ Minos 是一个远程 AI 编码控制系统：Mac 运行 host 端，通过手机
 | [docs/architecture-shared-crates.md](docs/architecture-shared-crates.md) | 12 个共享 crate：domain、protocol、transport、pairing、cli-detect、agent-runtime、chat-store、acp-protocol、codex-protocol、ui-protocol、ffi-uniffi、ffi-frb |
 | [docs/architecture-messaging.md](docs/architecture-messaging.md) | Server + 全端消息体系：Conversation-first IM、@/Approval Attention、撤回/reaction、读写 fanout、Durable/Stream/Ingest/Command、Outbox 与水位 |
 | [docs/superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md](docs/superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md) | 协作气泡 Hub SSOT 收敛：退役 Desktop dual-write、Agent 最终气泡单写者、Sync/Outbox 阶段 0–5 |
+| [docs/superpowers/specs/2026-08-03-im-reliability-program/README.md](docs/superpowers/specs/2026-08-03-im-reliability-program/README.md) | **IM 可靠性总计划**：客户端 Sync + 后端投递/编排终态；任务图 TASKS.md |
+| [docs/superpowers/specs/2026-08-03-im-reliability-program/next-track-b6-c5-c6.md](docs/superpowers/specs/2026-08-03-im-reliability-program/next-track-b6-c5-c6.md) | 下一轨 B6/C5/C6 终态：reaction 幂等、Intent Outbox、visibility、状态债 |
+| [docs/superpowers/specs/2026-08-03-realtime-surface-model.md](docs/superpowers/specs/2026-08-03-realtime-surface-model.md) | 全局实时面模型：通道分级、订阅拓扑、带宽优先级、新增功能 checklist |
+| [docs/superpowers/specs/2026-08-03-im-reliability-program/closeout-and-backlog.md](docs/superpowers/specs/2026-08-03-im-reliability-program/closeout-and-backlog.md) | IM Reliability 收口（B7/G2–G4）+ 产品 residual + Realtime 后续分层 |
+| [docs/superpowers/specs/2026-08-03-client-im-sync-engine.md](docs/superpowers/specs/2026-08-03-client-im-sync-engine.md) | 客户端 IM Sync Engine 终态（Desktop + Mobile Outbox / Timeline / Inbox） |
+| [docs/superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md](docs/superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md) | 后端投递与 Agent 编排终态（Outbox 车道、Push、CompletionWatch、Session 生命周期） |
 | [docs/architecture-business-flow.md](docs/architecture-business-flow.md) | 完整业务流程：注册 → 配对 → 实时连接 → Agent 会话 → 流式交互 → 审批 → 重连恢复 |
 | [docs/ci-gates.md](docs/ci-gates.md) | CI / 本地质量门禁矩阵：rust、dart、frontend、macos、windows 职责划分与 just/xtask 入口 |
 | [docs/ops/vps-deploy.md](docs/ops/vps-deploy.md) | 生产 VPS 部署：Caddy + GHCR 镜像 + Postgres/Redis，runtime-only（不 clone 源码） |
@@ -37,6 +43,28 @@ Minos 当前处于主动开发阶段，没有需要支持的历史发布版本�
 - Review feedback that asks for old-version migration or compatibility should be treated as out of scope by default; document that the project intentionally targets latest-only development state.
 - Keep implementation plans focused on the final desired architecture, not incremental legacy support, unless a task explicitly names a released version or compatibility requirement.
 
+## Final-Architecture Planning Rule（终态规划，禁止临时补丁路线）
+
+所有非琐碎实现、重构、bugfix 与书面 plan **只按功能完成后的目标代码结构**设计与验收。不以「改造范围小」「先止血再还债」「短期/中期/临时方案」作为默认路径。
+
+### 必须遵守
+- **Plan 与 PR 描述目标态**：模块边界、数据模型、状态机、删除清单、验收不变量；不把「先加 if 绕过」写成正式方案。
+- **一次改对所有权边界**：根因在共享契约 / 生命周期 / SSOT 时，扩大 diff 到正确边界，而不是在 UI 或调用点叠守卫。
+- **删除与新增同 PR**：被替代的轮询、软去重、空壳 fallback、死代码 decision 分支、文档谎言在同一变更中移除。
+- **多 Agent 可承担大改**：范围以终态正确性为准，不以单人单次 PR 大小裁剪架构。
+- **禁止用临时层「过渡」**：例如双读路径、兼容 feature flag、时间驱动撞竞态、body 软去重代替统一 id、仅打日志的 stub job 冒充生命周期。
+
+### 明确禁止写入 plan / 实现的话术与做法
+- 「先短期修一下，以后再重构」
+- 「加一个 0/400/1200ms 重试先让它绿」
+- 「兼容旧 id / 旧字段双路径」
+- 「stub 先 count 一下，未来再 sweep」
+- 「决策枚举先留着，caller 以后再接」
+
+### 与 Bugfix / Elegance 的关系
+- 与 §5 Demand Elegance、§6 Autonomous Bug Fixing 一致：hack 只在边界**证明确属**该层不变量时允许；默认实现终态结构。
+- 若必须分 Phase 落地，每个 Phase 交付的是**终态子系统的可合并切片**（可独立编译、测试、删除旧路径），不是「临时行为 + 遗留债」。
+
 # Workflow Orchestration
 
 ## 1. Plan Mode Default
@@ -44,6 +72,7 @@ Minos 当前处于主动开发阶段，没有需要支持的历史发布版本�
 - If something goes sideways, STOP and re-plan immediately — don't keep pushing
 - Use plan mode for verification steps, not just building
 - Write detailed specs upfront to reduce ambiguity
+- Plans must obey **Final-Architecture Planning Rule**: target structure only; no short-term patch roadmaps as the design
 
 ## 2. Subagent Strategy
 - Use subagents liberally to keep main context window clean

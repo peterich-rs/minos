@@ -5,7 +5,7 @@
  * Never append cloud IM into Host daemon SQLite (collaboration SSOT = Hub).
  *
  * Cold open / realtime both use `hubChatMessageToTimeline` + store merge.
- * Gap fill uses `before_ts_ms` (messages/query).
+ * Gap fill uses `before_seq` (messages/query).
  */
 
 import {
@@ -62,12 +62,12 @@ export async function mapHubChatMessageToTimeline(
 
 function mapPageToTimeline(page: HubMessagePage): {
   messages: TimelineMessage[];
-  nextBeforeTsMs: number | null;
+  nextBeforeSeq: number | null;
   rawCount: number;
 } {
   const ordered = page.messages
     .slice()
-    .sort((a, b) => a.createdAtMs - b.createdAtMs);
+    .sort((a, b) => a.messageSeq - b.messageSeq);
   const out: TimelineMessage[] = [];
   for (const m of ordered) {
     markMessageProjected(m.messageId);
@@ -78,7 +78,7 @@ function mapPageToTimeline(page: HubMessagePage): {
   }
   return {
     messages: out,
-    nextBeforeTsMs: page.nextBeforeTsMs,
+    nextBeforeSeq: page.nextBeforeSeq,
     rawCount: page.messages.length,
   };
 }
@@ -89,24 +89,24 @@ function mapPageToTimeline(page: HubMessagePage): {
  */
 export async function pullHubConversationMessages(
   conversationId: string,
-  opts?: { beforeTsMs?: number; limit?: number },
+  opts?: { beforeSeq?: number; afterSeq?: number; limit?: number },
 ): Promise<TimelineMessage[]> {
   const page = await pullHubConversationMessagePage(conversationId, opts);
   return page.messages;
 }
 
-/** Cold pull with gap cursor (Phase 4.4). */
+/** Cold pull with gap cursor (`before_seq` / `after_seq`). */
 export async function pullHubConversationMessagePage(
   conversationId: string,
-  opts?: { beforeTsMs?: number; limit?: number },
+  opts?: { beforeSeq?: number; afterSeq?: number; limit?: number },
 ): Promise<{
   messages: TimelineMessage[];
-  nextBeforeTsMs: number | null;
+  nextBeforeSeq: number | null;
   rawCount: number;
 }> {
   const auth = cloudAuth();
   if (!auth || !conversationId.trim()) {
-    return { messages: [], nextBeforeTsMs: null, rawCount: 0 };
+    return { messages: [], nextBeforeSeq: null, rawCount: 0 };
   }
   try {
     const page = await listHubConversationMessages(
@@ -114,7 +114,8 @@ export async function pullHubConversationMessagePage(
       auth.accessToken,
       conversationId,
       {
-        beforeTsMs: opts?.beforeTsMs,
+        beforeSeq: opts?.beforeSeq,
+        afterSeq: opts?.afterSeq,
         limit: opts?.limit ?? MESSAGE_PAGE_SIZE,
       },
     );
@@ -122,6 +123,25 @@ export async function pullHubConversationMessagePage(
     return mapPageToTimeline(page);
   } catch (error) {
     console.warn("[im-cloud-inbound] pull hub conversation failed", error);
-    return { messages: [], nextBeforeTsMs: null, rawCount: 0 };
+    return { messages: [], nextBeforeSeq: null, rawCount: 0 };
   }
+}
+
+/**
+ * Forward gap fill: messages with `message_seq > afterSeq` (ASC on wire, mapped).
+ * Used by SnapshotRequired range reconcile and live gap recovery.
+ */
+export async function pullHubForwardGap(
+  conversationId: string,
+  afterSeq: number,
+  opts?: { limit?: number },
+): Promise<TimelineMessage[]> {
+  if (!Number.isFinite(afterSeq) || afterSeq < 0) {
+    return [];
+  }
+  const page = await pullHubConversationMessagePage(conversationId, {
+    afterSeq,
+    limit: opts?.limit ?? MESSAGE_PAGE_SIZE,
+  });
+  return page.messages;
 }

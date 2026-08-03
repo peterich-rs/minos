@@ -413,17 +413,28 @@ export async function addAgentToConversation(
   );
 }
 
+export type HubReactionGroup = {
+  emoji: string;
+  count: number;
+  reactedByMe: boolean;
+  actors: Array<{ actorId: string; actorKind: string; displayName: string }>;
+};
+
 export type HubChatMessage = {
   messageId: string;
   conversationId: string;
   text: string;
   createdAtMs: number;
+  /** Per-conversation Hub ordering key; undefined when absent (never pseudo-0). */
+  messageSeq?: number;
   senderType: "user" | "agent";
   senderAccountId: string;
   senderMinosId: string;
   senderDisplayName: string;
   replyToMessageId?: string | null;
   recalledAtMs?: number | null;
+  /** Viewer-resolved reaction aggregates from messages/query. */
+  reactions?: HubReactionGroup[];
 };
 
 function mapHubChatMessage(raw: {
@@ -431,6 +442,7 @@ function mapHubChatMessage(raw: {
   conversation_id: string;
   text: string;
   created_at_ms: number;
+  message_seq?: number;
   sender_type?: string;
   sender: {
     account_id: string;
@@ -439,49 +451,122 @@ function mapHubChatMessage(raw: {
   };
   reply_to?: { message_id: string } | null;
   recalled_at_ms?: number | null;
+  reactions?: Array<{
+    emoji: string;
+    count: number;
+    reacted_by_me?: boolean;
+    actors?: Array<{
+      actor_id: string;
+      actor_kind: string;
+      display_name: string;
+    }>;
+  }>;
 }): HubChatMessage {
   return {
     messageId: raw.message_id,
     conversationId: raw.conversation_id,
     text: raw.text,
     createdAtMs: raw.created_at_ms,
+    // Missing message_seq stays undefined — never coerce to 0 (pseudo-order).
+    messageSeq:
+      raw.message_seq != null && Number.isFinite(raw.message_seq)
+        ? raw.message_seq
+        : undefined,
     senderType: raw.sender_type === "agent" ? "agent" : "user",
     senderAccountId: raw.sender.account_id,
     senderMinosId: raw.sender.minos_id,
     senderDisplayName: raw.sender.display_name,
     replyToMessageId: raw.reply_to?.message_id ?? null,
     recalledAtMs: raw.recalled_at_ms ?? null,
+    reactions: (raw.reactions ?? []).map((g) => ({
+      emoji: g.emoji,
+      count: g.count,
+      reactedByMe: Boolean(g.reacted_by_me),
+      actors: (g.actors ?? []).map((a) => ({
+        actorId: a.actor_id,
+        actorKind: a.actor_kind,
+        displayName: a.display_name,
+      })),
+    })),
   };
+}
+
+/** Account-scoped conversation digest from POST /v1/conversations/query. */
+export type HubConversationListItem = {
+  conversationId: string;
+  title: string;
+  preview: string | null;
+  lastMessageAtMs: number;
+  unreadCount: number;
+  unreadMentionCount: number;
+  kind: string;
+  memberCount: number;
+};
+
+/**
+ * Account-scoped Hub inbox digests (multi-end SSOT for rail unread/preview).
+ * Single-flight hydrate source for HubDigestCache — not per-project.
+ */
+export async function listHubConversations(
+  deviceId: string,
+  accessToken: string,
+): Promise<HubConversationListItem[]> {
+  const resp = await requestJson<{
+    conversations?: Array<{
+      conversation_id: string;
+      kind?: string;
+      title?: string;
+      member_count?: number;
+      last_message_preview?: string | null;
+      last_message_at_ms?: number;
+      unread_count?: number;
+      unread_mention_count?: number;
+    }>;
+  }>("/v1/conversations/query", {
+    method: "POST",
+    headers: deviceHeaders(deviceId, accessToken),
+    body: JSON.stringify({}),
+  });
+  return (resp.conversations ?? []).map((c) => ({
+    conversationId: c.conversation_id,
+    title: c.title ?? "Conversation",
+    preview: c.last_message_preview ?? null,
+    lastMessageAtMs: c.last_message_at_ms ?? 0,
+    unreadCount: c.unread_count ?? 0,
+    unreadMentionCount: c.unread_mention_count ?? 0,
+    kind: c.kind ?? "group",
+    memberCount: c.member_count ?? 0,
+  }));
 }
 
 /** Page result for Hub cold-path messages/query (gap fill / older pages). */
 export type HubMessagePage = {
   messages: HubChatMessage[];
-  /** Cursor for next older page; null when no more history. */
-  nextBeforeTsMs: number | null;
+  /** Cursor for next older page (`before_seq`); null when no more history. */
+  nextBeforeSeq: number | null;
 };
 
 /**
  * Cold-read hub conversation timeline (Mobile / multi-end).
- * Gap API: `before_ts_ms` pages older (ASC-of-page is newest-first from server).
- * `after_seq` / `before_seq` not yet on wire — use timestamps + Durable resume.
+ * Gap API: `before_seq` / `after_seq` keyset on per-conversation message_seq.
  */
 export async function listHubConversationMessages(
   deviceId: string,
   accessToken: string,
   conversationId: string,
-  opts?: { beforeTsMs?: number; limit?: number },
+  opts?: { beforeSeq?: number; afterSeq?: number; limit?: number },
 ): Promise<HubMessagePage> {
   const resp = await requestJson<{
     messages: Array<Parameters<typeof mapHubChatMessage>[0]>;
-    next_before_ts_ms?: number | null;
+    next_before_seq?: number | null;
   }>(
     `/v1/conversations/${encodeURIComponent(conversationId)}/messages/query`,
     {
       method: "POST",
       headers: deviceHeaders(deviceId, accessToken),
       body: JSON.stringify({
-        before_ts_ms: opts?.beforeTsMs,
+        before_seq: opts?.beforeSeq,
+        after_seq: opts?.afterSeq,
         limit: opts?.limit ?? 100,
       }),
     },
@@ -489,11 +574,8 @@ export async function listHubConversationMessages(
   const messages = (resp.messages ?? []).map(mapHubChatMessage);
   return {
     messages,
-    // Server sets next_before only when page was full (more older rows).
-    nextBeforeTsMs:
-      resp.next_before_ts_ms === undefined
-        ? null
-        : resp.next_before_ts_ms,
+    nextBeforeSeq:
+      resp.next_before_seq === undefined ? null : resp.next_before_seq,
   };
 }
 
@@ -502,8 +584,11 @@ export async function markHubConversationRead(
   deviceId: string,
   accessToken: string,
   conversationId: string,
-): Promise<{ lastReadAtMs: number | null }> {
-  const resp = await requestJson<{ last_read_at_ms?: number | null }>(
+): Promise<{ lastReadSeq: number | null; lastReadAtMs: number | null }> {
+  const resp = await requestJson<{
+    last_read_seq?: number | null;
+    last_read_at_ms?: number | null;
+  }>(
     `/v1/conversations/${encodeURIComponent(conversationId)}/read`,
     {
       method: "POST",
@@ -511,7 +596,73 @@ export async function markHubConversationRead(
       body: JSON.stringify({}),
     },
   );
-  return { lastReadAtMs: resp.last_read_at_ms ?? null };
+  return {
+    lastReadSeq: resp.last_read_seq ?? null,
+    lastReadAtMs: resp.last_read_at_ms ?? null,
+  };
+}
+
+/** Cloud reaction toggle (Hub message ids only). Aggregate is SSOT. */
+export async function toggleHubReaction(
+  deviceId: string,
+  accessToken: string,
+  conversationId: string,
+  messageId: string,
+  emoji: string,
+  /** Required B6: outbox entry id; same value on retry for event_id idempotency. */
+  clientOpId: string,
+): Promise<{
+  messageId: string;
+  conversationId: string;
+  reactions: Array<{
+    emoji: string;
+    count: number;
+    reactedByMe: boolean;
+    actors: Array<{ actorId: string; actorKind: string; displayName: string }>;
+  }>;
+  action: string;
+}> {
+  const opId = clientOpId.trim();
+  if (!opId) {
+    throw new Error("client_op_id is required for reaction toggle");
+  }
+  const resp = await requestJson<{
+    message_id: string;
+    conversation_id: string;
+    action: string;
+    reactions?: Array<{
+      emoji: string;
+      count: number;
+      reacted_by_me: boolean;
+      actors?: Array<{
+        actor_id: string;
+        actor_kind: string;
+        display_name: string;
+      }>;
+    }>;
+  }>(
+    `/v1/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/reactions/toggle`,
+    {
+      method: "POST",
+      headers: deviceHeaders(deviceId, accessToken),
+      body: JSON.stringify({ emoji, client_op_id: opId }),
+    },
+  );
+  return {
+    messageId: resp.message_id,
+    conversationId: resp.conversation_id,
+    action: resp.action,
+    reactions: (resp.reactions ?? []).map((g) => ({
+      emoji: g.emoji,
+      count: g.count,
+      reactedByMe: g.reacted_by_me,
+      actors: (g.actors ?? []).map((a) => ({
+        actorId: a.actor_id,
+        actorKind: a.actor_kind,
+        displayName: a.display_name,
+      })),
+    })),
+  };
 }
 
 /** Hub multi-end recall (sender within window). */

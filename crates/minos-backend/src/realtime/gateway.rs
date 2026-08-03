@@ -321,6 +321,22 @@ pub async fn run_session(mut ws: WebSocket, state: BackendState, upgrade: Gatewa
     }
     let mut revocation_rx = legacy_handle.subscribe_revocation();
 
+    // Host online edge: force-due pending dispatches for linked accounts, then wake.
+    if upgrade.role == DeviceRole::AgentHost {
+        if let Err(error) =
+            crate::http::v1::social::on_host_online_force_agent_dispatch(&state, upgrade.device_id)
+                .await
+        {
+            tracing::warn!(
+                target: "minos_backend::realtime::gateway",
+                error = %error,
+                host_device_id = %upgrade.device_id,
+                "host online force-due agent dispatch failed"
+            );
+            state.wake_agent_dispatch();
+        }
+    }
+
     // Online = this socket is registered. Fanout is ephemeral StreamEvent;
     // last_seen is durable for cold-path HTTP lists.
     presence::publish_connection_presence(
@@ -599,6 +615,10 @@ async fn note_connection_activity(
     *last_db_touch = Instant::now();
 }
 
+/// Register the connection's default topic for **live** fanout only.
+///
+/// Catch-up is client-driven via explicit `Subscribe` + `resume_after`.
+/// Hello must never `replay_topic(..., 0)` (would flood offline history).
 async fn auto_subscribe_default_topic(
     ws: &mut WebSocket,
     state: &BackendState,
@@ -609,7 +629,16 @@ async fn auto_subscribe_default_topic(
     let _ = state
         .subscription_mgr
         .add_topics(conn.conn_id, std::slice::from_ref(&topic));
-    replay_topic(ws, state, conn, &topic, 0).await
+    // Optional ack so clients know live is armed for the default topic.
+    let _ = send_server_frame(
+        ws,
+        &ServerFrame::SubscribeAck {
+            topics: vec![topic.topic_string()],
+            client_request_id: None,
+        },
+    )
+    .await;
+    Ok(())
 }
 
 async fn handle_text_frame(
@@ -914,7 +943,8 @@ async fn handle_subscribe(
         return Ok(());
     }
 
-    let newly = state
+    // Register for live fanout (may already be registered via Hello default topic).
+    let _newly = state
         .subscription_mgr
         .add_topics(conn.conn_id, &authorized_topics);
     if !authorized_topics.is_empty() {
@@ -931,13 +961,16 @@ async fn handle_subscribe(
         .await;
     }
 
+    // Catch-up for every topic in this Subscribe, including already-registered
+    // default topics (Hello is register-only). Clients pass resume_after cursors;
+    // missing key → after=0 (full retained history).
     let resume_after = resume_after.unwrap_or_default();
-    for topic in newly {
+    for topic in &authorized_topics {
         let after = resume_after
             .get(&topic.topic_string())
             .copied()
             .unwrap_or(0);
-        replay_topic(ws, state, conn, &topic, after).await?;
+        replay_topic(ws, state, conn, topic, after).await?;
     }
 
     Ok(())
@@ -1425,6 +1458,9 @@ async fn persist_host_ingest_chunk(
         }
 
         fanout_host_ingest_ui_events(state, &chunk.session_id, chunk.seq, &translated);
+
+        // Event-driven TurnCompletionProjector (replaces 100ms poll watcher).
+        crate::http::v1::social::try_project_completion_for_session(state, &chunk.session_id).await;
     }
     Ok(true)
 }

@@ -136,6 +136,11 @@ UI 使用自研 **Minos design tokens**（iOS 向手感），不再依赖 `shadc
 | 撤回 | 居中 `ConversationSystemMessage` |
 | 交互 | 长按：引用 / 复制 / 重试 / 撤回；失败红 `!` 重试；stick-to-bottom + 跳转最新 FAB |
 | 实时 | Composer 上 Agent activity ticker；深链 Agent 气泡 → `/thread/:sessionId` |
+| TimelineSync | `SocialConversationState` 维护 `minLoadedSeq` / `maxLoadedSeq` / `hasOlder`；`loadOlder()` → Hub `before_seq`；近顶滚动触发 |
+| InboxSync | `ConversationsController` 事件 → 单行 patch + unread bump；**禁止**每事件 `invalidateSelf` / 全量 REST |
+| SnapshotRequired | Rust `UiEvent raw(kind=snapshot_required)` → `imSnapshotSyncProvider`：conversation 仅 `ref.exists` 时 range reconcile（不 cold-start / 不 mark-read）；account → inbox hydrate |
+| 排序 | durable 仅 `server_order_key`（message_seq）；禁止 `COALESCE(seq, created_at_ms)` |
+| parse 失败 | Rust `parse_chat_message` 返回 `None`，不入空壳气泡 |
 
 **注意**：Agent session transcript（`ThreadViewPage` / `MessageBubble`）仍是执行面，可保留 L/R 或 transcript rail，不与协作 IM 行壳混用。
 

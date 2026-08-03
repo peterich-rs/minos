@@ -1,14 +1,62 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart' show StateProvider;
 import 'package:minos/application/agent_activity_provider.dart';
 import 'package:minos/application/conversations_sort.dart';
+import 'package:minos/application/im_outbox_worker.dart';
 import 'package:minos/data/repositories/social_repository.dart';
+import 'package:minos/data/repositories/thread_repository.dart';
 import 'package:minos/domain/social_message.dart';
+import 'package:minos/domain/social_message_order.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'social_providers.g.dart';
+
+/// Currently open social chat conversation (focused for unread / markRead).
+/// Distinct from "has timeline window" (provider alive with messages).
+final focusedSocialConversationIdProvider = StateProvider<String?>((ref) {
+  return null;
+});
+
+/// Consume `snapshot_required` UiEvent (Rust realtime) → TimelineSync / InboxSync.
+///
+/// Conversation topic: only reconcile when [socialConversationProvider] already
+/// exists (chat open). Never cold-start autoDispose for a closed chat (would
+/// race mark-read / clear-unread). Background: no-op; next open rebuilds.
+/// Account topic: full inbox hydrate is OK.
+final imSnapshotSyncProvider = Provider<void>((ref) {
+  final repo = ref.watch(threadRepositoryProvider);
+  final sub = repo.uiEvents.listen((frame) {
+    final ui = frame.ui;
+    if (ui is! UiEventMessage_Raw || ui.kind != 'snapshot_required') return;
+    try {
+      final map = jsonDecode(ui.payloadJson);
+      if (map is! Map) return;
+      final topic = map['topic']?.toString().trim() ?? '';
+      if (topic.isEmpty) return;
+      if (topic.startsWith('conversation:')) {
+        final conversationId = topic.substring('conversation:'.length).trim();
+        if (conversationId.isEmpty) return;
+        final timeline = socialConversationProvider(conversationId);
+        // Prefer exists: do not materialize autoDispose for closed chats.
+        if (!ref.exists(timeline)) {
+          return;
+        }
+        unawaited(ref.read(timeline.notifier).onSnapshotRequired());
+        return;
+      }
+      if (topic.startsWith('account:')) {
+        unawaited(ref.read(conversationsProvider.notifier).onAccountSnapshot());
+      }
+    } catch (_) {
+      // Malformed snapshot payload — ignore; next hydrate corrects.
+    }
+  });
+  ref.onDispose(sub.cancel);
+});
 
 final socialProfileProvider = FutureProvider<MyProfileResponse>((ref) {
   return ref.watch(socialRepositoryProvider).myProfile();
@@ -89,43 +137,76 @@ final socialUnreadCountProvider = Provider<int>((ref) {
 
 const Object _socialConversationUnset = Object();
 
+/// Timeline window + meta for one conversation (TimelineSync).
 class SocialConversationState {
   const SocialConversationState({
     required this.myAccountId,
     required this.messages,
     required this.isLoading,
     required this.error,
+    this.minLoadedSeq,
+    this.maxLoadedSeq,
+    this.hasOlder = false,
+    this.loadingOlder = false,
   });
 
   const SocialConversationState.initial()
     : myAccountId = null,
       messages = const <SocialChatMessage>[],
       isLoading = true,
-      error = null;
+      error = null,
+      minLoadedSeq = null,
+      maxLoadedSeq = null,
+      hasOlder = false,
+      loadingOlder = false;
 
   final String? myAccountId;
   final List<SocialChatMessage> messages;
+  final int? minLoadedSeq;
+  final int? maxLoadedSeq;
+  final bool hasOlder;
+  final bool loadingOlder;
   final bool isLoading;
   final Object? error;
 
   SocialConversationState copyWith({
     String? myAccountId,
     List<SocialChatMessage>? messages,
+    int? minLoadedSeq,
+    int? maxLoadedSeq,
+    bool? hasOlder,
+    bool? loadingOlder,
     bool? isLoading,
     Object? error = _socialConversationUnset,
   }) {
     return SocialConversationState(
       myAccountId: myAccountId ?? this.myAccountId,
       messages: messages ?? this.messages,
+      minLoadedSeq: minLoadedSeq ?? this.minLoadedSeq,
+      maxLoadedSeq: maxLoadedSeq ?? this.maxLoadedSeq,
+      hasOlder: hasOlder ?? this.hasOlder,
+      loadingOlder: loadingOlder ?? this.loadingOlder,
       isLoading: isLoading ?? this.isLoading,
       error: identical(error, _socialConversationUnset) ? this.error : error,
+    );
+  }
+
+  SocialConversationState withMessages(List<SocialChatMessage> next) {
+    return copyWith(
+      messages: next,
+      minLoadedSeq: minLoadedSeqOf(next),
+      maxLoadedSeq: maxLoadedSeqOf(next),
     );
   }
 }
 
 @riverpod
 class SocialConversation extends _$SocialConversation {
+  static const int _pageSize = 100;
+  static const Duration _markReadDebounce = Duration(milliseconds: 400);
+
   StreamSubscription<SocialEventFrame>? _eventsSub;
+  Timer? _markReadTimer;
 
   late final String _conversationId;
 
@@ -143,12 +224,95 @@ class SocialConversation extends _$SocialConversation {
               ref.invalidateSelf(),
           onDone: ref.invalidateSelf,
         );
-    ref.onDispose(() => _eventsSub?.cancel());
+    ref.onDispose(() {
+      unawaited(_eventsSub?.cancel() ?? Future<void>.value());
+      _markReadTimer?.cancel();
+    });
     unawaited(_load(seedState: initialState));
     return initialState;
   }
 
   Future<void> refresh() => _load();
+
+  /// Older page via Hub `before_seq` (TimelineSync.loadOlder).
+  Future<void> loadOlder() async {
+    if (state.loadingOlder || !state.hasOlder) {
+      return;
+    }
+    final minSeq = state.minLoadedSeq;
+    if (minSeq == null || minSeq <= 1) {
+      state = state.copyWith(hasOlder: false, loadingOlder: false);
+      return;
+    }
+
+    state = state.copyWith(loadingOlder: true);
+    final repository = ref.read(socialRepositoryProvider);
+    try {
+      final response = await repository.listChatMessages(
+        conversationId: _conversationId,
+        beforeSeq: minSeq,
+        limit: _pageSize,
+      );
+      await repository.upsertRemoteMessages(
+        conversationId: _conversationId,
+        messages: response.messages,
+      );
+      final messages = await repository.loadMessages(_conversationId);
+      final hasOlder =
+          response.nextBeforeSeq != null ||
+          response.messages.length >= _pageSize;
+      state = state
+          .withMessages(messages)
+          .copyWith(
+            hasOlder: hasOlder,
+            loadingOlder: false,
+            error: null,
+          );
+    } catch (error) {
+      state = state.copyWith(loadingOlder: false, error: error);
+    }
+  }
+
+  /// SnapshotRequired range reconcile: keep window, forward fill + latest page.
+  /// Timeline-only: does **not** mark-read or clear unread (caller must only
+  /// invoke when this provider already exists / chat is open).
+  Future<void> onSnapshotRequired() async {
+    final repository = ref.read(socialRepositoryProvider);
+    final prev = state.messages;
+    final maxSeq = state.maxLoadedSeq ?? maxLoadedSeqOf(prev);
+    try {
+      if (maxSeq != null) {
+        final forward = await repository.listChatMessages(
+          conversationId: _conversationId,
+          afterSeq: maxSeq,
+          limit: _pageSize,
+        );
+        await repository.upsertRemoteMessages(
+          conversationId: _conversationId,
+          messages: forward.messages,
+        );
+      }
+      final latest = await repository.listChatMessages(
+        conversationId: _conversationId,
+        limit: _pageSize,
+      );
+      await repository.upsertRemoteMessages(
+        conversationId: _conversationId,
+        messages: latest.messages,
+      );
+      final messages = await repository.loadMessages(_conversationId);
+      final hasOlder =
+          latest.nextBeforeSeq != null ||
+          latest.messages.length >= _pageSize ||
+          state.hasOlder;
+      state = state
+          .withMessages(messages)
+          .copyWith(hasOlder: hasOlder, isLoading: false, error: null);
+      // No mark-read here: open path / inbound debounce own unread.
+    } catch (error) {
+      state = state.copyWith(error: error, isLoading: false);
+    }
+  }
 
   Future<void> sendMessage(
     String text, {
@@ -167,44 +331,35 @@ class SocialConversation extends _$SocialConversation {
       text: trimmed,
       replyTo: replyPreview,
     );
+    final clientMessageId = pending.wireClientMessageId;
+    await repository.enqueueUserMessageOutbox(
+      clientMessageId: clientMessageId,
+      conversationId: _conversationId,
+      text: trimmed,
+      replyToMessageId: replyPreview?.messageId,
+    );
     await repository.touchConversationPreview(
       conversationId: _conversationId,
       preview: trimmed,
       createdAtMs: pending.createdAtMs,
     );
-    state = state.copyWith(
-      messages: await repository.loadMessages(_conversationId),
-      error: null,
+    final messages = await repository.loadMessages(_conversationId);
+    state = state.withMessages(messages).copyWith(error: null);
+    // Inbox patch without full REST.
+    unawaited(
+      ref
+          .read(conversationsProvider.notifier)
+          .patchPreview(
+            conversationId: _conversationId,
+            preview: trimmed,
+            lastMessageAtMs: pending.createdAtMs,
+            unreadCount: 0,
+          ),
     );
-    ref.invalidate(conversationsProvider);
 
-    try {
-      final message = await repository.sendChatMessage(
-        conversationId: _conversationId,
-        text: trimmed,
-        replyToMessageId: replyPreview?.messageId,
-      );
-      await repository.markMessageSent(
-        localId: pending.localId,
-        message: message,
-      );
-      await repository.touchConversationPreview(
-        conversationId: _conversationId,
-        preview: message.text,
-        createdAtMs: repository.platformInt64ToIntValue(message.createdAtMs),
-      );
-      state = state.copyWith(
-        messages: await repository.loadMessages(_conversationId),
-      );
-      ref.invalidate(conversationAgentSessionsProvider(_conversationId));
-      ref.invalidate(conversationsProvider);
-    } catch (error) {
-      await repository.markMessageFailed(pending.localId);
-      state = state.copyWith(
-        messages: await repository.loadMessages(_conversationId),
-      );
-      rethrow;
-    }
+    // Durable outbox owns transport; kick worker without blocking UI on REST.
+    unawaited(ref.read(imOutboxWorkerProvider).ensureStarted());
+    unawaited(ref.read(imOutboxWorkerProvider).flush());
   }
 
   Future<void> retryMessage(String localId) async {
@@ -221,38 +376,24 @@ class SocialConversation extends _$SocialConversation {
     }
 
     final repository = ref.read(socialRepositoryProvider);
-    await repository.markMessageSending(localId);
-    state = state.copyWith(
-      messages: await repository.loadMessages(_conversationId),
-    );
+    final clientMessageId = target.wireClientMessageId;
+    final replyToMessageId = target.replyTo?.recalledAtMs == null
+        ? target.replyTo?.messageId
+        : null;
 
-    try {
-      final replyToMessageId = target.replyTo?.recalledAtMs == null
-          ? target.replyTo?.messageId
-          : null;
-      final message = await repository.sendChatMessage(
-        conversationId: _conversationId,
-        text: target.text,
-        replyToMessageId: replyToMessageId,
-      );
-      await repository.markMessageSent(localId: localId, message: message);
-      await repository.touchConversationPreview(
-        conversationId: _conversationId,
-        preview: message.text,
-        createdAtMs: repository.platformInt64ToIntValue(message.createdAtMs),
-      );
-      state = state.copyWith(
-        messages: await repository.loadMessages(_conversationId),
-      );
-      ref.invalidate(conversationAgentSessionsProvider(_conversationId));
-      ref.invalidate(conversationsProvider);
-    } catch (error) {
-      await repository.markMessageFailed(localId);
-      state = state.copyWith(
-        messages: await repository.loadMessages(_conversationId),
-      );
-      rethrow;
-    }
+    await repository.markMessageSending(localId);
+    // Reuse the same client_message_id — never mint a new key on retry.
+    await repository.enqueueUserMessageOutbox(
+      clientMessageId: clientMessageId,
+      conversationId: _conversationId,
+      text: target.text,
+      replyToMessageId: replyToMessageId,
+    );
+    final messages = await repository.loadMessages(_conversationId);
+    state = state.withMessages(messages);
+
+    unawaited(ref.read(imOutboxWorkerProvider).ensureStarted());
+    unawaited(ref.read(imOutboxWorkerProvider).flush());
   }
 
   Future<void> recallMessage(String localId) async {
@@ -278,14 +419,23 @@ class SocialConversation extends _$SocialConversation {
       preview: message.text,
       createdAtMs: repository.platformInt64ToIntValue(message.createdAtMs),
     );
-    state = state.copyWith(
-      messages: await repository.loadMessages(_conversationId),
-    );
+    final messages = await repository.loadMessages(_conversationId);
+    state = state.withMessages(messages);
     final replyDraft = ref.read(socialReplyDraftProvider(_conversationId));
     if (replyDraft == localId) {
       ref.read(socialReplyDraftProvider(_conversationId).notifier).clear();
     }
-    ref.invalidate(conversationsProvider);
+    unawaited(
+      ref
+          .read(conversationsProvider.notifier)
+          .patchPreview(
+            conversationId: _conversationId,
+            preview: message.text,
+            lastMessageAtMs: repository.platformInt64ToIntValue(
+              message.createdAtMs,
+            ),
+          ),
+    );
   }
 
   Future<void> _load({SocialConversationState? seedState}) async {
@@ -293,36 +443,60 @@ class SocialConversation extends _$SocialConversation {
     final previous = seedState ?? state;
     final cachedMessages = await repository.loadMessages(_conversationId);
     final cachedAccountId = await repository.loadCurrentAccountId();
-    state = previous.copyWith(
-      myAccountId: cachedAccountId ?? previous.myAccountId,
-      messages: cachedMessages.isEmpty ? previous.messages : cachedMessages,
-      isLoading: true,
-      error: null,
-    );
+    state = previous
+        .withMessages(
+          cachedMessages.isEmpty ? previous.messages : cachedMessages,
+        )
+        .copyWith(
+          myAccountId: cachedAccountId ?? previous.myAccountId,
+          isLoading: true,
+          error: null,
+        );
     try {
       final profile = await repository.myProfile();
       await repository.saveCurrentAccountId(profile.accountId);
       final response = await repository.listChatMessages(
         conversationId: _conversationId,
-        limit: 100,
+        limit: _pageSize,
       );
       await repository.upsertRemoteMessages(
         conversationId: _conversationId,
         messages: response.messages,
       );
-      await repository.markConversationRead(conversationId: _conversationId);
+      await repository.clearUnread(_conversationId);
+      // Single mark-read on open (not per inbound).
+      unawaited(_markConversationReadNow());
+      final messages = await repository.loadMessages(_conversationId);
+      final hasOlder =
+          response.nextBeforeSeq != null ||
+          response.messages.length >= _pageSize;
       state = SocialConversationState(
         myAccountId: profile.accountId,
-        messages: await repository.loadMessages(_conversationId),
+        messages: messages,
+        minLoadedSeq: minLoadedSeqOf(messages),
+        maxLoadedSeq: maxLoadedSeqOf(messages),
+        hasOlder: hasOlder,
+        loadingOlder: false,
         isLoading: false,
         error: null,
       );
       ref.invalidate(conversationAgentSessionsProvider(_conversationId));
-      ref.invalidate(conversationsProvider);
+      unawaited(
+        ref
+            .read(conversationsProvider.notifier)
+            .applyMarkReadLocal(_conversationId),
+      );
     } catch (error) {
+      final fallback = cachedMessages.isEmpty
+          ? previous.messages
+          : cachedMessages;
       state = SocialConversationState(
         myAccountId: cachedAccountId ?? previous.myAccountId,
-        messages: cachedMessages.isEmpty ? previous.messages : cachedMessages,
+        messages: fallback,
+        minLoadedSeq: minLoadedSeqOf(fallback),
+        maxLoadedSeq: maxLoadedSeqOf(fallback),
+        hasOlder: previous.hasOlder,
+        loadingOlder: false,
         isLoading: false,
         error: error,
       );
@@ -333,7 +507,99 @@ class SocialConversation extends _$SocialConversation {
     if (frame.conversationId != _conversationId) {
       return;
     }
+    if (frame.kind == 'reaction_updated') {
+      final mid = frame.message.messageId.trim();
+      if (mid.isEmpty) return;
+      unawaited(_applyRemoteReactions(mid, frame.message.reactions));
+      return;
+    }
+    // Empty shell already filtered in Rust; belt-and-suspenders here.
+    if (frame.message.messageId.trim().isEmpty) {
+      return;
+    }
     unawaited(_applyRemoteMessage(frame.message));
+  }
+
+  Future<void> _applyRemoteReactions(
+    String messageId,
+    List<ReactionGroup> reactions,
+  ) async {
+    final repository = ref.read(socialRepositoryProvider);
+    await repository.updateMessageReactions(
+      conversationId: _conversationId,
+      messageId: messageId,
+      reactions: reactions,
+    );
+    final messages = await repository.loadMessages(_conversationId);
+    state = state.withMessages(messages).copyWith(error: null);
+  }
+
+  /// Toggle reaction via Intent Outbox (C5.2); optimistic UI then worker drain.
+  Future<void> toggleReaction({
+    required String messageId,
+    required String emoji,
+  }) async {
+    final mid = messageId.trim();
+    final em = emoji.trim();
+    if (mid.isEmpty || em.isEmpty) return;
+    final repository = ref.read(socialRepositoryProvider);
+    final clientOpId =
+        'react-${DateTime.now().microsecondsSinceEpoch}-${mid.hashCode.abs()}';
+    // Optimistic: flip reacted_by_me for this emoji in local list.
+    final nextMessages = state.messages.map((m) {
+      if (m.serverMessageId != mid && m.localId != mid) return m;
+      return m.copyWith(reactions: _optimisticToggle(m.reactions, em));
+    }).toList(growable: false);
+    state = state.withMessages(nextMessages);
+
+    await repository.enqueueReactionToggleOutbox(
+      clientOpId: clientOpId,
+      conversationId: _conversationId,
+      messageId: mid,
+      emoji: em,
+    );
+    unawaited(ref.read(imOutboxWorkerProvider).flush());
+  }
+
+  List<ReactionGroup> _optimisticToggle(
+    List<ReactionGroup> prev,
+    String emoji,
+  ) {
+    final list = List<ReactionGroup>.from(prev);
+    final idx = list.indexWhere((g) => g.emoji == emoji);
+    if (idx < 0) {
+      list.add(
+        ReactionGroup(
+          emoji: emoji,
+          count: 1,
+          reactedByMe: true,
+          actors: const <ReactionActor>[],
+        ),
+      );
+      return list;
+    }
+    final g = list[idx];
+    if (g.reactedByMe) {
+      final count = g.count - 1;
+      if (count <= 0) {
+        list.removeAt(idx);
+      } else {
+        list[idx] = ReactionGroup(
+          emoji: g.emoji,
+          count: count,
+          reactedByMe: false,
+          actors: g.actors,
+        );
+      }
+    } else {
+      list[idx] = ReactionGroup(
+        emoji: g.emoji,
+        count: g.count + 1,
+        reactedByMe: true,
+        actors: g.actors,
+      );
+    }
+    return list;
   }
 
   Future<void> _applyRemoteMessage(ChatMessageSummary message) async {
@@ -343,22 +609,43 @@ class SocialConversation extends _$SocialConversation {
       conversationId: message.conversationId,
       preview: message.text,
       createdAtMs: repository.platformInt64ToIntValue(message.createdAtMs),
+      unreadCount: 0,
     );
-    state = state.copyWith(
-      messages: await repository.loadMessages(_conversationId),
-      error: null,
-    );
-    unawaited(_markConversationRead());
+    // Incremental merge: prefer single-row into in-memory list when possible.
+    final messages = await repository.loadMessages(_conversationId);
+    state = state.withMessages(messages).copyWith(error: null);
+    _scheduleMarkRead();
     ref.invalidate(conversationAgentSessionsProvider(_conversationId));
-    ref.invalidate(conversationsProvider);
+    // Inbox patch: focused → unread 0, no full REST.
+    unawaited(
+      ref
+          .read(conversationsProvider.notifier)
+          .patchFromInbound(
+            message: message,
+            focused: true,
+            myAccountId: state.myAccountId,
+          ),
+    );
   }
 
-  Future<void> _markConversationRead() async {
+  void _scheduleMarkRead() {
+    _markReadTimer?.cancel();
+    _markReadTimer = Timer(_markReadDebounce, () {
+      unawaited(_markConversationReadNow());
+    });
+  }
+
+  Future<void> _markConversationReadNow() async {
     try {
       await ref
           .read(socialRepositoryProvider)
           .markConversationRead(conversationId: _conversationId);
-      ref.invalidate(conversationsProvider);
+      await ref.read(socialRepositoryProvider).clearUnread(_conversationId);
+      unawaited(
+        ref
+            .read(conversationsProvider.notifier)
+            .applyMarkReadLocal(_conversationId),
+      );
     } catch (_) {}
   }
 
@@ -428,23 +715,42 @@ final conversationsProvider =
       ConversationsController.new,
     );
 
+/// InboxSync: incremental patch; full REST only hydrate / refresh / snapshot.
 class ConversationsController extends AsyncNotifier<ConversationsResponse> {
   StreamSubscription<SocialEventFrame>? _eventsSub;
 
   @override
   Future<ConversationsResponse> build() async {
+    // Arm SnapshotRequired consumer for app lifetime (Inbox/Timeline).
+    ref.watch(imSnapshotSyncProvider);
+
     _eventsSub ??= ref
         .read(socialRepositoryProvider)
         .socialEvents
         .listen(
-          (_) {
-            ref.invalidateSelf();
+          (frame) {
+            // Hot path: single-row patch — never invalidateSelf / full REST.
+            unawaited(_onSocialEvent(frame));
           },
-          onError: (Object error, StackTrace stackTrace) =>
-              ref.invalidateSelf(),
-          onDone: ref.invalidateSelf,
+          onError: (Object error, StackTrace stackTrace) {
+            // Connection errors: soft; next hydrate corrects.
+          },
+          onDone: () {},
         );
     ref.onDispose(() => _eventsSub?.cancel());
+
+    // Start IM outbox worker once conversations hydrate; wire UI refresh hooks.
+    final outbox = ref.read(imOutboxWorkerProvider);
+    outbox.onConversationDirty = (conversationId) {
+      unawaited(
+        ref.read(socialConversationProvider(conversationId).notifier).refresh(),
+      );
+    };
+    outbox.onInboxDirty = () {
+      // Prefer patch if possible; full refresh only when worker cannot patch.
+      unawaited(refresh());
+    };
+    unawaited(outbox.ensureStarted());
 
     final repository = ref.read(socialRepositoryProvider);
     final cached = await repository.loadConversations();
@@ -466,6 +772,9 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
   Future<void> refresh() async {
     state = AsyncValue.data(await _fetchRemoteConversations());
   }
+
+  /// Account SnapshotRequired / pull-to-refresh entry.
+  Future<void> onAccountSnapshot() => refresh();
 
   Future<void> deleteConversation(String conversationId) async {
     final previous = state;
@@ -494,6 +803,211 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
       state = previous;
       Error.throwWithStackTrace(error, stackTrace);
     }
+  }
+
+  Future<void> applyMarkReadLocal(String conversationId) async {
+    final current = state.asData?.value;
+    if (current == null) return;
+    final next = current.conversations.map((c) {
+      if (c.conversationId != conversationId) return c;
+      return ConversationSummary(
+        conversationId: c.conversationId,
+        kind: c.kind,
+        title: c.title,
+        counterpart: c.counterpart,
+        memberCount: c.memberCount,
+        lastMessagePreview: c.lastMessagePreview,
+        lastMessageAtMs: c.lastMessageAtMs,
+        unreadCount: 0,
+        unreadMentionCount: 0,
+      );
+    }).toList(growable: false);
+    state = AsyncValue.data(
+      conversationsSortedByLastActive(
+        ConversationsResponse(conversations: next),
+      ),
+    );
+    await ref.read(socialRepositoryProvider).clearUnread(conversationId);
+  }
+
+  Future<void> patchPreview({
+    required String conversationId,
+    required String preview,
+    required int lastMessageAtMs,
+    int? unreadCount,
+  }) async {
+    final repository = ref.read(socialRepositoryProvider);
+    await repository.touchConversationPreview(
+      conversationId: conversationId,
+      preview: preview,
+      createdAtMs: lastMessageAtMs,
+      unreadCount: unreadCount,
+    );
+    final current = state.asData?.value;
+    if (current == null) return;
+    final exists = current.conversations.any(
+      (c) => c.conversationId == conversationId,
+    );
+    List<ConversationSummary> next;
+    if (exists) {
+      next = current.conversations.map((c) {
+        if (c.conversationId != conversationId) return c;
+        return ConversationSummary(
+          conversationId: c.conversationId,
+          kind: c.kind,
+          title: c.title,
+          counterpart: c.counterpart,
+          memberCount: c.memberCount,
+          lastMessagePreview: preview,
+          lastMessageAtMs: repository.platformInt64FromIntValue(
+            lastMessageAtMs,
+          ),
+          unreadCount: unreadCount ?? c.unreadCount,
+          unreadMentionCount: unreadCount == 0 ? 0 : c.unreadMentionCount,
+        );
+      }).toList(growable: false);
+    } else {
+      next = <ConversationSummary>[
+        ConversationSummary(
+          conversationId: conversationId,
+          kind: ConversationKind.group,
+          title: 'Conversation',
+          memberCount: 0,
+          lastMessagePreview: preview,
+          lastMessageAtMs: repository.platformInt64FromIntValue(
+            lastMessageAtMs,
+          ),
+          unreadCount: unreadCount ?? 0,
+          unreadMentionCount: 0,
+        ),
+        ...current.conversations,
+      ];
+    }
+    state = AsyncValue.data(
+      conversationsSortedByLastActive(
+        ConversationsResponse(conversations: next),
+      ),
+    );
+  }
+
+  Future<void> patchFromInbound({
+    required ChatMessageSummary message,
+    required bool focused,
+    String? myAccountId,
+  }) async {
+    final repository = ref.read(socialRepositoryProvider);
+    final conversationId = message.conversationId;
+    if (conversationId.isEmpty || message.messageId.trim().isEmpty) {
+      return;
+    }
+    final createdAtMs = repository.platformInt64ToIntValue(message.createdAtMs);
+    final isOwn =
+        myAccountId != null &&
+        myAccountId.isNotEmpty &&
+        message.sender.accountId == myAccountId;
+    final mention =
+        myAccountId != null &&
+        message.mentionedAccountIds.contains(myAccountId);
+
+    int unread = 0;
+    int unreadMention = 0;
+    final prev = await repository.loadConversation(conversationId);
+    if (focused || isOwn) {
+      unread = 0;
+      unreadMention = 0;
+      await repository.clearUnread(conversationId);
+    } else {
+      unread = (prev?.unreadCount ?? 0) + 1;
+      unreadMention =
+          (prev?.unreadMentionCount ?? 0) + (mention ? 1 : 0);
+      await repository.touchConversationPreview(
+        conversationId: conversationId,
+        preview: message.text,
+        createdAtMs: createdAtMs,
+        unreadCount: unread,
+        unreadMentionCount: unreadMention,
+      );
+    }
+    if (focused || isOwn) {
+      await repository.touchConversationPreview(
+        conversationId: conversationId,
+        preview: message.text,
+        createdAtMs: createdAtMs,
+        unreadCount: 0,
+        unreadMentionCount: 0,
+      );
+    }
+
+    final current = state.asData?.value;
+    if (current == null) return;
+
+    final exists = current.conversations.any(
+      (c) => c.conversationId == conversationId,
+    );
+    List<ConversationSummary> next;
+    if (exists) {
+      next = current.conversations.map((c) {
+        if (c.conversationId != conversationId) return c;
+        return ConversationSummary(
+          conversationId: c.conversationId,
+          kind: c.kind,
+          title: c.title,
+          counterpart: c.counterpart,
+          memberCount: c.memberCount,
+          lastMessagePreview: message.text,
+          lastMessageAtMs: message.createdAtMs,
+          unreadCount: focused || isOwn ? 0 : unread,
+          unreadMentionCount: focused || isOwn ? 0 : unreadMention,
+        );
+      }).toList(growable: false);
+    } else {
+      next = <ConversationSummary>[
+        ConversationSummary(
+          conversationId: conversationId,
+          kind: ConversationKind.group,
+          title: prev?.title ?? 'Conversation',
+          counterpart: prev?.counterpart,
+          memberCount: prev?.memberCount ?? 0,
+          lastMessagePreview: message.text,
+          lastMessageAtMs: message.createdAtMs,
+          unreadCount: focused || isOwn ? 0 : 1,
+          unreadMentionCount: focused || isOwn
+              ? 0
+              : (mention ? 1 : 0),
+        ),
+        ...current.conversations,
+      ];
+    }
+    state = AsyncValue.data(
+      conversationsSortedByLastActive(
+        ConversationsResponse(conversations: next),
+      ),
+    );
+  }
+
+  Future<void> _onSocialEvent(SocialEventFrame frame) async {
+    // Reactions are conversation-only; do not bump sidebar unread (B6.2).
+    if (frame.kind == 'reaction_updated') {
+      return;
+    }
+    if (frame.message.messageId.trim().isEmpty) {
+      return;
+    }
+    final focusedId = ref.read(focusedSocialConversationIdProvider);
+    final focused = focusedId != null && focusedId == frame.conversationId;
+    // Open conversation controller also patches; still apply inbox for badge
+    // when not focused. When focused, SocialConversation drives markRead.
+    String? myAccountId;
+    try {
+      myAccountId = await ref
+          .read(socialRepositoryProvider)
+          .loadCurrentAccountId();
+    } catch (_) {}
+    await patchFromInbound(
+      message: frame.message,
+      focused: focused,
+      myAccountId: myAccountId,
+    );
   }
 
   Future<ConversationsResponse> _fetchRemoteConversations() async {

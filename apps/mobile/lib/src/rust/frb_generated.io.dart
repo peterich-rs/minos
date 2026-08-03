@@ -388,6 +388,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ListProjectsResponse dco_decode_list_projects_response(dynamic raw);
 
   @protected
+  List<ReactionActor> dco_decode_list_reaction_actor(dynamic raw);
+
+  @protected
+  List<ReactionGroup> dco_decode_list_reaction_group(dynamic raw);
+
+  @protected
   List<RequestTraceRecord> dco_decode_list_request_trace_record(dynamic raw);
 
   @protected
@@ -458,6 +464,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ProjectSummary dco_decode_project_summary(dynamic raw);
 
   @protected
+  ReactionActor dco_decode_reaction_actor(dynamic raw);
+
+  @protected
+  ReactionGroup dco_decode_reaction_group(dynamic raw);
+
+  @protected
   ReadSessionParams dco_decode_read_session_params(dynamic raw);
 
   @protected
@@ -483,6 +495,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SubagentStatus dco_decode_subagent_status(dynamic raw);
+
+  @protected
+  ToggleReactionResponse dco_decode_toggle_reaction_response(dynamic raw);
 
   @protected
   int dco_decode_u_16(dynamic raw);
@@ -943,6 +958,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<ReactionActor> sse_decode_list_reaction_actor(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<ReactionGroup> sse_decode_list_reaction_group(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<RequestTraceRecord> sse_decode_list_request_trace_record(
     SseDeserializer deserializer,
   );
@@ -1035,6 +1060,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ProjectSummary sse_decode_project_summary(SseDeserializer deserializer);
 
   @protected
+  ReactionActor sse_decode_reaction_actor(SseDeserializer deserializer);
+
+  @protected
+  ReactionGroup sse_decode_reaction_group(SseDeserializer deserializer);
+
+  @protected
   ReadSessionParams sse_decode_read_session_params(
     SseDeserializer deserializer,
   );
@@ -1070,6 +1101,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SubagentStatus sse_decode_subagent_status(SseDeserializer deserializer);
+
+  @protected
+  ToggleReactionResponse sse_decode_toggle_reaction_response(
+    SseDeserializer deserializer,
+  );
 
   @protected
   int sse_decode_u_16(SseDeserializer deserializer);
@@ -1653,6 +1689,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_reaction_actor(
+    List<ReactionActor> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_reaction_group(
+    List<ReactionGroup> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_request_trace_record(
     List<RequestTraceRecord> self,
     SseSerializer serializer,
@@ -1764,6 +1812,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_reaction_actor(ReactionActor self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_reaction_group(ReactionGroup self, SseSerializer serializer);
+
+  @protected
   void sse_encode_read_session_params(
     ReadSessionParams self,
     SseSerializer serializer,
@@ -1811,6 +1865,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_subagent_status(
     SubagentStatus self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_toggle_reaction_response(
+    ToggleReactionResponse self,
     SseSerializer serializer,
   );
 

@@ -60,15 +60,28 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
   int _bottomAnchorGeneration = 0;
   bool _following = true;
 
+  static const double _topLoadOlderThreshold = 96;
+
   @override
   void initState() {
     super.initState();
     _scrollController.addListener(_onScrollPositionChanged);
+    // Focused for unread / markRead (distinct from timeline window open).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(focusedSocialConversationIdProvider.notifier).state =
+          widget.conversationId;
+    });
   }
 
   @override
   void dispose() {
     _scrollController.removeListener(_onScrollPositionChanged);
+    // Clear focus if we still own it.
+    final focused = ref.read(focusedSocialConversationIdProvider);
+    if (focused == widget.conversationId) {
+      ref.read(focusedSocialConversationIdProvider.notifier).state = null;
+    }
     _controller.dispose();
     _composerFocusNode.dispose();
     _scrollController.dispose();
@@ -77,8 +90,24 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
 
   void _onScrollPositionChanged() {
     final near = _isNearBottom();
-    if (near == _following) return;
-    setState(() => _following = near);
+    if (near != _following) {
+      setState(() => _following = near);
+    }
+    // Near top of ASC list → load older page (before_seq).
+    if (_isNearTop()) {
+      final notifier = ref.read(
+        socialConversationProvider(widget.conversationId).notifier,
+      );
+      final st = ref.read(socialConversationProvider(widget.conversationId));
+      if (st.hasOlder && !st.loadingOlder) {
+        unawaited(notifier.loadOlder());
+      }
+    }
+  }
+
+  bool _isNearTop() {
+    if (!_scrollController.hasClients) return false;
+    return _scrollController.position.pixels <= _topLoadOlderThreshold;
   }
 
   Future<void> _send() async {
@@ -801,6 +830,23 @@ class _ConversationMessagePane extends ConsumerWidget {
                                   conversationId: conversationId,
                                   message: message,
                                 ),
+                          onToggleReaction:
+                              message.serverMessageId == null || message.isRecalled
+                              ? null
+                              : (emoji) {
+                                  unawaited(
+                                    ref
+                                        .read(
+                                          socialConversationProvider(
+                                            conversationId,
+                                          ).notifier,
+                                        )
+                                        .toggleReaction(
+                                          messageId: message.serverMessageId!,
+                                          emoji: emoji,
+                                        ),
+                                  );
+                                },
                         ),
                       ],
                     ),

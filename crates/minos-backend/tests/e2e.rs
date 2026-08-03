@@ -255,11 +255,21 @@ async fn expect_hello_frame(ws: &mut WsClient) -> anyhow::Result<()> {
             ..
         } => {
             anyhow::ensure!(heartbeat_interval_ms == 25_000);
-            Ok(())
         }
-        other => Err(anyhow::anyhow!(
-            "expected Hello as first frame, got {other:?}"
+        other => {
+            return Err(anyhow::anyhow!(
+                "expected Hello as first frame, got {other:?}"
+            ));
+        }
+    }
+    // Hello is register-only: gateway may immediately ack default topic live arm.
+    match timeout(Duration::from_millis(100), recv_server_frame(ws)).await {
+        Ok(Ok(ServerFrame::SubscribeAck { .. })) => Ok(()),
+        Ok(Ok(other)) => Err(anyhow::anyhow!(
+            "unexpected post-hello frame (expected default SubscribeAck or silence): {other:?}"
         )),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Ok(()),
     }
 }
 

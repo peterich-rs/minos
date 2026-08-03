@@ -47,7 +47,13 @@ class ThreadCommands {
     required String requestId,
     required String sessionId,
     required Map<String, dynamic> decision,
+    String? clientRequestId,
   }) async {
+    // C5.3: stable Hub client_request_id for this user intent.
+    final opId =
+        clientRequestId?.trim().isNotEmpty == true
+            ? clientRequestId!.trim()
+            : 'approval-${DateTime.now().microsecondsSinceEpoch}-$requestId';
     logFlutterInfo(
       'thread_commands',
       'sendApprovalDecision requested sessionId=$sessionId requestId=$requestId',
@@ -57,6 +63,7 @@ class ThreadCommands {
         requestId: requestId,
         sessionId: sessionId,
         decision: decision,
+        clientRequestId: opId,
       );
       logFlutterDebug(
         'thread_commands',

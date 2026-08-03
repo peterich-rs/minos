@@ -56,6 +56,24 @@ export type HubRealtimeHandlers = {
   onChatMessage: (message: HubChatMessage) => void;
   /** Multi-end recall: remove or mark recalled in Hub timeline. */
   onChatMessageRecalled?: (message: HubChatMessage) => void;
+  /**
+   * Conversation reaction aggregate update. Clients apply `reactions` as full
+   * replace; `action` is animation-only and must not drive state.
+   */
+  onMessageReactions?: (input: {
+    conversationId: string;
+    messageId: string;
+    reactions: Array<{
+      emoji: string;
+      count: number;
+      reactedByMe: boolean;
+      actors: Array<{
+        actorId: string;
+        actorKind: string;
+        displayName: string;
+      }>;
+    }>;
+  }) => void;
   onConnectionChange?: (state: HubRealtimeSyncState) => void;
   /**
    * Cursor too old for topic — clear projection for conversation topics and
@@ -95,14 +113,25 @@ const RECALL_KINDS = new Set([
   "ConversationMessageRecalled",
 ]);
 
+const REACTION_KINDS = new Set([
+  "conversation_message_reaction_updated",
+  "ConversationMessageReactionUpdated",
+]);
+
 export class HubRealtimeSession {
   private ws: WebSocket | null = null;
   private stopped = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
+  /** When true, skip starting ping (document hidden); resume on show. */
+  private pingPaused = false;
   private readonly handlers: HubRealtimeHandlers;
-  private auth: { deviceId: string; accessToken: string } | null = null;
+  private auth: {
+    deviceId: string;
+    accessToken: string;
+    accountId: string;
+  } | null = null;
   private syncState: HubRealtimeSyncState = "disconnected";
   /** Desired conversation topics (open windows); re-subscribed on reconnect. */
   private conversationIds = new Set<string>();
@@ -118,15 +147,64 @@ export class HubRealtimeSession {
     return this.syncState;
   }
 
-  start(deviceId: string, accessToken: string): void {
+  start(deviceId: string, accessToken: string, accountId?: string): void {
     this.stopped = false;
-    this.auth = { deviceId, accessToken };
+    this.auth = {
+      deviceId,
+      accessToken,
+      accountId: accountId?.trim() ?? "",
+    };
     this.cursors = loadTopicCursors();
     void this.connect();
   }
 
-  updateAuth(deviceId: string, accessToken: string): void {
-    this.auth = { deviceId, accessToken };
+  updateAuth(deviceId: string, accessToken: string, accountId?: string): void {
+    this.auth = {
+      deviceId,
+      accessToken,
+      accountId: accountId?.trim() ?? this.auth?.accountId ?? "",
+    };
+  }
+
+  /**
+   * C6.1: Force an immediate reconnect (sleep/wake, online, focus restore).
+   * Resets backoff, closes the current socket, and connects now.
+   */
+  forceReconnect(): void {
+    if (this.stopped || !this.auth) return;
+    this.clearTimers();
+    this.reconnectAttempt = 0;
+    this.pendingSubscribeTopics.clear();
+    if (this.ws) {
+      try {
+        // Detach onclose so we do not schedule the backoff path.
+        this.ws.onclose = null;
+        this.ws.onerror = null;
+        this.ws.onmessage = null;
+        this.ws.close();
+      } catch {
+        /* ignore */
+      }
+      this.ws = null;
+    }
+    void this.connect();
+  }
+
+  /**
+   * Pause keepalive pings while the document is hidden (do **not** close WS).
+   * TCP will naturally timeout if the network is gone; on show we reconnect.
+   */
+  setPingPaused(paused: boolean): void {
+    this.pingPaused = paused;
+    if (paused) {
+      if (this.pingTimer) {
+        clearInterval(this.pingTimer);
+        this.pingTimer = null;
+      }
+      return;
+    }
+    // Resume ping if socket is open.
+    this.ensurePingTimer();
   }
 
   stop(): void {
@@ -143,6 +221,23 @@ export class HubRealtimeSession {
       this.ws = null;
     }
     this.setState("disconnected");
+  }
+
+  private ensurePingTimer(): void {
+    if (this.pingPaused || this.pingTimer) return;
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    this.pingTimer = setInterval(() => {
+      if (this.pingPaused) return;
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(
+          JSON.stringify({
+            type: "ping",
+            ts: Date.now(),
+          }),
+        );
+      }
+    }, 25_000);
   }
 
   /**
@@ -213,7 +308,15 @@ export class HubRealtimeSession {
   }
 
   private desiredTopics(): string[] {
-    const topics = [...this.conversationIds].map(conversationTopic);
+    const topics: string[] = [];
+    const accountId = this.auth?.accountId?.trim();
+    if (accountId) {
+      // Account topic: Hello is register-only; client must Subscribe with resume.
+      topics.push(`account:${accountId}`);
+    }
+    for (const id of this.conversationIds) {
+      topics.push(conversationTopic(id));
+    }
     return topics;
   }
 
@@ -253,16 +356,7 @@ export class HubRealtimeSession {
       ws.onopen = () => {
         this.reconnectAttempt = 0;
         // Wait for Hello before Subscribe; account is auto-subscribed by gateway.
-        this.pingTimer = setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(
-              JSON.stringify({
-                type: "ping",
-                ts: Date.now(),
-              }),
-            );
-          }
-        }, 25_000);
+        this.ensurePingTimer();
       };
 
       ws.onmessage = (ev) => {
@@ -312,12 +406,12 @@ export class HubRealtimeSession {
 
     if (type === "hello") {
       this.setState("syncing");
-      // Re-subscribe open conversation topics with resume_after.
-      const convTopics = this.desiredTopics();
-      if (convTopics.length > 0) {
-        this.sendSubscribe(convTopics);
+      // Register-only Hello may include a default-topic SubscribeAck next;
+      // always client-Subscribe account + open conversations with resume_after.
+      const topics = this.desiredTopics();
+      if (topics.length > 0) {
+        this.sendSubscribe(topics);
       } else {
-        // Account auto-sub is enough for inbox; go Live after short settle.
         this.setState("live");
       }
       return;
@@ -327,6 +421,7 @@ export class HubRealtimeSession {
       for (const t of frame.topics ?? []) {
         this.pendingSubscribeTopics.delete(t);
       }
+      // Gateway may emit default-topic ack before our Subscribe; ignore extras.
       if (this.pendingSubscribeTopics.size === 0) {
         this.setState("live");
       }
@@ -427,6 +522,43 @@ export class HubRealtimeSession {
         console.warn("[hub-realtime] failed to map recall", error);
         return false;
       }
+    }
+
+    if (REACTION_KINDS.has(eventKind)) {
+      const p = payload as DurableMessagePayload & {
+        reactions?: Array<{
+          emoji: string;
+          count: number;
+          reacted_by_me?: boolean;
+          reactedByMe?: boolean;
+          actors?: Array<{
+            actor_id?: string;
+            actorId?: string;
+            actor_kind?: string;
+            actorKind?: string;
+            display_name?: string;
+            displayName?: string;
+          }>;
+        }>;
+      };
+      if (!p.message_id || !p.conversation_id || !p.reactions) {
+        return false;
+      }
+      this.handlers.onMessageReactions?.({
+        conversationId: p.conversation_id,
+        messageId: p.message_id,
+        reactions: p.reactions.map((g) => ({
+          emoji: g.emoji,
+          count: g.count,
+          reactedByMe: Boolean(g.reacted_by_me ?? g.reactedByMe),
+          actors: (g.actors ?? []).map((a) => ({
+            actorId: a.actor_id ?? a.actorId ?? "",
+            actorKind: a.actor_kind ?? a.actorKind ?? "user",
+            displayName: a.display_name ?? a.displayName ?? "",
+          })),
+        })),
+      });
+      return true;
     }
 
     // Other durable kinds (session lifecycle, etc.): ignore but advance.

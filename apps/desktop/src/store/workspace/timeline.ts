@@ -1,10 +1,14 @@
 /**
  * L3a Timeline (messages) hydrate + older pages.
  *
- * Phase 3–4 Linked: Hub chat bubbles are primary SSOT projection; local daemon
- * contributes tool/git/system cards only. loadOlder uses Hub `before_ts_ms`
- * gap API when Hub-first mode. Local-only / unauthenticated still reads fully
- * from daemon.
+ * Linked: Hub chat bubbles are primary SSOT projection; local daemon
+ * contributes tool/git/system cards only. loadOlder uses Hub `before_seq`
+ * when Hub-first mode. Local-only / unauthenticated still reads fully from
+ * daemon.
+ *
+ * focused ≠ hasWindow: loadTimeline is hydrate-only — never writes
+ * focusedConversationId and never mark-reads (quiet or full). Focus + mark-read
+ * live on open/select (Timeline mount) and debounced focused inbound.
  */
 import type { WorkspaceGet, WorkspaceSet, WorkspaceState } from "./types";
 import { bumpStatus, toUiMessage } from "./helpers";
@@ -67,14 +71,13 @@ export function createTimelineActions(
           const dirty = { ...s.timelineDirtyByConversation };
           delete dirty[conversationId];
           // Ensure messages key exists so Hub WS hasWindow during cold pull.
+          // focused ≠ hasWindow: hydrate-only — no focusedConversationId, no
+          // mark-read (open path + debounced focused inbound own those).
           const hasMessagesKey = Object.prototype.hasOwnProperty.call(
             s.messagesByConversation,
             conversationId,
           );
           return {
-            // Mark focused immediately so Hub WS upserts land during the
-            // first cold pull (before markConversationRead at end of load).
-            focusedConversationId: conversationId,
             messagesByConversation: hasMessagesKey
               ? s.messagesByConversation
               : {
@@ -112,7 +115,7 @@ export function createTimelineActions(
                 messages: [] as Awaited<
                   ReturnType<typeof pullHubConversationMessagePage>
                 >["messages"],
-                nextBeforeTsMs: null as number | null,
+                nextBeforeSeq: null as number | null,
                 rawCount: 0,
               });
 
@@ -126,11 +129,28 @@ export function createTimelineActions(
           const hubRows = hubPage.messages;
 
           const localUi = messagePage.messages.map(toUiMessage);
-          // Durable reactions ride on list_messages; hydrate before paint merge.
-          // Phase 5.2: local-only for Linked Hub bubbles — see reaction-store.
-          useReactionStore
-            .getState()
-            .hydrateFromMessages(messagePage.messages);
+          // Hub IM: cold-hydrate reactions from Hub page (viewer-resolved).
+          // Local workbench: daemon list_messages reactions.
+          if (linked && hubRows.length > 0) {
+            useReactionStore.getState().hydrateFromMessages(
+              hubRows.map((m) => ({
+                id: m.messageId,
+                reactions: (m.reactions ?? []).map((g) => ({
+                  emoji: g.emoji,
+                  count: g.count,
+                  reactedByMe: g.reactedByMe,
+                  actors: g.actors.map((a) => ({
+                    id: a.actorId,
+                    displayName: a.displayName,
+                  })),
+                })),
+              })),
+            );
+          } else {
+            useReactionStore
+              .getState()
+              .hydrateFromMessages(messagePage.messages);
+          }
 
           set((s) => {
             const prevMessages = s.messagesByConversation[conversationId];
@@ -153,7 +173,7 @@ export function createTimelineActions(
               EMPTY_MESSAGE_HISTORY;
             const hubHasOlder =
               linked &&
-              (hubPage.nextBeforeTsMs != null ||
+              (hubPage.nextBeforeSeq != null ||
                 hubPage.rawCount >= MESSAGE_PAGE_SIZE);
             const firstCreated = firstMessageCreatedAtMs(merged);
             const nextHist: MessageHistoryMeta = quiet
@@ -193,10 +213,9 @@ export function createTimelineActions(
             };
           });
 
-          // Opening the conversation clears unread message attention.
-          if (!quiet) {
-            get().markConversationRead(conversationId);
-          }
+          // loadTimeline is hydrate-only: never mark-read / never write focus.
+          // Focus + Hub mark-read live on open/select (Timeline mount) and
+          // debounced inbound while focused (im-hub-bridge).
 
           // User Outbox drain + Host→Hub agent-result uplink for Desktop-native
           // turns (Hub projector only arms client_live Mobile dispatches).
@@ -263,26 +282,9 @@ export function createTimelineActions(
 
     const linked = hubImEnabled();
     const beforeSeq = hist.firstLoadedSeq;
-    const existing = get().messagesByConversation[conversationId] ?? [];
-    const beforeTs =
-      hist.firstLoadedCreatedAtMs ?? firstMessageCreatedAtMs(existing);
 
-    // Nothing to page with.
-    if (!linked && (beforeSeq == null || beforeSeq <= 1)) {
-      set((s) => ({
-        messageHistoryByConversation: {
-          ...s.messageHistoryByConversation,
-          [conversationId]: {
-            firstLoadedSeq: hist.firstLoadedSeq,
-            firstLoadedCreatedAtMs: hist.firstLoadedCreatedAtMs,
-            hasOlder: false,
-            loadingOlder: false,
-          },
-        },
-      }));
-      return;
-    }
-    if (linked && (beforeTs == null || beforeTs <= 0) && (beforeSeq == null || beforeSeq <= 1)) {
+    // Nothing to page with (daemon and Hub both use message_seq cursors).
+    if (beforeSeq == null || beforeSeq <= 1) {
       set((s) => ({
         messageHistoryByConversation: {
           ...s.messageHistoryByConversation,
@@ -308,28 +310,27 @@ export function createTimelineActions(
     }));
 
     try {
-      // Local-only path: page daemon. Linked: Hub before_ts_ms + local tool cards.
+      // Local-only: page daemon by seq. Linked: Hub before_seq + local tool cards.
       const daemonPagePromise =
-        beforeSeq != null && beforeSeq > 1
+        beforeSeq > 1
           ? daemonApi.listMessages(conversationId, {
               beforeSeq,
               limit: MESSAGE_PAGE_SIZE,
             })
           : Promise.resolve({ messages: [], hasMore: false });
 
-      const hubPagePromise =
-        linked && beforeTs != null && beforeTs > 0
-          ? pullHubConversationMessagePage(conversationId, {
-              beforeTsMs: beforeTs,
-              limit: MESSAGE_PAGE_SIZE,
-            })
-          : Promise.resolve({
-              messages: [] as Awaited<
-                ReturnType<typeof pullHubConversationMessagePage>
-              >["messages"],
-              nextBeforeTsMs: null as number | null,
-              rawCount: 0,
-            });
+      const hubPagePromise = linked
+        ? pullHubConversationMessagePage(conversationId, {
+            beforeSeq,
+            limit: MESSAGE_PAGE_SIZE,
+          })
+        : Promise.resolve({
+            messages: [] as Awaited<
+              ReturnType<typeof pullHubConversationMessagePage>
+            >["messages"],
+            nextBeforeSeq: null as number | null,
+            rawCount: 0,
+          });
 
       const [page, hubPage] = await Promise.all([
         daemonPagePromise,
@@ -352,7 +353,7 @@ export function createTimelineActions(
         const merged = trimmed.messages;
         const hubHasOlder =
           linked &&
-          (hubPage.nextBeforeTsMs != null ||
+          (hubPage.nextBeforeSeq != null ||
             hubPage.rawCount >= MESSAGE_PAGE_SIZE);
         return {
           messagesByConversation: {

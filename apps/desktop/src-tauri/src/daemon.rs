@@ -1172,11 +1172,17 @@ impl DaemonBridge {
             .context("minos_local_delete_agent_profile")
     }
 
-    pub async fn send_user_message(&self, session_id: String, text: String) -> Result<()> {
+    pub async fn send_user_message(
+        &self,
+        session_id: String,
+        text: String,
+        origin_message_id: Option<String>,
+    ) -> Result<()> {
         let client = self.client().await?;
         let req = SendUserMessageRequest {
-            session_id: session_id,
+            session_id,
             text,
+            origin_message_id,
         };
         client
             .request::<(), _>("minos_local_send_user_message", [req])

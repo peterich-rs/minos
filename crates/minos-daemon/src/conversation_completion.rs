@@ -94,7 +94,15 @@ struct SessionProjection {
     /// Idle/Closed arrived; wait for last_completed if ingest is still lagging.
     pending_boundary: bool,
     /// Stable durable id suffix for this turn so races upsert one row.
+    /// Prefer frozen `origin_message_id` (user Hub message) when set.
     turn_write_id: Option<String>,
+    /// Origin user message id for agent-result:{conv}:{session}:{origin}.
+    origin_message_id: Option<String>,
+    /// Staged origin applied on the next [`begin_turn`] (survives user MessageStarted reset).
+    pending_origin_message_id: Option<String>,
+    /// Hub collab / Linked turns must not fall back to message_key/t{ms}.
+    /// Set when a Hub conversation is bound or origin is staged for collab.
+    require_canonical_origin: bool,
 }
 
 impl SessionProjection {
@@ -112,7 +120,29 @@ impl SessionProjection {
         self.turn_recorded = false;
         self.write_in_flight = false;
         self.pending_boundary = false;
-        self.turn_write_id = None;
+        // Promote staged origin for this turn (Desktop/Hub user message id).
+        let origin = self.pending_origin_message_id.take();
+        self.origin_message_id = origin.clone();
+        self.turn_write_id = origin;
+    }
+
+    /// Stage origin for the next turn (or apply immediately if turn already open).
+    fn set_origin_message_id(&mut self, origin: impl Into<String>) {
+        let origin = origin.into();
+        if origin.is_empty() {
+            return;
+        }
+        self.pending_origin_message_id = Some(origin.clone());
+        // If a turn is already open (post-begin_turn), pin durable id now.
+        self.origin_message_id = Some(origin.clone());
+        self.turn_write_id = Some(origin);
+        // Origin-staged turns are collab-shaped: never fall back to message_key.
+        self.require_canonical_origin = true;
+    }
+
+    /// Mark this session as Hub collab so completion refuses non-canonical ids.
+    fn set_require_canonical_origin(&mut self) {
+        self.require_canonical_origin = true;
     }
 
     fn close_text_segment(&mut self, message_id: &str) {
@@ -155,9 +185,30 @@ impl SessionProjection {
     }
 
     /// Allocate a turn write id lazily on first successful claim.
-    fn ensure_turn_write_id(&mut self, fallback_key: &str) -> String {
+    ///
+    /// Frozen formula suffix = `origin_message_id` when known (always preferred,
+    /// even over a previously claimed fallback). Else message key or timestamp
+    /// for pure local/non-collab paths without origin.
+    ///
+    /// Returns `None` when collab requires origin and none is available (skip
+    /// non-canonical agent-result rather than invent message_key/t{ms}).
+    fn ensure_turn_write_id(&mut self, fallback_key: &str) -> Option<String> {
+        // Origin always wins (collab / Desktop-native with wired user message id).
+        if let Some(origin) = self
+            .origin_message_id
+            .clone()
+            .or_else(|| self.pending_origin_message_id.clone())
+        {
+            self.origin_message_id = Some(origin.clone());
+            self.turn_write_id = Some(origin.clone());
+            return Some(origin);
+        }
+        if self.require_canonical_origin {
+            // Fail-visible: collab must not mint non-canonical agent-result ids.
+            return None;
+        }
         if let Some(id) = self.turn_write_id.clone() {
-            return id;
+            return Some(id);
         }
         // Prefer first completed message key; fall back to a timestamped id.
         let id = if fallback_key.is_empty() {
@@ -166,7 +217,7 @@ impl SessionProjection {
             fallback_key.to_owned()
         };
         self.turn_write_id = Some(id.clone());
-        id
+        Some(id)
     }
 
     /// Atomically claim the right to write this turn's conversation result.
@@ -176,7 +227,7 @@ impl SessionProjection {
             return None;
         }
         let (key, text) = self.last_completed()?;
-        let durable = self.ensure_turn_write_id(&key);
+        let durable = self.ensure_turn_write_id(&key)?;
         self.write_in_flight = true;
         self.recorded_key = Some(key.clone());
         Some((key, text, durable))
@@ -407,6 +458,24 @@ impl ConversationCompletion {
         }
     }
 
+    /// Note the user message id that triggered the current agent turn.
+    /// Used for frozen `agent-result:{conv}:{session}:{origin_message_id}` ids.
+    pub(crate) async fn note_turn_origin(&self, session_id: &str, origin_message_id: &str) {
+        if origin_message_id.is_empty() {
+            return;
+        }
+        let mut projections = self.projections.lock().await;
+        let projection = projections.entry(session_id.to_owned()).or_default();
+        projection.set_origin_message_id(origin_message_id);
+    }
+
+    /// Hub collab session: completion must not fall back to message_key/t{ms}.
+    pub(crate) async fn note_require_canonical_origin(&self, session_id: &str) {
+        let mut projections = self.projections.lock().await;
+        let projection = projections.entry(session_id.to_owned()).or_default();
+        projection.set_require_canonical_origin();
+    }
+
     pub(crate) async fn on_session_state(&self, session_id: &str, state: &SessionState) {
         match state {
             SessionState::Starting | SessionState::Resuming | SessionState::Running { .. } => {
@@ -459,8 +528,23 @@ impl ConversationCompletion {
             let Some(projection) = projections.get_mut(session_id) else {
                 return;
             };
+            let require_origin = projection.require_canonical_origin;
+            let has_origin = projection
+                .origin_message_id
+                .as_ref()
+                .or(projection.pending_origin_message_id.as_ref())
+                .is_some();
             let Some((key, text, durable)) = projection.claim_write() else {
-                // Already recorded, write in flight, or no completed text yet.
+                // Already recorded, write in flight, no completed text, or collab
+                // missing origin (hard contract: skip non-canonical agent-result).
+                if require_origin && !has_origin && projection.last_completed().is_some() {
+                    warn!(
+                        target: "minos_daemon::conversation_completion",
+                        session_id,
+                        conversation_id = %conversation_id,
+                        "skip agent-result write: collab requires origin_message_id (no message_key/t{{ms}} fallback)"
+                    );
+                }
                 return;
             };
             let agent = projection
@@ -917,6 +1001,42 @@ mod tests {
             &[assistant_start("m1"), delta("m1", "done"), completed("m1")],
         );
         assert!(p.should_try_record_on_ingest(true, false));
+    }
+
+    #[test]
+    fn origin_message_id_wins_over_fallback_message_key() {
+        let mut p = SessionProjection::default();
+        // Simulate race: fallback claimed first, then origin noted.
+        p.turn_write_id = Some("m1".into());
+        p.set_origin_message_id("user-hub-msg-42");
+        let durable = p.ensure_turn_write_id("m1").expect("origin");
+        assert_eq!(durable, "user-hub-msg-42");
+        // claim_write path uses same ensure.
+        p.completed
+            .push(("m1".into(), "final text".into()));
+        p.turn_recorded = false;
+        p.write_in_flight = false;
+        let claimed = p.claim_write().expect("claim");
+        assert_eq!(claimed.2, "user-hub-msg-42");
+    }
+
+    #[test]
+    fn collab_without_origin_skips_non_canonical_write() {
+        let mut p = SessionProjection::default();
+        p.set_require_canonical_origin();
+        p.completed
+            .push(("assistant-key".into(), "final".into()));
+        assert!(p.claim_write().is_none());
+        assert!(p.ensure_turn_write_id("assistant-key").is_none());
+    }
+
+    #[test]
+    fn local_non_collab_still_allows_message_key_fallback() {
+        let mut p = SessionProjection::default();
+        p.completed
+            .push(("assistant-key".into(), "final".into()));
+        let claimed = p.claim_write().expect("local claim");
+        assert_eq!(claimed.2, "assistant-key");
     }
 
     #[test]

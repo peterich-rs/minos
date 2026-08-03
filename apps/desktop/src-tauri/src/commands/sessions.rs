@@ -46,10 +46,11 @@ pub async fn daemon_send_user_message(
     state: State<'_, AppState>,
     session_id: String,
     text: String,
+    origin_message_id: Option<String>,
 ) -> Result<(), String> {
     state
         .daemon
-        .send_user_message(session_id, text)
+        .send_user_message(session_id, text, origin_message_id)
         .await
         .map_err(|e| e.to_string())
 }

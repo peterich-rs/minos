@@ -67,6 +67,8 @@ pub struct AgentGlue {
     /// legacy surface (no workspace param). Resolved once at construction
     /// time.
     default_workspace: PathBuf,
+    /// Conversation completion projector (local agent-result writeback).
+    completion: crate::conversation_completion::ConversationCompletion,
 }
 
 impl AgentGlue {
@@ -326,6 +328,7 @@ impl AgentGlue {
             local_conversation_event_tx,
             ingest_sync,
             default_workspace,
+            completion,
         }
     }
 
@@ -455,6 +458,7 @@ impl AgentGlue {
             None,
             None,
             None,
+            None,
         )
         .await
     }
@@ -464,6 +468,8 @@ impl AgentGlue {
     /// When `conversation_id` is set (Mobile/Hub dispatch), the session is bound to
     /// **that exact id** under a resolved local project — never
     /// `ensure_workspace_conversation` / "Direct agent sessions".
+    ///
+    /// `origin_message_id` pins frozen agent-result id suffix for collab turns.
     pub async fn start_agent_with_session_id_in_conversation(
         &self,
         session_id: String,
@@ -472,6 +478,7 @@ impl AgentGlue {
         conversation_id: Option<String>,
         project_id: Option<String>,
         conversation_title: Option<String>,
+        origin_message_id: Option<String>,
     ) -> Result<StartAgentResponse, MinosError> {
         let _mode = req.mode.map_or(AgentLaunchMode::Server, runtime_mode);
         let workspace = resolve_workspace(&self.default_workspace, &req.workspace);
@@ -537,6 +544,22 @@ impl AgentGlue {
             .await;
         }
 
+        // Hub collab: require canonical origin (no message_key/t{ms} fallback).
+        if hub_conversation_id.is_some() {
+            self.completion
+                .note_require_canonical_origin(&session_id)
+                .await;
+        }
+        // Pin origin before the turn runs so completion never falls back to
+        // message_key/t{ms} when Hub origin is known.
+        if let Some(origin) = origin_message_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            self.completion.note_turn_origin(&session_id, origin).await;
+        }
+
         if let Some(message) = initial_user_message
             .as_deref()
             .map(str::trim)
@@ -555,6 +578,7 @@ impl AgentGlue {
             agent = %agent_label(req.agent),
             session_id = %session_id,
             conversation_id = hub_conversation_id.unwrap_or(""),
+            origin_message_id = origin_message_id.as_deref().unwrap_or(""),
             "agent session started with fixed session_id"
         );
         Ok(StartAgentResponse { session_id, cwd })
@@ -597,6 +621,12 @@ impl AgentGlue {
                 session_id = %req.session_id,
                 "take_needs_continue failed before send_user_message",
             );
+        }
+        if let Some(origin) = req.origin_message_id.as_deref().map(str::trim).filter(|s| !s.is_empty())
+        {
+            self.completion
+                .note_turn_origin(&req.session_id, origin)
+                .await;
         }
         self.manager
             .send_user_message(&req.session_id, req.text)
@@ -646,7 +676,7 @@ impl AgentGlue {
             approval_policy,
             sandbox_policy,
             conversation_id: _,
-            origin_message_id: _,
+            origin_message_id,
             model,
             reasoning_effort,
         } = req;
@@ -654,6 +684,11 @@ impl AgentGlue {
         if let Some(existing_session_id) = session_id.as_deref() {
             self.ensure_thread_registered(existing_session_id).await?;
         }
+        let staged_origin = origin_message_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
 
         let policies = if approval_policy.is_none() && sandbox_policy.is_none() {
             None
@@ -685,6 +720,12 @@ impl AgentGlue {
             outcome.provider_session_id.as_deref(),
         )
         .await;
+
+        if let Some(origin) = staged_origin.as_deref() {
+            self.completion
+                .note_turn_origin(&outcome.session_id, origin)
+                .await;
+        }
 
         Ok(AgentDispatchResponse {
             session_id: outcome.session_id,

@@ -1,187 +1,43 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  hubChatMessageToTimeline,
-  isHubImMode,
-  isLocalChatBubbleForHubSsot,
+  agentResultSessionKey,
   mergeHubAndLocalTimeline,
   removeMessageFromTimeline,
+  sessionIdFromAgentResultId,
   upsertHubMessageIntoTimeline,
 } from "./hub-timeline.ts";
 import type { TimelineMessage } from "./mock-data.ts";
-import type { HubChatMessage } from "./minos-cloud.ts";
-
-function hub(partial: Partial<HubChatMessage> & Pick<HubChatMessage, "messageId">): HubChatMessage {
-  return {
-    messageId: partial.messageId,
-    conversationId: partial.conversationId ?? "c1",
-    text: partial.text ?? "hello",
-    createdAtMs: partial.createdAtMs ?? 1_000,
-    senderType: partial.senderType ?? "user",
-    senderAccountId: partial.senderAccountId ?? "acc",
-    senderMinosId: partial.senderMinosId ?? "u",
-    senderDisplayName: partial.senderDisplayName ?? "User",
-    replyToMessageId: partial.replyToMessageId ?? null,
-    recalledAtMs: partial.recalledAtMs ?? null,
-  };
-}
 
 function local(
   partial: Partial<TimelineMessage> & Pick<TimelineMessage, "id">,
 ): TimelineMessage {
   return {
-    id: partial.id,
-    role: partial.role ?? "user",
-    body: partial.body ?? "x",
-    time: partial.time ?? "now",
-    createdAtMs: partial.createdAtMs ?? 1,
-    kind: partial.kind,
-    agent: partial.agent,
-    sessionId: partial.sessionId,
-    deliveryStatus: partial.deliveryStatus,
-    replyToMessageId: partial.replyToMessageId,
-    messageSeq: partial.messageSeq,
+    role: "user",
+    body: partial.body ?? partial.id,
+    time: "now",
+    createdAtMs: partial.createdAtMs ?? 0,
+    ...partial,
   };
 }
 
-describe("isHubImMode", () => {
-  it("requires authenticated + access token", () => {
-    assert.equal(isHubImMode({ authPhase: "authenticated", accessToken: "t" }), true);
-    assert.equal(isHubImMode({ authPhase: "login", accessToken: "t" }), false);
-    assert.equal(isHubImMode({ authPhase: "authenticated", accessToken: "" }), false);
-  });
-});
-
-describe("hubChatMessageToTimeline", () => {
-  it("maps user and agent rows", () => {
-    const u = hubChatMessageToTimeline(hub({ messageId: "m1", text: "hi" }));
-    assert.equal(u?.role, "user");
-    assert.equal(u?.body, "hi");
-    assert.equal(u?.kind, "text");
-
-    const a = hubChatMessageToTimeline(
-      hub({
-        messageId: "m2",
-        text: "done",
-        senderType: "agent",
-        senderDisplayName: "🤖 Grok",
-      }),
-    );
-    assert.equal(a?.role, "agent");
-    assert.equal(a?.agent, "grok");
-  });
-
-  it("skips empty and recalled", () => {
+describe("agentResultSessionKey", () => {
+  it("parses conversation:session prefix", () => {
     assert.equal(
-      hubChatMessageToTimeline(hub({ messageId: "m", text: "  " })),
-      null,
+      agentResultSessionKey("agent-result:c:s:origin"),
+      "c:s",
     );
-    assert.equal(
-      hubChatMessageToTimeline(
-        hub({ messageId: "m", text: "x", recalledAtMs: 99 }),
-      ),
-      null,
-    );
-  });
-});
-
-describe("isLocalChatBubbleForHubSsot", () => {
-  it("treats user/agent text as hub-owned bubbles", () => {
-    assert.equal(
-      isLocalChatBubbleForHubSsot(local({ id: "u1", role: "user" })),
-      true,
-    );
-    assert.equal(
-      isLocalChatBubbleForHubSsot(
-        local({ id: "agent-result:c:s:t", role: "agent" }),
-      ),
-      true,
-    );
-  });
-
-  it("keeps tool/git/approval local", () => {
-    assert.equal(
-      isLocalChatBubbleForHubSsot(
-        local({ id: "t1", role: "system", kind: "tool_summary" }),
-      ),
-      false,
-    );
-    assert.equal(
-      isLocalChatBubbleForHubSsot(
-        local({ id: "g1", role: "system", kind: "git_activity" }),
-      ),
-      false,
-    );
-  });
-});
-
-describe("mergeHubAndLocalTimeline rebuild", () => {
-  it("hub wins same id; gap-fills local chat missing from hub", () => {
-    const hub: TimelineMessage = {
-      id: "shared-1",
-      role: "user",
-      body: "from hub",
-      time: "12:00",
-      createdAtMs: 200,
-      kind: "text",
-      deliveryStatus: "sent",
-    };
-    const localDup: TimelineMessage = {
-      id: "shared-1",
-      role: "user",
-      body: "local older copy",
-      time: "11:00",
-      createdAtMs: 100,
-      kind: "text",
-      deliveryStatus: "sent",
-    };
-    const localOnlyUser: TimelineMessage = {
-      id: "local-only-user",
-      role: "user",
-      body: "not on hub yet",
-      time: "11:00",
-      createdAtMs: 100,
-      kind: "text",
-      deliveryStatus: "sent",
-    };
-    const tool: TimelineMessage = {
-      id: "tool-1",
-      role: "system",
-      body: "ran tool",
-      time: "12:01",
-      createdAtMs: 201,
-      kind: "tool_summary",
-    };
-    const optimistic: TimelineMessage = {
-      id: "pending-1",
-      role: "user",
-      body: "sending…",
-      time: "12:02",
-      createdAtMs: 202,
-      kind: "text",
-      deliveryStatus: "sending",
-    };
-    const merged = mergeHubAndLocalTimeline({
-      hubMessages: [hub],
-      localMessages: [localDup, localOnlyUser, tool, optimistic],
-    });
-    const ids = merged.map((m) => m.id);
-    assert.ok(ids.includes("shared-1"));
-    assert.equal(merged.find((m) => m.id === "shared-1")?.body, "from hub");
-    assert.ok(ids.includes("tool-1"));
-    assert.ok(ids.includes("pending-1"));
-    // Gap-fill: local user not on hub still shows (Desktop native path).
-    assert.ok(ids.includes("local-only-user"));
+    assert.equal(sessionIdFromAgentResultId("agent-result:c:s:origin"), "s");
   });
 });
 
 describe("mergeHubAndLocalTimeline", () => {
-  it("prefers hub on same id; keeps local tool + agent-result gap", () => {
+  it("prefers hub on same id; keeps local tool + agent-result gap by id", () => {
     const merged = mergeHubAndLocalTimeline({
       hubMessages: [
         local({ id: "hub-u", role: "user", body: "from mobile", createdAtMs: 10 }),
         local({
-          id: "agent-result:c:sess1:1",
+          id: "agent-result:c:sess1:origin1",
           role: "agent",
           body: "hub reply",
           createdAtMs: 20,
@@ -196,14 +52,14 @@ describe("mergeHubAndLocalTimeline", () => {
           createdAtMs: 15,
         }),
         local({
-          id: "agent-result:c:sess1:1",
+          id: "agent-result:c:sess1:origin1",
           role: "agent",
           body: "local duplicate",
           createdAtMs: 21,
         }),
         local({
-          // Different session — Desktop-native turn not yet on Hub.
-          id: "agent-result:c:sess2:1",
+          // Different origin (second turn) — keep until Hub has same id.
+          id: "agent-result:c:sess1:origin2",
           role: "agent",
           body: "local only reply",
           createdAtMs: 22,
@@ -215,19 +71,20 @@ describe("mergeHubAndLocalTimeline", () => {
     assert.ok(ids.includes("tool-1"));
     // Same id: Hub body wins.
     assert.equal(
-      merged.find((m) => m.id === "agent-result:c:sess1:1")?.body,
+      merged.find((m) => m.id === "agent-result:c:sess1:origin1")?.body,
       "hub reply",
     );
-    assert.ok(ids.includes("agent-result:c:sess2:1"));
+    // Different origin id: both kept (no session soft-dedupe).
+    assert.ok(ids.includes("agent-result:c:sess1:origin2"));
   });
 
-  it("suppresses local agent-result when Hub has same session different durable id", () => {
-    // Mobile client_live path: Hub projector uses trigger_seq durable suffix;
-    // daemon conversation_completion uses message_key — same turn, two ids.
+  it("does not soft-dedupe by body or session when origin ids differ", () => {
+    // Pre-C2: same session different durable suffix suppressed local.
+    // C2: only same id collapses.
     const merged = mergeHubAndLocalTimeline({
       hubMessages: [
         local({
-          id: "agent-result:conv1:sessA:42",
+          id: "agent-result:conv1:sessA:user-msg-1",
           role: "agent",
           body: "Hi again — ready when you are.",
           createdAtMs: 100,
@@ -236,7 +93,7 @@ describe("mergeHubAndLocalTimeline", () => {
       ],
       localMessages: [
         local({
-          id: "agent-result:conv1:sessA:m2",
+          id: "agent-result:conv1:sessA:user-msg-2",
           role: "agent",
           body: "Hi again — ready when you are.",
           createdAtMs: 101,
@@ -244,9 +101,7 @@ describe("mergeHubAndLocalTimeline", () => {
       ],
     });
     const agentRows = merged.filter((m) => m.role === "agent");
-    assert.equal(agentRows.length, 1);
-    assert.equal(agentRows[0]?.id, "agent-result:conv1:sessA:42");
-    assert.equal(agentRows[0]?.replyToMessageId, "user-msg-1");
+    assert.equal(agentRows.length, 2);
   });
 
   it("keeps optimistic sending/failed user rows not yet on hub", () => {
@@ -265,6 +120,46 @@ describe("mergeHubAndLocalTimeline", () => {
     assert.equal(merged.length, 1);
     assert.equal(merged[0]?.id, "pending-1");
   });
+
+  it("hub and local shared id: hub wins; local-only user gap-fills", () => {
+    const hub = local({ id: "shared-1", role: "user", body: "from hub", createdAtMs: 100 });
+    const localDup = local({
+      id: "shared-1",
+      role: "user",
+      body: "from local",
+      createdAtMs: 100,
+    });
+    const localOnlyUser = local({
+      id: "local-only-user",
+      role: "user",
+      body: "local",
+      createdAtMs: 101,
+    });
+    const tool = local({
+      id: "tool-1",
+      role: "system",
+      kind: "tool_summary",
+      body: "rg",
+      createdAtMs: 102,
+    });
+    const optimistic = local({
+      id: "pending-1",
+      role: "user",
+      body: "…",
+      deliveryStatus: "sending",
+      createdAtMs: 202,
+    });
+    const merged = mergeHubAndLocalTimeline({
+      hubMessages: [hub],
+      localMessages: [localDup, localOnlyUser, tool, optimistic],
+    });
+    const ids = merged.map((m) => m.id);
+    assert.ok(ids.includes("shared-1"));
+    assert.equal(merged.find((m) => m.id === "shared-1")?.body, "from hub");
+    assert.ok(ids.includes("tool-1"));
+    assert.ok(ids.includes("pending-1"));
+    assert.ok(ids.includes("local-only-user"));
+  });
 });
 
 describe("upsertHubMessageIntoTimeline", () => {
@@ -276,10 +171,10 @@ describe("upsertHubMessageIntoTimeline", () => {
     assert.equal(b[0]?.body, "b");
   });
 
-  it("drops local agent-result sibling when Hub agent-result for same session arrives", () => {
+  it("keeps distinct agent-result origins (no session soft drop)", () => {
     const prev = [
       local({
-        id: "agent-result:c:s1:localKey",
+        id: "agent-result:c:s1:origin-local",
         role: "agent",
         body: "done",
         createdAtMs: 10,
@@ -288,16 +183,16 @@ describe("upsertHubMessageIntoTimeline", () => {
     const next = upsertHubMessageIntoTimeline(
       prev,
       local({
-        id: "agent-result:c:s1:99",
+        id: "agent-result:c:s1:origin-hub",
         role: "agent",
         body: "done",
         createdAtMs: 11,
         replyToMessageId: "u1",
       }),
     );
-    assert.equal(next.length, 1);
-    assert.equal(next[0]?.id, "agent-result:c:s1:99");
-    assert.equal(next[0]?.replyToMessageId, "u1");
+    assert.equal(next.length, 2);
+    assert.ok(next.some((m) => m.id === "agent-result:c:s1:origin-local"));
+    assert.ok(next.some((m) => m.id === "agent-result:c:s1:origin-hub"));
   });
 });
 

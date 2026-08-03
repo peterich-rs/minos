@@ -554,20 +554,40 @@ mod tests {
         .await
         .unwrap();
 
-        outbox_events::enqueue(&pool, "out-acked", "host", "evt-acked", T0)
-            .await
-            .unwrap();
-        let claimed = outbox_events::claim_available(&pool, "worker-1", T0, 10)
-            .await
-            .unwrap();
+        outbox_events::enqueue(
+            &pool,
+            "out-acked",
+            "host",
+            "evt-acked",
+            outbox_events::OutboxLane::SocialDurable,
+            T0,
+        )
+        .await
+        .unwrap();
+        let claimed = outbox_events::claim_available(
+            &pool,
+            "worker-1",
+            T0,
+            10,
+            outbox_events::OutboxLane::SocialDurable,
+        )
+        .await
+        .unwrap();
         assert_eq!(claimed.len(), 1);
         assert!(outbox_events::ack(&pool, "out-acked", T0 + 10)
             .await
             .unwrap());
 
-        outbox_events::enqueue(&pool, "out-pending", "host", "evt-pending", T0)
-            .await
-            .unwrap();
+        outbox_events::enqueue(
+            &pool,
+            "out-pending",
+            "host",
+            "evt-pending",
+            outbox_events::OutboxLane::SocialDurable,
+            T0,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             delete_ready_for_retention(&pool, T0 + 100, 10)

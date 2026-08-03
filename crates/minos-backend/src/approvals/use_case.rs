@@ -338,6 +338,27 @@ impl ApprovalService for DefaultApprovalService {
     }
 
     async fn respond(&self, input: RespondApprovalInput) -> Result<(), ApprovalError> {
+        let client_request_id = input
+            .client_request_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
+        // C5.3: same client_request_id retry → return prior success (no re-dispatch).
+        if let Some(ref cid) = client_request_id {
+            if let Some(existing) =
+                store::approval_requests::get_by_client_request_id(&self.store, cid).await?
+            {
+                if existing.request_id == input.request_id {
+                    return Ok(());
+                }
+                return Err(ApprovalError::ValidationFormat(
+                    "client_request_id already used for a different approval".into(),
+                ));
+            }
+        }
+
         let row = self
             .repos
             .approval_requests
@@ -346,6 +367,7 @@ impl ApprovalService for DefaultApprovalService {
             .ok_or(ApprovalError::NotFound)?;
 
         if row.state != ApprovalRequestState::Pending {
+            // Already resolved without this client_request_id → conflict.
             return Err(ApprovalError::AlreadyResolved);
         }
         if !self
@@ -380,21 +402,29 @@ impl ApprovalService for DefaultApprovalService {
             return Err(ApprovalError::Internal(error));
         }
 
-        let resolved = self
-            .repos
-            .approval_requests
-            .resolve(
-                &row.request_id,
-                ApprovalRequestState::Decided,
-                chrono::Utc::now().timestamp_millis(),
-                Some(&request.decision),
-            )
-            .await?;
+        let resolved = store::approval_requests::resolve_with_client_request_id(
+            &self.store,
+            &row.request_id,
+            ApprovalRequestState::Decided,
+            chrono::Utc::now().timestamp_millis(),
+            Some(&request.decision),
+            client_request_id.as_deref(),
+        )
+        .await?;
         if !resolved {
+            // Lost race: if our client_request_id was stamped by concurrent twin, ok.
+            if let Some(ref cid) = client_request_id {
+                if let Some(existing) =
+                    store::approval_requests::get_by_client_request_id(&self.store, cid).await?
+                {
+                    if existing.request_id == input.request_id {
+                        return Ok(());
+                    }
+                }
+            }
             return Err(ApprovalError::AlreadyResolved);
         }
 
-        let _ = input.client_request_id;
         Ok(())
     }
 }
