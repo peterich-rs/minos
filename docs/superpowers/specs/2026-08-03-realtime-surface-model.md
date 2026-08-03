@@ -121,9 +121,9 @@ Q4: payload 是否 > ~1KB 且接收方未打开详情？
 
 | 变更 | 应选 | 今日 | 缺口 |
 |------|------|------|------|
-| Host 配对 / 解绑 | **T2** `HostLinked`/`HostUnlinked` on account | ❌ 只写 DB | **发射 + 客户端 arm** |
+| Host 配对 / 解绑 | **T2** `HostLinked`/`HostUnlinked` on account | ✅ R1 same-tx + Mobile/Desktop arm | — |
 | Host 在线 | **T0** presence stream | ✅ | 不能代替成员增删 |
-| 好友请求 / 接受 | **T2** account digest 或 T3 invalidate | ❌ 多靠 HTTP+refresh | 协议若无则 **先补枚举再发射**（禁止 silent HTTP） |
+| 好友请求 / 接受 | **T2** account `FriendRequestUpdated` | ✅ R2 emit + Mobile refresh | Desktop optional |
 | 好友删除 | T2/T3 | 待审计 | 同上 |
 | Agent 注册/改配置 | T3 invalidate `agents` 或 T2 | 多 HTTP | 低频可用 T3/T4 |
 | 群成员加减 | T2 conversation+account 或 T3 | 待审计 | 影响 ACL 时须 durable |
@@ -270,8 +270,8 @@ Store 分层:
 
 | event | 有发射点？ | 客户端 arm？ | 实际 Tier | 应用 |
 |-------|------------|--------------|-----------|------|
-| HostLinked | ❌ | ❌ | 应 T2 | R1 |
-| HostUnlinked | ❌ | ❌ | 应 T2 | R1 |
+| HostLinked | ✅ | ✅ | T2 | R1 DONE |
+| HostUnlinked | ✅ | ✅ | T2 | R1 DONE |
 | ProjectArchived | ? | ? | 应 T3 | R0 查 |
 | … | | | | |
 

@@ -2,17 +2,27 @@
 //!
 //! Owns account↔host binding via `host_links` + `host_installation_tokens`.
 //! QR pairing was removed; this is the only bind path.
+//!
+//! Multi-end roster: every successful link/unlink records `HostLinked` /
+//! `HostUnlinked` durable + outbox on `account:{id}` in the **same** write
+//! transaction (Realtime Surface R1, T2 digest).
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
 use minos_domain::DeviceId;
+use minos_protocol::DurableEvent;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres};
+use uuid::Uuid;
 
 use crate::{
+    app::tx::DbTx,
     error::BackendError,
     session::{SessionRegistry, SessionRevocation},
-    store::{host_installation_tokens, host_links, AsStorePool, StoreHandle, StorePoolRef},
+    store::{
+        durable_event_log, host_installation_tokens, host_links, outbox_events, AsStorePool,
+        StoreHandle, StorePoolRef,
+    },
 };
 
 /// Outcome of a successful [`HostLinkService::link_host`].
@@ -21,6 +31,8 @@ pub struct HostLinkOutcome {
     pub host_installation_id: DeviceId,
     pub host_installation_token: String,
     pub link: host_links::PairRow,
+    /// Deterministic durable event id enqueued for account roster fanout.
+    pub durable_event_id: String,
 }
 
 #[derive(Debug)]
@@ -37,6 +49,42 @@ fn map_host_link_store_err(error: BackendError) -> HostLinkError {
         },
         other => HostLinkError::Internal(other),
     }
+}
+
+/// Deterministic HostLinked event id (idempotent re-link same pair_id).
+#[must_use]
+pub fn host_linked_event_id(account_id: &str, host_installation_id: &str, pair_id: &str) -> String {
+    format!("host-linked-{account_id}-{host_installation_id}-{pair_id}")
+}
+
+/// Deterministic HostUnlinked event id (pair_id from pre-delete row).
+#[must_use]
+pub fn host_unlinked_event_id(
+    account_id: &str,
+    host_installation_id: &str,
+    pair_id: &str,
+) -> String {
+    format!("host-unlinked-{account_id}-{host_installation_id}-{pair_id}")
+}
+
+async fn enqueue_host_roster_durable(
+    tx: &mut DbTx<'_>,
+    event_id: &str,
+    event: &DurableEvent,
+    at_ms: i64,
+) -> Result<(), BackendError> {
+    let cursor = durable_event_log::record_in_tx(tx, event_id, event, at_ms).await?;
+    let outbox_id = Uuid::new_v4().to_string();
+    outbox_events::enqueue_in_tx(
+        tx,
+        &outbox_id,
+        cursor.topic.kind().as_str(),
+        &cursor.event_id,
+        outbox_events::OutboxLane::SocialDurable,
+        at_ms,
+    )
+    .await?;
+    Ok(())
 }
 
 /// Stateless facade for host link / unlink.
@@ -57,6 +105,8 @@ impl HostLinkService {
     /// Exclusivity is checked **inside** the write transaction (with
     /// `UNIQUE (host_installation_id)` as belt-and-suspenders). Re-linking the
     /// same account rotates tokens (revoke all then issue a fresh `hit_*`).
+    ///
+    /// On success, records `DurableEvent::HostLinked` + outbox in the same tx.
     pub async fn link_host(
         &self,
         host_installation_id: DeviceId,
@@ -67,132 +117,129 @@ impl HostLinkService {
         let now = Utc::now().timestamp_millis();
         let token = generate_host_installation_token();
         let token_hash = sha256_hex(&token);
-        let link = match self.pool.as_store_pool() {
+        let (link, durable_event_id) = match self.pool.as_store_pool() {
             StorePoolRef::Sqlite(pool) => {
-                let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| {
+                let mut raw_tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| {
                     HostLinkError::Internal(BackendError::StoreQuery {
                         operation: "begin_host_link".into(),
                         message: e.to_string(),
                     })
                 })?;
-                let result: Result<host_links::PairRow, HostLinkError> = async {
-                    host_links::assert_host_available_or_same_account_sqlite(
-                        &mut *tx,
-                        host_installation_id,
-                        account_id,
-                    )
-                    .await
-                    .map_err(map_host_link_store_err)?;
-                    let link = host_links::upsert_link_with_executor(
-                        &mut *tx,
-                        host_installation_id,
-                        account_id,
-                        linked_via_installation_id,
-                        host_display_name,
-                        now,
-                    )
-                    .await
-                    .map_err(map_host_link_store_err)?;
-                    // Rotate: revoke prior host tokens then mint a fresh one.
-                    host_installation_tokens::revoke_all_for_host_with_executor(
-                        &mut *tx,
-                        host_installation_id,
-                        now,
-                    )
+                host_links::assert_host_available_or_same_account_sqlite(
+                    &mut *raw_tx,
+                    host_installation_id,
+                    account_id,
+                )
+                .await
+                .map_err(map_host_link_store_err)?;
+                let link = host_links::upsert_link_with_executor(
+                    &mut *raw_tx,
+                    host_installation_id,
+                    account_id,
+                    linked_via_installation_id,
+                    host_display_name,
+                    now,
+                )
+                .await
+                .map_err(map_host_link_store_err)?;
+                host_installation_tokens::revoke_all_for_host_with_executor(
+                    &mut *raw_tx,
+                    host_installation_id,
+                    now,
+                )
+                .await
+                .map_err(HostLinkError::Internal)?;
+                host_installation_tokens::insert_token_with_executor(
+                    &mut *raw_tx,
+                    &token_hash,
+                    host_installation_id,
+                    now,
+                )
+                .await
+                .map_err(HostLinkError::Internal)?;
+
+                let event_id = host_linked_event_id(
+                    account_id,
+                    &host_installation_id.to_string(),
+                    &link.pair_id,
+                );
+                let display = link
+                    .link_display_name
+                    .clone()
+                    .or_else(|| host_display_name.map(str::to_string));
+                let event = DurableEvent::HostLinked {
+                    account_id: account_id.to_string(),
+                    host_installation_id: host_installation_id.to_string(),
+                    pair_id: link.pair_id.clone(),
+                    at_ms: now,
+                    host_display_name: display,
+                };
+                let mut db_tx = DbTx::Sqlite(raw_tx);
+                enqueue_host_roster_durable(&mut db_tx, &event_id, &event, now)
                     .await
                     .map_err(HostLinkError::Internal)?;
-                    host_installation_tokens::insert_token_with_executor(
-                        &mut *tx,
-                        &token_hash,
-                        host_installation_id,
-                        now,
-                    )
-                    .await
-                    .map_err(HostLinkError::Internal)?;
-                    Ok(link)
-                }
-                .await;
-                match result {
-                    Ok(link) => {
-                        tx.commit().await.map_err(|e| {
-                            HostLinkError::Internal(BackendError::StoreQuery {
-                                operation: "commit_host_link".into(),
-                                message: e.to_string(),
-                            })
-                        })?;
-                        link
-                    }
-                    Err(err) => {
-                        tx.rollback().await.map_err(|e| {
-                            HostLinkError::Internal(BackendError::StoreQuery {
-                                operation: "rollback_host_link".into(),
-                                message: e.to_string(),
-                            })
-                        })?;
-                        return Err(err);
-                    }
-                }
+                db_tx.commit().await.map_err(HostLinkError::Internal)?;
+                (link, event_id)
             }
             StorePoolRef::Postgres(pool) => {
-                let mut tx = begin_serializable_postgres_tx(pool, "begin_host_link")
+                let mut raw_tx = begin_serializable_postgres_tx(pool, "begin_host_link")
                     .await
                     .map_err(HostLinkError::Internal)?;
-                let result: Result<host_links::PairRow, HostLinkError> = async {
-                    host_links::assert_host_available_or_same_account_postgres(
-                        &mut *tx,
-                        host_installation_id,
-                        account_id,
-                    )
-                    .await
-                    .map_err(map_host_link_store_err)?;
-                    let link = host_links::upsert_link_with_postgres_executor(
-                        &mut *tx,
-                        host_installation_id,
-                        account_id,
-                        linked_via_installation_id,
-                        host_display_name,
-                        now,
-                    )
-                    .await
-                    .map_err(map_host_link_store_err)?;
-                    host_installation_tokens::revoke_all_for_host_with_postgres_executor(
-                        &mut *tx,
-                        host_installation_id,
-                        now,
-                    )
+                host_links::assert_host_available_or_same_account_postgres(
+                    &mut *raw_tx,
+                    host_installation_id,
+                    account_id,
+                )
+                .await
+                .map_err(map_host_link_store_err)?;
+                let link = host_links::upsert_link_with_postgres_executor(
+                    &mut *raw_tx,
+                    host_installation_id,
+                    account_id,
+                    linked_via_installation_id,
+                    host_display_name,
+                    now,
+                )
+                .await
+                .map_err(map_host_link_store_err)?;
+                host_installation_tokens::revoke_all_for_host_with_postgres_executor(
+                    &mut *raw_tx,
+                    host_installation_id,
+                    now,
+                )
+                .await
+                .map_err(HostLinkError::Internal)?;
+                host_installation_tokens::insert_token_with_postgres_executor(
+                    &mut *raw_tx,
+                    &token_hash,
+                    host_installation_id,
+                    now,
+                )
+                .await
+                .map_err(HostLinkError::Internal)?;
+
+                let event_id = host_linked_event_id(
+                    account_id,
+                    &host_installation_id.to_string(),
+                    &link.pair_id,
+                );
+                let display = link
+                    .link_display_name
+                    .clone()
+                    .or_else(|| host_display_name.map(str::to_string));
+                let event = DurableEvent::HostLinked {
+                    account_id: account_id.to_string(),
+                    host_installation_id: host_installation_id.to_string(),
+                    pair_id: link.pair_id.clone(),
+                    at_ms: now,
+                    host_display_name: display,
+                };
+                let mut db_tx = DbTx::Postgres(raw_tx);
+                enqueue_host_roster_durable(&mut db_tx, &event_id, &event, now)
                     .await
                     .map_err(HostLinkError::Internal)?;
-                    host_installation_tokens::insert_token_with_postgres_executor(
-                        &mut *tx,
-                        &token_hash,
-                        host_installation_id,
-                        now,
-                    )
-                    .await
-                    .map_err(HostLinkError::Internal)?;
-                    Ok(link)
-                }
-                .await;
-                match result {
-                    Ok(link) => {
-                        tx.commit().await.map_err(|e| {
-                            HostLinkError::Internal(BackendError::StoreQuery {
-                                operation: "commit_host_link".into(),
-                                message: e.to_string(),
-                            })
-                        })?;
-                        link
-                    }
-                    Err(err) => {
-                        tx.rollback().await.map_err(|e| {
-                            HostLinkError::Internal(BackendError::StoreQuery {
-                                operation: "rollback_host_link".into(),
-                                message: e.to_string(),
-                            })
-                        })?;
-                        return Err(err);
-                    }
-                }
+                db_tx.commit().await.map_err(HostLinkError::Internal)?;
+                (link, event_id)
             }
         };
 
@@ -203,126 +250,132 @@ impl HostLinkService {
             host_installation_id,
             host_installation_token: token,
             link,
+            durable_event_id,
         })
     }
 
     /// Unlink host for one account: delete link, always revoke host tokens,
     /// kill live `/ws/host`, and invalidate peer-target caches.
+    ///
+    /// On success, records `DurableEvent::HostUnlinked` + outbox in the same tx.
+    /// Returns the durable event id.
     pub async fn unlink_host(
         &self,
         registry: &SessionRegistry,
         host_installation_id: DeviceId,
         account_id: &str,
-    ) -> Result<(), HostLinkError> {
+    ) -> Result<String, HostLinkError> {
         let now = Utc::now().timestamp_millis();
-        let deleted = match self.pool.as_store_pool() {
+        let durable_event_id = match self.pool.as_store_pool() {
             StorePoolRef::Sqlite(pool) => {
-                let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| {
+                let mut raw_tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| {
                     HostLinkError::Internal(BackendError::StoreQuery {
                         operation: "begin_host_unlink".into(),
                         message: e.to_string(),
                     })
                 })?;
-                let result: Result<u64, HostLinkError> = async {
-                    let deleted = host_links::delete_pair_with_executor(
-                        &mut *tx,
-                        host_installation_id,
-                        account_id,
-                    )
+                let existing = host_links::get_pair_with_executor(
+                    &mut *raw_tx,
+                    host_installation_id,
+                    account_id,
+                )
+                .await
+                .map_err(HostLinkError::Internal)?;
+                let Some(existing) = existing else {
+                    return Err(HostLinkError::NotFound);
+                };
+                let deleted = host_links::delete_pair_with_executor(
+                    &mut *raw_tx,
+                    host_installation_id,
+                    account_id,
+                )
+                .await
+                .map_err(HostLinkError::Internal)?;
+                if deleted == 0 {
+                    return Err(HostLinkError::NotFound);
+                }
+                host_installation_tokens::revoke_all_for_host_with_executor(
+                    &mut *raw_tx,
+                    host_installation_id,
+                    now,
+                )
+                .await
+                .map_err(HostLinkError::Internal)?;
+
+                let event_id = host_unlinked_event_id(
+                    account_id,
+                    &host_installation_id.to_string(),
+                    &existing.pair_id,
+                );
+                let event = DurableEvent::HostUnlinked {
+                    account_id: account_id.to_string(),
+                    host_installation_id: host_installation_id.to_string(),
+                    at_ms: now,
+                };
+                let mut db_tx = DbTx::Sqlite(raw_tx);
+                enqueue_host_roster_durable(&mut db_tx, &event_id, &event, now)
                     .await
                     .map_err(HostLinkError::Internal)?;
-                    if deleted == 0 {
-                        return Ok(0);
-                    }
-                    host_installation_tokens::revoke_all_for_host_with_executor(
-                        &mut *tx,
-                        host_installation_id,
-                        now,
-                    )
-                    .await
-                    .map_err(HostLinkError::Internal)?;
-                    Ok(deleted)
-                }
-                .await;
-                match result {
-                    Ok(deleted) => {
-                        tx.commit().await.map_err(|e| {
-                            HostLinkError::Internal(BackendError::StoreQuery {
-                                operation: "commit_host_unlink".into(),
-                                message: e.to_string(),
-                            })
-                        })?;
-                        deleted
-                    }
-                    Err(err) => {
-                        tx.rollback().await.map_err(|e| {
-                            HostLinkError::Internal(BackendError::StoreQuery {
-                                operation: "rollback_host_unlink".into(),
-                                message: e.to_string(),
-                            })
-                        })?;
-                        return Err(err);
-                    }
-                }
+                db_tx.commit().await.map_err(HostLinkError::Internal)?;
+                event_id
             }
             StorePoolRef::Postgres(pool) => {
-                let mut tx = begin_serializable_postgres_tx(pool, "begin_host_unlink")
+                let mut raw_tx = begin_serializable_postgres_tx(pool, "begin_host_unlink")
                     .await
                     .map_err(HostLinkError::Internal)?;
-                let result: Result<u64, HostLinkError> = async {
-                    let deleted = host_links::delete_pair_with_postgres_executor(
-                        &mut *tx,
-                        host_installation_id,
-                        account_id,
-                    )
-                    .await
-                    .map_err(HostLinkError::Internal)?;
-                    if deleted == 0 {
-                        return Ok(0);
-                    }
-                    host_installation_tokens::revoke_all_for_host_with_postgres_executor(
-                        &mut *tx,
-                        host_installation_id,
-                        now,
-                    )
-                    .await
-                    .map_err(HostLinkError::Internal)?;
-                    Ok(deleted)
+                let existing = host_links::get_pair_with_postgres_executor(
+                    &mut *raw_tx,
+                    host_installation_id,
+                    account_id,
+                )
+                .await
+                .map_err(HostLinkError::Internal)?;
+                let Some(existing) = existing else {
+                    return Err(HostLinkError::NotFound);
+                };
+                let deleted = host_links::delete_pair_with_postgres_executor(
+                    &mut *raw_tx,
+                    host_installation_id,
+                    account_id,
+                )
+                .await
+                .map_err(HostLinkError::Internal)?;
+                if deleted == 0 {
+                    return Err(HostLinkError::NotFound);
                 }
-                .await;
-                match result {
-                    Ok(deleted) => {
-                        tx.commit().await.map_err(|e| {
-                            HostLinkError::Internal(BackendError::StoreQuery {
-                                operation: "commit_host_unlink".into(),
-                                message: e.to_string(),
-                            })
-                        })?;
-                        deleted
-                    }
-                    Err(err) => {
-                        tx.rollback().await.map_err(|e| {
-                            HostLinkError::Internal(BackendError::StoreQuery {
-                                operation: "rollback_host_unlink".into(),
-                                message: e.to_string(),
-                            })
-                        })?;
-                        return Err(err);
-                    }
-                }
+                host_installation_tokens::revoke_all_for_host_with_postgres_executor(
+                    &mut *raw_tx,
+                    host_installation_id,
+                    now,
+                )
+                .await
+                .map_err(HostLinkError::Internal)?;
+
+                let event_id = host_unlinked_event_id(
+                    account_id,
+                    &host_installation_id.to_string(),
+                    &existing.pair_id,
+                );
+                let event = DurableEvent::HostUnlinked {
+                    account_id: account_id.to_string(),
+                    host_installation_id: host_installation_id.to_string(),
+                    at_ms: now,
+                };
+                let mut db_tx = DbTx::Postgres(raw_tx);
+                enqueue_host_roster_durable(&mut db_tx, &event_id, &event, now)
+                    .await
+                    .map_err(HostLinkError::Internal)?;
+                db_tx.commit().await.map_err(HostLinkError::Internal)?;
+                event_id
             }
         };
-
-        if deleted == 0 {
-            return Err(HostLinkError::NotFound);
-        }
 
         let _ = crate::ingest::invalidate_peer_targets_for_host(host_installation_id).await;
         let _ = crate::ingest::invalidate_peer_targets_for_account(&self.pool, account_id).await;
         if let Some(handle) = registry.remove(host_installation_id) {
             handle.revoke(SessionRevocation::AuthRevoked);
         }
-        Ok(())
+        Ok(durable_event_id)
     }
 }
 
@@ -364,6 +417,10 @@ fn generate_host_installation_token() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::SessionRegistry;
+    use crate::store::device_installations::insert_device;
+    use crate::store::test_support::{insert_account, insert_ios_device, memory_pool, T0};
+    use minos_domain::DeviceRole;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -380,5 +437,79 @@ mod tests {
         assert!(d
             .chars()
             .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    }
+
+    #[test]
+    fn host_linked_event_id_is_stable() {
+        assert_eq!(
+            host_linked_event_id("acc", "host", "pair"),
+            "host-linked-acc-host-pair"
+        );
+    }
+
+    #[tokio::test]
+    async fn link_host_enqueues_host_linked_durable() {
+        let pool = memory_pool().await;
+        let account = insert_account(&pool, "link-durable@example.com").await;
+        let host = DeviceId::new();
+        insert_device(&pool, host, "Office Mac", DeviceRole::AgentHost, T0)
+            .await
+            .unwrap();
+        let via = insert_ios_device(&pool, &account).await;
+        let svc = HostLinkService::new(pool.clone());
+        let outcome = svc
+            .link_host(host, &account, via, Some("Office Mac"))
+            .await
+            .expect("link");
+
+        let topic = format!("account:{account}");
+        let rows = durable_event_log::read_topic_after(&pool, "account", &topic, 0, 10)
+            .await
+            .expect("read durable");
+        assert!(
+            rows.iter().any(|r| {
+                r.event_id == outcome.durable_event_id
+                    && r.payload_json
+                        .get("kind")
+                        .and_then(|k| k.as_str())
+                        == Some("host_linked")
+            }),
+            "expected host_linked durable, got {rows:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unlink_host_enqueues_host_unlinked_durable() {
+        let pool = memory_pool().await;
+        let account = insert_account(&pool, "unlink-durable@example.com").await;
+        let host = DeviceId::new();
+        insert_device(&pool, host, "Laptop", DeviceRole::AgentHost, T0)
+            .await
+            .unwrap();
+        let via = insert_ios_device(&pool, &account).await;
+        let svc = HostLinkService::new(pool.clone());
+        svc.link_host(host, &account, via, Some("Laptop"))
+            .await
+            .expect("link");
+        let registry = SessionRegistry::new();
+        let event_id = svc
+            .unlink_host(&registry, host, &account)
+            .await
+            .expect("unlink");
+
+        let topic = format!("account:{account}");
+        let rows = durable_event_log::read_topic_after(&pool, "account", &topic, 0, 20)
+            .await
+            .expect("read durable");
+        assert!(
+            rows.iter().any(|r| {
+                r.event_id == event_id
+                    && r.payload_json
+                        .get("kind")
+                        .and_then(|k| k.as_str())
+                        == Some("host_unlinked")
+            }),
+            "expected host_unlinked durable, got {rows:?}"
+        );
     }
 }

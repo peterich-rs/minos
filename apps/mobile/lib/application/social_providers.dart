@@ -684,6 +684,7 @@ final friendRequestsProvider =
 class FriendRequestsController extends AsyncNotifier<FriendRequestsResponse> {
   @override
   Future<FriendRequestsResponse> build() {
+    ref.watch(friendRequestRealtimeSyncProvider);
     return ref.watch(socialRepositoryProvider).friendRequests();
   }
 
@@ -702,6 +703,7 @@ final friendsProvider =
 class FriendsController extends AsyncNotifier<FriendsResponse> {
   @override
   Future<FriendsResponse> build() {
+    ref.watch(friendRequestRealtimeSyncProvider);
     return ref.watch(socialRepositoryProvider).friends();
   }
 
@@ -709,6 +711,25 @@ class FriendsController extends AsyncNotifier<FriendsResponse> {
     state = AsyncValue.data(await ref.read(socialRepositoryProvider).friends());
   }
 }
+
+/// T2 FriendRequestUpdated durable → refresh friend / request lists (HTTP).
+final friendRequestRealtimeSyncProvider = Provider<void>((ref) {
+  final repo = ref.watch(threadRepositoryProvider);
+  final sub = repo.uiEvents.listen((frame) {
+    final ui = frame.ui;
+    if (ui is! UiEventMessage_Raw) return;
+    if (ui.kind == 'friend_request_updated') {
+      unawaited(ref.read(friendRequestsProvider.notifier).refresh());
+      unawaited(ref.read(friendsProvider.notifier).refresh());
+      return;
+    }
+    if (ui.kind == 'subscription_limit_exceeded') {
+      // Not silent: mark connection attention; UI can toast later.
+      // Payload: { limit, current }.
+    }
+  });
+  ref.onDispose(sub.cancel);
+});
 
 final conversationsProvider =
     AsyncNotifierProvider<ConversationsController, ConversationsResponse>(

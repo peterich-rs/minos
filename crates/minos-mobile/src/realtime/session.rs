@@ -201,6 +201,19 @@ fn dispatch_event(
                         ts_ms: chrono::Utc::now().timestamp_millis(),
                     });
                 }
+                // Roster / social graph (Realtime Surface R1/R2): surface as Raw
+                // UiEvent so Flutter can upsert/remove hosts or invalidate friends.
+                "host_linked" | "host_unlinked" | "friend_request_updated" => {
+                    let _ = ui_events_tx.send(UiEventFrame {
+                        session_id: String::new(),
+                        seq: 0,
+                        ui: UiEventMessage::Raw {
+                            kind: kind.clone(),
+                            payload_json: payload.to_string(),
+                        },
+                        ts_ms: chrono::Utc::now().timestamp_millis(),
+                    });
+                }
                 _ => {
                     tracing::debug!(kind, topic, "unhandled durable event");
                 }
@@ -284,6 +297,35 @@ fn dispatch_event(
         }
         RealtimeEvent::SubscriptionDenied { topic, reason } => {
             tracing::warn!(topic, reason, "subscription denied");
+            let _ = ui_events_tx.send(UiEventFrame {
+                session_id: String::new(),
+                seq: 0,
+                ui: UiEventMessage::Raw {
+                    kind: "subscription_denied".into(),
+                    payload_json: serde_json::json!({
+                        "topic": topic,
+                        "reason": reason,
+                    })
+                    .to_string(),
+                },
+                ts_ms: chrono::Utc::now().timestamp_millis(),
+            });
+        }
+        RealtimeEvent::SubscriptionLimitExceeded { limit, current } => {
+            tracing::warn!(limit, current, "subscription limit exceeded");
+            let _ = ui_events_tx.send(UiEventFrame {
+                session_id: String::new(),
+                seq: 0,
+                ui: UiEventMessage::Raw {
+                    kind: "subscription_limit_exceeded".into(),
+                    payload_json: serde_json::json!({
+                        "limit": limit,
+                        "current": current,
+                    })
+                    .to_string(),
+                },
+                ts_ms: chrono::Utc::now().timestamp_millis(),
+            });
         }
         RealtimeEvent::ForceClose { reason, close_code } => {
             tracing::warn!(reason, close_code, "force close from server");

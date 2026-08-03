@@ -7,6 +7,7 @@ import 'package:minos/data/repositories/hosts_repository.dart';
 import 'package:minos/data/repositories/runtime_repository.dart';
 import 'package:minos/data/repositories/thread_repository.dart';
 import 'package:minos/domain/linked_host.dart';
+import 'package:minos/infrastructure/platform_int64.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -22,37 +23,83 @@ Stream<ConnectionState> connectionState(Ref ref) {
 
 /// Keep [pairedMacsProvider] in sync with hub presence StreamEvents
 /// (`UiEventMessage.raw(kind: presence)`). Device online = host WS on server.
+///
+/// Also arms HostLinked / HostUnlinked durable roster events (Realtime R1):
+/// upsert/remove members — not presence-only.
 final hostPresenceSyncProvider = Provider<void>((ref) {
   final repo = ref.watch(threadRepositoryProvider);
   final sub = repo.uiEvents.listen((frame) {
     final ui = frame.ui;
-    if (ui is! UiEventMessage_Raw || ui.kind != 'presence') return;
+    if (ui is! UiEventMessage_Raw) return;
     try {
-      final map = jsonDecode(ui.payloadJson);
-      if (map is! Map) return;
-      final kind = map['principal_kind']?.toString();
-      // Only host device rows live in pairedMacs; account_client is for hosts.
-      if (kind != null && kind != 'host') return;
-      final id = map['installation_id']?.toString().trim() ?? '';
-      if (id.isEmpty) return;
-      final online = map['online'] == true;
-      final lastSeen = map['last_seen_at_ms'];
-      final lastSeenMs = lastSeen is int
-          ? lastSeen
-          : lastSeen is num
-          ? lastSeen.toInt()
-          : int.tryParse(lastSeen?.toString() ?? '') ?? 0;
-      unawaited(
-        ref
-            .read(pairedMacsProvider.notifier)
-            .applyHostPresence(
-              installationId: id,
-              online: online,
-              lastSeenAtMs: lastSeenMs > 0 ? lastSeenMs : null,
-            ),
-      );
+      if (ui.kind == 'presence') {
+        final map = jsonDecode(ui.payloadJson);
+        if (map is! Map) return;
+        final kind = map['principal_kind']?.toString();
+        // Only host device rows live in pairedMacs; account_client is for hosts.
+        if (kind != null && kind != 'host') return;
+        final id = map['installation_id']?.toString().trim() ?? '';
+        if (id.isEmpty) return;
+        final online = map['online'] == true;
+        final lastSeen = map['last_seen_at_ms'];
+        final lastSeenMs = lastSeen is int
+            ? lastSeen
+            : lastSeen is num
+            ? lastSeen.toInt()
+            : int.tryParse(lastSeen?.toString() ?? '') ?? 0;
+        unawaited(
+          ref
+              .read(pairedMacsProvider.notifier)
+              .applyHostPresence(
+                installationId: id,
+                online: online,
+                lastSeenAtMs: lastSeenMs > 0 ? lastSeenMs : null,
+              ),
+        );
+        return;
+      }
+      if (ui.kind == 'host_linked') {
+        final map = jsonDecode(ui.payloadJson);
+        if (map is! Map) return;
+        final id = map['host_installation_id']?.toString().trim() ?? '';
+        if (id.isEmpty) return;
+        final display =
+            map['host_display_name']?.toString().trim().isNotEmpty == true
+            ? map['host_display_name'].toString().trim()
+            : 'host';
+        final atMsRaw = map['at_ms'];
+        final atMs = atMsRaw is int
+            ? atMsRaw
+            : atMsRaw is num
+            ? atMsRaw.toInt()
+            : int.tryParse(atMsRaw?.toString() ?? '') ?? 0;
+        unawaited(
+          ref
+              .read(pairedMacsProvider.notifier)
+              .applyHostLinked(
+                installationId: id,
+                displayName: display,
+                linkedAtMs: atMs > 0 ? atMs : null,
+              ),
+        );
+        return;
+      }
+      if (ui.kind == 'host_unlinked') {
+        final map = jsonDecode(ui.payloadJson);
+        if (map is! Map) return;
+        final id = map['host_installation_id']?.toString().trim() ?? '';
+        if (id.isEmpty) return;
+        unawaited(
+          ref
+              .read(pairedMacsProvider.notifier)
+              .applyHostUnlinked(installationId: id),
+        );
+        return;
+      }
+      // friend_request_updated + subscription_limit_exceeded: armed in
+      // social_providers / logging path (not host roster).
     } catch (_) {
-      // Malformed presence payload — ignore; next list refresh corrects.
+      // Malformed presence/roster payload — ignore; next list refresh corrects.
     }
   });
   ref.onDispose(sub.cancel);
@@ -173,6 +220,69 @@ class PairedMacs extends AsyncNotifier<List<HostSummaryDto>> {
     if (changed) {
       state = AsyncValue.data(next);
     }
+  }
+
+  /// Durable HostLinked: upsert roster row (membership, not presence).
+  Future<void> applyHostLinked({
+    required String installationId,
+    required String displayName,
+    int? linkedAtMs,
+  }) async {
+    final current = state.asData?.value;
+    if (current == null) {
+      try {
+        await refresh();
+      } catch (_) {}
+      return;
+    }
+    final at = linkedAtMs != null && linkedAtMs > 0
+        ? platformInt64FromInt(linkedAtMs)
+        : platformInt64FromInt(DateTime.now().millisecondsSinceEpoch);
+    final idx = current.indexWhere((h) => h.hostDeviceId == installationId);
+    if (idx >= 0) {
+      final prev = current[idx];
+      final next = [...current];
+      next[idx] = HostSummaryDto(
+        hostDeviceId: prev.hostDeviceId,
+        hostDisplayName: displayName.isNotEmpty
+            ? displayName
+            : prev.hostDisplayName,
+        pairedAtMs: at,
+        pairedViaDeviceId: prev.pairedViaDeviceId,
+        online: prev.online,
+      );
+      state = AsyncValue.data(next);
+      return;
+    }
+    final inserted = [
+      HostSummaryDto(
+        hostDeviceId: installationId,
+        hostDisplayName: displayName,
+        pairedAtMs: at,
+        pairedViaDeviceId: '00000000-0000-0000-0000-000000000000',
+        online: false,
+      ),
+      ...current,
+    ];
+    state = AsyncValue.data(inserted);
+    await _ensureActiveHost(inserted);
+  }
+
+  /// Durable HostUnlinked: remove roster row.
+  Future<void> applyHostUnlinked({required String installationId}) async {
+    final current = state.asData?.value;
+    if (current == null) {
+      try {
+        await refresh();
+      } catch (_) {}
+      return;
+    }
+    final next = current
+        .where((h) => h.hostDeviceId != installationId)
+        .toList(growable: false);
+    if (next.length == current.length) return;
+    _lastSeenByHost.remove(installationId);
+    state = AsyncValue.data(next);
   }
 
   int? lastSeenAtMs(String hostInstallationId) =>

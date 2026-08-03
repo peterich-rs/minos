@@ -136,8 +136,8 @@ Backend spec: [../2026-08-03-backend-im-delivery-orchestration.md](../2026-08-03
 - [x] **C6.1** Desktop：`forceReconnect` + visibility/online/focus；隐藏暂停 ping、显示强制恢复
 - [x] **C6.2** Mobile：App 根 bootstrap outbox worker（修 cold-start / 死 Provider）
 - [x] **C6.3** 客户端 Delete list + 状态债：Messages badge 已挂 `socialUnreadCountProvider`；**Hub digest 单轨未读 / 订阅 LRU 见 Honest residuals**（范围大，未本轨强并）
-- [ ] **C6.4** Client Success Definition 9 条全绿 → **V3**（见 closeout-and-backlog；[EVIDENCE](EVIDENCE.md) V3：自动化/代码检视 PARTIAL，设备杀进程/双端观察 **NOT_RUN**）
-- [ ] **C6.5** 与 Backend B7 联调：多端发送、@agent 连发、在线不推、Snapshot、离线 reaction、休眠恢复 → **V3**（[EVIDENCE](EVIDENCE.md) V3：后端策略已测；多端 live 矩阵 **NOT_RUN**）
+- [ ] **C6.4** Client Success Definition 9 条全绿 → **V3**（[EVIDENCE](EVIDENCE.md) V3：自动化/Mobile outbox **升级**；设备杀进程/双端观察仍 **MANUAL_REQUIRED** runbook）
+- [ ] **C6.5** 与 Backend B7 联调：多端发送、@agent 连发、在线不推、Snapshot、离线 reaction、休眠恢复 → **V3**（后端策略已测；多端 live 矩阵 **NOT_RUN** — EVIDENCE runbook）
 
 ---
 
@@ -147,20 +147,30 @@ Backend spec: [../2026-08-03-backend-im-delivery-orchestration.md](../2026-08-03
 
 - [x] **G1** 文档交叉链接无矛盾；messaging/daemon/desktop 描述 client_live projector + host_projection uplink（非「仅单写者已删 dual」谎言）
 - [x] **G2** `rg` 门禁：无 `client_message_id: None`；无 soft 120_000 dedupe；无 stale_session COUNT-only 逻辑 → **V1**（`scripts/im-reliability-gates.sh` ALL PASS — EVIDENCE V1）
-- [ ] **G3** CI：backend 相关测 + desktop im/timeline 单测 + mobile unit → **V2**（backend 267 + Desktop IM 76 **PASS**；Mobile flutter test **NOT_RUN** pub.dev TLS — EVIDENCE V2）
-- [ ] **G4** 手工：Program README §3 DoD 全部勾选 + EVIDENCE 索引 → **V4**（EVIDENCE 已建；DoD 仅勾有证据项，多端/Mobile 阻塞全勾 — EVIDENCE V4）
+- [x] **G3** CI：backend 相关测 + desktop im/timeline 单测 + mobile unit → **V2**（backend 270 + Desktop IM 78 + Mobile 17 **PASS**；pub.dev TLS 时用 `PUB_HOSTED_URL` mirror — EVIDENCE V2）
+- [ ] **G4** 手工：Program README §3 DoD 全部勾选 + EVIDENCE 索引 → **V4**（DoD 仅勾有证据项；设备矩阵仍阻塞全勾 — EVIDENCE V4）
+
+### Layer R — Realtime Surface（独立 program 切片）
+
+> 规范：[realtime-surface-model.md](../2026-08-03-realtime-surface-model.md) · 审计：[realtime-surface-audit.md](realtime-surface-audit.md)
+
+- [x] **R0** DurableEvent × HTTP 写审计表
+- [x] **R1** HostLinked/HostUnlinked 全链路（backend same-tx + Mobile/Desktop arm + 单测）
+- [x] **R2** FriendRequestUpdated T2 发射 + Mobile refresh arm
+- [ ] **R3** Account thin digest — **BLOCKED**（需 Mobile conversation subscribe FRB；设计见 audit §3）
+- [x] **R4** Desktop conversation subscription LRU (16) + Mobile SubscriptionLimitExceeded 非静默丢弃
 
 ### Honest residuals（deferrals）
 
 | 项 | 状态 |
 |----|------|
 | Hub digest 单轨未读（C6.3 状态债） | Desktop 仍可能存在 local `readMessageCountById` vs Hub digest 双轨；本轨只交付 badge + forceReconnect，未强并 digest 单轨 |
-| 订阅 LRU（C6.3） | `unsubscribeConversation` 仍无调用方；reconnect 仍重订已打开集；未做最近-N LRU |
-| Desktop approval Hub HTTP | Desktop resolve 仍走 **local daemon**（reachability outbox）；Hub `/v1/approvals/respond` + `client_request_id` 由 **Mobile** 全链路使用；非 daemon 云端审批若未来 Desktop 直连 Hub 再接同一 body |
+| 订阅 LRU（C6.3 / R4） | **R4 DONE** — Desktop `conversation-sub-lru` + `subscribeConversation` 驱逐；Mobile 仍无 conversation 订阅 API |
+| Desktop approval Hub HTTP | Desktop resolve 仍走 **local daemon**（reachability outbox）；Hub `/v1/approvals/respond` + `client_request_id` 由 **Mobile** 全链路使用 |
 | Multi-instance CompletionWatch / presence | in-memory registry；单实例假设 |
 | TUI origin_message_id | local-only None；非 collab |
 | Public HTTP `/v1/agent-sessions/*` | **origin_message_id 已透传**（可选字段）；无 origin 时仍为非 collab 调用方责任 |
 | Desktop 会话列表 Hub SSOT | 仍以 daemon 为主 |
-| C6.4 / C6.5 多端 live | 自动化/检视见 EVIDENCE V3；设备联调矩阵仍 **NOT_RUN** |
-| Mobile unit (G3) | 本机 `flutter test` 因 pub.dev TLS 未跑；需网络可恢复后补跑 |
-| G4 full DoD | 依赖 C6.4/C6.5 设备证据；后端 B7 已 PASS |
+| C6.4 / C6.5 多端 live | 自动化见 EVIDENCE V3；设备联调矩阵 **NOT_RUN**（runbook） |
+| R3 account thin digest | BLOCKED on Mobile conversation topic subscribe |
+| G4 full DoD | 依赖 C6.4/C6.5 设备证据；后端 B7 + G3 已 PASS |

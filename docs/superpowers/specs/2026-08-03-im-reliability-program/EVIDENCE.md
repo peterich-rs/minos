@@ -14,15 +14,25 @@
 | Layer | Scope | Result |
 |-------|--------|--------|
 | **V1** | B7.1 scenarios + B7.2/G2 rg gates | **PASS** |
-| **V2** | G3 unit suites | **PARTIAL** — backend lib + Desktop IM green; Mobile **NOT_RUN** (pub.dev TLS) |
-| **V3** | C6.4 nine bars + C6.5 multi-end matrix | **PARTIAL** — automated + code inspection; multi-device **NOT_RUN** |
-| **V4** | README §3 DoD full check | **NOT COMPLETE** — multi-end / Mobile device bars block full DoD |
+| **V2** | G3 unit suites | **PASS** — backend lib 270; Desktop IM 78; Mobile flutter 17 (via `PUB_HOSTED_URL=https://pub.flutter-io.cn`) |
+| **V3** | C6.4 nine bars + C6.5 multi-end matrix | **PARTIAL** — more AUTOMATED rows; device matrix still **MANUAL_REQUIRED** (runbook below) |
+| **V4** | README §3 DoD full check | **PARTIAL** — mobile outbox DoD checked; kill-process multi-end still open |
 
 **Blockers for V4 full closeout**
 
-1. Multi-device / multi-client manual matrix (C6.5) not executed in this session.
-2. Mobile Flutter unit suite not run (network to `pub.dev` failed with TLS/socket errors).
-3. Layer P residuals remain deferred (Hub digest dual-track, subscription LRU, Desktop Hub approval HTTP) — tracked as residuals, not V blockers for code correctness of B1–B6/C1–C6.3.
+1. Multi-device / multi-client **live** matrix (C6.5) — use §V3 runbook; not executed end-to-end in automation.
+2. Device kill-process / offline reaction observation still **MANUAL_REQUIRED**.
+3. Layer P residuals (Hub digest dual-track, Desktop Hub approval HTTP) remain deferred — not V code blockers for B1–B6/C1–C6.3.
+
+### Layer R (Realtime Surface) — this delivery
+
+| Track | Result | Evidence |
+|-------|--------|----------|
+| **R0** | **PASS** | [realtime-surface-audit.md](realtime-surface-audit.md) |
+| **R1** | **PASS** | host_link same-tx HostLinked/Unlinked; Mobile + Desktop arms; unit tests |
+| **R2** | **PASS** | FriendRequestUpdated emit + Mobile refresh arm |
+| **R3** | **BLOCKED** | Design in audit §3; needs Mobile conversation subscribe FRB |
+| **R4** | **PASS** | Desktop LRU + Mobile SubscriptionLimitExceeded UiEvent |
 
 ---
 
@@ -138,7 +148,16 @@ cargo test -p minos-backend --test v1_social -- \
 
 ```text
 cargo test -p minos-backend --lib
-# 267 passed; 0 failed; 0 ignored
+# 270 passed; 0 failed; 0 ignored
+# exit 0  (2026-08-03 re-run; +host_link durable tests)
+```
+
+### Backend host roster (R1)
+
+```text
+cargo test -p minos-backend --lib host_link
+# link_host_enqueues_host_linked_durable PASS
+# unlink_host_enqueues_host_unlinked_durable PASS
 # exit 0
 ```
 
@@ -166,24 +185,25 @@ cd apps/desktop && node --experimental-strip-types --test \
   src/shared/lib/hub-realtime.test.ts \
   src/shared/lib/hub-cursors.test.ts \
   src/shared/lib/message-history.test.ts
-# 76 passed; 0 failed; exit 0
+# 78 passed; 0 failed; exit 0  (+ R4 LRU pure tests)
 ```
 
-Key coverage: outbox reclaim/agent_result/reaction/approval kinds; no soft-dedupe; canonical agent-result id; timeline order by seq; Snapshot range helpers; mark-read debounce.
+Key coverage: outbox reclaim/agent_result/reaction/approval kinds; no soft-dedupe; canonical agent-result id; timeline order by seq; Snapshot range helpers; mark-read debounce; conversation subscription LRU.
 
 ### Mobile unit tests
 
 ```text
-cd apps/mobile && flutter test \
+# If pub.dev TLS fails, use China mirror (or any reachable mirror):
+export PUB_HOSTED_URL=https://pub.flutter-io.cn
+cd apps/mobile && flutter pub get
+flutter test \
   test/infrastructure/im_outbox_store_test.dart \
   test/application/conversations_sort_test.dart \
   test/domain/social_message_order_test.dart
-# NOT_RUN — pub.dev TLS/socket failure resolving packages
-# (flutter_riverpod / flutter_rust_bridge). .dart_tool present but resolver
-# still contacts network.
+# 17 passed; 0 failed; exit 0  (2026-08-03)
 ```
 
-**G3 overall:** **PARTIAL** (backend + desktop green; mobile not executed this session).
+**G3 overall:** **PASS** (backend + desktop + mobile unit green).
 
 ---
 
@@ -193,17 +213,17 @@ From [client-im-sync-engine.md](../2026-08-03-client-im-sync-engine.md) §Succes
 
 | # | Invariant | Proof class | Evidence |
 |---|-----------|-------------|----------|
-| 1 | At-most-once visible / idempotent send | **AUTOMATED** (backend) + **CODE_INSPECTION** (client) | `insert_message_with_client_id_is_idempotent`; `client_message_id_retry_repairs_missing_durable`; Desktop im-outbox ack prevents re-project; Mobile outbox reuses same client_message_id (social_providers). Device kill/retry matrix: **MANUAL_REQUIRED / NOT_RUN** |
-| 2 | Process death / inflight reclaim | **AUTOMATED** (Desktop) | `im-outbox`: reclaims stale inflight; listDue includes reclaim. Mobile outbox store test: **NOT_RUN** (network) |
-| 3 | Hot path O(1) inbox | **PASS_BY_CODE_INSPECTION** | ConversationsController: no per-event invalidateSelf / full REST; `upsertConversation` + patch. `saveConversations` DELETE only on hydrate |
-| 4 | unread: background +1 / focus clear / own no-bump | **PASS_BY_CODE_INSPECTION** + partial unit | Mobile `bumpUnread`; mark-read debounce 400ms (Desktop unit). Multi-end observation: **MANUAL_REQUIRED / NOT_RUN** |
-| 5 | loadOlder + Snapshot range | **AUTOMATED** (Desktop helpers) + **CODE_INSPECTION** | `im-timeline-sync.test.ts` min/max seq + quiet-tail merge; Mobile `loadOlder` on scroll; SnapshotRequired consumers armed |
-| 6 | Sort by message_seq | **AUTOMATED** | `timeline-order.test.ts` / `sortTimelineMessages`; Mobile domain order tests exist but **NOT_RUN** |
-| 7 | Agent bubble same id / no soft-dedupe | **AUTOMATED** | hub-timeline no soft-dedupe tests; `isCanonicalAgentResultId`; backend two-bubble integration |
-| 8 | Reaction offline deliverable | **AUTOMATED** (outbox enqueue) | Desktop im-outbox `reaction_toggle` in due queue; Mobile reactions UI + outbox (code). Offline device delivery: **MANUAL_REQUIRED / NOT_RUN** |
-| 9 | Client Delete list clear | **AUTOMATED** (G2) + inspection | See V1 client delete list |
+| 1 | At-most-once visible / idempotent send | **AUTOMATED** (backend + Desktop + Mobile outbox) | Hub idempotency + Desktop im-outbox + Mobile `ImOutboxMemory` enqueue idempotent / acked no-op (17 unit tests). Device kill matrix: **MANUAL_REQUIRED** (runbook) |
+| 2 | Process death / inflight reclaim | **AUTOMATED** (Desktop + Mobile) | Desktop im-outbox reclaim; Mobile `stale inflight reclaim` + `startup reclaim covers sending rows` **PASS** |
+| 3 | Hot path O(1) inbox | **PASS_BY_CODE_INSPECTION** | ConversationsController: no per-event invalidateSelf / full REST; `upsertConversation` + patch |
+| 4 | unread: background +1 / focus clear / own no-bump | **PASS_BY_CODE_INSPECTION** + unit | Mobile `bumpUnread`; Desktop mark-read debounce 400ms unit. Dual-end observation: **MANUAL_REQUIRED** |
+| 5 | loadOlder + Snapshot range | **AUTOMATED** (Desktop) + **CODE_INSPECTION** (Mobile) | `im-timeline-sync.test.ts`; Mobile Snapshot consumer + loadOlder |
+| 6 | Sort by message_seq | **AUTOMATED** | Desktop `timeline-order.test.ts`; Mobile `social_message_order_test.dart` **17 suite includes 4 order tests PASS** |
+| 7 | Agent bubble same id / no soft-dedupe | **AUTOMATED** | hub-timeline + backend two-bubble integration |
+| 8 | Reaction offline deliverable | **AUTOMATED** (outbox) | Desktop reaction_toggle due queue; Mobile outbox classification unit. Device offline deliver: **MANUAL_REQUIRED** |
+| 9 | Client Delete list clear | **AUTOMATED** (G2) | `scripts/im-reliability-gates.sh` |
 
-**C6.4 overall:** automated + inspection cover structural invariants; device-level proof incomplete → **do not claim full green**.
+**C6.4 overall:** structural bars automated; device kill/offline still runbook → **PARTIAL** (not full green).
 
 ---
 
@@ -211,21 +231,33 @@ From [client-im-sync-engine.md](../2026-08-03-client-im-sync-engine.md) §Succes
 
 | Scenario | Desktop | Mobile | Backend | Status |
 |----------|---------|--------|---------|--------|
-| Mutual text send | unit outbox + hub merge | code path | client_message_id idempotency | **PARTIAL** — no live multi-client run |
-| @agent two bubbles | code + backend integration | code path | `two_rapid_dispatches…` **PASS** | **PARTIAL** — backend proven; UI multi-end **NOT_RUN** |
-| Online no push | n/a observe | n/a observe | `online_presence_skips_push` **PASS** | **AUTOMATED** (backend policy) |
+| Mutual text send | unit outbox + hub merge | outbox unit + code | client_message_id idempotency | **PARTIAL** — no live multi-client run |
+| @agent two bubbles | code + backend integration | code path | `two_rapid_dispatches…` **PASS** | **PARTIAL** |
+| Online no push | n/a | n/a | `online_presence_skips_push` **PASS** | **AUTOMATED** |
 | SnapshotRequired | timeline-sync unit | Snapshot consumer code | n/a | **PARTIAL** |
-| Offline reaction | outbox reaction_toggle unit | outbox + UI code | reaction idempotency **PASS** | **PARTIAL** |
-| Sleep / resume live | C6.1 forceReconnect code | reconnect code | n/a | **PASS_BY_CODE_INSPECTION** — device **NOT_RUN** |
+| Offline reaction | outbox reaction_toggle unit | outbox unit | reaction idempotency **PASS** | **PARTIAL** |
+| Sleep / resume live | C6.1 forceReconnect code | reconnect unit (mobile) | n/a | **PASS_BY_CODE_INSPECTION** |
 | Approval intent | daemon outbox unit | Hub client_request_id | approval store tests **PASS** | **PARTIAL** — Desktop Hub HTTP residual (P3) |
 
-**C6.5 overall:** **NOT_RUN** as live multi-end matrix. Backend-only rows automated; full matrix requires devices/QA.
+**C6.5 overall:** live multi-end **NOT_RUN**; automated rows as above.
+
+### V3 device runbook (do not fake PASS)
+
+Use only when QA has two clients + hub:
+
+1. **Mutual text** — Desktop + Mobile same conversation; both show one bubble; Hub `message_seq` monotonic.
+2. **Kill sender mid-outbox** — send, airplane mode, force-quit app, relaunch; outbox drains; Hub still one row for `client_message_id`.
+3. **@agent ×2** — two @mentions same session; two agent bubbles with distinct origin ids.
+4. **Online no push** — Mobile foreground + WS live; trigger message; no APNs/FCM log success (policy unit already covers).
+5. **Offline reaction** — Desktop offline toggle reaction; reconnect; single durable reaction event_id.
+6. **Sleep/resume** — lock phone 60s; unlock; account resume_after catch-up without full wipe.
+7. **Host link live (R1)** — link host on Desktop account path; Mobile hosts list upserts without pull-to-refresh.
 
 ---
 
 ## V4 — Program DoD (G4)
 
-README §3 checkboxes updated **only** where evidence is solid (automated or rigorous code inspection of the production path). Multi-device / Mobile suite / full C6.5 remain unchecked.
+README §3 checkboxes updated **only** where evidence is solid. Full G4 **not** claimed (device matrix open).
 
 See [README.md](README.md) §3 and [TASKS.md](TASKS.md) B7 / C6.4–C6.5 / G2–G4.
 
@@ -233,20 +265,23 @@ See [README.md](README.md) §3 and [TASKS.md](TASKS.md) B7 / C6.4–C6.5 / G2–
 
 | DoD area | EVIDENCE section |
 |----------|------------------|
-| Write path outbox / idempotency | V1 #1, V2 Desktop im-outbox, V3 #1–2 |
+| Write path outbox / idempotency | V1 #1, V2 Desktop + Mobile outbox, V3 #1–2 |
 | Async dispatch | V1 #4, send_message_inner enqueue |
 | O(1) inbox / unread / pagination | V3 #3–5 |
 | Agent bubbles | V1 #5, V3 #7 |
 | Push / lanes / lifecycle | V1 #2–3, #6, #9 |
 | Delete list | V1 G2 + delete tables |
+| Realtime Host roster | R0 audit + R1 host_link tests |
 
 ---
 
-## Artifacts created this run
+## Artifacts
 
 | Path | Purpose |
 |------|---------|
-| `docs/superpowers/specs/2026-08-03-im-reliability-program/EVIDENCE.md` | This file |
-| `scripts/im-reliability-gates.sh` | Repeatable G2/B7.2 gates |
+| `EVIDENCE.md` | This file |
+| `scripts/im-reliability-gates.sh` | G2/B7.2 gates |
+| `realtime-surface-audit.md` | R0 DurableEvent × HTTP audit |
+| `apps/desktop/src/shared/lib/conversation-sub-lru.ts` | R4 pure LRU |
 
 **No git commit / push / PR** (parent handles after review).

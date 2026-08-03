@@ -24,6 +24,11 @@ pub enum RealtimeEvent {
         topic: String,
         reason: String,
     },
+    /// Gateway refused further Subscribe (topic cap 128). Surface to UI.
+    SubscriptionLimitExceeded {
+        limit: usize,
+        current: usize,
+    },
     ForceClose {
         reason: String,
         close_code: u16,
@@ -40,7 +45,7 @@ pub fn handle_server_frame(frame: ServerFrame) -> Option<RealtimeEvent> {
         }
         ServerFrame::SubscriptionLimitExceeded { limit, current } => {
             tracing::warn!(limit, current, "subscription limit exceeded");
-            None
+            Some(RealtimeEvent::SubscriptionLimitExceeded { limit, current })
         }
         ServerFrame::DurableEvent {
             topic,

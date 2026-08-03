@@ -18,10 +18,19 @@ import {
   type TopicCursorMap,
 } from "@/shared/lib/hub-cursors";
 import {
+  MAX_OPEN_CONVERSATION_SUBSCRIPTIONS,
+  conversationSubscriptionLruTouch,
+} from "@/shared/lib/conversation-sub-lru";
+import {
   createWsTicket,
   hubClientWsUrl,
   type HubChatMessage,
 } from "@/shared/lib/minos-cloud";
+
+export {
+  MAX_OPEN_CONVERSATION_SUBSCRIPTIONS,
+  conversationSubscriptionLruTouch,
+} from "@/shared/lib/conversation-sub-lru";
 
 export type HubRealtimeSyncState =
   | "disconnected"
@@ -80,6 +89,20 @@ export type HubRealtimeHandlers = {
    * cold-pull snapshot page, then reset cursor.
    */
   onSnapshotRequired?: (topic: string) => void;
+  /** Account roster: host linked (T2). */
+  onHostLinked?: (input: {
+    hostInstallationId: string;
+    pairId?: string;
+    hostDisplayName?: string;
+    atMs?: number;
+  }) => void;
+  /** Account roster: host unlinked (T2). */
+  onHostUnlinked?: (input: { hostInstallationId: string; atMs?: number }) => void;
+  /** Gateway subscription cap (default 128). */
+  onSubscriptionLimitExceeded?: (input: {
+    limit: number;
+    current: number;
+  }) => void;
 };
 
 function mapMessage(
@@ -133,8 +156,11 @@ export class HubRealtimeSession {
     accountId: string;
   } | null = null;
   private syncState: HubRealtimeSyncState = "disconnected";
-  /** Desired conversation topics (open windows); re-subscribed on reconnect. */
-  private conversationIds = new Set<string>();
+  /**
+   * Desired conversation topics (open windows); re-subscribed on reconnect.
+   * Insertion/access order is LRU: first key = oldest for eviction (R4).
+   */
+  private conversationIds = new Map<string, true>();
   private cursors: TopicCursorMap = loadTopicCursors();
   /** Topics we still expect SubscribeAck for after a Subscribe batch. */
   private pendingSubscribeTopics = new Set<string>();
@@ -242,20 +268,29 @@ export class HubRealtimeSession {
 
   /**
    * Open/focus a conversation: ensure `conversation:{id}` is subscribed with
-   * resume_after when Live/Syncing.
+   * resume_after when Live/Syncing. Enforces LRU cap
+   * [`MAX_OPEN_CONVERSATION_SUBSCRIPTIONS`] (R4).
    */
   subscribeConversation(conversationId: string): void {
     const id = conversationId?.trim();
     if (!id) return;
-    this.conversationIds.add(id);
+    const ordered = [...this.conversationIds.keys()];
+    const { next, evicted } = conversationSubscriptionLruTouch(ordered, id);
+    for (const old of evicted) {
+      this.unsubscribeConversation(old);
+    }
+    this.conversationIds.clear();
+    for (const cid of next) {
+      this.conversationIds.set(cid, true);
+    }
     this.sendSubscribe([conversationTopic(id)]);
   }
 
-  /** Leave conversation topic when window closed (optional). */
+  /** Leave conversation topic when window closed or LRU-evicted. */
   unsubscribeConversation(conversationId: string): void {
     const id = conversationId?.trim();
     if (!id) return;
-    this.conversationIds.delete(id);
+    if (!this.conversationIds.delete(id)) return;
     const topic = conversationTopic(id);
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(
@@ -265,6 +300,11 @@ export class HubRealtimeSession {
         }),
       );
     }
+  }
+
+  /** Test/introspection: current conversation subscription count. */
+  get openConversationSubscriptionCount(): number {
+    return this.conversationIds.size;
   }
 
   private setState(state: HubRealtimeSyncState): void {
@@ -314,7 +354,7 @@ export class HubRealtimeSession {
       // Account topic: Hello is register-only; client must Subscribe with resume.
       topics.push(`account:${accountId}`);
     }
-    for (const id of this.conversationIds) {
+    for (const id of this.conversationIds.keys()) {
       topics.push(conversationTopic(id));
     }
     return topics;
@@ -443,6 +483,28 @@ export class HubRealtimeSession {
       return;
     }
 
+    if (
+      type === "subscription_limit_exceeded" ||
+      type === "SubscriptionLimitExceeded"
+    ) {
+      const limit = Number(
+        (frame as { limit?: number }).limit ??
+          (frame.payload as { limit?: number } | undefined)?.limit ??
+          0,
+      );
+      const current = Number(
+        (frame as { current?: number }).current ??
+          (frame.payload as { current?: number } | undefined)?.current ??
+          0,
+      );
+      console.warn("[hub-realtime] subscription limit exceeded", {
+        limit,
+        current,
+      });
+      this.handlers.onSubscriptionLimitExceeded?.({ limit, current });
+      return;
+    }
+
     if (type === "pong") {
       return;
     }
@@ -561,7 +623,44 @@ export class HubRealtimeSession {
       return true;
     }
 
-    // Other durable kinds (session lifecycle, etc.): ignore but advance.
+    if (
+      eventKind === "host_linked" ||
+      eventKind === "HostLinked"
+    ) {
+      const p = payload as DurableMessagePayload & {
+        host_installation_id?: string;
+        pair_id?: string;
+        host_display_name?: string;
+      };
+      const hostId = p.host_installation_id?.trim();
+      if (!hostId) return false;
+      this.handlers.onHostLinked?.({
+        hostInstallationId: hostId,
+        pairId: p.pair_id,
+        hostDisplayName: p.host_display_name,
+        atMs: p.at_ms,
+      });
+      return true;
+    }
+
+    if (
+      eventKind === "host_unlinked" ||
+      eventKind === "HostUnlinked"
+    ) {
+      const p = payload as DurableMessagePayload & {
+        host_installation_id?: string;
+      };
+      const hostId = p.host_installation_id?.trim();
+      if (!hostId) return false;
+      this.handlers.onHostUnlinked?.({
+        hostInstallationId: hostId,
+        atMs: p.at_ms,
+      });
+      return true;
+    }
+
+    // Other durable kinds (session lifecycle, friend_request_updated, etc.):
+    // advance cursor; optional handlers not required.
     return true;
   }
 }

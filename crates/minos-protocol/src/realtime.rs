@@ -408,15 +408,31 @@ pub enum DurableEvent {
         account_id: String,
         at_ms: i64,
     },
+    /// Account roster: host paired (T2 digest on `account:{id}`).
     HostLinked {
         account_id: String,
         host_installation_id: String,
         pair_id: String,
         at_ms: i64,
+        /// Display name for immediate list upsert without HTTP.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host_display_name: Option<String>,
     },
+    /// Account roster: host unlinked (T2 digest on `account:{id}`).
     HostUnlinked {
         account_id: String,
         host_installation_id: String,
+        at_ms: i64,
+    },
+    /// Social graph: friend request created / accepted / rejected (T2 on account).
+    /// One event per affected account (from and/or to); clients invalidate roster HTTP.
+    FriendRequestUpdated {
+        account_id: String,
+        request_id: String,
+        from_account_id: String,
+        to_account_id: String,
+        /// `"pending"` | `"accepted"` | `"rejected"`
+        status: String,
         at_ms: i64,
     },
     AgentSessionStarted {
@@ -548,6 +564,7 @@ impl DurableEvent {
             Self::AccountPasswordChanged { .. } => "account_password_changed",
             Self::HostLinked { .. } => "host_linked",
             Self::HostUnlinked { .. } => "host_unlinked",
+            Self::FriendRequestUpdated { .. } => "friend_request_updated",
             Self::AgentSessionStarted { .. } => "agent_session_started",
             Self::AgentSessionEnded { .. } => "agent_session_ended",
             Self::AgentTurnAppended { .. } => "agent_turn_appended",
@@ -577,7 +594,10 @@ impl DurableEvent {
             Self::AccountRegistered { account_id, .. }
             | Self::AccountPasswordChanged { account_id, .. }
             | Self::HostLinked { account_id, .. }
-            | Self::HostUnlinked { account_id, .. } => RealtimeTopic::Account(account_id.clone()),
+            | Self::HostUnlinked { account_id, .. }
+            | Self::FriendRequestUpdated { account_id, .. } => {
+                RealtimeTopic::Account(account_id.clone())
+            }
             Self::AgentSessionStarted { session_id, .. }
             | Self::AgentSessionEnded { session_id, .. }
             | Self::AgentTurnAppended { session_id, .. }

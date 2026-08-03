@@ -57,15 +57,15 @@
 
 ### 3.1 写路径
 
-- [ ] 任意端发送意图：断网 / 杀进程 / 重试 → **Hub 至多一条** 对应消息。（Hub 幂等单测已绿；设备杀进程矩阵 **NOT_RUN** — EVIDENCE V3#1）  
+- [ ] 任意端发送意图：断网 / 杀进程 / 重试 → **Hub 至多一条** 对应消息。（Hub 幂等 + Desktop/Mobile outbox 单测已绿；设备杀进程矩阵 **NOT_RUN** — EVIDENCE V3#1 runbook）  
 - [x] Desktop outbox：无永久 inflight；agent_result / reaction 同队列语义。（`im-outbox.test.ts` reclaim + kinds — EVIDENCE V2）  
-- [ ] Mobile：FFI 透传 `client_message_id`；SQLite outbox；无「仅手动重试」。（代码透传已检；flutter unit **NOT_RUN** — EVIDENCE V2/V3）  
+- [x] Mobile：FFI 透传 `client_message_id`；SQLite outbox；无「仅手动重试」。（透传代码 + `im_outbox_store_test` 17 测 PASS — EVIDENCE V2/V3）  
 - [x] 发消息 HTTP **不**等待 host agent RPC；offline dispatch 可恢复。（enqueue-only + `agent_dispatch_queues_when_host_offline` / drains — EVIDENCE V1#4）
 
 ### 3.2 读与同步
 
 - [x] 入站事件 O(1) inbox patch；禁止热路径全量 conversations wipe。（ConversationsController 热路径 patch — EVIDENCE V3#3）  
-- [ ] unread 本地镜像正确（后台 +1，聚焦清零，own 不涨）。（代码路径 + debounce 单测；双端观察 **NOT_RUN** — EVIDENCE V3#4）  
+- [ ] unread 本地镜像正确（后台 +1，聚焦清零，own 不涨）。（代码路径 + debounce 单测；双端观察 **NOT_RUN** — EVIDENCE V3#4 runbook）  
 - [x] 两端 loadOlder（before_seq）；Snapshot 定向 gap（after_seq）。（Desktop timeline-sync 单测 + 两端代码路径 — EVIDENCE V3#5）  
 - [x] focused ≠ hasWindow；无 quiet load 偷焦点。（timeline hydrate-only + mark-read 契约测 — EVIDENCE V3）
 

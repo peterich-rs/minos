@@ -57,10 +57,11 @@
 |--------|--------|------|------|
 | B7.1 / B7.2 | **V1** | **PASS** | [EVIDENCE.md](EVIDENCE.md) V1 |
 | G2 | **V1** | **PASS** | `scripts/im-reliability-gates.sh` |
-| G3 | **V2** | **PARTIAL**（Mobile NOT_RUN） | EVIDENCE V2 |
-| C6.4 | **V3** | **PARTIAL**（设备矩阵 NOT_RUN） | EVIDENCE V3 |
-| C6.5 | **V3** | **NOT_RUN** live 多端 | EVIDENCE V3 |
+| G3 | **V2** | **PASS**（backend 270 + Desktop 78 + Mobile 17） | EVIDENCE V2 |
+| C6.4 | **V3** | **PARTIAL**（自动化升级；设备仍 runbook） | EVIDENCE V3 |
+| C6.5 | **V3** | **NOT_RUN** live 多端（runbook） | EVIDENCE V3 |
 | G4 | **V4** | **PARTIAL** DoD（未全勾） | EVIDENCE V4 + README §3 |
+| R0–R2/R4 | Layer R | **PASS**（R3 BLOCKED design） | realtime-surface-audit.md |
 
 ### 1.3 为何必须「一并规划」
 

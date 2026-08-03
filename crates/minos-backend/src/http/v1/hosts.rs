@@ -124,6 +124,9 @@ async fn post_link(
         .await
         .map_err(host_link_error)?;
 
+    // T2 HostLinked durable was enqueued in the same tx — wake outbox fanout.
+    state.wake_outbox();
+
     Ok(Json(ResponseEnvelope::new(
         LinkHostData {
             host_installation_id: outcome.host_installation_id.to_string(),
@@ -170,6 +173,9 @@ async fn post_unlink(
         )
         .await
         .map_err(host_link_error)?;
+
+    // T2 HostUnlinked durable was enqueued in the same tx — wake outbox fanout.
+    state.wake_outbox();
 
     Ok(StatusCode::NO_CONTENT)
 }

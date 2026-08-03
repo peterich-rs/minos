@@ -544,6 +544,63 @@ pub async fn list_account_client_targets_for_host(
         .collect()
 }
 
+/// Load one (host, account) link row when present.
+pub async fn get_pair_with_executor<'e, E>(
+    executor: E,
+    host_device_id: DeviceId,
+    mobile_account_id: &str,
+) -> Result<Option<PairRow>, BackendError>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
+    let host_s = host_device_id.to_string();
+    let row = sqlx::query_as::<_, PairRowTuple>(
+        r#"
+        SELECT pair_id, host_installation_id, account_id,
+               linked_via_installation_id, link_display_name, paired_at_ms
+        FROM host_links
+        WHERE host_installation_id = ? AND account_id = ?
+        "#,
+    )
+    .bind(&host_s)
+    .bind(mobile_account_id)
+    .fetch_optional(executor)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "host_links::get_pair".into(),
+        message: e.to_string(),
+    })?;
+    row.map(decode_pair_row).transpose()
+}
+
+pub async fn get_pair_with_postgres_executor<'e, E>(
+    executor: E,
+    host_device_id: DeviceId,
+    mobile_account_id: &str,
+) -> Result<Option<PairRow>, BackendError>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let host_s = host_device_id.to_string();
+    let row = sqlx::query_as::<_, PairRowTuple>(
+        r#"
+        SELECT pair_id, host_installation_id, account_id,
+               linked_via_installation_id, link_display_name, paired_at_ms
+        FROM host_links
+        WHERE host_installation_id = $1 AND account_id = $2
+        "#,
+    )
+    .bind(&host_s)
+    .bind(mobile_account_id)
+    .fetch_optional(executor)
+    .await
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "host_links::get_pair".into(),
+        message: e.to_string(),
+    })?;
+    row.map(decode_pair_row).transpose()
+}
+
 /// Does the (host, account) link exist?
 pub async fn exists(
     store: &impl AsStorePool,
