@@ -1,8 +1,9 @@
 //! In-memory registry for agent turn completion projection.
 //!
 //! Armed when Mobile/`client_live` dispatches an agent; drained on host ingest
-//! (event-driven). Keyed by **origin_message_id** (one watch per user turn);
-//! session has a secondary index so multi-turn dispatches never overwrite.
+//! (event-driven). Keyed by **watch_key** = `{origin_message_id}:{session_id}`
+//! so multi-@ fan-out (same origin, distinct sessions/agents) never overwrites.
+//! Session has a secondary index for multi-watch drain on ingest.
 //!
 //! # Multi-instance (P6)
 //!
@@ -37,11 +38,26 @@ pub struct CompletionWatch {
     pub mention_minos_id: Option<String>,
 }
 
+impl CompletionWatch {
+    /// Stable registry key: one unfinished watch per (origin, session).
+    /// Multi-@ fan-out arms one watch per agent session against the same origin.
+    #[must_use]
+    pub fn watch_key(&self) -> String {
+        watch_key(&self.origin_message_id, &self.session_id)
+    }
+}
+
+/// `origin_message_id` + `session_id` composite key.
+#[must_use]
+pub fn watch_key(origin_message_id: &str, session_id: &str) -> String {
+    format!("{origin_message_id}:{session_id}")
+}
+
 #[derive(Debug, Default)]
 pub struct CompletionWatchRegistry {
-    /// Primary: one unfinished watch per origin user message.
-    by_origin: Mutex<HashMap<String, CompletionWatch>>,
-    /// Secondary: session_id → set of origin_message_ids.
+    /// Primary: unfinished watches by [`CompletionWatch::watch_key`].
+    by_key: Mutex<HashMap<String, CompletionWatch>>,
+    /// Secondary: session_id → set of watch keys.
     by_session: Mutex<HashMap<String, HashSet<String>>>,
 }
 
@@ -51,71 +67,61 @@ impl CompletionWatchRegistry {
         Self::default()
     }
 
-    /// Arm a watch for `origin_message_id`. Does **not** overwrite an existing
-    /// unfinished watch for a different origin on the same session.
-    ///
-    /// If the same origin is re-armed (idempotent re-dispatch), the watch is
-    /// replaced.
+    /// Arm a watch. Re-arming the same (origin, session) replaces the prior row
+    /// (idempotent re-dispatch). Distinct sessions for the same origin coexist
+    /// (multi-@ fan-out).
     pub fn arm(&self, watch: CompletionWatch) {
-        let origin = watch.origin_message_id.clone();
+        let key = watch.watch_key();
         let session_id = watch.session_id.clone();
-        if let (Ok(mut by_origin), Ok(mut by_session)) =
-            (self.by_origin.lock(), self.by_session.lock())
+        if let (Ok(mut by_key), Ok(mut by_session)) = (self.by_key.lock(), self.by_session.lock())
         {
-            // Drop previous session index entry if origin was re-armed on a
-            // different session (unlikely but keep indexes consistent).
-            if let Some(prev) = by_origin.get(&origin) {
+            if let Some(prev) = by_key.get(&key) {
                 if prev.session_id != session_id {
                     if let Some(set) = by_session.get_mut(&prev.session_id) {
-                        set.remove(&origin);
+                        set.remove(&key);
                         if set.is_empty() {
                             by_session.remove(&prev.session_id);
                         }
                     }
                 }
             }
-            by_origin.insert(origin.clone(), watch);
-            by_session
-                .entry(session_id)
-                .or_default()
-                .insert(origin);
+            by_key.insert(key.clone(), watch);
+            by_session.entry(session_id).or_default().insert(key);
         }
     }
 
-    pub fn get(&self, origin_message_id: &str) -> Option<CompletionWatch> {
-        self.by_origin
+    pub fn get(&self, watch_key: &str) -> Option<CompletionWatch> {
+        self.by_key
             .lock()
             .ok()
-            .and_then(|map| map.get(origin_message_id).cloned())
+            .and_then(|map| map.get(watch_key).cloned())
     }
 
-    /// All unfinished watches for a session (multi-turn).
+    /// All unfinished watches for a session (multi-turn / multi-origin).
     pub fn list_for_session(&self, session_id: &str) -> Vec<CompletionWatch> {
-        let origins = self
+        let keys = self
             .by_session
             .lock()
             .ok()
             .and_then(|map| map.get(session_id).cloned())
             .unwrap_or_default();
-        let by_origin = match self.by_origin.lock() {
+        let by_key = match self.by_key.lock() {
             Ok(m) => m,
             Err(_) => return Vec::new(),
         };
-        origins
-            .into_iter()
-            .filter_map(|o| by_origin.get(&o).cloned())
+        keys.into_iter()
+            .filter_map(|k| by_key.get(&k).cloned())
             .collect()
     }
 
-    pub fn remove(&self, origin_message_id: &str) -> Option<CompletionWatch> {
-        let (Ok(mut by_origin), Ok(mut by_session)) =
-            (self.by_origin.lock(), self.by_session.lock())
+    pub fn remove(&self, watch_key: &str) -> Option<CompletionWatch> {
+        let (Ok(mut by_key), Ok(mut by_session)) = (self.by_key.lock(), self.by_session.lock())
         else {
             return None;
         };
-        let watch = by_origin.remove(origin_message_id)?;
+        let watch = by_key.remove(watch_key)?;
         if let Some(set) = by_session.get_mut(&watch.session_id) {
-            set.remove(origin_message_id);
+            set.remove(watch_key);
             if set.is_empty() {
                 by_session.remove(&watch.session_id);
             }
@@ -124,29 +130,26 @@ impl CompletionWatchRegistry {
     }
 
     /// Drain watches whose `deadline_at_ms` is at or before `now_ms`.
-    ///
-    /// Used by SessionLifecycle TTL: each drained watch must surface a
-    /// user-visible failure and never leak in the registry.
     pub fn drain_expired(&self, now_ms: i64) -> Vec<CompletionWatch> {
-        let Ok(mut by_origin) = self.by_origin.lock() else {
+        let Ok(mut by_key) = self.by_key.lock() else {
             return Vec::new();
         };
-        let expired_origins: Vec<String> = by_origin
+        let expired_keys: Vec<String> = by_key
             .iter()
             .filter(|(_, w)| w.deadline_at_ms > 0 && w.deadline_at_ms <= now_ms)
             .map(|(k, _)| k.clone())
             .collect();
-        if expired_origins.is_empty() {
+        if expired_keys.is_empty() {
             return Vec::new();
         }
         let Ok(mut by_session) = self.by_session.lock() else {
             return Vec::new();
         };
-        let mut out = Vec::with_capacity(expired_origins.len());
-        for origin in expired_origins {
-            if let Some(watch) = by_origin.remove(&origin) {
+        let mut out = Vec::with_capacity(expired_keys.len());
+        for key in expired_keys {
+            if let Some(watch) = by_key.remove(&key) {
                 if let Some(set) = by_session.get_mut(&watch.session_id) {
-                    set.remove(&origin);
+                    set.remove(&key);
                     if set.is_empty() {
                         by_session.remove(&watch.session_id);
                     }
@@ -158,7 +161,7 @@ impl CompletionWatchRegistry {
     }
 
     pub fn len(&self) -> usize {
-        self.by_origin.lock().map(|m| m.len()).unwrap_or(0)
+        self.by_key.lock().map(|m| m.len()).unwrap_or(0)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -170,14 +173,14 @@ impl CompletionWatchRegistry {
 mod tests {
     use super::*;
 
-    fn sample_agent() -> AgentRow {
+    fn sample_agent(id: &str, runtime: &str) -> AgentRow {
         AgentRow {
-            agent_id: "a1".into(),
+            agent_id: id.into(),
             owner_account_id: "acc".into(),
-            name: "Codex".into(),
+            name: runtime.to_string(),
             description: String::new(),
             source: "host_runtime".into(),
-            runtime_agent: "codex".into(),
+            runtime_agent: runtime.into(),
             model: String::new(),
             workspace_path: None,
             created_at_ms: 0,
@@ -187,11 +190,11 @@ mod tests {
 
     fn watch(origin: &str, session: &str, floor: u64) -> CompletionWatch {
         CompletionWatch {
-            dispatch_id: format!("d-{origin}"),
+            dispatch_id: format!("d-{origin}-{session}"),
             origin_message_id: origin.into(),
             conversation_id: "c1".into(),
             session_id: session.into(),
-            agent: sample_agent(),
+            agent: sample_agent("a1", "codex"),
             raw_seq_floor: floor,
             armed_at_ms: 0,
             deadline_at_ms: 0,
@@ -206,22 +209,44 @@ mod tests {
         reg.arm(watch("o1", "sess", 1));
         reg.arm(watch("o2", "sess", 10));
         assert_eq!(reg.list_for_session("sess").len(), 2);
-        assert_eq!(reg.get("o1").map(|w| w.raw_seq_floor), Some(1));
-        assert_eq!(reg.get("o2").map(|w| w.raw_seq_floor), Some(10));
-        assert!(reg.remove("o1").is_some());
+        assert_eq!(
+            reg.get(&watch_key("o1", "sess"))
+                .map(|w| w.raw_seq_floor),
+            Some(1)
+        );
+        assert_eq!(
+            reg.get(&watch_key("o2", "sess"))
+                .map(|w| w.raw_seq_floor),
+            Some(10)
+        );
+        assert!(reg.remove(&watch_key("o1", "sess")).is_some());
         assert_eq!(reg.list_for_session("sess").len(), 1);
-        assert!(reg.get("o1").is_none());
-        assert!(reg.remove("o2").is_some());
+        assert!(reg.get(&watch_key("o1", "sess")).is_none());
+        assert!(reg.remove(&watch_key("o2", "sess")).is_some());
         assert!(reg.list_for_session("sess").is_empty());
     }
 
     #[test]
-    fn rearm_same_origin_replaces() {
+    fn multi_agent_same_origin_coexist() {
+        let reg = CompletionWatchRegistry::new();
+        reg.arm(watch("origin-1", "sess-codex", 1));
+        reg.arm(watch("origin-1", "sess-claude", 1));
+        assert_eq!(reg.len(), 2);
+        assert!(reg.get(&watch_key("origin-1", "sess-codex")).is_some());
+        assert!(reg.get(&watch_key("origin-1", "sess-claude")).is_some());
+    }
+
+    #[test]
+    fn rearm_same_origin_session_replaces() {
         let reg = CompletionWatchRegistry::new();
         reg.arm(watch("o1", "sess", 1));
         reg.arm(watch("o1", "sess", 5));
         assert_eq!(reg.list_for_session("sess").len(), 1);
-        assert_eq!(reg.get("o1").map(|w| w.raw_seq_floor), Some(5));
+        assert_eq!(
+            reg.get(&watch_key("o1", "sess"))
+                .map(|w| w.raw_seq_floor),
+            Some(5)
+        );
     }
 
     #[test]
@@ -236,8 +261,8 @@ mod tests {
         let drained = reg.drain_expired(100);
         assert_eq!(drained.len(), 1);
         assert_eq!(drained[0].origin_message_id, "dead");
-        assert!(reg.get("dead").is_none());
-        assert!(reg.get("live").is_some());
+        assert!(reg.get(&watch_key("dead", "sess")).is_none());
+        assert!(reg.get(&watch_key("live", "sess")).is_some());
         assert_eq!(reg.list_for_session("sess").len(), 1);
     }
 }

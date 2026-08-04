@@ -202,12 +202,17 @@ struct ForwardedAgentDispatch {
     watcher_from_seq: u64,
 }
 
-async fn build_agent_dispatch_plan(
+/// Build zero or more dispatch plans for a user message.
+///
+/// Multi-@ fan-out: every unique roster agent mentioned in the body gets its own
+/// plan (parallel host sessions). Reply-to-agent and single-agent rooms stay
+/// single-plan.
+async fn build_agent_dispatch_plans(
     state: &BackendState,
     conversation_id: &str,
     text: &str,
     reply_target: Option<&crate::store::social::ChatMessageRow>,
-) -> Result<Option<AgentDispatchPlan>, (StatusCode, Json<ErrorEnvelope>)> {
+) -> Result<Vec<AgentDispatchPlan>, (StatusCode, Json<ErrorEnvelope>)> {
     let conversation = crate::store::social::get_conversation(&state.store, conversation_id)
         .await
         .map_err(|e| err("internal", e.to_string()))?
@@ -216,7 +221,7 @@ async fn build_agent_dispatch_plan(
         .await
         .map_err(|e| err("internal", e.to_string()))?;
     if agents.is_empty() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     let human_members =
         crate::store::social::list_conversation_members(&state.store, conversation_id)
@@ -241,61 +246,56 @@ async fn build_agent_dispatch_plan(
                     .await
                     .map_err(|e| err("internal", e.to_string()))?
                 {
-                    return Ok(Some(AgentDispatchPlan {
+                    return Ok(vec![AgentDispatchPlan {
                         agent,
                         session_id: Some(session_id),
                         forwarded_text: text.to_string(),
                         mention_sender,
-                    }));
+                    }]);
                 }
             }
         }
     }
 
+    // Explicit multi-@ / @agent#short fan-out (order = first appearance).
+    let routes = all_mentioned_agent_routes(text, &agents);
+    if !routes.is_empty() {
+        let mut plans = Vec::with_capacity(routes.len());
+        for route in routes {
+            let session_id = resolve_dispatch_session_id(
+                state,
+                conversation_id,
+                &route.agent,
+                route.session_short_id.as_deref(),
+            )
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
+            plans.push(AgentDispatchPlan {
+                agent: route.agent.clone(),
+                session_id,
+                // Keep full body so each agent sees co-mentions (Buzz-style).
+                forwarded_text: text.to_string(),
+                mention_sender: true,
+            });
+        }
+        return Ok(plans);
+    }
+
+    // Bare text: single-agent rooms auto-route; multi-agent rooms need explicit @.
     if conversation.kind == "group" && human_members.len() == 1 && agents.len() == 1 {
         let agent = agents[0].clone();
-        // Bare text auto-routes; `@agent` / `@agent#short` still honored for reuse.
-        let (session_short, forwarded_text) =
-            if let Some(route) = first_mentioned_agent_route(text, &agents) {
-                if route.agent.agent_id == agent.agent_id {
-                    (route.session_short_id, route.forwarded_text)
-                } else {
-                    (None, text.to_string())
-                }
-            } else {
-                (None, text.to_string())
-            };
-        let session_id =
-            resolve_dispatch_session_id(state, conversation_id, &agent, session_short.as_deref())
-                .await
-                .map_err(|e| err("internal", e.to_string()))?;
-        return Ok(Some(AgentDispatchPlan {
+        let session_id = resolve_dispatch_session_id(state, conversation_id, &agent, None)
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
+        return Ok(vec![AgentDispatchPlan {
             agent,
             session_id,
-            forwarded_text,
+            forwarded_text: text.to_string(),
             mention_sender: false,
-        }));
+        }]);
     }
 
-    // Explicit @agent / @agent#short mention (group or agent DM-style rooms).
-    if let Some(route) = first_mentioned_agent_route(text, &agents) {
-        let session_id = resolve_dispatch_session_id(
-            state,
-            conversation_id,
-            &route.agent,
-            route.session_short_id.as_deref(),
-        )
-        .await
-        .map_err(|e| err("internal", e.to_string()))?;
-        return Ok(Some(AgentDispatchPlan {
-            agent: route.agent.clone(),
-            session_id,
-            forwarded_text: route.forwarded_text,
-            mention_sender: true,
-        }));
-    }
-
-    Ok(None)
+    Ok(Vec::new())
 }
 
 /// Resolve which formal agent session should receive a Hub `@agent` dispatch.
@@ -366,7 +366,11 @@ async fn forward_agent_dispatch(
                 text: text.to_string(),
                 mentions: Vec::new(),
                 origin_message_id: Some(origin_message_id.to_string()),
-                client_request_id: format!("social-send-{origin_message_id}"),
+                // Include agent so multi-@ fan-out send idempotency never collides.
+                client_request_id: format!(
+                    "social-send-{origin_message_id}:{}",
+                    agent.agent_id
+                ),
                 caller_account_id: account_id.to_string(),
             })
             .await
@@ -393,7 +397,11 @@ async fn forward_agent_dispatch(
             workspace_path: agent.workspace_path.clone(),
             initial_user_message: Some(text.to_string()),
             origin_message_id: Some(origin_message_id.to_string()),
-            client_request_id: format!("social-start-{origin_message_id}"),
+            // Multi-@ cold start: must key formal session id by origin×agent.
+            client_request_id: format!(
+                "social-start-{origin_message_id}:{}",
+                agent.agent_id
+            ),
             caller_account_id: account_id.to_string(),
             conversation_title,
         })
@@ -494,7 +502,6 @@ fn agent_error_code_for_message(message: &str) -> Option<&'static str> {
 struct MentionedAgentRoute {
     agent: crate::store::social::AgentRow,
     session_short_id: Option<String>,
-    forwarded_text: String,
 }
 
 fn first_mentioned_agent(
@@ -504,30 +511,46 @@ fn first_mentioned_agent(
     first_mentioned_agent_route(text, agents).map(|r| r.agent)
 }
 
-/// First `@agent` / `@agent#short` route for dispatch (Desktop `parseAgentRouting` parity).
+/// First `@agent` / `@agent#short` route (compat helper for intent errors).
 fn first_mentioned_agent_route(
     text: &str,
     agents: &[crate::store::social::AgentRow],
 ) -> Option<MentionedAgentRoute> {
-    // Prefer full-token parse so `@codex#deadbeef prompt` keeps the short id
-    // (collect_mention_tokens stops at `#`).
+    all_mentioned_agent_routes(text, agents).into_iter().next()
+}
+
+/// All unique `@agent` / `@agent#short` routes in appearance order (multi-@ fan-out).
+fn all_mentioned_agent_routes(
+    text: &str,
+    agents: &[crate::store::social::AgentRow],
+) -> Vec<MentionedAgentRoute> {
+    let mut out = Vec::new();
+    let mut seen_agent_ids = std::collections::HashSet::new();
+
+    // Leading full token first (preserves `#short` when present).
     if let Some(route) = parse_leading_agent_route(text, agents) {
-        return Some(route);
+        seen_agent_ids.insert(route.agent.agent_id.clone());
+        out.push(route);
     }
-    // Fall back: any mid-body @token (legacy multi-mention / name forms).
-    collect_mention_tokens(text).into_iter().find_map(|token| {
+
+    for token in collect_mention_tokens(text) {
         let t = token.trim();
         if t.is_empty() {
-            return None;
+            continue;
         }
         let (name_part, short) = split_agent_session_token(t);
-        let agent = match_agent_token(name_part, agents)?;
-        Some(MentionedAgentRoute {
+        let Some(agent) = match_agent_token(name_part, agents) else {
+            continue;
+        };
+        if !seen_agent_ids.insert(agent.agent_id.clone()) {
+            continue;
+        }
+        out.push(MentionedAgentRoute {
             agent: agent.clone(),
             session_short_id: short.map(str::to_string),
-            forwarded_text: strip_agent_mention_once(text, &agent),
-        })
-    })
+        });
+    }
+    out
 }
 
 fn parse_leading_agent_route(
@@ -544,22 +567,14 @@ fn parse_leading_agent_route(
         .find(|(_, ch)| ch.is_whitespace())
         .map(|(i, _)| i);
     let token = split_at.map_or(rest, |i| &rest[..i]);
-    let body = split_at.map_or("", |i| rest[i..].trim_start());
     if token.is_empty() {
         return None;
     }
     let (name_part, short) = split_agent_session_token(token);
     let agent = match_agent_token(name_part, agents)?;
-    let forwarded = if body.is_empty() {
-        // Keep original when mention is bare so Host still has content if needed.
-        text.to_string()
-    } else {
-        body.to_string()
-    };
     Some(MentionedAgentRoute {
         agent: agent.clone(),
         session_short_id: short.map(str::to_string),
-        forwarded_text: forwarded,
     })
 }
 
@@ -586,37 +601,6 @@ fn match_agent_token<'a>(
             || agent.runtime_agent.eq_ignore_ascii_case(&lower)
             || agent.name.eq_ignore_ascii_case(t)
     })
-}
-
-fn strip_agent_mention_once(text: &str, agent: &crate::store::social::AgentRow) -> String {
-    let candidates = [
-        agent.agent_id.as_str(),
-        agent.runtime_agent.as_str(),
-        agent.name.as_str(),
-    ];
-    let mut stripped = text.to_string();
-    for token in candidates {
-        let needle = format!("@{token}");
-        if stripped
-            .to_ascii_lowercase()
-            .contains(&needle.to_ascii_lowercase())
-        {
-            // Case-insensitive single replace of @token.
-            if let Some(idx) = stripped
-                .to_ascii_lowercase()
-                .find(&needle.to_ascii_lowercase())
-            {
-                stripped = format!("{}{}", &stripped[..idx], &stripped[idx + needle.len()..]);
-                break;
-            }
-        }
-    }
-    let normalised = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalised.is_empty() {
-        text.to_string()
-    } else {
-        normalised
-    }
 }
 
 fn normalize_workspace_path(path: Option<&str>) -> Option<String> {
@@ -711,22 +695,22 @@ fn arm_completion_watch(
 
 /// Called from host ingest after raw events land. Projects agent bubble(s) when ready.
 ///
-/// Multi-watch: every unfinished origin on this session is probed independently.
+/// Multi-watch: every unfinished (origin, session) on this session is probed.
 pub async fn try_project_completion_for_session(state: &BackendState, session_id: &str) {
     let watches = state.completion_watches.list_for_session(session_id);
     if watches.is_empty() {
         return;
     }
     for watch in watches {
-        match try_project_completion_for_origin(state, &watch.origin_message_id, false).await {
+        let key = watch.watch_key();
+        match try_project_completion_for_watch(state, &key, false).await {
             ProjectOutcome::Pending => {
                 // Quiet-window settle. One-shot delayed recheck; post is
                 // idempotent via client_message_id.
                 let state = state.clone();
-                let origin = watch.origin_message_id.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(GROUP_COMPLETION_SEQ_STABLE).await;
-                    let _ = try_project_completion_for_origin(&state, &origin, true).await;
+                    let _ = try_project_completion_for_watch(&state, &key, true).await;
                 });
             }
             ProjectOutcome::Done | ProjectOutcome::NotWatching => {}
@@ -740,15 +724,16 @@ enum ProjectOutcome {
     Done,
 }
 
-async fn try_project_completion_for_origin(
+async fn try_project_completion_for_watch(
     state: &BackendState,
-    origin_message_id: &str,
+    watch_key: &str,
     seq_stable: bool,
 ) -> ProjectOutcome {
-    let Some(watch) = state.completion_watches.get(origin_message_id) else {
+    let Some(watch) = state.completion_watches.get(watch_key) else {
         return ProjectOutcome::NotWatching;
     };
     let session_id = watch.session_id.clone();
+    let origin_message_id = watch.origin_message_id.clone();
 
     let session_terminal =
         match crate::store::agent_sessions::get(&state.store, &session_id).await {
@@ -808,7 +793,7 @@ async fn try_project_completion_for_origin(
             .await
             {
                 Ok(()) => {
-                    state.completion_watches.remove(origin_message_id);
+                    state.completion_watches.remove(watch_key);
                     tracing::info!(
                         target: "minos_backend::social",
                         conversation_id = %watch.conversation_id,
@@ -833,7 +818,7 @@ async fn try_project_completion_for_origin(
             }
         }
         Ok(crate::turn_completion::CompletionProbe::DoneWithoutText) => {
-            state.completion_watches.remove(origin_message_id);
+            state.completion_watches.remove(watch_key);
             tracing::info!(
                 target: "minos_backend::social",
                 conversation_id = %watch.conversation_id,
@@ -1111,7 +1096,14 @@ fn collect_mention_tokens(text: &str) -> Vec<&str> {
 
         let start = index + 1;
         let mut end = start;
-        while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'-') {
+        // Allow `#short` so mid-body `@codex#abcd` keeps session targeting
+        // (Desktop `parseAllAgentRoutings` parity).
+        while end < bytes.len()
+            && (bytes[end].is_ascii_alphanumeric()
+                || bytes[end] == b'-'
+                || bytes[end] == b'_'
+                || bytes[end] == b'#')
+        {
             end += 1;
         }
         if end > start {
@@ -1493,15 +1485,15 @@ pub async fn try_agent_dispatch(
         Some(message_id) => crate::store::social::get_message(&state.store, message_id).await?,
         None => None,
     };
-    let dispatch_plan =
-        build_agent_dispatch_plan(state, conversation_id, trimmed_text, reply_target.as_ref())
+    let plans =
+        build_agent_dispatch_plans(state, conversation_id, trimmed_text, reply_target.as_ref())
             .await
             .map_err(|(_, body)| crate::error::BackendError::StoreQuery {
                 operation: "social::try_agent_dispatch.plan".into(),
                 message: body.0.error.message,
             })?;
 
-    let Some(plan) = dispatch_plan else {
+    if plans.is_empty() {
         if let Some((code, detail)) =
             unmatched_agent_intent_error(state, conversation_id, trimmed_text).await?
         {
@@ -1526,7 +1518,7 @@ pub async fn try_agent_dispatch(
             .await;
         }
         return Ok(());
-    };
+    }
 
     let members =
         crate::store::social::list_conversation_member_profiles(&state.store, conversation_id)
@@ -1536,40 +1528,47 @@ pub async fn try_agent_dispatch(
         .find(|m| m.account_id == account_id)
         .map(|m| m.minos_id.clone());
     let now_ms = chrono::Utc::now().timestamp_millis();
-    let dispatch_id = uuid::Uuid::new_v4().to_string();
-    let row = crate::store::agent_dispatch_queue::AgentDispatchRow {
-        dispatch_id,
-        origin_message_id: message.message_id.clone(),
-        conversation_id: conversation_id.to_string(),
-        account_id: account_id.to_string(),
-        agent_id: plan.agent.agent_id.clone(),
-        session_id: plan.session_id.clone(),
-        forwarded_text: plan.forwarded_text,
-        mention_sender: plan.mention_sender,
-        sender_minos_id,
-        status: crate::store::agent_dispatch_queue::STATUS_PENDING.to_string(),
-        attempts: 0,
-        next_attempt_at_ms: now_ms,
-        last_error: None,
-        created_at_ms: now_ms,
-        updated_at_ms: now_ms,
-    };
-    let inserted = crate::store::agent_dispatch_queue::enqueue(&state.store, &row).await?;
-    if inserted {
-        tracing::info!(
-            target: "minos_backend::social",
-            conversation_id = %conversation_id,
-            origin_message_id = %message.message_id,
-            agent_id = %plan.agent.agent_id,
-            "agent dispatch enqueued"
-        );
+    let mut any_inserted = false;
+    for plan in plans {
+        let dispatch_id = uuid::Uuid::new_v4().to_string();
+        let row = crate::store::agent_dispatch_queue::AgentDispatchRow {
+            dispatch_id,
+            origin_message_id: message.message_id.clone(),
+            conversation_id: conversation_id.to_string(),
+            account_id: account_id.to_string(),
+            agent_id: plan.agent.agent_id.clone(),
+            session_id: plan.session_id.clone(),
+            forwarded_text: plan.forwarded_text,
+            mention_sender: plan.mention_sender,
+            sender_minos_id: sender_minos_id.clone(),
+            status: crate::store::agent_dispatch_queue::STATUS_PENDING.to_string(),
+            attempts: 0,
+            next_attempt_at_ms: now_ms,
+            last_error: None,
+            created_at_ms: now_ms,
+            updated_at_ms: now_ms,
+        };
+        let inserted = crate::store::agent_dispatch_queue::enqueue(&state.store, &row).await?;
+        if inserted {
+            any_inserted = true;
+            tracing::info!(
+                target: "minos_backend::social",
+                conversation_id = %conversation_id,
+                origin_message_id = %message.message_id,
+                agent_id = %plan.agent.agent_id,
+                "agent dispatch enqueued"
+            );
+        } else {
+            tracing::debug!(
+                target: "minos_backend::social",
+                origin_message_id = %message.message_id,
+                agent_id = %plan.agent.agent_id,
+                "agent dispatch already queued for origin+agent (idempotent)"
+            );
+        }
+    }
+    if any_inserted {
         state.wake_agent_dispatch();
-    } else {
-        tracing::debug!(
-            target: "minos_backend::social",
-            origin_message_id = %message.message_id,
-            "agent dispatch already queued for origin (idempotent)"
-        );
     }
 
     Ok(())
@@ -1755,13 +1754,24 @@ async fn execute_claimed_dispatch(
                 runtime = %agent.runtime_agent,
                 "agent dispatch started"
             );
-            crate::store::social::bind_session_to_message_for_agent(
+            // Single-agent bind only. Multi-@ would last-writer-win on
+            // chat_messages.agent_session_id; completion + queue already key
+            // by origin×agent/session.
+            let multi_for_origin = crate::store::agent_dispatch_queue::count_by_origin(
                 &state.store,
                 &row.origin_message_id,
-                &agent.agent_id,
-                &dispatch.session_id,
             )
-            .await?;
+            .await
+            .unwrap_or(1);
+            if multi_for_origin <= 1 {
+                crate::store::social::bind_session_to_message_for_agent(
+                    &state.store,
+                    &row.origin_message_id,
+                    &agent.agent_id,
+                    &dispatch.session_id,
+                )
+                .await?;
+            }
             crate::store::agent_dispatch_queue::mark_succeeded(
                 &state.store,
                 &row.dispatch_id,
@@ -2055,11 +2065,20 @@ async fn notify_agent_dispatch_failure(
     );
 
     // Visible timeline bubble when we know which agent failed.
+    // Multi-@ requires agent/session in the id so failures never collide.
     if let Some(agent) = agent {
         let client_id = if code == "completion_timeout" {
-            format!("agent-completion-timeout:{origin_message_id}")
+            format!(
+                "agent-completion-timeout:{}:{}:{}",
+                conversation_id,
+                session_id.unwrap_or("none"),
+                origin_message_id
+            )
         } else {
-            format!("agent-dispatch-error:{origin_message_id}")
+            format!(
+                "agent-dispatch-error:{}:{}:{}",
+                conversation_id, agent.agent_id, origin_message_id
+            )
         };
         if let Err(error) = post_agent_social_message(
             state,
@@ -2120,7 +2139,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_watch_registry_arms_and_removes_by_origin() {
+    fn completion_watch_registry_arms_and_removes_by_watch_key() {
         let reg = crate::completion_watch::CompletionWatchRegistry::new();
         let agent = crate::store::social::AgentRow {
             agent_id: "a1".into(),
@@ -2146,12 +2165,45 @@ mod tests {
             mention_account_id: None,
             mention_minos_id: None,
         });
-        assert_eq!(
-            reg.get("m1").map(|w| w.raw_seq_floor),
-            Some(3)
-        );
+        let key = crate::completion_watch::watch_key("m1", "sess-1");
+        assert_eq!(reg.get(&key).map(|w| w.raw_seq_floor), Some(3));
         assert_eq!(reg.list_for_session("sess-1").len(), 1);
-        assert!(reg.remove("m1").is_some());
-        assert!(reg.get("m1").is_none());
+        assert!(reg.remove(&key).is_some());
+        assert!(reg.get(&key).is_none());
+    }
+
+    #[test]
+    fn multi_mention_routes_unique_agents_in_order() {
+        let agents = vec![
+            crate::store::social::AgentRow {
+                agent_id: "bot-codex".into(),
+                owner_account_id: "acc".into(),
+                name: "Codex".into(),
+                description: String::new(),
+                source: "host_runtime".into(),
+                runtime_agent: "codex".into(),
+                model: String::new(),
+                workspace_path: None,
+                created_at_ms: 0,
+                updated_at_ms: 0,
+            },
+            crate::store::social::AgentRow {
+                agent_id: "bot-claude".into(),
+                owner_account_id: "acc".into(),
+                name: "Claude".into(),
+                description: String::new(),
+                source: "host_runtime".into(),
+                runtime_agent: "claude".into(),
+                model: String::new(),
+                workspace_path: None,
+                created_at_ms: 0,
+                updated_at_ms: 0,
+            },
+        ];
+        let routes =
+            all_mentioned_agent_routes("@codex @claude @codex count off 1 2", &agents);
+        assert_eq!(routes.len(), 2);
+        assert_eq!(routes[0].agent.runtime_agent, "codex");
+        assert_eq!(routes[1].agent.runtime_agent, "claude");
     }
 }

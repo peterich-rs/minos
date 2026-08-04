@@ -60,6 +60,14 @@ pub enum SocketRequest {
         /// JSON object matching minos_protocol::GitActivity (tagged `kind`).
         activity: serde_json::Value,
     },
+    /// Toggle an emoji reaction on a message that @mentioned this agent.
+    ReactToMessage {
+        conversation_id: String,
+        source_agent: Option<String>,
+        source_session_id: Option<String>,
+        message_id: String,
+        emoji: String,
+    },
     Ping,
 }
 

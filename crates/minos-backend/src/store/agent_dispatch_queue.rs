@@ -38,7 +38,8 @@ pub struct AgentDispatchRow {
     pub updated_at_ms: i64,
 }
 
-/// Insert a pending dispatch. Idempotent on `origin_message_id` (UNIQUE).
+/// Insert a pending dispatch. Idempotent on `(origin_message_id, agent_id)`.
+/// Multi-@ fan-out enqueues one row per agent for the same origin.
 /// Returns `true` if a new row was inserted.
 pub async fn enqueue<S>(
     store: &S,
@@ -193,6 +194,35 @@ where
     }
 }
 
+/// Count dispatch rows for an origin (multi-@ fan-out size).
+pub async fn count_by_origin<S>(store: &S, origin_message_id: &str) -> Result<i64, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let n: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM agent_dispatch_queue WHERE origin_message_id = ?1",
+            )
+            .bind(origin_message_id)
+            .fetch_one(pool)
+            .await
+            .map_err(store_err("agent_dispatch_queue::count_by_origin"))?;
+            Ok(n)
+        }
+        StorePoolRef::Postgres(pool) => {
+            let n: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM agent_dispatch_queue WHERE origin_message_id = $1",
+            )
+            .bind(origin_message_id)
+            .fetch_one(pool)
+            .await
+            .map_err(store_err("agent_dispatch_queue::count_by_origin"))?;
+            Ok(n)
+        }
+    }
+}
+
 /// Host-online edge: make pending (and reclaimable inflight) rows for these
 /// accounts immediately due so the worker can drain without waiting backoff.
 ///
@@ -233,7 +263,7 @@ async fn enqueue_sqlite(pool: &SqlitePool, row: &AgentDispatchRow) -> Result<boo
             session_id, forwarded_text, mention_sender, sender_minos_id, status,
             attempts, next_attempt_at_ms, last_error, created_at_ms, updated_at_ms
          ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
-         ON CONFLICT(origin_message_id) DO NOTHING",
+         ON CONFLICT(origin_message_id, agent_id) DO NOTHING",
     )
     .bind(&row.dispatch_id)
     .bind(&row.origin_message_id)
@@ -469,7 +499,7 @@ async fn enqueue_postgres(pool: &PgPool, row: &AgentDispatchRow) -> Result<bool,
             session_id, forwarded_text, mention_sender, sender_minos_id, status,
             attempts, next_attempt_at_ms, last_error, created_at_ms, updated_at_ms
          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-         ON CONFLICT(origin_message_id) DO NOTHING",
+         ON CONFLICT(origin_message_id, agent_id) DO NOTHING",
     )
     .bind(&row.dispatch_id)
     .bind(&row.origin_message_id)
@@ -762,7 +792,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enqueue_is_idempotent_on_origin_message_id() {
+    async fn enqueue_is_idempotent_on_origin_and_agent() {
         let store = mem().await;
         let now = 1_000_i64;
         let row = AgentDispatchRow {
@@ -786,6 +816,11 @@ mod tests {
         let mut row2 = row.clone();
         row2.dispatch_id = "d2".into();
         assert!(!enqueue(&store, &row2).await.unwrap());
+        // Multi-@ fan-out: different agent on same origin is a new row.
+        let mut row3 = row.clone();
+        row3.dispatch_id = "d3".into();
+        row3.agent_id = "agent2".into();
+        assert!(enqueue(&store, &row3).await.unwrap());
         let got = get_by_origin(&store, "origin-1").await.unwrap().unwrap();
         assert_eq!(got.dispatch_id, "d1");
     }

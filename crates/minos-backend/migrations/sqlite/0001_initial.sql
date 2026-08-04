@@ -559,9 +559,10 @@ CREATE INDEX idx_push_dispatch_log_account
     ON push_dispatch_log(account_id);
 
 -- Agent dispatch queue: send_message enqueues; worker drains when host is live.
+-- UNIQUE(origin, agent): multi-@ fan-out enqueues one row per mentioned agent.
 CREATE TABLE agent_dispatch_queue (
     dispatch_id          TEXT PRIMARY KEY,
-    origin_message_id    TEXT NOT NULL UNIQUE,
+    origin_message_id    TEXT NOT NULL,
     conversation_id      TEXT NOT NULL,
     account_id           TEXT NOT NULL,
     agent_id             TEXT NOT NULL,
@@ -575,7 +576,8 @@ CREATE TABLE agent_dispatch_queue (
     next_attempt_at_ms   INTEGER NOT NULL,
     last_error           TEXT,
     created_at_ms        INTEGER NOT NULL,
-    updated_at_ms        INTEGER NOT NULL
+    updated_at_ms        INTEGER NOT NULL,
+    UNIQUE (origin_message_id, agent_id)
 ) STRICT;
 
 CREATE INDEX idx_agent_dispatch_queue_due

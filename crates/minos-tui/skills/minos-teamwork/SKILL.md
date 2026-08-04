@@ -51,10 +51,23 @@ Do not assume the prompt contains the current conversation state if MCP is avail
 - Call `post_conversation_update` only for concise conversation-visible updates that should appear
   in the shared conversation. Do not duplicate routine final answers into the conversation
   unless the user or workflow needs a visible status update.
+- Call `react_to_message` for lightweight acknowledgements (👍 ✅ 👀 ❤️) on a user
+  message that **@mentioned you**. Prefer a reaction over a full reply when the
+  user only needs a quick ack. The host **hard-rejects** reactions on messages
+  that did not @mention this agent — do not try to react to teammate chatter or
+  unrelated history. Toggle is idempotent (same emoji again removes it).
 - Call `post_git_update` for structured git milestones instead of free-form text:
   `worktree_created`, `commits_made`, `pr_opened`, `ready_for_review`,
   `checks_failed`, `merged`. Prefer this whenever you finish a delivery step
   that involves commits or a pull request.
+
+## Multi-agent @mentions
+
+A single user message may @mention several agents (e.g. `@codex @claude count 1 2`).
+Each mentioned agent is woken in parallel with the same origin message. Coordinate
+via `list_conversation_messages` when order matters; your final answer is projected
+into the conversation automatically — use `react_to_message` only for acks, not
+as a substitute for a required answer.
 
 ## Git work units
 

@@ -91,6 +91,7 @@ impl McpSidecarArgs {
                 cancel_delegation: !self.disable_cancel_delegation,
                 post_conversation_update: !self.disable_post_conversation_update,
                 post_git_update: !self.disable_post_git_update,
+                react_to_message: true,
             },
         })
         .await?;

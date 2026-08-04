@@ -715,7 +715,8 @@ Hub SSOT 收敛：
 | 撤回 | Hub `POST …/messages/:id/recall` + Durable `*Recalled` | conversation + account topics | ✅ |
 | Reaction | Hub toggle + conversation durable | Hub API + Intent Outbox | Desktop/Mobile `reaction_toggle` outbox + B6 `client_op_id` 幂等；conversation-only fanout |
 | 未读 / mark-read | Linked 打开会话 → `POST …/read` + 本地 badge | Hub + local count | ✅ **C4** 增量 inbox |
-| Mobile `@agent` 派发 | 消息落库后 **AgentDispatchQueue** + CompletionWatch(per origin) | Backend **B3/B4** | ✅ 异步 enqueue；watch 键 = `origin_message_id` |
+| Mobile `@agent` 派发 | 消息落库后 **AgentDispatchQueue** + CompletionWatch(per origin×session) | Backend **B3/B4** | ✅ 异步 enqueue；**多 @ fan-out**（`UNIQUE(origin, agent_id)` 一 agent 一行）；watch 键 = `{origin}:{session_id}` |
+| Agent 表情互动 | teamwork MCP `react_to_message` → daemon 本地 reaction | Host workbench | ✅ **硬门禁**：仅允许对 **@ 了该 agent** 的消息；actor_kind=`agent` |
 | Session 生命周期 | `session_lifecycle` job：失联 host → session `failed` + durable end；watch TTL → 失败气泡 + remove | Backend **B5** | ✅ 非 COUNT-only |
 
 **Desktop Sync 状态机**（`hub-realtime.ts`）：`Disconnected → Connecting → Syncing → Live`；per-topic `topic_seq` 持久化 `localStorage`（`minos.hub.topic_cursors.v1`）；重连 `Subscribe { resume_after }`；`SnapshotRequired` → **range reconcile**（`after_seq=maxLoaded` forward fill + latest page merge，保留已加载窗口；禁止 clear-only）。`focusedConversationId` ≠ timeline `hasWindow`：`loadTimeline` hydrate-only（不写 focus、不 mark-read）；focus/mark-read 在 Timeline 打开路径 + focused 入站 400ms debounce。

@@ -4232,6 +4232,94 @@ async fn handle_daemon_mcp_request(
                 data: Some(serde_json::json!({ "accepted": true })),
             })
         }
+        SocketRequest::ReactToMessage {
+            conversation_id,
+            source_agent,
+            source_session_id,
+            message_id,
+            emoji,
+        } => {
+            let source_agent = source_agent
+                .as_deref()
+                .map(parse_socket_agent)
+                .transpose()?
+                .ok_or_else(|| anyhow::anyhow!("react_to_message requires source_agent"))?;
+            validate_mcp_source_session(
+                &store,
+                &conversation_id,
+                Some(source_agent),
+                source_session_id.as_deref(),
+            )
+            .await?;
+            let emoji = emoji.trim();
+            anyhow::ensure!(!emoji.is_empty(), "emoji must not be empty");
+            anyhow::ensure!(
+                emoji.chars().count() <= 32,
+                "emoji must be at most 32 characters"
+            );
+            let Some((msg_conversation_id, body, mentions_json)) = store
+                .get_message_body_for_reaction(&message_id)
+                .await?
+            else {
+                anyhow::bail!("message not found: {message_id}");
+            };
+            anyhow::ensure!(
+                msg_conversation_id == conversation_id,
+                "message {message_id} is not in this conversation"
+            );
+            // Hard gate: only react to messages that @mentioned this agent.
+            anyhow::ensure!(
+                message_mentions_agent(&body, &mentions_json, source_agent),
+                "react_to_message is only allowed on messages that @mention this agent ({})",
+                source_agent.bin_name()
+            );
+            let reaction_id = format!("rx-agent-{}", uuid::Uuid::new_v4());
+            let now_ms = current_unix_ms();
+            let actor_id = source_agent.bin_name().to_owned();
+            let display_name = source_agent.bin_name().to_owned();
+            let (cid, added) = store
+                .toggle_message_reaction(
+                    &message_id,
+                    emoji,
+                    &reaction_id,
+                    &actor_id,
+                    "agent",
+                    &display_name,
+                    now_ms,
+                )
+                .await?;
+            let reaction_rows = store
+                .list_reactions_for_messages(&[message_id.clone()])
+                .await?;
+            let reactions = aggregate_reactions_by_message(reaction_rows)
+                .remove(&message_id)
+                .unwrap_or_default();
+            tracing::info!(
+                target: "minos_daemon::agent",
+                conversation_id = %cid,
+                message_id = %message_id,
+                agent = %actor_id,
+                emoji = %emoji,
+                added,
+                "agent reacted to conversation message"
+            );
+            let _ = local_conversation_event_tx.send(
+                LocalConversationEvent::ConversationReactionToggled {
+                    conversation_id: cid.clone(),
+                    message_id: message_id.clone(),
+                    reactions: reactions.clone(),
+                },
+            );
+            Ok(SocketResponse::Ok {
+                data: Some(serde_json::json!({
+                    "accepted": true,
+                    "added": added,
+                    "message_id": message_id,
+                    "emoji": emoji,
+                    "reactions": reactions,
+                })),
+            })
+        }
         SocketRequest::PostGitUpdate {
             conversation_id,
             source_agent,
@@ -4693,6 +4781,41 @@ async fn resolve_delegate_agent_and_profile(
         return Ok((agent, Some(row.id)));
     }
     Ok((agent, None))
+}
+
+/// True when the message body or structured mentions target this agent runtime.
+/// Used to hard-gate `react_to_message` to only @-mentioned agents.
+fn message_mentions_agent(body: &str, mentions_json: &str, agent: AgentName) -> bool {
+    let bin = agent.bin_name();
+    // Structured mentions_json (ConversationMention[]).
+    if let Ok(mentions) =
+        serde_json::from_str::<Vec<minos_protocol::ConversationMention>>(mentions_json)
+    {
+        if mentions.iter().any(|m| m.agent == agent) {
+            return true;
+        }
+    }
+    // Body @tokens: @codex / @codex#short / case-insensitive runtime name.
+    let mut rest = body;
+    while let Some(at) = rest.find('@') {
+        rest = &rest[at + 1..];
+        let token_end = rest
+            .find(|ch: char| ch.is_whitespace() || ch == ',' || ch == ';' || ch == ')' || ch == ']')
+            .unwrap_or(rest.len());
+        let token = &rest[..token_end];
+        rest = &rest[token_end..];
+        if token.is_empty() {
+            continue;
+        }
+        let name_part = token.split_once('#').map(|(n, _)| n).unwrap_or(token);
+        if name_part.eq_ignore_ascii_case(bin) {
+            return true;
+        }
+        if parse_socket_agent(name_part).ok() == Some(agent) {
+            return true;
+        }
+    }
+    false
 }
 
 fn parse_conversation_mentions_from_body(body: &str) -> Vec<minos_protocol::ConversationMention> {

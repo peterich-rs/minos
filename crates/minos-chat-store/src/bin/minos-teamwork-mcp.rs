@@ -68,6 +68,7 @@ async fn main() -> Result<()> {
             cancel_delegation: !args.disable_cancel_delegation,
             post_conversation_update: !args.disable_post_conversation_update,
             post_git_update: !args.disable_post_git_update,
+            react_to_message: true,
         },
     })
     .await

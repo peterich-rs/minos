@@ -191,16 +191,73 @@ export function parseAgentRouting(
   text: string,
   profiles: readonly MentionProfile[] = [],
 ): { target: AgentRouteTarget; prompt: string; messageBody: string } | null {
+  return parseAllAgentRoutings(text, profiles)[0] ?? null;
+}
+
+export type AgentRouting = {
+  target: AgentRouteTarget;
+  prompt: string;
+  messageBody: string;
+};
+
+/**
+ * Multi-@ fan-out: every unique agent mentioned in the body (appearance order).
+ * Shared prompt is the body with leading agent @tokens stripped when the
+ * message starts with @; otherwise the full text is the prompt for each agent.
+ */
+export function parseAllAgentRoutings(
+  text: string,
+  profiles: readonly MentionProfile[] = [],
+): AgentRouting[] {
   const messageBody = text.trimEnd();
   const trimmed = text.trimStart();
-  if (!trimmed.startsWith("@")) return null;
-  const rest = trimmed.slice(1);
-  const splitAt = [...rest].findIndex((ch) => /\s/.test(ch));
-  const token = splitAt === -1 ? rest : rest.slice(0, splitAt);
-  const body = splitAt === -1 ? "" : rest.slice(splitAt).trimStart();
-  const target = parseAgentRouteTarget(token, profiles);
-  if (!target) return null;
-  return { target, prompt: body, messageBody };
+  if (!trimmed) return [];
+
+  const routes: AgentRouting[] = [];
+  const seen = new Set<string>();
+
+  // Walk @tokens anywhere in the body (not only leading).
+  const re = /(^|[\s([{"'`])@([^\s@]+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(trimmed)) !== null) {
+    const token = match[2] ?? "";
+    if (!token) continue;
+    const target = parseAgentRouteTarget(token, profiles);
+    if (!target) continue;
+    const key = target.profileId
+      ? `p:${target.profileId}`
+      : target.sessionShortId
+        ? `${target.agent}#${target.sessionShortId}`
+        : target.agent;
+    if (seen.has(key)) continue;
+    // Dedup by agent runtime for bare @agent (one session per agent per turn).
+    const agentKey = target.agent;
+    if (!target.sessionShortId && !target.profileId && seen.has(`a:${agentKey}`)) {
+      continue;
+    }
+    seen.add(key);
+    if (!target.sessionShortId && !target.profileId) {
+      seen.add(`a:${agentKey}`);
+    }
+    routes.push({ target, prompt: "", messageBody });
+  }
+
+  if (routes.length === 0) return [];
+
+  // Shared prompt: strip leading consecutive agent @tokens.
+  let prompt = trimmed;
+  while (prompt.startsWith("@")) {
+    const rest = prompt.slice(1);
+    const splitAt = [...rest].findIndex((ch) => /\s/.test(ch));
+    const token = splitAt === -1 ? rest : rest.slice(0, splitAt);
+    if (!parseAgentRouteTarget(token, profiles)) break;
+    prompt = splitAt === -1 ? "" : rest.slice(splitAt).trimStart();
+  }
+  // Also strip mid-body agent mentions when message is pure multi-@ + instruction
+  // is already handled by leading strip; keep full body if no leading @.
+  const sharedPrompt = prompt.trim() || messageBody;
+
+  return routes.map((r) => ({ ...r, prompt: sharedPrompt }));
 }
 
 /** Active @-token at cursor for autocomplete (TUI-style). */
