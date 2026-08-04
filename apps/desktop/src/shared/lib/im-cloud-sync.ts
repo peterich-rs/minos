@@ -19,11 +19,13 @@ import { useAccountStore } from "@/store/account-store";
 import {
   addAgentToConversation,
   ensureHostRuntimeAgent,
+  respondHubApproval,
   sendAgentConversationMessage,
   sendConversationMessage,
   toggleHubReaction,
   upsertConversation,
 } from "@/shared/lib/minos-cloud";
+import { isHubImMode } from "@/shared/lib/hub-timeline";
 import {
   displayNameForRuntime,
   isCanonicalAgentResultId,
@@ -329,12 +331,19 @@ async function postReactionToggleFromOutbox(
 }
 
 /**
- * Treat daemon "already resolved" as success so outbox retries after a
+ * Treat daemon/Hub "already resolved" as success so outbox retries after a
  * successful-but-unacked first attempt do not burn the entry.
  */
 function isApprovalAlreadyResolvedError(error: unknown): boolean {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code: unknown }).code ?? "").toLowerCase()
+      : "";
   const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
   return (
+    code.includes("already_resolved") ||
+    code.includes("approval_already") ||
+    code.includes("approval_not_found") ||
     msg.includes("already_resolved") ||
     msg.includes("already resolved") ||
     msg.includes("approval_already") ||
@@ -342,6 +351,11 @@ function isApprovalAlreadyResolvedError(error: unknown): boolean {
   );
 }
 
+/**
+ * P3 branch by auth mode (no dual SSOT):
+ * - Hub IM mode: POST /v1/approvals/respond + top-level client_request_id
+ * - Local-only: daemon resolveApproval; decision JSON never carries client_request_id
+ */
 async function postApprovalResolveFromOutbox(
   entry: ImOutboxEntry,
 ): Promise<void> {
@@ -349,6 +363,8 @@ async function postApprovalResolveFromOutbox(
     requestId?: string;
     sessionId?: string;
     decision?: string | Record<string, unknown>;
+    /** Explicit route stamped at enqueue (`hub` | `daemon`). */
+    route?: string;
   };
   try {
     payload = JSON.parse(entry.text) as typeof payload;
@@ -362,17 +378,37 @@ async function postApprovalResolveFromOutbox(
       "invalid_payload: approval_resolve requires requestId+sessionId+decision",
     );
   }
-  // Clean agent decision only — never inject client_request_id into decision
-  // (daemon strips unknown fields; pollutes agent decision JSON).
-  // Local daemon path: outbox is reachability only (C5.3 option b).
+  // Clean agent decision only — never nest client_request_id in decision JSON.
   const decision =
     typeof payload.decision === "string"
       ? { decision: payload.decision }
       : { ...payload.decision };
-  // Strip any accidental client_request_id if present in stored payload.
   delete (decision as Record<string, unknown>).client_request_id;
+
+  const { session, authPhase } = useAccountStore.getState();
+  const hubRoute =
+    payload.route === "hub" ||
+    (payload.route !== "daemon" &&
+      isHubImMode({
+        authPhase,
+        accessToken: session?.accessToken,
+      }));
+
   try {
-    await daemonApi.resolveApproval(requestId, sessionId, decision);
+    if (hubRoute) {
+      const auth = cloudAuth();
+      if (!auth) {
+        throw new Error("not authenticated");
+      }
+      // Top-level client_request_id = outbox logical op id (Intent Outbox).
+      await respondHubApproval(auth.deviceId, auth.accessToken, {
+        requestId,
+        decision,
+        clientRequestId: entry.clientMessageId,
+      });
+    } else {
+      await daemonApi.resolveApproval(requestId, sessionId, decision);
+    }
   } catch (error) {
     if (isApprovalAlreadyResolvedError(error)) {
       return;
@@ -450,15 +486,20 @@ export async function syncReactionToggleToCloud(input: {
 }
 
 /**
- * C5.3: durable approval intent for local daemon reachability.
- * Decision JSON is agent-facing only (no client_request_id injection).
- * clientMessageId is local outbox op id only for this path.
+ * C5.3 / P3: durable approval intent via Intent Outbox.
+ *
+ * - Hub authenticated: POST /v1/approvals/respond with top-level
+ *   `client_request_id` (= clientOpId). Decision body is agent-facing only.
+ * - Local / no hub: daemon `resolveApproval` for reachability; never stuff
+ *   client_request_id into decision JSON.
  */
-export async function syncApprovalResolveToDaemon(input: {
+export async function syncApprovalResolve(input: {
   sessionId: string;
   requestId: string;
   decision: Record<string, unknown>;
   clientOpId: string;
+  /** Force route; default derives from Hub IM mode at enqueue. */
+  route?: "hub" | "daemon";
 }): Promise<void> {
   const sessionId = input.sessionId.trim();
   const requestId = input.requestId.trim();
@@ -471,6 +512,20 @@ export async function syncApprovalResolveToDaemon(input: {
   const decision = { ...input.decision };
   delete decision.client_request_id;
 
+  const { session, authPhase } = useAccountStore.getState();
+  const route =
+    input.route ??
+    (isHubImMode({
+      authPhase,
+      accessToken: session?.accessToken,
+    })
+      ? "hub"
+      : "daemon");
+
+  if (route === "hub" && !cloudAuth()) {
+    throw new Error("not authenticated");
+  }
+
   const entry = enqueueApprovalResolve({
     conversationId: sessionId,
     clientMessageId: clientOpId,
@@ -478,6 +533,7 @@ export async function syncApprovalResolveToDaemon(input: {
       requestId,
       sessionId,
       decision,
+      route,
     }),
   });
   if (entry.status === "acked" || isAcked(clientOpId)) return;

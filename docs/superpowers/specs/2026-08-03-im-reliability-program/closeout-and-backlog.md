@@ -181,16 +181,16 @@ Uuid::new_v4() in reaction event_id path
 
 ## 3. Layer P — Product residuals（完整列表，不混进 V）
 
-| ID | 项 | 建议优先级 | 依赖 |
-|----|-----|------------|------|
-| P1 | Desktop Hub digest **单轨**未读（去掉/降级 `readMessageCountById` 双轨） | P1 体验 | 无 |
-| P2 | Conversation 订阅 **LRU** + `unsubscribeConversation` | P2 | 无 |
-| P3 | Desktop 审批 **Hub HTTP** + client_request_id（今日仅 daemon） | P2 | C5.3 residual |
-| P4 | TUI `origin_message_id` 贯通 | P3 | collab 若走 TUI |
-| P5 | APNs/FCM **真通道**（非 log stub） | 产品 | 运维 |
-| P6 | Multi-instance CompletionWatch / presence 共享 | 规模 | 多副本部署 |
+| ID | 项 | 状态 | 证据 |
+|----|-----|------|------|
+| P1 | Desktop Hub digest **单轨**未读（去掉/降级 `readMessageCountById` 双轨） | **DONE** | Hub mode `unreadSource: "hub"`；local baseline 仅 daemon-only — [LAYER-P.md](LAYER-P.md) |
+| P2 | Conversation 订阅 **LRU** + `unsubscribeConversation` | **DONE** | R4: `conversation-sub-lru` + subscribe 驱逐 unsub |
+| P3 | Desktop 审批 **Hub HTTP** + client_request_id | **DONE** | `syncApprovalResolve` Hub/daemon 单轨分支 + Intent Outbox |
+| P4 | TUI `origin_message_id` 贯通 | **DONE** | conversation submit 传 origin；pure local workbench 仍 None |
+| P5 | APNs/FCM **真通道**（非 log stub） | **BLOCKED** ops secrets | 接口 + NotWired 诚实结果；无 fake Sent |
+| P6 | Multi-instance CompletionWatch / presence 共享 | **DONE** process-local contract | 文档 + host-online re-arm；Redis store 延后 |
 
-P 项 **单独 TASKS 区或 issue**；不阻挡 V4，除非产品强制。
+详见 [LAYER-P.md](LAYER-P.md)。P 不阻挡 V4，除非产品强制。
 
 ---
 

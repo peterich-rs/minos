@@ -65,22 +65,23 @@ export function createUseCasesActions(
     if (get().source !== "daemon") return;
     const payload =
       typeof decision === "string" ? { decision } : { ...decision };
-    // Never inject client_request_id into agent decision (daemon strips it).
+    // Never inject client_request_id into agent decision (daemon/Hub strip).
     delete (payload as Record<string, unknown>).client_request_id;
-    // C5.3: Intent Outbox for daemon reachability only (local path).
-    // Logical op id is local; Hub client_request_id is Mobile/Hub path.
+    // P3 / C5.3: Intent Outbox — Hub HTTP + client_request_id when authenticated;
+    // otherwise local daemon path (decision JSON stays clean).
     const clientOpId =
       typeof crypto !== "undefined" && "randomUUID" in crypto
         ? `approval-${crypto.randomUUID()}`
         : `approval-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    const { syncApprovalResolveToDaemon } = await import(
+    const { syncApprovalResolve } = await import(
       "@/shared/lib/im-cloud-sync"
     );
-    await syncApprovalResolveToDaemon({
+    await syncApprovalResolve({
       sessionId,
       requestId,
       decision: payload,
       clientOpId,
+      route: hubAuthenticated() ? "hub" : "daemon",
     });
     // Drop local approval/question cards for this request; re-list will converge.
     set((s) => {
@@ -275,8 +276,9 @@ export function createUseCasesActions(
   markConversationRead: (conversationId) => {
     const conv = get().conversations.find((c) => c.id === conversationId);
     const count = conv?.messageCount ?? 0;
-    // Focus + local rail/digest clear immediately (focused ≠ hasWindow).
+    // Focus + rail clear immediately (focused ≠ hasWindow).
     // Quiet loadTimeline must never set focus; only open / mark-read does.
+    // P1: local baseline only matters for daemon-only; Hub path clears digest.
     set((s) => ({
       focusedConversationId: conversationId,
       readMessageCountById: {

@@ -579,6 +579,44 @@ export async function listHubConversationMessages(
   };
 }
 
+/**
+ * P3: Hub approval intent (`POST /v1/approvals/respond`).
+ * `client_request_id` is top-level Intent Outbox id (C5.3); never nest inside
+ * agent decision JSON.
+ */
+export async function respondHubApproval(
+  deviceId: string,
+  accessToken: string,
+  input: {
+    requestId: string;
+    decision: Record<string, unknown> | string;
+    clientRequestId: string;
+  },
+): Promise<void> {
+  const requestId = input.requestId.trim();
+  const clientRequestId = input.clientRequestId.trim();
+  if (!requestId || !clientRequestId) {
+    throw new Error(
+      "respondHubApproval requires requestId and clientRequestId",
+    );
+  }
+  const decision =
+    typeof input.decision === "string"
+      ? { decision: input.decision }
+      : { ...input.decision };
+  // Agent decision only — strip accidental nested client_request_id.
+  delete (decision as Record<string, unknown>).client_request_id;
+  await requestJson<void>("/v1/approvals/respond", {
+    method: "POST",
+    headers: deviceHeaders(deviceId, accessToken),
+    body: JSON.stringify({
+      request_id: requestId,
+      decision,
+      client_request_id: clientRequestId,
+    }),
+  });
+}
+
 /** Hub mark-read (Linked inbox unread). */
 export async function markHubConversationRead(
   deviceId: string,

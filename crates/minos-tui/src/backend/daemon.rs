@@ -379,11 +379,20 @@ impl AgentBackend for DaemonBackend {
         })
     }
 
-    async fn send_message(&self, session_id: &str, text: &str) -> Result<()> {
+    async fn send_message(
+        &self,
+        session_id: &str,
+        text: &str,
+        origin_message_id: Option<&str>,
+    ) -> Result<()> {
+        let origin = origin_message_id
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
         let request = SendUserMessageRequest {
             session_id: session_id.to_owned(),
             text: text.to_owned(),
-            origin_message_id: None,
+            origin_message_id: origin,
         };
         self.client
             .request::<(), _>("minos_local_send_user_message", [request])

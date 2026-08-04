@@ -49,23 +49,32 @@ impl PushChannel for CompositeChannel {
 
     async fn send(&self, attempt: PushAttempt) -> Result<PushSendOutcome, PushSendError> {
         if self.channels.is_empty() {
-            tracing::warn!(
+            tracing::debug!(
                 target: "minos_backend::notifications::composite",
-                "no push channels configured; notification dropped"
+                "no push channels configured; treating as NotWired (no fake Sent)"
             );
-            return Ok(PushSendOutcome::Sent); // Treat as sent to avoid retries
+            return Ok(PushSendOutcome::NotWired);
         }
 
         let mut last_error = None;
+        let mut saw_not_wired = false;
 
         for channel in &self.channels {
             match channel.send(attempt.clone()).await {
+                Ok(PushSendOutcome::NotWired) => {
+                    saw_not_wired = true;
+                    continue;
+                }
                 Ok(outcome) => return Ok(outcome),
                 Err(PushSendError::NotConfigured(_)) => continue,
                 Err(e) => {
                     last_error = Some(e);
                 }
             }
+        }
+
+        if saw_not_wired {
+            return Ok(PushSendOutcome::NotWired);
         }
 
         Err(last_error

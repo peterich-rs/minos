@@ -417,6 +417,14 @@ impl NotificationService for DefaultNotificationService {
                                         "rate_limited",
                                     );
                                 }
+                                Ok(PushSendOutcome::NotWired) => {
+                                    // P5: config hooks exist but provider not production-wired.
+                                    // Do not record_sent — honest non-delivery.
+                                    crate::telemetry::record_push_send(
+                                        kind.as_str(),
+                                        "not_wired",
+                                    );
+                                }
                                 Err(_) => {
                                     crate::telemetry::record_push_send(kind.as_str(), "error");
                                 }

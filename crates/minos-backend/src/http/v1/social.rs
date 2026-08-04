@@ -1579,6 +1579,11 @@ pub async fn try_agent_dispatch(
 ///
 /// Production path used from the host WS gateway (and tests) — does **not**
 /// require faking `next_attempt_at_ms` via requeue.
+///
+/// P6: also the multi-instance recovery edge for process-local
+/// [`crate::completion_watch::CompletionWatchRegistry`] — re-dispatch re-arms
+/// watches on the instance that claims the work (same process as the host WS
+/// when workers are co-located).
 pub async fn on_host_online_force_agent_dispatch(
     state: &BackendState,
     host_device_id: minos_domain::DeviceId,

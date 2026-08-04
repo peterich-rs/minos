@@ -255,7 +255,7 @@ impl App {
             delegation_result_source_message(delegation, target_session_id, visible_body);
         if let Err(error) = self
             .backend
-            .send_message(source_session_id, &source_body)
+            .send_message(source_session_id, &source_body, None)
             .await
         {
             tracing::warn!(

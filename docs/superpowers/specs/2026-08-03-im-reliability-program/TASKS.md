@@ -101,7 +101,7 @@ Backend spec: [../2026-08-03-backend-im-delivery-orchestration.md](../2026-08-03
 - [x] **C2.4** 删除 Timeline 2s completion trail poll（仅保留 phase=error 且无 livePush 的 one-shot quiet refresh）
 - [x] **C2.5** `messageSeq ?? 0` → 缺失为 undefined；timeline-order 仅 seq 跨源 + optimistic 尾部
 - [x] **C2.6** 测试更新（hub-timeline / timeline-order / im-outbox / isCanonicalAgentResultId）
-- Residual: **TUI** still passes `origin_message_id: None` on local daemon RPC（local workbench only；not Hub collab path）— acceptable until TUI Linked; collab host/daemon path requires origin hard contract (skip non-canonical).
+- Residual: **TUI** pure local workbench / MCP without conversation user row still passes `origin_message_id: None`；conversation submit path now pins origin (P4 DONE).
 
 ### C3 TimelineSync
 
@@ -164,13 +164,14 @@ Backend spec: [../2026-08-03-backend-im-delivery-orchestration.md](../2026-08-03
 
 | 项 | 状态 |
 |----|------|
-| Hub digest 单轨未读（C6.3 状态债） | Desktop 仍可能存在 local `readMessageCountById` vs Hub digest 双轨；本轨只交付 badge + forceReconnect，未强并 digest 单轨 |
-| 订阅 LRU（C6.3 / R4） | **R4 DONE** — Desktop `conversation-sub-lru` + `subscribeConversation` 驱逐；**Mobile R3a** conversation subscribe/unsubscribe on open chat |
-| Desktop approval Hub HTTP | Desktop resolve 仍走 **local daemon**（reachability outbox）；Hub `/v1/approvals/respond` + `client_request_id` 由 **Mobile** 全链路使用 |
-| Multi-instance CompletionWatch / presence | in-memory registry；单实例假设 |
-| TUI origin_message_id | local-only None；非 collab |
+| **P1** Hub digest 单轨未读 | **DONE** — Hub IM mode rail unread = digest only；`readMessageCountById` 仅 daemon-only / 未登录 — LAYER-P.md |
+| **P2** 订阅 LRU | **DONE** — R4 Desktop `conversation-sub-lru` + `unsubscribeConversation` on eviction；Mobile R3a open-chat subscribe |
+| **P3** Desktop approval Hub HTTP | **DONE** — authenticated: `POST /v1/approvals/respond` + top-level `client_request_id` Intent Outbox；local: daemon path, decision JSON clean |
+| **P4** TUI origin_message_id | **DONE** — conversation submit pins `tui-{conv}-{ms}` origin through daemon RPC；pure local workbench / MCP without conv message stays `None` |
+| **P5** APNs/FCM 真通道 | **BLOCKED** on ops secrets — channel interface + env hooks；`NotWired` 非 fake Sent — LAYER-P.md |
+| **P6** Multi-instance CompletionWatch | **DONE** process-local contract — host-online force-due re-arm；Redis watch store deferred |
 | Public HTTP `/v1/agent-sessions/*` | **origin_message_id 已透传**（可选字段）；无 origin 时仍为非 collab 调用方责任 |
-| Desktop 会话列表 Hub SSOT | 仍以 daemon 为主 |
+| Desktop 会话列表 Hub SSOT | 仍以 daemon 为主（title/unread 已 Hub prefer） |
 | C6.4 / C6.5 多端 live | 自动化见 EVIDENCE V3；设备联调矩阵 **NOT_RUN**（runbook） |
 | R3 account thin digest | **DONE** — audit §3 + EVIDENCE R3 |
-| G4 full DoD | 依赖 C6.4/C6.5 设备证据；后端 B7 + G3 已 PASS；**Layer R complete** |
+| G4 full DoD | 依赖 C6.4/C6.5 设备证据；后端 B7 + G3 已 PASS；**Layer R complete**；**Layer P executed** |

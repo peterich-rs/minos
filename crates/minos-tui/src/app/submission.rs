@@ -172,21 +172,33 @@ impl App {
 
         self.hydrate_thread_if_needed(&session_id).await;
 
+        // P4: when a conversation user row is recorded, pin the same id as
+        // origin_message_id for agent-result:{conv}:{session}:{origin}.
+        // Pure local workbench (no conversation) keeps origin None.
         let conversation_message = message_body.as_ref().and_then(|body| {
             self.ui
                 .nav_level()
                 .conversation_id()
-                .map(|conversation_id| (conversation_id.to_owned(), body.clone()))
+                .map(|conversation_id| {
+                    let origin_id = format!(
+                        "tui-{}-{}",
+                        conversation_id,
+                        chrono::Utc::now().timestamp_millis()
+                    );
+                    (conversation_id.to_owned(), body.clone(), origin_id)
+                })
         });
         if let Some(tx) = self.event_tx.clone() {
             let backend = Arc::clone(&self.backend);
             let conversation_message = conversation_message.clone();
             tokio::spawn(async move {
-                if let Some((conversation_id, body)) = conversation_message {
+                let origin_message_id = if let Some((conversation_id, body, origin_id)) =
+                    conversation_message
+                {
                     if let Err(error) = backend
                         .append_conversation_message(
                             &conversation_id,
-                            None,
+                            Some(&origin_id),
                             None,
                             "user",
                             None,
@@ -208,7 +220,10 @@ impl App {
                         });
                         return;
                     }
-                }
+                    Some(origin_id)
+                } else {
+                    None
+                };
                 if let Err(e) = backend.resume_session(&session_id, false).await {
                     tracing::debug!(
                         target: "minos_tui::app",
@@ -217,7 +232,10 @@ impl App {
                         "resume_session failed or not needed"
                     );
                 }
-                if let Err(error) = backend.send_message(&session_id, &text).await {
+                if let Err(error) = backend
+                    .send_message(&session_id, &text, origin_message_id.as_deref())
+                    .await
+                {
                     let error = format_error_chain(&error);
                     tracing::warn!(
                         target: "minos_tui::app",
@@ -231,10 +249,19 @@ impl App {
             return true;
         }
 
-        if let Some((conversation_id, body)) = conversation_message {
+        let origin_message_id = if let Some((conversation_id, body, origin_id)) =
+            conversation_message
+        {
             if let Err(error) = self
                 .backend
-                .append_conversation_message(&conversation_id, None, None, "user", None, &body)
+                .append_conversation_message(
+                    &conversation_id,
+                    Some(&origin_id),
+                    None,
+                    "user",
+                    None,
+                    &body,
+                )
                 .await
             {
                 tracing::warn!(
@@ -247,7 +274,10 @@ impl App {
                 self.ui
                     .set_error(format!("Failed to record conversation message: {error}"));
             }
-        }
+            Some(origin_id)
+        } else {
+            None
+        };
         if let Err(e) = self.backend.resume_session(&session_id, false).await {
             tracing::debug!(
                 target: "minos_tui::app",
@@ -256,7 +286,11 @@ impl App {
                 "resume_session failed or not needed"
             );
         }
-        if let Err(error) = self.backend.send_message(&session_id, &text).await {
+        if let Err(error) = self
+            .backend
+            .send_message(&session_id, &text, origin_message_id.as_deref())
+            .await
+        {
             self.ui.set_error(format!(
                 "Failed to send message: {}",
                 format_error_chain(&error)

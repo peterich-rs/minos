@@ -129,9 +129,10 @@ export type WorkspaceState = {
   }[];
   clisStatus: ResourceFetchStatus;
   /**
-   * ReadReceipt baseline: messageCount when user last opened a conversation.
-   * Persistable (localStorage); not a business ConversationList cache.
-   * unread = max(0, messageCount - baseline). Survives bootEpoch.
+   * Local ReadReceipt baseline for **daemon-only / unauthenticated** rail.
+   * Hub IM mode (P1): unread SSOT is Hub digest / live patch only — this map
+   * is not used for badges while authenticated. Survives bootEpoch for
+   * offline fallback after logout.
    */
   readMessageCountById: Record<string, number>;
   /** Conversation currently open in the timeline (unread forced to 0). */

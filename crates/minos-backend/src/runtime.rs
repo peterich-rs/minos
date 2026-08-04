@@ -20,7 +20,6 @@ use crate::host_commands::{HostCommandService, RuntimeHostCommandService};
 use crate::host_link::HostLinkService;
 use crate::http::{self, BackendState, RouteContract};
 use crate::ingest::{translate::SessionTranslators, use_case::IngestUseCase};
-use crate::notifications::channels::composite::CompositeChannel;
 use crate::notifications::use_case::DefaultNotificationService;
 use crate::notifications::NotificationService;
 use crate::project::ProjectService;
@@ -154,11 +153,21 @@ impl AppContext {
         let run_workers = runtime_config.runtime_mode.runs_supervised_workers();
         // Build notification service before realtime so durable fanout can
         // trigger push as a secondary side effect without owning the outbox.
-        let composite_channel = CompositeChannel::from_env();
+        // P5: register channel kinds individually so channel_for(Apns|Fcm)
+        // matches. Each send returns NotWired until ops secrets + provider
+        // integration land (never fake Sent).
+        let mut push_channels: Vec<Arc<dyn crate::notifications::channels::PushChannel>> =
+            Vec::new();
+        if let Some(apns) = crate::notifications::channels::apns::ApnsChannel::from_env() {
+            push_channels.push(Arc::new(apns));
+        }
+        if let Some(fcm) = crate::notifications::channels::fcm::FcmChannel::from_env() {
+            push_channels.push(Arc::new(fcm));
+        }
         let notifications: Arc<dyn NotificationService> = Arc::new(
             DefaultNotificationService::new(
                 store.clone(),
-                vec![Arc::new(composite_channel)],
+                push_channels,
                 Arc::clone(&registry) as Arc<dyn crate::notifications::PresencePort>,
             ),
         );

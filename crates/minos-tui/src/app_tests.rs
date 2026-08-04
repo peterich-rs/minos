@@ -157,7 +157,12 @@ impl AgentBackend for TestBackend {
         })
     }
 
-    async fn send_message(&self, session_id: &str, text: &str) -> Result<()> {
+    async fn send_message(
+        &self,
+        session_id: &str,
+        text: &str,
+        _origin_message_id: Option<&str>,
+    ) -> Result<()> {
         if self.block_sends {
             std::future::pending::<()>().await;
         }

@@ -100,7 +100,7 @@ impl App {
                 self.refresh_current_conversation_sessions(&conversation_id)
                     .await;
                 self.backend
-                    .send_message(&outcome.session_id, &prompt)
+                    .send_message(&outcome.session_id, &prompt, None)
                     .await?;
                 let delegation = self
                     .state
@@ -356,7 +356,9 @@ impl App {
                         session_short_id
                     )
                 })?;
-            self.backend.send_message(&session_id, &prompt).await?;
+            self.backend
+                .send_message(&session_id, &prompt, None)
+                .await?;
             return Ok(body.to_owned());
         }
         if let Some(error) = self.agent_unavailability_error(target.agent) {
@@ -377,7 +379,7 @@ impl App {
         self.refresh_current_conversation_sessions(conversation_id)
             .await;
         self.backend
-            .send_message(&outcome.session_id, &prompt)
+            .send_message(&outcome.session_id, &prompt, None)
             .await?;
         Ok(delegation_visible_message(
             target.agent,

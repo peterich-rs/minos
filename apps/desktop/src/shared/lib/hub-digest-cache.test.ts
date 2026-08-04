@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it, beforeEach } from "node:test";
 import { hubDigestCache } from "./hub-digest-cache.ts";
-import { mergeConversationList } from "./conversation-list-merge.ts";
+import {
+  mergeConversationList,
+  resolveRailUnread,
+} from "./conversation-list-merge.ts";
 
 // Pure helpers only — no @/ path aliases (node:test strip-types).
 
@@ -57,10 +60,67 @@ describe("hubDigestCache", () => {
   });
 });
 
+describe("resolveRailUnread (P1 single-track)", () => {
+  it("hub mode uses digest only and ignores local baseline", () => {
+    assert.equal(
+      resolveRailUnread({
+        conversationId: "c1",
+        unreadSource: "hub",
+        hubUnreadCount: 3,
+        localUnread: 99,
+      }),
+      3,
+    );
+    assert.equal(
+      resolveRailUnread({
+        conversationId: "c1",
+        unreadSource: "hub",
+        hubUnreadCount: 0,
+        localUnread: 99,
+      }),
+      undefined,
+    );
+    assert.equal(
+      resolveRailUnread({
+        conversationId: "c1",
+        unreadSource: "hub",
+        hubUnreadCount: undefined,
+        localUnread: 5,
+      }),
+      undefined,
+    );
+  });
+
+  it("local mode uses baseline unread only", () => {
+    assert.equal(
+      resolveRailUnread({
+        conversationId: "c1",
+        unreadSource: "local",
+        hubUnreadCount: 7,
+        localUnread: 2,
+      }),
+      2,
+    );
+  });
+
+  it("focused conversation clears badge", () => {
+    assert.equal(
+      resolveRailUnread({
+        conversationId: "c1",
+        focusedConversationId: "c1",
+        unreadSource: "hub",
+        hubUnreadCount: 4,
+      }),
+      undefined,
+    );
+  });
+});
+
 describe("mergeConversationList", () => {
   it("prefers Hub title/preview/unread and keeps daemon host fields", () => {
     const merged = mergeConversationList({
       projectId: "p1",
+      unreadSource: "hub",
       daemonRows: [
         {
           id: "c1",
@@ -72,6 +132,7 @@ describe("mergeConversationList", () => {
           runningCount: 1,
           approvalCount: 0,
           messageCount: 3,
+          unread: 9, // local baseline must not win in hub mode
         },
       ],
       hubDigests: [
@@ -95,9 +156,46 @@ describe("mergeConversationList", () => {
     assert.equal(merged[0].runningCount, 1);
   });
 
+  it("hub mode does not fall back to local unread when digest missing", () => {
+    const merged = mergeConversationList({
+      projectId: "p1",
+      unreadSource: "hub",
+      daemonRows: [
+        {
+          id: "c-local-only",
+          projectId: "p1",
+          title: "Daemon",
+          unread: 5,
+          messageCount: 10,
+        },
+      ],
+      hubDigests: [],
+    });
+    assert.equal(merged.length, 1);
+    assert.equal(merged[0].unread, undefined);
+  });
+
+  it("local mode keeps daemon baseline unread", () => {
+    const merged = mergeConversationList({
+      projectId: "p1",
+      unreadSource: "local",
+      daemonRows: [
+        {
+          id: "c1",
+          projectId: "p1",
+          title: "Daemon",
+          unread: 4,
+        },
+      ],
+      hubDigests: [],
+    });
+    assert.equal(merged[0].unread, 4);
+  });
+
   it("shows Hub-only rows when daemon absent", () => {
     const merged = mergeConversationList({
       projectId: "p1",
+      unreadSource: "hub",
       daemonRows: [],
       hubDigests: [
         {

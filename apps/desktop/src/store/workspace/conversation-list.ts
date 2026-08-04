@@ -101,9 +101,14 @@ export function createConversationListActions(
 
             let list;
             if (hubMode) {
+              // P1: Hub digest is unread SSOT. Do not seed rail unread from
+              // readMessageCountById (local baseline is daemon-only fallback).
               const daemonUi = normalized
                 .filter((row) => Boolean(row.id))
-                .map((row) => toUiConversation(row, read, focused, projectId));
+                .map((row) => {
+                  const ui = toUiConversation(row, {}, focused, projectId);
+                  return { ...ui, unread: undefined };
+                });
               // Never attach Hub-only under every project (would duplicate).
               // Hub-only rows live with empty projectId in a single global set.
               list = mergeConversationList({
@@ -112,8 +117,10 @@ export function createConversationListActions(
                 projectId,
                 includeHubOnly: false,
                 focusedConversationId: focused,
+                unreadSource: "hub",
               });
             } else {
+              // Daemon-only / unauthenticated: local baseline unread track.
               list = normalized
                 .filter((row) => Boolean(row.id))
                 .map((row) => toUiConversation(row, read, focused, projectId));
@@ -137,6 +144,7 @@ export function createConversationListActions(
                     projectId: "",
                     includeHubOnly: true,
                     focusedConversationId: focused,
+                    unreadSource: "hub",
                   })
                 : [];
 
@@ -146,7 +154,9 @@ export function createConversationListActions(
             const conversations = [...others, ...list, ...hubOnly];
             set((s) => ({
               conversations,
-              readMessageCountById: read,
+              // Hub mode: keep map for cold-start daemon-only fallback only;
+              // rail unread never reads it while authenticated.
+              readMessageCountById: hubMode ? s.readMessageCountById : read,
               conversationsStatusByProject: {
                 ...s.conversationsStatusByProject,
                 [projectId]: { phase: "ready", generation },

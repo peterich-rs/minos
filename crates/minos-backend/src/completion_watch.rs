@@ -3,6 +3,18 @@
 //! Armed when Mobile/`client_live` dispatches an agent; drained on host ingest
 //! (event-driven). Keyed by **origin_message_id** (one watch per user turn);
 //! session has a secondary index so multi-turn dispatches never overwrite.
+//!
+//! # Multi-instance (P6)
+//!
+//! This registry is **process-local**. Correct multi-replica operation requires
+//! co-locating host WebSocket + `agent_dispatch_worker` on the same process so
+//! `arm` and host-ingest `try_project_completion_for_session` share memory.
+//!
+//! Recovery path (already production): host online →
+//! [`crate::http::v1::social::on_host_online_force_agent_dispatch`] force-dues
+//! pending dispatches → worker re-arms watches on the instance that processes
+//! the batch. A shared Redis-backed watch store is deferred until multi-replica
+//! host affinity is required at scale.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;

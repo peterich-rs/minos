@@ -44,23 +44,12 @@ impl PushChannel for SmtpChannel {
     }
 
     async fn send(&self, attempt: PushAttempt) -> Result<PushSendOutcome, PushSendError> {
-        // TODO: Implement real SMTP send using lettre.
-        //
-        // Steps:
-        // 1. Build lettre Message with HTML + plain text bodies
-        // 2. Create SmtpTransport with rustls
-        // 3. Send the message
-        // 4. Map response:
-        //    - Success => Ok(PushSendOutcome::Sent)
-        //    - Permanent error => Ok(PushSendOutcome::TokenExpired)
-        //    - Rate limit => Ok(PushSendOutcome::RateLimited)
-        //
-        // For now, log and return Sent.
-        tracing::debug!(
+        // Email fallback not production-wired (same honesty as APNs/FCM P5).
+        tracing::warn!(
             target: "minos_backend::notifications::smtp",
             account_id = %attempt.account_id,
-            "SMTP push stub: would send email notification"
+            "SMTP channel NotWired: config present but production send not implemented"
         );
-        Ok(PushSendOutcome::Sent)
+        Ok(PushSendOutcome::NotWired)
     }
 }

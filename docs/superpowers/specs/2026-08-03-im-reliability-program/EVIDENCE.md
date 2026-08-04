@@ -260,7 +260,7 @@ From [client-im-sync-engine.md](../2026-08-03-client-im-sync-engine.md) §Succes
 | SnapshotRequired | timeline-sync unit | Snapshot consumer code | n/a | **PARTIAL** |
 | Offline reaction | outbox reaction_toggle unit | outbox unit | reaction idempotency **PASS** | **PARTIAL** |
 | Sleep / resume live | C6.1 forceReconnect code | reconnect unit (mobile) | n/a | **PASS_BY_CODE_INSPECTION** |
-| Approval intent | daemon outbox unit | Hub client_request_id | approval store tests **PASS** | **PARTIAL** — Desktop Hub HTTP residual (P3) |
+| Approval intent | daemon outbox unit | Hub client_request_id | approval store tests **PASS** + Desktop P3 Hub HTTP | **PASS** (P3 Desktop Hub path shipped) |
 
 **C6.5 overall:** live multi-end **NOT_RUN**; automated rows as above.
 
@@ -298,13 +298,16 @@ See [README.md](README.md) §3 and [TASKS.md](TASKS.md) B7 / C6.4–C6.5 / G2–
 
 ---
 
+## Layer P — Product residuals
+
+See [LAYER-P.md](LAYER-P.md). Status: P1–P4/P6 **DONE**; P5 **BLOCKED** (ops secrets, honest `NotWired`).
+
 ## Artifacts
 
 | Path | Purpose |
 |------|---------|
 | `EVIDENCE.md` | This file |
+| `LAYER-P.md` | Layer P evidence + status |
 | `scripts/im-reliability-gates.sh` | G2/B7.2 gates |
 | `realtime-surface-audit.md` | R0 DurableEvent × HTTP audit |
 | `apps/desktop/src/shared/lib/conversation-sub-lru.ts` | R4 pure LRU |
-
-**No git commit / push / PR** (parent handles after review).

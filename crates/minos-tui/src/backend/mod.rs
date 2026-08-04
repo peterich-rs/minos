@@ -199,7 +199,17 @@ pub trait AgentBackend: Send + Sync {
 
     async fn start_agent(&self, agent: AgentName, workspace: PathBuf) -> Result<StartAgentOutcome>;
 
-    async fn send_message(&self, session_id: &str, text: &str) -> Result<()>;
+    /// Send user text to an agent session.
+    ///
+    /// `origin_message_id` is the conversation user message id that triggered
+    /// this turn (agent-result id suffix). Pass `None` only for pure local
+    /// workbench turns with no conversation message row.
+    async fn send_message(
+        &self,
+        session_id: &str,
+        text: &str,
+        origin_message_id: Option<&str>,
+    ) -> Result<()>;
 
     async fn send_approval_decision(
         &self,
