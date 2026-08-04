@@ -586,10 +586,13 @@ export class HubRealtimeSession {
       return;
     }
 
-    // Some serializers nest kind on payload only.
+    // Some serializers nest kind on payload only — still advance cursor on apply.
     if (frame.payload && typeof frame.payload === "object" && "kind" in frame.payload) {
       const p = frame.payload as DurableMessagePayload;
-      this.handleDurable(p.kind, p);
+      const applied = this.handleDurable(p.kind, p);
+      if (applied) {
+        this.noteTopicSeq(frame.topic, frame.topic_seq);
+      }
     }
   }
 

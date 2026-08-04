@@ -2,25 +2,26 @@
 
 | Field | Value |
 |-------|--------|
-| Status | **Normative execution SSOT** for remaining client/backend IM reliability |
-| Date | 2026-08-03 |
-| Program | [README](README.md) · [TASKS](TASKS.md) |
+| Status | **Shipped**（实现 + Layer V partial / Layer P+R DONE）— 本文保留为终态契约 SSOT |
+| Date | 2026-08-03 · **status table refreshed 2026-08-04** |
+| Program | [README](README.md) · [TASKS](TASKS.md) · [EVIDENCE](EVIDENCE.md) |
 | Rule | [AGENTS.md Final-Architecture Planning Rule](../../../../Agents.md) — 只落地终态结构，禁止短期补丁 |
 | Depends on | B1–B5 / C1–C4 **APPROVE** |
 
-> 本文吸收 2026-08-03 深挖评估：问题定位、终态契约、微信级矩阵、状态管理债务。实现按 **B6 → C5 → C6** 串行闭环（实现 → review → 打回 → APPROVE）。
+> 历史：2026-08-03 深挖评估 + B6→C5→C6 串行闭环。  
+> **2026-08-04：** B6/C5/C6.1–C6.3 代码已合入 `feat/im-reliability-program`；下表为**代码现实**，不再是「待开轨」快照。
 
 ---
 
-## 0. 现状结论（已复核）
+## 0. 现状结论（2026-08-04 复核）
 
-| 轨 | 完成度（约） | 硬缺口 |
-|----|--------------|--------|
-| 消息收发 / 未读 / 重连水位 | ~90% | 局部 drift（见 §4） |
-| **B6** Reaction 服务端契约 | ~40% | `event_id` 末尾 `Uuid::new_v4()` 破坏幂等 |
-| **C5** Intent Outbox | Desktop reaction ~20%；Mobile reaction ~0%；Approval ~0% | outbox kind 半装载；approval 丢 `client_request_id` |
-| **C6** 连接生命周期 | Mobile ~80%；Desktop ~30% | Desktop 无 visibility/sleep；Mobile worker 冷启动 gap |
-| 整体相对「微信级」 | **架构对齐，实现约 75%** | 缺 reaction 可靠写 + Desktop 休眠恢复 + approval 持久化 |
+| 轨 | 完成度 | 状态 |
+|----|--------|------|
+| 消息收发 / 未读 / 重连水位 | **~95%** | Outbox + Snapshot/after_seq + unread Hub SSOT；设备杀进程矩阵仍 runbook |
+| **B6** Reaction 服务端契约 | **DONE** | 确定性 `event_id` + `client_op_id` claim-before-toggle；conversation-only fanout |
+| **C5** Intent Outbox | **DONE** | Desktop reaction/approval + Mobile reaction outbox；approval 顶层 `client_request_id` |
+| **C6** 连接生命周期 | **DONE**（C6.1–3） | Desktop forceReconnect/visibility；Mobile app-root worker bootstrap；C6.4/5 live 矩阵 **NOT_RUN** |
+| 整体相对「微信级」 | **实现轨关闭** | 残留：真 Push 通道（P5）、多副本 CompletionWatch Redis、设备联调 |
 
 ---
 

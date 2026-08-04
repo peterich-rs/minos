@@ -64,6 +64,21 @@ export function hubChatMessageToTimeline(
     agent = (fromMap as AgentRuntime | null) ?? runtimeFromHubAgent(message);
   }
 
+  // Preserve explicit empty array so merge treats Hub "no reactions" as SSOT
+  // (do not collapse [] → undefined and fall back to stale local).
+  const reactions =
+    message.reactions === undefined
+      ? undefined
+      : message.reactions.map((g) => ({
+          emoji: g.emoji,
+          count: g.count,
+          reactedByMe: g.reactedByMe,
+          actors: (g.actors ?? []).map((a) => ({
+            id: a.actorId,
+            displayName: a.displayName,
+          })),
+        }));
+
   return {
     id: message.messageId,
     role: message.senderType === "agent" ? "agent" : "user",
@@ -79,6 +94,7 @@ export function hubChatMessageToTimeline(
     kind: "text",
     replyToMessageId: message.replyToMessageId ?? undefined,
     deliveryStatus: "sent",
+    reactions,
   };
 }
 
@@ -150,8 +166,10 @@ function isOptimisticLocalBubble(m: TimelineMessage): boolean {
  * - Hub wins on **same message id** for chat bubbles (multi-end SSOT).
  * - Local tool/git/system/approval cards always keep.
  * - Local chat bubbles **missing from Hub** are gap-filled only when:
- *   - optimistic user send (sending/failed), or
- *   - local agent-result not yet acked on Hub (same id space; no body soft-dedupe).
+ *   - optimistic send (`sending` / `failed`), or
+ *   - local user row (host_projection lag: daemon sent, Hub outbox pending), or
+ *   - local `agent-result:…` not yet on Hub (same id space; no body soft-dedupe).
+ * - Bare non-canonical agent rows without Hub id are dropped (no dual SSOT ghosts).
  */
 export function mergeHubAndLocalTimeline(input: {
   hubMessages: TimelineMessage[];
@@ -167,35 +185,44 @@ export function mergeHubAndLocalTimeline(input: {
 
   // Hub bubbles are authoritative when present; keep local messageSeq so sort
   // still works (Hub HTTP rows often omit host-local seq).
+  // Reactions: Hub defined (incl. []) wins; only fall back when Hub omits field.
   for (const m of input.hubMessages) {
     const localPeer = input.localMessages.find((l) => l.id === m.id);
-    if (localPeer?.messageSeq != null && m.messageSeq == null) {
-      byId.set(m.id, { ...m, messageSeq: localPeer.messageSeq });
-    } else {
-      byId.set(m.id, m);
-    }
+    const reactions =
+      m.reactions !== undefined ? m.reactions : localPeer?.reactions;
+    const messageSeq =
+      m.messageSeq != null
+        ? m.messageSeq
+        : localPeer?.messageSeq != null
+          ? localPeer.messageSeq
+          : undefined;
+    byId.set(m.id, { ...m, messageSeq, reactions });
   }
 
   // Gap-fill local chat not yet on Hub (same id → already covered above).
   for (const m of input.localMessages) {
     if (!isLocalChatBubbleForHubSsot(m)) continue;
     if (byId.has(m.id)) {
-      // Same id already from Hub: ensure seq retained if Hub lacked it.
+      // Same id already from Hub: fill seq only; never overwrite Hub reactions
+      // (including explicit empty) with stale local.
       const cur = byId.get(m.id)!;
       if (cur.messageSeq == null && m.messageSeq != null) {
         byId.set(m.id, { ...cur, messageSeq: m.messageSeq });
       }
+      if (cur.reactions === undefined && m.reactions !== undefined) {
+        byId.set(m.id, {
+          ...byId.get(m.id)!,
+          reactions: m.reactions,
+        });
+      }
       continue;
     }
 
-    // Optimistic user rows (not acked) and local agent-result before Hub
-    // projector / host_projection lands (canonical id, no soft-dedupe).
-    if (
+    const keep =
       isOptimisticLocalBubble(m) ||
       m.role === "user" ||
-      m.role === "agent" ||
-      m.id.startsWith("agent-result:")
-    ) {
+      m.id.startsWith("agent-result:");
+    if (keep) {
       byId.set(m.id, m);
     }
   }

@@ -432,14 +432,18 @@ async fn force_due_sqlite(
     account_ids: &[String],
     now_ms: i64,
 ) -> Result<u32, BackendError> {
-    // Loop per account: keeps bind indexing simple and rows small.
+    // pending always; inflight only when lease is stale (do not steal live work).
+    let stale_before = now_ms - STALE_INFLIGHT_MS;
     let mut total = 0u32;
     for account_id in account_ids {
         let result = sqlx::query(
             "UPDATE agent_dispatch_queue
              SET status = ?1, next_attempt_at_ms = ?2, updated_at_ms = ?3
              WHERE account_id = ?4
-               AND status IN (?5, ?6)",
+               AND (
+                    status = ?5
+                    OR (status = ?6 AND updated_at_ms < ?7)
+               )",
         )
         .bind(STATUS_PENDING)
         .bind(now_ms)
@@ -447,6 +451,7 @@ async fn force_due_sqlite(
         .bind(account_id)
         .bind(STATUS_PENDING)
         .bind(STATUS_INFLIGHT)
+        .bind(stale_before)
         .execute(pool)
         .await
         .map_err(store_err("agent_dispatch_queue::force_due"))?;
@@ -633,17 +638,23 @@ async fn force_due_postgres(
     account_ids: &[String],
     now_ms: i64,
 ) -> Result<u32, BackendError> {
+    let stale_before = now_ms - STALE_INFLIGHT_MS;
     let result = sqlx::query(
         "UPDATE agent_dispatch_queue
          SET status = $1, next_attempt_at_ms = $2, updated_at_ms = $3
          WHERE account_id = ANY($4)
-           AND status = ANY($5)",
+           AND (
+                status = $5
+                OR (status = $6 AND updated_at_ms < $7)
+           )",
     )
     .bind(STATUS_PENDING)
     .bind(now_ms)
     .bind(now_ms)
     .bind(account_ids)
-    .bind(&[STATUS_PENDING.to_string(), STATUS_INFLIGHT.to_string()][..])
+    .bind(STATUS_PENDING)
+    .bind(STATUS_INFLIGHT)
+    .bind(stale_before)
     .execute(pool)
     .await
     .map_err(store_err("agent_dispatch_queue::force_due"))?;

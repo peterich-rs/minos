@@ -39,6 +39,7 @@ import {
   enqueueReactionToggle,
   enqueueUserMessage,
   isAcked,
+  earliestPendingAttemptAt,
   listDuePending,
   markAcked,
   markFailed,
@@ -340,6 +341,8 @@ function isApprovalAlreadyResolvedError(error: unknown): boolean {
       ? String((error as { code: unknown }).code ?? "").toLowerCase()
       : "";
   const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  // Only treat explicit already-resolved / approval_not_found as success.
+  // Broad "not found" would mask unrelated 404s and burn retries incorrectly.
   return (
     code.includes("already_resolved") ||
     code.includes("approval_already") ||
@@ -347,7 +350,8 @@ function isApprovalAlreadyResolvedError(error: unknown): boolean {
     msg.includes("already_resolved") ||
     msg.includes("already resolved") ||
     msg.includes("approval_already") ||
-    msg.includes("not found") // request gone after host applied
+    msg.includes("approval_not_found") ||
+    msg.includes("approval not found")
   );
 }
 
@@ -417,7 +421,9 @@ async function postApprovalResolveFromOutbox(
   }
 }
 
-async function postOutboxEntry(entry: ImOutboxEntry): Promise<void> {
+async function postOutboxEntry(
+  entry: ImOutboxEntry,
+): Promise<HubReactionToggleResult | void> {
   switch (entry.kind) {
     case "user_message":
       await postUserMessageFromOutbox(entry);
@@ -426,8 +432,7 @@ async function postOutboxEntry(entry: ImOutboxEntry): Promise<void> {
       await postAgentResultFromOutbox(entry);
       return;
     case "reaction_toggle":
-      await postReactionToggleFromOutbox(entry);
-      return;
+      return postReactionToggleFromOutbox(entry);
     case "approval_resolve":
       await postApprovalResolveFromOutbox(entry);
       return;
@@ -439,8 +444,8 @@ async function postOutboxEntry(entry: ImOutboxEntry): Promise<void> {
 }
 
 /**
- * C5.1 single path: enqueue reaction_toggle then flush via the same outbox
- * machine as user_message. Returns Hub aggregate for generation-gated apply.
+ * C5.1 single path: enqueue reaction_toggle then flush via the shared outbox
+ * machine. Returns Hub aggregate for generation-gated apply.
  * Logical op id = clientOpId (= B6 client_op_id); row id = outbox:${clientOpId}.
  */
 export async function syncReactionToggleToCloud(input: {
@@ -472,17 +477,12 @@ export async function syncReactionToggleToCloud(input: {
     return null;
   }
 
-  markInflight(clientOpId);
-  try {
-    const result = await postReactionToggleFromOutbox(entry);
-    markAcked(clientOpId);
-    return result;
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    markFailed(clientOpId, msg);
-    scheduleOutboxWorker();
-    throw error instanceof Error ? error : new Error(msg);
-  }
+  const result = await flushOutboxEntry(entry, {
+    throwOnTerminal: true,
+    silentToast: true,
+  });
+  scheduleOutboxWorker();
+  return (result as HubReactionToggleResult | undefined) ?? null;
 }
 
 /**
@@ -527,7 +527,8 @@ export async function syncApprovalResolve(input: {
   }
 
   const entry = enqueueApprovalResolve({
-    conversationId: sessionId,
+    // Scope key for local storage only (not a Hub conversation id).
+    conversationId: `approval-session:${sessionId}`,
     clientMessageId: clientOpId,
     text: JSON.stringify({
       requestId,
@@ -538,16 +539,11 @@ export async function syncApprovalResolve(input: {
   });
   if (entry.status === "acked" || isAcked(clientOpId)) return;
 
-  markInflight(clientOpId);
-  try {
-    await postApprovalResolveFromOutbox(entry);
-    markAcked(clientOpId);
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    markFailed(clientOpId, msg);
-    scheduleOutboxWorker();
-    throw error instanceof Error ? error : new Error(msg);
-  }
+  await flushOutboxEntry(entry, {
+    throwOnTerminal: true,
+    silentToast: true,
+  });
+  scheduleOutboxWorker();
 }
 
 /**
@@ -593,38 +589,40 @@ export async function syncUserMessageToCloud(input: {
 
 async function flushOutboxEntry(
   entry: ImOutboxEntry,
-  opts?: { throwOnTerminal?: boolean },
-): Promise<void> {
+  opts?: { throwOnTerminal?: boolean; silentToast?: boolean },
+): Promise<HubReactionToggleResult | void> {
   if (entry.status === "acked") return;
   if (isAcked(entry.clientMessageId)) return;
 
   markInflight(entry.clientMessageId);
   try {
-    await postOutboxEntry(entry);
+    const result = await postOutboxEntry(entry);
     markAcked(entry.clientMessageId);
-    rememberProjected(entry.clientMessageId);
+    if (entry.kind === "user_message" || entry.kind === "agent_result") {
+      rememberProjected(entry.clientMessageId);
+    }
+    return result;
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     const status = markFailed(entry.clientMessageId, msg);
     console.warn("[im-cloud-sync] outbox flush failed", entry.kind, error);
-    if (status === "failed_terminal") {
-      toast.error(
-        "Cloud sync failed",
-        `Message not visible on other devices: ${msg}`,
-      );
-      if (opts?.throwOnTerminal) {
-        throw error instanceof Error ? error : new Error(msg);
+    const isMessageKind =
+      entry.kind === "user_message" || entry.kind === "agent_result";
+    if (!opts?.silentToast && isMessageKind) {
+      if (status === "failed_terminal") {
+        toast.error(
+          "Cloud sync failed",
+          `Message not visible on other devices: ${msg}`,
+        );
+      } else {
+        toast.warning(
+          "Cloud sync delayed",
+          "Will retry sending this message to other devices.",
+        );
       }
-    } else {
-      toast.warning(
-        "Cloud sync delayed",
-        "Will retry sending this message to other devices.",
-      );
-      // Hub-first Linked: first attempt failure still surfaces as send error so
-      // the optimistic row can flip to failed (outbox will retry in background).
-      if (opts?.throwOnTerminal) {
-        throw error instanceof Error ? error : new Error(msg);
-      }
+    }
+    if (opts?.throwOnTerminal) {
+      throw error instanceof Error ? error : new Error(msg);
     }
   }
 }
@@ -740,25 +738,36 @@ export async function projectMissingLocalAgentResultsToHub(
   }
 }
 
-/** Schedule a background outbox drain (deduped; used after enqueue). */
+/** Schedule a background outbox drain until no pending rows remain. */
 export function scheduleOutboxWorker(): void {
   if (outboxWorkerTimer != null) return;
+  const now = Date.now();
+  const dueNow = listDuePending(now);
+  const nextAt = earliestPendingAttemptAt(now);
+  if (dueNow.length === 0 && nextAt == null) return;
+  // Sleep until due (min 50ms, default 2s when already due).
+  const delay =
+    dueNow.length > 0
+      ? 50
+      : Math.max(50, Math.min((nextAt as number) - now, 5 * 60_000));
   outboxWorkerTimer = setTimeout(() => {
     outboxWorkerTimer = null;
     void flushImOutbox().then(() => {
-      const still = listDuePending(Date.now() + 60_000);
-      if (still.length > 0 || listDuePending().length > 0) {
+      if (earliestPendingAttemptAt() != null) {
         scheduleOutboxWorker();
       }
     });
-  }, 2_000);
+  }, delay);
 }
 
 /** Start background outbox drain (call once when account session is ready). */
 export function startImOutboxWorker(): void {
   reclaimStaleInflight();
-  void flushImOutbox();
-  scheduleOutboxWorker();
+  void flushImOutbox().then(() => {
+    if (earliestPendingAttemptAt() != null) {
+      scheduleOutboxWorker();
+    }
+  });
 }
 
 /** Clear process caches (tests / account switch). */

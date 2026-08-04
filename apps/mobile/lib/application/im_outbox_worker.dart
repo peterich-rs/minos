@@ -94,9 +94,11 @@ class ImOutboxWorker {
         await _flushUserMessage(repository, entry);
       case ImOutboxKind.reactionToggle:
         await _flushReactionToggle(repository, entry);
-      case ImOutboxKind.agentResult:
-        // Not used on Mobile yet — leave pending without burning terminal.
-        return;
+      case ImOutboxKind.unsupported:
+        await repository.markOutboxFailed(
+          clientOpId: entry.clientOpId,
+          error: 'unknown_kind',
+        );
     }
   }
 
@@ -200,6 +202,8 @@ class ImOutboxWorker {
         clientOpId: entry.clientOpId,
         error: error.toString(),
       );
+      // Open chat (if any) reloads cache to drop optimistic toggle.
+      onConversationDirty?.call(entry.conversationId);
     }
   }
 }

@@ -95,11 +95,6 @@ export type WorkspaceState = {
   timelineStatusByConversation: Record<string, ResourceFetchStatus>;
   /** Per-conversation Inspector (sessions) fetch status. */
   inspectorStatusByConversation: Record<string, ResourceFetchStatus>;
-  /**
-   * Conversations marked dirty by LiveIngress when no Timeline working set
-   * exists (no RPC until ensureLoaded).
-   */
-  timelineDirtyByConversation: Record<string, boolean>;
   /** Project-scoped aggregate sessions (Sessions tab). Keyed by projectId. */
   projectSessionsByProject: Record<string, ProjectSession[]>;
   projectSessionsStatusByProject: Record<string, ResourceFetchStatus>;

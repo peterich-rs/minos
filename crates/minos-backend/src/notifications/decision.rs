@@ -57,8 +57,6 @@ pub enum Decision {
 pub enum DecisionReason {
     /// Event type is not notifiable (or conversation-topic only — no account push).
     NotNotifiable,
-    /// Self-sender should not receive their own message.
-    SelfSender,
     /// User has disabled this notification category.
     PreferenceDisabled,
     /// Currently in quiet hours.

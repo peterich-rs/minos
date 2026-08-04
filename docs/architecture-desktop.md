@@ -44,7 +44,7 @@
 | Markdown | `react-markdown` + `remark-gfm` + Shiki `CodeBlock` | 完成态 GFM；streaming 纯文本；fenced code 懒加载 Shiki 高亮 |
 | 主题 | Shiki theme JSON → CSS vars（`ThemeProvider`） | Host → Appearance 选主题/强调色；FOUC 用 localStorage 缓存 vars；默认 `minos`（warm） |
 | 长列表 | `@tanstack/react-virtual`（侧栏）+ `virtua`（conversation timeline） | ConversationList + **Sessions 左栏**（`SessionListPane` + flatten 树）用 `VirtualizedList`；主时间线 `VList` + stick-to-bottom/`shift` prepend；session **transcript** 仍分页 DOM（硬上限 2000），避免与审批/流式测高互殴 |
-| 状态 | Zustand 5 + TanStack Query 5 | **混合**：RQ 管 catalog/index 只读列表（projects/conversations/**projectSessions**/inspectorSessions/clis/profiles/models）；Zustand 管 timeline/transcript/SessionEntity/乐观发送/UI 指针（L0–L6）。**SessionEntity** 是 session status 的 live SSOT（manager `sessionStateChanged` → Entity → inspector/list projection）；Inspector 在 live session 上 quiet re-list 兜底。Timeline 在 `messageCount>0` 但本地空窗时即使 `livePush` 也会 quiet 补拉。 |
+| 状态 | Zustand 5 + TanStack Query 5 | **混合**：RQ 可缓存 catalog 网络；**会 merge 进 SessionEntity 的 list**（inspector / project sessions）一律 `staleTime: 0`，禁止 30s 陈旧 lifecycle。Zustand 管 timeline/transcript/SessionEntity/乐观发送/UI 指针（L0–L6）。**SessionEntity 唯一写漏斗**：`mergeSessionEntity` / `patchSessionEntity` → `commitSessionEntity`（membership 投影 + `conversation.runningCount/approvalCount` 由 Entity Σ 重算）。list hydrate 是 sample（防 stale demote）；manager / resume / resolve 为 authoritative。Inspector 列表只读投影行，禁止组件层再 overlay 全表 Entity。 |)
 | 图标 | Lucide React | 导航与工具栏 |
 | 本机 API | `@tauri-apps/api` | `invoke` → Rust |
 | 自动更新 | `tauri-plugin-updater` + `plugin-process` | 仅 release 构建启用；见 [desktop-auto-update.md](./desktop-auto-update.md) |

@@ -1,11 +1,11 @@
 /**
- * Hub → Desktop IM inbound (Phase 3–4 / 6.0).
+ * Hub → Desktop IM inbound.
  *
  * Map Hub messages into the workspace timeline projection only.
  * Never append cloud IM into Host daemon SQLite (collaboration SSOT = Hub).
  *
  * Cold open / realtime both use `hubChatMessageToTimeline` + store merge.
- * Gap fill uses `before_seq` (messages/query).
+ * Gap fill uses `before_seq` / `after_seq` (messages/query).
  */
 
 import {
@@ -65,9 +65,17 @@ function mapPageToTimeline(page: HubMessagePage): {
   nextBeforeSeq: number | null;
   rawCount: number;
 } {
-  const ordered = page.messages
-    .slice()
-    .sort((a, b) => a.messageSeq - b.messageSeq);
+  // Sort only by present finite seq; missing seq stays at relative wire order tail.
+  const ordered = page.messages.slice().sort((a, b) => {
+    const sa = a.messageSeq;
+    const sb = b.messageSeq;
+    const aHas = sa != null && Number.isFinite(sa);
+    const bHas = sb != null && Number.isFinite(sb);
+    if (aHas && bHas && sa !== sb) return (sa as number) - (sb as number);
+    if (aHas && !bHas) return -1;
+    if (bHas && !aHas) return 1;
+    return (a.createdAtMs ?? 0) - (b.createdAtMs ?? 0);
+  });
   const out: TimelineMessage[] = [];
   for (const m of ordered) {
     markMessageProjected(m.messageId);

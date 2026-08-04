@@ -1,8 +1,9 @@
 /**
  * Lifecycle bridge: Account session → Hub realtime → Desktop timeline store.
  *
- * Phase 3–4: Hub chat messages update `messagesByConversation` directly.
- * Sync Engine: conversation subscribe, resume cursors, SnapshotRequired cold rebuild.
+ * Hub chat messages update `messagesByConversation` directly.
+ * Sync Engine: conversation subscribe, resume cursors, SnapshotRequired range rebuild.
+ * Cold hydrate is owned by loadTimeline (subscribe-only here on open).
  * No daemon_append of cloud IM into Host SQLite.
  */
 
@@ -21,7 +22,6 @@ import {
 import { startImOutboxWorker } from "@/shared/lib/im-cloud-sync";
 import {
   pullHubConversationMessagePage,
-  pullHubConversationMessages,
   pullHubForwardGap,
 } from "@/shared/lib/im-cloud-inbound";
 import {
@@ -46,6 +46,31 @@ let startedForToken: string | null = null;
 let lastSyncState: HubRealtimeSyncState = "disconnected";
 /** C6.1 lifecycle listeners registered once per process. */
 let lifecycleBound = false;
+
+/**
+ * Process-local set of message ids already counted toward rail unread.
+ * Caps size so T1 conversation frames + T2 account digests for the same
+ * message never double-increment unread.
+ */
+const unreadCountedMessageIds = new Set<string>();
+const MAX_UNREAD_COUNTED_IDS = 4000;
+
+function rememberUnreadCounted(messageId: string): boolean {
+  const id = messageId.trim();
+  if (!id) return false;
+  if (unreadCountedMessageIds.has(id)) return false;
+  unreadCountedMessageIds.add(id);
+  if (unreadCountedMessageIds.size > MAX_UNREAD_COUNTED_IDS) {
+    const drop = unreadCountedMessageIds.size - MAX_UNREAD_COUNTED_IDS;
+    let i = 0;
+    for (const k of unreadCountedMessageIds) {
+      unreadCountedMessageIds.delete(k);
+      i += 1;
+      if (i >= drop) break;
+    }
+  }
+  return true;
+}
 
 /** Debounced Hub mark-read while a focused timeline receives live messages. */
 const MARK_READ_DEBOUNCE_MS = 400;
@@ -167,6 +192,8 @@ async function onHubChatMessage(message: HubChatMessage): Promise<void> {
   // Always apply into the open/focused conversation window. Previously we only
   // wrote when a messagesByConversation key already existed — a race with the
   // first loadTimeline left Mobile/Hub messages invisible until re-open.
+  // Open/focused window: apply body. Background: next open loadTimeline always
+  // cold-pulls Hub (no separate dirty flag).
   if (focused || hasWindow) {
     useWorkspaceStore.setState((s) => {
       const prev = s.messagesByConversation[conversationId] ?? [];
@@ -193,14 +220,6 @@ async function onHubChatMessage(message: HubChatMessage): Promise<void> {
         },
       };
     });
-  } else {
-    // Background conversation: mark dirty so the next open forces Hub re-list.
-    useWorkspaceStore.setState((s) => ({
-      timelineDirtyByConversation: {
-        ...s.timelineDirtyByConversation,
-        [conversationId]: true,
-      },
-    }));
   }
 
   // Live patch Hub digest + rail row (no per-project Hub re-query).
@@ -219,6 +238,7 @@ function patchRailFromHubMessage(
 ): void {
   patchRailFromDigest({
     conversationId: message.conversationId,
+    messageId: message.messageId,
     preview: opts.isRecall
       ? "Message recalled"
       : message.text?.trim() || null,
@@ -231,9 +251,11 @@ function patchRailFromHubMessage(
 /**
  * R3: account-topic thin digest → rail/inbox only (no timeline body).
  * Conversation full frames still call {@link patchRailFromHubMessage}.
+ * Unread is messageId-deduped so T1 + T2 never double-count the same bubble.
  */
 function patchRailFromDigest(input: {
   conversationId: string;
+  messageId?: string | null;
   preview: string | null;
   lastAt: number;
   senderAccountId: string;
@@ -253,8 +275,12 @@ function patchRailFromDigest(input: {
     Boolean(myAccountId) && input.senderAccountId === myAccountId;
   let unread = prevDigest?.unreadCount ?? 0;
   // Own multi-end sends must not inflate local unread.
+  // messageId dedupe: same bubble on conversation + account topics once.
   if (!focused && !input.isRecall && !isOwn) {
-    unread = unread + 1;
+    const mid = input.messageId?.trim() ?? "";
+    if (!mid || rememberUnreadCounted(mid)) {
+      unread = unread + 1;
+    }
   }
   if (focused) {
     unread = 0;
@@ -314,23 +340,13 @@ function onAccountInboxDigest(digest: {
 }): void {
   const conversationId = digest.conversationId?.trim();
   if (!conversationId || !digest.messageId?.trim()) return;
-  // Digest is rail-only: mark timeline dirty so next open rehydrates full body.
+  // Digest is rail-only; timeline body arrives via conversation topic or
+  // next open loadTimeline (no dirty-flag scaffolding).
   const focused =
     useWorkspaceStore.getState().focusedConversationId === conversationId;
-  const hasWindow = Object.prototype.hasOwnProperty.call(
-    useWorkspaceStore.getState().messagesByConversation,
-    conversationId,
-  );
-  if (!focused && !hasWindow) {
-    useWorkspaceStore.setState((s) => ({
-      timelineDirtyByConversation: {
-        ...s.timelineDirtyByConversation,
-        [conversationId]: true,
-      },
-    }));
-  }
   patchRailFromDigest({
     conversationId,
+    messageId: digest.messageId,
     preview: digest.preview,
     lastAt: digest.atMs,
     senderAccountId: digest.senderAccountId,
@@ -405,8 +421,8 @@ async function onSnapshotRequired(topic: string): Promise<void> {
 /**
  * Range reconcile for a conversation window after SnapshotRequired.
  * - Keep existing rows as skeleton (no blank flash).
- * - Forward-fill with after_seq = maxLoadedSeq when present.
- * - Latest page merge calibrates tail; merge by id (Hub SSOT for bubbles).
+ * - Multi-page forward-fill with after_seq until empty or cursor stalls.
+ * - Latest page calibrates tail; optional multi-page before_seq repair for floor.
  */
 async function reconcileConversationFromHub(
   conversationId: string,
@@ -420,10 +436,19 @@ async function reconcileConversationFromHub(
 
   if (maxSeq != null) {
     try {
-      const forward = await pullHubForwardGap(conversationId, maxSeq, {
-        limit: MESSAGE_PAGE_SIZE,
-      });
-      hubChunks.push(...forward);
+      let cursor = maxSeq;
+      // Cap pages to avoid unbounded work on huge gaps (still multi-page).
+      for (let page = 0; page < 20; page += 1) {
+        const forward = await pullHubForwardGap(conversationId, cursor, {
+          limit: MESSAGE_PAGE_SIZE,
+        });
+        if (forward.length === 0) break;
+        hubChunks.push(...forward);
+        const nextMax = lastMessageSeq(forward);
+        if (nextMax == null || nextMax <= cursor) break;
+        cursor = nextMax;
+        if (forward.length < MESSAGE_PAGE_SIZE) break;
+      }
     } catch (error) {
       console.warn(
         "[im-hub-bridge] snapshot forward gap fill failed",
@@ -439,20 +464,23 @@ async function reconcileConversationFromHub(
   hubChunks.push(...latestPage.messages);
 
   // When the window has a known min seq and latest page does not cover down to
-  // it, one before_seq page repairs the lower edge without clearing UI.
-  const latestMin = firstMessageSeq(latestPage.messages);
-  if (
-    minSeq != null &&
-    minSeq > 1 &&
-    latestMin != null &&
-    latestMin > minSeq
-  ) {
+  // it, page older via before_seq until floor is covered or pages exhaust.
+  let latestMin = firstMessageSeq(latestPage.messages);
+  if (minSeq != null && minSeq > 1 && latestMin != null && latestMin > minSeq) {
     try {
-      const older = await pullHubConversationMessagePage(conversationId, {
-        beforeSeq: latestMin,
-        limit: MESSAGE_PAGE_SIZE,
-      });
-      hubChunks.push(...older.messages);
+      for (let page = 0; page < 20; page += 1) {
+        if (latestMin == null || latestMin <= minSeq) break;
+        const older = await pullHubConversationMessagePage(conversationId, {
+          beforeSeq: latestMin,
+          limit: MESSAGE_PAGE_SIZE,
+        });
+        if (older.messages.length === 0) break;
+        hubChunks.push(...older.messages);
+        const nextMin = firstMessageSeq(older.messages);
+        if (nextMin == null || nextMin >= latestMin) break;
+        latestMin = nextMin;
+        if (older.messages.length < MESSAGE_PAGE_SIZE) break;
+      }
     } catch (error) {
       console.warn(
         "[im-hub-bridge] snapshot before_seq repair failed",
@@ -467,6 +495,16 @@ async function reconcileConversationFromHub(
     hubById.set(m.id, m);
   }
   const hubRows = [...hubById.values()];
+
+  // Hydrate reactions from reconciled Hub rows (cold path).
+  try {
+    const { useReactionStore } = await import(
+      "@/features/chat/reaction-store"
+    );
+    useReactionStore.getState().hydrateFromMessages(hubRows);
+  } catch {
+    /* reaction store optional in tests */
+  }
 
   useWorkspaceStore.setState((s) => {
     const localPrev = s.messagesByConversation[conversationId] ?? [];
@@ -595,10 +633,10 @@ export function getHubRealtimeState(): HubRealtimeSyncState {
 }
 
 /**
- * Subscribe open conversation topic + cold hydrate (Hub-first).
- * Call on conversation open when account is authenticated.
+ * Subscribe conversation durable topic only (no timeline merge).
+ * loadTimeline owns cold hydrate to avoid dual writers.
  */
-export function focusConversationOnHub(conversationId: string): void {
+export function ensureConversationSubscribedOnHub(conversationId: string): void {
   if (!conversationId.trim()) return;
   ensureImHubBridge();
   const { session: account, authPhase } = useAccountStore.getState();
@@ -610,101 +648,15 @@ export function focusConversationOnHub(conversationId: string): void {
   ) {
     return;
   }
-  // Ensure focused id is tracked for reconnect re-subscribe.
   session?.subscribeConversation(conversationId);
-  void syncOpenConversationFromHub(conversationId);
 }
 
 /**
- * Cold hydrate open conversation from Hub into timeline store (Hub-first).
- * Call on conversation open when account is authenticated.
+ * @deprecated Prefer ensureConversationSubscribedOnHub + loadTimeline.
+ * Kept as alias for call sites that only need subscribe (no dual hydrate).
  */
-export async function syncOpenConversationFromHub(
-  conversationId: string,
-): Promise<void> {
-  const { session: account, authPhase } = useAccountStore.getState();
-  if (
-    !isHubImMode({
-      authPhase,
-      accessToken: account?.accessToken,
-    })
-  ) {
-    return;
-  }
-
-  // Ensure conversation durable topic is subscribed for live append/recall.
-  session?.subscribeConversation(conversationId);
-
-  const hubRows = await pullHubConversationMessages(conversationId);
-  if (hubRows.length === 0) {
-    // Still stamp history meta so loadOlder can try Hub paging.
-    useWorkspaceStore.setState((s) => {
-      if (
-        !Object.prototype.hasOwnProperty.call(
-          s.messagesByConversation,
-          conversationId,
-        )
-      ) {
-        return s;
-      }
-      const prevHist =
-        s.messageHistoryByConversation[conversationId] ?? EMPTY_MESSAGE_HISTORY;
-      return {
-        messageHistoryByConversation: {
-          ...s.messageHistoryByConversation,
-          [conversationId]: {
-            ...prevHist,
-            firstLoadedCreatedAtMs:
-              firstMessageCreatedAtMs(
-                s.messagesByConversation[conversationId] ?? [],
-              ) ?? prevHist.firstLoadedCreatedAtMs,
-          },
-        },
-      };
-    });
-    return;
-  }
-
-  useWorkspaceStore.setState((s) => {
-    const prev = s.messagesByConversation[conversationId] ?? [];
-    // Hub SSOT for chat bubbles; strip local user/agent rows that Hub owns.
-    const merged = mergeHubAndLocalTimeline({
-      hubMessages: hubRows,
-      localMessages: prev,
-    });
-    const trimmed = trimMessagesHardMax(merged);
-    const prevHist =
-      s.messageHistoryByConversation[conversationId] ?? EMPTY_MESSAGE_HISTORY;
-    return {
-      messagesByConversation: {
-        ...s.messagesByConversation,
-        [conversationId]: trimmed.messages,
-      },
-      messageHistoryByConversation: {
-        ...s.messageHistoryByConversation,
-        [conversationId]: {
-          firstLoadedSeq:
-            firstMessageSeq(trimmed.messages) ?? prevHist.firstLoadedSeq,
-          firstLoadedCreatedAtMs:
-            firstMessageCreatedAtMs(trimmed.messages) ??
-            prevHist.firstLoadedCreatedAtMs,
-          hasOlder:
-            prevHist.hasOlder ||
-            hubRows.length >= MESSAGE_PAGE_SIZE ||
-            trimmed.trimmed,
-          loadingOlder: false,
-        },
-      },
-    };
-  });
-
-  const ws = useWorkspaceStore.getState();
-  if (ws.source === "daemon") {
-    const conv = ws.conversations.find((c) => c.id === conversationId);
-    if (conv?.projectId) {
-      void ws.loadConversations(conv.projectId, { quiet: true });
-    }
-  }
+export function focusConversationOnHub(conversationId: string): void {
+  ensureConversationSubscribedOnHub(conversationId);
 }
 
 /**

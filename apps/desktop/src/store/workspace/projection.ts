@@ -1,9 +1,15 @@
 /**
  * SessionEntity commit + list projection glue for the workspace store.
+ *
+ * Sole write funnel: merge/patch Entity → commitSessionEntity →
+ * membership lists + conversation running/approval aggregates from Entity Σ.
  */
 import type { Conversation, Project } from "@/shared/lib/mock-data";
 import type { SessionEntity } from "@/shared/lib/session-entity";
-import { projectSessionFromEntity } from "@/shared/lib/session-entity";
+import {
+  conversationAggregatesFromEntities,
+  projectSessionFromEntity,
+} from "@/shared/lib/session-entity";
 import {
   projectEntityIntoLists as projectEntityIntoListsPure,
   projectSessionIdsIntoLists,
@@ -83,14 +89,70 @@ export function projectHydratedEntities(
 }
 
 /**
- * Sole write path for SessionEntity + list projection.
- * Optionally bumps conversation.approvalCount (+ project.needsAttention) when
- * elevating pending approval (§6.5 / §9 Board via list aggregates).
+ * Recompute conversation.runningCount / approvalCount from Entity membership.
+ * Optional project.needsAttention rollup when projects are present.
+ */
+export function recomputeConversationAggregates(
+  conversations: Conversation[],
+  sessionsById: Record<string, SessionEntity>,
+  conversationIds: readonly string[],
+  projects?: Project[],
+): { conversations: Conversation[]; projects?: Project[] } {
+  const unique = [
+    ...new Set(conversationIds.map((id) => id.trim()).filter(Boolean)),
+  ];
+  if (unique.length === 0) {
+    return { conversations, projects };
+  }
+
+  let nextConversations = conversations;
+  const touchedProjectIds = new Set<string>();
+
+  for (const convId of unique) {
+    const { runningCount, approvalCount } = conversationAggregatesFromEntities(
+      sessionsById,
+      convId,
+    );
+    const row = nextConversations.find((c) => c.id === convId);
+    if (
+      row &&
+      row.runningCount === runningCount &&
+      row.approvalCount === approvalCount
+    ) {
+      continue;
+    }
+    nextConversations = patchLocalConversation(nextConversations, convId, {
+      runningCount,
+      approvalCount,
+    });
+    const projectId = nextConversations.find((c) => c.id === convId)?.projectId;
+    if (projectId) touchedProjectIds.add(projectId);
+  }
+
+  let projectsOut = projects;
+  if (projectsOut && touchedProjectIds.size > 0) {
+    for (const projectId of touchedProjectIds) {
+      projectsOut = patchProjectAggregates(
+        projectsOut,
+        projectId,
+        nextConversations,
+      );
+    }
+  }
+
+  return {
+    conversations: nextConversations,
+    ...(projectsOut ? { projects: projectsOut } : {}),
+  };
+}
+
+/**
+ * Sole write path for SessionEntity + list projection + conversation aggregates.
  */
 export function commitSessionEntity(
   s: SessionListSlice,
   entity: SessionEntity,
-  opts?: { elevateApprovalCount?: boolean },
+  _opts?: { elevateApprovalCount?: boolean },
 ): {
   sessionsById: Record<string, SessionEntity>;
   sessionsByConversation: Record<string, ProjectSession[]>;
@@ -109,30 +171,63 @@ export function commitSessionEntity(
     entity.sessionId,
   );
 
-  let conversations = s.conversations;
-  let projectsOut: Project[] | undefined;
-  const elevated =
-    entity.hasPendingApproval &&
-    (!prev || !prev.hasPendingApproval || prev.status !== "needs_approval");
-  if (opts?.elevateApprovalCount !== false && elevated && entity.conversationId) {
-    const convId = entity.conversationId;
-    conversations = patchLocalConversation(s.conversations, convId, {
-      approvalCount: Math.max(
-        s.conversations.find((c) => c.id === convId)?.approvalCount ?? 0,
-        1,
-      ),
-    });
-    const projectId = conversations.find((c) => c.id === convId)?.projectId;
-    if (projectId && s.projects) {
-      projectsOut = patchProjectAggregates(s.projects, projectId, conversations);
-    }
-  }
+  const convIds = [
+    entity.conversationId,
+    prev?.conversationId ?? "",
+  ].filter(Boolean);
+
+  const aggregates = recomputeConversationAggregates(
+    s.conversations,
+    sessionsById,
+    convIds,
+    s.projects,
+  );
 
   return {
     sessionsById,
     ...lists,
-    conversations,
-    ...(projectsOut ? { projects: projectsOut } : {}),
+    conversations: aggregates.conversations,
+    ...(aggregates.projects ? { projects: aggregates.projects } : {}),
+  };
+}
+
+/**
+ * After bulk Entity map replacement (hydrate), re-project lists + aggregates
+ * for the touched conversation ids.
+ */
+export function commitHydratedSessionEntities(
+  s: SessionListSlice,
+  sessionsById: Record<string, SessionEntity>,
+  orderedIds: readonly string[],
+  opts?: { primaryConversationId?: string },
+): {
+  sessionsById: Record<string, SessionEntity>;
+  sessionsByConversation: Record<string, ProjectSession[]>;
+  projectSessionsByProject: Record<string, ProjectSession[]>;
+  attentionSessions: ProjectSession[];
+  conversations: Conversation[];
+  projects?: Project[];
+} {
+  const sibling = projectHydratedEntities(s, sessionsById, orderedIds);
+  const convIds = new Set<string>();
+  if (opts?.primaryConversationId) {
+    convIds.add(opts.primaryConversationId);
+  }
+  for (const id of orderedIds) {
+    const e = sessionsById[id];
+    if (e?.conversationId) convIds.add(e.conversationId);
+  }
+  const aggregates = recomputeConversationAggregates(
+    s.conversations,
+    sessionsById,
+    [...convIds],
+    s.projects,
+  );
+  return {
+    sessionsById,
+    ...sibling,
+    conversations: aggregates.conversations,
+    ...(aggregates.projects ? { projects: aggregates.projects } : {}),
   };
 }
 

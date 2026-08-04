@@ -52,14 +52,6 @@ pub(super) fn default_teamwork_store() -> crate::teamwork::TeamworkStore {
     crate::teamwork::TeamworkStore::disabled()
 }
 
-pub(super) fn conversation_agent_result_message_id(
-    conversation_id: &str,
-    session_id: &str,
-    message_id: &str,
-) -> String {
-    format!("agent-result:{conversation_id}:{session_id}:{message_id}")
-}
-
 pub(super) fn codex_user_input_decision(question_ids: &[String], text: &str) -> serde_json::Value {
     let lines = text
         .lines()

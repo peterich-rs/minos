@@ -1,9 +1,14 @@
-import { useEffect } from "react";
-import { useWorkspaceStore } from "@/store/workspace-store";
+import { useEffect, useRef } from "react";
+import {
+  useWorkspaceStore,
+  type ProjectSession,
+} from "@/store/workspace-store";
 import { WorkTimelineShell } from "@/shared/ui/WorkChrome";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
 import { TimelineHeader } from "./TimelineHeader";
+
+const EMPTY_SESSIONS: ProjectSession[] = [];
 
 /**
  * Declarative conversation timeline: parent passes `conversationId` (and
@@ -20,12 +25,17 @@ export function Timeline({ conversationId }: { conversationId: string }) {
   const source = useWorkspaceStore((s) => s.source);
   const bootEpoch = useWorkspaceStore((s) => s.bootEpoch);
   const livePush = useWorkspaceStore((s) => s.livePush);
+  const sessions = useWorkspaceStore(
+    (s) => s.sessionsByConversation[conversationId] ?? EMPTY_SESSIONS,
+  );
   const timelineStatus = useWorkspaceStore(
     (s) => s.timelineStatusByConversation[conversationId],
   );
 
   const conversation = conversations.find((c) => c.id === conversationId);
   const phase = timelineStatus?.phase ?? "idle";
+  /** One quiet recovery per error generation — no error→load→error poll loop. */
+  const errorRecoveryGenRef = useRef<number | null>(null);
 
   // Open/select path: set focus + clear unread (not loadTimeline's job).
   useEffect(() => {
@@ -47,15 +57,28 @@ export function Timeline({ conversationId }: { conversationId: string }) {
     bootEpoch,
   ]);
 
-  // C2: no 2s completion-trail poll. Agent-result arrives via Hub WS /
-  // daemon conversation_event + live-ingress single quiet loadTimeline.
-  // Keep a one-shot quiet refresh only on hard error recovery (no live push).
+  // Agent-result arrives via Hub WS / daemon conversation_event + live-ingress
+  // single quiet loadTimeline. One-shot quiet recovery only when degraded and
+  // live push is off (no generation-loop re-entry).
   useEffect(() => {
     if (source !== "daemon") return;
     if (livePush) return;
-    if (phase !== "error") return;
+    if (phase !== "error") {
+      errorRecoveryGenRef.current = null;
+      return;
+    }
+    const gen = timelineStatus?.generation ?? 0;
+    if (errorRecoveryGenRef.current === gen) return;
+    errorRecoveryGenRef.current = gen;
     void loadTimeline(conversationId, { quiet: true });
-  }, [conversationId, source, livePush, phase, loadTimeline]);
+  }, [
+    conversationId,
+    source,
+    livePush,
+    phase,
+    timelineStatus?.generation,
+    loadTimeline,
+  ]);
 
   if (!conversation) {
     return (

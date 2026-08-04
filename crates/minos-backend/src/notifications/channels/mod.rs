@@ -1,9 +1,10 @@
-//! Push notification channels: APNs, FCM, SMTP, and a composite dispatcher.
+//! Push notification channels: APNs and FCM.
+//!
+//! Runtime registers channels individually (`runtime.rs`). A composite
+//! dispatcher and SMTP channel were removed — unused dead code (P1 cleanup).
 
 pub mod apns;
-pub mod composite;
 pub mod fcm;
-pub mod smtp;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

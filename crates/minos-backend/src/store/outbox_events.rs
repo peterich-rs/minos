@@ -338,9 +338,11 @@ const HOST_OBSERVED_POSTGRES: &str = "(\
     OR (h.status = 'failed' AND COALESCE(h.error_json ->> 'kind', '') <> 'timeout')\
 )";
 
-/// Ack a claimed social (or already host-observed) outbox row.
+/// Ack an outbox row after durable publish succeeded.
 ///
-/// Host-command rows refuse ack until the host has observed the command
+/// Accepts **`pending` or `claimed`**: the HTTP fast-path publishes then settles
+/// without a worker claim; the outbox worker settles after claim+publish.
+/// Host-command rows still refuse ack until the host has observed the command
 /// (`ack_at_ms` or non-timeout host terminal). Backend timeout `finished_at_ms`
 /// never unlocks a success ack — use [`dead_letter`] / [`dead_letter_host_command_events`].
 pub async fn ack(
@@ -353,7 +355,7 @@ pub async fn ack(
             "UPDATE outbox_events
                 SET status = 'acked', ack_at_ms = ?
               WHERE outbox_id = ?
-                AND status = 'claimed'
+                AND status IN ('pending', 'claimed')
                 AND ack_at_ms IS NULL
                 AND dead_at_ms IS NULL
                 AND NOT EXISTS (
@@ -379,7 +381,7 @@ pub async fn ack(
             "UPDATE outbox_events
                 SET status = 'acked', ack_at_ms = $1
               WHERE outbox_id = $2
-                AND status = 'claimed'
+                AND status IN ('pending', 'claimed')
                 AND ack_at_ms IS NULL
                 AND dead_at_ms IS NULL
                 AND NOT EXISTS (
@@ -796,6 +798,49 @@ mod tests {
     use crate::store::host_commands;
     use crate::store::test_support::{memory_pool, T0};
     use minos_domain::{DeviceId, DeviceRole};
+
+    #[tokio::test]
+    async fn ack_settles_pending_social_row_without_claim() {
+        // HTTP fast-path: publish then ack while still pending (no worker claim).
+        let pool = memory_pool().await;
+        durable_event_log::append(
+            &pool,
+            "evt-pending-ack",
+            "conversation:c1",
+            "conversation",
+            1,
+            "c1",
+            &serde_json::json!({ "kind": "conversation.message_appended" }),
+            T0,
+        )
+        .await
+        .unwrap();
+        enqueue(
+            &pool,
+            "out-pending-ack",
+            "conversation",
+            "evt-pending-ack",
+            OutboxLane::SocialDurable,
+            T0,
+        )
+        .await
+        .unwrap();
+        let row = get(&pool, "out-pending-ack").await.unwrap().unwrap();
+        assert_eq!(row.status, OutboxStatus::Pending);
+        assert!(ack(&pool, "out-pending-ack", T0 + 1).await.unwrap());
+        let row = get(&pool, "out-pending-ack").await.unwrap().unwrap();
+        assert_eq!(row.status, OutboxStatus::Acked);
+        assert!(claim_available(
+            &pool,
+            "worker",
+            T0 + 2,
+            10,
+            OutboxLane::SocialDurable,
+        )
+        .await
+        .unwrap()
+        .is_empty());
+    }
 
     #[tokio::test]
     async fn claim_retry_and_ack_round_trip() {

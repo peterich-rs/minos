@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it, beforeEach } from "node:test";
 import {
   classifyOutboxFailure,
+  earliestPendingAttemptAt,
   enqueueAgentResult,
   enqueueApprovalResolve,
   enqueueReactionToggle,
@@ -186,6 +187,25 @@ describe("im-outbox", () => {
     assert.equal(due[0]!.clientMessageId, "react-1");
     // Storage row id is outbox:${logicalOpId}; wire op is clientMessageId.
     assert.equal(due[0]!.id, "outbox:react-1");
+  });
+
+  it("earliestPendingAttemptAt tracks backoff beyond 60s", () => {
+    const entry = enqueueUserMessage({
+      conversationId: "c1",
+      clientMessageId: "late-1",
+      text: "hi",
+    });
+    markInflight(entry.clientMessageId);
+    // Force a far-future nextAttempt via permanent-looking then reclaim path:
+    // markFailed with transient keeps pending with exponential backoff.
+    for (let i = 0; i < 5; i += 1) {
+      markFailed(entry.clientMessageId, "network error");
+      markInflight(entry.clientMessageId);
+    }
+    markFailed(entry.clientMessageId, "network error");
+    const next = earliestPendingAttemptAt();
+    assert.ok(next != null);
+    assert.ok((next as number) > Date.now() + 10_000);
   });
 
   it("includes approval_resolve in due queue with stable client op id (C5.3)", () => {

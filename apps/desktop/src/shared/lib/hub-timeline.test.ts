@@ -78,6 +78,65 @@ describe("mergeHubAndLocalTimeline", () => {
     assert.ok(ids.includes("agent-result:c:sess1:origin2"));
   });
 
+  it("Hub empty reactions win over stale local reactions", () => {
+    const merged = mergeHubAndLocalTimeline({
+      hubMessages: [
+        local({
+          id: "m1",
+          role: "user",
+          body: "hi",
+          createdAtMs: 1,
+          reactions: [],
+        }),
+      ],
+      localMessages: [
+        local({
+          id: "m1",
+          role: "user",
+          body: "hi",
+          createdAtMs: 1,
+          reactions: [
+            {
+              emoji: "👍",
+              count: 1,
+              reactedByMe: true,
+              actors: [{ id: "me", displayName: "Me" }],
+            },
+          ],
+        }),
+      ],
+    });
+    const row = merged.find((m) => m.id === "m1");
+    assert.ok(row);
+    assert.deepEqual(row?.reactions, []);
+  });
+
+  it("drops bare non-canonical agent locals not on hub (no dual SSOT ghosts)", () => {
+    const merged = mergeHubAndLocalTimeline({
+      hubMessages: [
+        local({ id: "hub-u", role: "user", body: "hi", createdAtMs: 1 }),
+      ],
+      localMessages: [
+        local({
+          id: "orphan-agent-uuid",
+          role: "agent",
+          body: "ghost",
+          createdAtMs: 2,
+        }),
+        local({
+          id: "agent-result:c:s:origin",
+          role: "agent",
+          body: "keep until hub",
+          createdAtMs: 3,
+        }),
+      ],
+    });
+    const ids = merged.map((m) => m.id);
+    assert.ok(ids.includes("hub-u"));
+    assert.ok(ids.includes("agent-result:c:s:origin"));
+    assert.equal(ids.includes("orphan-agent-uuid"), false);
+  });
+
   it("does not soft-dedupe by body or session when origin ids differ", () => {
     // Pre-C2: same session different durable suffix suppressed local.
     // C2: only same id collapses.

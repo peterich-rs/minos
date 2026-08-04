@@ -14,9 +14,9 @@ pub struct NotificationCooldownRow {
     pub last_sent_at_ms: i64,
 }
 
-/// Check if a cooldown has expired. Returns `true` if the notification
-/// should be sent (cooldown expired or never recorded).
-pub async fn check_and_update<S>(
+/// Read-only: returns `true` if cooldown has expired or never recorded.
+/// Does **not** stamp `last_sent_at_ms` — call [`record_sent`] only after true delivery.
+pub async fn is_allowed<S>(
     store: &S,
     account_id: &str,
     cooldown_key: &str,
@@ -28,17 +28,53 @@ where
 {
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
-            check_and_update_sqlite(pool, account_id, cooldown_key, cooldown_ms, now_ms).await
+            is_allowed_sqlite(pool, account_id, cooldown_key, cooldown_ms, now_ms).await
         }
         StorePoolRef::Postgres(pool) => {
-            check_and_update_postgres(pool, account_id, cooldown_key, cooldown_ms, now_ms).await
+            is_allowed_postgres(pool, account_id, cooldown_key, cooldown_ms, now_ms).await
         }
     }
 }
 
+/// Stamp cooldown after a successful push send.
+pub async fn record_sent<S>(
+    store: &S,
+    account_id: &str,
+    cooldown_key: &str,
+    now_ms: i64,
+) -> Result<(), BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => record_sent_sqlite(pool, account_id, cooldown_key, now_ms).await,
+        StorePoolRef::Postgres(pool) => {
+            record_sent_postgres(pool, account_id, cooldown_key, now_ms).await
+        }
+    }
+}
+
+/// Deprecated combined API: check + stamp. Prefer [`is_allowed`] + [`record_sent`].
+pub async fn check_and_update<S>(
+    store: &S,
+    account_id: &str,
+    cooldown_key: &str,
+    cooldown_ms: i64,
+    now_ms: i64,
+) -> Result<bool, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    if !is_allowed(store, account_id, cooldown_key, cooldown_ms, now_ms).await? {
+        return Ok(false);
+    }
+    record_sent(store, account_id, cooldown_key, now_ms).await?;
+    Ok(true)
+}
+
 // ── SQLite ─────────────────────────────────────────────────────────────
 
-async fn check_and_update_sqlite(
+async fn is_allowed_sqlite(
     pool: &SqlitePool,
     account_id: &str,
     cooldown_key: &str,
@@ -59,11 +95,18 @@ async fn check_and_update_sqlite(
 
     if let Some(row) = existing {
         if now_ms - row.last_sent_at_ms < cooldown_ms {
-            return Ok(false); // Still in cooldown
+            return Ok(false);
         }
     }
+    Ok(true)
+}
 
-    // Upsert the cooldown record
+async fn record_sent_sqlite(
+    pool: &SqlitePool,
+    account_id: &str,
+    cooldown_key: &str,
+    now_ms: i64,
+) -> Result<(), BackendError> {
     sqlx::query(
         "INSERT INTO notification_cooldowns (account_id, cooldown_key, last_sent_at_ms)
          VALUES (?1, ?2, ?3)
@@ -78,13 +121,12 @@ async fn check_and_update_sqlite(
         operation: "notification_cooldowns.upsert".into(),
         message: e.to_string(),
     })?;
-
-    Ok(true)
+    Ok(())
 }
 
 // ── Postgres ───────────────────────────────────────────────────────────
 
-async fn check_and_update_postgres(
+async fn is_allowed_postgres(
     pool: &PgPool,
     account_id: &str,
     cooldown_key: &str,
@@ -105,11 +147,18 @@ async fn check_and_update_postgres(
 
     if let Some(row) = existing {
         if now_ms - row.last_sent_at_ms < cooldown_ms {
-            return Ok(false); // Still in cooldown
+            return Ok(false);
         }
     }
+    Ok(true)
+}
 
-    // Upsert the cooldown record
+async fn record_sent_postgres(
+    pool: &PgPool,
+    account_id: &str,
+    cooldown_key: &str,
+    now_ms: i64,
+) -> Result<(), BackendError> {
     sqlx::query(
         "INSERT INTO notification_cooldowns (account_id, cooldown_key, last_sent_at_ms)
          VALUES ($1, $2, $3)
@@ -124,6 +173,5 @@ async fn check_and_update_postgres(
         operation: "notification_cooldowns.upsert".into(),
         message: e.to_string(),
     })?;
-
-    Ok(true)
+    Ok(())
 }

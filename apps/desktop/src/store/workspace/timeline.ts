@@ -68,8 +68,6 @@ export function createTimelineActions(
           generation;
 
         set((s) => {
-          const dirty = { ...s.timelineDirtyByConversation };
-          delete dirty[conversationId];
           // Ensure messages key exists so Hub WS hasWindow during cold pull.
           // focused ≠ hasWindow: hydrate-only — no focusedConversationId, no
           // mark-read (open path + debounced focused inbound own those).
@@ -88,20 +86,18 @@ export function createTimelineActions(
               ...s.timelineStatusByConversation,
               [conversationId]: next,
             },
-            timelineDirtyByConversation: dirty,
           };
         });
 
         try {
           const linked = hubImEnabled();
 
-          // Always (re)subscribe when loading a conversation — including quiet
-          // refreshes — so a focused timeline never loses live Hub push after
-          // reconnect / background loadTimeline(quiet: true).
+          // Subscribe only — loadTimeline is the sole cold-hydrate writer.
+          // (focusConversationOnHub must not dual-merge the window.)
           if (linked) {
             void import("@/shared/lib/im-hub-bridge").then(
-              ({ focusConversationOnHub }) => {
-                focusConversationOnHub(conversationId);
+              ({ ensureConversationSubscribedOnHub }) => {
+                ensureConversationSubscribedOnHub(conversationId);
               },
             );
           }
@@ -129,23 +125,10 @@ export function createTimelineActions(
           const hubRows = hubPage.messages;
 
           const localUi = messagePage.messages.map(toUiMessage);
-          // Hub IM: cold-hydrate reactions from Hub page (viewer-resolved).
+          // Hub IM: cold-hydrate reactions from mapped Hub rows (id + reactions).
           // Local workbench: daemon list_messages reactions.
           if (linked && hubRows.length > 0) {
-            useReactionStore.getState().hydrateFromMessages(
-              hubRows.map((m) => ({
-                id: m.messageId,
-                reactions: (m.reactions ?? []).map((g) => ({
-                  emoji: g.emoji,
-                  count: g.count,
-                  reactedByMe: g.reactedByMe,
-                  actors: g.actors.map((a) => ({
-                    id: a.actorId,
-                    displayName: a.displayName,
-                  })),
-                })),
-              })),
-            );
+            useReactionStore.getState().hydrateFromMessages(hubRows);
           } else {
             useReactionStore
               .getState()
@@ -233,7 +216,7 @@ export function createTimelineActions(
               );
               if (!hasLocalAgent) return;
               // Quiet re-pull so Hub echo replaces local-only agent-result
-              // (session-keyed merge) after successful uplink.
+              // (same-id merge) after successful uplink.
               const page = await pullHubConversationMessagePage(
                 conversationId,
                 { limit: MESSAGE_PAGE_SIZE },
@@ -337,7 +320,14 @@ export function createTimelineActions(
         hubPagePromise,
       ]);
       if (get().source !== "daemon") return;
-      useReactionStore.getState().hydrateFromMessages(page.messages);
+      // Linked: Hub page carries viewer-resolved reactions; local-only: daemon.
+      useReactionStore
+        .getState()
+        .hydrateFromMessages(
+          linked && hubPage.messages.length > 0
+            ? hubPage.messages
+            : page.messages,
+        );
       const olderLocal = page.messages.map(toUiMessage);
       set((s) => {
         const existingWindow = s.messagesByConversation[conversationId] ?? [];

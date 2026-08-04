@@ -360,8 +360,8 @@ impl NotificationService for DefaultNotificationService {
                     cooldown_ms,
                 } => {
                     any_decision_send = true;
-                    // UX rate limit (not correctness — event_id log is correctness).
-                    let allowed = crate::store::notification_cooldowns::check_and_update(
+                    // Check-only first — only stamp cooldown after a true Sent.
+                    let allowed = crate::store::notification_cooldowns::is_allowed(
                         &self.store,
                         account_id,
                         &cooldown_key,
@@ -419,7 +419,7 @@ impl NotificationService for DefaultNotificationService {
                                 }
                                 Ok(PushSendOutcome::NotWired) => {
                                     // P5: config hooks exist but provider not production-wired.
-                                    // Do not record_sent — honest non-delivery.
+                                    // Do not record_sent / do not burn cooldown.
                                     crate::telemetry::record_push_send(
                                         kind.as_str(),
                                         "not_wired",
@@ -440,6 +440,14 @@ impl NotificationService for DefaultNotificationService {
                             now_ms,
                         )
                         .await?;
+                        // UX rate limit only after true delivery.
+                        let _ = crate::store::notification_cooldowns::record_sent(
+                            &self.store,
+                            account_id,
+                            &cooldown_key,
+                            now_ms,
+                        )
+                        .await;
                     }
                 }
                 Decision::Skip { reason } => {
@@ -449,7 +457,6 @@ impl NotificationService for DefaultNotificationService {
                         DecisionReason::QuietHours => "quiet_hours",
                         DecisionReason::PreferenceDisabled => "preference_disabled",
                         DecisionReason::NotNotifiable => "not_notifiable",
-                        DecisionReason::SelfSender => "self_sender",
                     };
                     crate::telemetry::record_push_decision("skip", reason_label);
                 }

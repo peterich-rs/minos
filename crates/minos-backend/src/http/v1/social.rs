@@ -1631,13 +1631,75 @@ pub async fn process_agent_dispatch_batch(state: &BackendState) -> Result<u32, c
         match execute_claimed_dispatch(state, &row).await {
             Ok(()) => processed += 1,
             Err(error) => {
-                tracing::warn!(
-                    target: "minos_backend::social",
-                    error = %error,
-                    dispatch_id = %row.dispatch_id,
-                    origin_message_id = %row.origin_message_id,
-                    "agent dispatch execute path error"
-                );
+                // claim_due already incremented attempts; use post-claim value.
+                let attempts = row.attempts.max(1);
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let detail = error.to_string();
+                if attempts >= crate::store::agent_dispatch_queue::MAX_ATTEMPTS {
+                    tracing::warn!(
+                        target: "minos_backend::social",
+                        error = %error,
+                        dispatch_id = %row.dispatch_id,
+                        origin_message_id = %row.origin_message_id,
+                        attempts,
+                        "agent dispatch post-forward error terminal after retries"
+                    );
+                    if let Err(term_err) = crate::store::agent_dispatch_queue::mark_failed_terminal(
+                        &state.store,
+                        &row.dispatch_id,
+                        &detail,
+                        now_ms,
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            target: "minos_backend::social",
+                            error = %term_err,
+                            dispatch_id = %row.dispatch_id,
+                            "failed to mark agent dispatch terminal after post-forward error"
+                        );
+                    }
+                    notify_agent_dispatch_failure(
+                        state,
+                        &row.account_id,
+                        &row.conversation_id,
+                        &row.origin_message_id,
+                        None,
+                        row.session_id.as_deref(),
+                        "dispatch_post_forward",
+                        detail,
+                    )
+                    .await;
+                } else {
+                    tracing::warn!(
+                        target: "minos_backend::social",
+                        error = %error,
+                        dispatch_id = %row.dispatch_id,
+                        origin_message_id = %row.origin_message_id,
+                        attempts,
+                        "agent dispatch post-forward error; requeue with backoff"
+                    );
+                    let backoff_ms = (1_000i64)
+                        .saturating_mul(1i64 << attempts.min(6))
+                        .min(60_000);
+                    if let Err(requeue_err) = crate::store::agent_dispatch_queue::requeue_pending(
+                        &state.store,
+                        &row.dispatch_id,
+                        attempts,
+                        now_ms.saturating_add(backoff_ms),
+                        &detail,
+                        now_ms,
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            target: "minos_backend::social",
+                            error = %requeue_err,
+                            dispatch_id = %row.dispatch_id,
+                            "failed to requeue agent dispatch after post-forward error"
+                        );
+                    }
+                }
                 processed += 1;
             }
         }

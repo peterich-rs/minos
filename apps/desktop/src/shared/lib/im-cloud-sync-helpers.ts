@@ -1,5 +1,5 @@
 /**
- * Pure helpers for Desktop → Hub IM dual-write (no account / network deps).
+ * Pure helpers for Desktop → Hub IM projection (no account / network deps).
  */
 
 const VALID_RUNTIMES = new Set([

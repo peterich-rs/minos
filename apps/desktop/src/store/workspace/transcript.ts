@@ -6,10 +6,13 @@ import {
   bumpStatus,
   dedupeTranscriptItemsById,
   mergeTranscriptItems,
-  patchLocalConversation,
 } from "./helpers";
 import { commitSessionEntity, findSessionRow } from "./projection";
-import { mergeSessionEntity } from "@/shared/lib/session-entity";
+import {
+  daemonStatusFromEntity,
+  mergeSessionEntity,
+  patchSessionEntity,
+} from "@/shared/lib/session-entity";
 import { daemonApi } from "@/shared/lib/daemon";
 import {
   resumeInFlightSessions,
@@ -284,63 +287,49 @@ export function createTranscriptActions(
           items = demoteResolvedApprovalItems(trimmed.items);
           const hasPendingApproval = transcriptHasPendingApproval(items);
 
-          // Entity is sole status writer; list projection follows.
+          // Entity is sole status writer; list projection + aggregates follow.
+          // Seed lifecycle from daemonStatus — never UI status (needs_approval
+          // would coerce to running and erase idle parks).
           const prevEntity = s.sessionsById[sessionId];
           const elevatedCount = Math.max(
             session?.messageCount ?? 0,
             prevEntity?.messageCount ?? 0,
             observedMaxSeq,
           );
-          const seed = session
-            ? {
-                id: sessionId,
-                conversationId: session.conversationId,
-                conversationTitle: session.conversationTitle,
-                agent: session.agent,
-                shortId: session.shortId,
-                status: session.status,
-                model: session.model,
-                parentId: session.parentId,
-                summary: session.summary,
-                messageCount: elevatedCount || session.messageCount,
-                firstTsMs: session.firstTsMs,
-                lastTsMs: session.lastTsMs,
-                needsContinue: session.needsContinue,
-              }
-            : {
-                id: sessionId,
-                conversationId: prevEntity?.conversationId ?? "",
-                agent: prevEntity?.agent ?? "codex",
-                shortId: prevEntity?.shortId ?? sessionId.slice(0, 8),
-                status: (prevEntity?.daemonStatus ?? "running") as SessionStatus,
-                model: prevEntity?.model ?? "",
-                summary: prevEntity?.summary ?? "",
-                messageCount: elevatedCount || prevEntity?.messageCount,
-              };
+          const seed = {
+            id: sessionId,
+            conversationId:
+              session?.conversationId || prevEntity?.conversationId || "",
+            conversationTitle:
+              session?.conversationTitle ?? prevEntity?.conversationTitle,
+            agent: session?.agent || prevEntity?.agent || "codex",
+            shortId:
+              session?.shortId ||
+              prevEntity?.shortId ||
+              sessionId.slice(0, 8),
+            status: daemonStatusFromEntity(
+              prevEntity,
+              (session?.status as SessionStatus | undefined) ?? "running",
+            ),
+            model: session?.model || prevEntity?.model || "",
+            parentId: session?.parentId ?? prevEntity?.parentId,
+            summary: session?.summary ?? prevEntity?.summary ?? "",
+            messageCount: elevatedCount || session?.messageCount,
+            firstTsMs: session?.firstTsMs ?? prevEntity?.firstTsMs,
+            lastTsMs: session?.lastTsMs ?? prevEntity?.lastTsMs,
+            needsContinue:
+              prevEntity?.needsContinue ?? session?.needsContinue,
+          };
           const entity = mergeSessionEntity(prevEntity, seed, {
             pendingApproval: hasPendingApproval,
             approvalPolicy: approvalStatusPolicy,
+            // Transcript scan is high-confidence for pending; lifecycle stays sample
+            // so we do not invent running from UI status.
+            lifecycleSource: "sample",
           });
           const committed = commitSessionEntity(s, entity);
 
-          const convId = entity.conversationId;
-          const wasPending = prevEntity?.hasPendingApproval === true;
-          const demoted =
-            wasPending &&
-            !hasPendingApproval &&
-            approvalStatusPolicy === "sync";
-          let conversations = committed.conversations;
-          if (convId && demoted) {
-            conversations = patchLocalConversation(conversations, convId, {
-              approvalCount: Math.max(
-                (conversations.find((c) => c.id === convId)?.approvalCount ??
-                  1) - 1,
-                0,
-              ),
-            });
-          }
-
-          let transcriptHistoryBySession = s.transcriptHistoryBySession;
+          let transcriptHistoryBySession = s.transcriptHistoryBySession
           // Quiet peeks must not reset infinite-scroll cursors for a window
           // that was already opened with a full tail/history.
           if (!append && !quiet) {
@@ -373,7 +362,6 @@ export function createTranscriptActions(
 
           return {
             ...committed,
-            conversations,
             transcriptsBySession: {
               ...s.transcriptsBySession,
               [sessionId]: items,
@@ -433,8 +421,40 @@ export function createTranscriptActions(
     try {
       await daemonApi.resumeSession(sessionId, true);
       resumedInterruptedSessions.add(sessionId);
-      // Refresh list status (suspended → running/idle) without flashing loaders.
-      const convId = session.conversationId;
+
+      // Entity is the sole status SSOT. After auto-continue succeeds, paint
+      // Running on every surface that projects Entity (Inspector rail, Session
+      // detail, Sessions tab) *before* quiet re-list — list RPC / manager
+      // SessionStateChanged can lag, which previously left the rail on Paused
+      // while the agent was already working (only Transcript open re-listed).
+      set((s) => {
+        const prev = s.sessionsById[sessionId];
+        const entity = patchSessionEntity(prev, sessionId, {
+          daemonStatus: "running",
+          needsContinue: false,
+          conversationId:
+            prev?.conversationId || session.conversationId || "",
+          conversationTitle:
+            prev?.conversationTitle ?? session.conversationTitle,
+          agent: prev?.agent || session.agent,
+          shortId: prev?.shortId || session.shortId,
+          model: prev?.model || session.model,
+          summary: prev?.summary || session.summary,
+          parentId: prev?.parentId ?? session.parentId,
+          messageCount: prev?.messageCount ?? session.messageCount,
+          firstTsMs: prev?.firstTsMs ?? session.firstTsMs,
+          lastTsMs: Date.now(),
+        });
+        return commitSessionEntity(s, entity, {
+          elevateApprovalCount: false,
+        });
+      });
+
+      // Confirm with daemon list (may refine idle/running/approval). Quiet so
+      // we do not flash loaders; Entity already shows live.
+      const convId =
+        get().sessionsById[sessionId]?.conversationId ||
+        session.conversationId;
       const projectId = get().conversations.find((c) => c.id === convId)
         ?.projectId;
       if (convId) {

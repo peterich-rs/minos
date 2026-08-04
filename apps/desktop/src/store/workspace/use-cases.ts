@@ -2,7 +2,6 @@
  * L6 use-cases — send, approvals, conversation/project mutations.
  */
 import type { WorkspaceGet, WorkspaceSet, WorkspaceState } from "./types";
-import { patchLocalConversation } from "./helpers";
 import { commitSessionEntity, findSessionRow } from "./projection";
 import { patchSessionEntity } from "@/shared/lib/session-entity";
 import { daemonApi } from "@/shared/lib/daemon";
@@ -15,6 +14,7 @@ import {
   type MentionProfile,
 } from "@/shared/lib/agent-route";
 import type { DeliveryStatus, TimelineMessage } from "@/shared/lib/mock-data";
+import type { TranscriptItem } from "@/shared/lib/daemon";
 import {
   ensureSessionsForRouting,
   quietRefreshConversationSlices,
@@ -23,7 +23,6 @@ import {
 import { syncUserMessageToCloud } from "@/shared/lib/im-cloud-sync";
 import { isHubImMode } from "@/shared/lib/hub-timeline";
 import { useAccountStore } from "@/store/account-store";
-
 /** True when Minos account is signed in (multi-end Hub projection available). */
 function hubAuthenticated(): boolean {
   const { session, authPhase } = useAccountStore.getState();
@@ -31,6 +30,41 @@ function hubAuthenticated(): boolean {
     authPhase,
     accessToken: session?.accessToken,
   });
+}
+
+/**
+ * After local approval/permission resolution: patch Entity + recompute
+ * conversation aggregates from Entity Σ (no ±1 approvalCount hacks).
+ */
+function commitResolvedApprovalState(
+  s: WorkspaceState,
+  sessionId: string,
+  items: TranscriptItem[],
+) {
+  const stillPending = transcriptHasPendingApproval(items);
+  const prevEntity = s.sessionsById[sessionId];
+  const session = findSessionRow(s, sessionId);
+  const entity = patchSessionEntity(prevEntity, sessionId, {
+    hasPendingApproval: stillPending,
+    daemonStatus: stillPending
+      ? (prevEntity?.daemonStatus ?? "running")
+      : "running",
+    needsContinue: false,
+    conversationId:
+      session?.conversationId ?? prevEntity?.conversationId ?? "",
+    agent: session?.agent ?? prevEntity?.agent,
+    shortId: session?.shortId ?? prevEntity?.shortId,
+    model: session?.model ?? prevEntity?.model,
+    summary: session?.summary ?? prevEntity?.summary,
+  });
+  const committed = commitSessionEntity(s, entity);
+  return {
+    ...committed,
+    transcriptsBySession: {
+      ...s.transcriptsBySession,
+      [sessionId]: items,
+    },
+  };
 }
 
 /** Load host profiles for @ProfileName / @p/id parse (best-effort). */
@@ -83,14 +117,14 @@ export function createUseCasesActions(
       clientOpId,
       route: hubAuthenticated() ? "hub" : "daemon",
     });
-    // Drop local approval/question cards for this request; re-list will converge.
+    // Drop local approval/question cards; Entity aggregates recompute via commit.
     set((s) => {
       const items = (s.transcriptsBySession[sessionId] ?? []).map((it) =>
         it.requestId === requestId &&
         (it.kind === "approval" || it.kind === "question")
           ? {
               ...it,
-              kind: "status",
+              kind: "status" as const,
               text:
                 typeof decision === "string"
                   ? `Answered: ${decision}`
@@ -101,45 +135,7 @@ export function createUseCasesActions(
             }
           : it,
       );
-      const stillPending = transcriptHasPendingApproval(items);
-      const prevEntity = s.sessionsById[sessionId];
-      const session = findSessionRow(s, sessionId);
-      const entity = patchSessionEntity(prevEntity, sessionId, {
-        hasPendingApproval: stillPending,
-        daemonStatus: stillPending
-          ? (prevEntity?.daemonStatus ?? "running")
-          : "running",
-        conversationId:
-          session?.conversationId ?? prevEntity?.conversationId ?? "",
-        agent: session?.agent ?? prevEntity?.agent,
-        shortId: session?.shortId ?? prevEntity?.shortId,
-        model: session?.model ?? prevEntity?.model,
-        summary: session?.summary ?? prevEntity?.summary,
-      });
-      const committed = commitSessionEntity(s, entity, {
-        elevateApprovalCount: false,
-      });
-      const convId = entity.conversationId;
-      const wasPending = prevEntity?.hasPendingApproval === true;
-      let conversations = committed.conversations;
-      // Optimistic: clear one approval slot when last pending is resolved.
-      if (convId && wasPending && !stillPending) {
-        conversations = patchLocalConversation(conversations, convId, {
-          approvalCount: Math.max(
-            (s.conversations.find((c) => c.id === convId)?.approvalCount ?? 1) -
-              1,
-            0,
-          ),
-        });
-      }
-      return {
-        ...committed,
-        conversations,
-        transcriptsBySession: {
-          ...s.transcriptsBySession,
-          [sessionId]: items,
-        },
-      };
+      return commitResolvedApprovalState(s, sessionId, items);
     });
     // Pull fresh tail after the agent continues.
     await get().loadTranscript(sessionId, {
@@ -152,57 +148,19 @@ export function createUseCasesActions(
   respondOpencodePermission: async (sessionId, permissionId, response) => {
     if (get().source !== "daemon") return;
     await daemonApi.respondOpencodePermission(sessionId, permissionId, response);
-    // Same Entity + list projection path as resolveApproval (status sole writers).
     set((s) => {
       const items = (s.transcriptsBySession[sessionId] ?? []).map((it) =>
         it.requestId === permissionId
           ? {
               ...it,
-              kind: "status",
+              kind: "status" as const,
               text: `Permission ${response}`,
               title: "Permission",
               requestId: null,
             }
           : it,
       );
-      const stillPending = transcriptHasPendingApproval(items);
-      const prevEntity = s.sessionsById[sessionId];
-      const session = findSessionRow(s, sessionId);
-      const entity = patchSessionEntity(prevEntity, sessionId, {
-        hasPendingApproval: stillPending,
-        daemonStatus: stillPending
-          ? (prevEntity?.daemonStatus ?? "running")
-          : "running",
-        conversationId:
-          session?.conversationId ?? prevEntity?.conversationId ?? "",
-        agent: session?.agent ?? prevEntity?.agent,
-        shortId: session?.shortId ?? prevEntity?.shortId,
-        model: session?.model ?? prevEntity?.model,
-        summary: session?.summary ?? prevEntity?.summary,
-      });
-      const committed = commitSessionEntity(s, entity, {
-        elevateApprovalCount: false,
-      });
-      const convId = entity.conversationId;
-      const wasPending = prevEntity?.hasPendingApproval === true;
-      let conversations = committed.conversations;
-      if (convId && wasPending && !stillPending) {
-        conversations = patchLocalConversation(conversations, convId, {
-          approvalCount: Math.max(
-            (s.conversations.find((c) => c.id === convId)?.approvalCount ?? 1) -
-              1,
-            0,
-          ),
-        });
-      }
-      return {
-        ...committed,
-        conversations,
-        transcriptsBySession: {
-          ...s.transcriptsBySession,
-          [sessionId]: items,
-        },
-      };
+      return commitResolvedApprovalState(s, sessionId, items);
     });
     await get().loadTranscript(sessionId, {
       tailWindow: 200,
@@ -219,7 +177,7 @@ export function createUseCasesActions(
         it.requestId === questionId
           ? {
               ...it,
-              kind: "status",
+              kind: "status" as const,
               text: "Question answered",
               title: "Question",
               requestId: null,
@@ -227,44 +185,7 @@ export function createUseCasesActions(
             }
           : it,
       );
-      const stillPending = transcriptHasPendingApproval(items);
-      const prevEntity = s.sessionsById[sessionId];
-      const session = findSessionRow(s, sessionId);
-      const entity = patchSessionEntity(prevEntity, sessionId, {
-        hasPendingApproval: stillPending,
-        daemonStatus: stillPending
-          ? (prevEntity?.daemonStatus ?? "running")
-          : "running",
-        conversationId:
-          session?.conversationId ?? prevEntity?.conversationId ?? "",
-        agent: session?.agent ?? prevEntity?.agent,
-        shortId: session?.shortId ?? prevEntity?.shortId,
-        model: session?.model ?? prevEntity?.model,
-        summary: session?.summary ?? prevEntity?.summary,
-      });
-      const committed = commitSessionEntity(s, entity, {
-        elevateApprovalCount: false,
-      });
-      const convId = entity.conversationId;
-      const wasPending = prevEntity?.hasPendingApproval === true;
-      let conversations = committed.conversations;
-      if (convId && wasPending && !stillPending) {
-        conversations = patchLocalConversation(conversations, convId, {
-          approvalCount: Math.max(
-            (s.conversations.find((c) => c.id === convId)?.approvalCount ?? 1) -
-              1,
-            0,
-          ),
-        });
-      }
-      return {
-        ...committed,
-        conversations,
-        transcriptsBySession: {
-          ...s.transcriptsBySession,
-          [sessionId]: items,
-        },
-      };
+      return commitResolvedApprovalState(s, sessionId, items);
     });
     await get().loadTranscript(sessionId, {
       tailWindow: 200,
@@ -507,8 +428,28 @@ export function createUseCasesActions(
 
       if (prompt.trim()) {
         // Reattach only — user text wins over any pending auto-continue flag.
+        // On success paint Entity running via sole commit (no bare RPC side-effect).
         try {
           await daemonApi.resumeSession(sessionId, false);
+          set((s) => {
+            const prev = s.sessionsById[sessionId];
+            const row = findSessionRow(s, sessionId);
+            const entity = patchSessionEntity(prev, sessionId, {
+              daemonStatus: "running",
+              needsContinue: false,
+              conversationId:
+                prev?.conversationId ||
+                row?.conversationId ||
+                conversationId,
+              agent: prev?.agent || row?.agent,
+              shortId: prev?.shortId || row?.shortId,
+              model: prev?.model || row?.model,
+              summary: prev?.summary || row?.summary,
+              parentId: prev?.parentId ?? row?.parentId,
+              lastTsMs: Date.now(),
+            });
+            return commitSessionEntity(s, entity);
+          });
         } catch {
           /* not needed when already live */
         }
@@ -685,6 +626,25 @@ export function createUseCasesActions(
       if (prompt.trim()) {
         try {
           await daemonApi.resumeSession(sessionId, false);
+          set((s) => {
+            const prev = s.sessionsById[sessionId];
+            const row = findSessionRow(s, sessionId);
+            const entity = patchSessionEntity(prev, sessionId, {
+              daemonStatus: "running",
+              needsContinue: false,
+              conversationId:
+                prev?.conversationId ||
+                row?.conversationId ||
+                conversationId,
+              agent: prev?.agent || row?.agent,
+              shortId: prev?.shortId || row?.shortId,
+              model: prev?.model || row?.model,
+              summary: prev?.summary || row?.summary,
+              parentId: prev?.parentId ?? row?.parentId,
+              lastTsMs: Date.now(),
+            });
+            return commitSessionEntity(s, entity);
+          });
         } catch {
           /* not needed when already live */
         }

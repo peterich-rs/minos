@@ -661,6 +661,47 @@ impl ConversationService for DefaultConversationService {
         let now_ms = chrono::Utc::now().timestamp_millis();
 
         let mut tx = self.store.begin().await?;
+        // Claim client_op_id **before** toggle so concurrent retries cannot double-flip.
+        let claimed = social::try_claim_reaction_client_op_in_tx(
+            &mut tx,
+            client_op_id,
+            conversation_id,
+            message_id,
+            emoji.trim(),
+            "pending",
+            account_id,
+            now_ms,
+        )
+        .await?;
+        if !claimed {
+            // Lost race or sequential retry raced into the tx: return current aggregate.
+            let rows = social::list_for_message_in_tx(&mut tx, message_id).await?;
+            let reactions = social::aggregate_groups(&rows, Some(account_id));
+            tx.rollback().await.ok();
+            if let Some(prior) = social::get_reaction_client_op(&self.store, client_op_id).await? {
+                let event_id = social::reaction_event_id(
+                    conversation_id,
+                    message_id,
+                    prior.emoji.as_str(),
+                    &format!("user-{account_id}"),
+                    prior.action.as_str(),
+                    client_op_id,
+                );
+                return Ok((
+                    prior.action,
+                    reactions,
+                    social::PendingDurablePublish {
+                        topic_kind: "conversation".into(),
+                        event_id,
+                        outbox_id: None,
+                    },
+                ));
+            }
+            return Err(ConversationError::ValidationFormat(
+                "client_op_id claim lost without prior row".into(),
+            ));
+        }
+
         let action = social::toggle_user_in_tx(
             &mut tx,
             conversation_id,
@@ -671,17 +712,7 @@ impl ConversationService for DefaultConversationService {
             now_ms,
         )
         .await?;
-        social::insert_reaction_client_op_in_tx(
-            &mut tx,
-            client_op_id,
-            conversation_id,
-            message_id,
-            emoji.trim(),
-            &action,
-            account_id,
-            now_ms,
-        )
-        .await?;
+        social::set_reaction_client_op_action_in_tx(&mut tx, client_op_id, &action).await?;
         let rows = social::list_for_message_in_tx(&mut tx, message_id).await?;
         // HTTP response: viewer-resolved for the toggling account.
         let reactions = social::aggregate_groups(&rows, Some(account_id));

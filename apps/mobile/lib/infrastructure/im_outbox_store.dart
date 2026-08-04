@@ -16,8 +16,9 @@ enum ImOutboxStatus {
 
 enum ImOutboxKind {
   userMessage,
-  agentResult,
   reactionToggle,
+  /// Legacy / foreign kind (e.g. old agent_result). Never flushed as user send.
+  unsupported,
 }
 
 /// Permanent client/business errors may exhaust to terminal.
@@ -41,7 +42,7 @@ class ImOutboxEntry {
     this.lastError,
   });
 
-  /// = client_message_id for user_message / agent_result.
+  /// = client_message_id for user_message; = client_op_id for reaction_toggle.
   final String clientOpId;
   final ImOutboxKind kind;
   final String conversationId;
@@ -96,22 +97,23 @@ String imOutboxKindWire(ImOutboxKind kind) {
   switch (kind) {
     case ImOutboxKind.userMessage:
       return 'user_message';
-    case ImOutboxKind.agentResult:
-      return 'agent_result';
     case ImOutboxKind.reactionToggle:
       return 'reaction_toggle';
+    case ImOutboxKind.unsupported:
+      return 'unsupported';
   }
 }
 
 ImOutboxKind imOutboxKindFromWire(String raw) {
   switch (raw) {
-    case 'agent_result':
-      return ImOutboxKind.agentResult;
     case 'reaction_toggle':
       return ImOutboxKind.reactionToggle;
     case 'user_message':
-    default:
       return ImOutboxKind.userMessage;
+    default:
+      // agent_result and any other unknown wire → permanent fail path, not
+      // user_message flush (avoids empty_text / invalid_payload noise).
+      return ImOutboxKind.unsupported;
   }
 }
 

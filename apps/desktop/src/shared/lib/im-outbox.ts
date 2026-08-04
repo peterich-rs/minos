@@ -413,6 +413,21 @@ export function listDuePending(now = nowMs()): ImOutboxEntry[] {
   );
 }
 
+/**
+ * Earliest `nextAttemptAt` among pending (or reclaimed stale inflight) rows.
+ * Used by the outbox worker to sleep until something is actually due —
+ * never stop the chain when backoff exceeds an arbitrary window.
+ */
+export function earliestPendingAttemptAt(now = nowMs()): number | null {
+  reclaimStaleInflight(now);
+  let min: number | null = null;
+  for (const e of loadStore().entries) {
+    if (e.status !== "pending") continue;
+    if (min == null || e.nextAttemptAt < min) min = e.nextAttemptAt;
+  }
+  return min;
+}
+
 export function listUnsynced(): ImOutboxEntry[] {
   return loadStore().entries.filter(
     (e) =>

@@ -328,6 +328,89 @@ pub async fn get_reaction_client_op(
     }
 }
 
+/// Claim `client_op_id` uniquely inside a write tx.
+///
+/// Returns `true` when this transaction owns the op (insert succeeded).
+/// Returns `false` when another writer already claimed the same id — caller
+/// must **not** toggle again and should return the prior aggregate.
+pub async fn try_claim_reaction_client_op_in_tx(
+    tx: &mut DbTx<'_>,
+    client_op_id: &str,
+    conversation_id: &str,
+    message_id: &str,
+    emoji: &str,
+    action: &str,
+    account_id: &str,
+    created_at_ms: i64,
+) -> Result<bool, BackendError> {
+    let rows = match tx {
+        DbTx::Sqlite(tx) => sqlx::query(
+            "INSERT OR IGNORE INTO reaction_client_ops
+                    (client_op_id, conversation_id, message_id, emoji, action, account_id, created_at_ms)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(client_op_id)
+        .bind(conversation_id)
+        .bind(message_id)
+        .bind(emoji)
+        .bind(action)
+        .bind(account_id)
+        .bind(created_at_ms)
+        .execute(&mut **tx)
+        .await
+        .map_err(store_err("message_reactions::try_claim_reaction_client_op"))?
+        .rows_affected(),
+        DbTx::Postgres(tx) => sqlx::query(
+            "INSERT INTO reaction_client_ops
+                    (client_op_id, conversation_id, message_id, emoji, action, account_id, created_at_ms)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)
+                 ON CONFLICT (client_op_id) DO NOTHING",
+        )
+        .bind(client_op_id)
+        .bind(conversation_id)
+        .bind(message_id)
+        .bind(emoji)
+        .bind(action)
+        .bind(account_id)
+        .bind(created_at_ms)
+        .execute(&mut **tx)
+        .await
+        .map_err(store_err("message_reactions::try_claim_reaction_client_op"))?
+        .rows_affected(),
+    };
+    Ok(rows == 1)
+}
+
+/// Update action after a successful claim + toggle (same tx).
+pub async fn set_reaction_client_op_action_in_tx(
+    tx: &mut DbTx<'_>,
+    client_op_id: &str,
+    action: &str,
+) -> Result<(), BackendError> {
+    match tx {
+        DbTx::Sqlite(tx) => {
+            sqlx::query(
+                "UPDATE reaction_client_ops SET action = ?1 WHERE client_op_id = ?2",
+            )
+            .bind(action)
+            .bind(client_op_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(store_err("message_reactions::set_reaction_client_op_action"))?;
+        }
+        DbTx::Postgres(tx) => {
+            sqlx::query("UPDATE reaction_client_ops SET action = $1 WHERE client_op_id = $2")
+                .bind(action)
+                .bind(client_op_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(store_err("message_reactions::set_reaction_client_op_action"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Backward-compatible name: claim with known action (no rows_affected check).
 pub async fn insert_reaction_client_op_in_tx(
     tx: &mut DbTx<'_>,
     client_op_id: &str,
@@ -338,43 +421,17 @@ pub async fn insert_reaction_client_op_in_tx(
     account_id: &str,
     created_at_ms: i64,
 ) -> Result<(), BackendError> {
-    match tx {
-        DbTx::Sqlite(tx) => {
-            sqlx::query(
-                "INSERT OR IGNORE INTO reaction_client_ops
-                    (client_op_id, conversation_id, message_id, emoji, action, account_id, created_at_ms)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
-            )
-            .bind(client_op_id)
-            .bind(conversation_id)
-            .bind(message_id)
-            .bind(emoji)
-            .bind(action)
-            .bind(account_id)
-            .bind(created_at_ms)
-            .execute(&mut **tx)
-            .await
-            .map_err(store_err("message_reactions::insert_reaction_client_op"))?;
-        }
-        DbTx::Postgres(tx) => {
-            sqlx::query(
-                "INSERT INTO reaction_client_ops
-                    (client_op_id, conversation_id, message_id, emoji, action, account_id, created_at_ms)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)
-                 ON CONFLICT (client_op_id) DO NOTHING",
-            )
-            .bind(client_op_id)
-            .bind(conversation_id)
-            .bind(message_id)
-            .bind(emoji)
-            .bind(action)
-            .bind(account_id)
-            .bind(created_at_ms)
-            .execute(&mut **tx)
-            .await
-            .map_err(store_err("message_reactions::insert_reaction_client_op"))?;
-        }
-    }
+    let _ = try_claim_reaction_client_op_in_tx(
+        tx,
+        client_op_id,
+        conversation_id,
+        message_id,
+        emoji,
+        action,
+        account_id,
+        created_at_ms,
+    )
+    .await?;
     Ok(())
 }
 

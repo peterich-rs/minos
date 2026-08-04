@@ -21,6 +21,21 @@ final focusedSocialConversationIdProvider = StateProvider<String?>((ref) {
   return null;
 });
 
+/// Last realtime subscription limit breach (R4). Shell can toast/banner.
+class SubscriptionLimitNotice {
+  const SubscriptionLimitNotice({
+    required this.limit,
+    required this.current,
+    required this.atMs,
+  });
+  final int limit;
+  final int current;
+  final int atMs;
+}
+
+final subscriptionLimitNoticeProvider =
+    StateProvider<SubscriptionLimitNotice?>((ref) => null);
+
 /// Consume `snapshot_required` UiEvent (Rust realtime) → TimelineSync / InboxSync.
 ///
 /// Conversation topic: only reconcile when [socialConversationProvider] already
@@ -220,9 +235,9 @@ class SocialConversation extends _$SocialConversation {
         .socialEvents
         .listen(
           _onSocialEvent,
-          onError: (Object error, StackTrace stackTrace) =>
-              ref.invalidateSelf(),
-          onDone: ref.invalidateSelf,
+          // Soft: connection churn must not rebuild + mark-read the open chat.
+          onError: (Object error, StackTrace stackTrace) {},
+          onDone: () {},
         );
     // R3a: open chat subscribes conversation topic for full T1 live frames.
     // Account topic digests are inbox-only and must not drive this timeline.
@@ -242,6 +257,14 @@ class SocialConversation extends _$SocialConversation {
   }
 
   Future<void> refresh() => _load();
+
+  /// Cache-only reload after outbox ack (no REST, no mark-read, no subscribe).
+  /// Used when the conversation is already open; never materialize closed chats.
+  Future<void> reloadFromLocalCache() async {
+    final repository = ref.read(socialRepositoryProvider);
+    final messages = await repository.loadMessages(_conversationId);
+    state = state.withMessages(messages).copyWith(error: null);
+  }
 
   /// Older page via Hub `before_seq` (TimelineSync.loadOlder).
   Future<void> loadOlder() async {
@@ -575,7 +598,9 @@ class SocialConversation extends _$SocialConversation {
       messageId: mid,
       emoji: em,
     );
-    unawaited(ref.read(imOutboxWorkerProvider).flush());
+    final worker = ref.read(imOutboxWorkerProvider);
+    unawaited(worker.ensureStarted());
+    unawaited(worker.flush());
   }
 
   List<ReactionGroup> _optimisticToggle(
@@ -741,8 +766,20 @@ final friendRequestRealtimeSyncProvider = Provider<void>((ref) {
       return;
     }
     if (ui.kind == 'subscription_limit_exceeded') {
-      // Not silent: mark connection attention; UI can toast later.
-      // Payload: { limit, current }.
+      // Non-silent: publish notice for shell banner/toast (R4).
+      int limit = 0;
+      int current = 0;
+      try {
+        final payload = jsonDecode(ui.payloadJson) as Map<String, dynamic>?;
+        limit = (payload?['limit'] as num?)?.toInt() ?? 0;
+        current = (payload?['current'] as num?)?.toInt() ?? 0;
+      } catch (_) {}
+      ref.read(subscriptionLimitNoticeProvider.notifier).state =
+          SubscriptionLimitNotice(
+            limit: limit,
+            current: current,
+            atMs: DateTime.now().millisecondsSinceEpoch,
+          );
     }
   });
   ref.onDispose(sub.cancel);
@@ -779,10 +816,14 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
 
     // Start IM outbox worker once conversations hydrate; wire UI refresh hooks.
     final outbox = ref.read(imOutboxWorkerProvider);
+    // Never materialize autoDispose open-chat for background drain — that
+    // would subscribe + mark-read a conversation the user is not viewing.
     outbox.onConversationDirty = (conversationId) {
-      unawaited(
-        ref.read(socialConversationProvider(conversationId).notifier).refresh(),
-      );
+      final timeline = socialConversationProvider(conversationId);
+      if (!ref.exists(timeline)) {
+        return;
+      }
+      unawaited(ref.read(timeline.notifier).reloadFromLocalCache());
     };
     outbox.onInboxDirty = () {
       // Prefer patch if possible; full refresh only when worker cannot patch.

@@ -26,6 +26,25 @@ class AppShellPage extends ConsumerWidget {
     // C6.3: Messages tab badge from Hub inbox unread sum.
     final unread = ref.watch(socialUnreadCountProvider);
 
+    // R4: non-silent subscription limit (LRU eviction / cap).
+    ref.listen<SubscriptionLimitNotice?>(subscriptionLimitNoticeProvider, (
+      previous,
+      next,
+    ) {
+      if (next == null) return;
+      if (previous?.atMs == next.atMs) return;
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text(
+            next.limit > 0
+                ? '实时订阅已达上限（${next.current}/${next.limit}），部分会话将仅在打开时同步'
+                : '实时订阅已达上限，部分会话将仅在打开时同步',
+          ),
+        ),
+      );
+    });
+
     return Scaffold(
       backgroundColor: colors.canvas,
       body: IndexedStack(

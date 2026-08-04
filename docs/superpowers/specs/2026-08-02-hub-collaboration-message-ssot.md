@@ -180,10 +180,12 @@ Host ingest (raw_events 已有)
 **幂等键（稳定）**：
 
 ```text
-client_message_id = "agent-result:{conversation_id}:{session_id}:{turn_write_id}"
+client_message_id = "agent-result:{conversation_id}:{session_id}:{origin_message_id}"
 ```
 
-与今日 daemon 本地 id 同形，便于迁移与对账；**Hub 行是权威**，本地 id 仅作 projection key。
+`origin_message_id` = 触发该 turn 的用户消息 id（Hub `client_message_id` / Desktop 本地 user row id）。  
+与 daemon `conversation_completion` 冻结公式一致；**禁止** `message_key` / `t{ms}` 作 collab 后缀。  
+**Hub 行是权威**，本地 canonical id 仅作 projection / host_projection uplink 键。
 
 ### 2.2 语义对齐 Daemon `conversation_completion`
 
