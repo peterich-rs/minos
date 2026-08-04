@@ -10,11 +10,16 @@
 #   TAURI_SIGNING_PRIVATE_KEY
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  (empty string OK)
 #
-# Optional Apple secrets (macOS codesign + notarize when all present):
+# Optional Apple secrets (macOS **codesign only** in CI when present):
 #   APPLE_CERTIFICATE          base64 .p12
 #   APPLE_CERTIFICATE_PASSWORD
 #   APPLE_SIGNING_IDENTITY     e.g. "Developer ID Application: …"
-#   APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID
+#
+# Notarization is intentionally **out of CI** (Apple notary can exceed the
+# 6h Actions hard cap). After the workflow publishes a signed DMG / .app.tar.gz,
+# run locally:
+#   apps/desktop/scripts/notarize-macos-release.sh --version X.Y.Z
+# (needs APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID + notarytool).
 #
 # See docs/desktop-auto-update.md
 
@@ -32,6 +37,12 @@ on:
         required: false
         type: boolean
         default: true
+      # Escape hatch only — Apple notary regularly exceeds Actions job limits.
+      notarize_in_ci:
+        description: "Also notarize in CI (slow; may hit 6h timeout). Prefer local notarize script."
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -113,6 +124,9 @@ jobs:
     name: macOS aarch64
     needs: prepare
     runs-on: macos-14
+    # Build + codesign only is ~20–40m. Keep a hard cap so a stuck notary
+    # (if notarize_in_ci=true) fails the job instead of burning a full 6h.
+    timeout-minutes: ${{ inputs.notarize_in_ci && 360 || 90 }}
     outputs:
       platform_key: darwin-aarch64
       archive_name: ${{ steps.pack.outputs.archive_name }}
@@ -202,9 +216,6 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           test -n "$MINOS_BACKEND_URL" || { echo "missing MINOS_BACKEND_URL secret"; exit 1; }
@@ -212,6 +223,22 @@ jobs:
           if [[ "${{ steps.apple.outputs.enabled }}" != "true" ]]; then
             echo "::warning::Apple signing secrets not fully configured; building with --no-sign"
             ARGS+=(--no-sign)
+          fi
+          # Default: never pass APPLE_ID/PASSWORD/TEAM_ID so Tauri codesigns
+          # but does not call notary. Optional CI notarize is opt-in only.
+          if [[ "${{ inputs.notarize_in_ci }}" == "true" ]]; then
+            echo "::warning::notarize_in_ci=true — Apple notary may take hours (job timeout 360m)"
+            export APPLE_ID="${{ secrets.APPLE_ID }}"
+            export APPLE_PASSWORD="${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}"
+            export APPLE_TEAM_ID="${{ secrets.APPLE_TEAM_ID }}"
+            if [[ -z "${APPLE_ID:-}" || -z "${APPLE_PASSWORD:-}" || -z "${APPLE_TEAM_ID:-}" ]]; then
+              echo "::error::notarize_in_ci=true but APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID secrets missing"
+              exit 1
+            fi
+          else
+            unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID || true
+            echo "::notice::Codesign-only (no notarize). After release, run on a Mac:"
+            echo "  apps/desktop/scripts/notarize-macos-release.sh --version ${{ needs.prepare.outputs.version }}"
           fi
           pnpm tauri "${ARGS[@]}"
 
@@ -271,7 +298,10 @@ jobs:
           gh release upload "$TAG" "$STABLE_ARCHIVE" "${STABLE_ARCHIVE}.sig" --clobber
           gh release upload minos-desktop-latest "$STABLE_ARCHIVE" "${STABLE_ARCHIVE}.sig" --clobber
           if [[ -n "${DMG:-}" && -f "$DMG" ]]; then
-            gh release upload "$TAG" "$DMG" --clobber
+            # Keep a stable name so local notarize script can find the asset.
+            STABLE_DMG="Minos_${VERSION}_aarch64.dmg"
+            cp "$DMG" "$STABLE_DMG"
+            gh release upload "$TAG" "$STABLE_DMG" --clobber
           fi
           # Stash sig text for assemble job
           mkdir -p /tmp/sigout
