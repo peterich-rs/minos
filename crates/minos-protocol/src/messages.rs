@@ -415,7 +415,7 @@ pub struct SendChatMessageRequest {
     /// @deprecated Prefer `client_sent_at_ms`. Accepted but not used as ordering authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at_ms: Option<i64>,
-    /// Ready `media_blobs.blob_id` values owned by the sender (upload via `/v1/media/...` first).
+    /// Ready media blob ids owned by the sender (upload via the media API first).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachment_blob_ids: Vec<String>,
 }
