@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// On `404` with `error.code == "not_paired"`, the caller has no row in
 /// `account_host_pairings` — the response body uses the standard
 /// `{ "error": { "code": ..., "message": ... } }` envelope shared by
-/// every other `/v1/*` route.
+/// every other `/v1/...` route.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct MePeerResponse {
     pub peer_device_id: DeviceId,
@@ -415,7 +415,7 @@ pub struct SendChatMessageRequest {
     /// @deprecated Prefer `client_sent_at_ms`. Accepted but not used as ordering authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at_ms: Option<i64>,
-    /// Ready `media_blobs.blob_id` values owned by the sender (upload via `/v1/media/*` first).
+    /// Ready `media_blobs.blob_id` values owned by the sender (upload via `/v1/media/...` first).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachment_blob_ids: Vec<String>,
 }
