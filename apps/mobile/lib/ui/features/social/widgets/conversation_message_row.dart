@@ -126,12 +126,10 @@ class ConversationMessageRow extends StatelessWidget {
             ],
           ),
         ),
-        if (message.reactions.isNotEmpty || onToggleReaction != null) ...<Widget>[
+        if (message.reactions.isNotEmpty ||
+            onToggleReaction != null) ...<Widget>[
           const SizedBox(height: MinosSpacing.xs),
-          _ReactionStrip(
-            groups: message.reactions,
-            onToggle: onToggleReaction,
-          ),
+          _ReactionStrip(groups: message.reactions, onToggle: onToggleReaction),
         ],
       ],
     );

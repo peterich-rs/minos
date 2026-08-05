@@ -283,6 +283,7 @@ abstract class MinosCoreProtocol {
     required String requestId,
     required String sessionId,
     required Map<String, dynamic> decision,
+
     /// Hub Intent Outbox id (C5.3). Stable across retries of the same intent.
     String? clientRequestId,
   });

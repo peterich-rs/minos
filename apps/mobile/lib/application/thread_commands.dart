@@ -50,10 +50,9 @@ class ThreadCommands {
     String? clientRequestId,
   }) async {
     // C5.3: stable Hub client_request_id for this user intent.
-    final opId =
-        clientRequestId?.trim().isNotEmpty == true
-            ? clientRequestId!.trim()
-            : 'approval-${DateTime.now().microsecondsSinceEpoch}-$requestId';
+    final opId = clientRequestId?.trim().isNotEmpty == true
+        ? clientRequestId!.trim()
+        : 'approval-${DateTime.now().microsecondsSinceEpoch}-$requestId';
     logFlutterInfo(
       'thread_commands',
       'sendApprovalDecision requested sessionId=$sessionId requestId=$requestId',

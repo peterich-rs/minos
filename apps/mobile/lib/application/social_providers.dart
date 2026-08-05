@@ -33,8 +33,9 @@ class SubscriptionLimitNotice {
   final int atMs;
 }
 
-final subscriptionLimitNoticeProvider =
-    StateProvider<SubscriptionLimitNotice?>((ref) => null);
+final subscriptionLimitNoticeProvider = StateProvider<SubscriptionLimitNotice?>(
+  (ref) => null,
+);
 
 /// Consume `snapshot_required` UiEvent (Rust realtime) → TimelineSync / InboxSync.
 ///
@@ -242,9 +243,7 @@ class SocialConversation extends _$SocialConversation {
     // R3a: open chat subscribes conversation topic for full T1 live frames.
     // Account topic digests are inbox-only and must not drive this timeline.
     final repository = ref.read(socialRepositoryProvider);
-    unawaited(
-      repository.subscribeConversation(conversationId: conversationId),
-    );
+    unawaited(repository.subscribeConversation(conversationId: conversationId));
     ref.onDispose(() {
       unawaited(_eventsSub?.cancel() ?? Future<void>.value());
       _markReadTimer?.cancel();
@@ -295,11 +294,7 @@ class SocialConversation extends _$SocialConversation {
           response.messages.length >= _pageSize;
       state = state
           .withMessages(messages)
-          .copyWith(
-            hasOlder: hasOlder,
-            loadingOlder: false,
-            error: null,
-          );
+          .copyWith(hasOlder: hasOlder, loadingOlder: false, error: null);
     } catch (error) {
       state = state.copyWith(loadingOlder: false, error: error);
     }
@@ -586,10 +581,12 @@ class SocialConversation extends _$SocialConversation {
     final clientOpId =
         'react-${DateTime.now().microsecondsSinceEpoch}-${mid.hashCode.abs()}';
     // Optimistic: flip reacted_by_me for this emoji in local list.
-    final nextMessages = state.messages.map((m) {
-      if (m.serverMessageId != mid && m.localId != mid) return m;
-      return m.copyWith(reactions: _optimisticToggle(m.reactions, em));
-    }).toList(growable: false);
+    final nextMessages = state.messages
+        .map((m) {
+          if (m.serverMessageId != mid && m.localId != mid) return m;
+          return m.copyWith(reactions: _optimisticToggle(m.reactions, em));
+        })
+        .toList(growable: false);
     state = state.withMessages(nextMessages);
 
     await repository.enqueueReactionToggleOutbox(
@@ -774,12 +771,13 @@ final friendRequestRealtimeSyncProvider = Provider<void>((ref) {
         limit = (payload?['limit'] as num?)?.toInt() ?? 0;
         current = (payload?['current'] as num?)?.toInt() ?? 0;
       } catch (_) {}
-      ref.read(subscriptionLimitNoticeProvider.notifier).state =
-          SubscriptionLimitNotice(
-            limit: limit,
-            current: current,
-            atMs: DateTime.now().millisecondsSinceEpoch,
-          );
+      ref
+          .read(subscriptionLimitNoticeProvider.notifier)
+          .state = SubscriptionLimitNotice(
+        limit: limit,
+        current: current,
+        atMs: DateTime.now().millisecondsSinceEpoch,
+      );
     }
   });
   ref.onDispose(sub.cancel);
@@ -887,20 +885,22 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
   Future<void> applyMarkReadLocal(String conversationId) async {
     final current = state.asData?.value;
     if (current == null) return;
-    final next = current.conversations.map((c) {
-      if (c.conversationId != conversationId) return c;
-      return ConversationSummary(
-        conversationId: c.conversationId,
-        kind: c.kind,
-        title: c.title,
-        counterpart: c.counterpart,
-        memberCount: c.memberCount,
-        lastMessagePreview: c.lastMessagePreview,
-        lastMessageAtMs: c.lastMessageAtMs,
-        unreadCount: 0,
-        unreadMentionCount: 0,
-      );
-    }).toList(growable: false);
+    final next = current.conversations
+        .map((c) {
+          if (c.conversationId != conversationId) return c;
+          return ConversationSummary(
+            conversationId: c.conversationId,
+            kind: c.kind,
+            title: c.title,
+            counterpart: c.counterpart,
+            memberCount: c.memberCount,
+            lastMessagePreview: c.lastMessagePreview,
+            lastMessageAtMs: c.lastMessageAtMs,
+            unreadCount: 0,
+            unreadMentionCount: 0,
+          );
+        })
+        .toList(growable: false);
     state = AsyncValue.data(
       conversationsSortedByLastActive(
         ConversationsResponse(conversations: next),
@@ -929,22 +929,24 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
     );
     List<ConversationSummary> next;
     if (exists) {
-      next = current.conversations.map((c) {
-        if (c.conversationId != conversationId) return c;
-        return ConversationSummary(
-          conversationId: c.conversationId,
-          kind: c.kind,
-          title: c.title,
-          counterpart: c.counterpart,
-          memberCount: c.memberCount,
-          lastMessagePreview: preview,
-          lastMessageAtMs: repository.platformInt64FromIntValue(
-            lastMessageAtMs,
-          ),
-          unreadCount: unreadCount ?? c.unreadCount,
-          unreadMentionCount: unreadCount == 0 ? 0 : c.unreadMentionCount,
-        );
-      }).toList(growable: false);
+      next = current.conversations
+          .map((c) {
+            if (c.conversationId != conversationId) return c;
+            return ConversationSummary(
+              conversationId: c.conversationId,
+              kind: c.kind,
+              title: c.title,
+              counterpart: c.counterpart,
+              memberCount: c.memberCount,
+              lastMessagePreview: preview,
+              lastMessageAtMs: repository.platformInt64FromIntValue(
+                lastMessageAtMs,
+              ),
+              unreadCount: unreadCount ?? c.unreadCount,
+              unreadMentionCount: unreadCount == 0 ? 0 : c.unreadMentionCount,
+            );
+          })
+          .toList(growable: false);
     } else {
       next = <ConversationSummary>[
         ConversationSummary(
@@ -997,8 +999,7 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
       await repository.clearUnread(conversationId);
     } else {
       unread = (prev?.unreadCount ?? 0) + 1;
-      unreadMention =
-          (prev?.unreadMentionCount ?? 0) + (mention ? 1 : 0);
+      unreadMention = (prev?.unreadMentionCount ?? 0) + (mention ? 1 : 0);
       await repository.touchConversationPreview(
         conversationId: conversationId,
         preview: message.text,
@@ -1025,20 +1026,22 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
     );
     List<ConversationSummary> next;
     if (exists) {
-      next = current.conversations.map((c) {
-        if (c.conversationId != conversationId) return c;
-        return ConversationSummary(
-          conversationId: c.conversationId,
-          kind: c.kind,
-          title: c.title,
-          counterpart: c.counterpart,
-          memberCount: c.memberCount,
-          lastMessagePreview: message.text,
-          lastMessageAtMs: message.createdAtMs,
-          unreadCount: focused || isOwn ? 0 : unread,
-          unreadMentionCount: focused || isOwn ? 0 : unreadMention,
-        );
-      }).toList(growable: false);
+      next = current.conversations
+          .map((c) {
+            if (c.conversationId != conversationId) return c;
+            return ConversationSummary(
+              conversationId: c.conversationId,
+              kind: c.kind,
+              title: c.title,
+              counterpart: c.counterpart,
+              memberCount: c.memberCount,
+              lastMessagePreview: message.text,
+              lastMessageAtMs: message.createdAtMs,
+              unreadCount: focused || isOwn ? 0 : unread,
+              unreadMentionCount: focused || isOwn ? 0 : unreadMention,
+            );
+          })
+          .toList(growable: false);
     } else {
       next = <ConversationSummary>[
         ConversationSummary(
@@ -1050,9 +1053,7 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
           lastMessagePreview: message.text,
           lastMessageAtMs: message.createdAtMs,
           unreadCount: focused || isOwn ? 0 : 1,
-          unreadMentionCount: focused || isOwn
-              ? 0
-              : (mention ? 1 : 0),
+          unreadMentionCount: focused || isOwn ? 0 : (mention ? 1 : 0),
         ),
         ...current.conversations,
       ];

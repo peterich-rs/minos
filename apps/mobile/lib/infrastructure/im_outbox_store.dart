@@ -3,30 +3,24 @@
 
 const int kImOutboxMaxPermanentAttempts = 8;
 const int kImOutboxBaseBackoffMs = 1500;
+
 /// Cap exponential backoff so long offline keeps retrying without terminal.
 const int kImOutboxMaxBackoffMs = 5 * 60 * 1000;
 const int kImOutboxStaleInflightMs = 45 * 1000;
 
-enum ImOutboxStatus {
-  pending,
-  inflight,
-  acked,
-  failedTerminal,
-}
+enum ImOutboxStatus { pending, inflight, acked, failedTerminal }
 
 enum ImOutboxKind {
   userMessage,
   reactionToggle,
+
   /// Legacy / foreign kind (e.g. old agent_result). Never flushed as user send.
   unsupported,
 }
 
 /// Permanent client/business errors may exhaust to terminal.
 /// Transient network/connection errors stay pending forever (capped backoff).
-enum OutboxFailureClass {
-  transient,
-  permanent,
-}
+enum OutboxFailureClass { transient, permanent }
 
 class ImOutboxEntry {
   const ImOutboxEntry({
@@ -222,9 +216,8 @@ class ImOutboxMemory {
   final Map<String, ImOutboxEntry> _entries = <String, ImOutboxEntry>{};
 
   List<ImOutboxEntry> get snapshot =>
-      _entries.values.toList(growable: false)..sort(
-        (a, b) => a.createdAtMs.compareTo(b.createdAtMs),
-      );
+      _entries.values.toList(growable: false)
+        ..sort((a, b) => a.createdAtMs.compareTo(b.createdAtMs));
 
   void enqueueUserMessage({
     required String clientOpId,

@@ -13,6 +13,7 @@ class SocialChatMessage {
     required this.deliveryState,
     this.senderType = SenderType.user,
     this.serverMessageId,
+
     /// Stable idempotency key for Hub insert (= wire client_message_id).
     /// For pending/sending rows this equals [localId].
     this.clientMessageId,
@@ -37,6 +38,7 @@ class SocialChatMessage {
   final ChatMessageReplySummary? replyTo;
   final int? recalledAtMs;
   final List<String> mentionedAccountIds;
+
   /// Hub reaction aggregates (viewer-resolved when available).
   final List<ReactionGroup> reactions;
 

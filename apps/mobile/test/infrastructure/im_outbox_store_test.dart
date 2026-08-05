@@ -4,7 +4,10 @@ import 'package:minos/infrastructure/im_outbox_store.dart';
 void main() {
   group('classifyOutboxFailure', () {
     test('network and connection are transient', () {
-      expect(classifyOutboxFailure('network error'), OutboxFailureClass.transient);
+      expect(
+        classifyOutboxFailure('network error'),
+        OutboxFailureClass.transient,
+      );
       expect(
         classifyOutboxFailure('Not signed in — message not synced'),
         OutboxFailureClass.transient,
@@ -13,7 +16,10 @@ void main() {
         classifyOutboxFailure('connection refused'),
         OutboxFailureClass.transient,
       );
-      expect(classifyOutboxFailure('SocketException'), OutboxFailureClass.transient);
+      expect(
+        classifyOutboxFailure('SocketException'),
+        OutboxFailureClass.transient,
+      );
       expect(classifyOutboxFailure('HTTP 503'), OutboxFailureClass.transient);
     });
 
@@ -28,8 +34,14 @@ void main() {
     });
 
     test('408 and 429 stay transient', () {
-      expect(classifyOutboxFailure('HTTP 408 timeout'), OutboxFailureClass.transient);
-      expect(classifyOutboxFailure('HTTP 429 too many'), OutboxFailureClass.transient);
+      expect(
+        classifyOutboxFailure('HTTP 408 timeout'),
+        OutboxFailureClass.transient,
+      );
+      expect(
+        classifyOutboxFailure('HTTP 429 too many'),
+        OutboxFailureClass.transient,
+      );
     });
   });
 
@@ -166,10 +178,7 @@ void main() {
       store.markInflight('covered', t0);
       final covered = store.reclaimAllInflightOnStartup(t0 + 100);
       expect(covered.contains('covered'), isTrue);
-      expect(
-        store.snapshot.single.status,
-        ImOutboxStatus.pending,
-      );
+      expect(store.snapshot.single.status, ImOutboxStatus.pending);
 
       final stranded = store.strandedSendingLocalIds(
         sendingLocalIds: <String>['covered', 'orphan'],

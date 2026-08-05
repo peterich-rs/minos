@@ -831,7 +831,8 @@ class _ConversationMessagePane extends ConsumerWidget {
                                   message: message,
                                 ),
                           onToggleReaction:
-                              message.serverMessageId == null || message.isRecalled
+                              message.serverMessageId == null ||
+                                  message.isRecalled
                               ? null
                               : (emoji) {
                                   unawaited(

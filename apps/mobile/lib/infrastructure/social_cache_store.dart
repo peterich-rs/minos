@@ -270,10 +270,7 @@ class SocialCacheStore {
     }
     await db.update(
       'cached_social_conversations',
-      <String, Object?>{
-        'unread_count': 0,
-        'unread_mention_count': 0,
-      },
+      <String, Object?>{'unread_count': 0, 'unread_mention_count': 0},
       where: 'conversation_id = ?',
       whereArgs: <Object>[conversationId],
     );
@@ -512,10 +509,7 @@ class SocialCacheStore {
         'last_error': 'stale_inflight_reclaimed',
       },
       where: "status = ? AND updated_at_ms < ?",
-      whereArgs: <Object>[
-        imOutboxStatusWire(ImOutboxStatus.inflight),
-        cutoff,
-      ],
+      whereArgs: <Object>[imOutboxStatusWire(ImOutboxStatus.inflight), cutoff],
     );
   }
 
@@ -529,10 +523,7 @@ class SocialCacheStore {
     final rows = await db.query(
       'im_outbox',
       where: 'status = ? AND next_attempt_at_ms <= ?',
-      whereArgs: <Object>[
-        imOutboxStatusWire(ImOutboxStatus.pending),
-        now,
-      ],
+      whereArgs: <Object>[imOutboxStatusWire(ImOutboxStatus.pending), now],
       orderBy: 'next_attempt_at_ms ASC',
     );
     return rows.map(_outboxFromRow).toList(growable: false);
@@ -765,8 +756,7 @@ class SocialCacheStore {
         <String, Object?>{
           'conversation_id': message.conversationId,
           'server_message_id': message.messageId,
-          'client_message_id':
-              existing.clientMessageId ?? existing.localId,
+          'client_message_id': existing.clientMessageId ?? existing.localId,
           'sender_json': jsonEncode(_userSummaryToMap(message.sender)),
           'text': message.text,
           'created_at_ms': platformInt64ToInt(message.createdAtMs),
@@ -874,8 +864,7 @@ class SocialCacheStore {
         <String, Object?>{
           'conversation_id': message.conversationId,
           'server_message_id': message.messageId,
-          'client_message_id':
-              existing.clientMessageId ?? message.messageId,
+          'client_message_id': existing.clientMessageId ?? message.messageId,
           'sender_json': jsonEncode(_userSummaryToMap(message.sender)),
           'text': message.text,
           'created_at_ms': platformInt64ToInt(message.createdAtMs),

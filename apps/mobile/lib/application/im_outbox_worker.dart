@@ -42,8 +42,7 @@ class ImOutboxWorker {
     await repository.reconcileSendingMessagesOnStartup();
 
     final runtime = _ref.read(runtimeRepositoryProvider);
-    _connected =
-        runtime.currentConnectionState is ConnectionState_Connected;
+    _connected = runtime.currentConnectionState is ConnectionState_Connected;
 
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 2), (_) {
