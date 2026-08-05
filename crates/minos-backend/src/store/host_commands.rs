@@ -138,7 +138,7 @@ pub async fn enqueue(
         StorePoolRef::Postgres(pool) => {
             sqlx::query(
                 "INSERT INTO host_commands
-                    (command_id, host_installation_id, agent_session_id, method, params_json, requested_by_account_id, status::text, deadline_at_ms, created_at_ms)
+                    (command_id, host_installation_id, agent_session_id, method, params_json, requested_by_account_id, status, deadline_at_ms, created_at_ms)
                  VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8)",
             )
             .bind(command_id)
@@ -176,7 +176,7 @@ pub async fn enqueue_in_tx(
         DbTx::Sqlite(tx) => {
             sqlx::query(
                 "INSERT INTO host_commands
-                    (command_id, host_installation_id, agent_session_id, method, params_json, requested_by_account_id, status::text, deadline_at_ms, created_at_ms)
+                    (command_id, host_installation_id, agent_session_id, method, params_json, requested_by_account_id, status, deadline_at_ms, created_at_ms)
                  VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
             )
             .bind(command_id)
@@ -194,7 +194,7 @@ pub async fn enqueue_in_tx(
         DbTx::Postgres(tx) => {
             sqlx::query(
                 "INSERT INTO host_commands
-                    (command_id, host_installation_id, agent_session_id, method, params_json, requested_by_account_id, status::text, deadline_at_ms, created_at_ms)
+                    (command_id, host_installation_id, agent_session_id, method, params_json, requested_by_account_id, status, deadline_at_ms, created_at_ms)
                  VALUES ($1, $2, $3, $4, CAST($5 AS JSONB), $6, 'pending', $7, $8)",
             )
             .bind(command_id)
@@ -222,7 +222,7 @@ pub async fn get(
         match store.as_store_pool() {
             StorePoolRef::Sqlite(pool) => sqlx::query_as::<_, HostCommandRowTuple>(
                 "SELECT command_id, host_installation_id, agent_session_id, method, params_json,
-                        requested_by_account_id, status::text, response_json, error_json,
+                        requested_by_account_id, status, response_json, error_json,
                         deadline_at_ms, created_at_ms, ack_at_ms, finished_at_ms
                    FROM host_commands
                   WHERE command_id = ?",
@@ -350,7 +350,7 @@ pub async fn list_timed_out_open(
         match store.as_store_pool() {
             StorePoolRef::Sqlite(pool) => sqlx::query_as::<_, HostCommandRowTuple>(
                 "SELECT command_id, host_installation_id, agent_session_id, method, params_json,
-                        requested_by_account_id, status::text, response_json, error_json,
+                        requested_by_account_id, status, response_json, error_json,
                         deadline_at_ms, created_at_ms, ack_at_ms, finished_at_ms
                    FROM host_commands
                   WHERE deadline_at_ms <= ?

@@ -84,7 +84,7 @@ pub async fn insert_pending(
         StorePoolRef::Postgres(pool) => {
             sqlx::query(
                 "INSERT INTO approval_requests
-                    (request_id, agent_session_id, turn_id, method, params_json, state::text, deadline_at_ms, created_at_ms, resolved_at_ms, resolution_json)
+                    (request_id, agent_session_id, turn_id, method, params_json, state, deadline_at_ms, created_at_ms, resolved_at_ms, resolution_json)
                  VALUES ($1, $2, $3, $4, $5::jsonb, $6::approval_state, $7, $8, NULL, NULL)
                  ON CONFLICT (request_id) DO NOTHING",
             )
