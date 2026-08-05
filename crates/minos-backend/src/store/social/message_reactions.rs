@@ -108,7 +108,9 @@ pub fn aggregate_groups(
                 .collect();
             let reacted_by_me = viewer_account_id
                 .map(|vid| {
-                    actors.iter().any(|a| a.actor_kind == "user" && a.actor_id == vid)
+                    actors
+                        .iter()
+                        .any(|a| a.actor_kind == "user" && a.actor_id == vid)
                 })
                 .unwrap_or(false);
             Some(ReactionGroup {
@@ -291,8 +293,8 @@ pub async fn get_reaction_client_op(
             .fetch_optional(pool)
             .await
             .map_err(store_err("message_reactions::get_reaction_client_op"))?;
-            Ok(row.map(|(client_op_id, conversation_id, message_id, emoji, action, account_id, created_at_ms)| {
-                ReactionClientOpRow {
+            Ok(row.map(
+                |(
                     client_op_id,
                     conversation_id,
                     message_id,
@@ -300,8 +302,18 @@ pub async fn get_reaction_client_op(
                     action,
                     account_id,
                     created_at_ms,
-                }
-            }))
+                )| {
+                    ReactionClientOpRow {
+                        client_op_id,
+                        conversation_id,
+                        message_id,
+                        emoji,
+                        action,
+                        account_id,
+                        created_at_ms,
+                    }
+                },
+            ))
         }
         StorePoolRef::Postgres(pool) => {
             let row = sqlx::query_as::<_, (String, String, String, String, String, String, i64)>(
@@ -313,8 +325,8 @@ pub async fn get_reaction_client_op(
             .fetch_optional(pool)
             .await
             .map_err(store_err("message_reactions::get_reaction_client_op"))?;
-            Ok(row.map(|(client_op_id, conversation_id, message_id, emoji, action, account_id, created_at_ms)| {
-                ReactionClientOpRow {
+            Ok(row.map(
+                |(
                     client_op_id,
                     conversation_id,
                     message_id,
@@ -322,8 +334,18 @@ pub async fn get_reaction_client_op(
                     action,
                     account_id,
                     created_at_ms,
-                }
-            }))
+                )| {
+                    ReactionClientOpRow {
+                        client_op_id,
+                        conversation_id,
+                        message_id,
+                        emoji,
+                        action,
+                        account_id,
+                        created_at_ms,
+                    }
+                },
+            ))
         }
     }
 }
@@ -389,14 +411,14 @@ pub async fn set_reaction_client_op_action_in_tx(
 ) -> Result<(), BackendError> {
     match tx {
         DbTx::Sqlite(tx) => {
-            sqlx::query(
-                "UPDATE reaction_client_ops SET action = ?1 WHERE client_op_id = ?2",
-            )
-            .bind(action)
-            .bind(client_op_id)
-            .execute(&mut **tx)
-            .await
-            .map_err(store_err("message_reactions::set_reaction_client_op_action"))?;
+            sqlx::query("UPDATE reaction_client_ops SET action = ?1 WHERE client_op_id = ?2")
+                .bind(action)
+                .bind(client_op_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(store_err(
+                    "message_reactions::set_reaction_client_op_action",
+                ))?;
         }
         DbTx::Postgres(tx) => {
             sqlx::query("UPDATE reaction_client_ops SET action = $1 WHERE client_op_id = $2")
@@ -404,7 +426,9 @@ pub async fn set_reaction_client_op_action_in_tx(
                 .bind(client_op_id)
                 .execute(&mut **tx)
                 .await
-                .map_err(store_err("message_reactions::set_reaction_client_op_action"))?;
+                .map_err(store_err(
+                    "message_reactions::set_reaction_client_op_action",
+                ))?;
         }
     }
     Ok(())

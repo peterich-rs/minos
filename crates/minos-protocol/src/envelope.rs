@@ -303,6 +303,7 @@ mod tests {
                     mentioned_account_ids: Vec::new(),
                     sender_type: crate::SenderType::User,
                     reactions: vec![],
+                    attachments: vec![],
                 },
             },
         };

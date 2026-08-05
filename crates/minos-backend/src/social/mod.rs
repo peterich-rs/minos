@@ -213,6 +213,7 @@ impl SocialService {
                 mentioned_account_ids,
                 sender_type,
                 reactions: vec![],
+                attachments: vec![],
             });
         }
         Ok(output)

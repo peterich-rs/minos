@@ -20,6 +20,7 @@ use crate::host_commands::{HostCommandService, RuntimeHostCommandService};
 use crate::host_link::HostLinkService;
 use crate::http::{self, BackendState, RouteContract};
 use crate::ingest::{translate::SessionTranslators, use_case::IngestUseCase};
+use crate::media::MediaService;
 use crate::notifications::use_case::DefaultNotificationService;
 use crate::notifications::NotificationService;
 use crate::project::ProjectService;
@@ -111,6 +112,8 @@ pub struct AppContext {
     pub translators: Arc<SessionTranslators>,
     pub realtime: Arc<RealtimeFanout>,
     pub notifications: Arc<dyn NotificationService>,
+    /// Blob upload/download (R2 or local). Always present; may be unconfigured.
+    pub media: Arc<MediaService>,
     /// Agent turn completion watches (ingest-driven TurnCompletionProjector).
     pub completion_watches: Arc<crate::completion_watch::CompletionWatchRegistry>,
     pub instance_id: String,
@@ -164,13 +167,12 @@ impl AppContext {
         if let Some(fcm) = crate::notifications::channels::fcm::FcmChannel::from_env() {
             push_channels.push(Arc::new(fcm));
         }
-        let notifications: Arc<dyn NotificationService> = Arc::new(
-            DefaultNotificationService::new(
+        let notifications: Arc<dyn NotificationService> =
+            Arc::new(DefaultNotificationService::new(
                 store.clone(),
                 push_channels,
                 Arc::clone(&registry) as Arc<dyn crate::notifications::PresencePort>,
-            ),
-        );
+            ));
         let realtime = RealtimeFanout::new(
             Arc::clone(&registry),
             Arc::clone(&subscription_mgr),
@@ -202,7 +204,7 @@ impl AppContext {
         );
         let auth = AuthUseCase::new_with_realtime_tickets_and_supabase(
             store.clone(),
-            jwt_secret,
+            jwt_secret.clone(),
             realtime_tickets,
             supabase,
         );
@@ -214,6 +216,7 @@ impl AppContext {
             store.clone(),
             Arc::clone(&host_commands),
         );
+        let media = Arc::new(MediaService::from_env(store.clone(), jwt_secret));
         Arc::new(Self {
             config: Arc::new(runtime_config),
             data,
@@ -232,6 +235,7 @@ impl AppContext {
             translators,
             realtime,
             notifications,
+            media,
             completion_watches: Arc::new(crate::completion_watch::CompletionWatchRegistry::new()),
             instance_id,
             outbox_wake: Arc::new(tokio::sync::Notify::new()),
@@ -309,10 +313,8 @@ impl RuntimeShell {
                 outbox_wake: Arc::clone(&app.outbox_wake),
                 agent_dispatch_wake: Arc::clone(&app.agent_dispatch_wake),
             });
-            let jobs = crate::jobs::default_jobs(
-                Some(Arc::clone(&app.realtime)),
-                Some(Arc::clone(&app)),
-            );
+            let jobs =
+                crate::jobs::default_jobs(Some(Arc::clone(&app.realtime)), Some(Arc::clone(&app)));
             Some(crate::jobs::JobSupervisor::spawn_all(
                 jobs,
                 ctx,

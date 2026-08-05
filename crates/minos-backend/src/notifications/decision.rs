@@ -256,6 +256,7 @@ mod tests {
             mentioned_account_ids: Vec::new(),
             sender_type: SenderType::User,
             reactions: vec![],
+            attachments: vec![],
         }
     }
 

@@ -102,6 +102,14 @@ services:
       MINOS_JWT_SECRET: ${MINOS_JWT_SECRET:?set MINOS_JWT_SECRET}
       RUST_LOG: ${RUST_LOG:-info,minos_backend=info}
       MINOS_SHUTDOWN_TIMEOUT_SECS: "30"
+      # Optional Cloudflare R2 (chat attachments / media blobs). Omit all to disable.
+      MINOS_R2_ACCOUNT_ID: ${MINOS_R2_ACCOUNT_ID:-}
+      MINOS_R2_ACCESS_KEY_ID: ${MINOS_R2_ACCESS_KEY_ID:-}
+      MINOS_R2_SECRET_ACCESS_KEY: ${MINOS_R2_SECRET_ACCESS_KEY:-}
+      MINOS_R2_BUCKET: ${MINOS_R2_BUCKET:-}
+      MINOS_R2_ENDPOINT: ${MINOS_R2_ENDPOINT:-}
+      MINOS_MEDIA_MAX_BYTES: ${MINOS_MEDIA_MAX_BYTES:-10485760}
+      MINOS_MEDIA_PUBLIC_BASE_URL: ${MINOS_MEDIA_PUBLIC_BASE_URL:-}
     ports:
       - "127.0.0.1:8787:8787"
     healthcheck:

@@ -143,30 +143,34 @@ async fn list_open_host_sessions(
     limit: i64,
 ) -> Result<Vec<OpenHostSession>, crate::error::BackendError> {
     match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => sqlx::query_as::<_, OpenHostSession>(
-            "SELECT session_id, conversation_id, host_installation_id, status
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, OpenHostSession>(
+                "SELECT session_id, conversation_id, host_installation_id, status
                FROM agent_sessions
               WHERE status IN ('pending', 'running', 'stopping')
                 AND host_installation_id IS NOT NULL
                 AND ended_at_ms IS NULL
               ORDER BY started_at_ms ASC
               LIMIT ?",
-        )
-        .bind(limit)
-        .fetch_all(pool)
-        .await,
-        StorePoolRef::Postgres(pool) => sqlx::query_as::<_, OpenHostSession>(
-            "SELECT session_id, conversation_id, host_installation_id, status
+            )
+            .bind(limit)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, OpenHostSession>(
+                "SELECT session_id, conversation_id, host_installation_id, status
                FROM agent_sessions
               WHERE status IN ('pending', 'running', 'stopping')
                 AND host_installation_id IS NOT NULL
                 AND ended_at_ms IS NULL
               ORDER BY started_at_ms ASC
               LIMIT $1",
-        )
-        .bind(limit)
-        .fetch_all(pool)
-        .await,
+            )
+            .bind(limit)
+            .fetch_all(pool)
+            .await
+        }
     }
     .map_err(|e| crate::error::BackendError::StoreQuery {
         operation: "session_lifecycle.list_open_host_sessions".into(),
@@ -184,10 +188,7 @@ async fn mark_session_failed_with_event(
     let Some(current) = agent_sessions::get(&state.store, &row.session_id).await? else {
         return Ok(false);
     };
-    if !matches!(
-        current.status.as_str(),
-        "pending" | "running" | "stopping"
-    ) {
+    if !matches!(current.status.as_str(), "pending" | "running" | "stopping") {
         return Ok(false);
     }
 
@@ -240,13 +241,9 @@ async fn mark_session_failed_with_event(
         status: "failed".into(),
         at_ms: now_ms,
     };
-    let cursor = durable_event_log::record_in_tx(
-        &mut tx,
-        &Uuid::new_v4().to_string(),
-        &ended_event,
-        now_ms,
-    )
-    .await?;
+    let cursor =
+        durable_event_log::record_in_tx(&mut tx, &Uuid::new_v4().to_string(), &ended_event, now_ms)
+            .await?;
     outbox_events::enqueue_in_tx(
         &mut tx,
         &Uuid::new_v4().to_string(),

@@ -347,9 +347,7 @@ fn dispatch_event(
 fn parse_chat_message(payload: &serde_json::Value) -> Option<ChatMessageSummary> {
     let message_payload = payload.get("message").unwrap_or(payload);
     match serde_json::from_value::<ChatMessageSummary>(message_payload.clone()) {
-        Ok(msg)
-            if !msg.message_id.trim().is_empty() && !msg.conversation_id.trim().is_empty() =>
-        {
+        Ok(msg) if !msg.message_id.trim().is_empty() && !msg.conversation_id.trim().is_empty() => {
             Some(msg)
         }
         Ok(_) => {
@@ -424,7 +422,10 @@ fn parse_account_inbox_digest(
 
     // SenderRef on wire: { "kind": "user", "account_id": "..." } or agent.
     let (sender_account_id, sender_type) = match payload.get("sender") {
-        Some(s) if s.get("agent_id").is_some() || s.get("kind").and_then(|k| k.as_str()) == Some("agent") => {
+        Some(s)
+            if s.get("agent_id").is_some()
+                || s.get("kind").and_then(|k| k.as_str()) == Some("agent") =>
+        {
             (
                 s.get("agent_id")
                     .and_then(|v| v.as_str())
@@ -474,6 +475,7 @@ fn parse_account_inbox_digest(
             mentioned_account_ids,
             sender_type,
             reactions: vec![],
+            attachments: vec![],
         },
     })
 }
@@ -523,6 +525,7 @@ fn parse_reaction_updated(payload: &serde_json::Value) -> Option<SocialEventFram
             mentioned_account_ids: vec![],
             sender_type: SenderType::User,
             reactions,
+            attachments: vec![],
         },
     })
 }
@@ -729,7 +732,10 @@ mod tests {
         assert_eq!(frame.message.sender.display_name, "Other");
         assert_eq!(frame.message.sender.account_id, "other");
         assert_eq!(frame.message.message_seq, 7);
-        assert_eq!(frame.message.mentioned_account_ids, vec!["viewer".to_string()]);
+        assert_eq!(
+            frame.message.mentioned_account_ids,
+            vec!["viewer".to_string()]
+        );
         assert!(frame.message.recalled_at_ms.is_none());
     }
 

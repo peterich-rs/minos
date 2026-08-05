@@ -274,6 +274,35 @@ pub struct ChatMessageSummary {
     /// Cloud reaction aggregates (viewer-resolved `reacted_by_me`). Empty when none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reactions: Vec<ReactionGroup>,
+    /// Uploaded media blobs linked to this message (Hub SSOT).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<ChatMessageAttachment>,
+}
+
+/// Media blob linked to a chat message (metadata; bytes live in object storage).
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ChatMessageAttachment {
+    pub blob_id: String,
+    pub content_type: String,
+    pub byte_size: i64,
+    /// `image` | `file` | `audio` | `video`
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_filename: Option<String>,
+}
+
+/// Attachment descriptor passed Host-side for materialize-before-agent.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct DispatchAttachment {
+    pub blob_id: String,
+    pub content_type: String,
+    pub byte_size: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_filename: Option<String>,
+    /// Short-lived URL to stream bytes (`/v1/media/blobs/:id/content?token=`).
+    pub download_url: String,
 }
 
 /// Cloud multi-account reaction actor (`account_id` or `agent_id`).
@@ -386,6 +415,9 @@ pub struct SendChatMessageRequest {
     /// @deprecated Prefer `client_sent_at_ms`. Accepted but not used as ordering authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at_ms: Option<i64>,
+    /// Ready `media_blobs.blob_id` values owned by the sender (upload via `/v1/media/*` first).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachment_blob_ids: Vec<String>,
 }
 
 // ─── Agent in Group Chat ───────────────────────────────────────────────
@@ -769,6 +801,9 @@ pub struct SendUserMessageRequest {
     /// User Hub / local message id that triggered this turn (agent-result id suffix).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_message_id: Option<String>,
+    /// Host downloads these into the workspace before prompting the agent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<DispatchAttachment>,
 }
 
 /// Server → Host. Unified dispatch payload for agent-bound chat messages.
@@ -794,6 +829,9 @@ pub struct AgentDispatchRequest {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    /// Host downloads these into the workspace before prompting the agent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<DispatchAttachment>,
 }
 
 /// Host → Server response for [`AgentDispatchRequest`].
@@ -1910,6 +1948,7 @@ mod tests {
             session_id: "thread-abc12".into(),
             text: "ping".into(),
             origin_message_id: None,
+            attachments: vec![],
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: SendUserMessageRequest = serde_json::from_str(&json).unwrap();
@@ -1929,6 +1968,7 @@ mod tests {
             origin_message_id: Some("msg-456".into()),
             model: Some("gpt-5.4".into()),
             reasoning_effort: Some("high".into()),
+            attachments: vec![],
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: AgentDispatchRequest = serde_json::from_str(&json).unwrap();
@@ -1948,6 +1988,7 @@ mod tests {
             origin_message_id: None,
             model: None,
             reasoning_effort: None,
+            attachments: vec![],
         };
         let json = serde_json::to_string(&req).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();

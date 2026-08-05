@@ -85,7 +85,9 @@ pub async fn list_messages(
 ) -> Result<Vec<ChatMessageRow>, BackendError> {
     let effective_limit = i64::from(limit.min(200));
     match (before_seq, after_seq) {
-        (Some(before), _) => list_messages_before(store, conversation_id, before, effective_limit).await,
+        (Some(before), _) => {
+            list_messages_before(store, conversation_id, before, effective_limit).await
+        }
         (None, Some(after)) => {
             let mut rows =
                 list_messages_after(store, conversation_id, after, effective_limit).await?;

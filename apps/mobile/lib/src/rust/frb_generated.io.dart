@@ -214,6 +214,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   UserSummary dco_decode_box_autoadd_user_summary(dynamic raw);
 
   @protected
+  ChatMessageAttachment dco_decode_chat_message_attachment(dynamic raw);
+
+  @protected
   ChatMessageReplySummary dco_decode_chat_message_reply_summary(dynamic raw);
 
   @protected
@@ -322,6 +325,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ListAgentsResponse dco_decode_list_agents_response(dynamic raw);
+
+  @protected
+  List<ChatMessageAttachment> dco_decode_list_chat_message_attachment(
+    dynamic raw,
+  );
 
   @protected
   List<ChatMessageSummary> dco_decode_list_chat_message_summary(dynamic raw);
@@ -730,6 +738,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   UserSummary sse_decode_box_autoadd_user_summary(SseDeserializer deserializer);
 
   @protected
+  ChatMessageAttachment sse_decode_chat_message_attachment(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   ChatMessageReplySummary sse_decode_chat_message_reply_summary(
     SseDeserializer deserializer,
   );
@@ -868,6 +881,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ListAgentsResponse sse_decode_list_agents_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<ChatMessageAttachment> sse_decode_list_chat_message_attachment(
     SseDeserializer deserializer,
   );
 
@@ -1394,6 +1412,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_chat_message_attachment(
+    ChatMessageAttachment self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_chat_message_reply_summary(
     ChatMessageReplySummary self,
     SseSerializer serializer,
@@ -1577,6 +1601,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_agents_response(
     ListAgentsResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_chat_message_attachment(
+    List<ChatMessageAttachment> self,
     SseSerializer serializer,
   );
 

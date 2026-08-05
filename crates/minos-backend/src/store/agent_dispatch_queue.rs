@@ -41,10 +41,7 @@ pub struct AgentDispatchRow {
 /// Insert a pending dispatch. Idempotent on `(origin_message_id, agent_id)`.
 /// Multi-@ fan-out enqueues one row per agent for the same origin.
 /// Returns `true` if a new row was inserted.
-pub async fn enqueue<S>(
-    store: &S,
-    row: &AgentDispatchRow,
-) -> Result<bool, BackendError>
+pub async fn enqueue<S>(store: &S, row: &AgentDispatchRow) -> Result<bool, BackendError>
 where
     S: AsStorePool + ?Sized,
 {
@@ -256,7 +253,7 @@ pub fn backoff_delay_ms(attempts: i32) -> i64 {
 // ── SQLite ─────────────────────────────────────────────────────────────
 
 async fn enqueue_sqlite(pool: &SqlitePool, row: &AgentDispatchRow) -> Result<bool, BackendError> {
-    let mention: i64 = if row.mention_sender { 1 } else { 0 };
+    let mention = i64::from(row.mention_sender);
     let result = sqlx::query(
         "INSERT INTO agent_dispatch_queue (
             dispatch_id, origin_message_id, conversation_id, account_id, agent_id,

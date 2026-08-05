@@ -1458,6 +1458,12 @@ impl AgentManager {
 
     /// Test-only state snapshot for a single thread.
     #[cfg(any(test, feature = "test-support"))]
+    /// Workspace path for a live session (for materializing Hub attachments).
+    pub async fn session_workspace(&self, session_id: &str) -> Option<std::path::PathBuf> {
+        let sessions = self.sessions.lock().await;
+        sessions.get(session_id).map(|h| h.workspace.clone())
+    }
+
     pub async fn session_state(&self, session_id: &str) -> Option<SessionState> {
         self.sessions
             .lock()

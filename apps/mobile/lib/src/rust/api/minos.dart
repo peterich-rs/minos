@@ -619,6 +619,41 @@ class AuthSummary {
           email == other.email;
 }
 
+class ChatMessageAttachment {
+  final String blobId;
+  final String contentType;
+  final PlatformInt64 byteSize;
+  final String kind;
+  final String? originalFilename;
+
+  const ChatMessageAttachment({
+    required this.blobId,
+    required this.contentType,
+    required this.byteSize,
+    required this.kind,
+    this.originalFilename,
+  });
+
+  @override
+  int get hashCode =>
+      blobId.hashCode ^
+      contentType.hashCode ^
+      byteSize.hashCode ^
+      kind.hashCode ^
+      originalFilename.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ChatMessageAttachment &&
+          runtimeType == other.runtimeType &&
+          blobId == other.blobId &&
+          contentType == other.contentType &&
+          byteSize == other.byteSize &&
+          kind == other.kind &&
+          originalFilename == other.originalFilename;
+}
+
 class ChatMessageReplySummary {
   final String messageId;
   final UserSummary sender;
@@ -662,6 +697,7 @@ class ChatMessageSummary {
   final List<String> mentionedAccountIds;
   final SenderType senderType;
   final List<ReactionGroup> reactions;
+  final List<ChatMessageAttachment> attachments;
 
   const ChatMessageSummary({
     required this.messageId,
@@ -675,6 +711,7 @@ class ChatMessageSummary {
     required this.mentionedAccountIds,
     required this.senderType,
     required this.reactions,
+    required this.attachments,
   });
 
   @override
@@ -689,7 +726,8 @@ class ChatMessageSummary {
       recalledAtMs.hashCode ^
       mentionedAccountIds.hashCode ^
       senderType.hashCode ^
-      reactions.hashCode;
+      reactions.hashCode ^
+      attachments.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -706,7 +744,8 @@ class ChatMessageSummary {
           recalledAtMs == other.recalledAtMs &&
           mentionedAccountIds == other.mentionedAccountIds &&
           senderType == other.senderType &&
-          reactions == other.reactions;
+          reactions == other.reactions &&
+          attachments == other.attachments;
 }
 
 @freezed

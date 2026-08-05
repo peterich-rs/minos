@@ -4470,6 +4470,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ChatMessageAttachment dco_decode_chat_message_attachment(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
+    return ChatMessageAttachment(
+      blobId: dco_decode_String(arr[0]),
+      contentType: dco_decode_String(arr[1]),
+      byteSize: dco_decode_i_64(arr[2]),
+      kind: dco_decode_String(arr[3]),
+      originalFilename: dco_decode_opt_String(arr[4]),
+    );
+  }
+
+  @protected
   ChatMessageReplySummary dco_decode_chat_message_reply_summary(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -4487,8 +4502,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ChatMessageSummary dco_decode_chat_message_summary(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 11)
-      throw Exception('unexpected arr length: expect 11 but see ${arr.length}');
+    if (arr.length != 12)
+      throw Exception('unexpected arr length: expect 12 but see ${arr.length}');
     return ChatMessageSummary(
       messageId: dco_decode_String(arr[0]),
       conversationId: dco_decode_String(arr[1]),
@@ -4501,6 +4516,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       mentionedAccountIds: dco_decode_list_String(arr[8]),
       senderType: dco_decode_sender_type(arr[9]),
       reactions: dco_decode_list_reaction_group(arr[10]),
+      attachments: dco_decode_list_chat_message_attachment(arr[11]),
     );
   }
 
@@ -4857,6 +4873,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     if (arr.length != 1)
       throw Exception('unexpected arr length: expect 1 but see ${arr.length}');
     return ListAgentsResponse(agents: dco_decode_list_agent_summary(arr[0]));
+  }
+
+  @protected
+  List<ChatMessageAttachment> dco_decode_list_chat_message_attachment(
+    dynamic raw,
+  ) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>)
+        .map(dco_decode_chat_message_attachment)
+        .toList();
   }
 
   @protected
@@ -6153,6 +6179,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  ChatMessageAttachment sse_decode_chat_message_attachment(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_blobId = sse_decode_String(deserializer);
+    var var_contentType = sse_decode_String(deserializer);
+    var var_byteSize = sse_decode_i_64(deserializer);
+    var var_kind = sse_decode_String(deserializer);
+    var var_originalFilename = sse_decode_opt_String(deserializer);
+    return ChatMessageAttachment(
+      blobId: var_blobId,
+      contentType: var_contentType,
+      byteSize: var_byteSize,
+      kind: var_kind,
+      originalFilename: var_originalFilename,
+    );
+  }
+
+  @protected
   ChatMessageReplySummary sse_decode_chat_message_reply_summary(
     SseDeserializer deserializer,
   ) {
@@ -6187,6 +6232,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_mentionedAccountIds = sse_decode_list_String(deserializer);
     var var_senderType = sse_decode_sender_type(deserializer);
     var var_reactions = sse_decode_list_reaction_group(deserializer);
+    var var_attachments = sse_decode_list_chat_message_attachment(deserializer);
     return ChatMessageSummary(
       messageId: var_messageId,
       conversationId: var_conversationId,
@@ -6199,6 +6245,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       mentionedAccountIds: var_mentionedAccountIds,
       senderType: var_senderType,
       reactions: var_reactions,
+      attachments: var_attachments,
     );
   }
 
@@ -6618,6 +6665,20 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_agents = sse_decode_list_agent_summary(deserializer);
     return ListAgentsResponse(agents: var_agents);
+  }
+
+  @protected
+  List<ChatMessageAttachment> sse_decode_list_chat_message_attachment(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <ChatMessageAttachment>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_chat_message_attachment(deserializer));
+    }
+    return ans_;
   }
 
   @protected
@@ -8232,6 +8293,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_chat_message_attachment(
+    ChatMessageAttachment self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.blobId, serializer);
+    sse_encode_String(self.contentType, serializer);
+    sse_encode_i_64(self.byteSize, serializer);
+    sse_encode_String(self.kind, serializer);
+    sse_encode_opt_String(self.originalFilename, serializer);
+  }
+
+  @protected
   void sse_encode_chat_message_reply_summary(
     ChatMessageReplySummary self,
     SseSerializer serializer,
@@ -8263,6 +8337,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_list_String(self.mentionedAccountIds, serializer);
     sse_encode_sender_type(self.senderType, serializer);
     sse_encode_list_reaction_group(self.reactions, serializer);
+    sse_encode_list_chat_message_attachment(self.attachments, serializer);
   }
 
   @protected
@@ -8621,6 +8696,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_agent_summary(self.agents, serializer);
+  }
+
+  @protected
+  void sse_encode_list_chat_message_attachment(
+    List<ChatMessageAttachment> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_chat_message_attachment(item, serializer);
+    }
   }
 
   @protected

@@ -44,6 +44,7 @@ impl TeamworkStore {
             .await
     }
 
+    #[allow(dead_code)] // retained for MCP/teamwork control plane; not on TUI hot path
     pub async fn running_delegation_for_thread(
         &self,
         conversation_id: &str,
@@ -68,6 +69,7 @@ impl TeamworkStore {
             .await
     }
 
+    #[allow(dead_code)] // retained for MCP/teamwork control plane; not on TUI hot path
     pub async fn complete_delegation_for_thread(
         &self,
         conversation_id: &str,

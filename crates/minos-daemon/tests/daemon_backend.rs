@@ -129,6 +129,7 @@ async fn start_agent_and_send_message_round_trip() {
                 session_id: start_resp.session_id.clone(),
                 text: "integration test message".into(),
                 origin_message_id: None,
+                attachments: vec![],
             }],
         )
         .await

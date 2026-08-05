@@ -15,6 +15,7 @@
 | 公网域名 | `https://minos.ainexc.com`（Caddy 终止 TLS） |
 | 进程 | 一个 monolith 容器（`MINOS_ENV=prod`） |
 | 存储 | PostgreSQL 16 + Redis 7（本机 Docker，仅 loopback） |
+| 媒体对象 | 可选 **Cloudflare R2**（`media_blobs` 元数据在 DB，字节在 R2；见 [ops/r2-media.md](ops/r2-media.md)） |
 | 镜像 | GHCR 预构建，VPS 只 `docker pull`（见 `deploy/prod/`） |
 | 运维手册 | [ops/vps-deploy.md](ops/vps-deploy.md) |
 
@@ -45,6 +46,16 @@
 | `message_bus_backend` | `MINOS_MESSAGE_BUS_BACKEND` | `inline` |
 | `cors_origins` | `MINOS_CORS_ORIGINS` | `*` |
 
+媒体对象存储（环境变量，非 clap 字段；由 `MediaService::from_env` 读取）：
+
+| 环境变量 | 说明 |
+|---------|------|
+| `MINOS_R2_ACCOUNT_ID` / `MINOS_R2_ACCESS_KEY_ID` / `MINOS_R2_SECRET_ACCESS_KEY` / `MINOS_R2_BUCKET` | 配置完整时使用 Cloudflare R2 |
+| `MINOS_R2_ENDPOINT` | 可选；默认 `https://{account_id}.r2.cloudflarestorage.com` |
+| `MINOS_MEDIA_LOCAL_DIR` | 无 R2 时的本地目录（开发） |
+| `MINOS_MEDIA_MAX_BYTES` | 单对象上限，默认 10 MiB |
+| `MINOS_MEDIA_PUBLIC_BASE_URL` | 下载 URL 绝对前缀（可选） |
+
 **运行模式**：`Monolith`（HTTP + Worker 一体）、`HttpOnly`（仅 API）、`WorkerOnly`（仅后台任务）
 
 ## HTTP 路由 (`src/http/`)
@@ -71,6 +82,7 @@
 /v1/projects/*        POST   项目 CRUD
 /v1/realtime/*        POST   WS 票据签发
 /v1/notifications/*   POST   推送令牌/偏好
+/v1/media/*           GET/POST/PUT  附件 blob（R2 / 本地对象存储）
 /v1/social/*          POST   Agent 注册/对话成员
 ```
 

@@ -713,11 +713,11 @@ mod tests {
         // Must not carry full ChatMessageSummary nest.
         assert!(json.get("message").is_none());
         let back: DurableEvent = serde_json::from_value(json).unwrap();
-        assert_eq!(back.event_kind_str(), "account_conversation_message_appended");
         assert_eq!(
-            back.topic(),
-            RealtimeTopic::Account("acc-1".into())
+            back.event_kind_str(),
+            "account_conversation_message_appended"
         );
+        assert_eq!(back.topic(), RealtimeTopic::Account("acc-1".into()));
     }
 
     #[test]
@@ -745,6 +745,7 @@ mod tests {
                 mentioned_account_ids: vec![],
                 sender_type: crate::SenderType::User,
                 reactions: vec![],
+                attachments: vec![],
             }),
         };
         let json = serde_json::to_value(&event).unwrap();

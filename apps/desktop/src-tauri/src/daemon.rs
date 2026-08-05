@@ -1183,6 +1183,7 @@ impl DaemonBridge {
             session_id,
             text,
             origin_message_id,
+            attachments: vec![],
         };
         client
             .request::<(), _>("minos_local_send_user_message", [req])

@@ -99,6 +99,7 @@ pub trait ConversationService: Send + Sync {
         client_message_id: Option<&str>,
         message_source: minos_protocol::MessageSource,
         client_sent_at_ms: Option<i64>,
+        attachment_blob_ids: &[String],
     ) -> Result<(ChatMessageSummary, Vec<social::ProfileRow>), ConversationError>;
 
     async fn recall_message(
@@ -375,14 +376,9 @@ impl ConversationService for DefaultConversationService {
         let deleted_at_ms =
             social::conversation_deleted_at_for_account(&self.store, conversation_id, account_id)
                 .await?;
-        let mut messages = social::list_messages(
-            &self.store,
-            conversation_id,
-            before_seq,
-            after_seq,
-            limit,
-        )
-        .await?;
+        let mut messages =
+            social::list_messages(&self.store, conversation_id, before_seq, after_seq, limit)
+                .await?;
         if let Some(deleted_at_ms) = deleted_at_ms {
             messages.retain(|message| message.created_at_ms > deleted_at_ms);
         }
@@ -393,8 +389,7 @@ impl ConversationService for DefaultConversationService {
         };
         // list_messages returns DESC; reverse to chronological ASC for clients.
         messages.reverse();
-        let hydrated =
-            hydrate_messages_for_viewer(&self.store, messages, Some(account_id)).await?;
+        let hydrated = hydrate_messages_for_viewer(&self.store, messages, Some(account_id)).await?;
         Ok(ListMessagesResult {
             messages: hydrated,
             next_before_seq,
@@ -410,10 +405,30 @@ impl ConversationService for DefaultConversationService {
         client_message_id: Option<&str>,
         message_source: minos_protocol::MessageSource,
         client_sent_at_ms: Option<i64>,
+        attachment_blob_ids: &[String],
     ) -> Result<(ChatMessageSummary, Vec<social::ProfileRow>), ConversationError> {
         if !social::is_conversation_member(&self.store, conversation_id, account_id).await? {
             return Err(ConversationError::NotFound);
         }
+        let attachment_rows = crate::store::message_attachments::load_ready_owned_blobs(
+            &self.store,
+            account_id,
+            attachment_blob_ids,
+        )
+        .await
+        .map_err(|e| ConversationError::ValidationFormat(e.to_string()))?;
+        let attachments_wire: Vec<minos_protocol::ChatMessageAttachment> = attachment_rows
+            .iter()
+            .map(|b| minos_protocol::ChatMessageAttachment {
+                blob_id: b.blob_id.clone(),
+                content_type: b.content_type.clone(),
+                byte_size: b.byte_size,
+                kind: b.kind.clone(),
+                original_filename: b.original_filename.clone(),
+            })
+            .collect();
+        let attachment_ids: Vec<String> =
+            attachment_rows.iter().map(|b| b.blob_id.clone()).collect();
         // reply_to: client_live hard-fails; host_projection / system soft-drop.
         let reply_to_id = match reply_to_message_id {
             Some(message_id) => match social::get_message(&self.store, message_id).await? {
@@ -515,7 +530,8 @@ impl ConversationService for DefaultConversationService {
                 recalled_at_ms: None,
                 mentioned_account_ids: mentioned_account_ids.clone(),
                 sender_type: SenderType::User,
-            reactions: vec![],
+                reactions: vec![],
+                attachments: attachments_wire.clone(),
             }
         } else {
             // Idempotent hit: re-hydrate so durable repair uses current SSOT text.
@@ -529,6 +545,14 @@ impl ConversationService for DefaultConversationService {
         };
         social::ensure_social_message_delivery_in_tx(&mut tx, &message, &member_ids).await?;
         tx.commit().await?;
+        if outcome.inserted && !attachment_ids.is_empty() {
+            crate::store::message_attachments::link_blobs_to_message(
+                &self.store,
+                &message.message_id,
+                &attachment_ids,
+            )
+            .await?;
+        }
         Ok((message, members))
     }
 
@@ -558,22 +582,15 @@ impl ConversationService for DefaultConversationService {
                 "message recall window has expired (5 minutes)".into(),
             ));
         }
-        let member_ids =
-            social::list_conversation_members(&self.store, conversation_id).await?;
+        let member_ids = social::list_conversation_members(&self.store, conversation_id).await?;
 
         // Hydrate before mutating so sender/reply stay available for durable payload.
         let mut hydrated = hydrate_messages(&self.store, vec![existing]).await?;
         let mut message = hydrated.remove(0);
 
         let mut tx = self.store.begin().await?;
-        social::recall_message_in_tx(
-            &mut tx,
-            conversation_id,
-            message_id,
-            account_id,
-            now_ms,
-        )
-        .await?;
+        social::recall_message_in_tx(&mut tx, conversation_id, message_id, account_id, now_ms)
+            .await?;
         message.text = "[message recalled]".to_string();
         message.recalled_at_ms = Some(message.recalled_at_ms.unwrap_or(now_ms));
         message.mentioned_account_ids.clear();
@@ -624,7 +641,8 @@ impl ConversationService for DefaultConversationService {
                 && prior.message_id == message_id
                 && prior.account_id == account_id
             {
-                let rows = social::list_for_messages(&self.store, &[message_id.to_string()]).await?;
+                let rows =
+                    social::list_for_messages(&self.store, &[message_id.to_string()]).await?;
                 let reactions = social::aggregate_groups(&rows, Some(account_id));
                 let event_id = social::reaction_event_id(
                     conversation_id,
@@ -903,6 +921,22 @@ pub async fn hydrate_messages_for_viewer(
             .or_default()
             .push(row);
     }
+    let attachment_join =
+        crate::store::message_attachments::list_for_messages(store, &message_ids).await?;
+    let mut attachments_by_message: HashMap<String, Vec<minos_protocol::ChatMessageAttachment>> =
+        HashMap::new();
+    for row in attachment_join {
+        attachments_by_message
+            .entry(row.message_id.clone())
+            .or_default()
+            .push(minos_protocol::ChatMessageAttachment {
+                blob_id: row.blob_id,
+                content_type: row.content_type,
+                byte_size: row.byte_size,
+                kind: row.kind,
+                original_filename: row.original_filename,
+            });
+    }
 
     let mut reply_ids = rows
         .iter()
@@ -966,6 +1000,9 @@ pub async fn hydrate_messages_for_viewer(
             .remove(&row.message_id)
             .map(|rows| social::aggregate_groups(&rows, viewer_account_id))
             .unwrap_or_default();
+        let attachments = attachments_by_message
+            .remove(&row.message_id)
+            .unwrap_or_default();
         output.push(ChatMessageSummary {
             message_id: row.message_id,
             conversation_id: row.conversation_id,
@@ -978,6 +1015,7 @@ pub async fn hydrate_messages_for_viewer(
             mentioned_account_ids,
             sender_type,
             reactions,
+            attachments,
         });
     }
     Ok(output)

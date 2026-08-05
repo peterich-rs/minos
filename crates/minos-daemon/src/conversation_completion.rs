@@ -1005,15 +1005,16 @@ mod tests {
 
     #[test]
     fn origin_message_id_wins_over_fallback_message_key() {
-        let mut p = SessionProjection::default();
         // Simulate race: fallback claimed first, then origin noted.
-        p.turn_write_id = Some("m1".into());
+        let mut p = SessionProjection {
+            turn_write_id: Some("m1".into()),
+            ..Default::default()
+        };
         p.set_origin_message_id("user-hub-msg-42");
         let durable = p.ensure_turn_write_id("m1").expect("origin");
         assert_eq!(durable, "user-hub-msg-42");
         // claim_write path uses same ensure.
-        p.completed
-            .push(("m1".into(), "final text".into()));
+        p.completed.push(("m1".into(), "final text".into()));
         p.turn_recorded = false;
         p.write_in_flight = false;
         let claimed = p.claim_write().expect("claim");
@@ -1024,8 +1025,7 @@ mod tests {
     fn collab_without_origin_skips_non_canonical_write() {
         let mut p = SessionProjection::default();
         p.set_require_canonical_origin();
-        p.completed
-            .push(("assistant-key".into(), "final".into()));
+        p.completed.push(("assistant-key".into(), "final".into()));
         assert!(p.claim_write().is_none());
         assert!(p.ensure_turn_write_id("assistant-key").is_none());
     }
@@ -1033,8 +1033,7 @@ mod tests {
     #[test]
     fn local_non_collab_still_allows_message_key_fallback() {
         let mut p = SessionProjection::default();
-        p.completed
-            .push(("assistant-key".into(), "final".into()));
+        p.completed.push(("assistant-key".into(), "final".into()));
         let claimed = p.claim_write().expect("local claim");
         assert_eq!(claimed.2, "assistant-key");
     }

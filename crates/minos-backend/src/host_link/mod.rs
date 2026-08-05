@@ -67,12 +67,47 @@ pub fn host_unlinked_event_id(
     format!("host-unlinked-{account_id}-{host_installation_id}-{pair_id}")
 }
 
+/// Idempotent on deterministic `event_id`: same-account re-link keeps token
+/// rotation but does not re-insert HostLinked / HostUnlinked durable rows.
 async fn enqueue_host_roster_durable(
     tx: &mut DbTx<'_>,
     event_id: &str,
     event: &DurableEvent,
     at_ms: i64,
 ) -> Result<(), BackendError> {
+    let topic_kind = event.topic().kind().as_str();
+    let exists = match tx {
+        DbTx::Sqlite(raw) => sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*)
+               FROM durable_event_log
+              WHERE topic_kind = ?
+                AND event_id = ?",
+        )
+        .bind(topic_kind)
+        .bind(event_id)
+        .fetch_one(&mut **raw)
+        .await
+        .map(|n| n > 0),
+        DbTx::Postgres(raw) => sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*)
+               FROM durable_event_log
+              WHERE topic_kind = $1
+                AND event_id = $2",
+        )
+        .bind(topic_kind)
+        .bind(event_id)
+        .fetch_one(&mut **raw)
+        .await
+        .map(|n| n > 0),
+    }
+    .map_err(|e| BackendError::StoreQuery {
+        operation: "host_link::durable_exists".into(),
+        message: e.to_string(),
+    })?;
+    if exists {
+        return Ok(());
+    }
+
     let cursor = durable_event_log::record_in_tx(tx, event_id, event, at_ms).await?;
     let outbox_id = Uuid::new_v4().to_string();
     outbox_events::enqueue_in_tx(
@@ -469,10 +504,7 @@ mod tests {
         assert!(
             rows.iter().any(|r| {
                 r.event_id == outcome.durable_event_id
-                    && r.payload_json
-                        .get("kind")
-                        .and_then(|k| k.as_str())
-                        == Some("host_linked")
+                    && r.payload_json.get("kind").and_then(|k| k.as_str()) == Some("host_linked")
             }),
             "expected host_linked durable, got {rows:?}"
         );
@@ -504,10 +536,7 @@ mod tests {
         assert!(
             rows.iter().any(|r| {
                 r.event_id == event_id
-                    && r.payload_json
-                        .get("kind")
-                        .and_then(|k| k.as_str())
-                        == Some("host_unlinked")
+                    && r.payload_json.get("kind").and_then(|k| k.as_str()) == Some("host_unlinked")
             }),
             "expected host_unlinked durable, got {rows:?}"
         );

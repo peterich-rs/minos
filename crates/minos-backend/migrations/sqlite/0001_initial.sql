@@ -584,3 +584,37 @@ CREATE INDEX idx_agent_dispatch_queue_due
     ON agent_dispatch_queue(status, next_attempt_at_ms);
 CREATE INDEX idx_agent_dispatch_queue_conversation
     ON agent_dispatch_queue(conversation_id);
+
+-- Media blobs: metadata SSOT in DB; bytes in R2 (or local dir for dev).
+CREATE TABLE media_blobs (
+    blob_id             TEXT PRIMARY KEY,
+    account_id          TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    object_key          TEXT NOT NULL UNIQUE,
+    content_type        TEXT NOT NULL,
+    byte_size           INTEGER NOT NULL,
+    sha256_hex          TEXT,
+    original_filename   TEXT,
+    kind                TEXT NOT NULL
+        CHECK (kind IN ('image', 'file', 'audio', 'video')),
+    status              TEXT NOT NULL
+        CHECK (status IN ('pending', 'ready', 'failed', 'deleted')),
+    created_at_ms       INTEGER NOT NULL,
+    ready_at_ms         INTEGER,
+    deleted_at_ms       INTEGER
+) STRICT;
+
+CREATE INDEX idx_media_blobs_account_created
+    ON media_blobs(account_id, created_at_ms DESC);
+CREATE INDEX idx_media_blobs_status
+    ON media_blobs(status, created_at_ms);
+
+-- Message ↔ media blob links (order preserved).
+CREATE TABLE chat_message_attachments (
+    message_id   TEXT NOT NULL REFERENCES chat_messages(message_id) ON DELETE CASCADE,
+    blob_id      TEXT NOT NULL REFERENCES media_blobs(blob_id) ON DELETE RESTRICT,
+    sort_order   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (message_id, blob_id)
+) STRICT;
+
+CREATE INDEX idx_chat_message_attachments_blob
+    ON chat_message_attachments(blob_id);

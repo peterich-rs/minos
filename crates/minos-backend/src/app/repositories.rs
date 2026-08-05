@@ -2098,14 +2098,9 @@ impl ConversationMessagesRepository for StoreBackedConversationMessagesRepositor
         cursor: Option<&str>,
     ) -> Result<Vec<MessageRow>, BackendError> {
         let before_seq = cursor.and_then(|c| c.parse::<i64>().ok());
-        let rows = store::social::list_messages(
-            &self.store,
-            conversation_id,
-            before_seq,
-            None,
-            limit,
-        )
-        .await?;
+        let rows =
+            store::social::list_messages(&self.store, conversation_id, before_seq, None, limit)
+                .await?;
         Ok(rows.into_iter().map(convert_chat_message).collect())
     }
 
@@ -2387,14 +2382,9 @@ impl OutboxRepository for StoreBackedOutboxRepository {
         lane: store::outbox_events::OutboxLane,
     ) -> Result<Vec<OutboxRow>, BackendError> {
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let rows = store::outbox_events::claim_available(
-            &self.store,
-            worker_id,
-            now_ms,
-            batch,
-            lane,
-        )
-        .await?;
+        let rows =
+            store::outbox_events::claim_available(&self.store, worker_id, now_ms, batch, lane)
+                .await?;
         Ok(rows.into_iter().map(convert_outbox_row).collect())
     }
 

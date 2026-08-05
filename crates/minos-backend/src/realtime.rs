@@ -667,11 +667,8 @@ impl RealtimeFanout {
 
         let (kind, payload) = durable_event_kind_payload(&durable.payload_json);
         if kind != "host_command_issued" {
-            self.dead_letter_outbox_row(
-                &row,
-                "host_command lane row is not host_command_issued",
-            )
-            .await;
+            self.dead_letter_outbox_row(&row, "host_command lane row is not host_command_issued")
+                .await;
             crate::telemetry::record_outbox_dispatch("dead_letter");
             return;
         }

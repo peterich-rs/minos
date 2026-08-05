@@ -168,17 +168,32 @@ fn deterministic_uuid(namespace: &str, parts: &[&str]) -> String {
         .collect()
 }
 
-fn expected_social_start_session_id(account_id: &str, origin_message_id: &str) -> String {
+fn expected_social_start_session_id(
+    account_id: &str,
+    origin_message_id: &str,
+    agent_id: &str,
+) -> String {
+    // Must match multi-@ fan-out client_request_id: origin×agent.
     deterministic_uuid(
         "agent-session-start",
-        &[account_id, &format!("social-start-{origin_message_id}")],
+        &[
+            account_id,
+            &format!("social-start-{origin_message_id}:{agent_id}"),
+        ],
     )
 }
 
-fn expected_social_send_turn_id(session_id: &str, origin_message_id: &str) -> String {
+fn expected_social_send_turn_id(
+    session_id: &str,
+    origin_message_id: &str,
+    agent_id: &str,
+) -> String {
     deterministic_uuid(
         "agent-session-send-input",
-        &[session_id, &format!("social-send-{origin_message_id}")],
+        &[
+            session_id,
+            &format!("social-send-{origin_message_id}:{agent_id}"),
+        ],
     )
 }
 
@@ -214,8 +229,7 @@ async fn assert_agent_start_host_command(
     assert_eq!(row.params_json["initial_user_message"], expected_text);
     // B4: origin_message_id must reach host so daemon pins agent-result suffix.
     assert_eq!(
-        row.params_json["origin_message_id"],
-        _origin_message_id,
+        row.params_json["origin_message_id"], _origin_message_id,
         "agent_session.start must carry origin_message_id"
     );
     assert_eq!(
@@ -236,9 +250,10 @@ async fn assert_agent_send_host_command(
     requester_account_id: &str,
     session_id: &str,
     origin_message_id: &str,
+    agent_id: &str,
     expected_text: &str,
 ) {
-    let turn_id = expected_social_send_turn_id(session_id, origin_message_id);
+    let turn_id = expected_social_send_turn_id(session_id, origin_message_id, agent_id);
     let row = host_commands::get(pool, &format!("cmd-agent-session-send-{turn_id}"))
         .await
         .unwrap()
@@ -258,8 +273,7 @@ async fn assert_agent_send_host_command(
     assert_eq!(row.params_json["text"], expected_text);
     assert_eq!(row.params_json["mentions"], serde_json::json!([]));
     assert_eq!(
-        row.params_json["origin_message_id"],
-        origin_message_id,
+        row.params_json["origin_message_id"], origin_message_id,
         "agent_session.send_input must carry origin_message_id"
     );
 }
@@ -859,7 +873,8 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
     minos_backend::http::v1::social::process_agent_dispatch_batch(&state)
         .await
         .unwrap();
-    let session_id = expected_social_start_session_id(&alice.account_id, &user_message_id);
+    let session_id =
+        expected_social_start_session_id(&alice.account_id, &user_message_id, &agent.agent_id);
     assert_eq!(
         social::lookup_session_id_for_message(&state.store, &user_message_id)
             .await
@@ -873,7 +888,8 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
         &alice.account_id,
         &session_id,
         &user_message_id,
-        "please help",
+        // Full body kept so multi-@ co-mentions remain visible to each agent.
+        &format!("@{} please help", agent.agent_id),
         &conversation.conversation_id,
         &agent.agent_id,
         Some("/Users/example/minos"),
@@ -1029,7 +1045,8 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
         &alice.account_id,
         &session_id,
         &followup_message_id,
-        "one more thing",
+        &agent.agent_id,
+        &format!("@{} one more thing", agent.agent_id),
     )
     .await;
 }
@@ -1142,7 +1159,11 @@ async fn direct_agent_conversation_auto_routes_and_reuses_reply_session() {
     minos_backend::http::v1::social::process_agent_dispatch_batch(&state)
         .await
         .unwrap();
-    let session_id = expected_social_start_session_id(&alice.account_id, &first_user_message_id);
+    let session_id = expected_social_start_session_id(
+        &alice.account_id,
+        &first_user_message_id,
+        &agent.agent_id,
+    );
     assert_eq!(
         social::lookup_session_id_for_message(&state.store, &first_user_message_id)
             .await
@@ -1224,6 +1245,7 @@ async fn direct_agent_conversation_auto_routes_and_reuses_reply_session() {
         &alice.account_id,
         &session_id,
         &second_user_message_id,
+        &agent.agent_id,
         "follow up",
     )
     .await;
@@ -1310,7 +1332,8 @@ async fn group_reply_to_agent_message_reuses_session() {
     minos_backend::http::v1::social::process_agent_dispatch_batch(&state)
         .await
         .unwrap();
-    let session_id = expected_social_start_session_id(&alice.account_id, &user_message_id);
+    let session_id =
+        expected_social_start_session_id(&alice.account_id, &user_message_id, &agent.agent_id);
 
     // Verify session binding on user message
     assert_eq!(
@@ -1326,7 +1349,7 @@ async fn group_reply_to_agent_message_reuses_session() {
         &alice.account_id,
         &session_id,
         &user_message_id,
-        "summarize the PR",
+        &format!("@{} summarize the PR", agent.agent_id),
         &conversation.conversation_id,
         &agent.agent_id,
         None,
@@ -1392,6 +1415,7 @@ async fn group_reply_to_agent_message_reuses_session() {
         &alice.account_id,
         &session_id,
         &followup_message_id,
+        &agent.agent_id,
         "can you also include the test coverage?",
     )
     .await;
@@ -1502,7 +1526,7 @@ async fn mobile_at_agent_reuses_desktop_formal_session_without_chat_bind() {
         Some(desktop_session_id)
     );
     assert_ne!(
-        expected_social_start_session_id(&alice.account_id, &user_message_id),
+        expected_social_start_session_id(&alice.account_id, &user_message_id, &agent.agent_id),
         desktop_session_id
     );
 
@@ -1513,7 +1537,8 @@ async fn mobile_at_agent_reuses_desktop_formal_session_without_chat_bind() {
         &alice.account_id,
         desktop_session_id,
         &user_message_id,
-        "continue the refactor",
+        &agent.agent_id,
+        "@codex continue the refactor",
     )
     .await;
     assert!(
@@ -1521,7 +1546,11 @@ async fn mobile_at_agent_reuses_desktop_formal_session_without_chat_bind() {
             &state.store,
             &format!(
                 "cmd-agent-session-start-{}",
-                expected_social_start_session_id(&alice.account_id, &user_message_id)
+                expected_social_start_session_id(
+                    &alice.account_id,
+                    &user_message_id,
+                    &agent.agent_id
+                )
             )
         )
         .await
@@ -1612,12 +1641,10 @@ async fn agent_dispatch_queues_when_host_offline() {
     assert!(after.next_attempt_at_ms >= after.updated_at_ms);
 
     // No formal session bound until host is live.
-    assert!(
-        social::lookup_session_id_for_message(&state.store, &origin)
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(social::lookup_session_id_for_message(&state.store, &origin)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 /// B3: pending dispatch drains when host becomes online.
@@ -1694,10 +1721,12 @@ async fn agent_dispatch_drains_when_host_comes_online() {
 
     // Production host-online edge: force due for linked accounts (no fake requeue).
     let _host_rx = seed_live_host_session(&state, host_device_id, &alice.account_id);
-    let forced =
-        minos_backend::http::v1::social::on_host_online_force_agent_dispatch(&state, host_device_id)
-            .await
-            .unwrap();
+    let forced = minos_backend::http::v1::social::on_host_online_force_agent_dispatch(
+        &state,
+        host_device_id,
+    )
+    .await
+    .unwrap();
     assert!(forced >= 1, "host online must force-due pending dispatches");
 
     minos_backend::http::v1::social::process_agent_dispatch_batch(&state)
@@ -1712,7 +1741,7 @@ async fn agent_dispatch_drains_when_host_comes_online() {
         done.status,
         minos_backend::store::agent_dispatch_queue::STATUS_SUCCEEDED
     );
-    let session_id = expected_social_start_session_id(&alice.account_id, &origin);
+    let session_id = expected_social_start_session_id(&alice.account_id, &origin, &agent.agent_id);
     assert_agent_start_host_command(
         &state.store,
         host_device_id,
@@ -1799,7 +1828,7 @@ async fn two_rapid_dispatches_project_two_agent_bubbles() {
     minos_backend::http::v1::social::process_agent_dispatch_batch(&state)
         .await
         .unwrap();
-    let session_id = expected_social_start_session_id(&alice.account_id, &origin1);
+    let session_id = expected_social_start_session_id(&alice.account_id, &origin1, &agent.agent_id);
 
     // Second mention (reuse session via lookup) before first completion.
     let (status, body2) = common::send(
@@ -1951,8 +1980,5 @@ async fn two_rapid_dispatches_project_two_agent_bubbles() {
     let rows2 = social::list_messages(&state.store, &conversation.conversation_id, None, None, 50)
         .await
         .unwrap();
-    assert_eq!(
-        rows2.iter().filter(|r| r.sender_type == "agent").count(),
-        2
-    );
+    assert_eq!(rows2.iter().filter(|r| r.sender_type == "agent").count(), 2);
 }

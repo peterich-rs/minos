@@ -290,6 +290,7 @@ async fn send_message(
         req.client_message_id,
         req.message_source.unwrap_or_default(),
         req.client_sent_at_ms.or(req.created_at_ms),
+        req.attachment_blob_ids,
     )
     .await
 }
@@ -308,6 +309,7 @@ async fn send_message_command(
         req.client_message_id,
         req.message_source.unwrap_or_default(),
         req.client_sent_at_ms.or(req.created_at_ms),
+        req.attachment_blob_ids,
     )
     .await
 }
@@ -321,11 +323,15 @@ async fn send_message_inner(
     client_message_id: Option<String>,
     message_source: minos_protocol::MessageSource,
     client_sent_at_ms: Option<i64>,
+    attachment_blob_ids: Vec<String>,
 ) -> Result<Json<ChatMessageSummary>, (StatusCode, Json<ErrorEnvelope>)> {
     let account_id = super::social::require_account_id_from_state(&state, &headers)?;
     let trimmed = text.trim().to_string();
-    if trimmed.is_empty() {
-        return Err(err("bad_request", "message text is required"));
+    if trimmed.is_empty() && attachment_blob_ids.is_empty() {
+        return Err(err(
+            "bad_request",
+            "message text or attachment_blob_ids is required",
+        ));
     }
 
     let conversations_svc = DefaultConversationService::new(state.store.clone());
@@ -338,6 +344,7 @@ async fn send_message_inner(
             client_message_id.as_deref(),
             message_source,
             client_sent_at_ms,
+            &attachment_blob_ids,
         )
         .await
         .map_err(map_conversation_error)?;

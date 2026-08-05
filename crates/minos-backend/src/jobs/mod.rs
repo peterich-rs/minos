@@ -45,9 +45,9 @@ pub fn default_jobs(
     }
 
     if let Some(app) = app {
-        jobs.push(agent_dispatch_worker::AgentDispatchWorkerJob::new(Arc::clone(
-            &app,
-        )));
+        jobs.push(agent_dispatch_worker::AgentDispatchWorkerJob::new(
+            Arc::clone(&app),
+        ));
         jobs.push(stale_session_sweeper::SessionLifecycleJob::new(app));
     }
 

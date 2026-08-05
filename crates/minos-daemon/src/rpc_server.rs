@@ -202,6 +202,8 @@ pub async fn invoke_host_command(
                 conversation_title: Option<String>,
                 #[serde(default)]
                 title: Option<String>,
+                #[serde(default)]
+                attachments: Vec<minos_protocol::DispatchAttachment>,
             }
             let req: StartAgentSessionParams = parse_params(&params)?;
             let agent_label = req.runtime_agent.as_deref().unwrap_or(&req.agent_id);
@@ -234,6 +236,7 @@ pub async fn invoke_host_command(
                     req.project_id,
                     conversation_title,
                     req.origin_message_id,
+                    req.attachments,
                 )
                 .await
                 .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
@@ -250,6 +253,8 @@ pub async fn invoke_host_command(
                 text: String,
                 #[serde(default)]
                 origin_message_id: Option<String>,
+                #[serde(default)]
+                attachments: Vec<minos_protocol::DispatchAttachment>,
             }
             let req: SendAgentSessionInputParams = parse_params(&params)?;
             into_result(
@@ -258,6 +263,7 @@ pub async fn invoke_host_command(
                         session_id: req.session_id,
                         text: req.text,
                         origin_message_id: req.origin_message_id,
+                        attachments: req.attachments,
                     })
                     .await,
             )

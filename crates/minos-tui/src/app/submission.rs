@@ -192,38 +192,37 @@ impl App {
             let backend = Arc::clone(&self.backend);
             let conversation_message = conversation_message.clone();
             tokio::spawn(async move {
-                let origin_message_id = if let Some((conversation_id, body, origin_id)) =
-                    conversation_message
-                {
-                    if let Err(error) = backend
-                        .append_conversation_message(
-                            &conversation_id,
-                            Some(&origin_id),
-                            None,
-                            "user",
-                            None,
-                            &body,
-                        )
-                        .await
-                    {
-                        let error = format!("Failed to save conversation message: {error}");
-                        tracing::warn!(
-                            target: "minos_tui::app",
-                            error = %error,
-                            conversation_id = %conversation_id,
-                            session_id = %session_id,
-                            "append_conversation_message failed before send"
-                        );
-                        let _ = tx.send(AppEvent::SendMessageFailed {
-                            session_id: session_id.clone(),
-                            error,
-                        });
-                        return;
-                    }
-                    Some(origin_id)
-                } else {
-                    None
-                };
+                let origin_message_id =
+                    if let Some((conversation_id, body, origin_id)) = conversation_message {
+                        if let Err(error) = backend
+                            .append_conversation_message(
+                                &conversation_id,
+                                Some(&origin_id),
+                                None,
+                                "user",
+                                None,
+                                &body,
+                            )
+                            .await
+                        {
+                            let error = format!("Failed to save conversation message: {error}");
+                            tracing::warn!(
+                                target: "minos_tui::app",
+                                error = %error,
+                                conversation_id = %conversation_id,
+                                session_id = %session_id,
+                                "append_conversation_message failed before send"
+                            );
+                            let _ = tx.send(AppEvent::SendMessageFailed {
+                                session_id: session_id.clone(),
+                                error,
+                            });
+                            return;
+                        }
+                        Some(origin_id)
+                    } else {
+                        None
+                    };
                 if let Err(e) = backend.resume_session(&session_id, false).await {
                     tracing::debug!(
                         target: "minos_tui::app",
@@ -249,35 +248,34 @@ impl App {
             return true;
         }
 
-        let origin_message_id = if let Some((conversation_id, body, origin_id)) =
-            conversation_message
-        {
-            if let Err(error) = self
-                .backend
-                .append_conversation_message(
-                    &conversation_id,
-                    Some(&origin_id),
-                    None,
-                    "user",
-                    None,
-                    &body,
-                )
-                .await
-            {
-                tracing::warn!(
-                    target: "minos_tui::app",
-                    error = %error,
-                    conversation_id = %conversation_id,
-                    session_id = %session_id,
-                    "append_conversation_message failed before send"
-                );
-                self.ui
-                    .set_error(format!("Failed to record conversation message: {error}"));
-            }
-            Some(origin_id)
-        } else {
-            None
-        };
+        let origin_message_id =
+            if let Some((conversation_id, body, origin_id)) = conversation_message {
+                if let Err(error) = self
+                    .backend
+                    .append_conversation_message(
+                        &conversation_id,
+                        Some(&origin_id),
+                        None,
+                        "user",
+                        None,
+                        &body,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        target: "minos_tui::app",
+                        error = %error,
+                        conversation_id = %conversation_id,
+                        session_id = %session_id,
+                        "append_conversation_message failed before send"
+                    );
+                    self.ui
+                        .set_error(format!("Failed to record conversation message: {error}"));
+                }
+                Some(origin_id)
+            } else {
+                None
+            };
         if let Err(e) = self.backend.resume_session(&session_id, false).await {
             tracing::debug!(
                 target: "minos_tui::app",

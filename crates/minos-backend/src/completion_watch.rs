@@ -73,8 +73,7 @@ impl CompletionWatchRegistry {
     pub fn arm(&self, watch: CompletionWatch) {
         let key = watch.watch_key();
         let session_id = watch.session_id.clone();
-        if let (Ok(mut by_key), Ok(mut by_session)) = (self.by_key.lock(), self.by_session.lock())
-        {
+        if let (Ok(mut by_key), Ok(mut by_session)) = (self.by_key.lock(), self.by_session.lock()) {
             if let Some(prev) = by_key.get(&key) {
                 if prev.session_id != session_id {
                     if let Some(set) = by_session.get_mut(&prev.session_id) {
@@ -210,13 +209,11 @@ mod tests {
         reg.arm(watch("o2", "sess", 10));
         assert_eq!(reg.list_for_session("sess").len(), 2);
         assert_eq!(
-            reg.get(&watch_key("o1", "sess"))
-                .map(|w| w.raw_seq_floor),
+            reg.get(&watch_key("o1", "sess")).map(|w| w.raw_seq_floor),
             Some(1)
         );
         assert_eq!(
-            reg.get(&watch_key("o2", "sess"))
-                .map(|w| w.raw_seq_floor),
+            reg.get(&watch_key("o2", "sess")).map(|w| w.raw_seq_floor),
             Some(10)
         );
         assert!(reg.remove(&watch_key("o1", "sess")).is_some());
@@ -243,8 +240,7 @@ mod tests {
         reg.arm(watch("o1", "sess", 5));
         assert_eq!(reg.list_for_session("sess").len(), 1);
         assert_eq!(
-            reg.get(&watch_key("o1", "sess"))
-                .map(|w| w.raw_seq_floor),
+            reg.get(&watch_key("o1", "sess")).map(|w| w.raw_seq_floor),
             Some(5)
         );
     }

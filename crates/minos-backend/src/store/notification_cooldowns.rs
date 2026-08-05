@@ -47,7 +47,9 @@ where
     S: AsStorePool + ?Sized,
 {
     match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => record_sent_sqlite(pool, account_id, cooldown_key, now_ms).await,
+        StorePoolRef::Sqlite(pool) => {
+            record_sent_sqlite(pool, account_id, cooldown_key, now_ms).await
+        }
         StorePoolRef::Postgres(pool) => {
             record_sent_postgres(pool, account_id, cooldown_key, now_ms).await
         }

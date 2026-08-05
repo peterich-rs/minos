@@ -656,9 +656,7 @@ impl MobileHttpClient {
             Some(req.session_id.clone()),
             Some(format!("request_id={}", req.request_id)),
         );
-        let client_request_id = client_request_id
-            .map(str::trim)
-            .filter(|s| !s.is_empty());
+        let client_request_id = client_request_id.map(str::trim).filter(|s| !s.is_empty());
         let request = self.request_with_json(
             Method::POST,
             &url,
@@ -1658,9 +1656,8 @@ impl MobileHttpClient {
         emoji: &str,
         client_op_id: &str,
     ) -> Result<minos_protocol::ToggleReactionResponse, MinosError> {
-        let path = format!(
-            "/v1/conversations/{conversation_id}/messages/{message_id}/reactions/toggle"
-        );
+        let path =
+            format!("/v1/conversations/{conversation_id}/messages/{message_id}/reactions/toggle");
         let url = format!("{}{}", self.base, path);
         let trace_id = start_http_trace(
             Method::POST.as_str(),

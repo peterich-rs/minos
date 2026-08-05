@@ -73,7 +73,11 @@ fn account_append_digest(account_id: &str, message: &ChatMessageSummary) -> Dura
     }
 }
 
-fn account_recall_digest(account_id: &str, message: &ChatMessageSummary, at_ms: i64) -> DurableEvent {
+fn account_recall_digest(
+    account_id: &str,
+    message: &ChatMessageSummary,
+    at_ms: i64,
+) -> DurableEvent {
     DurableEvent::AccountConversationMessageRecalled {
         account_id: account_id.to_string(),
         conversation_id: message.conversation_id.clone(),
@@ -200,7 +204,13 @@ pub async fn ensure_social_message_delivery_in_tx(
         }
     };
     pending.push(
-        ensure_one_in_tx(tx, &conversation_event_id(message), &conversation_event, at_ms).await?,
+        ensure_one_in_tx(
+            tx,
+            &conversation_event_id(message),
+            &conversation_event,
+            at_ms,
+        )
+        .await?,
     );
 
     for account_id in member_account_ids {
@@ -296,8 +306,8 @@ mod tests {
     use super::*;
     use crate::app::tx::Storage;
     use crate::store::social::{
-        create_group_conversation, ensure_social_message_delivery_in_tx, insert_message_with_id_in_tx,
-        list_conversation_members,
+        create_group_conversation, ensure_social_message_delivery_in_tx,
+        insert_message_with_id_in_tx, list_conversation_members,
     };
     use crate::store::test_support::{insert_account, memory_pool, T0};
     use minos_protocol::{ChatMessageSummary, ReactionGroup, SenderType, UserSummary};
@@ -541,11 +551,11 @@ mod tests {
             mentioned_account_ids: vec![],
             sender_type: SenderType::User,
             reactions: vec![],
+            attachments: vec![],
         };
-        let pending =
-            ensure_social_message_delivery_in_tx(&mut tx, &message, &members)
-                .await
-                .unwrap();
+        let pending = ensure_social_message_delivery_in_tx(&mut tx, &message, &members)
+            .await
+            .unwrap();
         // 1 conversation + 2 members
         assert_eq!(pending.len(), 3);
         assert!(pending.iter().all(|p| p.outbox_id.is_some()));
@@ -619,21 +629,20 @@ mod tests {
             mentioned_account_ids: vec![],
             sender_type: SenderType::User,
             reactions: vec![],
+            attachments: vec![],
         };
-        let pending =
-            ensure_social_message_delivery_in_tx(&mut tx, &message, &members)
-                .await
-                .unwrap();
+        let pending = ensure_social_message_delivery_in_tx(&mut tx, &message, &members)
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
         assert_eq!(pending.len(), 1 + members.len());
         assert!(pending.iter().all(|p| p.outbox_id.is_some()));
 
         // Second repair is idempotent (no new outbox).
         let mut tx = Storage::begin(&pool).await.unwrap();
-        let pending2 =
-            ensure_social_message_delivery_in_tx(&mut tx, &message, &members)
-                .await
-                .unwrap();
+        let pending2 = ensure_social_message_delivery_in_tx(&mut tx, &message, &members)
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
         assert!(pending2.iter().all(|p| p.outbox_id.is_none()));
     }
@@ -643,10 +652,9 @@ mod tests {
         let pool = memory_pool().await;
         let alice = insert_account(&pool, "alice-digest@example.com").await;
         let bob = insert_account(&pool, "bob-digest@example.com").await;
-        let conversation =
-            create_group_conversation(&pool, &alice, "digest", &[bob.clone()], T0)
-                .await
-                .unwrap();
+        let conversation = create_group_conversation(&pool, &alice, "digest", &[bob.clone()], T0)
+            .await
+            .unwrap();
         let members = list_conversation_members(&pool, &conversation.conversation_id)
             .await
             .unwrap();
@@ -682,11 +690,11 @@ mod tests {
             mentioned_account_ids: vec![bob.clone()],
             sender_type: SenderType::User,
             reactions: vec![],
+            attachments: vec![],
         };
-        let pending =
-            ensure_social_message_delivery_in_tx(&mut tx, &message, &members)
-                .await
-                .unwrap();
+        let pending = ensure_social_message_delivery_in_tx(&mut tx, &message, &members)
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
         assert_eq!(pending.len(), 1 + members.len());
 

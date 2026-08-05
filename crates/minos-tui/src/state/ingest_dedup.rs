@@ -1,6 +1,5 @@
 //! Ingest deduplication helpers.
 
-use minos_agent_runtime::SessionState;
 use minos_protocol::LocalIngestFrame;
 
 use super::AppState;
@@ -33,10 +32,6 @@ pub(crate) fn mark_ingest_applied(state: &mut AppState, frame: &LocalIngestFrame
 
     state.applied_ingest_fingerprints.insert(fingerprint);
     true
-}
-
-pub(crate) fn thread_is_done(state: &SessionState) -> bool {
-    matches!(state, SessionState::Idle | SessionState::Closed { .. })
 }
 
 pub(crate) fn frame_marks_agent_result_done(frame: &LocalIngestFrame) -> bool {

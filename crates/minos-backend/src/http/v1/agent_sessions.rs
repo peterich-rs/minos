@@ -181,6 +181,7 @@ async fn start_session(
             client_request_id: request.client_request_id,
             caller_account_id: account_id,
             conversation_title: None,
+            attachments: Vec::new(),
         })
         .await
         .map_err(map_agent_session_error)?;
@@ -213,6 +214,7 @@ async fn send_input(
                 .filter(|s| !s.is_empty()),
             client_request_id: request.client_request_id,
             caller_account_id: account_id,
+            attachments: Vec::new(),
         })
         .await
         .map_err(map_agent_session_error)?;

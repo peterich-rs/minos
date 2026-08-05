@@ -618,6 +618,48 @@ const ROUTE_INVENTORY: &[RouteContract] = &[
         "account_api",
         "account_bearer",
     ),
+    RouteContract::new(
+        "GET",
+        "/v1/media/status",
+        "/v1/media/status",
+        "account_api",
+        "public",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/media/blobs",
+        "/v1/media/blobs",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/media/blobs/get",
+        "/v1/media/blobs/get",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "POST",
+        "/v1/media/blobs/delete",
+        "/v1/media/blobs/delete",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "PUT",
+        "/v1/media/blobs/:blob_id/content",
+        "/v1/media/blobs/test-blob/content",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
+        "GET",
+        "/v1/media/blobs/:blob_id/content",
+        "/v1/media/blobs/test-blob/content",
+        "account_api",
+        "account_bearer_or_download_token",
+    ),
 ];
 
 impl BackendState {

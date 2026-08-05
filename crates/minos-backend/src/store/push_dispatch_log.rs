@@ -9,11 +9,7 @@ use crate::error::BackendError;
 use crate::store::{AsStorePool, StorePoolRef};
 
 /// Returns true if a successful push was already recorded for this pair.
-pub async fn has_sent<S>(
-    store: &S,
-    event_id: &str,
-    account_id: &str,
-) -> Result<bool, BackendError>
+pub async fn has_sent<S>(store: &S, event_id: &str, account_id: &str) -> Result<bool, BackendError>
 where
     S: AsStorePool + ?Sized,
 {

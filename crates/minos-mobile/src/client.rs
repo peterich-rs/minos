@@ -774,6 +774,7 @@ impl MobileClient {
                     message_source: Some(minos_protocol::MessageSource::ClientLive),
                     client_sent_at_ms: Some(chrono::Utc::now().timestamp_millis()),
                     created_at_ms: None,
+                    attachment_blob_ids: Vec::new(),
                 },
             )
         })

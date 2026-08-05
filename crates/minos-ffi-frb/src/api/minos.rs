@@ -40,8 +40,8 @@ pub use minos_domain::{
     PairingState,
 };
 pub use minos_protocol::{
-    AgentSummary, AuthSummary, ChatMessageReplySummary, ChatMessageSummary, CloseReason,
-    ConversationAgentMembersResponse, ConversationKind, ConversationMembersResponse,
+    AgentSummary, AuthSummary, ChatMessageAttachment, ChatMessageReplySummary, ChatMessageSummary,
+    CloseReason, ConversationAgentMembersResponse, ConversationKind, ConversationMembersResponse,
     ConversationReadResponse, ConversationResponse, ConversationSummary, ConversationsResponse,
     CreateProjectRequest, CreateProjectResponse, DeleteProjectRequest, FriendRequestStatus,
     FriendRequestSummary, FriendRequestsResponse, FriendSummary, FriendsResponse, HostSkillError,
@@ -1586,6 +1586,16 @@ pub struct _ToggleReactionResponse {
 }
 
 #[allow(dead_code)]
+#[frb(mirror(ChatMessageAttachment))]
+pub struct _ChatMessageAttachment {
+    pub blob_id: String,
+    pub content_type: String,
+    pub byte_size: i64,
+    pub kind: String,
+    pub original_filename: Option<String>,
+}
+
+#[allow(dead_code)]
 #[frb(mirror(ChatMessageSummary))]
 pub struct _ChatMessageSummary {
     pub message_id: String,
@@ -1599,6 +1609,7 @@ pub struct _ChatMessageSummary {
     pub mentioned_account_ids: Vec<String>,
     pub sender_type: SenderType,
     pub reactions: Vec<ReactionGroup>,
+    pub attachments: Vec<ChatMessageAttachment>,
 }
 
 #[allow(dead_code)]

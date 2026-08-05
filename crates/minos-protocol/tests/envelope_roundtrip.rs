@@ -162,7 +162,8 @@ fn all_event_kind_variants_round_trip() {
                 recalled_at_ms: None,
                 mentioned_account_ids: vec!["acct-2".into()],
                 sender_type: SenderType::User,
-            reactions: vec![],
+                reactions: vec![],
+                attachments: vec![],
             },
         },
     ];

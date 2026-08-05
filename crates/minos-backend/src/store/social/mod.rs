@@ -202,10 +202,10 @@ pub use delivery::{
 
 // Cloud reactions
 pub use message_reactions::{
-    aggregate_for_message, aggregate_groups, get_reaction_client_op, insert_reaction_client_op_in_tx,
-    set_reaction_client_op_action_in_tx, try_claim_reaction_client_op_in_tx,
-    list_for_message_in_tx, list_for_messages, toggle_user_in_tx, MessageReactionRow,
-    ReactionClientOpRow, ToggleReactionOutcome,
+    aggregate_for_message, aggregate_groups, get_reaction_client_op,
+    insert_reaction_client_op_in_tx, list_for_message_in_tx, list_for_messages,
+    set_reaction_client_op_action_in_tx, toggle_user_in_tx, try_claim_reaction_client_op_in_tx,
+    MessageReactionRow, ReactionClientOpRow, ToggleReactionOutcome,
 };
 // B6 event_id helper
 pub use delivery::reaction_event_id;

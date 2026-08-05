@@ -225,9 +225,7 @@ pub async fn resolve_with_client_request_id(
             operation: "approval_requests::resolve.serialize".into(),
             message: error.to_string(),
         })?;
-    let client_request_id = client_request_id
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let client_request_id = client_request_id.map(str::trim).filter(|s| !s.is_empty());
 
     let rows_affected = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query(
@@ -511,11 +509,7 @@ mod tests {
     use serde_json::json;
 
     async fn seed_pending(pool: &sqlx::SqlitePool, request_id: &str, session_id: &str) {
-        let account = insert_account(
-            pool,
-            &format!("approval-{request_id}@example.com"),
-        )
-        .await;
+        let account = insert_account(pool, &format!("approval-{request_id}@example.com")).await;
         let conv = crate::store::social::create_group_conversation(
             pool,
             &account,

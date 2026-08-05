@@ -56,8 +56,7 @@ const OUTBOX_DISPATCH_TOTAL: &str = "minos_backend_outbox_dispatch_total";
 const OUTBOX_DISPATCH_LAG_SECONDS: &str = "minos_backend_outbox_dispatch_lag_seconds";
 const APPROVAL_TIMEOUT_RESOLVED_TOTAL: &str = "minos_backend_approval_timeout_resolved_total";
 const HOST_COMMAND_TIMEOUT_TOTAL: &str = "minos_backend_host_command_timeout_total";
-const OUTBOX_HOST_COMMAND_EXPIRED_TOTAL: &str =
-    "minos_backend_outbox_host_command_expired_total";
+const OUTBOX_HOST_COMMAND_EXPIRED_TOTAL: &str = "minos_backend_outbox_host_command_expired_total";
 const AGENT_SESSIONS_ACTIVE: &str = "minos_backend_agent_sessions_active";
 const APPROVALS_PENDING: &str = "minos_backend_approvals_pending";
 const DURABLE_EVENT_LOG_SIZE: &str = "minos_backend_durable_event_log_size";

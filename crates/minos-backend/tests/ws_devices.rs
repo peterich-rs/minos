@@ -322,6 +322,20 @@ async fn expect_no_server_frame(ws: &mut WsClient) -> anyhow::Result<()> {
     }
 }
 
+/// Hello is register-only; gateway immediately acks the default topic live arm.
+async fn drain_default_topic_subscribe_ack(ws: &mut WsClient) -> anyhow::Result<()> {
+    match recv_server_frame(ws).await? {
+        ServerFrame::SubscribeAck { topics, .. } => {
+            anyhow::ensure!(
+                topics.len() == 1,
+                "expected single default-topic SubscribeAck after Hello, got {topics:?}"
+            );
+            Ok(())
+        }
+        other => anyhow::bail!("expected default-topic SubscribeAck after Hello, got {other:?}"),
+    }
+}
+
 async fn expect_close_code(
     ws: &mut WsClient,
     expected_code: u16,
@@ -425,6 +439,7 @@ async fn ws_host_connects_with_hello_for_agent_host() -> anyhow::Result<()> {
         } => assert_eq!(heartbeat_interval_ms, 25_000),
         other => panic!("expected Hello, got {other:?}"),
     }
+    drain_default_topic_subscribe_ack(&mut ws).await?;
     expect_no_server_frame(&mut ws).await?;
 
     Ok(())
@@ -441,6 +456,7 @@ async fn ws_host_stays_idle_when_no_host_durable_events() -> anyhow::Result<()> 
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    drain_default_topic_subscribe_ack(&mut ws).await?;
     expect_no_server_frame(&mut ws).await?;
 
     Ok(())
@@ -468,6 +484,7 @@ async fn ws_client_emits_only_hello_for_mobile_client() -> anyhow::Result<()> {
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    drain_default_topic_subscribe_ack(&mut ws).await?;
     expect_no_server_frame(&mut ws).await?;
 
     Ok(())
@@ -578,6 +595,7 @@ async fn ws_host_accepts_formal_host_ticket_query_auth() -> anyhow::Result<()> {
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    drain_default_topic_subscribe_ack(&mut ws).await?;
     expect_no_server_frame(&mut ws).await?;
 
     Ok(())
@@ -603,6 +621,7 @@ async fn ws_client_reconnect_supersedes_prior_socket_with_auth_close() -> anyhow
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    drain_default_topic_subscribe_ack(&mut first).await?;
 
     let mut replacement = connect_formal_gateway_ws(
         &relay,
@@ -615,6 +634,7 @@ async fn ws_client_reconnect_supersedes_prior_socket_with_auth_close() -> anyhow
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    drain_default_topic_subscribe_ack(&mut replacement).await?;
 
     expect_close_code(&mut first, 4401, "session_superseded").await?;
 
@@ -647,6 +667,7 @@ async fn ws_host_last_link_revoke_closes_live_socket_with_auth_revoked() -> anyh
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    drain_default_topic_subscribe_ack(&mut ws).await?;
 
     let (status, body) = post_json(
         &mut app,

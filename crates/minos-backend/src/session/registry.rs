@@ -318,8 +318,7 @@ impl SessionRegistry {
             return;
         }
         let now_ms = chrono::Utc::now().timestamp_millis();
-        self.last_mobile_disconnect_at_ms
-            .insert(account_id, now_ms);
+        self.last_mobile_disconnect_at_ms.insert(account_id, now_ms);
     }
 
     /// Test / clock-injected stamp for disconnect grace unit tests.

@@ -328,8 +328,7 @@ impl NotificationService for DefaultNotificationService {
     ) -> Result<DispatchOutcome, NotificationError> {
         let now_ms = chrono::Utc::now().timestamp_millis();
 
-        let target_account_ids =
-            resolve_target_accounts(&self.store, &envelope.payload).await?;
+        let target_account_ids = resolve_target_accounts(&self.store, &envelope.payload).await?;
         if target_account_ids.is_empty() {
             return Ok(DispatchOutcome::Skipped);
         }
@@ -420,10 +419,7 @@ impl NotificationService for DefaultNotificationService {
                                 Ok(PushSendOutcome::NotWired) => {
                                     // P5: config hooks exist but provider not production-wired.
                                     // Do not record_sent / do not burn cooldown.
-                                    crate::telemetry::record_push_send(
-                                        kind.as_str(),
-                                        "not_wired",
-                                    );
+                                    crate::telemetry::record_push_send(kind.as_str(), "not_wired");
                                 }
                                 Err(_) => {
                                     crate::telemetry::record_push_send(kind.as_str(), "error");
@@ -855,7 +851,10 @@ mod tests {
         rt.block_on(async {
             let pool = memory_pool().await;
             let store = StoreHandle::from(pool);
-            assert!(resolve_target_accounts(&store, &event).await.unwrap().is_empty());
+            assert!(resolve_target_accounts(&store, &event)
+                .await
+                .unwrap()
+                .is_empty());
         });
     }
 }

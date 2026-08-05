@@ -564,7 +564,9 @@ mod tests {
                     .as_object()
                     .expect("path item")
                     .iter()
-                    .filter(|(key, _)| matches!(key.as_str(), "get" | "post" | "delete"))
+                    .filter(|(key, _)| {
+                        matches!(key.as_str(), "get" | "post" | "put" | "patch" | "delete")
+                    })
                     .count()
             })
             .sum()

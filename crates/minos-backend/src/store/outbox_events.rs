@@ -161,9 +161,9 @@ pub async fn get(
     store: &impl AsStorePool,
     outbox_id: &str,
 ) -> Result<Option<OutboxEventRow>, BackendError> {
-    let row = match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => {
-            sqlx::query_as::<_, OutboxEventRowTuple>(
+    let row =
+        match store.as_store_pool() {
+            StorePoolRef::Sqlite(pool) => sqlx::query_as::<_, OutboxEventRowTuple>(
                 "SELECT outbox_id, topic_kind, event_id, lane, status, available_at_ms, attempts,
                         claimed_by, claimed_at_ms, ack_at_ms, dead_at_ms, last_error_json
                    FROM outbox_events
@@ -171,10 +171,8 @@ pub async fn get(
             )
             .bind(outbox_id)
             .fetch_optional(pool)
-            .await
-        }
-        StorePoolRef::Postgres(pool) => {
-            sqlx::query_as::<_, OutboxEventRowTuple>(
+            .await,
+            StorePoolRef::Postgres(pool) => sqlx::query_as::<_, OutboxEventRowTuple>(
                 "SELECT outbox_id, topic_kind, event_id, lane, status, available_at_ms, attempts,
                         claimed_by, claimed_at_ms, ack_at_ms, dead_at_ms, last_error_json::text
                    FROM outbox_events
@@ -182,10 +180,9 @@ pub async fn get(
             )
             .bind(outbox_id)
             .fetch_optional(pool)
-            .await
+            .await,
         }
-    }
-    .map_err(store_err("outbox_events::get"))?;
+        .map_err(store_err("outbox_events::get"))?;
 
     row.map(decode_row).transpose()
 }
@@ -830,16 +827,12 @@ mod tests {
         assert!(ack(&pool, "out-pending-ack", T0 + 1).await.unwrap());
         let row = get(&pool, "out-pending-ack").await.unwrap().unwrap();
         assert_eq!(row.status, OutboxStatus::Acked);
-        assert!(claim_available(
-            &pool,
-            "worker",
-            T0 + 2,
-            10,
-            OutboxLane::SocialDurable,
-        )
-        .await
-        .unwrap()
-        .is_empty());
+        assert!(
+            claim_available(&pool, "worker", T0 + 2, 10, OutboxLane::SocialDurable,)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -891,15 +884,9 @@ mod tests {
         .await
         .unwrap();
 
-        let claimed = claim_available(
-            &pool,
-            "worker-1",
-            T0,
-            10,
-            OutboxLane::SocialDurable,
-        )
-        .await
-        .unwrap();
+        let claimed = claim_available(&pool, "worker-1", T0, 10, OutboxLane::SocialDurable)
+            .await
+            .unwrap();
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].outbox_id, "out-1");
         assert_eq!(claimed[0].topic_kind, "host");
@@ -916,26 +903,16 @@ mod tests {
         )
         .await
         .unwrap());
-        assert!(claim_available(
-            &pool,
-            "worker-1",
-            T0 + 200,
-            10,
-            OutboxLane::SocialDurable,
-        )
-        .await
-        .unwrap()
-        .is_empty());
+        assert!(
+            claim_available(&pool, "worker-1", T0 + 200, 10, OutboxLane::SocialDurable,)
+                .await
+                .unwrap()
+                .is_empty()
+        );
 
-        let claimed = claim_available(
-            &pool,
-            "worker-2",
-            T0 + 300,
-            10,
-            OutboxLane::SocialDurable,
-        )
-        .await
-        .unwrap();
+        let claimed = claim_available(&pool, "worker-2", T0 + 300, 10, OutboxLane::SocialDurable)
+            .await
+            .unwrap();
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].outbox_id, "out-1");
         assert_eq!(claimed[0].attempts, 2);
@@ -943,17 +920,13 @@ mod tests {
 
         assert!(ack(&pool, "out-1", T0 + 301).await.unwrap());
         assert!(ack(&pool, "out-1", T0 + 302).await.unwrap());
-        assert!(claim_available(
-            &pool,
-            "worker-3",
-            T0 + 1_000,
-            10,
-            OutboxLane::SocialDurable,
-        )
-        .await
-        .unwrap()
-        .iter()
-        .all(|row| row.outbox_id != "out-1"));
+        assert!(
+            claim_available(&pool, "worker-3", T0 + 1_000, 10, OutboxLane::SocialDurable,)
+                .await
+                .unwrap()
+                .iter()
+                .all(|row| row.outbox_id != "out-1")
+        );
 
         let row = get(&pool, "out-1").await.unwrap().unwrap();
         assert_eq!(row.status, OutboxStatus::Acked);
@@ -1013,53 +986,33 @@ mod tests {
         .await
         .unwrap();
 
-        let social = claim_available(
-            &pool,
-            "social-worker",
-            T0,
-            10,
-            OutboxLane::SocialDurable,
-        )
-        .await
-        .unwrap();
+        let social = claim_available(&pool, "social-worker", T0, 10, OutboxLane::SocialDurable)
+            .await
+            .unwrap();
         assert_eq!(social.len(), 1);
         assert_eq!(social[0].outbox_id, "out-social");
         assert_eq!(social[0].lane, OutboxLane::SocialDurable);
 
-        let host = claim_available(
-            &pool,
-            "host-worker",
-            T0,
-            10,
-            OutboxLane::HostCommand,
-        )
-        .await
-        .unwrap();
+        let host = claim_available(&pool, "host-worker", T0, 10, OutboxLane::HostCommand)
+            .await
+            .unwrap();
         assert_eq!(host.len(), 1);
         assert_eq!(host[0].outbox_id, "out-host");
         assert_eq!(host[0].lane, OutboxLane::HostCommand);
 
         // Social claim must not drain host_command rows and vice versa.
-        assert!(claim_available(
-            &pool,
-            "social-worker-2",
-            T0,
-            10,
-            OutboxLane::SocialDurable,
-        )
-        .await
-        .unwrap()
-        .is_empty());
-        assert!(claim_available(
-            &pool,
-            "host-worker-2",
-            T0,
-            10,
-            OutboxLane::HostCommand,
-        )
-        .await
-        .unwrap()
-        .is_empty());
+        assert!(
+            claim_available(&pool, "social-worker-2", T0, 10, OutboxLane::SocialDurable,)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            claim_available(&pool, "host-worker-2", T0, 10, OutboxLane::HostCommand,)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -1110,16 +1063,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            claim_available(
-                &pool,
-                "w-social",
-                T0,
-                10,
-                OutboxLane::SocialDurable,
-            )
-            .await
-            .unwrap()
-            .len(),
+            claim_available(&pool, "w-social", T0, 10, OutboxLane::SocialDurable,)
+                .await
+                .unwrap()
+                .len(),
             1
         );
         assert_eq!(
@@ -1200,15 +1147,9 @@ mod tests {
         .await
         .unwrap();
 
-        let claimed = claim_available(
-            &pool,
-            "worker-1",
-            T0,
-            10,
-            OutboxLane::HostCommand,
-        )
-        .await
-        .unwrap();
+        let claimed = claim_available(&pool, "worker-1", T0, 10, OutboxLane::HostCommand)
+            .await
+            .unwrap();
         assert_eq!(claimed.len(), 1);
         assert!(!ack(&pool, "out-host-command", T0 + 1).await.unwrap());
 
@@ -1262,15 +1203,9 @@ mod tests {
         .await
         .unwrap();
 
-        let claimed = claim_available(
-            &pool,
-            "worker-1",
-            T0,
-            10,
-            OutboxLane::HostCommand,
-        )
-        .await
-        .unwrap();
+        let claimed = claim_available(&pool, "worker-1", T0, 10, OutboxLane::HostCommand)
+            .await
+            .unwrap();
         assert_eq!(claimed.len(), 1);
         // Past deadline must never unlock a success ack.
         assert!(!ack(&pool, "out-host-command-expired", T0 + 11)
@@ -1450,9 +1385,7 @@ mod tests {
         assert!(cmd.finished_at_ms.is_none());
 
         // Past deadline but observed: ack unlocks (same rule as dispatch observation-first).
-        assert!(ack(&pool, "out-obs-past-deadline", T0 + 20)
-            .await
-            .unwrap());
+        assert!(ack(&pool, "out-obs-past-deadline", T0 + 20).await.unwrap());
         let row = get(&pool, "out-obs-past-deadline").await.unwrap().unwrap();
         assert_eq!(row.status, OutboxStatus::Acked);
         assert_eq!(row.ack_at_ms, Some(T0 + 20));
@@ -1885,15 +1818,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let claimed = claim_available(
-            &pool,
-            "worker-1",
-            T0,
-            10,
-            OutboxLane::HostCommand,
-        )
-        .await
-        .unwrap();
+        let claimed = claim_available(&pool, "worker-1", T0, 10, OutboxLane::HostCommand)
+            .await
+            .unwrap();
         assert_eq!(claimed.len(), 1);
         assert!(host_commands::ack(&pool, "cmd-claimed", T0 + 2)
             .await
@@ -1942,15 +1869,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let claimed = claim_available(
-            &pool,
-            "bad-worker",
-            T0,
-            10,
-            OutboxLane::SocialDurable,
-        )
-        .await
-        .unwrap();
+        let claimed = claim_available(&pool, "bad-worker", T0, 10, OutboxLane::SocialDurable)
+            .await
+            .unwrap();
         assert_eq!(claimed.len(), 1);
 
         assert_eq!(

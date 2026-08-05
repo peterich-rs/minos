@@ -459,6 +459,7 @@ impl AgentGlue {
             None,
             None,
             None,
+            Vec::new(),
         )
         .await
     }
@@ -479,6 +480,7 @@ impl AgentGlue {
         project_id: Option<String>,
         conversation_title: Option<String>,
         origin_message_id: Option<String>,
+        attachments: Vec<minos_protocol::DispatchAttachment>,
     ) -> Result<StartAgentResponse, MinosError> {
         let _mode = req.mode.map_or(AgentLaunchMode::Server, runtime_mode);
         let workspace = resolve_workspace(&self.default_workspace, &req.workspace);
@@ -560,13 +562,19 @@ impl AgentGlue {
             self.completion.note_turn_origin(&session_id, origin).await;
         }
 
-        if let Some(message) = initial_user_message
-            .as_deref()
-            .map(str::trim)
-            .filter(|message| !message.is_empty())
-        {
+        let paths = crate::media_materialize::materialize_attachments(
+            &outcome.cwd,
+            origin_message_id.as_deref(),
+            &attachments,
+        )
+        .await;
+        let prompt = crate::media_materialize::append_attachment_paths(
+            initial_user_message.as_deref().unwrap_or(""),
+            &paths,
+        );
+        if !prompt.trim().is_empty() {
             self.manager
-                .send_user_message(&session_id, message.to_string())
+                .send_user_message(&session_id, prompt)
                 .await
                 .map_err(map_anyhow)?;
         }
@@ -622,14 +630,30 @@ impl AgentGlue {
                 "take_needs_continue failed before send_user_message",
             );
         }
-        if let Some(origin) = req.origin_message_id.as_deref().map(str::trim).filter(|s| !s.is_empty())
+        if let Some(origin) = req
+            .origin_message_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
         {
             self.completion
                 .note_turn_origin(&req.session_id, origin)
                 .await;
         }
+        let cwd = self
+            .manager
+            .session_workspace(&req.session_id)
+            .await
+            .unwrap_or_else(|| self.default_workspace.clone());
+        let paths = crate::media_materialize::materialize_attachments(
+            &cwd,
+            req.origin_message_id.as_deref(),
+            &req.attachments,
+        )
+        .await;
+        let text = crate::media_materialize::append_attachment_paths(&req.text, &paths);
         self.manager
-            .send_user_message(&req.session_id, req.text)
+            .send_user_message(&req.session_id, text)
             .await
             .map_err(map_anyhow)?;
         self.persist_current_provider_session_id(&req.session_id)
@@ -679,6 +703,7 @@ impl AgentGlue {
             origin_message_id,
             model,
             reasoning_effort,
+            attachments,
         } = req;
 
         if let Some(existing_session_id) = session_id.as_deref() {
@@ -699,12 +724,20 @@ impl AgentGlue {
             })
         };
         let launch = minos_agent_runtime::AgentLaunchOptions::from_parts(model, reasoning_effort);
+        let workspace_path = resolve_workspace(&self.default_workspace, &workspace);
+        let paths = crate::media_materialize::materialize_attachments(
+            &workspace_path,
+            staged_origin.as_deref(),
+            &attachments,
+        )
+        .await;
+        let text = crate::media_materialize::append_attachment_paths(&text, &paths);
 
         let outcome = self
             .manager
             .dispatch_message_with_options(
                 agent,
-                resolve_workspace(&self.default_workspace, &workspace),
+                workspace_path,
                 session_id,
                 text,
                 policies,
@@ -4257,9 +4290,8 @@ async fn handle_daemon_mcp_request(
                 emoji.chars().count() <= 32,
                 "emoji must be at most 32 characters"
             );
-            let Some((msg_conversation_id, body, mentions_json)) = store
-                .get_message_body_for_reaction(&message_id)
-                .await?
+            let Some((msg_conversation_id, body, mentions_json)) =
+                store.get_message_body_for_reaction(&message_id).await?
             else {
                 anyhow::bail!("message not found: {message_id}");
             };

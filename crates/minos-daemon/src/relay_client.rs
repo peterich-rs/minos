@@ -809,12 +809,7 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
             );
             // Hello is register-only; catch-up via Subscribe + resume_after.
             let host_topic = format!("host:{}", ctx.self_device_id);
-            let resume_seq = ctx
-                .host_topic_seq
-                .lock()
-                .ok()
-                .map(|g| *g)
-                .unwrap_or(0);
+            let resume_seq = ctx.host_topic_seq.lock().ok().map(|g| *g).unwrap_or(0);
             let mut resume_after = HashMap::new();
             if resume_seq > 0 {
                 resume_after.insert(host_topic.clone(), resume_seq);

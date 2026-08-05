@@ -565,6 +565,48 @@
       "probe_path": "/v1/notifications/preferences/update",
       "surface": "account_api",
       "auth": "account_bearer"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/media/status",
+      "probe_path": "/v1/media/status",
+      "surface": "account_api",
+      "auth": "public"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/media/blobs",
+      "probe_path": "/v1/media/blobs",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/media/blobs/get",
+      "probe_path": "/v1/media/blobs/get",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/media/blobs/delete",
+      "probe_path": "/v1/media/blobs/delete",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/media/blobs/:blob_id/content",
+      "probe_path": "/v1/media/blobs/test-blob/content",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/media/blobs/:blob_id/content",
+      "probe_path": "/v1/media/blobs/test-blob/content",
+      "surface": "account_api",
+      "auth": "account_bearer_or_download_token"
     }
   ]
 }

@@ -23,6 +23,8 @@ pub struct StartAgentSessionInput {
     pub caller_account_id: String,
     /// Optional display title for Host local conversation upsert.
     pub conversation_title: Option<String>,
+    /// Media to materialize on Host before the agent prompt.
+    pub attachments: Vec<minos_protocol::DispatchAttachment>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -44,6 +46,8 @@ pub struct SendInputInput {
     pub origin_message_id: Option<String>,
     pub client_request_id: String,
     pub caller_account_id: String,
+    /// Media to materialize on Host before the agent prompt.
+    pub attachments: Vec<minos_protocol::DispatchAttachment>,
 }
 
 #[derive(Debug, Clone)]

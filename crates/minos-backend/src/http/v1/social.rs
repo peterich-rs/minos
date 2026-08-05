@@ -76,6 +76,8 @@ pub struct SendConversationMessageRequest {
     pub client_sent_at_ms: Option<i64>,
     #[serde(default)]
     pub created_at_ms: Option<i64>,
+    #[serde(default)]
+    pub attachment_blob_ids: Vec<String>,
 }
 
 #[allow(clippy::unused_async)]
@@ -355,6 +357,7 @@ async fn forward_agent_dispatch(
     text: &str,
     conversation_id: &str,
     origin_message_id: &str,
+    attachments: Vec<minos_protocol::DispatchAttachment>,
 ) -> Result<ForwardedAgentDispatch, crate::error::BackendError> {
     if let Some(session_id) = session_id {
         let watcher_from_seq =
@@ -367,11 +370,9 @@ async fn forward_agent_dispatch(
                 mentions: Vec::new(),
                 origin_message_id: Some(origin_message_id.to_string()),
                 // Include agent so multi-@ fan-out send idempotency never collides.
-                client_request_id: format!(
-                    "social-send-{origin_message_id}:{}",
-                    agent.agent_id
-                ),
+                client_request_id: format!("social-send-{origin_message_id}:{}", agent.agent_id),
                 caller_account_id: account_id.to_string(),
+                attachments,
             })
             .await
             .map_err(|error| map_agent_session_dispatch_error("agent_session.send_input", error))?;
@@ -398,12 +399,10 @@ async fn forward_agent_dispatch(
             initial_user_message: Some(text.to_string()),
             origin_message_id: Some(origin_message_id.to_string()),
             // Multi-@ cold start: must key formal session id by origin×agent.
-            client_request_id: format!(
-                "social-start-{origin_message_id}:{}",
-                agent.agent_id
-            ),
+            client_request_id: format!("social-start-{origin_message_id}:{}", agent.agent_id),
             caller_account_id: account_id.to_string(),
             conversation_title,
+            attachments,
         })
         .await
         .map_err(|error| map_agent_session_dispatch_error("agent_session.start", error))?;
@@ -411,6 +410,54 @@ async fn forward_agent_dispatch(
         session_id: output.session_id,
         watcher_from_seq: 0,
     })
+}
+
+/// Build host-downloadable attachment descriptors for an origin Hub message.
+async fn dispatch_attachments_for_origin(
+    state: &BackendState,
+    account_id: &str,
+    origin_message_id: &str,
+) -> Result<Vec<minos_protocol::DispatchAttachment>, crate::error::BackendError> {
+    let joins = crate::store::message_attachments::list_for_messages(
+        &state.store,
+        &[origin_message_id.to_string()],
+    )
+    .await?;
+    if joins.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !state.media.is_configured() {
+        tracing::warn!(
+            target: "minos_backend::social",
+            origin_message_id,
+            "message has attachments but media store is not configured"
+        );
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::with_capacity(joins.len());
+    for row in joins {
+        if row.status != "ready" {
+            continue;
+        }
+        match state.media.get_download(account_id, &row.blob_id).await {
+            Ok(dl) => out.push(minos_protocol::DispatchAttachment {
+                blob_id: row.blob_id,
+                content_type: row.content_type,
+                byte_size: row.byte_size,
+                original_filename: row.original_filename,
+                download_url: dl.download_url,
+            }),
+            Err(e) => {
+                tracing::warn!(
+                    target: "minos_backend::social",
+                    blob_id = %row.blob_id,
+                    error = %e,
+                    "failed to sign attachment download for host dispatch"
+                );
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Resolve a host/Desktop project id for agent start so Host does not invent
@@ -671,18 +718,20 @@ fn arm_completion_watch(
     let now_ms = chrono::Utc::now().timestamp_millis();
     // Watch TTL is enforced by SessionLifecycle (B5); arm with a long ceiling.
     let deadline_at_ms = now_ms + 30 * 60 * 1000;
-    state.completion_watches.arm(crate::completion_watch::CompletionWatch {
-        dispatch_id: dispatch_id.clone(),
-        origin_message_id: origin_message_id.clone(),
-        conversation_id,
-        session_id: session_id.clone(),
-        agent,
-        raw_seq_floor,
-        armed_at_ms: now_ms,
-        deadline_at_ms,
-        mention_account_id,
-        mention_minos_id,
-    });
+    state
+        .completion_watches
+        .arm(crate::completion_watch::CompletionWatch {
+            dispatch_id: dispatch_id.clone(),
+            origin_message_id: origin_message_id.clone(),
+            conversation_id,
+            session_id: session_id.clone(),
+            agent,
+            raw_seq_floor,
+            armed_at_ms: now_ms,
+            deadline_at_ms,
+            mention_account_id,
+            mention_minos_id,
+        });
     tracing::info!(
         target: "minos_backend::social",
         session_id = %session_id,
@@ -735,24 +784,24 @@ async fn try_project_completion_for_watch(
     let session_id = watch.session_id.clone();
     let origin_message_id = watch.origin_message_id.clone();
 
-    let session_terminal =
-        match crate::store::agent_sessions::get(&state.store, &session_id).await {
-            Ok(Some(session)) => {
-                session.ended_at_ms.is_some()
-                    || crate::turn_completion::is_session_terminal_status(&session.status)
-            }
-            Ok(None) => false,
-            Err(error) => {
-                tracing::warn!(
-                    target: "minos_backend::social",
-                    error = %error,
-                    session_id = %session_id,
-                    origin_message_id = %origin_message_id,
-                    "completion projection failed to load agent session"
-                );
-                false
-            }
-        };
+    let session_terminal = match crate::store::agent_sessions::get(&state.store, &session_id).await
+    {
+        Ok(Some(session)) => {
+            session.ended_at_ms.is_some()
+                || crate::turn_completion::is_session_terminal_status(&session.status)
+        }
+        Ok(None) => false,
+        Err(error) => {
+            tracing::warn!(
+                target: "minos_backend::social",
+                error = %error,
+                session_id = %session_id,
+                origin_message_id = %origin_message_id,
+                "completion projection failed to load agent session"
+            );
+            false
+        }
+    };
 
     match find_completed_agent_reply(
         &state.store,
@@ -769,11 +818,7 @@ async fn try_project_completion_for_watch(
                 .mention_minos_id
                 .as_deref()
                 .map_or(text.clone(), |minos_id| format!("@{minos_id} {text}"));
-            let mentions = watch
-                .mention_account_id
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>();
+            let mentions = watch.mention_account_id.iter().cloned().collect::<Vec<_>>();
             let client_message_id =
                 crate::turn_completion::TurnCompletionProjector::agent_result_client_message_id(
                     &watch.conversation_id,
@@ -972,7 +1017,43 @@ async fn persist_agent_message_with_delivery(
     .await
     .map_err(|e| err("internal", e.to_string()))?;
 
-    let message = if !outcome.inserted {
+    let message = if outcome.inserted {
+        let sender = minos_protocol::UserSummary {
+            account_id: agent.agent_id.clone(),
+            minos_id: agent.agent_id.clone(),
+            display_name: format!("🤖 {}", agent.name),
+        };
+        let message = ChatMessageSummary {
+            message_id: outcome.row.message_id.clone(),
+            conversation_id: outcome.row.conversation_id.clone(),
+            sender,
+            text: outcome.row.text.clone(),
+            created_at_ms: outcome.row.created_at_ms,
+            message_seq: outcome.row.message_seq,
+            reply_to,
+            recalled_at_ms: None,
+            mentioned_account_ids: mentioned_account_ids.to_vec(),
+            sender_type: SenderType::Agent,
+            reactions: vec![],
+            attachments: vec![],
+        };
+        crate::store::social::ensure_social_message_delivery_in_tx(&mut tx, &message, &member_ids)
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
+        // Re-hydrate for API parity with list_messages.
+        let mut hydrated =
+            crate::conversations::use_case::hydrate_messages(&state.store, vec![outcome.row])
+                .await
+                .map_err(|e| err("internal", e.to_string()))?;
+        let mut full = hydrated.remove(0);
+        if full.mentioned_account_ids.is_empty() && !mentioned_account_ids.is_empty() {
+            full.mentioned_account_ids = mentioned_account_ids.to_vec();
+        }
+        full
+    } else {
         // Idempotent hit: abandon empty insert tx, hydrate SSOT, repair durable.
         drop(tx);
         let mut hydrated =
@@ -995,41 +1076,6 @@ async fn persist_agent_message_with_delivery(
             .await
             .map_err(|e| err("internal", e.to_string()))?;
         message
-    } else {
-        let sender = minos_protocol::UserSummary {
-            account_id: agent.agent_id.clone(),
-            minos_id: agent.agent_id.clone(),
-            display_name: format!("🤖 {}", agent.name),
-        };
-        let message = ChatMessageSummary {
-            message_id: outcome.row.message_id.clone(),
-            conversation_id: outcome.row.conversation_id.clone(),
-            sender,
-            text: outcome.row.text.clone(),
-            created_at_ms: outcome.row.created_at_ms,
-            message_seq: outcome.row.message_seq,
-            reply_to,
-            recalled_at_ms: None,
-            mentioned_account_ids: mentioned_account_ids.to_vec(),
-            sender_type: SenderType::Agent,
-            reactions: vec![],
-        };
-        crate::store::social::ensure_social_message_delivery_in_tx(&mut tx, &message, &member_ids)
-            .await
-            .map_err(|e| err("internal", e.to_string()))?;
-        tx.commit()
-            .await
-            .map_err(|e| err("internal", e.to_string()))?;
-        // Re-hydrate for API parity with list_messages.
-        let mut hydrated =
-            crate::conversations::use_case::hydrate_messages(&state.store, vec![outcome.row])
-                .await
-                .map_err(|e| err("internal", e.to_string()))?;
-        let mut full = hydrated.remove(0);
-        if full.mentioned_account_ids.is_empty() && !mentioned_account_ids.is_empty() {
-            full.mentioned_account_ids = mentioned_account_ids.to_vec();
-        }
-        full
     };
 
     if let Err(error) = publish_social_message_delivery(state, &message, &member_ids).await {
@@ -1589,10 +1635,7 @@ pub async fn on_host_online_force_agent_dispatch(
 ) -> Result<u32, crate::error::BackendError> {
     let pairs =
         crate::store::host_links::list_accounts_for_host(&state.store, host_device_id).await?;
-    let account_ids: Vec<String> = pairs
-        .into_iter()
-        .map(|p| p.mobile_account_id)
-        .collect();
+    let account_ids: Vec<String> = pairs.into_iter().map(|p| p.mobile_account_id).collect();
     if account_ids.is_empty() {
         state.wake_agent_dispatch();
         return Ok(0);
@@ -1618,10 +1661,11 @@ pub async fn on_host_online_force_agent_dispatch(
 /// Drain due AgentDispatchQueue rows: host RPC + arm CompletionWatch.
 ///
 /// Called by [`crate::jobs::agent_dispatch_worker`] and tests.
-pub async fn process_agent_dispatch_batch(state: &BackendState) -> Result<u32, crate::error::BackendError> {
+pub async fn process_agent_dispatch_batch(
+    state: &BackendState,
+) -> Result<u32, crate::error::BackendError> {
     let now_ms = chrono::Utc::now().timestamp_millis();
-    let claimed =
-        crate::store::agent_dispatch_queue::claim_due(&state.store, now_ms, 16).await?;
+    let claimed = crate::store::agent_dispatch_queue::claim_due(&state.store, now_ms, 16).await?;
     if claimed.is_empty() {
         return Ok(0);
     }
@@ -1733,6 +1777,8 @@ async fn execute_claimed_dispatch(
         return Ok(());
     };
 
+    let attachments =
+        dispatch_attachments_for_origin(state, &row.account_id, &row.origin_message_id).await?;
     match forward_agent_dispatch(
         state,
         &row.account_id,
@@ -1741,6 +1787,7 @@ async fn execute_claimed_dispatch(
         &row.forwarded_text,
         &row.conversation_id,
         &row.origin_message_id,
+        attachments,
     )
     .await
     {
@@ -2200,8 +2247,7 @@ mod tests {
                 updated_at_ms: 0,
             },
         ];
-        let routes =
-            all_mentioned_agent_routes("@codex @claude @codex count off 1 2", &agents);
+        let routes = all_mentioned_agent_routes("@codex @claude @codex count off 1 2", &agents);
         assert_eq!(routes.len(), 2);
         assert_eq!(routes[0].agent.runtime_agent, "codex");
         assert_eq!(routes[1].agent.runtime_agent, "claude");

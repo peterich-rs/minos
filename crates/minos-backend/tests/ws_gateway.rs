@@ -193,6 +193,7 @@ async fn seed_session(
             client_request_id: client_request_id.to_string(),
             caller_account_id: account_id.to_string(),
             conversation_title: None,
+            attachments: Vec::new(),
         })
         .await
         .map_err(|error| anyhow::anyhow!("start session failed: {error}"))
@@ -215,6 +216,7 @@ async fn send_input(
             origin_message_id: None,
             client_request_id: client_request_id.to_string(),
             caller_account_id: account_id.to_string(),
+            attachments: Vec::new(),
         })
         .await
         .map_err(|error| anyhow::anyhow!("send input failed: {error}"))
@@ -415,7 +417,11 @@ async fn seed_account_durable_events(
     Ok(())
 }
 
-async fn seed_host_durable_events(relay: &Relay, host_id: DeviceId, count: i64) -> anyhow::Result<()> {
+async fn seed_host_durable_events(
+    relay: &Relay,
+    host_id: DeviceId,
+    count: i64,
+) -> anyhow::Result<()> {
     let host = host_id.to_string();
     let topic = format!("host:{host}");
     for seq in 1..=count {
@@ -456,15 +462,9 @@ async fn drain_default_topic_subscribe_ack(ws: &mut WsClient) -> anyhow::Result<
     }
 }
 
-/// After Hello, accept the default-topic SubscribeAck (live arm) and reject
-/// any durable/stream/bootstrap frames for QUIET_TIMEOUT.
-
 /// Host connect path after Hello: drain register-only ack, then Subscribe host
 /// topic for catch-up (Hello no longer replays durable history).
-async fn host_subscribe_for_catchup(
-    ws: &mut WsClient,
-    host_id: DeviceId,
-) -> anyhow::Result<()> {
+async fn host_subscribe_for_catchup(ws: &mut WsClient, host_id: DeviceId) -> anyhow::Result<()> {
     drain_default_topic_subscribe_ack(ws).await?;
     let host_topic = format!("host:{host_id}");
     send_client_frame(
@@ -575,7 +575,10 @@ async fn subscribe_with_resume_after_filters_below_cursor() -> anyhow::Result<()
         &mut ws,
         &ClientFrame::Subscribe {
             topics: vec![account_topic.clone()],
-            resume_after: Some(std::collections::HashMap::from([(account_topic.clone(), 5)])),
+            resume_after: Some(std::collections::HashMap::from([(
+                account_topic.clone(),
+                5,
+            )])),
             client_request_id: Some("resume-after-filter".into()),
         },
     )
@@ -729,6 +732,7 @@ async fn account_topic_delivers_social_message_payloads() -> anyhow::Result<()> 
             None,
             minos_protocol::MessageSource::ClientLive,
             None,
+            &[],
         )
         .await?;
     minos_backend::http::v1::social::fan_out_social_message(&relay.state, &message).await;

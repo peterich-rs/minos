@@ -393,6 +393,7 @@ impl AgentBackend for DaemonBackend {
             session_id: session_id.to_owned(),
             text: text.to_owned(),
             origin_message_id: origin,
+            attachments: vec![],
         };
         self.client
             .request::<(), _>("minos_local_send_user_message", [request])

@@ -5203,6 +5203,14 @@ const _: fn() = || {
         let _: String = AuthSummary.email;
     }
     {
+        let ChatMessageAttachment = None::<crate::api::minos::ChatMessageAttachment>.unwrap();
+        let _: String = ChatMessageAttachment.blob_id;
+        let _: String = ChatMessageAttachment.content_type;
+        let _: i64 = ChatMessageAttachment.byte_size;
+        let _: String = ChatMessageAttachment.kind;
+        let _: Option<String> = ChatMessageAttachment.original_filename;
+    }
+    {
         let ChatMessageReplySummary = None::<crate::api::minos::ChatMessageReplySummary>.unwrap();
         let _: String = ChatMessageReplySummary.message_id;
         let _: crate::api::minos::UserSummary = ChatMessageReplySummary.sender;
@@ -5222,6 +5230,7 @@ const _: fn() = || {
         let _: Vec<String> = ChatMessageSummary.mentioned_account_ids;
         let _: crate::api::minos::SenderType = ChatMessageSummary.sender_type;
         let _: Vec<crate::api::minos::ReactionGroup> = ChatMessageSummary.reactions;
+        let _: Vec<crate::api::minos::ChatMessageAttachment> = ChatMessageSummary.attachments;
     }
     match None::<crate::api::minos::ConnectionState>.unwrap() {
         crate::api::minos::ConnectionState::Disconnected => {}
@@ -6044,6 +6053,24 @@ impl SseDecode for bool {
     }
 }
 
+impl SseDecode for crate::api::minos::ChatMessageAttachment {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_blobId = <String>::sse_decode(deserializer);
+        let mut var_contentType = <String>::sse_decode(deserializer);
+        let mut var_byteSize = <i64>::sse_decode(deserializer);
+        let mut var_kind = <String>::sse_decode(deserializer);
+        let mut var_originalFilename = <Option<String>>::sse_decode(deserializer);
+        return crate::api::minos::ChatMessageAttachment {
+            blob_id: var_blobId,
+            content_type: var_contentType,
+            byte_size: var_byteSize,
+            kind: var_kind,
+            original_filename: var_originalFilename,
+        };
+    }
+}
+
 impl SseDecode for crate::api::minos::ChatMessageReplySummary {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -6075,6 +6102,8 @@ impl SseDecode for crate::api::minos::ChatMessageSummary {
         let mut var_mentionedAccountIds = <Vec<String>>::sse_decode(deserializer);
         let mut var_senderType = <crate::api::minos::SenderType>::sse_decode(deserializer);
         let mut var_reactions = <Vec<crate::api::minos::ReactionGroup>>::sse_decode(deserializer);
+        let mut var_attachments =
+            <Vec<crate::api::minos::ChatMessageAttachment>>::sse_decode(deserializer);
         return crate::api::minos::ChatMessageSummary {
             message_id: var_messageId,
             conversation_id: var_conversationId,
@@ -6087,6 +6116,7 @@ impl SseDecode for crate::api::minos::ChatMessageSummary {
             mentioned_account_ids: var_mentionedAccountIds,
             sender_type: var_senderType,
             reactions: var_reactions,
+            attachments: var_attachments,
         };
     }
 }
@@ -6580,6 +6610,20 @@ impl SseDecode for crate::api::minos::ListAgentsResponse {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_agents = <Vec<crate::api::minos::AgentSummary>>::sse_decode(deserializer);
         return crate::api::minos::ListAgentsResponse { agents: var_agents };
+    }
+}
+
+impl SseDecode for Vec<crate::api::minos::ChatMessageAttachment> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::minos::ChatMessageAttachment>::sse_decode(
+                deserializer,
+            ));
+        }
+        return ans_;
     }
 }
 
@@ -8588,6 +8632,30 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::AuthSummary
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ChatMessageAttachment> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.0.blob_id.into_into_dart().into_dart(),
+            self.0.content_type.into_into_dart().into_dart(),
+            self.0.byte_size.into_into_dart().into_dart(),
+            self.0.kind.into_into_dart().into_dart(),
+            self.0.original_filename.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::ChatMessageAttachment>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::ChatMessageAttachment>>
+    for crate::api::minos::ChatMessageAttachment
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::ChatMessageAttachment> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ChatMessageReplySummary> {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
@@ -8625,6 +8693,7 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ChatMessage
             self.0.mentioned_account_ids.into_into_dart().into_dart(),
             self.0.sender_type.into_into_dart().into_dart(),
             self.0.reactions.into_into_dart().into_dart(),
+            self.0.attachments.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -10502,6 +10571,17 @@ impl SseEncode for bool {
     }
 }
 
+impl SseEncode for crate::api::minos::ChatMessageAttachment {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.blob_id, serializer);
+        <String>::sse_encode(self.content_type, serializer);
+        <i64>::sse_encode(self.byte_size, serializer);
+        <String>::sse_encode(self.kind, serializer);
+        <Option<String>>::sse_encode(self.original_filename, serializer);
+    }
+}
+
 impl SseEncode for crate::api::minos::ChatMessageReplySummary {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -10526,6 +10606,7 @@ impl SseEncode for crate::api::minos::ChatMessageSummary {
         <Vec<String>>::sse_encode(self.mentioned_account_ids, serializer);
         <crate::api::minos::SenderType>::sse_encode(self.sender_type, serializer);
         <Vec<crate::api::minos::ReactionGroup>>::sse_encode(self.reactions, serializer);
+        <Vec<crate::api::minos::ChatMessageAttachment>>::sse_encode(self.attachments, serializer);
     }
 }
 
@@ -10923,6 +11004,16 @@ impl SseEncode for crate::api::minos::ListAgentsResponse {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<crate::api::minos::AgentSummary>>::sse_encode(self.agents, serializer);
+    }
+}
+
+impl SseEncode for Vec<crate::api::minos::ChatMessageAttachment> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::minos::ChatMessageAttachment>::sse_encode(item, serializer);
+        }
     }
 }
 
