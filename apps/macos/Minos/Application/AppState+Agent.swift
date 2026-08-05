@@ -93,7 +93,14 @@ extension AppState {
         AppLog.info("appState.agent", "sendUserMessage(ping) · sessionId=\(currentSession.sessionId)")
 
         do {
-            try await daemon.sendUserMessage(.init(sessionId: currentSession.sessionId, text: "ping"))
+            try await daemon.sendUserMessage(
+                .init(
+                    sessionId: currentSession.sessionId,
+                    text: "ping",
+                    originMessageId: nil,
+                    attachments: []
+                )
+            )
         } catch let error as MinosError {
             self.currentSession = nil
             agentState = .idle
