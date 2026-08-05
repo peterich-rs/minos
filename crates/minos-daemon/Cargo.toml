@@ -50,7 +50,7 @@ ed25519-dalek = { workspace = true }
 getrandom = { workspace = true }
 uniffi = { workspace = true, optional = true, features = ["tokio"] }
 clap = { version = "4", features = ["derive"] }
-reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+reqwest = { workspace = true }
 
 [dev-dependencies]
 minos-agent-runtime = { path = "../minos-agent-runtime", version = "0.1.0", features = ["test-support"] }

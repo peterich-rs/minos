@@ -483,7 +483,7 @@ pub async fn get_conversation(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, ConversationRow>(
-                "SELECT conversation_id, kind, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms
+                "SELECT conversation_id, kind::text, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms
                    FROM conversations
                   WHERE conversation_id = $1",
             )
@@ -559,7 +559,7 @@ pub async fn list_conversations_for(
             sqlx::query_as::<_, ConversationDigestRow>(
                 "SELECT
                     c.conversation_id,
-                    c.kind,
+                    c.kind::text,
                     c.title,
                     c.created_by_account_id,
                     c.direct_account_low,
@@ -969,7 +969,7 @@ pub(crate) async fn find_direct_conversation(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, ConversationRow>(
-                "SELECT conversation_id, kind, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms
+                "SELECT conversation_id, kind::text, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms
                    FROM conversations
                   WHERE kind = 'direct'
                     AND direct_account_low = $1

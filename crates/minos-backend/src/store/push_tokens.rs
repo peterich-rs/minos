@@ -125,7 +125,7 @@ async fn upsert_sqlite(
     at_ms: i64,
 ) -> Result<PushTokenRow, BackendError> {
     sqlx::query_as::<_, PushTokenRow>(
-        "INSERT INTO push_tokens (token_hash, account_id, installation_id, kind, locale, created_at_ms, last_used_at_ms)
+        "INSERT INTO push_tokens (token_hash, account_id, installation_id, kind::text, locale, created_at_ms, last_used_at_ms)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
          ON CONFLICT(token_hash) DO UPDATE SET
              installation_id = excluded.installation_id,
@@ -221,7 +221,7 @@ async fn upsert_postgres(
     at_ms: i64,
 ) -> Result<PushTokenRow, BackendError> {
     sqlx::query_as::<_, PushTokenRow>(
-        "INSERT INTO push_tokens (token_hash, account_id, installation_id, kind, locale, created_at_ms, last_used_at_ms)
+        "INSERT INTO push_tokens (token_hash, account_id, installation_id, kind::text, locale, created_at_ms, last_used_at_ms)
          VALUES ($1, $2, $3, $4, $5, $6, $6)
          ON CONFLICT(token_hash) DO UPDATE SET
              installation_id = EXCLUDED.installation_id,

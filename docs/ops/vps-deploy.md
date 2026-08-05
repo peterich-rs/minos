@@ -199,6 +199,21 @@ Suggested systemd timer: daily 03:15 UTC, retain 14 days (script already deletes
 
 Local dev defaults remain `127.0.0.1:8787`.
 
+### Supabase exchange (backend, not client-only)
+
+Clients authenticate with Supabase Auth, then call `POST /v1/auth/supabase` on the hub.
+The **backend** must have IdP verify config in `/opt/minos/deploy/.env` (and compose must pass it through — see `deploy/prod/docker-compose.yml`):
+
+| Variable | Required? | Notes |
+|----------|-----------|--------|
+| `SUPABASE_URL` | **Yes** for login | `https://<ref>.supabase.co` — enables JWKS verify |
+| `SUPABASE_JWT_AUD` | Recommended | Default `authenticated` |
+| `SUPABASE_JWT_SECRET` | Only if HS256 | Legacy shared secret; modern projects use JWKS and can omit this |
+
+If `SUPABASE_URL` is missing, exchange returns **503** with `error.code = supabase_not_configured` (register in Supabase can still succeed; Minos session never issues).
+
+For binary/systemd path, set the same keys in the unit environment (`deploy/dev-binary/env.example`).
+
 ---
 
 ## Firewall

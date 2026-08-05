@@ -53,7 +53,7 @@ pub async fn create(
         StorePoolRef::Postgres(pool) => {
             sqlx::query(
                 "INSERT INTO agent_turns
-                    (turn_id, agent_session_id, turn_seq, role, status, started_at_ms, finished_at_ms, summary_text, usage_json)
+                    (turn_id, agent_session_id, turn_seq, role::text, status::text, started_at_ms, finished_at_ms, summary_text, usage_json)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             )
             .bind(turn_id)
@@ -87,7 +87,7 @@ pub async fn get(
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, AgentTurnRow>(
-                "SELECT turn_id, agent_session_id, turn_seq, role, status, started_at_ms, finished_at_ms, summary_text, usage_json
+                "SELECT turn_id, agent_session_id, turn_seq, role::text, status::text, started_at_ms, finished_at_ms, summary_text, usage_json
                    FROM agent_turns
                   WHERE turn_id = ?",
             )
@@ -97,7 +97,7 @@ pub async fn get(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, AgentTurnRow>(
-                "SELECT turn_id, agent_session_id, turn_seq, role, status, started_at_ms, finished_at_ms, summary_text, usage_json
+                "SELECT turn_id, agent_session_id, turn_seq, role::text, status::text, started_at_ms, finished_at_ms, summary_text, usage_json
                    FROM agent_turns
                   WHERE turn_id = $1",
             )
@@ -160,7 +160,7 @@ pub async fn list_for_session(
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, AgentTurnRow>(
-                "SELECT turn_id, agent_session_id, turn_seq, role, status, started_at_ms, finished_at_ms, summary_text, usage_json
+                "SELECT turn_id, agent_session_id, turn_seq, role::text, status::text, started_at_ms, finished_at_ms, summary_text, usage_json
                    FROM agent_turns
                   WHERE agent_session_id = ?1
                     AND (?2 IS NULL OR turn_seq > ?2)
@@ -175,7 +175,7 @@ pub async fn list_for_session(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, AgentTurnRow>(
-                "SELECT turn_id, agent_session_id, turn_seq, role, status, started_at_ms, finished_at_ms, summary_text, usage_json
+                "SELECT turn_id, agent_session_id, turn_seq, role::text, status::text, started_at_ms, finished_at_ms, summary_text, usage_json
                    FROM agent_turns
                   WHERE agent_session_id = $1
                     AND ($2::BIGINT IS NULL OR turn_seq > $2)

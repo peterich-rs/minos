@@ -173,8 +173,9 @@ pub async fn get(
             .fetch_optional(pool)
             .await,
             StorePoolRef::Postgres(pool) => sqlx::query_as::<_, OutboxEventRowTuple>(
-                "SELECT outbox_id, topic_kind, event_id, lane, status, available_at_ms, attempts,
-                        claimed_by, claimed_at_ms, ack_at_ms, dead_at_ms, last_error_json::text
+                "SELECT outbox_id, topic_kind, event_id, lane, status::text, available_at_ms,
+                        attempts::bigint, claimed_by, claimed_at_ms, ack_at_ms, dead_at_ms,
+                        last_error_json::text
                    FROM outbox_events
                   WHERE outbox_id = $1",
             )
@@ -302,9 +303,9 @@ async fn claim_available_postgres(
                 o.topic_kind,
                 o.event_id,
                 o.lane,
-                o.status,
+                o.status::text,
                 o.available_at_ms,
-                o.attempts,
+                o.attempts::bigint,
                 o.claimed_by,
                 o.claimed_at_ms,
                 o.ack_at_ms,

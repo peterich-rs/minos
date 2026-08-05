@@ -108,10 +108,13 @@ where
             .await
         }
         StorePoolRef::Postgres(pool) => {
+            // Postgres migration uses *_ms columns; alias to the shared row shape.
             sqlx::query_as::<_, RefreshTokenRow>(
-                "SELECT token_hash, account_id, installation_id AS device_id, issued_at, expires_at, revoked_at
+                "SELECT token_hash, account_id, installation_id AS device_id,
+                        issued_at_ms AS issued_at, expires_at_ms AS expires_at,
+                        revoked_at_ms AS revoked_at
                    FROM refresh_tokens
-                   WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > $2",
+                   WHERE token_hash = $1 AND revoked_at_ms IS NULL AND expires_at_ms > $2",
             )
             .bind(&hash)
             .bind(now)
@@ -147,7 +150,9 @@ where
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, RefreshTokenRow>(
-                "SELECT token_hash, account_id, installation_id AS device_id, issued_at, expires_at, revoked_at
+                "SELECT token_hash, account_id, installation_id AS device_id,
+                        issued_at_ms AS issued_at, expires_at_ms AS expires_at,
+                        revoked_at_ms AS revoked_at
                    FROM refresh_tokens
                    WHERE token_hash = $1",
             )
@@ -182,7 +187,7 @@ where
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query(
-                "UPDATE refresh_tokens SET revoked_at = $1 WHERE token_hash = $2 AND revoked_at IS NULL",
+                "UPDATE refresh_tokens SET revoked_at_ms = $1 WHERE token_hash = $2 AND revoked_at_ms IS NULL",
             )
             .bind(now)
             .bind(&hash)
@@ -247,7 +252,7 @@ pub async fn revoke_all_for_account(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query(
-                "UPDATE refresh_tokens SET revoked_at = $1 WHERE account_id = $2 AND revoked_at IS NULL",
+                "UPDATE refresh_tokens SET revoked_at_ms = $1 WHERE account_id = $2 AND revoked_at_ms IS NULL",
             )
             .bind(now)
             .bind(account_id)
@@ -283,7 +288,7 @@ pub async fn revoke_all_for_device(
         .await
         .map(|result| result.rows_affected()),
         StorePoolRef::Postgres(pool) => sqlx::query(
-            "UPDATE refresh_tokens SET revoked_at = $1 WHERE installation_id = $2 AND revoked_at IS NULL",
+            "UPDATE refresh_tokens SET revoked_at_ms = $1 WHERE installation_id = $2 AND revoked_at_ms IS NULL",
         )
         .bind(now)
         .bind(device_id)
@@ -309,7 +314,7 @@ pub async fn gc_expired(store: &impl AsStorePool, now_ms: i64) -> Result<u64, Ba
         .await
         .map(|result| result.rows_affected()),
         StorePoolRef::Postgres(pool) => sqlx::query(
-            "DELETE FROM refresh_tokens WHERE expires_at <= $1 OR revoked_at IS NOT NULL",
+            "DELETE FROM refresh_tokens WHERE expires_at_ms <= $1 OR revoked_at_ms IS NOT NULL",
         )
         .bind(now_ms)
         .execute(pool)
@@ -340,7 +345,7 @@ async fn insert_sqlite(pool: &SqlitePool, row: &RefreshTokenRow) -> Result<(), s
 
 async fn insert_postgres(pool: &PgPool, row: &RefreshTokenRow) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO refresh_tokens (token_hash, account_id, installation_id, issued_at, expires_at)
+        "INSERT INTO refresh_tokens (token_hash, account_id, installation_id, issued_at_ms, expires_at_ms)
            VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(&row.token_hash)
@@ -430,7 +435,7 @@ async fn rotate_postgres(
     })?;
 
     let result = sqlx::query(
-        "UPDATE refresh_tokens SET revoked_at = $1 WHERE token_hash = $2 AND revoked_at IS NULL",
+        "UPDATE refresh_tokens SET revoked_at_ms = $1 WHERE token_hash = $2 AND revoked_at_ms IS NULL",
     )
     .bind(now)
     .bind(old_hash)
@@ -449,7 +454,7 @@ async fn rotate_postgres(
     let new_hash = hash_plaintext(new_plaintext);
     let expires_at = now + REFRESH_TTL_MS;
     sqlx::query(
-        "INSERT INTO refresh_tokens (token_hash, account_id, installation_id, issued_at, expires_at)
+        "INSERT INTO refresh_tokens (token_hash, account_id, installation_id, issued_at_ms, expires_at_ms)
            VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(&new_hash)

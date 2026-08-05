@@ -38,7 +38,8 @@ base64 = "0.22"
 ed25519-dalek = "2"
 
 # http / rpc (client)
-reqwest = { version = "0.12", features = ["json", "stream"] }
+# rustls only — avoids openssl-sys so macOS → linux zig/cross builds work.
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 
 # url / time
 url = "2"
