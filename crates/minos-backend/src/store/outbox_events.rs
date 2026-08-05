@@ -172,16 +172,18 @@ pub async fn get(
             .bind(outbox_id)
             .fetch_optional(pool)
             .await,
-            StorePoolRef::Postgres(pool) => sqlx::query_as::<_, OutboxEventRowTuple>(
-                "SELECT outbox_id, topic_kind, event_id, lane, status::text, available_at_ms,
+            StorePoolRef::Postgres(pool) => {
+                sqlx::query_as::<_, OutboxEventRowTuple>(
+                    "SELECT outbox_id, topic_kind, event_id, lane, status::text, available_at_ms,
                         attempts::bigint, claimed_by, claimed_at_ms, ack_at_ms, dead_at_ms,
                         last_error_json::text
                    FROM outbox_events
                   WHERE outbox_id = $1",
-            )
-            .bind(outbox_id)
-            .fetch_optional(pool)
-            .await,
+                )
+                .bind(outbox_id)
+                .fetch_optional(pool)
+                .await
+            }
         }
         .map_err(store_err("outbox_events::get"))?;
 
