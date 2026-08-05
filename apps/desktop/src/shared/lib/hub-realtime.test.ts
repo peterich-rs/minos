@@ -79,7 +79,7 @@ describe("hub-realtime conversation subscription LRU (R4)", () => {
     const { conversationSubscriptionLruTouch } = await import(
       "./conversation-sub-lru.ts"
     );
-    let ordered = ["a", "b", "c"];
+    const ordered = ["a", "b", "c"];
     const r = conversationSubscriptionLruTouch(ordered, "a", 3);
     assert.deepEqual(r.next, ["b", "c", "a"]);
     assert.deepEqual(r.evicted, []);

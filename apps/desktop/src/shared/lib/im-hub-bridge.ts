@@ -307,7 +307,7 @@ function patchRailFromDigest(input: {
             updatedAtMs: lastAt,
             unread: unread > 0 ? unread : undefined,
             messageCount: 0,
-            boardColumn: "todo" as const,
+            boardColumn: "backlog" as const,
             agentSessionCount: 0,
             participatingAgents: [],
             runningCount: 0,

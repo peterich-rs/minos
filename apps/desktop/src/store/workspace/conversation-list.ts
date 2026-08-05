@@ -4,6 +4,7 @@
  * Hub IM mode: daemon list(project) ∥ HubDigestCache (single account hydrate);
  * merge via conversation-list-merge. Never re-fetch Hub per project.
  */
+import type { Conversation } from "@/shared/lib/mock-data";
 import type { WorkspaceGet, WorkspaceSet, WorkspaceState } from "./types";
 import {
   bumpStatus,
@@ -99,7 +100,7 @@ export function createConversationListActions(
               }
             }
 
-            let list;
+            let list: Conversation[];
             if (hubMode) {
               // P1: Hub digest is unread SSOT. Do not seed rail unread from
               // readMessageCountById (local baseline is daemon-only fallback).

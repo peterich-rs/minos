@@ -17,10 +17,7 @@ import {
   saveTopicCursors,
   type TopicCursorMap,
 } from "@/shared/lib/hub-cursors";
-import {
-  MAX_OPEN_CONVERSATION_SUBSCRIPTIONS,
-  conversationSubscriptionLruTouch,
-} from "@/shared/lib/conversation-sub-lru";
+import { conversationSubscriptionLruTouch } from "@/shared/lib/conversation-sub-lru";
 import {
   createWsTicket,
   hubClientWsUrl,
