@@ -302,10 +302,22 @@ export function FriendsWorkspace() {
         prev.map((c) => {
           if (c.conversation_id !== event.conversation_id) return c
           const fromMe = event.message.sender.account_id === activeSession.accountId
-          const inc = !isActive && !alreadyLoaded && !event.message.recalled_at_ms && !fromMe
+          const isRecall = Boolean(event.message.recalled_at_ms)
+          const inc =
+            !isActive && !alreadyLoaded && !isRecall && !fromMe
+          // Monotonic list clock: recall/stale frames must not regress last activity.
+          const incomingAt =
+            typeof event.message.created_at_ms === 'number' &&
+            event.message.created_at_ms > 0
+              ? event.message.created_at_ms
+              : 0
+          const lastAt =
+            incomingAt > 0
+              ? Math.max(c.last_message_at_ms ?? 0, incomingAt)
+              : (c.last_message_at_ms ?? 0)
           return {
             ...c,
-            last_message_at_ms: event.message.created_at_ms,
+            last_message_at_ms: lastAt,
             last_message_preview: previewForMessage(event.message),
             unread_count: inc ? c.unread_count + 1 : isActive ? 0 : c.unread_count,
             unread_mention_count:
@@ -435,7 +447,10 @@ export function FriendsWorkspace() {
             c.conversation_id === selectedConversationId
               ? {
                   ...c,
-                  last_message_at_ms: next.created_at_ms,
+                  last_message_at_ms: Math.max(
+                    c.last_message_at_ms ?? 0,
+                    next.created_at_ms > 0 ? next.created_at_ms : 0,
+                  ),
                   last_message_preview: previewForMessage(next),
                 }
               : c,

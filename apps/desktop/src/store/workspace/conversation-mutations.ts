@@ -66,7 +66,6 @@ export function createConversationMutationActions(
           projectId,
           title,
           preview: "No messages yet",
-          updatedAt: "now",
           updatedAtMs: Date.now(),
           messageCount: 0,
           boardColumn: "backlog",

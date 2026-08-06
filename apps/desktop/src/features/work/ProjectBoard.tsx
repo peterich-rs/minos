@@ -9,6 +9,7 @@ import { PriorityTag, ProgressTag } from "@/shared/ui/Tag";
 import { useUiStore } from "@/store/ui-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { cn } from "@/shared/lib/utils";
+import { formatListActivityTime } from "@/shared/lib/time";
 
 /** Board uses conversation.progress as the single source of truth (no local overrides). */
 export function ProjectBoard({ projectId }: { projectId: string }) {
@@ -108,7 +109,7 @@ function BoardCard({
             <ProgressTag progress={card.progress} size="sm" />
           ) : null}
           <span className="ml-auto text-3xs text-ink-muted">
-            {card.updatedAt}
+            {formatListActivityTime(card.updatedAtMs)}
           </span>
         </div>
       </button>

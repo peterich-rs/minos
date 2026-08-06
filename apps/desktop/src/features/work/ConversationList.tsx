@@ -25,6 +25,7 @@ import {
 import { useUiStore } from "@/store/ui-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { cn } from "@/shared/lib/utils";
+import { formatListActivityTime } from "@/shared/lib/time";
 
 /**
  * Project-scoped conversation list.
@@ -70,8 +71,8 @@ export function ConversationList({
       const aMs = a.updatedAtMs ?? 0;
       const bMs = b.updatedAtMs ?? 0;
       return sortByAttentionThenTime(
-        { hasUnread: aAttn > 0, lastAttentionMs: aMs, updatedAtMs: aMs },
-        { hasUnread: bAttn > 0, lastAttentionMs: bMs, updatedAtMs: bMs },
+        { hasUnread: aAttn > 0, updatedAtMs: aMs },
+        { hasUnread: bAttn > 0, updatedAtMs: bMs },
       );
     });
     return { items: filtered, projectCount: inProject.length };
@@ -257,7 +258,7 @@ const ConversationRow = memo(function ConversationRow({
       onSelect={() => onSelect(item.id)}
       titleTrailing={
         <span className="shrink-0 text-2xs tabular-nums text-ink-muted">
-          {item.updatedAt}
+          {formatListActivityTime(item.updatedAtMs)}
         </span>
       }
       meta={

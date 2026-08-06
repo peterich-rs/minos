@@ -23,7 +23,42 @@ import {
 } from "./shared";
 import { syncUserMessageToCloud } from "@/shared/lib/im-cloud-sync";
 import { isHubImMode } from "@/shared/lib/hub-timeline";
+import { formatLocalClock } from "@/shared/lib/time";
+import { hubDigestCache } from "@/shared/lib/hub-digest-cache";
+import { positiveMs } from "@/shared/lib/rail-activity";
 import { useAccountStore } from "@/store/account-store";
+
+/** Preview + last-activity bump for the conversation rail (local-first). */
+function patchRailActivity(
+  set: WorkspaceSet,
+  conversationId: string,
+  preview: string,
+  atMs: number,
+): void {
+  const id = conversationId.trim();
+  if (!id) return;
+  const text = preview.trim() || "No messages yet";
+  const clamped = positiveMs(atMs);
+  if (!clamped) return;
+  hubDigestCache.patchOne(id, {
+    preview: text,
+    lastMessageAtMs: Math.max(
+      clamped,
+      positiveMs(hubDigestCache.get(id)?.lastMessageAtMs),
+    ),
+  });
+  set((s) => ({
+    conversations: s.conversations.map((c) =>
+      c.id === id
+        ? {
+            ...c,
+            preview: text,
+            updatedAtMs: Math.max(positiveMs(c.updatedAtMs), clamped),
+          }
+        : c,
+    ),
+  }));
+}
 /** True when Minos account is signed in (multi-end Hub projection available). */
 function hubAuthenticated(): boolean {
   const { session, authPhase } = useAccountStore.getState();
@@ -252,17 +287,20 @@ export function createUseCasesActions(
     // bubble immediately (WeChat: empty composer + sending row).
     const resolvedId = messageId ?? `msg_${crypto.randomUUID()}`;
     const replyToMessageId = options?.replyToMessageId;
+    const createdAtMs = Date.now();
+    const clock = formatLocalClock(createdAtMs);
     const optimistic: TimelineMessage = {
       id: resolvedId,
       role: "user",
       body: messageBody,
-      time: "now",
-      createdAtMs: Date.now(),
+      time: clock,
+      createdAtMs,
       deliveryStatus: "sending",
       // Wave 2: local reply attachment on optimistic UI. Daemon append does not
       // yet accept reply_to — durable round-trip deferred to protocol wave.
       ...(replyToMessageId ? { replyToMessageId } : {}),
     };
+    // Optimistic timeline + rail (do not wait for Hub digest / list re-merge).
     set((s) => ({
       messagesByConversation: {
         ...s.messagesByConversation,
@@ -273,6 +311,11 @@ export function createUseCasesActions(
       },
       error: null,
     }));
+    const railPreview =
+      messageBody.trim().length > 88
+        ? `${messageBody.trim().slice(0, 88)}…`
+        : messageBody.trim();
+    patchRailActivity(set, conversationId, railPreview, createdAtMs);
 
     const patchDelivery = (
       status: DeliveryStatus,
@@ -290,6 +333,7 @@ export function createUseCasesActions(
                     deliveryStatus: status,
                     messageSeq: seq ?? m.messageSeq,
                     time: time ?? m.time,
+                    createdAtMs: m.createdAtMs ?? createdAtMs,
                   }
                 : m,
           ),
@@ -299,7 +343,7 @@ export function createUseCasesActions(
 
     // Mock backend has no RPC: flip to sent synchronously.
     if (get().source !== "daemon") {
-      patchDelivery("sent");
+      patchDelivery("sent", undefined, clock);
       return;
     }
 
@@ -374,7 +418,9 @@ export function createUseCasesActions(
         messageBody,
         resolvedId,
       );
-      patchDelivery("sent", messageSeq);
+      patchDelivery("sent", messageSeq, clock);
+      // Keep rail clock in sync even if Hub digest still lags.
+      patchRailActivity(set, conversationId, railPreview, createdAtMs);
       // Multi-end visibility: project user bubble with host_projection so Hub
       // does not re-dispatch (this machine already owns execution).
       if (accountOn) {
@@ -384,7 +430,7 @@ export function createUseCasesActions(
           text: messageBody,
           title: convTitle,
           replyToMessageId,
-          createdAtMs: Date.now(),
+          createdAtMs,
           agentRuntimes,
           messageSource: "host_projection",
         });
@@ -580,14 +626,33 @@ export function createUseCasesActions(
         messageBody,
         messageId,
       );
+      const retryAt = failed.createdAtMs ?? Date.now();
+      const retryClock = formatLocalClock(retryAt) || formatLocalClock(Date.now());
       patchDelivery("sent", messageSeq);
+      // Ensure bubble shows a real local clock (legacy rows may still say "now").
+      set((s) => ({
+        messagesByConversation: {
+          ...s.messagesByConversation,
+          [conversationId]: (s.messagesByConversation[conversationId] ?? []).map(
+            (m) =>
+              m.id === messageId
+                ? { ...m, time: retryClock, createdAtMs: retryAt }
+                : m,
+          ),
+        },
+      }));
+      const railPreview =
+        messageBody.trim().length > 88
+          ? `${messageBody.trim().slice(0, 88)}…`
+          : messageBody.trim();
+      patchRailActivity(set, conversationId, railPreview, retryAt);
       if (hubAuthenticated()) {
         void syncUserMessageToCloud({
           conversationId,
           messageId,
           text: messageBody,
           title: conv.title,
-          createdAtMs: failed.createdAtMs ?? Date.now(),
+          createdAtMs: retryAt,
           agentRuntimes: conv.participatingAgents,
           messageSource: "host_projection",
         });

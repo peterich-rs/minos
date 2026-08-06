@@ -188,11 +188,18 @@ function mapAccountDigest(
   const preview = isRecall
     ? (payload.preview?.trim() || "Message recalled")
     : (payload.preview?.trim() ?? "");
+  // 0 = omit activity bump (never invent client Date.now()).
+  const atMs =
+    typeof payload.at_ms === "number" &&
+    Number.isFinite(payload.at_ms) &&
+    payload.at_ms > 0
+      ? payload.at_ms
+      : 0;
   return {
     conversationId,
     messageId,
     preview,
-    atMs: payload.at_ms ?? Date.now(),
+    atMs,
     senderAccountId,
     senderDisplayName: payload.sender_display_name?.trim() || "",
     mentioned: Boolean(payload.mentioned),
@@ -644,17 +651,24 @@ export class HubRealtimeSession {
         }
         if (payload.message_id && payload.conversation_id) {
           // Minimal recall payload without full message body.
+          // at_ms is recall event time; 0 when absent (rail keeps prev clock).
+          const atMs =
+            typeof payload.at_ms === "number" &&
+            Number.isFinite(payload.at_ms) &&
+            payload.at_ms > 0
+              ? payload.at_ms
+              : 0;
           this.handlers.onChatMessageRecalled?.({
             messageId: payload.message_id,
             conversationId: payload.conversation_id,
             text: "",
-            createdAtMs: payload.at_ms ?? 0,
+            createdAtMs: atMs,
             senderType: "user",
             senderAccountId: "",
             senderMinosId: "",
             senderDisplayName: "",
             replyToMessageId: null,
-            recalledAtMs: payload.at_ms ?? Date.now(),
+            recalledAtMs: atMs > 0 ? atMs : null,
           });
           return true;
         }

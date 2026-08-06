@@ -20,6 +20,7 @@ import { MessageAuthorText, MessageHeaderRow } from "./MessageHeader";
 import { MessageTimestamp } from "./MessageTimestamp";
 import { useReactionStore } from "./reaction-store";
 import { GitActivityCard } from "./GitActivityCard";
+import { formatLocalClock, formatLocalDateTime } from "@/shared/lib/time";
 
 /**
  * Slack/Buzz-style message row: full-width, left-aligned for every author.
@@ -86,6 +87,14 @@ export const MessageRow = memo(function MessageRow({
   const authorLabel = isUser ? "You" : agentLabel;
   const avatarTone = isUser ? "slate" : (agent?.tone ?? "slate");
 
+  // Always format from epoch ms in local TZ — never trust wire `time` alone.
+  const displayTime =
+    formatLocalClock(message.createdAtMs ?? 0) || message.time || "";
+  const fullTitle =
+    message.createdAtMs && message.createdAtMs > 0
+      ? formatLocalDateTime(message.createdAtMs)
+      : undefined;
+
   if (message.kind === "tool_summary") {
     return (
       <div
@@ -96,7 +105,7 @@ export const MessageRow = memo(function MessageRow({
       >
         <Wrench className="h-3.5 w-3.5 shrink-0 text-ink-muted" />
         <span className="min-w-0 flex-1 truncate">{message.body}</span>
-        <span className="shrink-0 text-ink-muted">{message.time}</span>
+        <MessageTimestamp time={displayTime} title={fullTitle} />
       </div>
     );
   }
@@ -109,16 +118,15 @@ export const MessageRow = memo(function MessageRow({
           animateIn && "animate-message-in motion-reduce:animate-none",
         )}
       >
-        <GitActivityCard activity={message.gitActivity} time={message.time} />
+        <GitActivityCard
+          activity={message.gitActivity}
+          time={displayTime}
+        />
       </div>
     );
   }
 
   const isContinuation = groupedWithPrevious;
-  const fullTitle =
-    message.createdAtMs && message.createdAtMs > 0
-      ? new Date(message.createdAtMs).toLocaleString()
-      : undefined;
 
   const avatarGutter = isContinuation ? (
     <div
@@ -126,7 +134,7 @@ export const MessageRow = memo(function MessageRow({
       className="flex w-9 shrink-0 items-start justify-end self-stretch pt-0.5"
     >
       <MessageTimestamp
-        time={message.time}
+        time={displayTime}
         title={fullTitle}
         className="opacity-0 transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100"
       />
@@ -160,7 +168,7 @@ export const MessageRow = memo(function MessageRow({
       ) : (
         <MessageAuthorText as="h3">{authorLabel}</MessageAuthorText>
       )}
-      <MessageTimestamp time={message.time} title={fullTitle} />
+      <MessageTimestamp time={displayTime} title={fullTitle} />
       {isSending ? (
         <span className="text-2xs font-medium uppercase tracking-wide text-ink-muted/80">
           Sending

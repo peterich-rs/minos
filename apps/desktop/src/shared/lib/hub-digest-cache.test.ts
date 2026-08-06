@@ -3,6 +3,8 @@ import { describe, it, beforeEach } from "node:test";
 import { hubDigestCache } from "./hub-digest-cache.ts";
 import {
   mergeConversationList,
+  resolveLastActivityMs,
+  resolveListPreview,
   resolveRailUnread,
 } from "./conversation-list-merge.ts";
 
@@ -116,8 +118,59 @@ describe("resolveRailUnread (P1 single-track)", () => {
   });
 });
 
+describe("resolveLastActivityMs / resolveListPreview", () => {
+  it("takes max of hub and daemon for last activity", () => {
+    assert.equal(resolveLastActivityMs(100, 50), 100);
+    assert.equal(resolveLastActivityMs(50, 200), 200);
+    assert.equal(resolveLastActivityMs(0, 0), 0);
+    assert.equal(resolveLastActivityMs(undefined, 40), 40);
+  });
+
+  it("uses daemon preview when local activity is newer", () => {
+    assert.equal(
+      resolveListPreview({
+        hub: {
+          conversationId: "c1",
+          title: "Hub",
+          preview: "hub preview",
+          lastMessageAtMs: 50,
+          unreadCount: 0,
+          unreadMentionCount: 0,
+          kind: "group",
+          memberCount: 1,
+        },
+        daemonPreview: "local preview",
+        hubLastMessageAtMs: 50,
+        daemonUpdatedAtMs: 200,
+      }),
+      "local preview",
+    );
+  });
+
+  it("uses hub preview when hub is newer or tied", () => {
+    assert.equal(
+      resolveListPreview({
+        hub: {
+          conversationId: "c1",
+          title: "Hub",
+          preview: "hub preview",
+          lastMessageAtMs: 200,
+          unreadCount: 0,
+          unreadMentionCount: 0,
+          kind: "group",
+          memberCount: 1,
+        },
+        daemonPreview: "local preview",
+        hubLastMessageAtMs: 200,
+        daemonUpdatedAtMs: 100,
+      }),
+      "hub preview",
+    );
+  });
+});
+
 describe("mergeConversationList", () => {
-  it("prefers Hub title/preview/unread and keeps daemon host fields", () => {
+  it("prefers Hub title/unread; last activity is max(hub, daemon)", () => {
     const merged = mergeConversationList({
       projectId: "p1",
       unreadSource: "hub",
@@ -151,9 +204,41 @@ describe("mergeConversationList", () => {
     assert.equal(merged.length, 1);
     assert.equal(merged[0].title, "Hub title");
     assert.equal(merged[0].preview, "hub preview");
+    assert.equal(merged[0].updatedAtMs, 100);
     assert.equal(merged[0].unread, 2);
     assert.deepEqual(merged[0].participatingAgents, ["codex"]);
     assert.equal(merged[0].runningCount, 1);
+  });
+
+  it("does not pin list time to a stale Hub digest when daemon is newer", () => {
+    const merged = mergeConversationList({
+      projectId: "p1",
+      unreadSource: "hub",
+      daemonRows: [
+        {
+          id: "c1",
+          projectId: "p1",
+          title: "Local",
+          preview: "just sent",
+          updatedAtMs: 5000,
+        },
+      ],
+      hubDigests: [
+        {
+          conversationId: "c1",
+          title: "Hub title",
+          preview: "old hub",
+          lastMessageAtMs: 100,
+          unreadCount: 0,
+          unreadMentionCount: 0,
+          kind: "group",
+          memberCount: 1,
+        },
+      ],
+    });
+    assert.equal(merged[0].updatedAtMs, 5000);
+    assert.equal(merged[0].preview, "just sent");
+    assert.equal(merged[0].title, "Hub title");
   });
 
   it("hub mode does not fall back to local unread when digest missing", () => {

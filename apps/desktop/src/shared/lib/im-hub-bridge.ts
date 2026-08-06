@@ -35,7 +35,11 @@ import {
 } from "@/shared/lib/message-history";
 import { hubDigestCache } from "@/shared/lib/hub-digest-cache";
 import { ensureHubDigestHydrated } from "@/shared/lib/hub-digest-ensure";
-import { formatRelative } from "@/shared/lib/time";
+import {
+  positiveMs,
+  railActivityFromTimeline,
+  resolveDigestLastActivityMs,
+} from "@/shared/lib/rail-activity";
 import { useAccountStore } from "@/store/account-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import type { HubChatMessage } from "@/shared/lib/minos-cloud";
@@ -242,7 +246,8 @@ function patchRailFromHubMessage(
     preview: opts.isRecall
       ? "Message recalled"
       : message.text?.trim() || null,
-    lastAt: message.createdAtMs || Date.now(),
+    // Never forge client now — 0 means "unknown / omit bump".
+    lastAt: positiveMs(message.createdAtMs),
     senderAccountId: message.senderAccountId,
     isRecall: opts.isRecall,
   });
@@ -252,6 +257,11 @@ function patchRailFromHubMessage(
  * R3: account-topic thin digest → rail/inbox only (no timeline body).
  * Conversation full frames still call {@link patchRailFromHubMessage}.
  * Unread is messageId-deduped so T1 + T2 never double-count the same bubble.
+ *
+ * lastMessageAtMs rules:
+ * - Append: monotonic max(frame, previous); no Date.now() invent.
+ * - Recall: recompute from open timeline after drop; never apply recalled
+ *   message createdAtMs (would regress list clock when recalling an old row).
  */
 function patchRailFromDigest(input: {
   conversationId: string;
@@ -263,12 +273,36 @@ function patchRailFromDigest(input: {
 }): void {
   const conversationId = input.conversationId?.trim();
   if (!conversationId) return;
-  const focused =
-    useWorkspaceStore.getState().focusedConversationId === conversationId;
+  const ws = useWorkspaceStore.getState();
+  const focused = ws.focusedConversationId === conversationId;
   const prevDigest = hubDigestCache.get(conversationId);
-  const preview =
-    input.preview?.trim() || prevDigest?.preview || null;
-  const lastAt = input.lastAt || prevDigest?.lastMessageAtMs || Date.now();
+  const timeline = Object.prototype.hasOwnProperty.call(
+    ws.messagesByConversation,
+    conversationId,
+  )
+    ? ws.messagesByConversation[conversationId]
+    : undefined;
+
+  const prevLast = positiveMs(prevDigest?.lastMessageAtMs);
+  const resolvedLastAt = resolveDigestLastActivityMs({
+    isRecall: input.isRecall,
+    incomingLastAtMs: positiveMs(input.lastAt),
+    previousLastMessageAtMs: prevLast,
+    timeline,
+  });
+
+  let preview: string | null;
+  if (input.isRecall) {
+    const fromWindow = railActivityFromTimeline(timeline);
+    preview =
+      fromWindow?.preview ??
+      input.preview?.trim() ??
+      prevDigest?.preview ??
+      "Message recalled";
+  } else {
+    preview = input.preview?.trim() || prevDigest?.preview || null;
+  }
+
   const myAccountId =
     useAccountStore.getState().session?.accountId?.trim() ?? "";
   const isOwn =
@@ -287,7 +321,7 @@ function patchRailFromDigest(input: {
   }
   hubDigestCache.patchOne(conversationId, {
     preview,
-    lastMessageAtMs: lastAt,
+    lastMessageAtMs: resolvedLastAt,
     unreadCount: unread,
     title: prevDigest?.title,
   });
@@ -303,8 +337,7 @@ function patchRailFromDigest(input: {
             projectId: "",
             title: prevDigest?.title || "Conversation",
             preview: preview || "No messages yet",
-            updatedAt: formatRelative(lastAt),
-            updatedAtMs: lastAt,
+            updatedAtMs: resolvedLastAt,
             unread: unread > 0 ? unread : undefined,
             messageCount: 0,
             boardColumn: "backlog" as const,
@@ -319,11 +352,14 @@ function patchRailFromDigest(input: {
     }
     const next = [...s.conversations];
     const row = next[idx];
+    // Recall may lower the clock (latest bubble gone); append is monotonic.
+    const railMs = input.isRecall
+      ? resolvedLastAt || positiveMs(row.updatedAtMs)
+      : Math.max(positiveMs(row.updatedAtMs), resolvedLastAt);
     next[idx] = {
       ...row,
       preview: preview || row.preview,
-      updatedAt: formatRelative(lastAt),
-      updatedAtMs: lastAt,
+      updatedAtMs: railMs,
       unread: unread > 0 ? unread : undefined,
     };
     return { conversations: next };
@@ -348,7 +384,8 @@ function onAccountInboxDigest(digest: {
     conversationId,
     messageId: digest.messageId,
     preview: digest.preview,
-    lastAt: digest.atMs,
+    // Account thin digest: at_ms is server activity time (0 = omit bump).
+    lastAt: positiveMs(digest.atMs),
     senderAccountId: digest.senderAccountId,
     isRecall: digest.isRecall,
   });

@@ -19,7 +19,7 @@ import {
   parsePriority,
   parseProgress,
 } from "@/shared/lib/conversation-meta";
-import { formatLocalClock, formatRelative } from "@/shared/lib/time";
+import { formatLocalClock } from "@/shared/lib/time";
 import type {
   ProjectSession,
   ResourceFetchPhase,
@@ -150,10 +150,7 @@ export function toUiConversation(
     projectId: row.projectId,
     title: row.title,
     preview: row.preview || "No messages yet",
-    // Prefer local relative formatting from ms (Rust string may be UTC-ish).
-    updatedAt: row.updatedAtMs
-      ? formatRelative(row.updatedAtMs)
-      : row.updatedAt,
+    // Epoch ms only — ConversationList formats at render (local TZ).
     updatedAtMs: row.updatedAtMs ?? 0,
     messageCount: row.messageCount,
     unread: unread > 0 ? unread : undefined,
@@ -208,8 +205,8 @@ export function toUiMessage(m: DaemonMessage): TimelineMessage {
     agent: (m.agent as AgentRuntime | null) ?? undefined,
     sessionId: m.sessionId ?? undefined,
     body: m.body,
-    // Format in the browser with the user's local timezone.
-    time: m.createdAtMs ? formatLocalClock(m.createdAtMs) : m.time,
+    // Local TZ from epoch ms; never trust UTC-only wire `time` from daemon.
+    time: formatLocalClock(m.createdAtMs) || m.time || "",
     createdAtMs: m.createdAtMs,
     kind: timelineKindForMessage(m.kind, gitActivity),
     replyToMessageId: m.replyToMessageId ?? undefined,

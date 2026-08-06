@@ -10,17 +10,24 @@
  *   patch. Never use local `readMessageCountById` baseline dual-track.
  * - `unreadSource: "local"` (daemon-only / unauthenticated): row.unread from
  *   local baseline is authoritative.
+ *
+ * Last activity time:
+ * - `updatedAtMs = max(hub.lastMessageAtMs, daemon.updatedAtMs)` so local
+ *   host_projection lag cannot pin the rail to a stale Hub digest.
+ * - preview follows the newer of the two sources (not Hub-only when lagging).
+ * - Display strings are **not** stored; UI formats `updatedAtMs` at render.
  */
 
 import type { Conversation } from "./mock-data.ts";
 import type { HubConversationDigest } from "./hub-digest-cache.ts";
-import { formatRelative } from "./time.ts";
+import { positiveMs } from "./rail-activity.ts";
 
 export type DaemonListRow = {
   id: string;
   projectId: string;
   title: string;
   preview?: string;
+  /** @deprecated Wire fallback only; prefer updatedAtMs. */
   updatedAt?: string;
   updatedAtMs?: number;
   messageCount?: number;
@@ -44,6 +51,44 @@ export type UnreadSource = "hub" | "local";
 
 function hubPreview(d: HubConversationDigest): string {
   return d.preview?.trim() || "No messages yet";
+}
+
+/**
+ * Last-activity ms: newer of Hub digest and local daemon row.
+ * Either side may lag (Hub outbox vs local-only tool noise); max is correct
+ * for sort + list clock.
+ */
+export function resolveLastActivityMs(
+  hubLastMessageAtMs: number | null | undefined,
+  daemonUpdatedAtMs: number | null | undefined,
+): number {
+  return Math.max(
+    positiveMs(hubLastMessageAtMs),
+    positiveMs(daemonUpdatedAtMs),
+  );
+}
+
+/**
+ * Preview text for the newer activity source. When timestamps tie, Hub wins
+ * (multi-end rename/preview SSOT). When daemon is strictly newer, use local
+ * preview so host_projection lag does not freeze the rail.
+ */
+export function resolveListPreview(input: {
+  hub?: HubConversationDigest | null;
+  daemonPreview?: string | null;
+  hubLastMessageAtMs?: number | null;
+  daemonUpdatedAtMs?: number | null;
+}): string {
+  const hubMs = positiveMs(input.hubLastMessageAtMs);
+  const daemonMs = positiveMs(input.daemonUpdatedAtMs);
+  const hub = input.hub;
+  if (hub && hubMs >= daemonMs) {
+    return hubPreview(hub);
+  }
+  const local = input.daemonPreview?.trim();
+  if (local) return local;
+  if (hub) return hubPreview(hub);
+  return "No messages yet";
 }
 
 /**
@@ -72,7 +117,8 @@ export function resolveRailUnread(input: {
 
 /**
  * Merge daemon rows (project-scoped) with account-scoped Hub digests.
- * - title, preview, lastMessageAt → Hub preferred when present
+ * - title → Hub preferred when present
+ * - preview / last activity → newer of Hub vs daemon (see resolve*)
  * - unread → see `unreadSource` (P1)
  * - projectId, agents, git, priority, progress, running, approval → daemon
  * - Hub-only ids (no daemon row) still appear with omit/default host fields
@@ -112,7 +158,10 @@ export function mergeConversationList(input: {
     if (!id) continue;
     seen.add(id);
     const hub = hubById.get(id);
-    const lastMs = hub?.lastMessageAtMs || row.updatedAtMs || 0;
+    const lastMs = resolveLastActivityMs(
+      hub?.lastMessageAtMs,
+      row.updatedAtMs,
+    );
     const unread = resolveRailUnread({
       conversationId: id,
       focusedConversationId,
@@ -125,8 +174,12 @@ export function mergeConversationList(input: {
       id,
       projectId: row.projectId || projectId,
       title: hub?.title?.trim() || row.title || "Conversation",
-      preview: hub ? hubPreview(hub) : row.preview || "No messages yet",
-      updatedAt: lastMs ? formatRelative(lastMs) : (row.updatedAt ?? ""),
+      preview: resolveListPreview({
+        hub,
+        daemonPreview: row.preview,
+        hubLastMessageAtMs: hub?.lastMessageAtMs,
+        daemonUpdatedAtMs: row.updatedAtMs,
+      }),
       updatedAtMs: lastMs,
       unread,
       messageCount: row.messageCount ?? 0,
@@ -150,13 +203,12 @@ export function mergeConversationList(input: {
       const id = hub.conversationId;
       if (!id || seen.has(id)) continue;
       // Hub-only: no host shell — still show for multi-end IM inbox.
-      const lastMs = hub.lastMessageAtMs || 0;
+      const lastMs = resolveLastActivityMs(hub.lastMessageAtMs, 0);
       out.push({
         id,
         projectId: projectId || "",
         title: hub.title?.trim() || "Conversation",
         preview: hubPreview(hub),
-        updatedAt: lastMs ? formatRelative(lastMs) : "",
         updatedAtMs: lastMs,
         unread: resolveRailUnread({
           conversationId: id,

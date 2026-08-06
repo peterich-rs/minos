@@ -38,6 +38,7 @@ CREATE TABLE conversations (
     message_count         INTEGER NOT NULL DEFAULT 0,
     agent_session_count   INTEGER NOT NULL DEFAULT 0,
     created_at_ms         INTEGER NOT NULL,
+    -- Last top-level chat message activity (message upsert only; not title/git).
     updated_at_ms         INTEGER NOT NULL,
     -- Product metadata (priority / workflow / git work-unit binding)
     priority              TEXT,
