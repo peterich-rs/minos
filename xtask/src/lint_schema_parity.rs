@@ -476,9 +476,8 @@ fn parse_on_delete(lower: &str) -> &'static str {
         "set null"
     } else if lower.contains("on delete restrict") {
         "restrict"
-    } else if lower.contains("on delete no action") {
-        "no action"
     } else {
+        // Includes explicit `ON DELETE NO ACTION` and the SQL default.
         "no action"
     }
 }
