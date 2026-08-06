@@ -744,8 +744,9 @@ fn parse_device_id(raw: &str, column: &str) -> Result<DeviceId, BackendError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::device_installations::{insert_device, set_account_id};
-    use crate::store::test_support::{insert_account, insert_ios_device, memory_pool, T0};
+        use crate::store::test_support::{
+        insert_account, insert_ios_device, insert_test_client, insert_test_host, memory_pool, T0,
+    };
     use pretty_assertions::assert_eq;
 
     async fn setup_one_host_one_account() -> (
@@ -757,9 +758,7 @@ mod tests {
         let pool = memory_pool().await;
         let account_id = insert_account(&pool, "user@example.com").await;
         let host = DeviceId::new();
-        insert_device(&pool, host, "Mac-mini", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        insert_test_host(&pool, host, "Mac-mini", T0).await;
         let mobile = insert_ios_device(&pool, &account_id).await;
         (pool, account_id, host, mobile)
     }
@@ -856,15 +855,18 @@ mod tests {
         let pool = memory_pool().await;
         let account_id = insert_account(&pool, "joined-targets@example.com").await;
         let host = DeviceId::new();
-        insert_device(&pool, host, "Mac-mini", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        insert_test_host(&pool, host, "Mac-mini", T0).await;
         let mobile = insert_ios_device(&pool, &account_id).await;
         let browser = DeviceId::new();
-        insert_device(&pool, browser, "browser", DeviceRole::BrowserAdmin, T0)
-            .await
-            .unwrap();
-        set_account_id(&pool, &browser, &account_id).await.unwrap();
+        insert_test_client(
+            &pool,
+            browser,
+            DeviceRole::BrowserAdmin,
+            &account_id,
+            "browser",
+            T0,
+        )
+        .await;
         insert_pair(&pool, host, &account_id, mobile, T0)
             .await
             .unwrap();

@@ -29,7 +29,8 @@ pub struct AccountRow {
 }
 
 const ACCOUNT_SELECT_SQLITE: &str =
-    "SELECT account_id, email, minos_id, display_name, supabase_sub, created_at, last_login_at
+    "SELECT account_id, email, minos_id, display_name, supabase_sub,
+            created_at_ms AS created_at, last_login_at_ms AS last_login_at
                    FROM accounts";
 
 const ACCOUNT_SELECT_POSTGRES: &str = "SELECT account_id, email, minos_id, display_name,
@@ -268,7 +269,7 @@ where
     let now = Utc::now().timestamp_millis();
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
-            sqlx::query("UPDATE accounts SET last_login_at = ? WHERE account_id = ?")
+            sqlx::query("UPDATE accounts SET last_login_at_ms = ? WHERE account_id = ?")
                 .bind(now)
                 .bind(account_id)
                 .execute(pool)
@@ -332,7 +333,7 @@ async fn create_sqlite(
     now: i64,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO accounts (account_id, email, minos_id, display_name, supabase_sub, created_at)
+        "INSERT INTO accounts (account_id, email, minos_id, display_name, supabase_sub, created_at_ms)
            VALUES (?, ?, ?, NULL, ?, ?)",
     )
     .bind(account_id)

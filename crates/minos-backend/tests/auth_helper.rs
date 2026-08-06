@@ -1,6 +1,7 @@
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
+use minos_backend::store::test_support::{insert_test_host};
 use minos_backend::http::auth::{authenticate, AuthError, AuthOutcome};
-use minos_backend::store::{device_installations::insert_device, test_support::memory_pool};
+use minos_backend::store::test_support::memory_pool;
 use minos_domain::{DeviceId, DeviceRole};
 
 fn header_map(pairs: &[(&str, &str)]) -> HeaderMap {
@@ -50,9 +51,7 @@ async fn missing_device_id_returns_unauthorized() {
 async fn role_mismatch_against_existing_row_is_unauthorized() {
     let pool = memory_pool().await;
     let id = DeviceId::new();
-    insert_device(&pool, id, "Mac", DeviceRole::AgentHost, 0)
-        .await
-        .unwrap();
+    insert_test_host(&pool, id, "Mac", 0).await;
     let headers = header_map(&[
         ("x-device-id", &id.to_string()),
         ("x-device-role", "mobile-client"),

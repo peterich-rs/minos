@@ -39,6 +39,13 @@ pub trait ProjectRepo: Send + Sync {
     ) -> Result<(), BackendError>;
 
     async fn delete(&self, account_id: &str, project_id: &str) -> Result<(), BackendError>;
+
+    async fn archive(
+        &self,
+        account_id: &str,
+        project_id: &str,
+        at_ms: i64,
+    ) -> Result<bool, BackendError>;
 }
 
 struct SqlProjectRepo {
@@ -97,6 +104,16 @@ impl ProjectRepo for SqlProjectRepo {
     async fn delete(&self, account_id: &str, project_id: &str) -> Result<(), BackendError> {
         let _db_timer = crate::telemetry::DbTimer::new(PROJECT_REPO_METRIC_LABEL, "delete");
         crate::store::projects::delete(&self.store, account_id, project_id).await
+    }
+
+    async fn archive(
+        &self,
+        account_id: &str,
+        project_id: &str,
+        at_ms: i64,
+    ) -> Result<bool, BackendError> {
+        let _db_timer = crate::telemetry::DbTimer::new(PROJECT_REPO_METRIC_LABEL, "archive");
+        crate::store::projects::archive(&self.store, account_id, project_id, at_ms).await
     }
 }
 
@@ -183,6 +200,22 @@ impl ProjectService {
     pub async fn delete(&self, account_id: &str, project_id: &str) -> Result<(), ProjectError> {
         self.repo
             .delete(account_id, project_id)
+            .await
+            .map_err(ProjectError::Internal)
+    }
+
+    /// Soft-archive a project so default list filters hide it.
+    pub async fn archive(
+        &self,
+        account_id: &str,
+        project_id: &str,
+    ) -> Result<bool, ProjectError> {
+        self.repo
+            .archive(
+                account_id,
+                project_id,
+                chrono::Utc::now().timestamp_millis(),
+            )
             .await
             .map_err(ProjectError::Internal)
     }

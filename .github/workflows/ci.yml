@@ -53,9 +53,49 @@ jobs:
           DATABASE_URL=sqlite://target/sqlx-prepare.sqlite?mode=rwc cargo sqlx prepare --check --workspace -- -p minos-backend --all-targets
 
       - name: cargo xtask check-rust
-        # Single Rust SSOT: fmt, clippy, real lints, workspace tests,
+        # Single Rust SSOT: fmt, clippy, real lints, schema-parity, workspace tests,
         # daemon --features test-support, backend platform schema drift.
         run: cargo xtask check-rust
+
+  # -------------------------------------------------------------------------
+  # backend-pg — Postgres storage-parity contract smoke (MINOS_PG_TESTS=1).
+  # -------------------------------------------------------------------------
+  backend-pg:
+    name: backend postgres smoke
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: minos
+          POSTGRES_PASSWORD: minos
+          POSTGRES_DB: minos
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U minos"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MINOS_PG_TESTS: "1"
+      MINOS_DATABASE_URL: postgres://minos:minos@localhost:5432/minos
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
+
+      - name: cargo xtask lint-schema-parity
+        run: cargo xtask lint-schema-parity
+
+      - name: Postgres migration + contract smoke
+        run: cargo test -p minos-backend --test pg_migration --test pg_contract_smoke -- --nocapture
 
   # -------------------------------------------------------------------------
   # windows-host — narrow portability lane for host runtime crates.

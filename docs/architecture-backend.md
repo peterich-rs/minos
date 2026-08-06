@@ -196,11 +196,15 @@ Link proof 签名载荷：`"{installation_id}:{nonce}:v1/hosts/link"`（无 lead
 
 `Sqlite(SqlitePool)` 或 `Postgres(PgPool)`，通过 `AsStorePool` trait 抽象。
 
-Migrations 为 latest-only 单一初始 schema（`sqlx::migrate!`）：
-- SQLite：`crates/minos-backend/migrations/sqlite/0001_initial.sql`
-- Postgres：`crates/minos-backend/migrations/postgres/0001_initial.sql`
+**逻辑 schema SSOT（storage parity）**：两方言共享同一表集合、列名、FK 图与 CHECK 语义；仅类型编码与物理布局可不同（PG ENUM/JSONB/BOOLEAN、`durable_event_log` LIST 分区、`SKIP LOCKED` / advisory lock）。门禁：`cargo xtask lint-schema-parity` / `just schema-parity`。规格：`docs/superpowers/specs/backend-storage-parity-design.md`。
 
-不保留增量 ALTER 链；schema 变更直接改对应方言的 canonical 文件并 wipe 本地 DB。
+Migrations 为 latest-only 单一初始 schema（`sqlx::migrate!`）：
+- SQLite：`crates/minos-backend/migrations/sqlite/0001_initial.sql`（本地 `just backend` 默认）
+- Postgres：`crates/minos-backend/migrations/postgres/0001_initial.sql`（生产 `MINOS_STORAGE_MODE=external-sql`）
+
+不保留增量 ALTER 链；schema 变更直接改对应方言的 canonical 文件并 **wipe** 本地 SQLite / 重建 PG volume（编辑 migration 文件不会自动 reshape 已有库）。
+
+Postgres 集成 smoke（默认 skip）：`MINOS_PG_TESTS=1 MINOS_DATABASE_URL=postgres://… just check-backend-pg`。
 
 ### 核心表
 

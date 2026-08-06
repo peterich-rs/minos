@@ -10,7 +10,6 @@
 //! - [`host_commands`] — durable host command queue + results.
 //! - [`outbox_events`] — durable event dispatcher work queue.
 
-use std::ops::Deref;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -164,15 +163,6 @@ impl AsStorePool for PgPool {
     }
 }
 
-impl Deref for StoreHandle {
-    type Target = SqlitePool;
-
-    fn deref(&self) -> &Self::Target {
-        self.sqlite_pool()
-            .expect("sqlite-only store path reached while running MINOS_STORAGE_MODE=external-sql")
-    }
-}
-
 impl From<SqlitePool> for StoreHandle {
     fn from(value: SqlitePool) -> Self {
         Self::Sqlite(value)
@@ -232,7 +222,7 @@ pub mod sessions;
 pub mod social;
 pub mod thread_sync_state;
 
-pub use device_installations::{get_device, insert_device, DeviceRow};
+pub use device_installations::{get_device, DeviceRow};
 
 #[must_use]
 pub const fn sqlite_backend_enabled() -> bool {
@@ -478,23 +468,65 @@ pub mod test_support {
     /// `DeviceId`. Client auth is bearer-only (no device secret).
     pub async fn insert_ios_device(pool: &SqlitePool, account_id: &str) -> DeviceId {
         let id = DeviceId::new();
-        let id_str = id.to_string();
-        let kind = DeviceRole::MobileClient.to_installation_kind();
-        sqlx::query(
-            "INSERT INTO device_installations
-                (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
-             VALUES (?, ?, ?, NULL, ?, ?, ?)",
+        crate::store::device_installations::insert_client_for_account(
+            pool,
+            id,
+            "iPhone",
+            DeviceRole::MobileClient,
+            account_id,
+            T0,
         )
-        .bind(&id_str)
-        .bind(kind)
-        .bind("iPhone")
-        .bind(T0)
-        .bind(T0)
-        .bind(account_id)
-        .execute(pool)
         .await
         .unwrap();
         id
+    }
+
+    /// Fixed host public key for fixtures.
+    pub const TEST_HOST_PUBLIC_KEY: &str = "test-host-public-key-v1";
+
+    /// Strict host fixture (public_key required).
+    pub async fn insert_test_host(
+        pool: &impl crate::store::AsStorePool,
+        id: DeviceId,
+        name: &str,
+        now: i64,
+    ) {
+        crate::store::device_installations::insert_host_with_public_key(
+            pool,
+            id,
+            name,
+            TEST_HOST_PUBLIC_KEY,
+            now,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Strict host fixture with a generated id.
+    pub async fn insert_test_host_new(
+        pool: &impl crate::store::AsStorePool,
+        name: &str,
+        now: i64,
+    ) -> DeviceId {
+        let id = DeviceId::new();
+        insert_test_host(pool, id, name, now).await;
+        id
+    }
+
+    /// Strict client fixture (account_id required).
+    pub async fn insert_test_client(
+        pool: &impl crate::store::AsStorePool,
+        id: DeviceId,
+        role: DeviceRole,
+        account_id: &str,
+        name: &str,
+        now: i64,
+    ) {
+        crate::store::device_installations::insert_client_for_account(
+            pool, id, name, role, account_id, now,
+        )
+        .await
+        .unwrap();
     }
 }
 

@@ -369,9 +369,7 @@ pub fn platform_contract_snapshot() -> BackendPlatformContract {
                 "Serves /ws/client and /ws/host for realtime ticket auth, session activation, forwarding, regular ingest persistence, and UI fanout",
             ],
             runtime_blockers: vec![
-                "Most remaining /v1 handlers plus approval-driven realtime flows still rely on SQLite-only services and store queries",
-                "Many store modules under crates/minos-backend/src/store still use SQLite-specific SQL placeholders and transactions",
-                "The embedded migration set under crates/minos-backend/migrations is SQLite-only",
+                "Multi-instance Redis fan-out and cache invalidation are not exercised by default local SQLite tests; use MINOS_PG_TESTS=1 plus redis-backed integration for cluster semantics",
             ],
         },
         cache_backends: enum_names::<CacheBackendKind>(),

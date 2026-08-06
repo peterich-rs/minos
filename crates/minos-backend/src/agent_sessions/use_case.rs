@@ -110,7 +110,14 @@ impl DefaultAgentSessionService {
             .ok_or(AgentSessionError::HostUnavailable)
     }
 
-    async fn resolve_agent(&self, agent_id: &str) -> Result<ResolvedAgent, AgentSessionError> {
+    /// Resolve wire `agent_id` to a runtime agent. Virtual aliases (`agent_codex`, …)
+    /// ensure a host_runtime row so `agent_sessions.agent_id` FK always points at
+    /// a real `agents` row (storage parity).
+    async fn resolve_agent(
+        &self,
+        agent_id: &str,
+        caller_account_id: &str,
+    ) -> Result<(String, ResolvedAgent), AgentSessionError> {
         if let Some(agent) = crate::store::social::get_agent(&self.store, agent_id).await? {
             let model = {
                 let t = agent.model.trim();
@@ -120,13 +127,17 @@ impl DefaultAgentSessionService {
                     Some(t.to_string())
                 }
             };
-            return Ok(ResolvedAgent {
-                runtime_agent: agent.runtime_agent,
-                owner_account_id: Some(agent.owner_account_id),
-                model,
-                // Host profiles store effort; social agents table has model only for now.
-                reasoning_effort: None,
-            });
+            let id = agent.agent_id.clone();
+            return Ok((
+                id,
+                ResolvedAgent {
+                    runtime_agent: agent.runtime_agent,
+                    owner_account_id: Some(agent.owner_account_id),
+                    model,
+                    // Host profiles store effort; social agents table has model only for now.
+                    reasoning_effort: None,
+                },
+            ));
         }
         let runtime_agent = match agent_id {
             "agent_codex" => "codex",
@@ -136,12 +147,25 @@ impl DefaultAgentSessionService {
             "agent_grok" => "grok",
             _ => return Err(AgentSessionError::ValidationFormat("unknown agent_id")),
         };
-        Ok(ResolvedAgent {
-            runtime_agent: runtime_agent.into(),
-            owner_account_id: None,
-            model: None,
-            reasoning_effort: None,
-        })
+        let ensured = crate::store::social::ensure_host_runtime_agent(
+            &self.store,
+            caller_account_id,
+            runtime_agent,
+            runtime_agent,
+            "",
+            None,
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await?;
+        Ok((
+            ensured.agent_id,
+            ResolvedAgent {
+                runtime_agent: runtime_agent.into(),
+                owner_account_id: Some(caller_account_id.to_string()),
+                model: None,
+                reasoning_effort: None,
+            },
+        ))
     }
 
     async fn host_is_authorized_for_session(
@@ -243,7 +267,9 @@ impl AgentSessionService for DefaultAgentSessionService {
         {
             return Err(AgentSessionError::ConversationForbidden);
         }
-        let resolved_agent = self.resolve_agent(&input.agent_id).await?;
+        let (resolved_agent_id, resolved_agent) = self
+            .resolve_agent(&input.agent_id, &input.caller_account_id)
+            .await?;
         let runtime_agent = resolved_agent.runtime_agent.clone();
         let agent_model = resolved_agent.model.clone();
         let agent_effort = resolved_agent.reasoning_effort.clone();
@@ -307,7 +333,7 @@ impl AgentSessionService for DefaultAgentSessionService {
             &input.conversation_id,
             input.project_id.as_deref(),
             Some(&host_device_id.to_string()),
-            Some(&input.agent_id),
+            Some(resolved_agent_id.as_str()),
             "pending",
             started_at_ms,
             None,
@@ -833,7 +859,7 @@ async fn insert_agent_session_in_tx(
             sqlx::query(
                 "INSERT INTO agent_sessions
                     (session_id, conversation_id, project_id, host_installation_id, agent_id, status, started_at_ms, ended_at_ms, idempotency_account_id, idempotency_key)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                 VALUES ($1, $2, $3, $4, $5, $6::agent_session_status, $7, $8, $9, $10)",
             )
             .bind(session_id)
             .bind(conversation_id)

@@ -106,8 +106,19 @@ check-macos:
 # Backend-focused verification for formal-cutover work.
 check-backend:
     cargo xtask gen-backend-platform-contract --check
+    cargo xtask lint-schema-parity
     cargo test -p minos-backend
     cargo test -p minos-daemon --features test-support
+
+# Postgres contract smoke (requires Docker Postgres or CI service).
+# Export MINOS_DATABASE_URL=postgres://… and MINOS_PG_TESTS=1.
+check-backend-pg:
+    cargo xtask lint-schema-parity
+    MINOS_PG_TESTS=1 cargo test -p minos-backend --test pg_migration --test pg_contract_smoke
+
+# Logical schema parity between SQLite and Postgres migrations.
+schema-parity:
+    cargo xtask lint-schema-parity
 
 # Regenerate the backend runtime contract, OpenAPI, and websocket schema artifacts.
 gen-backend-platform-contract:

@@ -6,8 +6,8 @@ use axum::routing::{delete, post};
 use axum::{Json, Router};
 use minos_domain::AgentName;
 use minos_protocol::{
-    CreateProjectRequest, CreateProjectResponse, DeleteProjectRequest, ListProjectsResponse,
-    UpdateProjectRequest,
+    ArchiveProjectRequest, CreateProjectRequest, CreateProjectResponse, DeleteProjectRequest,
+    ListProjectsResponse, UpdateProjectRequest,
 };
 use minos_ui_protocol::SessionEndReason;
 use serde::{Deserialize, Serialize};
@@ -67,6 +67,7 @@ pub fn router() -> Router<BackendState> {
         .route("/projects/update", post(update_project))
         .route("/projects/rename", post(update_project))
         .route("/projects/delete", post(delete_project_query))
+        .route("/projects/archive", post(archive_project))
         .route("/projects/:project_id", delete(delete_project_path))
         .route(
             "/projects/link-conversation",
@@ -150,6 +151,32 @@ async fn delete_project_query(
     Json(req): Json<DeleteProjectRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorEnvelope>)> {
     delete_project_inner(state, headers, req.project_id).await
+}
+
+async fn archive_project(
+    State(state): State<BackendState>,
+    headers: HeaderMap,
+    Json(req): Json<ArchiveProjectRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorEnvelope>)> {
+    if req.project_id.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            err("bad_request", "project_id is required"),
+        ));
+    }
+    let account_id = require_account(&state, &headers).await?;
+    let archived = state
+        .projects
+        .archive(&account_id, &req.project_id)
+        .await
+        .map_err(project_error)?;
+    if !archived {
+        return Err((
+            StatusCode::NOT_FOUND,
+            err("not_found", "project not found or already archived"),
+        ));
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn delete_project_path(

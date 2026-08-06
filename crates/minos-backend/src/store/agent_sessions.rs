@@ -51,7 +51,7 @@ pub async fn create(
             sqlx::query(
                 "INSERT INTO agent_sessions
                     (session_id, conversation_id, project_id, host_installation_id, agent_id, status, started_at_ms, ended_at_ms)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                 VALUES ($1, $2, $3, $4, $5, $6::agent_session_status, $7, $8)",
             )
             .bind(session_id)
             .bind(conversation_id)
@@ -405,7 +405,7 @@ pub async fn update_status(
         .map(|result| result.rows_affected()),
         StorePoolRef::Postgres(pool) => sqlx::query(
             "UPDATE agent_sessions
-                    SET status = $1, ended_at_ms = $2
+                    SET status = $1::agent_session_status, ended_at_ms = $2
                   WHERE session_id = $3",
         )
         .bind(status)
@@ -685,7 +685,7 @@ mod tests {
             &conversation.conversation_id,
             None,
             None,
-            Some("agent_codex"),
+            None,
             "running",
             101,
             None,

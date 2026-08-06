@@ -1044,6 +1044,13 @@ pub struct DeleteProjectRequest {
     pub project_id: String,
 }
 
+/// Request to soft-archive a project (hidden from default list).
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ArchiveProjectRequest {
+    pub project_id: String,
+}
+
 /// Request to attach an existing backend thread to a project.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct AssignProjectThreadRequest {

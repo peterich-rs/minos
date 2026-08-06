@@ -22,6 +22,7 @@ mod lint_docs;
 mod lint_metrics;
 mod lint_naming;
 mod lint_route_inventory;
+mod lint_schema_parity;
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 enum BackendDbDriver {
@@ -111,6 +112,8 @@ enum Cmd {
     LintContract,
     /// Check route inventory completeness.
     LintRouteInventory,
+    /// Logical schema parity between SQLite and Postgres migrations.
+    LintSchemaParity,
 }
 
 fn main() -> Result<()> {
@@ -138,6 +141,7 @@ fn main() -> Result<()> {
         Cmd::LintMetrics => lint_metrics::run(&workspace_root()?),
         Cmd::LintContract => lint_contract::run(&workspace_root()?),
         Cmd::LintRouteInventory => lint_route_inventory::run(&workspace_root()?),
+        Cmd::LintSchemaParity => lint_schema_parity::run(&workspace_root()?),
     }
 }
 
@@ -168,6 +172,9 @@ fn check_rust() -> Result<()> {
     // OpenAPI / WS schema drift before we pay for clippy or tests.
     eprintln!("==> [static] backend platform schema drift");
     backend_platform_schemas::generate(&workspace_root, true)?;
+
+    eprintln!("==> [static] cargo xtask lint-schema-parity");
+    lint_schema_parity::run(&workspace_root)?;
 
     // --- phase 2: compile --------------------------------------------------
     eprintln!("==> [compile] cargo clippy");

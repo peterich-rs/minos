@@ -1,17 +1,18 @@
 -- Canonical SQLite schema (latest-only).
--- Incremental migration history has been collapsed; wipe local DBs on upgrade.
+-- Logical SSOT shared with postgres/0001_initial.sql (dialect types only differ).
+-- Wipe local DBs on upgrade. See docs/superpowers/specs/backend-storage-parity-design.md.
 
 -- Human accounts are IdP-bound via supabase_sub (no local password).
 CREATE TABLE accounts (
-    account_id     TEXT PRIMARY KEY,
-    email          TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    minos_id       TEXT,
-    display_name   TEXT,
+    account_id        TEXT PRIMARY KEY,
+    email             TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    minos_id          TEXT,
+    display_name      TEXT,
     -- Supabase Auth subject (JWT `sub`). Required for new users via
     -- POST /v1/auth/supabase exchange. NULL only for rare unbound fixtures.
-    supabase_sub   TEXT,
-    created_at     INTEGER NOT NULL,
-    last_login_at  INTEGER
+    supabase_sub      TEXT,
+    created_at_ms     INTEGER NOT NULL,
+    last_login_at_ms  INTEGER
 ) STRICT;
 
 CREATE UNIQUE INDEX idx_accounts_email ON accounts(email);
@@ -20,10 +21,8 @@ CREATE UNIQUE INDEX idx_accounts_supabase_sub
     ON accounts(supabase_sub)
     WHERE supabase_sub IS NOT NULL;
 
--- Client/host installations. `kind` mirrors Postgres installation_kind
--- (mobile|browser|desktop|host). Wire DeviceRole maps:
+-- Client/host installations. Wire DeviceRole maps:
 --   mobile-client→mobile, browser-admin→browser, desktop-console→desktop, agent-host→host.
--- secret_hash removed (device-secret rail retired; host uses host_installation_tokens).
 CREATE TABLE device_installations (
     installation_id   TEXT PRIMARY KEY,
     kind              TEXT NOT NULL CHECK (kind IN ('mobile', 'browser', 'desktop', 'host')),
@@ -33,12 +32,10 @@ CREATE TABLE device_installations (
     display_name      TEXT,
     created_at_ms     INTEGER NOT NULL,
     last_seen_at_ms   INTEGER NOT NULL,
-    -- Bootstrap-friendly consistency (host may lack public_key until TOFU;
-    -- client may lack account_id until login/exchange bind).
-    -- Steady-state: clients have account_id + null public_key; host has null account_id.
+    -- Strict parity with Postgres: clients require account_id; hosts require public_key.
     CONSTRAINT installation_kind_account_consistency CHECK (
-        (kind IN ('mobile', 'browser', 'desktop') AND public_key IS NULL) OR
-        (kind = 'host' AND account_id IS NULL)
+        (kind IN ('mobile', 'browser', 'desktop') AND account_id IS NOT NULL AND public_key IS NULL) OR
+        (kind = 'host' AND account_id IS NULL AND public_key IS NOT NULL)
     )
 ) STRICT;
 
@@ -54,8 +51,6 @@ CREATE TABLE host_installation_tokens (
     revoked_at_ms         INTEGER
 ) STRICT;
 
-CREATE UNIQUE INDEX idx_host_installation_tokens_token_hash
-    ON host_installation_tokens(token_hash);
 CREATE INDEX idx_host_installation_tokens_host_active
     ON host_installation_tokens(host_installation_id, revoked_at_ms);
 
@@ -63,17 +58,18 @@ CREATE TABLE refresh_tokens (
     token_hash        TEXT PRIMARY KEY,
     account_id        TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
     installation_id   TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
-    issued_at         INTEGER NOT NULL,
-    expires_at        INTEGER NOT NULL,
-    revoked_at        INTEGER
+    issued_at_ms      INTEGER NOT NULL,
+    expires_at_ms     INTEGER NOT NULL,
+    revoked_at_ms     INTEGER,
+    rotated_to_hash   TEXT REFERENCES refresh_tokens(token_hash) ON DELETE SET NULL
 ) STRICT;
 
 CREATE INDEX idx_refresh_tokens_account
     ON refresh_tokens(account_id)
-    WHERE revoked_at IS NULL;
+    WHERE revoked_at_ms IS NULL;
 CREATE INDEX idx_refresh_tokens_device
     ON refresh_tokens(installation_id)
-    WHERE revoked_at IS NULL;
+    WHERE revoked_at_ms IS NULL;
 
 CREATE TABLE host_links (
     pair_id                    TEXT NOT NULL PRIMARY KEY,
@@ -121,6 +117,50 @@ CREATE INDEX idx_friendships_low
 CREATE INDEX idx_friendships_high
     ON friendships(account_high_id, created_at_ms DESC);
 
+CREATE TABLE agents (
+    agent_id          TEXT PRIMARY KEY,
+    owner_account_id  TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    name              TEXT NOT NULL,
+    description       TEXT NOT NULL DEFAULT '',
+    source            TEXT NOT NULL DEFAULT 'user'
+                        CHECK (source IN ('user', 'host_runtime', 'system')),
+    runtime_agent     TEXT NOT NULL CHECK (runtime_agent IN ('codex', 'claude', 'gemini', 'opencode', 'grok')),
+    model             TEXT NOT NULL DEFAULT '',
+    workspace_path    TEXT,
+    created_at_ms     INTEGER NOT NULL,
+    updated_at_ms     INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX idx_agents_owner
+    ON agents(owner_account_id, created_at_ms DESC);
+
+CREATE UNIQUE INDEX idx_agents_host_runtime_unique
+    ON agents(owner_account_id, runtime_agent)
+    WHERE source = 'host_runtime';
+
+CREATE TABLE projects (
+    project_id       TEXT PRIMARY KEY,
+    account_id       TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    name             TEXT NOT NULL,
+    workspace_slug   TEXT NOT NULL,
+    workspace_path   TEXT,
+    created_at_ms    INTEGER NOT NULL,
+    updated_at_ms    INTEGER NOT NULL,
+    archived_at_ms   INTEGER,
+    UNIQUE(account_id, workspace_slug)
+) STRICT;
+
+CREATE INDEX idx_projects_account_updated
+    ON projects(account_id, updated_at_ms DESC);
+
+CREATE TABLE project_members (
+    project_id   TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+    account_id   TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    role         TEXT NOT NULL CHECK (role IN ('owner', 'editor', 'viewer')),
+    joined_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (project_id, account_id)
+) STRICT;
+
 CREATE TABLE conversations (
     conversation_id        TEXT PRIMARY KEY,
     kind                   TEXT NOT NULL CHECK (kind IN ('direct', 'group')),
@@ -132,7 +172,8 @@ CREATE TABLE conversations (
     updated_at_ms          INTEGER NOT NULL,
     next_message_seq       INTEGER NOT NULL DEFAULT 1,
     CHECK (
-        (kind = 'direct' AND direct_account_low IS NOT NULL AND direct_account_high IS NOT NULL) OR
+        (kind = 'direct' AND direct_account_low IS NOT NULL AND direct_account_high IS NOT NULL
+                         AND direct_account_low < direct_account_high) OR
         (kind = 'group' AND direct_account_low IS NULL AND direct_account_high IS NULL)
     )
 ) STRICT;
@@ -174,29 +215,6 @@ CREATE TABLE conversation_deletions (
 
 CREATE INDEX idx_conversation_deletions_account
     ON conversation_deletions(account_id, deleted_at_ms DESC);
-
-CREATE TABLE agents (
-    agent_id          TEXT PRIMARY KEY,
-    owner_account_id  TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    name              TEXT NOT NULL,
-    description       TEXT NOT NULL DEFAULT '',
-    -- user | host_runtime | system — host_runtime is the stable Desktop/Host mapping
-    source            TEXT NOT NULL DEFAULT 'user'
-                        CHECK (source IN ('user', 'host_runtime', 'system')),
-    runtime_agent     TEXT NOT NULL CHECK (runtime_agent IN ('codex', 'claude', 'gemini', 'opencode', 'grok')),
-    model             TEXT NOT NULL DEFAULT '',
-    workspace_path    TEXT,
-    created_at_ms     INTEGER NOT NULL,
-    updated_at_ms     INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX idx_agents_owner
-    ON agents(owner_account_id, created_at_ms DESC);
-
--- One host-runtime projection per (owner, runtime_agent).
-CREATE UNIQUE INDEX idx_agents_host_runtime_unique
-    ON agents(owner_account_id, runtime_agent)
-    WHERE source = 'host_runtime';
 
 CREATE TABLE conversation_agent_members (
     conversation_id     TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
@@ -261,8 +279,6 @@ CREATE INDEX idx_message_reactions_message
 CREATE INDEX idx_message_reactions_conversation
     ON message_reactions(conversation_id, message_id);
 
--- Intent Outbox op idempotency for reaction toggle (B6/C5): same client_op_id
--- must not re-toggle message_reactions on HTTP retry.
 CREATE TABLE reaction_client_ops (
     client_op_id     TEXT PRIMARY KEY,
     conversation_id  TEXT NOT NULL,
@@ -273,26 +289,12 @@ CREATE TABLE reaction_client_ops (
     created_at_ms    INTEGER NOT NULL
 ) STRICT;
 
-CREATE TABLE projects (
-    project_id       TEXT PRIMARY KEY,
-    account_id       TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    name             TEXT NOT NULL,
-    workspace_slug   TEXT NOT NULL,
-    workspace_path   TEXT,
-    created_at_ms    INTEGER NOT NULL,
-    updated_at_ms    INTEGER NOT NULL,
-    UNIQUE(account_id, workspace_slug)
-) STRICT;
-
-CREATE INDEX idx_projects_account_updated
-    ON projects(account_id, updated_at_ms DESC);
-
 CREATE TABLE agent_sessions (
     session_id        TEXT PRIMARY KEY,
     conversation_id   TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
     project_id        TEXT REFERENCES projects(project_id) ON DELETE SET NULL,
     host_installation_id TEXT REFERENCES device_installations(installation_id) ON DELETE SET NULL,
-    agent_id          TEXT,
+    agent_id          TEXT REFERENCES agents(agent_id) ON DELETE SET NULL,
     status            TEXT NOT NULL CHECK (status IN ('pending', 'running', 'stopping', 'stopped', 'ended', 'failed')),
     started_at_ms     INTEGER NOT NULL,
     ended_at_ms       INTEGER,
@@ -318,11 +320,9 @@ CREATE TABLE agent_turns (
     started_at_ms        INTEGER NOT NULL,
     finished_at_ms       INTEGER,
     summary_text         TEXT,
-    usage_json           TEXT
+    usage_json           TEXT,
+    UNIQUE (agent_session_id, turn_seq)
 ) STRICT;
-
-CREATE UNIQUE INDEX idx_agent_turns_session_seq
-    ON agent_turns(agent_session_id, turn_seq);
 
 CREATE TABLE agent_turn_events (
     turn_id         TEXT NOT NULL REFERENCES agent_turns(turn_id) ON DELETE CASCADE,
@@ -347,7 +347,6 @@ CREATE TABLE approval_requests (
     created_at_ms      INTEGER NOT NULL,
     resolved_at_ms     INTEGER,
     resolution_json    TEXT,
-    -- Client Intent Outbox id for respond idempotency (C5.3). NULL when absent.
     client_request_id  TEXT
 ) STRICT;
 
@@ -380,9 +379,10 @@ CREATE INDEX idx_sessions_project_last
     ON sessions(project_id, last_ts_ms DESC)
     WHERE project_id IS NOT NULL;
 
+-- No FK to sessions: ingest may outpace session row creation (parity with Postgres).
 CREATE TABLE raw_events (
     host_device_id   TEXT NOT NULL DEFAULT '',
-    session_id        TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    session_id       TEXT NOT NULL,
     seq              INTEGER NOT NULL,
     event_id         TEXT NOT NULL DEFAULT '',
     kind             TEXT NOT NULL DEFAULT 'agent_event',
@@ -402,7 +402,7 @@ CREATE UNIQUE INDEX idx_raw_events_event_id
 
 CREATE TABLE thread_sync_state (
     host_device_id       TEXT NOT NULL,
-    session_id            TEXT NOT NULL,
+    session_id           TEXT NOT NULL,
     backend_acked_seq    INTEGER NOT NULL DEFAULT 0,
     local_from_seq       INTEGER,
     local_to_seq         INTEGER,
@@ -416,43 +416,10 @@ CREATE TABLE thread_sync_state (
     PRIMARY KEY (host_device_id, session_id)
 ) STRICT;
 
-CREATE TABLE project_sessions (
-    project_id    TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
-    session_id     TEXT NOT NULL,
-    account_id    TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    linked_at_ms  INTEGER NOT NULL,
-    PRIMARY KEY (project_id, session_id)
-) STRICT;
-
-CREATE INDEX idx_project_sessions_account_project
-    ON project_sessions(account_id, project_id, linked_at_ms DESC);
-
-CREATE TABLE pending_approvals (
-    request_id      TEXT PRIMARY KEY,
-    session_id       TEXT NOT NULL,
-    turn_id         TEXT NOT NULL,
-    host_device_id  TEXT NOT NULL,
-    method          TEXT NOT NULL,
-    params_json     TEXT NOT NULL,
-    created_at_ms   INTEGER NOT NULL,
-    timeout_at_ms   INTEGER NOT NULL,
-    resolved_at_ms  INTEGER,
-    resolution      TEXT CHECK (
-        resolution IS NULL OR resolution IN ('user_decision', 'timeout', 'disconnected')
-    )
-) STRICT;
-
-CREATE INDEX idx_pending_approvals_timeout
-    ON pending_approvals(timeout_at_ms)
-    WHERE resolved_at_ms IS NULL;
-CREATE INDEX idx_pending_approvals_thread
-    ON pending_approvals(session_id)
-    WHERE resolved_at_ms IS NULL;
-
 CREATE TABLE host_commands (
     command_id                TEXT PRIMARY KEY,
     host_installation_id      TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
-    agent_session_id          TEXT,
+    agent_session_id          TEXT REFERENCES agent_sessions(session_id) ON DELETE SET NULL,
     method                    TEXT NOT NULL,
     params_json               TEXT NOT NULL,
     requested_by_account_id   TEXT REFERENCES accounts(account_id) ON DELETE SET NULL,
@@ -489,8 +456,6 @@ CREATE TABLE outbox_events (
     topic_kind        TEXT NOT NULL,
     event_id          TEXT NOT NULL,
     status            TEXT NOT NULL CHECK (status IN ('pending', 'claimed', 'acked', 'dead')),
-    -- social_durable: chat/account/reaction fanout (publish → ack).
-    -- host_command: host RPC delivery (publish → async host ack; expire → dead_letter).
     lane              TEXT NOT NULL DEFAULT 'social_durable'
         CHECK (lane IN ('social_durable', 'host_command')),
     available_at_ms   INTEGER NOT NULL,
@@ -510,10 +475,25 @@ CREATE INDEX idx_outbox_events_status_available
 CREATE INDEX idx_outbox_events_event_id
     ON outbox_events(topic_kind, event_id);
 
+CREATE TABLE audit_events (
+    audit_id         TEXT PRIMARY KEY,
+    actor_kind       TEXT NOT NULL,
+    account_id       TEXT REFERENCES accounts(account_id) ON DELETE SET NULL,
+    installation_id  TEXT REFERENCES device_installations(installation_id) ON DELETE SET NULL,
+    event_type       TEXT NOT NULL,
+    metadata         TEXT,
+    at_ms            INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX idx_audit_at_ms ON audit_events(at_ms DESC);
+CREATE INDEX idx_audit_account_at
+    ON audit_events(account_id, at_ms DESC)
+    WHERE account_id IS NOT NULL;
+
 CREATE TABLE push_tokens (
     token_hash       TEXT PRIMARY KEY,
     account_id       TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    installation_id  TEXT NOT NULL,
+    installation_id  TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
     kind             TEXT NOT NULL CHECK (kind IN ('apns', 'fcm')),
     locale           TEXT,
     created_at_ms    INTEGER NOT NULL,
@@ -547,7 +527,6 @@ CREATE TABLE notification_cooldowns (
 CREATE INDEX idx_notif_cooldowns_last_sent
     ON notification_cooldowns(last_sent_at_ms);
 
--- Push idempotency: successful push once per (event_id, account_id).
 CREATE TABLE push_dispatch_log (
     event_id     TEXT NOT NULL,
     account_id   TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
@@ -558,8 +537,6 @@ CREATE TABLE push_dispatch_log (
 CREATE INDEX idx_push_dispatch_log_account
     ON push_dispatch_log(account_id);
 
--- Agent dispatch queue: send_message enqueues; worker drains when host is live.
--- UNIQUE(origin, agent): multi-@ fan-out enqueues one row per mentioned agent.
 CREATE TABLE agent_dispatch_queue (
     dispatch_id          TEXT PRIMARY KEY,
     origin_message_id    TEXT NOT NULL,
@@ -585,7 +562,6 @@ CREATE INDEX idx_agent_dispatch_queue_due
 CREATE INDEX idx_agent_dispatch_queue_conversation
     ON agent_dispatch_queue(conversation_id);
 
--- Media blobs: metadata SSOT in DB; bytes in R2 (or local dir for dev).
 CREATE TABLE media_blobs (
     blob_id             TEXT PRIMARY KEY,
     account_id          TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
@@ -608,7 +584,6 @@ CREATE INDEX idx_media_blobs_account_created
 CREATE INDEX idx_media_blobs_status
     ON media_blobs(status, created_at_ms);
 
--- Message ↔ media blob links (order preserved).
 CREATE TABLE chat_message_attachments (
     message_id   TEXT NOT NULL REFERENCES chat_messages(message_id) ON DELETE CASCADE,
     blob_id      TEXT NOT NULL REFERENCES media_blobs(blob_id) ON DELETE RESTRICT,

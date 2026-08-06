@@ -346,6 +346,13 @@ const ROUTE_INVENTORY: &[RouteContract] = &[
         "account_bearer",
     ),
     RouteContract::new(
+        "POST",
+        "/v1/projects/archive",
+        "/v1/projects/archive",
+        "account_api",
+        "account_bearer",
+    ),
+    RouteContract::new(
         "DELETE",
         "/v1/projects/:project_id",
         "/v1/projects/proj_probe",

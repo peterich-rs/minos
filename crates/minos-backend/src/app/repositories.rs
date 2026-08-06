@@ -95,7 +95,7 @@ pub struct ProjectRow {
     pub project_id: String,
     pub account_id: String,
     pub name: String,
-    pub workspace_root: String,
+    pub workspace_slug: String,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub archived_at_ms: Option<i64>,
@@ -393,7 +393,7 @@ pub trait ProjectsRepository: Send + Sync {
         &self,
         account_id: &str,
         name: &str,
-        workspace_root: &str,
+        workspace_slug: &str,
         at_ms: i64,
     ) -> Result<ProjectRow, BackendError>;
 
@@ -410,7 +410,7 @@ pub trait ProjectsRepository: Send + Sync {
         &self,
         project_id: &str,
         name: Option<&str>,
-        workspace_root: Option<&str>,
+        workspace_slug: Option<&str>,
         at_ms: i64,
     ) -> Result<ProjectRow, BackendError>;
 
@@ -1045,7 +1045,7 @@ fn convert_refresh_token_row(row: store::refresh_tokens::RefreshTokenRow) -> Ref
         issued_at_ms: row.issued_at,
         expires_at_ms: row.expires_at,
         revoked_at_ms: row.revoked_at,
-        rotated_to_hash: None,
+        rotated_to_hash: row.rotated_to_hash,
     }
 }
 
@@ -1484,13 +1484,25 @@ struct StoreBackedProjectsRepository {
     store: StoreHandle,
 }
 
+fn project_record_to_row(row: store::projects::ProjectRecord) -> ProjectRow {
+    ProjectRow {
+        project_id: row.project_id,
+        account_id: row.account_id,
+        name: row.name,
+        workspace_slug: row.workspace_slug,
+        created_at_ms: row.created_at_ms,
+        updated_at_ms: row.updated_at_ms,
+        archived_at_ms: row.archived_at_ms,
+    }
+}
+
 #[async_trait]
 impl ProjectsRepository for StoreBackedProjectsRepository {
     async fn create(
         &self,
         account_id: &str,
         name: &str,
-        workspace_root: &str,
+        workspace_slug: &str,
         at_ms: i64,
     ) -> Result<ProjectRow, BackendError> {
         let project_id = Uuid::new_v4().to_string();
@@ -1499,7 +1511,7 @@ impl ProjectsRepository for StoreBackedProjectsRepository {
             &project_id,
             account_id,
             name,
-            workspace_root,
+            workspace_slug,
             None,
             at_ms,
         )
@@ -1508,7 +1520,7 @@ impl ProjectsRepository for StoreBackedProjectsRepository {
             project_id,
             account_id: account_id.to_string(),
             name: name.to_string(),
-            workspace_root: workspace_root.to_string(),
+            workspace_slug: workspace_slug.to_string(),
             created_at_ms: at_ms,
             updated_at_ms: at_ms,
             archived_at_ms: None,
@@ -1516,82 +1528,9 @@ impl ProjectsRepository for StoreBackedProjectsRepository {
     }
 
     async fn find(&self, project_id: &str) -> Result<Option<ProjectRow>, BackendError> {
-        match self.store.as_store_pool() {
-            StorePoolRef::Sqlite(pool) => {
-                let row = sqlx::query_as::<
-                    _,
-                    (String, String, String, String, i64, i64, Option<i64>),
-                >(
-                    "SELECT project_id, account_id, name, workspace_slug, created_at_ms, updated_at_ms, archived_at_ms \
-                     FROM projects WHERE project_id = ?",
-                )
-                .bind(project_id)
-                .fetch_optional(pool)
-                .await
-                .map_err(|e| BackendError::StoreQuery {
-                    operation: "projects.find".into(),
-                    message: e.to_string(),
-                })?;
-                Ok(row.map(
-                    |(
-                        project_id,
-                        account_id,
-                        name,
-                        workspace_root,
-                        created_at_ms,
-                        updated_at_ms,
-                        archived_at_ms,
-                    )| {
-                        ProjectRow {
-                            project_id,
-                            account_id,
-                            name,
-                            workspace_root,
-                            created_at_ms,
-                            updated_at_ms,
-                            archived_at_ms,
-                        }
-                    },
-                ))
-            }
-            StorePoolRef::Postgres(pool) => {
-                let row = sqlx::query_as::<
-                    _,
-                    (String, String, String, String, i64, i64, Option<i64>),
-                >(
-                    "SELECT project_id, account_id, name, workspace_root, created_at_ms, updated_at_ms, archived_at_ms \
-                     FROM projects WHERE project_id = $1",
-                )
-                .bind(project_id)
-                .fetch_optional(pool)
-                .await
-                .map_err(|e| BackendError::StoreQuery {
-                    operation: "projects.find".into(),
-                    message: e.to_string(),
-                })?;
-                Ok(row.map(
-                    |(
-                        project_id,
-                        account_id,
-                        name,
-                        workspace_root,
-                        created_at_ms,
-                        updated_at_ms,
-                        archived_at_ms,
-                    )| {
-                        ProjectRow {
-                            project_id,
-                            account_id,
-                            name,
-                            workspace_root,
-                            created_at_ms,
-                            updated_at_ms,
-                            archived_at_ms,
-                        }
-                    },
-                ))
-            }
-        }
+        Ok(store::projects::find_record(&self.store, project_id)
+            .await?
+            .map(project_record_to_row))
     }
 
     async fn list_for_account(
@@ -1600,141 +1539,22 @@ impl ProjectsRepository for StoreBackedProjectsRepository {
         limit: u32,
         cursor: Option<&str>,
     ) -> Result<Vec<ProjectRow>, BackendError> {
-        let effective_limit = i64::from(limit.min(200));
-        match self.store.as_store_pool() {
-            StorePoolRef::Sqlite(pool) => {
-                let rows = match cursor {
-                    Some(cursor_id) => {
-                        sqlx::query_as::<
-                            _,
-                            (String, String, String, String, i64, i64, Option<i64>),
-                        >(
-                            "SELECT project_id, account_id, name, workspace_slug, created_at_ms, updated_at_ms, archived_at_ms \
-                             FROM projects WHERE account_id = ? AND project_id > ? \
-                             ORDER BY project_id ASC LIMIT ?",
-                        )
-                        .bind(account_id)
-                        .bind(cursor_id)
-                        .bind(effective_limit)
-                        .fetch_all(pool)
-                        .await
-                    }
-                    None => {
-                        sqlx::query_as::<
-                            _,
-                            (String, String, String, String, i64, i64, Option<i64>),
-                        >(
-                            "SELECT project_id, account_id, name, workspace_slug, created_at_ms, updated_at_ms, archived_at_ms \
-                             FROM projects WHERE account_id = ? \
-                             ORDER BY project_id ASC LIMIT ?",
-                        )
-                        .bind(account_id)
-                        .bind(effective_limit)
-                        .fetch_all(pool)
-                        .await
-                    }
-                }
-                .map_err(|e| BackendError::StoreQuery {
-                    operation: "projects.list_for_account".into(),
-                    message: e.to_string(),
-                })?;
-                Ok(rows
-                    .into_iter()
-                    .map(
-                        |(
-                            project_id,
-                            account_id,
-                            name,
-                            workspace_root,
-                            created_at_ms,
-                            updated_at_ms,
-                            archived_at_ms,
-                        )| {
-                            ProjectRow {
-                                project_id,
-                                account_id,
-                                name,
-                                workspace_root,
-                                created_at_ms,
-                                updated_at_ms,
-                                archived_at_ms,
-                            }
-                        },
-                    )
-                    .collect())
-            }
-            StorePoolRef::Postgres(pool) => {
-                let rows = match cursor {
-                    Some(cursor_id) => {
-                        sqlx::query_as::<
-                            _,
-                            (String, String, String, String, i64, i64, Option<i64>),
-                        >(
-                            "SELECT project_id, account_id, name, workspace_root, created_at_ms, updated_at_ms, archived_at_ms \
-                             FROM projects WHERE account_id = $1 AND project_id > $2 \
-                             ORDER BY project_id ASC LIMIT $3",
-                        )
-                        .bind(account_id)
-                        .bind(cursor_id)
-                        .bind(effective_limit)
-                        .fetch_all(pool)
-                        .await
-                    }
-                    None => {
-                        sqlx::query_as::<
-                            _,
-                            (String, String, String, String, i64, i64, Option<i64>),
-                        >(
-                            "SELECT project_id, account_id, name, workspace_root, created_at_ms, updated_at_ms, archived_at_ms \
-                             FROM projects WHERE account_id = $1 \
-                             ORDER BY project_id ASC LIMIT $2",
-                        )
-                        .bind(account_id)
-                        .bind(effective_limit)
-                        .fetch_all(pool)
-                        .await
-                    }
-                }
-                .map_err(|e| BackendError::StoreQuery {
-                    operation: "projects.list_for_account".into(),
-                    message: e.to_string(),
-                })?;
-                Ok(rows
-                    .into_iter()
-                    .map(
-                        |(
-                            project_id,
-                            account_id,
-                            name,
-                            workspace_root,
-                            created_at_ms,
-                            updated_at_ms,
-                            archived_at_ms,
-                        )| {
-                            ProjectRow {
-                                project_id,
-                                account_id,
-                                name,
-                                workspace_root,
-                                created_at_ms,
-                                updated_at_ms,
-                                archived_at_ms,
-                            }
-                        },
-                    )
-                    .collect())
-            }
-        }
+        Ok(
+            store::projects::list_records_for_account(&self.store, account_id, limit, cursor)
+                .await?
+                .into_iter()
+                .map(project_record_to_row)
+                .collect(),
+        )
     }
 
     async fn update(
         &self,
         project_id: &str,
         name: Option<&str>,
-        workspace_root: Option<&str>,
+        workspace_slug: Option<&str>,
         at_ms: i64,
     ) -> Result<ProjectRow, BackendError> {
-        // Fetch existing first to fill in unchanged fields.
         let existing = self
             .find(project_id)
             .await?
@@ -1743,55 +1563,21 @@ impl ProjectsRepository for StoreBackedProjectsRepository {
                 message: "project not found".into(),
             })?;
         let new_name = name.unwrap_or(&existing.name);
-        let ws_col = if self.store.is_sqlite() {
-            "workspace_slug"
-        } else {
-            "workspace_root"
-        };
-        match self.store.as_store_pool() {
-            StorePoolRef::Sqlite(pool) => {
-                sqlx::query(&format!(
-                    "UPDATE projects SET name = ?, {ws_col} = ?, updated_at_ms = ? \
-                     WHERE project_id = ? AND account_id = ?"
-                ))
-                .bind(new_name)
-                .bind(workspace_root.unwrap_or(&existing.workspace_root))
-                .bind(at_ms)
-                .bind(project_id)
-                .bind(&existing.account_id)
-                .execute(pool)
-                .await
-                .map_err(|e| BackendError::StoreQuery {
-                    operation: "projects.update".into(),
-                    message: e.to_string(),
-                })?;
-            }
-            StorePoolRef::Postgres(pool) => {
-                sqlx::query(&format!(
-                    "UPDATE projects SET name = $1, {ws_col} = $2, updated_at_ms = $3 \
-                     WHERE project_id = $4 AND account_id = $5"
-                ))
-                .bind(new_name)
-                .bind(workspace_root.unwrap_or(&existing.workspace_root))
-                .bind(at_ms)
-                .bind(project_id)
-                .bind(&existing.account_id)
-                .execute(pool)
-                .await
-                .map_err(|e| BackendError::StoreQuery {
-                    operation: "projects.update".into(),
-                    message: e.to_string(),
-                })?;
-            }
-        }
-        // Return updated row.
+        let new_slug = workspace_slug.unwrap_or(&existing.workspace_slug);
+        store::projects::update_fields(
+            &self.store,
+            &existing.account_id,
+            project_id,
+            new_name,
+            new_slug,
+            at_ms,
+        )
+        .await?;
         Ok(ProjectRow {
             project_id: project_id.to_string(),
             account_id: existing.account_id,
             name: new_name.to_string(),
-            workspace_root: workspace_root
-                .unwrap_or(&existing.workspace_root)
-                .to_string(),
+            workspace_slug: new_slug.to_string(),
             created_at_ms: existing.created_at_ms,
             updated_at_ms: at_ms,
             archived_at_ms: existing.archived_at_ms,
@@ -1799,31 +1585,10 @@ impl ProjectsRepository for StoreBackedProjectsRepository {
     }
 
     async fn archive(&self, project_id: &str, at_ms: i64) -> Result<bool, BackendError> {
-        let result = match self.store.as_store_pool() {
-            StorePoolRef::Sqlite(pool) => sqlx::query(
-                "UPDATE projects SET archived_at_ms = ? \
-                     WHERE project_id = ? AND archived_at_ms IS NULL",
-            )
-            .bind(at_ms)
-            .bind(project_id)
-            .execute(pool)
-            .await
-            .map(|r| r.rows_affected()),
-            StorePoolRef::Postgres(pool) => sqlx::query(
-                "UPDATE projects SET archived_at_ms = $1 \
-                     WHERE project_id = $2 AND archived_at_ms IS NULL",
-            )
-            .bind(at_ms)
-            .bind(project_id)
-            .execute(pool)
-            .await
-            .map(|r| r.rows_affected()),
-        }
-        .map_err(|e| BackendError::StoreQuery {
-            operation: "projects.archive".into(),
-            message: e.to_string(),
-        })?;
-        Ok(result == 1)
+        let Some(existing) = self.find(project_id).await? else {
+            return Ok(false);
+        };
+        store::projects::archive(&self.store, &existing.account_id, project_id, at_ms).await
     }
 }
 
@@ -2416,9 +2181,7 @@ impl OutboxRepository for StoreBackedOutboxRepository {
 // ---------------------------------------------------------------------------
 // Store-backed implementations — AuditRepository
 //
-// The audit_events table exists only in the Postgres schema. On SQLite,
-// insert/list operations silently succeed with no persistence (audit is
-// non-critical for local development).
+// audit_events exists on both dialects (storage parity).
 // ---------------------------------------------------------------------------
 
 struct StoreBackedAuditRepository {
@@ -2438,8 +2201,25 @@ impl AuditRepository for StoreBackedAuditRepository {
     ) -> Result<AuditRow, BackendError> {
         let audit_id = Uuid::new_v4().to_string();
         match self.store.as_store_pool() {
-            StorePoolRef::Sqlite(_) => {
-                // No audit table in SQLite; return the constructed row.
+            StorePoolRef::Sqlite(pool) => {
+                sqlx::query(
+                    "INSERT INTO audit_events \
+                     (audit_id, actor_kind, account_id, installation_id, event_type, metadata, at_ms) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?)",
+                )
+                .bind(&audit_id)
+                .bind(actor_kind)
+                .bind(account_id)
+                .bind(installation_id)
+                .bind(event_type)
+                .bind(metadata)
+                .bind(at_ms)
+                .execute(pool)
+                .await
+                .map_err(|e| BackendError::StoreQuery {
+                    operation: "audit.insert".into(),
+                    message: e.to_string(),
+                })?;
             }
             StorePoolRef::Postgres(pool) => {
                 sqlx::query(
@@ -2480,7 +2260,57 @@ impl AuditRepository for StoreBackedAuditRepository {
         limit: u32,
     ) -> Result<Vec<AuditRow>, BackendError> {
         match self.store.as_store_pool() {
-            StorePoolRef::Sqlite(_) => Ok(Vec::new()),
+            StorePoolRef::Sqlite(pool) => {
+                let rows = sqlx::query_as::<
+                    _,
+                    (
+                        String,
+                        String,
+                        Option<String>,
+                        Option<String>,
+                        String,
+                        Option<String>,
+                        i64,
+                    ),
+                >(
+                    "SELECT audit_id, actor_kind, account_id, installation_id, \
+                            event_type, metadata, at_ms \
+                       FROM audit_events \
+                      WHERE account_id = ? AND at_ms >= ? \
+                      ORDER BY at_ms DESC LIMIT ?",
+                )
+                .bind(account_id)
+                .bind(since_ms)
+                .bind(i64::from(limit))
+                .fetch_all(pool)
+                .await
+                .map_err(|e| BackendError::StoreQuery {
+                    operation: "audit.list_since".into(),
+                    message: e.to_string(),
+                })?;
+                return Ok(rows
+                    .into_iter()
+                    .map(
+                        |(
+                            audit_id,
+                            actor_kind,
+                            account_id,
+                            installation_id,
+                            event_type,
+                            metadata,
+                            at_ms,
+                        )| AuditRow {
+                            audit_id,
+                            actor_kind,
+                            account_id,
+                            installation_id,
+                            event_type,
+                            metadata,
+                            at_ms,
+                        },
+                    )
+                    .collect());
+            }
             StorePoolRef::Postgres(pool) => {
                 let rows = sqlx::query_as::<
                     _,

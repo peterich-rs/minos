@@ -22,8 +22,9 @@ services:
     ports:
       - "5432:5432"
     volumes:
+      # Schema is applied only by minos-backend sqlx::migrate! (same as prod).
+      # Do not mount migrations into docker-entrypoint-initdb.d — that double-inits.
       - postgres_data:/var/lib/postgresql/data
-      - ../crates/minos-backend/migrations/postgres:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U minos"]
       interval: 10s

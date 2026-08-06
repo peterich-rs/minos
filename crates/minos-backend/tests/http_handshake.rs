@@ -250,9 +250,7 @@ async fn devices_authenticated_connect_emits_hello_frame_when_peer_is_not_live()
 
     let mac_id = DeviceId::new();
 
-    store::device_installations::insert_device(&pool, mac_id, "mac", DeviceRole::AgentHost, 0)
-        .await
-        .unwrap();
+    store::test_support::insert_test_host(&pool, mac_id, "mac", 0).await;
     let account_id = store::accounts::create(&pool, "presence@example.com")
         .await
         .unwrap()
@@ -286,9 +284,7 @@ async fn ws_client_rejects_host_ticket_with_401() {
     let (base, _task, pool, auth) = spawn_relay().await;
 
     let id = DeviceId::new();
-    store::device_installations::insert_device(&pool, id, "mac", DeviceRole::AgentHost, 0)
-        .await
-        .unwrap();
+    store::test_support::insert_test_host(&pool, id, "mac", 0).await;
 
     let ticket = issue_host_ws_ticket(&auth, id).await.unwrap();
     let err = connect_gateway_ws(&base, "/ws/client", &ticket)
