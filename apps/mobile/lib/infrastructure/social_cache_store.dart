@@ -779,6 +779,9 @@ class SocialCacheStore {
     return _loadMessageByLocalId(db, localId);
   }
 
+  /// Update rail preview. [createdAtMs] advances [last_message_at_ms] only via
+  /// `max(prev, createdAtMs)` — never invents wall clock, never regresses on
+  /// stale/recall frames with an older message timestamp.
   Future<void> touchConversationPreview({
     required String conversationId,
     required String preview,
@@ -790,9 +793,23 @@ class SocialCacheStore {
     if (db == null) {
       return;
     }
+    final existing = await db.query(
+      'cached_social_conversations',
+      columns: <String>['last_message_at_ms'],
+      where: 'conversation_id = ?',
+      whereArgs: <Object>[conversationId],
+      limit: 1,
+    );
+    final prevAt = existing.isEmpty
+        ? 0
+        : (existing.first['last_message_at_ms'] as int? ?? 0);
+    final incoming = createdAtMs > 0 ? createdAtMs : 0;
+    final nextAt = incoming > 0
+        ? (incoming > prevAt ? incoming : prevAt)
+        : prevAt;
     final values = <String, Object?>{
       'last_message_preview': preview,
-      'last_message_at_ms': createdAtMs,
+      'last_message_at_ms': nextAt,
     };
     if (unreadCount != null) {
       values['unread_count'] = unreadCount;
@@ -817,7 +834,7 @@ class SocialCacheStore {
           'counterpart_json': null,
           'member_count': 0,
           'last_message_preview': preview,
-          'last_message_at_ms': createdAtMs,
+          'last_message_at_ms': nextAt,
           'unread_count': unreadCount ?? 0,
           'unread_mention_count': unreadMentionCount ?? 0,
         },

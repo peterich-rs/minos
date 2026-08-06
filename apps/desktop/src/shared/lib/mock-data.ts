@@ -49,7 +49,11 @@ export type Project = {
   updatedAtMs: number;
   /** True when any conversation has unread or pending approval. */
   hasUnread: boolean;
-  /** Max updatedAtMs among conversations that currently need attention. */
+  /**
+   * Max `updatedAtMs` among conversations that currently need attention.
+   * Sort uses `hasUnread` + project `updatedAtMs` only — this is diagnostic /
+   * aggregate metadata, not a separate sort key.
+   */
   lastAttentionMs: number;
   /**
    * Which host owns this project (plane C).
@@ -63,8 +67,10 @@ export type Conversation = {
   projectId: string;
   title: string;
   preview: string;
-  updatedAt: string;
-  /** Raw last-update timestamp (ms) for sorting; `updatedAt` is display-only. */
+  /**
+   * Last activity epoch ms (sort + list clock SSOT).
+   * Format at render with `formatListActivityTime` — never store display strings.
+   */
   updatedAtMs: number;
   unread?: number;
   /** Aggregated message count in the conversation timeline. */
@@ -252,7 +258,6 @@ export const conversations: Conversation[] = [
     projectId: "proj-minos",
     title: "JWT auth refactor",
     preview: "@codex finished route handlers; @claude reviewing tests…",
-    updatedAt: "2m",
     updatedAtMs: NOW_MS - 2 * 60_000,
     unread: 2,
     messageCount: 14,
@@ -271,7 +276,6 @@ export const conversations: Conversation[] = [
     projectId: "proj-minos",
     title: "Desktop shell IA",
     preview: "You: map TUI nav to multi-pane desktop…",
-    updatedAt: "18m",
     updatedAtMs: NOW_MS - 18 * 60_000,
     messageCount: 6,
     boardColumn: "needs_you",
@@ -288,7 +292,6 @@ export const conversations: Conversation[] = [
     projectId: "proj-minos",
     title: "Ingest sync rework",
     preview: "codex: checkpoint coalescing landed",
-    updatedAt: "1h",
     updatedAtMs: NOW_MS - 60 * 60_000,
     messageCount: 9,
     boardColumn: "done",
@@ -305,7 +308,6 @@ export const conversations: Conversation[] = [
     projectId: "proj-minos",
     title: "Architecture docs pass",
     preview: "No agents yet — draft outline ready",
-    updatedAt: "Yesterday",
     updatedAtMs: NOW_MS - 24 * 60 * 60_000,
     messageCount: 1,
     boardColumn: "backlog",
@@ -322,7 +324,6 @@ export const conversations: Conversation[] = [
     projectId: "proj-landing",
     title: "Hero section rewrite",
     preview: "Waiting to start an agent",
-    updatedAt: "3h",
     updatedAtMs: NOW_MS - 3 * 60 * 60_000,
     messageCount: 1,
     boardColumn: "backlog",
@@ -339,7 +340,6 @@ export const conversations: Conversation[] = [
     projectId: "proj-landing",
     title: "SEO meta tags",
     preview: "gemini: drafted Open Graph tags",
-    updatedAt: "5h",
     updatedAtMs: NOW_MS - 5 * 60 * 60_000,
     messageCount: 4,
     boardColumn: "done",
@@ -356,7 +356,6 @@ export const conversations: Conversation[] = [
     projectId: "proj-sdk",
     title: "Retry policy for WS",
     preview: "@grok needs approval to edit reconnect.rs",
-    updatedAt: "12m",
     updatedAtMs: NOW_MS - 12 * 60_000,
     unread: 1,
     messageCount: 3,

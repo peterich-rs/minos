@@ -1497,7 +1497,9 @@ fn map_conversation(c: LocalConversationSummary) -> ConversationDto {
         preview: c
             .last_message_preview
             .unwrap_or_else(|| "No messages yet".into()),
-        updated_at: relative_time(c.updated_at_ms),
+        // Display is formatListActivityTime(updatedAtMs) in the webview — no
+        // frozen relative string from the host process (stale the moment it lands).
+        updated_at: String::new(),
         updated_at_ms: c.updated_at_ms,
         message_count: c.message_count,
         agent_session_count: c.agent_session_count,
@@ -1576,7 +1578,8 @@ fn map_message(m: LocalConversationMessage) -> MessageDto {
         agent: m.agent.map(agent_label),
         session_id: m.session_id,
         body: m.body,
-        time: clock_time(m.created_at_ms),
+        // Empty: webview formats created_at_ms with local timezone.
+        time: String::new(),
         created_at_ms: m.created_at_ms,
         kind: kind.into(),
         reply_to_message_id: m.reply_to_message_id,
@@ -3460,36 +3463,6 @@ fn thread_status_label(t: &SessionSummary) -> String {
         SessionState::Suspended { .. } => "suspended".into(),
         SessionState::Closed { .. } => "done".into(),
     }
-}
-
-fn relative_time(ms: i64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(ms);
-    let delta = (now - ms).max(0);
-    let secs = delta / 1000;
-    if secs < 60 {
-        return format!("{secs}s");
-    }
-    let mins = secs / 60;
-    if mins < 60 {
-        return format!("{mins}m");
-    }
-    let hours = mins / 60;
-    if hours < 48 {
-        return format!("{hours}h");
-    }
-    format!("{}d", hours / 24)
-}
-
-/// Fallback wire string only. UI formats `created_at_ms` in the local timezone.
-fn clock_time(ms: i64) -> String {
-    let secs = ms / 1000;
-    let mins_total = secs / 60;
-    let minutes = mins_total.rem_euclid(60);
-    let hours = (mins_total / 60).rem_euclid(24);
-    format!("{hours:02}:{minutes:02}")
 }
 
 fn pump_still_current(my_gen: u64, flag: &AtomicU64) -> bool {

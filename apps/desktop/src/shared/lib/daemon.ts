@@ -43,7 +43,8 @@ export type DaemonConversation = {
   projectId: string;
   title: string;
   preview: string;
-  updatedAt: string;
+  /** @deprecated Empty wire field; format `updatedAtMs` at render. */
+  updatedAt?: string;
   updatedAtMs: number;
   messageCount: number;
   agentSessionCount: number;

@@ -432,9 +432,11 @@ minos_local_read_session_raw_history / subscribe_ingest
 |----|------|
 | 排序键 | 服务端 `message_seq` ASC（bridge reverse + 前端 `sortTimelineMessages` 防御）；**不用** `createdAtMs` 排序 |
 | 字段 | `messageSeq` / `messageId` / `replyToMessageId` / `mentions` / `delegationId` 经 Tauri DTO 贯通 |
+| 时钟 | **epoch ms SSOT**（`createdAtMs` / 列表 `updatedAtMs`）。气泡用 `formatLocalClock`（本地 `HH:mm`）；列表/Board 用 `formatListActivityTime`（今天时钟 / Yesterday / 周几 / 日期）在 **render 时**格式化，**禁止**把相对时间串写进 store |
+| 列表 last activity | Hub IM：`max(hub.lastMessageAtMs, daemon.updatedAtMs)`；preview 跟随较新一侧（防 host_projection 滞后钉死旧 digest）。本机发送乐观更新 rail。**Recall**：从已打开时间线剩余气泡重算 last activity，禁止用被撤回消息的 `createdAtMs` 覆盖（会倒退列表时钟）；无窗口时保留 prev digest。Account digest 缺 `at_ms` 时 **不** 用 `Date.now()` 伪造。Daemon 物理 `conversations.updated_at_ms` **仅** message upsert 写入；title/git/session count 不 bump；list SELECT 用 top-level `MAX(created_at_ms)` 作 last-activity SSOT |
 | 正文 | user + agent 气泡用 `MarkdownText`：`react-markdown` + `remark-gfm`（标题/列表/表格/fence/粗斜体/链接；默认不渲染 raw HTML） |
 | 引用 | 有 `replyToMessageId` 时显示短引用条（委托 result → request 等） |
-| Optimistic | 本地 `pending` 行；下一次 list 整表替换服务端真相并丢弃 pending |
+| Optimistic | 本地 `sending` 行立刻用本地时钟；下一次 list / Hub merge 以 id 对齐服务端真相 |
 | Live | `daemon://conversation` → debounce re-list；仍以 `message_seq` 序展示 |
 | Subagent | 主时间线不展示 subagent session 消息（daemon list 过滤）；细节在 Sessions transcript |
 

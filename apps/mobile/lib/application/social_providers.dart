@@ -932,6 +932,11 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
       next = current.conversations
           .map((c) {
             if (c.conversationId != conversationId) return c;
+            final prevMs = repository.platformInt64ToIntValue(c.lastMessageAtMs);
+            final incoming = lastMessageAtMs > 0 ? lastMessageAtMs : 0;
+            final nextMs = incoming > 0
+                ? (incoming > prevMs ? incoming : prevMs)
+                : prevMs;
             return ConversationSummary(
               conversationId: c.conversationId,
               kind: c.kind,
@@ -939,9 +944,7 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
               counterpart: c.counterpart,
               memberCount: c.memberCount,
               lastMessagePreview: preview,
-              lastMessageAtMs: repository.platformInt64FromIntValue(
-                lastMessageAtMs,
-              ),
+              lastMessageAtMs: repository.platformInt64FromIntValue(nextMs),
               unreadCount: unreadCount ?? c.unreadCount,
               unreadMentionCount: unreadCount == 0 ? 0 : c.unreadMentionCount,
             );
@@ -956,7 +959,7 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
           memberCount: 0,
           lastMessagePreview: preview,
           lastMessageAtMs: repository.platformInt64FromIntValue(
-            lastMessageAtMs,
+            lastMessageAtMs > 0 ? lastMessageAtMs : 0,
           ),
           unreadCount: unreadCount ?? 0,
           unreadMentionCount: 0,
@@ -982,6 +985,7 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
       return;
     }
     final createdAtMs = repository.platformInt64ToIntValue(message.createdAtMs);
+    final isRecall = message.recalledAtMs != null;
     final isOwn =
         myAccountId != null &&
         myAccountId.isNotEmpty &&
@@ -993,17 +997,36 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
     int unread = 0;
     int unreadMention = 0;
     final prev = await repository.loadConversation(conversationId);
+    final prevMs = prev != null
+        ? repository.platformInt64ToIntValue(prev.lastMessageAtMs)
+        : 0;
+    // Monotonic list clock: never regress when a recall/stale frame carries
+    // an older createdAtMs than the current rail tip.
+    final nextMs = createdAtMs > 0
+        ? (createdAtMs > prevMs ? createdAtMs : prevMs)
+        : prevMs;
     if (focused || isOwn) {
       unread = 0;
       unreadMention = 0;
       await repository.clearUnread(conversationId);
-    } else {
+    } else if (!isRecall) {
       unread = (prev?.unreadCount ?? 0) + 1;
       unreadMention = (prev?.unreadMentionCount ?? 0) + (mention ? 1 : 0);
       await repository.touchConversationPreview(
         conversationId: conversationId,
         preview: message.text,
-        createdAtMs: createdAtMs,
+        createdAtMs: nextMs,
+        unreadCount: unread,
+        unreadMentionCount: unreadMention,
+      );
+    } else {
+      // Recall: preview only; keep unread as-is (server digest is SSOT).
+      unread = prev?.unreadCount ?? 0;
+      unreadMention = prev?.unreadMentionCount ?? 0;
+      await repository.touchConversationPreview(
+        conversationId: conversationId,
+        preview: message.text,
+        createdAtMs: nextMs,
         unreadCount: unread,
         unreadMentionCount: unreadMention,
       );
@@ -1012,7 +1035,7 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
       await repository.touchConversationPreview(
         conversationId: conversationId,
         preview: message.text,
-        createdAtMs: createdAtMs,
+        createdAtMs: nextMs,
         unreadCount: 0,
         unreadMentionCount: 0,
       );
@@ -1024,6 +1047,7 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
     final exists = current.conversations.any(
       (c) => c.conversationId == conversationId,
     );
+    final nextLastAt = repository.platformInt64FromIntValue(nextMs);
     List<ConversationSummary> next;
     if (exists) {
       next = current.conversations
@@ -1036,7 +1060,7 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
               counterpart: c.counterpart,
               memberCount: c.memberCount,
               lastMessagePreview: message.text,
-              lastMessageAtMs: message.createdAtMs,
+              lastMessageAtMs: nextLastAt,
               unreadCount: focused || isOwn ? 0 : unread,
               unreadMentionCount: focused || isOwn ? 0 : unreadMention,
             );
@@ -1051,9 +1075,11 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
           counterpart: prev?.counterpart,
           memberCount: prev?.memberCount ?? 0,
           lastMessagePreview: message.text,
-          lastMessageAtMs: message.createdAtMs,
-          unreadCount: focused || isOwn ? 0 : 1,
-          unreadMentionCount: focused || isOwn ? 0 : (mention ? 1 : 0),
+          lastMessageAtMs: nextLastAt,
+          unreadCount: focused || isOwn ? 0 : (isRecall ? 0 : 1),
+          unreadMentionCount: focused || isOwn
+              ? 0
+              : (isRecall ? 0 : (mention ? 1 : 0)),
         ),
         ...current.conversations,
       ];

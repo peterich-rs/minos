@@ -612,14 +612,15 @@ impl LocalStore {
         git_head: Option<&str>,
         ts_ms: i64,
     ) -> anyhow::Result<bool> {
+        // Do not bump updated_at_ms — that column is last-message activity only.
+        let _ = ts_ms;
         let result = sqlx::query(
             "UPDATE conversations SET \
                 branch = ?, \
                 worktree_path = ?, \
                 git_mode = COALESCE(?, git_mode), \
                 git_dirty = ?, \
-                git_head = ?, \
-                updated_at_ms = ? \
+                git_head = ? \
              WHERE conversation_id = ?",
         )
         .bind(branch)
@@ -627,7 +628,6 @@ impl LocalStore {
         .bind(git_mode)
         .bind(git_dirty.map(i64::from))
         .bind(git_head)
-        .bind(ts_ms)
         .bind(conversation_id)
         .execute(&self.pool)
         .await?;
@@ -669,7 +669,8 @@ impl LocalStore {
         if sets.is_empty() {
             return Ok(false);
         }
-        sets.push("updated_at_ms = ?");
+        // title / priority / progress must not move last-message activity.
+        let _ = ts_ms;
         let sql = format!(
             "UPDATE conversations SET {} WHERE conversation_id = ?",
             sets.join(", ")
@@ -684,7 +685,7 @@ impl LocalStore {
         if let Some(pr) = progress {
             query = query.bind(pr);
         }
-        query = query.bind(ts_ms).bind(conversation_id);
+        query = query.bind(conversation_id);
         let result = query.execute(&self.pool).await?;
         Ok(result.rows_affected() > 0)
     }
@@ -695,12 +696,12 @@ impl LocalStore {
         conversation_id: &str,
         ts_ms: i64,
     ) -> anyhow::Result<()> {
+        let _ = ts_ms;
         sqlx::query(
             "UPDATE conversations \
-             SET progress = 'in_progress', updated_at_ms = ? \
+             SET progress = 'in_progress' \
              WHERE conversation_id = ? AND progress = 'todo'",
         )
-        .bind(ts_ms)
         .bind(conversation_id)
         .execute(&self.pool)
         .await?;
@@ -955,12 +956,13 @@ impl LocalStore {
         .execute(&mut *tx)
         .await?;
         if count_as_agent_session && inserted.rows_affected() > 0 {
+            // Session membership is not a chat-message event — do not bump
+            // last-message activity (`updated_at_ms`).
             sqlx::query(
                 "UPDATE conversations \
-                 SET agent_session_count = agent_session_count + 1, updated_at_ms = ? \
+                 SET agent_session_count = agent_session_count + 1 \
                  WHERE conversation_id = ?",
             )
-            .bind(ts_ms)
             .bind(conversation_id)
             .execute(&mut *tx)
             .await?;
@@ -1053,6 +1055,8 @@ impl LocalStore {
             result.last_insert_rowid()
         };
 
+        // Sole writer of conversations.updated_at_ms outside create: last-message
+        // activity (preview + epoch). Title/git/session paths must not touch it.
         sqlx::query(
             "UPDATE conversations \
              SET last_message_preview = ?, updated_at_ms = ? \
@@ -1351,6 +1355,12 @@ pub fn normalize_roster_brief(raw: Option<&str>) -> String {
 
 /// Shared SELECT list for conversation rows (list + get).
 /// Includes live thread aggregates for board / attention chips.
+///
+/// **`updated_at_ms` (list last activity):** derived as
+/// `MAX(top-level chat_messages.created_at_ms)` (exclude subagent sessions),
+/// falling back to `c.created_at_ms` when empty. Physical `conversations.updated_at_ms`
+/// is only written on durable message upsert (not title/git/session count) so it
+/// stays aligned; list/get still derive so subagent filter stays correct.
 const CONVERSATION_SELECT_COLS: &str = "\
     c.conversation_id, c.project_id, c.title, \
     (SELECT m.body FROM chat_messages m \
