@@ -292,6 +292,13 @@
       "auth": "account_bearer"
     },
     {
+      "method": "POST",
+      "path": "/v1/projects/archive",
+      "probe_path": "/v1/projects/archive",
+      "surface": "account_api",
+      "auth": "account_bearer"
+    },
+    {
       "method": "DELETE",
       "path": "/v1/projects/:project_id",
       "probe_path": "/v1/projects/proj_probe",
