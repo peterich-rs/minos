@@ -932,7 +932,9 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
       next = current.conversations
           .map((c) {
             if (c.conversationId != conversationId) return c;
-            final prevMs = repository.platformInt64ToIntValue(c.lastMessageAtMs);
+            final prevMs = repository.platformInt64ToIntValue(
+              c.lastMessageAtMs,
+            );
             final incoming = lastMessageAtMs > 0 ? lastMessageAtMs : 0;
             final nextMs = incoming > 0
                 ? (incoming > prevMs ? incoming : prevMs)
