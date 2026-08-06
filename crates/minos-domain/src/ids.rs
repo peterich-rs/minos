@@ -31,32 +31,6 @@ impl std::fmt::Display for DeviceId {
     }
 }
 
-// UniFFI bridge. `DeviceId` is a local type, so this is the *home*
-// registration (no `remote` keyword). Downstream crates that want the same
-// type across their own tag should pull these impls in with
-// `uniffi::use_remote_type!(DeviceId from minos_domain)` rather than
-// re-registering (which collides with the home-crate blanket impls).
-// Bridging via `String` keeps the registration self-contained so this crate
-// doesn't also have to own a `Uuid` bridge.
-#[cfg(feature = "uniffi")]
-mod uniffi_bridges {
-    use super::{DeviceId, DeviceSecret};
-    use uuid::Uuid;
-
-    uniffi::custom_type!(DeviceId, String, {
-        lower: |id| id.0.to_string(),
-        try_lift: |text| Uuid::parse_str(&text).map(DeviceId).map_err(Into::into),
-    });
-
-    // `DeviceSecret` is a newtype over `String`; UniFFI marshals it as a
-    // transparent string. The base64url contents cross the FFI untouched —
-    // Swift never needs to know this is "base64url-no-pad, 43 chars".
-    uniffi::custom_type!(DeviceSecret, String, {
-        lower: |s| s.0,
-        try_lift: |s| Ok(DeviceSecret(s)),
-    });
-}
-
 /// One-shot pairing token: 32 random bytes, presented as base64url.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]

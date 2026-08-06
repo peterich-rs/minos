@@ -28,7 +28,6 @@ use crate::store::{ChatMessageRow, ConversationRow, EventRow, LocalStore, Sessio
 use crate::subscription::{AgentStateObserver, Subscription};
 use crate::{ingest_coalescer::IngestCoalescer, ingest_sync::IngestSyncHandle};
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentSessionSnapshot {
     pub session_id: String,

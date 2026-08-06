@@ -1,9 +1,7 @@
-//! UniFFI bridge for connection-state streaming.
+//! Push-model observer bridge for connection-state streaming.
 //!
-//! Rust consumers use `DaemonHandle::events_stream()` to get a raw
-//! `watch::Receiver`. UniFFI consumers (Swift) use the push-model
-//! `DaemonHandle::subscribe(observer)` + `Subscription::cancel()` because
-//! Tokio types cannot cross the FFI boundary.
+//! Prefer `DaemonHandle` watch receivers / local RPC for in-process Rust
+//! consumers. These observers remain for callback-style subscribers and tests.
 
 use std::sync::{Arc, Mutex};
 
@@ -13,12 +11,10 @@ use tokio::sync::{oneshot, watch};
 
 /// Opaque subscription handle. Swift holds this and calls `cancel` to
 /// tear down the observer task at app shutdown or menu teardown.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct Subscription {
     cancel_tx: Mutex<Option<oneshot::Sender<()>>>,
 }
 
-#[cfg_attr(feature = "uniffi", uniffi::export)]
 impl Subscription {
     /// Cancel the observer task. Idempotent.
     pub fn cancel(&self) {
@@ -40,12 +36,10 @@ impl Subscription {
 /// Foreign-implementable callback. Swift conforms to the generated
 /// `ConnectionStateObserver` protocol; Rust calls `on_state` each time
 /// `watch::Receiver::changed` fires.
-#[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 pub trait ConnectionStateObserver: Send + Sync {
     fn on_state(&self, state: ConnectionState);
 }
 
-#[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 pub trait AgentStateObserver: Send + Sync {
     fn on_state(&self, state: SessionState);
 }
@@ -53,14 +47,12 @@ pub trait AgentStateObserver: Send + Sync {
 /// Relay-link push observer. Swift implements this protocol; Rust calls
 /// `on_state` whenever the underlying `watch::Receiver<RelayLinkState>`
 /// fires. See spec §4.3 for the two independent state axes.
-#[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 pub trait RelayLinkStateObserver: Send + Sync {
     fn on_state(&self, state: RelayLinkState);
 }
 
 /// Peer-pairing push observer. Mirrors `RelayLinkStateObserver` for the
 /// peer axis: `Unpaired` / `Pairing` / `Paired { online }`.
-#[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 pub trait PeerStateObserver: Send + Sync {
     fn on_state(&self, state: PeerState);
 }

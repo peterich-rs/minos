@@ -25,8 +25,6 @@
 // gated `#[cfg(unix)]` and limited to async-signal-safe libc entry points.
 #![deny(unsafe_code)]
 
-#[cfg(feature = "uniffi")]
-uniffi::setup_scaffolding!();
 
 pub mod acp_client;
 pub(crate) mod approvals;

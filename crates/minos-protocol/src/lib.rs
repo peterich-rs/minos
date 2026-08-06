@@ -23,8 +23,3 @@ pub use realtime::*;
 pub use rpc::*;
 pub use ws_ticket::*;
 
-// UniFFI 0.31 per-crate scaffolding: every crate that carries `uniffi::*`
-// derives must define `UniFfiTag` locally via `setup_scaffolding!()`; the
-// derive expansions reference `crate::UniFfiTag`.
-#[cfg(feature = "uniffi")]
-uniffi::setup_scaffolding!();

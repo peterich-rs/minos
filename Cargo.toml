@@ -72,7 +72,6 @@ subtle = "2"
 which = "6"
 
 # ffi (consumed only by shim crates)
-uniffi = { version = "0.31", features = ["build"] }
 
 # macOS Keychain (consumed by minos-daemon under cfg(target_os = "macos"))
 

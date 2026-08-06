@@ -208,24 +208,10 @@ async fn wait_for_host_command_roundtrip(relay: &Relay, host_id: DeviceId) -> an
 }
 
 async fn register_formal_host(relay: &Relay, host_id: DeviceId) -> anyhow::Result<PairedHost> {
-    store::device_installations::insert_device(
-        &relay.state.store,
-        host_id,
-        "Test Mac",
-        DeviceRole::AgentHost,
-        0,
-    )
-    .await?;
+    store::test_support::insert_test_host(&relay.state.store, host_id, "Test Mac", 0,).await;
     let account = store::accounts::create(&relay.state.store, "relay-e2e@example.com").await?;
     let mobile_id = DeviceId::new();
-    store::device_installations::insert_device(
-        &relay.state.store,
-        mobile_id,
-        "Test iPhone",
-        DeviceRole::MobileClient,
-        0,
-    )
-    .await?;
+    { let _acct = store::accounts::create(&relay.state.store, &format!("fixture-{}@localhost", mobile_id)).await.unwrap(); store::test_support::insert_test_client(&relay.state.store, mobile_id, DeviceRole::MobileClient, &_acct.account_id, "Test iPhone", 0,).await; };
     store::device_installations::set_account_id(
         &relay.state.store,
         &mobile_id,

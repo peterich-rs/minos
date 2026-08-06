@@ -837,7 +837,7 @@ pub fn init_logging(log_dir: String) -> Result<(), MinosError> {
     minos_mobile::logging::init(Path::new(&log_dir))
 }
 
-/// Localize an `ErrorKind` into user-facing copy. Mirrors the UniFFI adapter's
+/// Localize an `ErrorKind` into user-facing copy. Mirrors the host error adapter's
 /// `kind_message` so Dart can render localized error strings without hard-
 /// coding them.
 #[frb(sync)]

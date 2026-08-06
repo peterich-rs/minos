@@ -1,7 +1,6 @@
 use minos_domain::AgentName;
 use serde::{Deserialize, Serialize};
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactRef {
     pub session_id: String,
@@ -11,7 +10,6 @@ pub struct ArtifactRef {
     pub media_type: String,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DisplayPayload {
@@ -199,7 +197,6 @@ pub enum SubagentStatus {
     Interrupted,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionEndReason {

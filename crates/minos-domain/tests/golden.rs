@@ -1,5 +1,5 @@
 //! Golden-file checks. Failure here means the JSON shape exposed across the
-//! UniFFI / frb boundary would silently change, breaking Swift / Dart consumers.
+//! FRB/mobile boundary would silently change, breaking Dart consumers.
 
 use minos_domain::{AgentDescriptor, AgentName, AgentStatus, ConnectionState};
 

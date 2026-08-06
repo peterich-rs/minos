@@ -4,12 +4,10 @@
 //! short, user-facing copy (zh / en) so UI layers do not need to translate
 //! by themselves. The `ErrorKind` companion enum mirrors `MinosError`'s
 //! discriminants without payload and carries the single-source-of-truth
-//! localization table — UniFFI consumers call `kind_message(kind, lang)`
-//! because `#[uniffi::Error]` variants cannot be passed as arguments.
+//! localization table — FFI/mobile consumers call `kind_message(kind, lang)`.
 
 use crate::PairingState;
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
     Zh,
@@ -17,9 +15,8 @@ pub enum Lang {
 }
 
 /// Payload-free discriminant of `MinosError`. Mirrored 1:1 with `MinosError`
-/// variants (excluding carried data). UniFFI exposes this + `user_message`
+/// variants (excluding carried data). Used with `user_message`
 /// as the cross-language localization bridge.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorKind {
     BindFailed,
@@ -186,7 +183,6 @@ impl ErrorKind {
     }
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 #[derive(thiserror::Error, Debug, Clone)]
 pub enum MinosError {
     // ── network / WS layer ──
