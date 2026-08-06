@@ -16,8 +16,7 @@ use regex::Regex;
 const TARGETS: &[&str] = &[
     "crates/minos-protocol/src",
     "crates/minos-domain/src",
-    "crates/minos-ffi-uniffi/src",
-    "crates/minos-ffi-frb/src",
+        "crates/minos-ffi-frb/src",
     "crates/minos-mobile/src",
     "crates/minos-daemon/src",
     "crates/minos-backend/migrations",

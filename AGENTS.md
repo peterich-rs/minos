@@ -8,14 +8,13 @@ Minos 是一个远程 AI 编码控制系统：Mac 运行 host 端，通过手机
 |------|---------|
 | [docs/architecture-overview.md](docs/architecture-overview.md) | 项目总览、顶层架构、仓库结构、crate 依赖图、技术栈 |
 | [docs/architecture-backend.md](docs/architecture-backend.md) | 后端服务 (minos-backend)：HTTP API、WebSocket 网关、认证、配对、实时扇出、数据库层、Agent 会话、后台 Worker |
-| [docs/architecture-daemon.md](docs/architecture-daemon.md) | Host 守护进程 (minos-daemon)：relay 连接、agent 管理、本地 SQLite 持久化、配对 QR、JSON-RPC 服务器、UniFFI 暴露 |
+| [docs/architecture-daemon.md](docs/architecture-daemon.md) | Host 守护进程 (minos-daemon)：relay 连接、agent 管理、本地 SQLite 持久化、Host Link、JSON-RPC 服务器 |
 | [docs/architecture-tui.md](docs/architecture-tui.md) | 终端 UI (minos-tui)：Ratatui 布局、事件系统、嵌入式/daemon 后端、群聊协调、MCP agent 间协作 |
 | [docs/architecture-mobile.md](docs/architecture-mobile.md) | 移动端 (Flutter + minos-mobile)：四层架构、Riverpod 状态管理、FRB 桥接、认证/配对/会话流程、WebSocket 重连 |
-| [docs/architecture-macos.md](docs/architecture-macos.md) | macOS 应用 (SwiftUI + UniFFI)：状态栏应用、DaemonDriving 协议、bootstrap、QR 渲染 |
 | [docs/architecture-web.md](docs/architecture-web.md) | Web 管理控制台 (React + Vite)：Zustand 状态、WebSocket 实时、工作区页面 |
-| [docs/architecture-desktop.md](docs/architecture-desktop.md) | Host 桌面壳 (Tauri + React)：多栏 Inbox/Agents UI，目标替代 TUI |
+| [docs/architecture-desktop.md](docs/architecture-desktop.md) | Host 桌面壳 (Tauri + React)：主 Host GUI，替代已移除的 Swift macOS app / 逐步替代 TUI |
 | [docs/architecture-grok-acp-projection.md](docs/architecture-grok-acp-projection.md) | Grok ACP tool content/raw_output 双通道 → Minos UI 投影清单 |
-| [docs/architecture-shared-crates.md](docs/architecture-shared-crates.md) | 12 个共享 crate：domain、protocol、transport、pairing、cli-detect、agent-runtime、chat-store、acp-protocol、codex-protocol、ui-protocol、ffi-uniffi、ffi-frb |
+| [docs/architecture-shared-crates.md](docs/architecture-shared-crates.md) | 共享 crate：domain、protocol、transport、cli-detect、agent-runtime、chat-store、acp-protocol、codex-protocol、ui-protocol、ffi-frb |
 | [docs/architecture-messaging.md](docs/architecture-messaging.md) | Server + 全端消息体系：Conversation-first IM、@/Approval Attention、撤回/reaction、读写 fanout、Durable/Stream/Ingest/Command、Outbox 与水位 |
 | [docs/superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md](docs/superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md) | 协作气泡 Hub SSOT 收敛：退役 Desktop dual-write、Agent 最终气泡单写者、Sync/Outbox 阶段 0–5 |
 | [docs/superpowers/specs/2026-08-03-im-reliability-program/README.md](docs/superpowers/specs/2026-08-03-im-reliability-program/README.md) | **IM 可靠性总计划**：客户端 Sync + 后端投递/编排终态；任务图 TASKS.md |
@@ -25,7 +24,7 @@ Minos 是一个远程 AI 编码控制系统：Mac 运行 host 端，通过手机
 | [docs/superpowers/specs/2026-08-03-client-im-sync-engine.md](docs/superpowers/specs/2026-08-03-client-im-sync-engine.md) | 客户端 IM Sync Engine 终态（Desktop + Mobile Outbox / Timeline / Inbox） |
 | [docs/superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md](docs/superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md) | 后端投递与 Agent 编排终态（Outbox 车道、Push、CompletionWatch、Session 生命周期） |
 | [docs/architecture-business-flow.md](docs/architecture-business-flow.md) | 完整业务流程：注册 → 配对 → 实时连接 → Agent 会话 → 流式交互 → 审批 → 重连恢复 |
-| [docs/ci-gates.md](docs/ci-gates.md) | CI / 本地质量门禁矩阵：rust、dart、frontend、macos、windows 职责划分与 just/xtask 入口 |
+| [docs/ci-gates.md](docs/ci-gates.md) | CI / 本地质量门禁矩阵：backend、backend-pg、mobile、web、desktop 职责划分与 just/xtask 入口 |
 | [docs/ops/vps-deploy.md](docs/ops/vps-deploy.md) | 生产 VPS 部署：Caddy + GHCR 镜像 + Postgres/Redis，runtime-only（不 clone 源码） |
 | [docs/ops/r2-media.md](docs/ops/r2-media.md) | 聊天附件 / media blob：Cloudflare R2（或本地目录）配置与 `/v1/media/*` API |
 | [docs/ops/vps-dev-binary.md](docs/ops/vps-dev-binary.md) | Dev/agent 二进制旁路：linux amd64 构建 + rsync + systemd，与 Docker 数据面共存 |

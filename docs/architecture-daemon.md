@@ -50,7 +50,7 @@ DaemonInner {
 }
 ```
 
-### UniFFI 暴露给 Swift 的方法
+### Desktop/TUI local RPC 暴露给 Swift 的方法
 
 | 方法 | 用途 |
 |------|------|
@@ -340,7 +340,7 @@ main.rs
         │           minos_local_host_prepare_link
         │           minos_local_host_sign_link_proof
         │           minos_local_host_apply_link_token
-        ├── Subscription (subscription.rs) — UniFFI observer 桥接
+        ├── Subscription (subscription.rs) — local RPC / Desktop observer 桥接
         ├── device_secret_store.rs — Host 令牌持久化（`hit_*`）
         ├── host_bootstrap_key_store.rs — Ed25519 密钥持久化
         ├── local_state.rs — DeviceId + PeerRecord JSON

@@ -88,20 +88,14 @@ backend:
         --listen "${MINOS_BACKEND_LISTEN:-127.0.0.1:8787}" \
         --db "${MINOS_BACKEND_DB:-./minos-backend.db}"
 
-# Full local gate. Wraps cargo xtask check-all (rust + platform legs).
-# On macOS this includes UniFFI/Xcode/Swift, minos-desktop check, and Flutter.
+# Full local gate. Wraps cargo xtask check-all (rust + desktop check on macOS + Flutter).
 check:
     cargo xtask check-all
 
 # Rust-only gate (fmt/clippy/lints/tests/daemon test-support/schema).
-# Same command as the CI `rust` job.
+# Same command as the CI `backend` job.
 check-rust:
     cargo xtask check-rust
-
-# macOS-native gate (UniFFI/Xcode/Swift + minos-desktop + Flutter ffi).
-# Same command as the CI `macos` job. Requires a macOS host.
-check-macos:
-    cargo xtask check-macos
 
 # Backend-focused verification for formal-cutover work.
 check-backend:
@@ -186,21 +180,6 @@ build-daemon profile='release':
     fi
     MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
     cargo build -p minos-daemon --bin minos-daemon --profile {{ profile }}
-
-# Build the macOS app through Xcode. The generated project also calls back
-# into just from its build phases, so Xcode IDE Run uses the same env path.
-
-# configuration = Debug | Release
-build-macos configuration='Debug':
-    @just check-env >/dev/null
-    cargo xtask gen-uniffi
-    cargo xtask gen-xcode
-    cd apps/macos && xcodebuild \
-        -project Minos.xcodeproj \
-        -scheme Minos \
-        -configuration {{ configuration }} \
-        -destination 'platform=macOS' \
-        build
 
 # Build the mobile Rust FFI staticlib for a given target.
 # target  = aarch64-apple-ios | aarch64-apple-ios-sim | x86_64-apple-ios | <android targets>
