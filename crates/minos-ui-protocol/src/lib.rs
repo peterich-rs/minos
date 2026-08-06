@@ -11,7 +11,6 @@
 
 #![forbid(unsafe_code)]
 
-
 mod ansi;
 mod claude;
 mod codex;

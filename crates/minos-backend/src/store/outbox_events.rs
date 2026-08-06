@@ -793,10 +793,10 @@ fn store_err(operation: &'static str) -> impl FnOnce(sqlx::Error) -> BackendErro
 #[cfg(test)]
 mod tests {
     use super::*;
-        use crate::store::durable_event_log;
+    use crate::store::durable_event_log;
     use crate::store::host_commands;
     use crate::store::test_support::{memory_pool, T0};
-    use minos_domain::{DeviceId};
+    use minos_domain::DeviceId;
 
     #[tokio::test]
     async fn ack_settles_pending_social_row_without_claim() {

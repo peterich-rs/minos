@@ -686,7 +686,7 @@ async fn broadcast_to_peers_of(
 mod tests {
     use super::*;
     use crate::store::device_installations::set_account_id;
-        use crate::store::host_links;
+    use crate::store::host_links;
     use crate::store::test_support::{
         insert_account, insert_ios_device, insert_test_client, insert_test_host, memory_pool, T0,
     };

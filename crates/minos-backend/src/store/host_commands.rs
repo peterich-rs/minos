@@ -510,9 +510,9 @@ fn store_err(operation: &'static str) -> impl FnOnce(sqlx::Error) -> BackendErro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::test_support::{insert_test_host};
+    use crate::store::test_support::insert_test_host;
     use crate::store::test_support::{memory_pool, T0};
-    
+
     async fn seed_host(pool: &SqlitePool) -> DeviceId {
         let host = DeviceId::new();
         insert_test_host(pool, host, "host", T0).await;

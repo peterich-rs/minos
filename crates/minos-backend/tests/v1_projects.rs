@@ -1,9 +1,9 @@
-use minos_backend::store::test_support::{insert_test_client, insert_test_host};
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use minos_backend::auth::jwt;
 use minos_backend::http::test_support::TEST_JWT_SECRET;
 use minos_backend::http::{router, test_support::backend_state};
+use minos_backend::store::test_support::{insert_test_client, insert_test_host};
 use minos_domain::{AgentName, DeviceId, DeviceRole};
 
 mod common;
@@ -64,10 +64,26 @@ async fn formal_project_routes_expose_canonical_conversation_and_agent_session_f
     .await
     .unwrap();
     let host_device_id = DeviceId::new();
-    insert_test_host(&state.store, host_device_id, "Mac", 999,).await;
+    insert_test_host(&state.store, host_device_id, "Mac", 999).await;
     // Host keeps account_id NULL; link via host_links (account ↔ host).
     let mobile = DeviceId::new();
-    { let _acct = minos_backend::store::accounts::create(&state.store, &format!("fixture-{}@localhost", mobile)).await.unwrap(); insert_test_client(&state.store, mobile, DeviceRole::MobileClient, &_acct.account_id, "iPhone", 999,).await; };
+    {
+        let _acct = minos_backend::store::accounts::create(
+            &state.store,
+            &format!("fixture-{}@localhost", mobile),
+        )
+        .await
+        .unwrap();
+        insert_test_client(
+            &state.store,
+            mobile,
+            DeviceRole::MobileClient,
+            &_acct.account_id,
+            "iPhone",
+            999,
+        )
+        .await;
+    };
     minos_backend::store::device_installations::set_account_id(
         &state.store,
         &mobile,
@@ -195,12 +211,13 @@ async fn formal_project_routes_expose_canonical_conversation_and_agent_session_f
         .sqlite_pool()
         .expect("project compatibility checks run only against sqlite test state");
 
-    let owner_rows: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM project_members WHERE project_id = ? AND role = 'owner'")
-            .bind(&project_id)
-            .fetch_one(pool)
-            .await
-            .unwrap();
+    let owner_rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM project_members WHERE project_id = ? AND role = 'owner'",
+    )
+    .bind(&project_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
     assert_eq!(owner_rows, 1, "project create must insert owner membership");
 
     let linked_project_id: Option<String> =

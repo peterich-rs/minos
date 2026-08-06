@@ -205,11 +205,7 @@ impl ProjectService {
     }
 
     /// Soft-archive a project so default list filters hide it.
-    pub async fn archive(
-        &self,
-        account_id: &str,
-        project_id: &str,
-    ) -> Result<bool, ProjectError> {
+    pub async fn archive(&self, account_id: &str, project_id: &str) -> Result<bool, ProjectError> {
         self.repo
             .archive(
                 account_id,

@@ -545,7 +545,7 @@ fn _sqlite_pool_type_anchor(_: &SqlitePool) {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::test_support::{insert_test_host, memory_pool, TEST_HOST_PUBLIC_KEY, T0};
+    use crate::store::test_support::{insert_test_host, memory_pool, T0, TEST_HOST_PUBLIC_KEY};
     use pretty_assertions::assert_eq;
 
     #[tokio::test]

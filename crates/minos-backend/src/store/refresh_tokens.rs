@@ -35,7 +35,8 @@ const REFRESH_SELECT_SQLITE: &str = "SELECT token_hash, account_id, installation
      rotated_to_hash \
      FROM refresh_tokens";
 
-const REFRESH_SELECT_POSTGRES: &str = "SELECT token_hash, account_id, installation_id AS device_id, \
+const REFRESH_SELECT_POSTGRES: &str =
+    "SELECT token_hash, account_id, installation_id AS device_id, \
      issued_at_ms AS issued_at, expires_at_ms AS expires_at, revoked_at_ms AS revoked_at, \
      rotated_to_hash \
      FROM refresh_tokens";
@@ -503,7 +504,8 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     async fn setup_account_and_device(pool: &SqlitePool) -> (String, String) {
-        let account_id = crate::store::test_support::insert_account(pool, "alice@example.com").await;
+        let account_id =
+            crate::store::test_support::insert_account(pool, "alice@example.com").await;
         let device_id = DeviceId::new();
         insert_test_client(
             pool,

@@ -26,5 +26,3 @@ pub use ids::*;
 pub use pairing_state::*;
 pub use relay_state::{PeerState, RelayLinkState};
 pub use role::*;
-
-

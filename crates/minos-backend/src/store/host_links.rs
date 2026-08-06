@@ -744,7 +744,7 @@ fn parse_device_id(raw: &str, column: &str) -> Result<DeviceId, BackendError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-        use crate::store::test_support::{
+    use crate::store::test_support::{
         insert_account, insert_ios_device, insert_test_client, insert_test_host, memory_pool, T0,
     };
     use pretty_assertions::assert_eq;

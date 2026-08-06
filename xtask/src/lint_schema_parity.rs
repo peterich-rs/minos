@@ -108,7 +108,9 @@ pub fn run(workspace_root: &Path) -> Result<()> {
             errors.push(format!("sqlite missing critical CHECK snippet: {snippet}"));
         }
         if !p_norm.contains(&sn) {
-            errors.push(format!("postgres missing critical CHECK snippet: {snippet}"));
+            errors.push(format!(
+                "postgres missing critical CHECK snippet: {snippet}"
+            ));
         }
     }
 
@@ -308,8 +310,7 @@ fn parse_table_body(
                 if let Some(cols) = extract_cols_after_keyword(item, "primary key") {
                     table.primary_key = cols;
                 } else if let Some(body) = extract_paren_body(
-                    item
-                        .to_ascii_lowercase()
+                    item.to_ascii_lowercase()
                         .find("primary key")
                         .map(|p| item[p + "primary key".len()..].trim_start())
                         .unwrap_or(""),
@@ -335,7 +336,7 @@ fn parse_table_body(
             continue;
         }
 
-        // Column definition: name type ... 
+        // Column definition: name type ...
         let mut parts = item.split_whitespace();
         let Some(col_name) = parts.next() else {
             continue;

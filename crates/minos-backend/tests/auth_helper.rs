@@ -1,6 +1,6 @@
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
-use minos_backend::store::test_support::{insert_test_host};
 use minos_backend::http::auth::{authenticate, AuthError, AuthOutcome};
+use minos_backend::store::test_support::insert_test_host;
 use minos_backend::store::test_support::memory_pool;
 use minos_domain::{DeviceId, DeviceRole};
 

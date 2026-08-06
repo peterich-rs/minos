@@ -111,7 +111,7 @@ mod tests {
     use super::*;
     use crate::store::test_support::{insert_account, insert_ios_device, memory_pool};
     use crate::store::{agent_sessions, host_links, social};
-    use minos_domain::{DeviceId};
+    use minos_domain::DeviceId;
 
     #[tokio::test]
     async fn account_subscription_authorizer_allows_owned_scopes_and_denies_host_topic() {

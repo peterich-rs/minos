@@ -24,7 +24,7 @@
 
 #![allow(clippy::too_many_lines)]
 
-use minos_backend::store::test_support::{insert_test_host};
+use minos_backend::store::test_support::insert_test_host;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use futures::{SinkExt, StreamExt};
@@ -453,7 +453,7 @@ async fn e2e_presence_tracks_live_peer_membership() -> anyhow::Result<()> {
 
     let mac_id = DeviceId::new();
 
-    insert_test_host(&relay.pool, mac_id, "mac", 0,).await;
+    insert_test_host(&relay.pool, mac_id, "mac", 0).await;
     // ADR-0020: insert via account_host_pairings instead of legacy device-keyed
     // pairings. The body of this test still asserts presence semantics that
     // were removed in Phase G; #[ignore]'d at the test attribute.

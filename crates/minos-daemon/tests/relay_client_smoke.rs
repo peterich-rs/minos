@@ -153,10 +153,23 @@ async fn register_formal_host(
     pool: &SqlitePool,
     host_id: DeviceId,
 ) -> anyhow::Result<DeviceSecret> {
-    store::test_support::insert_test_host(pool, host_id, "Fan's Mac", 0,).await;
+    store::test_support::insert_test_host(pool, host_id, "Fan's Mac", 0).await;
     let account = store::accounts::create(pool, "relay-smoke@example.com").await?;
     let mobile_id = DeviceId::new();
-    { let _acct = store::accounts::create(pool, &format!("fixture-{}@localhost", mobile_id)).await.unwrap(); store::test_support::insert_test_client(pool, mobile_id, DeviceRole::MobileClient, &_acct.account_id, "iPhone", 0,).await; };
+    {
+        let _acct = store::accounts::create(pool, &format!("fixture-{}@localhost", mobile_id))
+            .await
+            .unwrap();
+        store::test_support::insert_test_client(
+            pool,
+            mobile_id,
+            DeviceRole::MobileClient,
+            &_acct.account_id,
+            "iPhone",
+            0,
+        )
+        .await;
+    };
     store::device_installations::set_account_id(pool, &mobile_id, &account.account_id).await?;
 
     let linked = HostLinkService::new(pool.clone())
@@ -226,10 +239,24 @@ async fn apply_link_token_persists_and_connects() -> anyhow::Result<()> {
 
     let mac_name = "Fan's MacBook Pro".to_string();
     let host_id = DeviceId::new();
-    store::test_support::insert_test_host(&relay.pool, host_id, &mac_name, 0,).await;
+    store::test_support::insert_test_host(&relay.pool, host_id, &mac_name, 0).await;
     let account = store::accounts::create(&relay.pool, "host-link-smoke@example.com").await?;
     let mobile_id = DeviceId::new();
-    { let _acct = store::accounts::create(&relay.pool, &format!("fixture-{}@localhost", mobile_id)).await.unwrap(); store::test_support::insert_test_client(&relay.pool, mobile_id, DeviceRole::MobileClient, &_acct.account_id, "iPhone", 0,).await; };
+    {
+        let _acct =
+            store::accounts::create(&relay.pool, &format!("fixture-{}@localhost", mobile_id))
+                .await
+                .unwrap();
+        store::test_support::insert_test_client(
+            &relay.pool,
+            mobile_id,
+            DeviceRole::MobileClient,
+            &_acct.account_id,
+            "iPhone",
+            0,
+        )
+        .await;
+    };
     store::device_installations::set_account_id(&relay.pool, &mobile_id, &account.account_id)
         .await?;
     let linked = HostLinkService::new(relay.pool.clone())

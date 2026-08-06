@@ -271,34 +271,30 @@ pub async fn update_fields(
     at_ms: i64,
 ) -> Result<(), BackendError> {
     match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => {
-            sqlx::query(
-                r"UPDATE projects SET name = ?, workspace_slug = ?, updated_at_ms = ?
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            r"UPDATE projects SET name = ?, workspace_slug = ?, updated_at_ms = ?
                    WHERE project_id = ? AND account_id = ?",
-            )
-            .bind(name)
-            .bind(workspace_slug)
-            .bind(at_ms)
-            .bind(project_id)
-            .bind(account_id)
-            .execute(pool)
-            .await
-            .map(|_| ())
-        }
-        StorePoolRef::Postgres(pool) => {
-            sqlx::query(
-                r"UPDATE projects SET name = $1, workspace_slug = $2, updated_at_ms = $3
+        )
+        .bind(name)
+        .bind(workspace_slug)
+        .bind(at_ms)
+        .bind(project_id)
+        .bind(account_id)
+        .execute(pool)
+        .await
+        .map(|_| ()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            r"UPDATE projects SET name = $1, workspace_slug = $2, updated_at_ms = $3
                    WHERE project_id = $4 AND account_id = $5",
-            )
-            .bind(name)
-            .bind(workspace_slug)
-            .bind(at_ms)
-            .bind(project_id)
-            .bind(account_id)
-            .execute(pool)
-            .await
-            .map(|_| ())
-        }
+        )
+        .bind(name)
+        .bind(workspace_slug)
+        .bind(at_ms)
+        .bind(project_id)
+        .bind(account_id)
+        .execute(pool)
+        .await
+        .map(|_| ()),
     }
     .map_err(|e| BackendError::StoreQuery {
         operation: "projects.update_fields".into(),
@@ -720,12 +716,10 @@ mod tests {
             .await
             .unwrap());
         assert!(list(&pool, &account_id).await.unwrap().is_empty());
-        assert!(
-            get_for_account(&pool, &account_id, "proj-arch")
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert!(get_for_account(&pool, &account_id, "proj-arch")
+            .await
+            .unwrap()
+            .is_none());
         // Second archive is a no-op.
         assert!(!archive(&pool, &account_id, "proj-arch", 3000)
             .await

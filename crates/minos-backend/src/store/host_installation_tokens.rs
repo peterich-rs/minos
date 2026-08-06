@@ -216,8 +216,8 @@ fn decode_host_installation_token_row(
 #[cfg(test)]
 mod tests {
     use super::*;
-        use crate::store::test_support::{memory_pool, T0};
-    
+    use crate::store::test_support::{memory_pool, T0};
+
     #[tokio::test]
     async fn verify_active_token_updates_last_used() {
         let pool = memory_pool().await;

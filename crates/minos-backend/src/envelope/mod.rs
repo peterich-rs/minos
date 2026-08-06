@@ -800,8 +800,8 @@ pub(crate) fn role_metric_label(role: minos_domain::DeviceRole) -> &'static str 
 mod tests {
     use super::*;
     use crate::session::registry::OUTBOX_CAPACITY;
-    use crate::store::test_support::{insert_test_host};
     use crate::store::host_links;
+    use crate::store::test_support::insert_test_host;
     use crate::store::test_support::{insert_account, insert_ios_device, memory_pool, T0};
     use minos_domain::{DeviceId, DeviceRole};
     use pretty_assertions::assert_eq;

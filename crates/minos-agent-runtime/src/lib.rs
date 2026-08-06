@@ -25,7 +25,6 @@
 // gated `#[cfg(unix)]` and limited to async-signal-safe libc entry points.
 #![deny(unsafe_code)]
 
-
 pub mod acp_client;
 pub(crate) mod approvals;
 pub mod claude_driver;

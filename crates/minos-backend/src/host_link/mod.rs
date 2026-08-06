@@ -453,9 +453,9 @@ fn generate_host_installation_token() -> String {
 mod tests {
     use super::*;
     use crate::session::SessionRegistry;
-    use crate::store::test_support::{insert_test_host};
+    use crate::store::test_support::insert_test_host;
     use crate::store::test_support::{insert_account, insert_ios_device, memory_pool, T0};
-        use pretty_assertions::assert_eq;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn sha256_hex_matches_known_vector_and_is_deterministic() {

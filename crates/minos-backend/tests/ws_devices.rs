@@ -106,7 +106,23 @@ async fn formally_paired_host(relay: &Relay) -> anyhow::Result<FormalHostFixture
     let mobile = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
     // Desktop installation that performs Host Link on behalf of the account.
     let desktop = DeviceId::new();
-    { let _acct = minos_backend::store::accounts::create(&relay.pool, &format!("fixture-{}@localhost", desktop)).await.unwrap(); insert_test_client(&relay.pool, desktop, DeviceRole::DesktopConsole, &_acct.account_id, "desktop", 0,).await; };
+    {
+        let _acct = minos_backend::store::accounts::create(
+            &relay.pool,
+            &format!("fixture-{}@localhost", desktop),
+        )
+        .await
+        .unwrap();
+        insert_test_client(
+            &relay.pool,
+            desktop,
+            DeviceRole::DesktopConsole,
+            &_acct.account_id,
+            "desktop",
+            0,
+        )
+        .await;
+    };
     store::device_installations::set_account_id(&relay.pool, &desktop, &account_id).await?;
 
     let host = DeviceId::new();
@@ -490,7 +506,23 @@ async fn ws_client_accepts_browser_admin_legacy_ws_ticket_query_auth() -> anyhow
         .await?
         .account_id;
     let browser_id = DeviceId::new();
-    { let _acct = minos_backend::store::accounts::create(&relay.pool, &format!("fixture-{}@localhost", browser_id)).await.unwrap(); insert_test_client(&relay.pool, browser_id, DeviceRole::BrowserAdmin, &_acct.account_id, "web", 0,).await; };
+    {
+        let _acct = minos_backend::store::accounts::create(
+            &relay.pool,
+            &format!("fixture-{}@localhost", browser_id),
+        )
+        .await
+        .unwrap();
+        insert_test_client(
+            &relay.pool,
+            browser_id,
+            DeviceRole::BrowserAdmin,
+            &_acct.account_id,
+            "web",
+            0,
+        )
+        .await;
+    };
     store::device_installations::set_account_id(&relay.pool, &browser_id, &account_id).await?;
 
     let ticket =
@@ -513,7 +545,23 @@ async fn ws_client_accepts_formal_ticket_query_auth() -> anyhow::Result<()> {
         .await?
         .account_id;
     let browser_id = DeviceId::new();
-    { let _acct = minos_backend::store::accounts::create(&relay.pool, &format!("fixture-{}@localhost", browser_id)).await.unwrap(); insert_test_client(&relay.pool, browser_id, DeviceRole::BrowserAdmin, &_acct.account_id, "web", 0,).await; };
+    {
+        let _acct = minos_backend::store::accounts::create(
+            &relay.pool,
+            &format!("fixture-{}@localhost", browser_id),
+        )
+        .await
+        .unwrap();
+        insert_test_client(
+            &relay.pool,
+            browser_id,
+            DeviceRole::BrowserAdmin,
+            &_acct.account_id,
+            "web",
+            0,
+        )
+        .await;
+    };
     store::device_installations::set_account_id(&relay.pool, &browser_id, &account_id).await?;
 
     let ticket =
@@ -536,7 +584,23 @@ async fn ws_client_rejects_reused_formal_ticket() -> anyhow::Result<()> {
         .await?
         .account_id;
     let browser_id = DeviceId::new();
-    { let _acct = minos_backend::store::accounts::create(&relay.pool, &format!("fixture-{}@localhost", browser_id)).await.unwrap(); insert_test_client(&relay.pool, browser_id, DeviceRole::BrowserAdmin, &_acct.account_id, "web", 0,).await; };
+    {
+        let _acct = minos_backend::store::accounts::create(
+            &relay.pool,
+            &format!("fixture-{}@localhost", browser_id),
+        )
+        .await
+        .unwrap();
+        insert_test_client(
+            &relay.pool,
+            browser_id,
+            DeviceRole::BrowserAdmin,
+            &_acct.account_id,
+            "web",
+            0,
+        )
+        .await;
+    };
     store::device_installations::set_account_id(&relay.pool, &browser_id, &account_id).await?;
 
     let ticket =
@@ -674,7 +738,23 @@ async fn ws_client_rejects_legacy_ws_ticket_after_device_account_changes() -> an
         .await?
         .account_id;
     let browser_id = DeviceId::new();
-    { let _acct = minos_backend::store::accounts::create(&relay.pool, &format!("fixture-{}@localhost", browser_id)).await.unwrap(); insert_test_client(&relay.pool, browser_id, DeviceRole::BrowserAdmin, &_acct.account_id, "web", 0,).await; };
+    {
+        let _acct = minos_backend::store::accounts::create(
+            &relay.pool,
+            &format!("fixture-{}@localhost", browser_id),
+        )
+        .await
+        .unwrap();
+        insert_test_client(
+            &relay.pool,
+            browser_id,
+            DeviceRole::BrowserAdmin,
+            &_acct.account_id,
+            "web",
+            0,
+        )
+        .await;
+    };
     store::device_installations::set_account_id(&relay.pool, &browser_id, &account_a).await?;
 
     let ticket =

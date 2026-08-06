@@ -1,9 +1,9 @@
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
-use minos_backend::store::test_support::{insert_test_client, insert_test_host};
 use minos_backend::auth::jwt;
 use minos_backend::http::test_support::TEST_JWT_SECRET;
 use minos_backend::http::{router, test_support::backend_state};
+use minos_backend::store::test_support::{insert_test_client, insert_test_host};
 use minos_backend::store::{host_links, social};
 use minos_domain::{DeviceId, DeviceRole};
 
@@ -16,7 +16,23 @@ async fn paired_pair_with_account(
     let host = DeviceId::new();
     let ios = DeviceId::new();
     insert_test_host(&state.store, host, "Mac", 0).await;
-    { let _acct = minos_backend::store::accounts::create(&state.store, &format!("fixture-{}@localhost", ios)).await.unwrap(); insert_test_client(&state.store, ios, DeviceRole::MobileClient, &_acct.account_id, "iPhone", 0).await; };
+    {
+        let _acct = minos_backend::store::accounts::create(
+            &state.store,
+            &format!("fixture-{}@localhost", ios),
+        )
+        .await
+        .unwrap();
+        insert_test_client(
+            &state.store,
+            ios,
+            DeviceRole::MobileClient,
+            &_acct.account_id,
+            "iPhone",
+            0,
+        )
+        .await;
+    };
 
     let secret = minos_domain::DeviceSecret::generate();
 

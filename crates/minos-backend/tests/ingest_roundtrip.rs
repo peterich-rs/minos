@@ -5,8 +5,7 @@
 //! only as historical reference and is ignored in favor of the new realtime
 //! gateway coverage.
 
-
-use minos_backend::store::test_support::{insert_test_host};
+use minos_backend::store::test_support::insert_test_host;
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
@@ -210,7 +209,7 @@ async fn ingest_translates_and_fans_out_to_paired_mobile() -> anyhow::Result<()>
     // find the iOS receivers, so the iOS row needs `account_id` set and no
     // secret hash.
     let host_id = DeviceId::new();
-    insert_test_host(&relay.pool, host_id, "mac", 0,).await;
+    insert_test_host(&relay.pool, host_id, "mac", 0).await;
 
     let account_id = store::accounts::create(&relay.pool, "ingest@example.com")
         .await?
@@ -291,7 +290,7 @@ async fn ingest_retransmit_is_no_op() -> anyhow::Result<()> {
 
     let host_id = DeviceId::new();
 
-    insert_test_host(&relay.pool, host_id, "mac", 0,).await;
+    insert_test_host(&relay.pool, host_id, "mac", 0).await;
 
     let mut host = connect_client(&relay, host_id, DeviceRole::AgentHost, None).await?;
     // Drain Unpaired presence frame.
@@ -327,7 +326,7 @@ async fn ingest_derives_title_from_first_user_message_and_fans_out_synthetic_upd
     let relay = spawn_relay().await?;
 
     let host_id = DeviceId::new();
-    insert_test_host(&relay.pool, host_id, "mac", 0,).await;
+    insert_test_host(&relay.pool, host_id, "mac", 0).await;
 
     let account_id = store::accounts::create(&relay.pool, "title@example.com")
         .await?

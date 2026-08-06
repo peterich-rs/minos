@@ -47,7 +47,10 @@ async fn pg_strict_installation_check_and_projects_archive() {
     .bind(bad_host.to_string())
     .execute(store.postgres_pool().unwrap())
     .await;
-    assert!(host_fail.is_err(), "host without public_key must fail CHECK");
+    assert!(
+        host_fail.is_err(),
+        "host without public_key must fail CHECK"
+    );
 
     // Strict CHECK: client without account_id must fail.
     let bad_client = DeviceId::new();
@@ -126,24 +129,18 @@ async fn pg_strict_installation_check_and_projects_archive() {
         .await
         .unwrap();
     let plain2 = store::refresh_tokens::generate_plaintext();
-    let rotated = store::refresh_tokens::rotate(
-        &store,
-        &plain,
-        &plain2,
-        &account_id,
-        &client.to_string(),
-    )
-    .await
-    .unwrap();
+    let rotated =
+        store::refresh_tokens::rotate(&store, &plain, &plain2, &account_id, &client.to_string())
+            .await
+            .unwrap();
     assert!(rotated.is_some());
     let old_hash = store::refresh_tokens::hash_plaintext(&plain);
-    let rotated_to: Option<String> = sqlx::query_scalar(
-        "SELECT rotated_to_hash FROM refresh_tokens WHERE token_hash = $1",
-    )
-    .bind(&old_hash)
-    .fetch_one(store.postgres_pool().unwrap())
-    .await
-    .unwrap();
+    let rotated_to: Option<String> =
+        sqlx::query_scalar("SELECT rotated_to_hash FROM refresh_tokens WHERE token_hash = $1")
+            .bind(&old_hash)
+            .fetch_one(store.postgres_pool().unwrap())
+            .await
+            .unwrap();
     assert_eq!(
         rotated_to.as_deref(),
         Some(store::refresh_tokens::hash_plaintext(&plain2).as_str())
@@ -196,15 +193,10 @@ async fn pg_strict_installation_check_and_projects_archive() {
     }
 
     // agent_sessions.agent_id FK: invalid id fails; valid host_runtime agent ok.
-    let conversation = store::social::create_group_conversation(
-        &store,
-        &account_id,
-        "pg-smoke-group",
-        &[],
-        6000,
-    )
-    .await
-    .unwrap();
+    let conversation =
+        store::social::create_group_conversation(&store, &account_id, "pg-smoke-group", &[], 6000)
+            .await
+            .unwrap();
     let bad_session = store::agent_sessions::create(
         &store,
         &format!("sess-bad-{suffix}"),

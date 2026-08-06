@@ -203,7 +203,6 @@ fn check_rust() -> Result<()> {
     Ok(())
 }
 
-
 fn check_all(with_codex: bool) -> Result<()> {
     let workspace_root = workspace_root()?;
 
@@ -233,7 +232,6 @@ fn check_all(with_codex: bool) -> Result<()> {
     eprintln!("OK: all checks pass.");
     Ok(())
 }
-
 
 /// Compile the Tauri host shell on macOS (excluded from workspace clippy/test
 /// on Linux because of GUI system deps).
@@ -612,9 +610,6 @@ fn bootstrap() -> Result<()> {
 /// mobile FRB regen footgun (mismatched encode/decode / `@generated` headers).
 const FRB_CODEGEN_VERSION: &str = "2.12.0";
 
-
-
-
 fn gen_frb() -> Result<()> {
     let root = workspace_root()?;
     if which("flutter_rust_bridge_codegen").is_none() {
@@ -869,7 +864,6 @@ fn backend_db_reset_postgres(root: &Path) -> Result<()> {
         root,
     )
 }
-
 
 fn run(program: &str, args: &[&str], cwd: &Path) -> Result<()> {
     run_env(program, args, &[], cwd)
