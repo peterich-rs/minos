@@ -6,12 +6,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use serde::Deserialize;
 
-const GROUP_COMPLETION_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const GROUP_COMPLETION_IDLE_LOG_INTERVAL: Duration = Duration::from_mins(5);
-const GROUP_COMPLETION_IDLE_POLL_INTERVAL: Duration = Duration::from_secs(5);
-/// After raw seq stops advancing (and tools are idle), treat final text as stable.
-/// Slightly generous so Grok progress MessageCompleted → ToolCallPlaced is not
-/// mis-projected as the turn answer.
+/// Quiet-window settle after host ingest before treating turn as complete
+/// (replaces 100ms poll + seq_stable latch).
 const GROUP_COMPLETION_SEQ_STABLE: Duration = Duration::from_secs(2);
 use crate::app::tx::Storage;
 use crate::auth::bearer;
@@ -21,12 +17,11 @@ use axum::{Json, Router};
 use minos_domain::AgentName;
 use minos_protocol::{
     AddAgentToGroupRequest, AgentSummary, ChatMessageSummary, ConversationAgentMembersResponse,
-    DurableEvent, EnsureHostRuntimeAgentRequest, Envelope, EventKind, ListAgentsResponse,
-    RealtimeTopic, RegisterAgentRequest, RemoveAgentFromGroupRequest, SendAgentMessageRequest,
-    SenderRef, SenderType, UpdateAgentRequest,
+    EnsureHostRuntimeAgentRequest, Envelope, EventKind, ListAgentsResponse, RealtimeTopic,
+    RegisterAgentRequest, RemoveAgentFromGroupRequest, SendAgentMessageRequest, SenderType,
+    UpdateAgentRequest,
 };
 use serde_json::json;
-use uuid::Uuid;
 
 /// Known Host runtime bins that Mobile/Desktop may @-mention for dispatch.
 const HOST_RUNTIME_MENTIONS: &[&str] = &["codex", "claude", "gemini", "opencode", "grok"];
@@ -81,6 +76,8 @@ pub struct SendConversationMessageRequest {
     pub client_sent_at_ms: Option<i64>,
     #[serde(default)]
     pub created_at_ms: Option<i64>,
+    #[serde(default)]
+    pub attachment_blob_ids: Vec<String>,
 }
 
 #[allow(clippy::unused_async)]
@@ -112,6 +109,13 @@ pub fn require_account_id_from_state(
     Ok(bearer.account_id)
 }
 
+/// Publish social message delivery after the business row is durable.
+///
+/// Prefer writers that already committed `chat_messages` + durable + outbox in
+/// one transaction (Transactional Outbox). This helper:
+/// 1. best-effort legacy envelope fanout
+/// 2. **repairs** missing durable/outbox rows if a prior crash left a hole
+/// 3. publishes durable events (outbox dispatcher remains the reliability backstop)
 pub async fn fan_out_social_message(state: &BackendState, message: &ChatMessageSummary) {
     let members = match crate::store::social::list_conversation_members(
         &state.store,
@@ -139,165 +143,52 @@ pub async fn fan_out_social_message(state: &BackendState, message: &ChatMessageS
         },
     };
     state.realtime.fanout_social_message(&members, &frame).await;
-    // conversation:{id} for open-timeline subscribers + account:* inbox summaries.
-    if let Err(error) = fan_out_conversation_topic_event(state, message).await {
-        tracing::warn!(
-            target: "minos_backend::social",
-            conversation_id = %message.conversation_id,
-            message_id = %message.message_id,
-            error = %error,
-            "failed to publish conversation topic durable event"
-        );
-    }
-    if let Err(error) = fan_out_account_conversation_event(state, &members, message).await {
-        tracing::warn!(
-            target: "minos_backend::social",
-            conversation_id = %message.conversation_id,
-            message_id = %message.message_id,
-            error = %error,
-            "failed to publish formal social message event"
-        );
+
+    match publish_social_message_delivery(state, message, &members).await {
+        Ok(()) => {}
+        Err(error) => {
+            tracing::warn!(
+                target: "minos_backend::social",
+                conversation_id = %message.conversation_id,
+                message_id = %message.message_id,
+                error = %error,
+                "failed to publish social message durable events; outbox will retry if enqueued"
+            );
+        }
     }
 }
 
-/// Durable fanout on `conversation:{id}` (open chat timeline hot path).
-async fn fan_out_conversation_topic_event(
+/// Ensure durable+outbox exist (idempotent), then publish. Used by fan-out and
+/// as a post-commit publish path after transactional writers.
+pub async fn publish_social_message_delivery(
     state: &BackendState,
     message: &ChatMessageSummary,
+    member_account_ids: &[String],
 ) -> Result<(), crate::error::BackendError> {
-    let at_ms = message.recalled_at_ms.unwrap_or(message.created_at_ms);
-    let event = if message.recalled_at_ms.is_some() {
-        DurableEvent::ConversationMessageRecalled {
-            conversation_id: message.conversation_id.clone(),
-            message_id: message.message_id.clone(),
-            at_ms,
-            message: Some(message.clone()),
-        }
-    } else {
-        DurableEvent::ConversationMessageAppended {
-            conversation_id: message.conversation_id.clone(),
-            message_id: message.message_id.clone(),
-            sender: sender_ref_for_message(message),
-            at_ms,
-            message: Some(message.clone()),
-        }
-    };
-    let action = if message.recalled_at_ms.is_some() {
-        "recalled"
-    } else {
-        "appended"
-    };
-    let event_id = format!(
-        "social-conv-{action}-{}-{}",
-        message.conversation_id, message.message_id
-    );
     let mut tx = Storage::begin(&state.store).await?;
-    let cursor =
-        crate::store::durable_event_log::record_in_tx(&mut tx, &event_id, &event, at_ms).await?;
-    let outbox_id = Uuid::new_v4().to_string();
-    crate::store::outbox_events::enqueue_in_tx(
+    let pending = crate::store::social::ensure_social_message_delivery_in_tx(
         &mut tx,
-        &outbox_id,
-        cursor.topic.kind().as_str(),
-        &cursor.event_id,
-        at_ms,
+        message,
+        member_account_ids,
     )
     .await?;
     tx.commit().await?;
-    state
-        .realtime
-        .publish_durable_event_by_id(cursor.topic.kind().as_str(), &cursor.event_id)
-        .await?;
-    crate::store::outbox_events::ack(
-        &state.store,
-        &outbox_id,
-        chrono::Utc::now().timestamp_millis(),
-    )
-    .await?;
-    Ok(())
-}
-
-async fn fan_out_account_conversation_event(
-    state: &BackendState,
-    target_account_ids: &[String],
-    message: &ChatMessageSummary,
-) -> Result<(), crate::error::BackendError> {
-    let at_ms = message.recalled_at_ms.unwrap_or(message.created_at_ms);
-    let mut tx = Storage::begin(&state.store).await?;
-    let mut pending_events = Vec::<(String, String, String)>::new();
-    for account_id in target_account_ids {
-        let event = if message.recalled_at_ms.is_some() {
-            DurableEvent::AccountConversationMessageRecalled {
-                account_id: account_id.clone(),
-                conversation_id: message.conversation_id.clone(),
-                message_id: message.message_id.clone(),
-                at_ms,
-                message: message.clone(),
-            }
-        } else {
-            DurableEvent::AccountConversationMessageAppended {
-                account_id: account_id.clone(),
-                conversation_id: message.conversation_id.clone(),
-                message_id: message.message_id.clone(),
-                sender: sender_ref_for_message(message),
-                at_ms,
-                message: message.clone(),
-            }
-        };
-        let event_id = account_conversation_event_id(account_id, message);
-        let cursor =
-            crate::store::durable_event_log::record_in_tx(&mut tx, &event_id, &event, at_ms)
-                .await?;
-        let outbox_id = Uuid::new_v4().to_string();
-        crate::store::outbox_events::enqueue_in_tx(
-            &mut tx,
-            &outbox_id,
-            cursor.topic.kind().as_str(),
-            &cursor.event_id,
-            at_ms,
-        )
-        .await?;
-        pending_events.push((
-            cursor.topic.kind().as_str().to_string(),
-            cursor.event_id,
-            outbox_id,
-        ));
+    // Pipeline wake: do not wait solely on outbox poll floor.
+    if pending.iter().any(|p| p.outbox_id.is_some()) {
+        state.wake_outbox();
     }
-    tx.commit().await?;
-    for (topic_kind, event_id, outbox_id) in pending_events {
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    for item in pending {
         state
             .realtime
-            .publish_durable_event_by_id(&topic_kind, &event_id)
+            .publish_durable_event_by_id(&item.topic_kind, &item.event_id)
             .await?;
-        crate::store::outbox_events::ack(
-            &state.store,
-            &outbox_id,
-            chrono::Utc::now().timestamp_millis(),
-        )
-        .await?;
+        if let Some(outbox_id) = item.outbox_id.as_deref() {
+            crate::store::outbox_events::ack(&state.store, outbox_id, now_ms).await?;
+        }
     }
     Ok(())
-}
-
-fn sender_ref_for_message(message: &ChatMessageSummary) -> SenderRef {
-    match message.sender_type {
-        SenderType::Agent => SenderRef::Agent {
-            agent_id: message.sender.account_id.clone(),
-            session_id: None,
-        },
-        SenderType::User => SenderRef::User {
-            account_id: message.sender.account_id.clone(),
-        },
-    }
-}
-
-fn account_conversation_event_id(account_id: &str, message: &ChatMessageSummary) -> String {
-    let action = if message.recalled_at_ms.is_some() {
-        "recalled"
-    } else {
-        "appended"
-    };
-    format!("social-{action}-{account_id}-{}", message.message_id)
 }
 
 #[derive(Clone)]
@@ -313,12 +204,17 @@ struct ForwardedAgentDispatch {
     watcher_from_seq: u64,
 }
 
-async fn build_agent_dispatch_plan(
+/// Build zero or more dispatch plans for a user message.
+///
+/// Multi-@ fan-out: every unique roster agent mentioned in the body gets its own
+/// plan (parallel host sessions). Reply-to-agent and single-agent rooms stay
+/// single-plan.
+async fn build_agent_dispatch_plans(
     state: &BackendState,
     conversation_id: &str,
     text: &str,
     reply_target: Option<&crate::store::social::ChatMessageRow>,
-) -> Result<Option<AgentDispatchPlan>, (StatusCode, Json<ErrorEnvelope>)> {
+) -> Result<Vec<AgentDispatchPlan>, (StatusCode, Json<ErrorEnvelope>)> {
     let conversation = crate::store::social::get_conversation(&state.store, conversation_id)
         .await
         .map_err(|e| err("internal", e.to_string()))?
@@ -327,7 +223,7 @@ async fn build_agent_dispatch_plan(
         .await
         .map_err(|e| err("internal", e.to_string()))?;
     if agents.is_empty() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     let human_members =
         crate::store::social::list_conversation_members(&state.store, conversation_id)
@@ -352,61 +248,56 @@ async fn build_agent_dispatch_plan(
                     .await
                     .map_err(|e| err("internal", e.to_string()))?
                 {
-                    return Ok(Some(AgentDispatchPlan {
+                    return Ok(vec![AgentDispatchPlan {
                         agent,
                         session_id: Some(session_id),
                         forwarded_text: text.to_string(),
                         mention_sender,
-                    }));
+                    }]);
                 }
             }
         }
     }
 
+    // Explicit multi-@ / @agent#short fan-out (order = first appearance).
+    let routes = all_mentioned_agent_routes(text, &agents);
+    if !routes.is_empty() {
+        let mut plans = Vec::with_capacity(routes.len());
+        for route in routes {
+            let session_id = resolve_dispatch_session_id(
+                state,
+                conversation_id,
+                &route.agent,
+                route.session_short_id.as_deref(),
+            )
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
+            plans.push(AgentDispatchPlan {
+                agent: route.agent.clone(),
+                session_id,
+                // Keep full body so each agent sees co-mentions (Buzz-style).
+                forwarded_text: text.to_string(),
+                mention_sender: true,
+            });
+        }
+        return Ok(plans);
+    }
+
+    // Bare text: single-agent rooms auto-route; multi-agent rooms need explicit @.
     if conversation.kind == "group" && human_members.len() == 1 && agents.len() == 1 {
         let agent = agents[0].clone();
-        // Bare text auto-routes; `@agent` / `@agent#short` still honored for reuse.
-        let (session_short, forwarded_text) =
-            if let Some(route) = first_mentioned_agent_route(text, &agents) {
-                if route.agent.agent_id == agent.agent_id {
-                    (route.session_short_id, route.forwarded_text)
-                } else {
-                    (None, text.to_string())
-                }
-            } else {
-                (None, text.to_string())
-            };
-        let session_id =
-            resolve_dispatch_session_id(state, conversation_id, &agent, session_short.as_deref())
-                .await
-                .map_err(|e| err("internal", e.to_string()))?;
-        return Ok(Some(AgentDispatchPlan {
+        let session_id = resolve_dispatch_session_id(state, conversation_id, &agent, None)
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
+        return Ok(vec![AgentDispatchPlan {
             agent,
             session_id,
-            forwarded_text,
+            forwarded_text: text.to_string(),
             mention_sender: false,
-        }));
+        }]);
     }
 
-    // Explicit @agent / @agent#short mention (group or agent DM-style rooms).
-    if let Some(route) = first_mentioned_agent_route(text, &agents) {
-        let session_id = resolve_dispatch_session_id(
-            state,
-            conversation_id,
-            &route.agent,
-            route.session_short_id.as_deref(),
-        )
-        .await
-        .map_err(|e| err("internal", e.to_string()))?;
-        return Ok(Some(AgentDispatchPlan {
-            agent: route.agent.clone(),
-            session_id,
-            forwarded_text: route.forwarded_text,
-            mention_sender: true,
-        }));
-    }
-
-    Ok(None)
+    Ok(Vec::new())
 }
 
 /// Resolve which formal agent session should receive a Hub `@agent` dispatch.
@@ -466,6 +357,7 @@ async fn forward_agent_dispatch(
     text: &str,
     conversation_id: &str,
     origin_message_id: &str,
+    attachments: Vec<minos_protocol::DispatchAttachment>,
 ) -> Result<ForwardedAgentDispatch, crate::error::BackendError> {
     if let Some(session_id) = session_id {
         let watcher_from_seq =
@@ -476,8 +368,11 @@ async fn forward_agent_dispatch(
                 session_id: session_id.clone(),
                 text: text.to_string(),
                 mentions: Vec::new(),
-                client_request_id: format!("social-send-{origin_message_id}"),
+                origin_message_id: Some(origin_message_id.to_string()),
+                // Include agent so multi-@ fan-out send idempotency never collides.
+                client_request_id: format!("social-send-{origin_message_id}:{}", agent.agent_id),
                 caller_account_id: account_id.to_string(),
+                attachments,
             })
             .await
             .map_err(|error| map_agent_session_dispatch_error("agent_session.send_input", error))?;
@@ -502,9 +397,12 @@ async fn forward_agent_dispatch(
             host_installation_id: Some(host_device_id.to_string()),
             workspace_path: agent.workspace_path.clone(),
             initial_user_message: Some(text.to_string()),
-            client_request_id: format!("social-start-{origin_message_id}"),
+            origin_message_id: Some(origin_message_id.to_string()),
+            // Multi-@ cold start: must key formal session id by origin×agent.
+            client_request_id: format!("social-start-{origin_message_id}:{}", agent.agent_id),
             caller_account_id: account_id.to_string(),
             conversation_title,
+            attachments,
         })
         .await
         .map_err(|error| map_agent_session_dispatch_error("agent_session.start", error))?;
@@ -512,6 +410,54 @@ async fn forward_agent_dispatch(
         session_id: output.session_id,
         watcher_from_seq: 0,
     })
+}
+
+/// Build host-downloadable attachment descriptors for an origin Hub message.
+async fn dispatch_attachments_for_origin(
+    state: &BackendState,
+    account_id: &str,
+    origin_message_id: &str,
+) -> Result<Vec<minos_protocol::DispatchAttachment>, crate::error::BackendError> {
+    let joins = crate::store::message_attachments::list_for_messages(
+        &state.store,
+        &[origin_message_id.to_string()],
+    )
+    .await?;
+    if joins.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !state.media.is_configured() {
+        tracing::warn!(
+            target: "minos_backend::social",
+            origin_message_id,
+            "message has attachments but media store is not configured"
+        );
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::with_capacity(joins.len());
+    for row in joins {
+        if row.status != "ready" {
+            continue;
+        }
+        match state.media.get_download(account_id, &row.blob_id).await {
+            Ok(dl) => out.push(minos_protocol::DispatchAttachment {
+                blob_id: row.blob_id,
+                content_type: row.content_type,
+                byte_size: row.byte_size,
+                original_filename: row.original_filename,
+                download_url: dl.download_url,
+            }),
+            Err(e) => {
+                tracing::warn!(
+                    target: "minos_backend::social",
+                    blob_id = %row.blob_id,
+                    error = %e,
+                    "failed to sign attachment download for host dispatch"
+                );
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Resolve a host/Desktop project id for agent start so Host does not invent
@@ -603,7 +549,6 @@ fn agent_error_code_for_message(message: &str) -> Option<&'static str> {
 struct MentionedAgentRoute {
     agent: crate::store::social::AgentRow,
     session_short_id: Option<String>,
-    forwarded_text: String,
 }
 
 fn first_mentioned_agent(
@@ -613,30 +558,46 @@ fn first_mentioned_agent(
     first_mentioned_agent_route(text, agents).map(|r| r.agent)
 }
 
-/// First `@agent` / `@agent#short` route for dispatch (Desktop `parseAgentRouting` parity).
+/// First `@agent` / `@agent#short` route (compat helper for intent errors).
 fn first_mentioned_agent_route(
     text: &str,
     agents: &[crate::store::social::AgentRow],
 ) -> Option<MentionedAgentRoute> {
-    // Prefer full-token parse so `@codex#deadbeef prompt` keeps the short id
-    // (collect_mention_tokens stops at `#`).
+    all_mentioned_agent_routes(text, agents).into_iter().next()
+}
+
+/// All unique `@agent` / `@agent#short` routes in appearance order (multi-@ fan-out).
+fn all_mentioned_agent_routes(
+    text: &str,
+    agents: &[crate::store::social::AgentRow],
+) -> Vec<MentionedAgentRoute> {
+    let mut out = Vec::new();
+    let mut seen_agent_ids = std::collections::HashSet::new();
+
+    // Leading full token first (preserves `#short` when present).
     if let Some(route) = parse_leading_agent_route(text, agents) {
-        return Some(route);
+        seen_agent_ids.insert(route.agent.agent_id.clone());
+        out.push(route);
     }
-    // Fall back: any mid-body @token (legacy multi-mention / name forms).
-    collect_mention_tokens(text).into_iter().find_map(|token| {
+
+    for token in collect_mention_tokens(text) {
         let t = token.trim();
         if t.is_empty() {
-            return None;
+            continue;
         }
         let (name_part, short) = split_agent_session_token(t);
-        let agent = match_agent_token(name_part, agents)?;
-        Some(MentionedAgentRoute {
+        let Some(agent) = match_agent_token(name_part, agents) else {
+            continue;
+        };
+        if !seen_agent_ids.insert(agent.agent_id.clone()) {
+            continue;
+        }
+        out.push(MentionedAgentRoute {
             agent: agent.clone(),
             session_short_id: short.map(str::to_string),
-            forwarded_text: strip_agent_mention_once(text, &agent),
-        })
-    })
+        });
+    }
+    out
 }
 
 fn parse_leading_agent_route(
@@ -653,22 +614,14 @@ fn parse_leading_agent_route(
         .find(|(_, ch)| ch.is_whitespace())
         .map(|(i, _)| i);
     let token = split_at.map_or(rest, |i| &rest[..i]);
-    let body = split_at.map_or("", |i| rest[i..].trim_start());
     if token.is_empty() {
         return None;
     }
     let (name_part, short) = split_agent_session_token(token);
     let agent = match_agent_token(name_part, agents)?;
-    let forwarded = if body.is_empty() {
-        // Keep original when mention is bare so Host still has content if needed.
-        text.to_string()
-    } else {
-        body.to_string()
-    };
     Some(MentionedAgentRoute {
         agent: agent.clone(),
         session_short_id: short.map(str::to_string),
-        forwarded_text: forwarded,
     })
 }
 
@@ -695,37 +648,6 @@ fn match_agent_token<'a>(
             || agent.runtime_agent.eq_ignore_ascii_case(&lower)
             || agent.name.eq_ignore_ascii_case(t)
     })
-}
-
-fn strip_agent_mention_once(text: &str, agent: &crate::store::social::AgentRow) -> String {
-    let candidates = [
-        agent.agent_id.as_str(),
-        agent.runtime_agent.as_str(),
-        agent.name.as_str(),
-    ];
-    let mut stripped = text.to_string();
-    for token in candidates {
-        let needle = format!("@{token}");
-        if stripped
-            .to_ascii_lowercase()
-            .contains(&needle.to_ascii_lowercase())
-        {
-            // Case-insensitive single replace of @token.
-            if let Some(idx) = stripped
-                .to_ascii_lowercase()
-                .find(&needle.to_ascii_lowercase())
-            {
-                stripped = format!("{}{}", &stripped[..idx], &stripped[idx + needle.len()..]);
-                break;
-            }
-        }
-    }
-    let normalised = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalised.is_empty() {
-        text.to_string()
-    } else {
-        normalised
-    }
 }
 
 fn normalize_workspace_path(path: Option<&str>) -> Option<String> {
@@ -779,214 +701,190 @@ fn fan_out_agent_error(
     let _ = state.registry.broadcast_mobile_account(account_id, frame);
 }
 
+/// Arm TurnCompletionProjector for one origin user message (event-driven).
+/// Completion is projected on host ingest via [`try_project_completion_for_session`].
 #[allow(clippy::too_many_arguments)]
-fn spawn_group_completion_watcher(
-    state: BackendState,
+fn arm_completion_watch(
+    state: &BackendState,
+    dispatch_id: String,
+    origin_message_id: String,
     conversation_id: String,
-    reply_to_message_id: String,
     session_id: String,
     agent: crate::store::social::AgentRow,
-    trigger_seq: u64,
+    raw_seq_floor: u64,
     mention_account_id: Option<String>,
     mention_minos_id: Option<String>,
 ) {
-    tokio::spawn(async move {
-        let mut cursor = CompletionWatchCursor::new(trigger_seq, tokio::time::Instant::now());
-        loop {
-            let now = tokio::time::Instant::now();
-            match crate::store::raw_events::last_seq(&state.store, &session_id).await {
-                Ok(latest_seq) => {
-                    cursor.observe(latest_seq, now);
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        target: "minos_backend::social",
-                        error = %error,
-                        conversation_id = %conversation_id,
-                        session_id = %session_id,
-                        "group completion watcher failed to inspect latest raw event seq"
-                    );
-                }
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    // Watch TTL is enforced by SessionLifecycle (B5); arm with a long ceiling.
+    let deadline_at_ms = now_ms + 30 * 60 * 1000;
+    state
+        .completion_watches
+        .arm(crate::completion_watch::CompletionWatch {
+            dispatch_id: dispatch_id.clone(),
+            origin_message_id: origin_message_id.clone(),
+            conversation_id,
+            session_id: session_id.clone(),
+            agent,
+            raw_seq_floor,
+            armed_at_ms: now_ms,
+            deadline_at_ms,
+            mention_account_id,
+            mention_minos_id,
+        });
+    tracing::info!(
+        target: "minos_backend::social",
+        session_id = %session_id,
+        origin_message_id = %origin_message_id,
+        dispatch_id = %dispatch_id,
+        raw_seq_floor,
+        "armed TurnCompletionProjector watch for host-ingest projection"
+    );
+}
+
+/// Called from host ingest after raw events land. Projects agent bubble(s) when ready.
+///
+/// Multi-watch: every unfinished (origin, session) on this session is probed.
+pub async fn try_project_completion_for_session(state: &BackendState, session_id: &str) {
+    let watches = state.completion_watches.list_for_session(session_id);
+    if watches.is_empty() {
+        return;
+    }
+    for watch in watches {
+        let key = watch.watch_key();
+        match try_project_completion_for_watch(state, &key, false).await {
+            ProjectOutcome::Pending => {
+                // Quiet-window settle. One-shot delayed recheck; post is
+                // idempotent via client_message_id.
+                let state = state.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(GROUP_COMPLETION_SEQ_STABLE).await;
+                    let _ = try_project_completion_for_watch(&state, &key, true).await;
+                });
             }
+            ProjectOutcome::Done | ProjectOutcome::NotWatching => {}
+        }
+    }
+}
 
-            let session_terminal =
-                match crate::store::agent_sessions::get(&state.store, &session_id).await {
-                    Ok(Some(session)) => {
-                        session.ended_at_ms.is_some()
-                            || crate::turn_completion::is_session_terminal_status(&session.status)
-                    }
-                    Ok(None) => false,
-                    Err(error) => {
-                        tracing::warn!(
-                            target: "minos_backend::social",
-                            error = %error,
-                            session_id = %session_id,
-                            "group completion watcher failed to load agent session"
-                        );
-                        false
-                    }
-                };
+enum ProjectOutcome {
+    NotWatching,
+    Pending,
+    Done,
+}
 
-            let seq_stable = now.saturating_duration_since(cursor.last_activity_at)
-                >= GROUP_COMPLETION_SEQ_STABLE;
+async fn try_project_completion_for_watch(
+    state: &BackendState,
+    watch_key: &str,
+    seq_stable: bool,
+) -> ProjectOutcome {
+    let Some(watch) = state.completion_watches.get(watch_key) else {
+        return ProjectOutcome::NotWatching;
+    };
+    let session_id = watch.session_id.clone();
+    let origin_message_id = watch.origin_message_id.clone();
 
-            match find_completed_agent_reply(
-                &state.store,
-                &session_id,
-                agent_name_for_row(&agent),
-                trigger_seq,
-                session_terminal,
-                seq_stable,
+    let session_terminal = match crate::store::agent_sessions::get(&state.store, &session_id).await
+    {
+        Ok(Some(session)) => {
+            session.ended_at_ms.is_some()
+                || crate::turn_completion::is_session_terminal_status(&session.status)
+        }
+        Ok(None) => false,
+        Err(error) => {
+            tracing::warn!(
+                target: "minos_backend::social",
+                error = %error,
+                session_id = %session_id,
+                origin_message_id = %origin_message_id,
+                "completion projection failed to load agent session"
+            );
+            false
+        }
+    };
+
+    match find_completed_agent_reply(
+        &state.store,
+        &session_id,
+        agent_name_for_row(&watch.agent),
+        watch.raw_seq_floor,
+        session_terminal,
+        seq_stable,
+    )
+    .await
+    {
+        Ok(crate::turn_completion::CompletionProbe::Ready(text)) => {
+            let final_text = watch
+                .mention_minos_id
+                .as_deref()
+                .map_or(text.clone(), |minos_id| format!("@{minos_id} {text}"));
+            let mentions = watch.mention_account_id.iter().cloned().collect::<Vec<_>>();
+            let client_message_id =
+                crate::turn_completion::TurnCompletionProjector::agent_result_client_message_id(
+                    &watch.conversation_id,
+                    &session_id,
+                    &watch.origin_message_id,
+                );
+            match post_agent_social_message(
+                state,
+                &watch.conversation_id,
+                &watch.agent,
+                Some(session_id.as_str()),
+                &watch.origin_message_id,
+                &final_text,
+                &mentions,
+                Some(client_message_id.as_str()),
             )
             .await
             {
-                Ok(crate::turn_completion::CompletionProbe::Ready(text)) => {
-                    let final_text = mention_minos_id
-                        .as_deref()
-                        .map_or(text.clone(), |minos_id| format!("@{minos_id} {text}"));
-                    let mentions = mention_account_id.iter().cloned().collect::<Vec<_>>();
-                    // TurnCompletionProjector is the sole multi-end agent bubble writer.
-                    let client_message_id =
-                        crate::turn_completion::TurnCompletionProjector::agent_result_client_message_id(
-                            &conversation_id,
-                            &session_id,
-                            trigger_seq,
-                        );
-                    match post_agent_social_message(
-                        &state,
-                        &conversation_id,
-                        &agent,
-                        Some(session_id.as_str()),
-                        &reply_to_message_id,
-                        &final_text,
-                        &mentions,
-                        Some(client_message_id.as_str()),
-                    )
-                    .await
-                    {
-                        Ok(()) => {
-                            tracing::info!(
-                                target: "minos_backend::social",
-                                conversation_id = %conversation_id,
-                                session_id = %session_id,
-                                client_message_id = %client_message_id,
-                                "TurnCompletionProjector posted agent bubble"
-                            );
-                            return;
-                        }
-                        Err((_, body)) => {
-                            // Transient store/fanout failure must not abandon the turn —
-                            // keep polling (idempotent client_message_id on retry).
-                            // Cap via should_stop_after_long_idle (~5m without raw activity).
-                            tracing::warn!(
-                                target: "minos_backend::social",
-                                conversation_id = %conversation_id,
-                                session_id = %session_id,
-                                error = %body.0.error.message,
-                                "TurnCompletionProjector failed to post agent bubble; will retry"
-                            );
-                            tokio::time::sleep(GROUP_COMPLETION_IDLE_POLL_INTERVAL).await;
-                            continue;
-                        }
-                    }
-                }
-                Ok(crate::turn_completion::CompletionProbe::DoneWithoutText) => {
+                Ok(()) => {
+                    state.completion_watches.remove(watch_key);
                     tracing::info!(
                         target: "minos_backend::social",
-                        conversation_id = %conversation_id,
+                        conversation_id = %watch.conversation_id,
                         session_id = %session_id,
-                        trigger_seq,
-                        "TurnCompletionProjector finished without clean final text"
+                        origin_message_id = %origin_message_id,
+                        client_message_id = %client_message_id,
+                        "TurnCompletionProjector posted agent bubble (ingest-driven)"
                     );
-                    return;
+                    ProjectOutcome::Done
                 }
-                Ok(crate::turn_completion::CompletionProbe::Pending) => {}
-                Err(error) => {
+                Err((_, body)) => {
                     tracing::warn!(
                         target: "minos_backend::social",
-                        error = %error,
-                        conversation_id = %conversation_id,
+                        conversation_id = %watch.conversation_id,
                         session_id = %session_id,
-                        "TurnCompletionProjector failed to translate session state"
+                        origin_message_id = %origin_message_id,
+                        error = %body.0.error.message,
+                        "TurnCompletionProjector post failed; will retry on next ingest"
                     );
+                    ProjectOutcome::Pending
                 }
             }
-
-            // Bound infinite idle poll when Grok/etc. never yield final text and
-            // session never flips terminal (host offline mid-turn).
-            if cursor.should_stop_after_long_idle(now) {
-                tracing::warn!(
-                    target: "minos_backend::social",
-                    conversation_id = %conversation_id,
-                    session_id = %session_id,
-                    trigger_seq,
-                    last_observed_seq = cursor.last_observed_seq,
-                    "group completion watcher giving up after prolonged agent inactivity"
-                );
-                return;
-            }
-
-            if cursor.should_log_idle(now) {
-                tracing::warn!(
-                    target: "minos_backend::social",
-                    conversation_id = %conversation_id,
-                    session_id = %session_id,
-                    trigger_seq,
-                    last_observed_seq = cursor.last_observed_seq,
-                    "group completion watcher still waiting after agent inactivity"
-                );
-            }
-
-            tokio::time::sleep(cursor.next_poll_delay(now)).await;
         }
-    });
-}
-
-#[derive(Debug, Clone, Copy)]
-struct CompletionWatchCursor {
-    last_observed_seq: u64,
-    last_activity_at: tokio::time::Instant,
-    next_idle_log_at: tokio::time::Instant,
-}
-
-impl CompletionWatchCursor {
-    fn new(trigger_seq: u64, now: tokio::time::Instant) -> Self {
-        Self {
-            last_observed_seq: trigger_seq,
-            last_activity_at: now,
-            next_idle_log_at: now + GROUP_COMPLETION_IDLE_LOG_INTERVAL,
+        Ok(crate::turn_completion::CompletionProbe::DoneWithoutText) => {
+            state.completion_watches.remove(watch_key);
+            tracing::info!(
+                target: "minos_backend::social",
+                conversation_id = %watch.conversation_id,
+                session_id = %session_id,
+                origin_message_id = %origin_message_id,
+                raw_seq_floor = watch.raw_seq_floor,
+                "TurnCompletionProjector finished without clean final text"
+            );
+            ProjectOutcome::Done
         }
-    }
-
-    fn observe(&mut self, latest_seq: u64, now: tokio::time::Instant) {
-        if latest_seq <= self.last_observed_seq {
-            return;
+        Ok(crate::turn_completion::CompletionProbe::Pending) => ProjectOutcome::Pending,
+        Err(error) => {
+            tracing::warn!(
+                target: "minos_backend::social",
+                error = %error,
+                session_id = %session_id,
+                origin_message_id = %origin_message_id,
+                "TurnCompletionProjector probe failed"
+            );
+            ProjectOutcome::Pending
         }
-        self.last_observed_seq = latest_seq;
-        self.last_activity_at = now;
-        self.next_idle_log_at = now + GROUP_COMPLETION_IDLE_LOG_INTERVAL;
-    }
-
-    fn should_log_idle(&mut self, now: tokio::time::Instant) -> bool {
-        if now < self.next_idle_log_at {
-            return false;
-        }
-        self.next_idle_log_at = now + GROUP_COMPLETION_IDLE_LOG_INTERVAL;
-        true
-    }
-
-    /// Stop watching after one full idle-log window with no new raw events.
-    fn should_stop_after_long_idle(self, now: tokio::time::Instant) -> bool {
-        now.saturating_duration_since(self.last_activity_at) >= GROUP_COMPLETION_IDLE_LOG_INTERVAL
-    }
-
-    fn next_poll_delay(self, now: tokio::time::Instant) -> Duration {
-        if now.saturating_duration_since(self.last_activity_at)
-            >= GROUP_COMPLETION_IDLE_LOG_INTERVAL
-        {
-            return GROUP_COMPLETION_IDLE_POLL_INTERVAL;
-        }
-        GROUP_COMPLETION_POLL_INTERVAL
     }
 }
 
@@ -1041,25 +939,166 @@ async fn post_agent_social_message(
     client_message_id: Option<&str>,
 ) -> Result<(), (StatusCode, Json<ErrorEnvelope>)> {
     let session_id = session_id.map(str::trim).filter(|s| !s.is_empty());
-    let row = crate::store::social::insert_agent_message_with_session(
-        &state.store,
+    let (_message, members) = persist_agent_message_with_delivery(
+        state,
         conversation_id,
         &agent.agent_id,
         text,
-        chrono::Utc::now().timestamp_millis(),
         Some(reply_to_message_id),
         session_id,
         mentioned_account_ids,
         client_message_id,
     )
-    .await
-    .map_err(|e| err("internal", e.to_string()))?;
-    let mut hydrated = crate::conversations::use_case::hydrate_messages(&state.store, vec![row])
+    .await?;
+    let _ = members;
+    Ok(())
+}
+
+/// Insert agent message + durable/outbox in one transaction, then publish.
+#[allow(clippy::too_many_arguments)]
+async fn persist_agent_message_with_delivery(
+    state: &BackendState,
+    conversation_id: &str,
+    agent_id: &str,
+    text: &str,
+    reply_to_message_id: Option<&str>,
+    agent_session_id: Option<&str>,
+    mentioned_account_ids: &[String],
+    client_message_id: Option<&str>,
+) -> Result<(ChatMessageSummary, Vec<String>), (StatusCode, Json<ErrorEnvelope>)> {
+    let member_ids = crate::store::social::list_conversation_members(&state.store, conversation_id)
         .await
         .map_err(|e| err("internal", e.to_string()))?;
-    let message = hydrated.remove(0);
-    fan_out_social_message(state, &message).await;
-    Ok(())
+    let agent = crate::store::social::get_agent(&state.store, agent_id)
+        .await
+        .map_err(|e| err("internal", e.to_string()))?
+        .ok_or_else(|| err("not_found", "agent not found"))?;
+    // Preload reply before opening the write tx (no nested pool checkout).
+    let reply_to = match reply_to_message_id {
+        Some(id) => {
+            let reply_row = crate::store::social::get_message(&state.store, id)
+                .await
+                .map_err(|e| err("internal", e.to_string()))?;
+            match reply_row {
+                Some(row) => {
+                    let mut hydrated =
+                        crate::conversations::use_case::hydrate_messages(&state.store, vec![row])
+                            .await
+                            .map_err(|e| err("internal", e.to_string()))?;
+                    let parent = hydrated.remove(0);
+                    Some(minos_protocol::ChatMessageReplySummary {
+                        message_id: parent.message_id,
+                        sender: parent.sender,
+                        text: parent.text,
+                        recalled_at_ms: parent.recalled_at_ms,
+                    })
+                }
+                None => None,
+            }
+        }
+        None => None,
+    };
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    let mut tx = Storage::begin(&state.store)
+        .await
+        .map_err(|e| err("internal", e.to_string()))?;
+    let outcome = crate::store::social::insert_agent_message_with_session_in_tx(
+        &mut tx,
+        &agent,
+        conversation_id,
+        text,
+        now_ms,
+        reply_to_message_id,
+        agent_session_id,
+        mentioned_account_ids,
+        client_message_id,
+    )
+    .await
+    .map_err(|e| err("internal", e.to_string()))?;
+
+    let message = if outcome.inserted {
+        let sender = minos_protocol::UserSummary {
+            account_id: agent.agent_id.clone(),
+            minos_id: agent.agent_id.clone(),
+            display_name: format!("🤖 {}", agent.name),
+        };
+        let message = ChatMessageSummary {
+            message_id: outcome.row.message_id.clone(),
+            conversation_id: outcome.row.conversation_id.clone(),
+            sender,
+            text: outcome.row.text.clone(),
+            created_at_ms: outcome.row.created_at_ms,
+            message_seq: outcome.row.message_seq,
+            reply_to,
+            recalled_at_ms: None,
+            mentioned_account_ids: mentioned_account_ids.to_vec(),
+            sender_type: SenderType::Agent,
+            reactions: vec![],
+            attachments: vec![],
+        };
+        crate::store::social::ensure_social_message_delivery_in_tx(&mut tx, &message, &member_ids)
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
+        // Re-hydrate for API parity with list_messages.
+        let mut hydrated =
+            crate::conversations::use_case::hydrate_messages(&state.store, vec![outcome.row])
+                .await
+                .map_err(|e| err("internal", e.to_string()))?;
+        let mut full = hydrated.remove(0);
+        if full.mentioned_account_ids.is_empty() && !mentioned_account_ids.is_empty() {
+            full.mentioned_account_ids = mentioned_account_ids.to_vec();
+        }
+        full
+    } else {
+        // Idempotent hit: abandon empty insert tx, hydrate SSOT, repair durable.
+        drop(tx);
+        let mut hydrated =
+            crate::conversations::use_case::hydrate_messages(&state.store, vec![outcome.row])
+                .await
+                .map_err(|e| err("internal", e.to_string()))?;
+        let message = hydrated.remove(0);
+        let mut repair_tx = Storage::begin(&state.store)
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
+        crate::store::social::ensure_social_message_delivery_in_tx(
+            &mut repair_tx,
+            &message,
+            &member_ids,
+        )
+        .await
+        .map_err(|e| err("internal", e.to_string()))?;
+        repair_tx
+            .commit()
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
+        message
+    };
+
+    if let Err(error) = publish_social_message_delivery(state, &message, &member_ids).await {
+        tracing::warn!(
+            target: "minos_backend::social",
+            conversation_id = %conversation_id,
+            message_id = %message.message_id,
+            error = %error,
+            "failed to publish agent social message; outbox will retry if enqueued"
+        );
+    }
+    let frame = Envelope::Event {
+        version: 1,
+        event: EventKind::SocialMessage {
+            conversation_id: message.conversation_id.clone(),
+            message: message.clone(),
+        },
+    };
+    state
+        .realtime
+        .fanout_social_message(&member_ids, &frame)
+        .await;
+    Ok((message, member_ids))
 }
 
 fn extract_mentioned_account_ids(
@@ -1103,7 +1142,14 @@ fn collect_mention_tokens(text: &str) -> Vec<&str> {
 
         let start = index + 1;
         let mut end = start;
-        while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'-') {
+        // Allow `#short` so mid-body `@codex#abcd` keeps session targeting
+        // (Desktop `parseAllAgentRoutings` parity).
+        while end < bytes.len()
+            && (bytes[end].is_ascii_alphanumeric()
+                || bytes[end] == b'-'
+                || bytes[end] == b'_'
+                || bytes[end] == b'#')
+        {
             end += 1;
         }
         if end > start {
@@ -1447,41 +1493,27 @@ async fn send_agent_message(
     };
     // Server clock is authoritative; ignore client_sent_at_ms / created_at_ms for ordering.
     let _ = req.client_sent_at_ms.or(req.created_at_ms);
-    let row = crate::store::social::insert_agent_message_with_session(
-        &state.store,
+    let _ = now_ms;
+    let (message, _) = persist_agent_message_with_delivery(
+        &state,
         &conversation_id,
         &req.agent_id,
         &trimmed,
-        now_ms,
         reply_to.as_deref(),
         req.agent_session_id.as_deref(),
         &mentioned_account_ids,
         req.client_message_id.as_deref(),
     )
-    .await
-    .map_err(|e| err("internal", e.to_string()))?;
-    // Full hydrate so reply_to / agent sender match list_messages (fanout + clients).
-    let mut hydrated = crate::conversations::use_case::hydrate_messages(&state.store, vec![row])
-        .await
-        .map_err(|e| err("internal", e.to_string()))?;
-    let message = hydrated.remove(0);
-    // Prefer freshly extracted mentions when hydrate left them empty.
-    let message = if message.mentioned_account_ids.is_empty() && !mentioned_account_ids.is_empty() {
-        let mut m = message;
-        m.mentioned_account_ids = mentioned_account_ids;
-        m
-    } else {
-        message
-    };
-    fan_out_social_message(&state, &message).await;
+    .await?;
     Ok(Json(message))
 }
 
 /// Try to dispatch a message to an agent in the conversation (Mobile / client_live).
+/// Plan + enqueue agent dispatch after the user bubble is durable.
 ///
-/// Called after the user bubble is already durable. Failures must **not** be silent:
-/// they surface as (1) formal StreamEvent `agent_error`, (2) legacy Envelope AgentError,
-/// and (3) when an agent is known, a visible agent chat bubble in the timeline.
+/// HTTP path returns after this; host RPC runs on [`process_agent_dispatch_batch`].
+/// Immediate user-visible errors only for plan-time intent failures (no agent
+/// match). Host offline / RPC failures are queued with backoff, then terminal.
 pub async fn try_agent_dispatch(
     state: &BackendState,
     account_id: &str,
@@ -1499,15 +1531,15 @@ pub async fn try_agent_dispatch(
         Some(message_id) => crate::store::social::get_message(&state.store, message_id).await?,
         None => None,
     };
-    let dispatch_plan =
-        build_agent_dispatch_plan(state, conversation_id, trimmed_text, reply_target.as_ref())
+    let plans =
+        build_agent_dispatch_plans(state, conversation_id, trimmed_text, reply_target.as_ref())
             .await
             .map_err(|(_, body)| crate::error::BackendError::StoreQuery {
                 operation: "social::try_agent_dispatch.plan".into(),
                 message: body.0.error.message,
             })?;
 
-    let Some(plan) = dispatch_plan else {
+    if plans.is_empty() {
         if let Some((code, detail)) =
             unmatched_agent_intent_error(state, conversation_id, trimmed_text).await?
         {
@@ -1532,7 +1564,7 @@ pub async fn try_agent_dispatch(
             .await;
         }
         return Ok(());
-    };
+    }
 
     let members =
         crate::store::social::list_conversation_member_profiles(&state.store, conversation_id)
@@ -1540,54 +1572,275 @@ pub async fn try_agent_dispatch(
     let sender_minos_id = members
         .iter()
         .find(|m| m.account_id == account_id)
-        .map(|m| m.minos_id.clone())
-        .unwrap_or_default();
-    let mention_sender = plan.mention_sender;
-    let agent_for_error = plan.agent.clone();
-    let session_hint = plan.session_id.clone();
+        .map(|m| m.minos_id.clone());
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let mut any_inserted = false;
+    for plan in plans {
+        let dispatch_id = uuid::Uuid::new_v4().to_string();
+        let row = crate::store::agent_dispatch_queue::AgentDispatchRow {
+            dispatch_id,
+            origin_message_id: message.message_id.clone(),
+            conversation_id: conversation_id.to_string(),
+            account_id: account_id.to_string(),
+            agent_id: plan.agent.agent_id.clone(),
+            session_id: plan.session_id.clone(),
+            forwarded_text: plan.forwarded_text,
+            mention_sender: plan.mention_sender,
+            sender_minos_id: sender_minos_id.clone(),
+            status: crate::store::agent_dispatch_queue::STATUS_PENDING.to_string(),
+            attempts: 0,
+            next_attempt_at_ms: now_ms,
+            last_error: None,
+            created_at_ms: now_ms,
+            updated_at_ms: now_ms,
+        };
+        let inserted = crate::store::agent_dispatch_queue::enqueue(&state.store, &row).await?;
+        if inserted {
+            any_inserted = true;
+            tracing::info!(
+                target: "minos_backend::social",
+                conversation_id = %conversation_id,
+                origin_message_id = %message.message_id,
+                agent_id = %plan.agent.agent_id,
+                "agent dispatch enqueued"
+            );
+        } else {
+            tracing::debug!(
+                target: "minos_backend::social",
+                origin_message_id = %message.message_id,
+                agent_id = %plan.agent.agent_id,
+                "agent dispatch already queued for origin+agent (idempotent)"
+            );
+        }
+    }
+    if any_inserted {
+        state.wake_agent_dispatch();
+    }
 
+    Ok(())
+}
+
+/// Host online edge: force due dispatches for linked accounts, then wake worker.
+///
+/// Production path used from the host WS gateway (and tests) — does **not**
+/// require faking `next_attempt_at_ms` via requeue.
+///
+/// P6: also the multi-instance recovery edge for process-local
+/// [`crate::completion_watch::CompletionWatchRegistry`] — re-dispatch re-arms
+/// watches on the instance that claims the work (same process as the host WS
+/// when workers are co-located).
+pub async fn on_host_online_force_agent_dispatch(
+    state: &BackendState,
+    host_device_id: minos_domain::DeviceId,
+) -> Result<u32, crate::error::BackendError> {
+    let pairs =
+        crate::store::host_links::list_accounts_for_host(&state.store, host_device_id).await?;
+    let account_ids: Vec<String> = pairs.into_iter().map(|p| p.mobile_account_id).collect();
+    if account_ids.is_empty() {
+        state.wake_agent_dispatch();
+        return Ok(0);
+    }
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let n = crate::store::agent_dispatch_queue::force_due_for_accounts(
+        &state.store,
+        &account_ids,
+        now_ms,
+    )
+    .await?;
+    tracing::info!(
+        target: "minos_backend::social",
+        host_device_id = %host_device_id,
+        accounts = account_ids.len(),
+        forced = n,
+        "host online: forced agent dispatch queue due"
+    );
+    state.wake_agent_dispatch();
+    Ok(n)
+}
+
+/// Drain due AgentDispatchQueue rows: host RPC + arm CompletionWatch.
+///
+/// Called by [`crate::jobs::agent_dispatch_worker`] and tests.
+pub async fn process_agent_dispatch_batch(
+    state: &BackendState,
+) -> Result<u32, crate::error::BackendError> {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let claimed = crate::store::agent_dispatch_queue::claim_due(&state.store, now_ms, 16).await?;
+    if claimed.is_empty() {
+        return Ok(0);
+    }
+    let mut processed = 0u32;
+    for row in claimed {
+        match execute_claimed_dispatch(state, &row).await {
+            Ok(()) => processed += 1,
+            Err(error) => {
+                // claim_due already incremented attempts; use post-claim value.
+                let attempts = row.attempts.max(1);
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let detail = error.to_string();
+                if attempts >= crate::store::agent_dispatch_queue::MAX_ATTEMPTS {
+                    tracing::warn!(
+                        target: "minos_backend::social",
+                        error = %error,
+                        dispatch_id = %row.dispatch_id,
+                        origin_message_id = %row.origin_message_id,
+                        attempts,
+                        "agent dispatch post-forward error terminal after retries"
+                    );
+                    if let Err(term_err) = crate::store::agent_dispatch_queue::mark_failed_terminal(
+                        &state.store,
+                        &row.dispatch_id,
+                        &detail,
+                        now_ms,
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            target: "minos_backend::social",
+                            error = %term_err,
+                            dispatch_id = %row.dispatch_id,
+                            "failed to mark agent dispatch terminal after post-forward error"
+                        );
+                    }
+                    notify_agent_dispatch_failure(
+                        state,
+                        &row.account_id,
+                        &row.conversation_id,
+                        &row.origin_message_id,
+                        None,
+                        row.session_id.as_deref(),
+                        "dispatch_post_forward",
+                        detail,
+                    )
+                    .await;
+                } else {
+                    tracing::warn!(
+                        target: "minos_backend::social",
+                        error = %error,
+                        dispatch_id = %row.dispatch_id,
+                        origin_message_id = %row.origin_message_id,
+                        attempts,
+                        "agent dispatch post-forward error; requeue with backoff"
+                    );
+                    let backoff_ms = (1_000i64)
+                        .saturating_mul(1i64 << attempts.min(6))
+                        .min(60_000);
+                    if let Err(requeue_err) = crate::store::agent_dispatch_queue::requeue_pending(
+                        &state.store,
+                        &row.dispatch_id,
+                        attempts,
+                        now_ms.saturating_add(backoff_ms),
+                        &detail,
+                        now_ms,
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            target: "minos_backend::social",
+                            error = %requeue_err,
+                            dispatch_id = %row.dispatch_id,
+                            "failed to requeue agent dispatch after post-forward error"
+                        );
+                    }
+                }
+                processed += 1;
+            }
+        }
+    }
+    Ok(processed)
+}
+
+async fn execute_claimed_dispatch(
+    state: &BackendState,
+    row: &crate::store::agent_dispatch_queue::AgentDispatchRow,
+) -> Result<(), crate::error::BackendError> {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let Some(agent) = crate::store::social::get_agent(&state.store, &row.agent_id).await? else {
+        crate::store::agent_dispatch_queue::mark_failed_terminal(
+            &state.store,
+            &row.dispatch_id,
+            "agent_not_found",
+            now_ms,
+        )
+        .await?;
+        notify_agent_dispatch_failure(
+            state,
+            &row.account_id,
+            &row.conversation_id,
+            &row.origin_message_id,
+            None,
+            row.session_id.as_deref(),
+            "agent_not_found",
+            format!("Agent {} no longer exists", row.agent_id),
+        )
+        .await;
+        return Ok(());
+    };
+
+    let attachments =
+        dispatch_attachments_for_origin(state, &row.account_id, &row.origin_message_id).await?;
     match forward_agent_dispatch(
         state,
-        account_id,
-        &plan.agent,
-        plan.session_id.clone(),
-        &plan.forwarded_text,
-        conversation_id,
-        &message.message_id,
+        &row.account_id,
+        &agent,
+        row.session_id.clone(),
+        &row.forwarded_text,
+        &row.conversation_id,
+        &row.origin_message_id,
+        attachments,
     )
     .await
     {
         Ok(dispatch) => {
             tracing::info!(
                 target: "minos_backend::social",
-                conversation_id = %conversation_id,
+                conversation_id = %row.conversation_id,
                 session_id = %dispatch.session_id,
-                agent_id = %plan.agent.agent_id,
-                runtime = %plan.agent.runtime_agent,
+                origin_message_id = %row.origin_message_id,
+                agent_id = %agent.agent_id,
+                runtime = %agent.runtime_agent,
                 "agent dispatch started"
             );
-            crate::store::social::bind_session_to_message_for_agent(
+            // Single-agent bind only. Multi-@ would last-writer-win on
+            // chat_messages.agent_session_id; completion + queue already key
+            // by origin×agent/session.
+            let multi_for_origin = crate::store::agent_dispatch_queue::count_by_origin(
                 &state.store,
-                &message.message_id,
-                &plan.agent.agent_id,
+                &row.origin_message_id,
+            )
+            .await
+            .unwrap_or(1);
+            if multi_for_origin <= 1 {
+                crate::store::social::bind_session_to_message_for_agent(
+                    &state.store,
+                    &row.origin_message_id,
+                    &agent.agent_id,
+                    &dispatch.session_id,
+                )
+                .await?;
+            }
+            crate::store::agent_dispatch_queue::mark_succeeded(
+                &state.store,
+                &row.dispatch_id,
                 &dispatch.session_id,
+                now_ms,
             )
             .await?;
-
-            spawn_group_completion_watcher(
-                state.clone(),
-                conversation_id.to_string(),
-                message.message_id.clone(),
+            arm_completion_watch(
+                state,
+                row.dispatch_id.clone(),
+                row.origin_message_id.clone(),
+                row.conversation_id.clone(),
                 dispatch.session_id,
-                plan.agent,
+                agent,
                 dispatch.watcher_from_seq,
-                if mention_sender {
-                    Some(account_id.to_string())
+                if row.mention_sender {
+                    Some(row.account_id.clone())
                 } else {
                     None
                 },
-                if mention_sender {
-                    Some(sender_minos_id)
+                if row.mention_sender {
+                    row.sender_minos_id.clone()
                 } else {
                     None
                 },
@@ -1595,28 +1848,60 @@ pub async fn try_agent_dispatch(
         }
         Err(error) => {
             let (code, detail) = agent_error_from_backend_error(&error);
-            tracing::warn!(
-                target: "minos_backend::social",
-                conversation_id = %conversation_id,
-                agent_id = %agent_for_error.agent_id,
-                code = %code,
-                detail = %detail,
-                "agent dispatch failed after user message"
-            );
-            notify_agent_dispatch_failure(
-                state,
-                account_id,
-                conversation_id,
-                &message.message_id,
-                Some(&agent_for_error),
-                session_hint.as_deref(),
-                code,
-                detail,
-            )
-            .await;
+            let attempts = row.attempts;
+            if attempts >= crate::store::agent_dispatch_queue::MAX_ATTEMPTS {
+                tracing::warn!(
+                    target: "minos_backend::social",
+                    conversation_id = %row.conversation_id,
+                    agent_id = %agent.agent_id,
+                    origin_message_id = %row.origin_message_id,
+                    attempts,
+                    code = %code,
+                    detail = %detail,
+                    "agent dispatch failed terminal after retries"
+                );
+                crate::store::agent_dispatch_queue::mark_failed_terminal(
+                    &state.store,
+                    &row.dispatch_id,
+                    &detail,
+                    now_ms,
+                )
+                .await?;
+                notify_agent_dispatch_failure(
+                    state,
+                    &row.account_id,
+                    &row.conversation_id,
+                    &row.origin_message_id,
+                    Some(&agent),
+                    row.session_id.as_deref(),
+                    code,
+                    detail,
+                )
+                .await;
+            } else {
+                let delay = crate::store::agent_dispatch_queue::backoff_delay_ms(attempts);
+                let next = now_ms + delay;
+                tracing::info!(
+                    target: "minos_backend::social",
+                    conversation_id = %row.conversation_id,
+                    origin_message_id = %row.origin_message_id,
+                    attempts,
+                    next_attempt_at_ms = next,
+                    code = %code,
+                    "agent dispatch requeued (transient)"
+                );
+                crate::store::agent_dispatch_queue::requeue_pending(
+                    &state.store,
+                    &row.dispatch_id,
+                    attempts,
+                    next,
+                    &detail,
+                    now_ms,
+                )
+                .await?;
+            }
         }
     }
-
     Ok(())
 }
 
@@ -1733,6 +2018,50 @@ async fn unmatched_agent_intent_error(
     Ok(None)
 }
 
+/// Expire CompletionWatch rows past `deadline_at_ms`: user-visible failure + remove.
+///
+/// Called by SessionLifecycle (B5). Returns the number of watches drained.
+pub async fn expire_completion_watches(
+    state: &BackendState,
+    now_ms: i64,
+) -> Result<u32, crate::error::BackendError> {
+    let expired = state.completion_watches.drain_expired(now_ms);
+    if expired.is_empty() {
+        return Ok(0);
+    }
+    let mut n = 0u32;
+    for watch in expired {
+        let account_id = watch
+            .mention_account_id
+            .clone()
+            .unwrap_or_else(|| watch.agent.owner_account_id.clone());
+        tracing::warn!(
+            target: "minos_backend::social",
+            origin_message_id = %watch.origin_message_id,
+            session_id = %watch.session_id,
+            conversation_id = %watch.conversation_id,
+            deadline_at_ms = watch.deadline_at_ms,
+            "completion watch TTL expired; projecting failure bubble"
+        );
+        notify_agent_dispatch_failure(
+            state,
+            &account_id,
+            &watch.conversation_id,
+            &watch.origin_message_id,
+            Some(&watch.agent),
+            Some(&watch.session_id),
+            "completion_timeout",
+            format!(
+                "agent turn did not complete before watch deadline ({})",
+                watch.deadline_at_ms
+            ),
+        )
+        .await;
+        n = n.saturating_add(1);
+    }
+    Ok(n)
+}
+
 /// Surface dispatch failure to Mobile/Desktop: StreamEvent + Envelope + optional chat bubble.
 async fn notify_agent_dispatch_failure(
     state: &BackendState,
@@ -1747,6 +2076,10 @@ async fn notify_agent_dispatch_failure(
     let user_message = match code {
         "peer_offline" | "no_live_host" => {
             "⚠️ 无法启动 Agent：当前没有在线 Host。请打开本机 Desktop/daemon 并确保已链接云端。"
+                .to_string()
+        }
+        "completion_timeout" => {
+            "⚠️ Agent 回合超时：Host 未在时限内完成结果投影。请重试或检查 Desktop/daemon。"
                 .to_string()
         }
         "no_agents_in_conversation" | "agent_not_in_conversation" => detail.clone(),
@@ -1779,8 +2112,21 @@ async fn notify_agent_dispatch_failure(
     );
 
     // Visible timeline bubble when we know which agent failed.
+    // Multi-@ requires agent/session in the id so failures never collide.
     if let Some(agent) = agent {
-        let client_id = format!("agent-dispatch-error:{origin_message_id}");
+        let client_id = if code == "completion_timeout" {
+            format!(
+                "agent-completion-timeout:{}:{}:{}",
+                conversation_id,
+                session_id.unwrap_or("none"),
+                origin_message_id
+            )
+        } else {
+            format!(
+                "agent-dispatch-error:{}:{}:{}",
+                conversation_id, agent.agent_id, origin_message_id
+            )
+        };
         if let Err(error) = post_agent_social_message(
             state,
             conversation_id,
@@ -1840,42 +2186,70 @@ mod tests {
     }
 
     #[test]
-    fn completion_watch_cursor_resets_idle_log_on_agent_activity() {
-        let start = tokio::time::Instant::now();
-        let mut cursor = CompletionWatchCursor::new(10, start);
-
-        let almost_idle = start + GROUP_COMPLETION_IDLE_LOG_INTERVAL - Duration::from_millis(1);
-        assert!(!cursor.should_log_idle(almost_idle));
-
-        cursor.observe(11, almost_idle);
-        assert_eq!(cursor.last_observed_seq, 11);
-        assert!(!cursor.should_log_idle(start + GROUP_COMPLETION_IDLE_LOG_INTERVAL));
-        assert!(cursor.should_log_idle(almost_idle + GROUP_COMPLETION_IDLE_LOG_INTERVAL));
+    fn completion_watch_registry_arms_and_removes_by_watch_key() {
+        let reg = crate::completion_watch::CompletionWatchRegistry::new();
+        let agent = crate::store::social::AgentRow {
+            agent_id: "a1".into(),
+            owner_account_id: "acc".into(),
+            name: "Codex".into(),
+            description: String::new(),
+            source: "host_runtime".into(),
+            runtime_agent: "codex".into(),
+            model: String::new(),
+            workspace_path: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+        };
+        reg.arm(crate::completion_watch::CompletionWatch {
+            dispatch_id: "d1".into(),
+            origin_message_id: "m1".into(),
+            conversation_id: "c1".into(),
+            session_id: "sess-1".into(),
+            agent,
+            raw_seq_floor: 3,
+            armed_at_ms: 0,
+            deadline_at_ms: 0,
+            mention_account_id: None,
+            mention_minos_id: None,
+        });
+        let key = crate::completion_watch::watch_key("m1", "sess-1");
+        assert_eq!(reg.get(&key).map(|w| w.raw_seq_floor), Some(3));
+        assert_eq!(reg.list_for_session("sess-1").len(), 1);
+        assert!(reg.remove(&key).is_some());
+        assert!(reg.get(&key).is_none());
     }
 
     #[test]
-    fn completion_watch_cursor_logs_and_stops_after_long_idle() {
-        let start = tokio::time::Instant::now();
-        let mut cursor = CompletionWatchCursor::new(10, start);
-
-        // Non-increasing seq does not refresh activity (still start).
-        cursor.observe(10, start + Duration::from_secs(1));
-        cursor.observe(9, start + Duration::from_secs(2));
-        assert_eq!(cursor.last_observed_seq, 10);
-
-        // Advance seq → activity clock moves.
-        let active = start + Duration::from_secs(3);
-        cursor.observe(11, active);
-        assert_eq!(cursor.last_observed_seq, 11);
-
-        assert!(!cursor.should_stop_after_long_idle(
-            active + GROUP_COMPLETION_IDLE_LOG_INTERVAL - Duration::from_millis(1)
-        ));
-        assert!(cursor.should_log_idle(active + GROUP_COMPLETION_IDLE_LOG_INTERVAL));
-        assert!(cursor.should_stop_after_long_idle(active + GROUP_COMPLETION_IDLE_LOG_INTERVAL));
-        assert_eq!(
-            cursor.next_poll_delay(active + GROUP_COMPLETION_IDLE_LOG_INTERVAL),
-            GROUP_COMPLETION_IDLE_POLL_INTERVAL
-        );
+    fn multi_mention_routes_unique_agents_in_order() {
+        let agents = vec![
+            crate::store::social::AgentRow {
+                agent_id: "bot-codex".into(),
+                owner_account_id: "acc".into(),
+                name: "Codex".into(),
+                description: String::new(),
+                source: "host_runtime".into(),
+                runtime_agent: "codex".into(),
+                model: String::new(),
+                workspace_path: None,
+                created_at_ms: 0,
+                updated_at_ms: 0,
+            },
+            crate::store::social::AgentRow {
+                agent_id: "bot-claude".into(),
+                owner_account_id: "acc".into(),
+                name: "Claude".into(),
+                description: String::new(),
+                source: "host_runtime".into(),
+                runtime_agent: "claude".into(),
+                model: String::new(),
+                workspace_path: None,
+                created_at_ms: 0,
+                updated_at_ms: 0,
+            },
+        ];
+        let routes = all_mentioned_agent_routes("@codex @claude @codex count off 1 2", &agents);
+        assert_eq!(routes.len(), 2);
+        assert_eq!(routes[0].agent.runtime_agent, "codex");
+        assert_eq!(routes[1].agent.runtime_agent, "claude");
     }
 }

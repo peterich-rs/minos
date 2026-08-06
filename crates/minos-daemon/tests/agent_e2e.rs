@@ -542,6 +542,8 @@ async fn start_send_stream_stop_against_fake_codex_server() -> anyhow::Result<()
         .send_user_message(SendUserMessageRequest {
             session_id: THREAD_ID.into(),
             text: "hello from mobile".into(),
+            origin_message_id: None,
+            attachments: vec![],
         })
         .await?;
 

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   displayNameForRuntime,
+  isCanonicalAgentResultId,
   isProjectableAgentMessage,
   normalizeHostRuntime,
 } from "./im-cloud-sync-helpers.ts";
@@ -28,6 +29,29 @@ describe("displayNameForRuntime", () => {
   it("capitalizes the first letter", () => {
     assert.equal(displayNameForRuntime("codex"), "Codex");
     assert.equal(displayNameForRuntime("claude"), "Claude");
+  });
+});
+
+describe("isCanonicalAgentResultId", () => {
+  it("accepts frozen agent-result:{conv}:{session}:{origin}", () => {
+    assert.equal(
+      isCanonicalAgentResultId("agent-result:c1:s1:origin1"),
+      true,
+    );
+    assert.equal(
+      isCanonicalAgentResultId("agent-result:c1:s1:origin1", "c1"),
+      true,
+    );
+  });
+
+  it("rejects non-canonical shapes and conv mismatch", () => {
+    assert.equal(isCanonicalAgentResultId("agent-result:x"), false);
+    assert.equal(isCanonicalAgentResultId("agent-result:c:s:"), false);
+    assert.equal(isCanonicalAgentResultId("msg_uuid"), false);
+    assert.equal(
+      isCanonicalAgentResultId("agent-result:c1:s1:o1", "other"),
+      false,
+    );
   });
 });
 

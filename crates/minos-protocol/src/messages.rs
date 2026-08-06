@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// On `404` with `error.code == "not_paired"`, the caller has no row in
 /// `account_host_pairings` — the response body uses the standard
 /// `{ "error": { "code": ..., "message": ... } }` envelope shared by
-/// every other `/v1/*` route.
+/// every other `/v1/...` route.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct MePeerResponse {
     pub peer_device_id: DeviceId,
@@ -233,6 +233,10 @@ pub struct ConversationMembersResponse {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ConversationReadResponse {
+    /// Highest `message_seq` marked read in this conversation (0 = none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_read_seq: Option<i64>,
+    /// Display/audit only; unread boundary is `last_read_seq`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_read_at_ms: Option<i64>,
 }
@@ -255,6 +259,8 @@ pub struct ChatMessageSummary {
     pub sender: UserSummary,
     pub text: String,
     pub created_at_ms: i64,
+    /// Per-conversation monotonic sort/pagination key (Hub SSOT).
+    pub message_seq: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<ChatMessageReplySummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -265,21 +271,102 @@ pub struct ChatMessageSummary {
     /// Defaults to "user" for backward compatibility.
     #[serde(default = "default_sender_type")]
     pub sender_type: SenderType,
+    /// Cloud reaction aggregates (viewer-resolved `reacted_by_me`). Empty when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reactions: Vec<ReactionGroup>,
+    /// Uploaded media blobs linked to this message (Hub SSOT).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<ChatMessageAttachment>,
+}
+
+/// Media blob linked to a chat message (metadata; bytes live in object storage).
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ChatMessageAttachment {
+    pub blob_id: String,
+    pub content_type: String,
+    pub byte_size: i64,
+    /// `image` | `file` | `audio` | `video`
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_filename: Option<String>,
+}
+
+/// Attachment descriptor passed Host-side for materialize-before-agent.
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct DispatchAttachment {
+    pub blob_id: String,
+    pub content_type: String,
+    pub byte_size: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_filename: Option<String>,
+    /// Short-lived URL to stream bytes (`/v1/media/blobs/:id/content?token=`).
+    pub download_url: String,
+}
+
+/// Cloud multi-account reaction actor (`account_id` or `agent_id`).
+/// Distinct from daemon-only [`LocalReactionActor`].
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ReactionActor {
+    /// account_id or agent_id
+    pub actor_id: String,
+    /// `user` | `agent`
+    pub actor_kind: String,
+    pub display_name: String,
+}
+
+/// Cloud reaction group for one emoji on a message (aggregate SSOT).
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ReactionGroup {
+    pub emoji: String,
+    pub count: u32,
+    /// True when the authenticated viewer is among actors.
+    pub reacted_by_me: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actors: Vec<ReactionActor>,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ToggleReactionRequest {
+    pub emoji: String,
+    /// Client-generated op id (outbox entry id). Required for durable
+    /// `event_id` determinism: same id → ensure_one no-op; different id → new op.
+    pub client_op_id: String,
+}
+
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ToggleReactionResponse {
+    pub message_id: String,
+    pub conversation_id: String,
+    /// Authoritative full aggregate for the message after toggle.
+    pub reactions: Vec<ReactionGroup>,
+    /// `"add"` | `"remove"` — UI animation hint only; clients must not derive state from this.
+    pub action: String,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ListChatMessagesResponse {
     pub messages: Vec<ChatMessageSummary>,
+    /// Next older-page cursor (`before_seq`); None when no more history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub next_before_ts_ms: Option<i64>,
+    pub next_before_seq: Option<i64>,
 }
 
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ListChatMessagesRequest {
+    /// Load messages with `message_seq < before_seq` (older pages).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub before_ts_ms: Option<i64>,
+    pub before_seq: Option<i64>,
+    /// Load messages with `message_seq > after_seq` (incremental sync).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_seq: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
 }
@@ -328,6 +415,9 @@ pub struct SendChatMessageRequest {
     /// @deprecated Prefer `client_sent_at_ms`. Accepted but not used as ordering authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at_ms: Option<i64>,
+    /// Ready media blob ids owned by the sender (upload via the media API first).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachment_blob_ids: Vec<String>,
 }
 
 // ─── Agent in Group Chat ───────────────────────────────────────────────
@@ -708,6 +798,12 @@ pub struct StartAgentResponse {
 pub struct SendUserMessageRequest {
     pub session_id: String,
     pub text: String,
+    /// User Hub / local message id that triggered this turn (agent-result id suffix).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_message_id: Option<String>,
+    /// Host downloads these into the workspace before prompting the agent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<DispatchAttachment>,
 }
 
 /// Server → Host. Unified dispatch payload for agent-bound chat messages.
@@ -733,6 +829,9 @@ pub struct AgentDispatchRequest {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    /// Host downloads these into the workspace before prompting the agent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<DispatchAttachment>,
 }
 
 /// Host → Server response for [`AgentDispatchRequest`].
@@ -1639,7 +1738,8 @@ mod tests {
     #[test]
     fn list_chat_messages_request_round_trip() {
         let req = ListChatMessagesRequest {
-            before_ts_ms: Some(42),
+            before_seq: Some(42),
+            after_seq: Some(10),
             limit: Some(50),
         };
         let json = serde_json::to_string(&req).unwrap();
@@ -1847,6 +1947,8 @@ mod tests {
         let req = SendUserMessageRequest {
             session_id: "thread-abc12".into(),
             text: "ping".into(),
+            origin_message_id: None,
+            attachments: vec![],
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: SendUserMessageRequest = serde_json::from_str(&json).unwrap();
@@ -1866,6 +1968,7 @@ mod tests {
             origin_message_id: Some("msg-456".into()),
             model: Some("gpt-5.4".into()),
             reasoning_effort: Some("high".into()),
+            attachments: vec![],
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: AgentDispatchRequest = serde_json::from_str(&json).unwrap();
@@ -1885,6 +1988,7 @@ mod tests {
             origin_message_id: None,
             model: None,
             reasoning_effort: None,
+            attachments: vec![],
         };
         let json = serde_json::to_string(&req).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();

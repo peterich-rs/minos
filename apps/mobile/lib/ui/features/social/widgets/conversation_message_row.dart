@@ -20,6 +20,7 @@ class ConversationMessageRow extends StatelessWidget {
     this.onLongPress,
     this.onRetry,
     this.onOpenAgentSession,
+    this.onToggleReaction,
   });
 
   final SocialChatMessage message;
@@ -29,6 +30,7 @@ class ConversationMessageRow extends StatelessWidget {
   final VoidCallback? onLongPress;
   final VoidCallback? onRetry;
   final VoidCallback? onOpenAgentSession;
+  final void Function(String emoji)? onToggleReaction;
 
   @override
   Widget build(BuildContext context) {
@@ -124,6 +126,11 @@ class ConversationMessageRow extends StatelessWidget {
             ],
           ),
         ),
+        if (message.reactions.isNotEmpty ||
+            onToggleReaction != null) ...<Widget>[
+          const SizedBox(height: MinosSpacing.xs),
+          _ReactionStrip(groups: message.reactions, onToggle: onToggleReaction),
+        ],
       ],
     );
 
@@ -160,6 +167,89 @@ class _MentionsMeChip extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+const _kQuickReactionEmojis = <String>['👍', '❤️', '🎉', '👀', '😄'];
+
+class _ReactionStrip extends StatelessWidget {
+  const _ReactionStrip({required this.groups, this.onToggle});
+
+  final List<ReactionGroup> groups;
+  final void Function(String emoji)? onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = context.minosColors;
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      children: <Widget>[
+        for (final g in groups)
+          GestureDetector(
+            onTap: onToggle == null ? null : () => onToggle!(g.emoji),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: g.reactedByMe
+                    ? colors.accent.withValues(alpha: 0.18)
+                    : colors.surfaceMuted,
+                borderRadius: MinosRadii.pillAll,
+                border: g.reactedByMe
+                    ? Border.all(color: colors.accent.withValues(alpha: 0.5))
+                    : null,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                child: Text(
+                  '${g.emoji} ${g.count}',
+                  style: theme.textTheme.labelSmall,
+                ),
+              ),
+            ),
+          ),
+        if (onToggle != null)
+          GestureDetector(
+            onTap: () => _showPicker(context),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: colors.surfaceMuted,
+                borderRadius: MinosRadii.pillAll,
+              ),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                child: Text('+'),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  void _showPicker(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(MinosSpacing.md),
+            child: Wrap(
+              spacing: 12,
+              children: [
+                for (final emoji in _kQuickReactionEmojis)
+                  GestureDetector(
+                    onTap: () {
+                      Navigator.of(ctx).pop();
+                      onToggle?.call(emoji);
+                    },
+                    child: Text(emoji, style: const TextStyle(fontSize: 28)),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

@@ -93,7 +93,7 @@ pub async fn get(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, AgentSessionRow>(
-                "SELECT session_id, conversation_id, project_id, host_installation_id AS host_device_id, agent_id, status, started_at_ms, ended_at_ms
+                "SELECT session_id, conversation_id, project_id, host_installation_id AS host_device_id, agent_id, status::text, started_at_ms, ended_at_ms
                    FROM agent_sessions
                   WHERE session_id = $1",
             )
@@ -127,7 +127,7 @@ pub async fn get_for_account(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, AgentSessionRow>(
-                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status::text, s.started_at_ms, s.ended_at_ms
                    FROM agent_sessions s
                    JOIN conversation_members cm
                      ON cm.conversation_id = s.conversation_id
@@ -167,7 +167,7 @@ pub async fn latest_for_account_conversation(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, AgentSessionRow>(
-                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status::text, s.started_at_ms, s.ended_at_ms
                    FROM agent_sessions s
                    JOIN conversation_members cm
                      ON cm.conversation_id = s.conversation_id
@@ -212,7 +212,7 @@ pub async fn list_for_account(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, AgentSessionRow>(
-                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status::text, s.started_at_ms, s.ended_at_ms
                    FROM agent_sessions s
                    JOIN conversation_members cm
                      ON cm.conversation_id = s.conversation_id
@@ -262,7 +262,7 @@ pub async fn list_for_account_conversation(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, AgentSessionRow>(
-                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status::text, s.started_at_ms, s.ended_at_ms
                    FROM agent_sessions s
                    JOIN conversation_members cm
                      ON cm.conversation_id = s.conversation_id
@@ -314,7 +314,7 @@ pub async fn list_for_account_project(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, AgentSessionRow>(
-                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status::text, s.started_at_ms, s.ended_at_ms
                    FROM agent_sessions s
                    JOIN conversation_members cm
                      ON cm.conversation_id = s.conversation_id
@@ -473,7 +473,7 @@ pub async fn latest_reusable_for_conversation_agent(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, AgentSessionRow>(
-                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status::text, s.started_at_ms, s.ended_at_ms
                    FROM agent_sessions s
                   WHERE s.conversation_id = $1
                     AND s.ended_at_ms IS NULL
@@ -541,7 +541,7 @@ pub async fn find_reusable_by_short_id(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, AgentSessionRow>(
-                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status, s.started_at_ms, s.ended_at_ms
+                "SELECT s.session_id, s.conversation_id, s.project_id, s.host_installation_id AS host_device_id, s.agent_id, s.status::text, s.started_at_ms, s.ended_at_ms
                    FROM agent_sessions s
                   WHERE s.conversation_id = $1
                     AND s.ended_at_ms IS NULL

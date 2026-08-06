@@ -5,6 +5,7 @@ import {
   isProfileNameCleanToken,
   isProfileNameUnique,
   parseAgentRouting,
+  parseAllAgentRoutings,
   profileMentionInsert,
   shortSessionId,
   validateProfileName,
@@ -67,6 +68,19 @@ describe("parseAgentRouting", () => {
 
   it("does not resolve ambiguous profile names without @p/id", () => {
     assert.equal(parseAgentRouting("@Helper x", profiles), null);
+  });
+});
+
+describe("parseAllAgentRoutings", () => {
+  it("fans out unique agents in appearance order with shared prompt", () => {
+    const routes = parseAllAgentRoutings(
+      "@codex @claude @codex count off 1 then 2",
+    );
+    assert.equal(routes.length, 2);
+    assert.equal(routes[0]?.target.agent, "codex");
+    assert.equal(routes[1]?.target.agent, "claude");
+    assert.equal(routes[0]?.prompt, "count off 1 then 2");
+    assert.equal(routes[1]?.prompt, "count off 1 then 2");
   });
 });
 

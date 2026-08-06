@@ -47,10 +47,17 @@ describe("sortTimelineMessages", () => {
     );
   });
 
-  it("does not put seq-bearing agent above hub user without seq (same second)", () => {
-    // Regression: Linked merge — Hub user has no messageSeq; local agent-result
-    // has seq. Old sort put all seq rows before no-seq → agent above user.
+  it("puts seq-bearing durable rows before optimistic no-seq peers", () => {
+    // C2: cross-source order is seq-only when present; optimistic (sending)
+    // without seq is pinned after durable.
     const sorted = sortTimelineMessages([
+      msg({
+        id: "pending",
+        role: "user",
+        deliveryStatus: "sending",
+        createdAtMs: 1_700_000_050,
+        body: "@grok 你好",
+      }),
       msg({
         id: "agent-result:c:s:1",
         role: "agent",
@@ -58,17 +65,10 @@ describe("sortTimelineMessages", () => {
         createdAtMs: 1_700_000_100,
         body: "hi from grok",
       }),
-      msg({
-        id: "user-hub",
-        role: "user",
-        // no messageSeq (Hub projection)
-        createdAtMs: 1_700_000_050,
-        body: "@grok 你好",
-      }),
     ]);
     assert.deepEqual(
       sorted.map((m) => m.id),
-      ["user-hub", "agent-result:c:s:1"],
+      ["agent-result:c:s:1", "pending"],
     );
   });
 

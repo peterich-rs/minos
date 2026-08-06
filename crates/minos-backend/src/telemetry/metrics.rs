@@ -56,6 +56,7 @@ const OUTBOX_DISPATCH_TOTAL: &str = "minos_backend_outbox_dispatch_total";
 const OUTBOX_DISPATCH_LAG_SECONDS: &str = "minos_backend_outbox_dispatch_lag_seconds";
 const APPROVAL_TIMEOUT_RESOLVED_TOTAL: &str = "minos_backend_approval_timeout_resolved_total";
 const HOST_COMMAND_TIMEOUT_TOTAL: &str = "minos_backend_host_command_timeout_total";
+const OUTBOX_HOST_COMMAND_EXPIRED_TOTAL: &str = "minos_backend_outbox_host_command_expired_total";
 const AGENT_SESSIONS_ACTIVE: &str = "minos_backend_agent_sessions_active";
 const APPROVALS_PENDING: &str = "minos_backend_approvals_pending";
 const DURABLE_EVENT_LOG_SIZE: &str = "minos_backend_durable_event_log_size";
@@ -176,6 +177,10 @@ fn prometheus_handle() -> &'static PrometheusHandle {
             "Approval requests resolved due to timeout."
         );
         metrics::describe_counter!(HOST_COMMAND_TIMEOUT_TOTAL, "Host commands that timed out.");
+        metrics::describe_counter!(
+            OUTBOX_HOST_COMMAND_EXPIRED_TOTAL,
+            "Host-command outbox rows dead-lettered due to deadline expiry (never success-acked)."
+        );
         metrics::describe_counter!(
             JOB_TICK_TOTAL,
             "Background job tick attempts, labeled by job name and result."
@@ -395,6 +400,12 @@ pub fn increment_approval_timeout_resolved() {
 pub fn increment_host_command_timeout() {
     init();
     metrics::counter!(HOST_COMMAND_TIMEOUT_TOTAL).increment(1);
+}
+
+/// Host-command outbox row expired without host observation → dead_letter (B2.4).
+pub fn increment_host_command_outbox_expired() {
+    init();
+    metrics::counter!(OUTBOX_HOST_COMMAND_EXPIRED_TOTAL).increment(1);
 }
 
 pub fn record_job_tick(job: &str, result: &str) {

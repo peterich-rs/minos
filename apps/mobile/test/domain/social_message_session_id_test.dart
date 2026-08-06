@@ -4,7 +4,7 @@ import 'package:minos/src/rust/api/minos.dart';
 
 void main() {
   group('SocialChatMessage.agentSessionIdFromMessageId', () {
-    test('parses agent-result dual-write ids', () {
+    test('parses agent-result canonical ids', () {
       const message = SocialChatMessage(
         localId: 'local-1',
         conversationId: 'conv-1',

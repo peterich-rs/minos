@@ -189,9 +189,11 @@ async fn seed_session(
             host_installation_id: Some(host_id.to_string()),
             workspace_path: None,
             initial_user_message: initial_user_message.map(str::to_string),
+            origin_message_id: None,
             client_request_id: client_request_id.to_string(),
             caller_account_id: account_id.to_string(),
             conversation_title: None,
+            attachments: Vec::new(),
         })
         .await
         .map_err(|error| anyhow::anyhow!("start session failed: {error}"))
@@ -211,8 +213,10 @@ async fn send_input(
             session_id: session_id.to_string(),
             text: text.to_string(),
             mentions: Vec::new(),
+            origin_message_id: None,
             client_request_id: client_request_id.to_string(),
             caller_account_id: account_id.to_string(),
+            attachments: Vec::new(),
         })
         .await
         .map_err(|error| anyhow::anyhow!("send input failed: {error}"))
@@ -306,6 +310,7 @@ async fn client_subscribe_replays_agent_session_durable_events() -> anyhow::Resu
         }
         other => panic!("expected Hello, got {other:?}"),
     }
+    drain_default_topic_subscribe_ack(&mut ws).await?;
 
     send_client_frame(
         &mut ws,
@@ -359,6 +364,7 @@ async fn client_subscription_denies_host_topics() -> anyhow::Result<()> {
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    drain_default_topic_subscribe_ack(&mut ws).await?;
 
     send_client_frame(
         &mut ws,
@@ -381,11 +387,143 @@ async fn client_subscription_denies_host_topics() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Seed account durable events so Hello register-only cannot hide a
+/// `replay_topic(..., 0)` regression behind an empty log.
+async fn seed_account_durable_events(
+    relay: &Relay,
+    account_id: &str,
+    count: i64,
+) -> anyhow::Result<()> {
+    let topic = format!("account:{account_id}");
+    for seq in 1..=count {
+        let event_id = format!("seed-account-{account_id}-{seq}");
+        let payload = serde_json::json!({
+            "kind": "account_registered",
+            "account_id": account_id,
+            "at_ms": seq * 1000,
+        });
+        store::durable_event_log::append(
+            &relay.pool,
+            &event_id,
+            &topic,
+            "account",
+            seq,
+            account_id,
+            &payload,
+            seq * 1000,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn seed_host_durable_events(
+    relay: &Relay,
+    host_id: DeviceId,
+    count: i64,
+) -> anyhow::Result<()> {
+    let host = host_id.to_string();
+    let topic = format!("host:{host}");
+    for seq in 1..=count {
+        let event_id = format!("seed-host-{host}-{seq}");
+        let payload = serde_json::json!({
+            "kind": "host_force_close",
+            "host_installation_id": host,
+            "reason": "seed",
+            "at_ms": seq * 1000,
+        });
+        store::durable_event_log::append(
+            &relay.pool,
+            &event_id,
+            &topic,
+            "host",
+            seq,
+            &host,
+            &payload,
+            seq * 1000,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Drain the register-only default-topic SubscribeAck emitted after Hello.
+async fn drain_default_topic_subscribe_ack(ws: &mut WsClient) -> anyhow::Result<()> {
+    match recv_server_frame(ws).await? {
+        ServerFrame::SubscribeAck { topics, .. } => {
+            assert_eq!(
+                topics.len(),
+                1,
+                "expected single default-topic SubscribeAck after Hello"
+            );
+            Ok(())
+        }
+        other => anyhow::bail!("expected default-topic SubscribeAck after Hello, got {other:?}"),
+    }
+}
+
+/// Host connect path after Hello: drain register-only ack, then Subscribe host
+/// topic for catch-up (Hello no longer replays durable history).
+async fn host_subscribe_for_catchup(ws: &mut WsClient, host_id: DeviceId) -> anyhow::Result<()> {
+    drain_default_topic_subscribe_ack(ws).await?;
+    let host_topic = format!("host:{host_id}");
+    send_client_frame(
+        ws,
+        &ClientFrame::Subscribe {
+            topics: vec![host_topic.clone()],
+            resume_after: None,
+            client_request_id: Some("host-catchup".into()),
+        },
+    )
+    .await?;
+    match recv_server_frame(ws).await? {
+        ServerFrame::SubscribeAck { topics, .. } => {
+            assert_eq!(topics, vec![host_topic]);
+        }
+        other => panic!("expected host SubscribeAck, got {other:?}"),
+    }
+    Ok(())
+}
+
+async fn assert_post_hello_register_only(ws: &mut WsClient) -> anyhow::Result<()> {
+    drain_default_topic_subscribe_ack(ws).await?;
+    let deadline = tokio::time::Instant::now() + QUIET_TIMEOUT;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        match timeout(remaining, ws.next()).await {
+            Err(_) => return Ok(()),
+            Ok(None) => anyhow::bail!("websocket ended unexpectedly"),
+            Ok(Some(Err(error))) => anyhow::bail!("websocket error: {error}"),
+            Ok(Some(Ok(Message::Ping(payload)))) => {
+                ws.send(Message::Pong(payload)).await?;
+            }
+            Ok(Some(Ok(Message::Pong(_)))) => {}
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let frame: ServerFrame = serde_json::from_str(&text)?;
+                match frame {
+                    ServerFrame::StreamEvent { kind, .. } if kind == "presence" => {}
+                    other => anyhow::bail!(
+                        "unexpected post-hello frame after default SubscribeAck (Hello must not replay durable history): {other:?}"
+                    ),
+                }
+            }
+            Ok(Some(Ok(other))) => {
+                anyhow::bail!("unexpected websocket frame after Hello: {other:?}")
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn client_handshake_stays_quiet_after_hello_without_legacy_bootstrap_frames(
 ) -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
     let (account_id, phone_id) = seed_client_account(&relay, "ws-client-hello@example.com").await?;
+    // Seed history: empty log would hide a resume-from-0 regression.
+    seed_account_durable_events(&relay, &account_id, 5).await?;
     let ticket =
         issue_client_ws_ticket(&relay, &account_id, phone_id, DeviceRole::MobileClient).await?;
     let mut ws = connect_client(&relay, "/ws/client", &ticket).await?;
@@ -395,12 +533,7 @@ async fn client_handshake_stays_quiet_after_hello_without_legacy_bootstrap_frame
         other => panic!("expected Hello, got {other:?}"),
     }
 
-    match timeout(QUIET_TIMEOUT, ws.next()).await {
-        Err(_) => Ok(()),
-        Ok(Some(Ok(frame))) => anyhow::bail!("unexpected post-hello frame: {frame:?}"),
-        Ok(Some(Err(error))) => anyhow::bail!("websocket error: {error}"),
-        Ok(None) => anyhow::bail!("websocket ended unexpectedly"),
-    }
+    assert_post_hello_register_only(&mut ws).await
 }
 
 #[tokio::test]
@@ -408,6 +541,7 @@ async fn host_handshake_stays_quiet_after_hello_without_legacy_checkpoint_frames
 ) -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
     let host_id = seed_host(&relay).await?;
+    seed_host_durable_events(&relay, host_id, 5).await?;
     let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
     let mut ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
 
@@ -416,12 +550,138 @@ async fn host_handshake_stays_quiet_after_hello_without_legacy_checkpoint_frames
         other => panic!("expected Hello, got {other:?}"),
     }
 
+    assert_post_hello_register_only(&mut ws).await
+}
+
+#[tokio::test]
+async fn subscribe_with_resume_after_filters_below_cursor() -> anyhow::Result<()> {
+    let relay = spawn_relay().await?;
+    let (account_id, phone_id) = seed_client_account(&relay, "ws-resume-after@example.com").await?;
+    seed_account_durable_events(&relay, &account_id, 10).await?;
+
+    let ticket =
+        issue_client_ws_ticket(&relay, &account_id, phone_id, DeviceRole::MobileClient).await?;
+    let mut ws = connect_client(&relay, "/ws/client", &ticket).await?;
+
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
+    }
+    // Consume optional default-topic SubscribeAck (register-only auto-sub).
+    let _ = assert_post_hello_register_only(&mut ws).await;
+
+    let account_topic = format!("account:{account_id}");
+    send_client_frame(
+        &mut ws,
+        &ClientFrame::Subscribe {
+            topics: vec![account_topic.clone()],
+            resume_after: Some(std::collections::HashMap::from([(
+                account_topic.clone(),
+                5,
+            )])),
+            client_request_id: Some("resume-after-filter".into()),
+        },
+    )
+    .await?;
+
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::SubscribeAck { topics, .. } => {
+            assert_eq!(topics, vec![account_topic.clone()]);
+        }
+        other => panic!("expected SubscribeAck, got {other:?}"),
+    }
+
+    let mut seqs = Vec::new();
+    for _ in 0..5 {
+        match recv_server_frame(&mut ws).await? {
+            ServerFrame::DurableEvent {
+                topic, topic_seq, ..
+            } => {
+                assert_eq!(topic, account_topic);
+                seqs.push(topic_seq);
+            }
+            other => panic!("expected DurableEvent seq 6..=10, got {other:?}"),
+        }
+    }
+    assert_eq!(seqs, vec![6, 7, 8, 9, 10]);
+
+    // No extra frames after catch-up.
     match timeout(QUIET_TIMEOUT, ws.next()).await {
         Err(_) => Ok(()),
-        Ok(Some(Ok(frame))) => anyhow::bail!("unexpected post-hello frame: {frame:?}"),
+        Ok(Some(Ok(frame))) => anyhow::bail!("unexpected extra frame after resume: {frame:?}"),
         Ok(Some(Err(error))) => anyhow::bail!("websocket error: {error}"),
         Ok(None) => anyhow::bail!("websocket ended unexpectedly"),
     }
+}
+
+#[tokio::test]
+async fn subscribe_below_retention_floor_emits_snapshot_required() -> anyhow::Result<()> {
+    let relay = spawn_relay().await?;
+    let (account_id, phone_id) =
+        seed_client_account(&relay, "ws-snapshot-floor@example.com").await?;
+    // Floor: first retained seq is 4 → retention_floor_seq = 3.
+    // Client resume_after=1 is below floor → SnapshotRequired (not silent empty).
+    let topic = format!("account:{account_id}");
+    for seq in 4..=8 {
+        let event_id = format!("seed-floor-{account_id}-{seq}");
+        let payload = serde_json::json!({
+            "kind": "account_registered",
+            "account_id": account_id,
+            "at_ms": seq * 1000,
+        });
+        store::durable_event_log::append(
+            &relay.pool,
+            &event_id,
+            &topic,
+            "account",
+            seq,
+            &account_id,
+            &payload,
+            seq * 1000,
+        )
+        .await?;
+    }
+
+    let ticket =
+        issue_client_ws_ticket(&relay, &account_id, phone_id, DeviceRole::MobileClient).await?;
+    let mut ws = connect_client(&relay, "/ws/client", &ticket).await?;
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
+    }
+    let _ = assert_post_hello_register_only(&mut ws).await;
+
+    send_client_frame(
+        &mut ws,
+        &ClientFrame::Subscribe {
+            topics: vec![topic.clone()],
+            resume_after: Some(std::collections::HashMap::from([(topic.clone(), 1)])),
+            client_request_id: Some("snapshot-floor".into()),
+        },
+    )
+    .await?;
+
+    // SubscribeAck then SnapshotRequired (order: ack first, then replay).
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::SubscribeAck { topics, .. } => {
+            assert_eq!(topics, vec![topic.clone()]);
+        }
+        other => panic!("expected SubscribeAck, got {other:?}"),
+    }
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::SnapshotRequired {
+            topic: t,
+            last_known_seq,
+            retention_floor_seq,
+        } => {
+            assert_eq!(t, topic);
+            assert_eq!(last_known_seq, 1);
+            assert_eq!(retention_floor_seq, 3);
+        }
+        other => panic!("expected SnapshotRequired, got {other:?}"),
+    }
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -445,6 +705,7 @@ async fn account_topic_delivers_social_message_payloads() -> anyhow::Result<()> 
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    drain_default_topic_subscribe_ack(&mut ws).await?;
     send_client_frame(
         &mut ws,
         &ClientFrame::Subscribe {
@@ -471,6 +732,7 @@ async fn account_topic_delivers_social_message_payloads() -> anyhow::Result<()> 
             None,
             minos_protocol::MessageSource::ClientLive,
             None,
+            &[],
         )
         .await?;
     minos_backend::http::v1::social::fan_out_social_message(&relay.state, &message).await;
@@ -485,8 +747,10 @@ async fn account_topic_delivers_social_message_payloads() -> anyhow::Result<()> 
             assert_eq!(topic, format!("account:{account_id}"));
             assert_eq!(kind, "account_conversation_message_appended");
             assert_eq!(payload["conversation_id"], conversation.conversation_id);
-            assert_eq!(payload["message"]["message_id"], message.message_id);
-            assert_eq!(payload["message"]["text"], "hello while chat is open");
+            // R3 thin account digest: ids + preview, not nested ChatMessageSummary.
+            assert_eq!(payload["message_id"], message.message_id);
+            assert_eq!(payload["preview"], "hello while chat is open");
+            assert!(payload.get("message").is_none());
         }
         other => panic!("expected social DurableEvent, got {other:?}"),
     }
@@ -527,6 +791,24 @@ async fn host_replays_durable_command_and_accepts_ack_result() -> anyhow::Result
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    // Hello is register-only; catch-up requires explicit Subscribe.
+    let _ = assert_post_hello_register_only(&mut ws).await;
+    let host_topic = format!("host:{host_id}");
+    send_client_frame(
+        &mut ws,
+        &ClientFrame::Subscribe {
+            topics: vec![host_topic.clone()],
+            resume_after: None,
+            client_request_id: Some("host-replay-subscribe".into()),
+        },
+    )
+    .await?;
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::SubscribeAck { topics, .. } => {
+            assert_eq!(topics, vec![host_topic.clone()]);
+        }
+        other => panic!("expected SubscribeAck, got {other:?}"),
+    }
 
     let command_id = match recv_server_frame(&mut ws).await? {
         ServerFrame::DurableEvent {
@@ -535,7 +817,7 @@ async fn host_replays_durable_command_and_accepts_ack_result() -> anyhow::Result
             payload,
             ..
         } => {
-            assert_eq!(topic, format!("host:{host_id}"));
+            assert_eq!(topic, host_topic);
             assert_eq!(kind, "host_command_issued");
             let command_id = payload["command_id"].as_str().unwrap().to_string();
             assert_eq!(payload["agent_session_id"], output.session_id);
@@ -637,6 +919,7 @@ async fn dispatch_json_issues_durable_host_command_and_returns_result() -> anyho
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    host_subscribe_for_catchup(&mut ws, host_id).await?;
 
     let command_id = match recv_server_frame(&mut ws).await? {
         ServerFrame::DurableEvent {
@@ -735,6 +1018,7 @@ async fn host_stream_event_persists_slice_and_fanouts_to_subscribed_client() -> 
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    drain_default_topic_subscribe_ack(&mut client_ws).await?;
     send_client_frame(
         &mut client_ws,
         &ClientFrame::Subscribe {
@@ -759,6 +1043,7 @@ async fn host_stream_event_persists_slice_and_fanouts_to_subscribed_client() -> 
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    host_subscribe_for_catchup(&mut host_ws, host_id).await?;
     match recv_server_frame(&mut host_ws).await? {
         ServerFrame::DurableEvent { .. } => {}
         other => panic!("expected host DurableEvent replay, got {other:?}"),
@@ -813,6 +1098,7 @@ async fn orphan_raw_host_stream_event_does_not_create_legacy_conversation() -> a
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    drain_default_topic_subscribe_ack(&mut host_ws).await?;
 
     send_client_frame(
         &mut host_ws,
@@ -893,6 +1179,7 @@ async fn raw_host_stream_event_updates_formal_turn_cold_replay() -> anyhow::Resu
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    drain_default_topic_subscribe_ack(&mut client_ws).await?;
     send_client_frame(
         &mut client_ws,
         &ClientFrame::Subscribe {
@@ -913,6 +1200,7 @@ async fn raw_host_stream_event_updates_formal_turn_cold_replay() -> anyhow::Resu
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    drain_default_topic_subscribe_ack(&mut host_ws).await?;
 
     let topic = format!("agent_session:{}", output.session_id);
     send_client_frame(
@@ -1039,6 +1327,7 @@ async fn live_durable_events_flow_from_outbox_to_subscribed_host_and_client() ->
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    drain_default_topic_subscribe_ack(&mut client_ws).await?;
     send_client_frame(
         &mut client_ws,
         &ClientFrame::Subscribe {
@@ -1065,6 +1354,7 @@ async fn live_durable_events_flow_from_outbox_to_subscribed_host_and_client() ->
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    host_subscribe_for_catchup(&mut host_ws, host_id).await?;
     let replayed_start_command_id = match recv_server_frame(&mut host_ws).await? {
         ServerFrame::DurableEvent { kind, payload, .. } => {
             assert_eq!(kind, "host_command_issued");
@@ -1102,7 +1392,13 @@ async fn live_durable_events_flow_from_outbox_to_subscribed_host_and_client() ->
         "follow-up text",
     )
     .await?;
+    // Lanes are independent: social fanout and host_command must both be drained.
     relay.state.realtime.dispatch_outbox_batch().await?;
+    relay
+        .state
+        .realtime
+        .dispatch_host_command_outbox_batch()
+        .await?;
 
     match recv_server_frame(&mut client_ws).await? {
         ServerFrame::DurableEvent {
@@ -1173,6 +1469,7 @@ async fn host_ingest_live_batch_fans_out_projection_to_subscribed_client() -> an
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    drain_default_topic_subscribe_ack(&mut client_ws).await?;
     send_client_frame(
         &mut client_ws,
         &ClientFrame::Subscribe {
@@ -1198,6 +1495,7 @@ async fn host_ingest_live_batch_fans_out_projection_to_subscribed_client() -> an
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    host_subscribe_for_catchup(&mut host_ws, host_id).await?;
     // Drain host command durable replay.
     match recv_server_frame(&mut host_ws).await? {
         ServerFrame::DurableEvent { .. } => {}
@@ -1342,6 +1640,7 @@ async fn host_ingest_live_batch_records_approval_request() -> anyhow::Result<()>
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    host_subscribe_for_catchup(&mut host_ws, host_id).await?;
     match recv_server_frame(&mut host_ws).await? {
         ServerFrame::DurableEvent { .. } => {}
         other => panic!("expected host DurableEvent replay, got {other:?}"),
@@ -1426,6 +1725,7 @@ async fn host_ingest_auto_registers_unknown_session_when_linked() -> anyhow::Res
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
     }
+    drain_default_topic_subscribe_ack(&mut host_ws).await?;
 
     send_client_frame(
         &mut host_ws,

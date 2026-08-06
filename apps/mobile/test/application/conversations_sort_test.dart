@@ -37,19 +37,19 @@ void main() {
       ]);
     });
 
-    test('tie-breaks by conversationId descending', () {
+    test('tie-breaks by title then conversationId ascending', () {
       final items = <ConversationSummary>[
-        conversation(id: 'alpha', lastMessageAtMs: 50),
-        conversation(id: 'zeta', lastMessageAtMs: 50),
-        conversation(id: 'beta', lastMessageAtMs: 50),
+        conversation(id: 'c-z', lastMessageAtMs: 50, title: 'Zulu'),
+        conversation(id: 'c-a', lastMessageAtMs: 50, title: 'Alpha'),
+        conversation(id: 'c-b', lastMessageAtMs: 50, title: 'Alpha'),
       ];
 
       final sorted = sortConversationsByLastActive(items);
 
       expect(sorted.map((c) => c.conversationId).toList(), <String>[
-        'zeta',
-        'beta',
-        'alpha',
+        'c-a',
+        'c-b',
+        'c-z',
       ]);
     });
 

@@ -102,7 +102,14 @@ final class AgentStateTests: XCTestCase {
 
         XCTAssertEqual(
             daemon.sendUserMessageCalls,
-            [SendUserMessageRequest(sessionId: "thread-99", text: "ping")]
+            [
+                SendUserMessageRequest(
+                    sessionId: "thread-99",
+                    text: "ping",
+                    originMessageId: nil,
+                    attachments: []
+                )
+            ]
         )
     }
 

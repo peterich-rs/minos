@@ -97,7 +97,7 @@ pub async fn get(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, AgentTurnRow>(
-                "SELECT turn_id, agent_session_id, turn_seq, role, status, started_at_ms, finished_at_ms, summary_text, usage_json
+                "SELECT turn_id, agent_session_id, turn_seq, role::text, status::text, started_at_ms, finished_at_ms, summary_text, usage_json
                    FROM agent_turns
                   WHERE turn_id = $1",
             )
@@ -133,7 +133,7 @@ pub async fn get_for_account(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, AgentTurnRow>(
-                "SELECT t.turn_id, t.agent_session_id, t.turn_seq, t.role, t.status, t.started_at_ms, t.finished_at_ms, t.summary_text, t.usage_json
+                "SELECT t.turn_id, t.agent_session_id, t.turn_seq, t.role::text, t.status::text, t.started_at_ms, t.finished_at_ms, t.summary_text, t.usage_json
                    FROM agent_turns t
                    JOIN agent_sessions s
                      ON s.session_id = t.agent_session_id
@@ -175,7 +175,7 @@ pub async fn list_for_session(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, AgentTurnRow>(
-                "SELECT turn_id, agent_session_id, turn_seq, role, status, started_at_ms, finished_at_ms, summary_text, usage_json
+                "SELECT turn_id, agent_session_id, turn_seq, role::text, status::text, started_at_ms, finished_at_ms, summary_text, usage_json
                    FROM agent_turns
                   WHERE agent_session_id = $1
                     AND ($2::BIGINT IS NULL OR turn_seq > $2)

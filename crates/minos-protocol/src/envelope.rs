@@ -297,10 +297,13 @@ mod tests {
                     },
                     text: "hello from websocket".into(),
                     created_at_ms: 1_717_171_717,
+                    message_seq: 1,
                     reply_to: None,
                     recalled_at_ms: None,
                     mentioned_account_ids: Vec::new(),
                     sender_type: crate::SenderType::User,
+                    reactions: vec![],
+                    attachments: vec![],
                 },
             },
         };

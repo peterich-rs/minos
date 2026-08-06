@@ -50,7 +50,6 @@ export const emptyWorkspace = {
   sessionsByConversation: {} as Record<string, ProjectSession[]>,
   timelineStatusByConversation: {} as Record<string, ResourceFetchStatus>,
   inspectorStatusByConversation: {} as Record<string, ResourceFetchStatus>,
-  timelineDirtyByConversation: {} as Record<string, boolean>,
   projectSessionsByProject: {} as Record<string, ProjectSession[]>,
   projectSessionsStatusByProject: {} as Record<string, ResourceFetchStatus>,
   sessionsById: {} as Record<string, SessionEntity>,

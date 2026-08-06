@@ -13,7 +13,11 @@
 | [architecture-mobile.md](architecture-mobile.md) / [architecture-desktop.md](architecture-desktop.md) / [architecture-web.md](architecture-web.md) | 各端 UI 与投影 |
 | [architecture-business-flow.md](architecture-business-flow.md) | 端到端业务步骤 |
 | [architecture-shared-crates.md](architecture-shared-crates.md) | `minos-protocol` / `minos-ui-protocol` 线类型 |
-| [superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md](superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md) | **协作气泡 Hub SSOT 收敛**：退役 dual-write、Agent 单写者、Sync/Outbox 阶段清单 |
+| [superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md](superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md) | **协作气泡 Hub SSOT 收敛**：退役 dual-write、Agent 单写者 |
+| [superpowers/specs/2026-08-03-im-reliability-program/README.md](superpowers/specs/2026-08-03-im-reliability-program/README.md) | **IM 可靠性总计划**（客户端 Sync + 后端投递/编排）；[TASKS](superpowers/specs/2026-08-03-im-reliability-program/TASKS.md) |
+| [superpowers/specs/2026-08-03-realtime-surface-model.md](superpowers/specs/2026-08-03-realtime-surface-model.md) | **全局实时面**：Tier T0–T4、订阅拓扑、payload 厚度、新增功能 checklist；非 case-by-case |
+| [superpowers/specs/2026-08-03-client-im-sync-engine.md](superpowers/specs/2026-08-03-client-im-sync-engine.md) | 客户端 Sync Engine 终态 |
+| [superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md](superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md) | 后端 Outbox 车道 / Push / Dispatch / CompletionWatch 终态 |
 | ADR 0004 / 0009 / 0011 | JSON-RPC、Broker 拓扑、Envelope 历史决策 |
 
 线类型源码：`crates/minos-protocol/src/realtime.rs`。
@@ -44,7 +48,7 @@ Minos **额外**叠加 Agent 执行与 Host 控制，但不应用「远程 Agent
 
 | 优先级 | 轴 | IM 类比 | Minos 实体 |
 |--------|----|---------|------------|
-| **P0 主轴** | A. 协作消息 | 用户/机器人聊天消息 + 群协作 | `conversation` + `conversation_members` + `conversation_messages` + mentions/reads/recall（+ 规划中的 reactions） |
+| **P0 主轴** | A. 协作消息 | 用户/机器人聊天消息 + 群协作 | `conversation` + `conversation_members` + `conversation_messages` + mentions/reads/recall + `message_reactions` |
 | **P1 嵌入** | B. Agent 热投影 | 直播流 / typing / 工具过程卡片 | Host ingest → `StreamEvent(ui_event)` + session transcript；关键状态落 Durable |
 | **P1 嵌入** | C. Attention / 特殊 @ | @人、@here、待办、审批 | `message_mentions`、`ApprovalRequested`、列表 `unread_*` / `needs_attention`、Push |
 | **P2 能力** | D. Host 控制与上行 | 设备信令 + 边缘日志 | `host_commands`、ingest 幂等、Gap Pull |
@@ -53,11 +57,14 @@ Minos **额外**叠加 Agent 执行与 Host 控制，但不应用「远程 Agent
 
 1. **对话是 SSOT 容器**。Agent session 从属于 `conversation_id`；列表、未读、@、reaction 都以 conversation 为协作单元。  
 2. **Cloud 不跑 Agent**。云端是 **IM + 投影 + 协调中枢**；执行在用户 Host。  
-3. **Hub 是多端协作 SSOT（人读的聊天气泡、@、未读、recall）**；Host 本地 SQLite 是 **Agent 原始事件 / 本地工作台的长期 SSOT**。二者不可做成「聊天气泡对等双权威」。过渡 dual-write 见 §7.4.1，收敛见 [Hub 协作消息 SSOT 方案](superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md)。  
+3. **Hub 是多端协作 SSOT（人读的聊天气泡、@、未读、recall）**；Host 本地 SQLite 是 **Agent 原始事件 / 本地工作台的长期 SSOT**。二者不可做成「聊天气泡对等双权威」。收敛见 [Hub 协作消息 SSOT 方案](superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md)。  
 4. **写路径先事务后推送**（Transactional Outbox），禁止「只推不存」；端上 best-effort 静默 dual-write **不算**满足本条。  
 5. **Attention 统一建模**（见 §3.4）：人 @、审批、失败 session 等共享「谁需要被打扰 / 进 Attention 列表」的逻辑，而不是各做一套通知。  
 6. **最新架构优先**，不做历史 wire 兼容双写（见 AGENTS.md Development-State Policy）。  
-7. **Agent 最终聊天气泡单一写者**（Hub 中心 turn 投影，或 Host 可信 `host_projection`）；禁止 UI 扫本地时间线往 Hub 回放投影当主路径。
+7. **Agent 最终聊天气泡按路径的写者（双写者，非对等权威）**：  
+   - **Mobile / client_live @agent**：Hub `TurnCompletionProjector`（CompletionWatch per `origin_message_id`）写 Hub 气泡。  
+   - **Desktop-native Linked**：本机 daemon 写本地 `agent-result:…` 工作台行；Desktop Outbox 以 **`host_projection`** 上行同一规范 id（Hub 不二次 dispatch）。  
+   - 禁止 UI 扫本地时间线无 id 回放投影当主路径；禁止 body 软去重。
 
 ---
 
@@ -146,7 +153,7 @@ Gateway ──推送──► 订阅方（online / offline / last_seen）
 | **last_seen** | 耐久：`device_installations.last_seen_at_ms`；HTTP 列表返回；连接 open/close 强制 touch（冷路径展示，不冒充 online） |
 | **Presence 推送** |  ephemeral `StreamEvent{kind:presence}`：Host 上下线 → 各 linked `account:{id}`（Mobile 改设备 online）；Account client 上下线 → 各 linked `host:{id}`（Host peer list） |
 | **吊销踢连接** | 同 installation 重连 `session_superseded`（4401）；auth/unlink `auth_revoked`（4401）；Host 可先收 `HostForceClose` 再 close |
-| **离线 Push** | 与 presence 正交：账户无活跃 WS 时由 `NotificationService` 决策（见 Plane P） |
+| **离线 Push** | presence + 偏好 + event_id 幂等 决策（见 Plane P / Backend B1）；**非**「与 presence 脱钩」 |
 
 ```
 Client/Host
@@ -159,10 +166,11 @@ GET /ws/client?ticket=…  或  /ws/host?ticket=…
   │  校验 + 消费 ticket + 角色匹配
   ▼
 ServerFrame::Hello { conn_id, server_time_ms, heartbeat_interval_ms }
-  │  registry insert（踢旧）+ presence online + 默认 topic
+  │  registry insert（踢旧）+ presence online
+  │  **默认 topic 仅 live register**（可选 SubscribeAck）；**不** `replay_topic(0)`
   ▼
 ClientFrame::Subscribe { topics, resume_after? }
-  │
+  │  含 account/host 默认 topic + 打开的 conversation；catch-up 靠 resume_after
   ▼
 SubscribeAck / SubscriptionDenied / SnapshotRequired
   │
@@ -171,7 +179,8 @@ SubscribeAck / SubscriptionDenied / SnapshotRequired
   └─ 退出：remove registry（若仍是 current）→ presence offline
 ```
 
-客户端断线后指数退避重连（典型 1s→30s 封顶）；冷路径 HTTP 列表用 `online` + `last_seen_at_ms` 纠偏。
+客户端断线后指数退避重连（典型 1s→30s 封顶）；冷路径 HTTP 列表用 `online` + `last_seen_at_ms` 纠偏。  
+**不变量**：Hello 静默（无历史洪水）；`resume_after < retention_floor` → `SnapshotRequired`（冷重建），禁止静默空回放。
 
 代码：`realtime/gateway.rs`、`realtime/liveness.rs`、`realtime/presence.rs`；线类型 `PresencePayload` / `PRESENCE_STREAM_KIND`（`minos-protocol`）。
 
@@ -182,7 +191,7 @@ SubscribeAck / SubscriptionDenied / SnapshotRequired
 | TopicKind | 示例 | 承载内容 |
 |-----------|------|----------|
 | `account` | `account:{id}` | 账户级通知：host 链接、会话列表级消息摘要、账户事件 |
-| `conversation` | `conversation:{id}` | 对话消息 append / recall /（规划）reaction；时间线热路径 |
+| `conversation` | `conversation:{id}` | 对话消息 append / recall / reaction aggregate；时间线热路径 |
 | `project` | `project:{id}` | 项目与对话关联、归档 |
 | `agent_session` | `agent_session:{id}` | 会话生命周期、turn、**Approval Attention**、**UI 流式投影** |
 | `host` | `host:{installation_id}` | Host 命令下发、强制关闭、链接状态 |
@@ -229,8 +238,8 @@ created_at_ms, read_at_ms?, resolved_at_ms?
 POST send-message
   → extract_mentioned_account_ids(text, members)  // 仅成员可被 @
   → insert conversation_messages + message_mentions
-  → Durable ConversationMessageAppended (topic conversation:*)
-  → 对成员写 AccountConversationMessageAppended (topic account:*)  // 列表/inbox
+  → Durable ConversationMessageAppended (topic conversation:*)  // T1 full body
+  → 对成员写 AccountConversationMessageAppended thin digest (topic account:*)  // T2 列表/inbox
   → 未读：相对 conversation_reads 计算 unread_count / unread_mention_count
   → Push：偏好 direct_message / group_mention；在线则可不推
 ```
@@ -283,55 +292,56 @@ Agent tool 需权限
 
 | 层 | 状态 | 说明 |
 |----|------|------|
-| Desktop 本地 | **已实现** | daemon SQLite + `toggle_conversation_message_reaction`；live `reactionToggled`；聚合 `LocalReactionGroup` |
-| Cloud / 多端 | **未接** | backend 无 `message_reactions` 表；无 Durable reaction 事件 |
-
-**目标形态（Discord / Slack 式，可扩展）**：
+| Cloud / 多端 | **已实现（Hub SSOT）** | `message_reactions` + `POST …/reactions/toggle` + Durable `ConversationMessageReactionUpdated`（**conversation topic only**） |
+| Desktop UI | **已接 Hub**（代码）；可靠 Outbox / Mobile UI → [IM Reliability C5](superpowers/specs/2026-08-03-im-reliability-program/TASKS.md) | 非 local-only |
+| Desktop 本地 workbench | daemon `LocalReaction*` | 仅 Host-local message ids；禁止与 Hub 双 SSOT |
 
 ```text
 message_reactions (
-  message_id, emoji, account_id,  -- 人
-  -- 或 actor: (actor_kind, actor_id) 支持 agent 将来点 reaction
-  created_at_ms,
-  PRIMARY KEY (message_id, emoji, actor_kind, actor_id)
+  reaction_id PK,
+  message_id, conversation_id, emoji,
+  actor_kind CHECK (user|agent), actor_id, display_name, created_at_ms,
+  UNIQUE (message_id, emoji, actor_kind, actor_id)
 )
 ```
 
-写路径模板（与发消息同构）：
+写路径：
 
 ```
-POST .../messages/:id/reactions/toggle { emoji }
-  → TX: upsert/delete reaction 行 + 可选聚合缓存
-  → Durable ConversationMessageReactionUpdated {
-        conversation_id, message_id, emoji, action: add|remove,
-        actor, reactions: [ { emoji, count, me, sample_actors } ]
-     }
-  → topic conversation:* （打开时间线的端）
-  → 可选：轻量 account 摘要（一般不进 Push，避免噪声）
+POST /v1/conversations/:cid/messages/:mid/reactions/toggle
+  body: { emoji, client_op_id }   // client_op_id = Intent Outbox entry id (C5)
+  → TX: toggle message_reactions + aggregate + ensure_reaction_delivery_in_tx
+  → event_id = social-reaction-{conv}-{msg}-{emoji}-{actor_key}-{action}-{client_op_id}
+     （确定性；禁止 Uuid::new_v4 / at_ms；同 client_op_id 重试 → ensure_one no-op）
+  → COMMIT → wake_outbox + publish ConversationMessageReactionUpdated
+  → topic conversation:* only（不驱动 sidebar unread；无 account fanout）
 ```
+
+**Fanout 锁定（B6.2）：conversation-only。**  
+Reaction **不** 写 account topic、**不** 驱动 rail / sidebar unread。若未来要 inbox 反应提示，须另开完整 `AccountConversationReactionUpdated` 设计，禁止半拉。
 
 不变量：
 
-- 仅 conversation 成员可 reaction。  
-- **幂等 toggle**（同 actor 同 emoji 再点取消）。  
-- 撤回消息：reaction 只读或随消息隐藏。  
-- 聚合下发优先（全量 groups），避免端上自己算全集。  
-- Desktop 本地 reaction 在 Host Link / 云端消息对齐后，应 **迁移或双写切断为仅云端**（latest-only，不做长期双 SSOT）。
+- 仅 conversation 成员可 reaction；**幂等 toggle**（同 `client_op_id` 幂等；不同 `client_op_id` 可区分并发 op）。  
+- **`reactions` 聚合向量是 SSOT**；`action` 仅动画 hint。  
+- 客户端 gap 后仍以最新完整 aggregate 全量替换。  
+- Hub IM 消息 id → 仅 Hub toggle（Desktop/Mobile Intent Outbox `reaction_toggle`）；local workbench → 仅 daemon `LocalReaction*`（禁止 dual-write）。
 
 #### 3.4.6 通知与降噪（Plane P 细化）
 
-`NotificationService` + `decide()` 已覆盖类别：`message` / `approval` / `session_ended`；偏好含 `direct_message`、`group_mention`、`approval_required`、quiet hours。
+`NotificationService` + `decide()` 目标类别：`message` / `approval` / `session_ended`；偏好含 `direct_message`、`group_mention`、`approval_required`、quiet hours。
 
-规划补齐：
+**终态策略**（实现见 [Backend Delivery B1](superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md)；**禁止** 枚举存在但 caller 不接）：
 
 | 场景 | 推送策略 |
 |------|----------|
-| 普通群消息 | 默认可关；依赖未读角标 |
+| 普通群消息 | 默认可关；依赖未读角标；`AccountConversationMessageAppended` 触发 |
 | @我 | 默认开；计入 `unread_mention_count` |
-| Approval | 默认开；**绕过 quiet hours**；短 cooldown |
-| Reaction 到我的消息 | 可选、默认关或折叠 |
+| Approval | 默认开；**绕过 quiet hours**；target = 可审批账户（须解析，非空） |
+| Session ended | 默认按偏好；target = session owner |
+| Reaction | 不默认 Push（conversation fanout only） |
 | Agent 流式 token | **永不 Push**（Stream only） |
-| 任意事件 | 账户任一 installation **在线 WS** → 可 Skip Push（已有 UserOnline 语义） |
+| Presence | 账户有 live client WS（含 grace）→ `UserOnline` Skip；**event_id 幂等** 防 outbox 重放双推 |
 
 Push **只唤醒**；点进后靠 Durable cursor / HTTP 拉一致状态。
 
@@ -380,13 +390,14 @@ Minos 明确区分 **可靠性语义不同** 的消息平面——这是成熟�
 ```
 Client HTTP (start/stop/send-input/approval/…)
   → 事务写 host_commands + DurableEvent::HostCommandIssued
-  → Outbox → topic host:{installation_id}
+  → Outbox lane=host_command（与 social_durable 分车道 claim）
+  → HostCommandOutboxJob publish → topic host:{installation_id}
   → Daemon 执行
-  → ClientFrame::HostCommandAck
-  → ClientFrame::HostCommandResult
+  → ClientFrame::HostCommandAck / HostCommandResult
+  → ack_pending_host_command_events（成功观察后 outbox acked）
 ```
 
-超时：`HostCommandTimeoutJob`。Host 离线：命令持久化，上线后经 Durable 回放/outbox 再投递。
+超时：deadline 过期 → outbox **dead_letter** + metric（禁止假成功 ack）；`poll_timed_out_commands` 同步终结 `host_commands` 行。Host 离线：命令持久化，上线后经 Durable 回放 / host_command outbox 再投递。Social fanout 永不串行等待 host ack。
 
 ### 4.4 Plane I — Host Ingest（上行原始事件，幂等、可补洞）
 
@@ -431,8 +442,24 @@ Agent CLI
 
 ### 4.6 Plane P — 离线推送（Push）
 
-当客户端无活跃 WS 时，`PushFanoutJob` 根据在线态、偏好、免打扰与冷却决策 APNs/FCM 类推送。  
+当客户端无活跃 WS（或超出 online grace）时，根据 **presence + 偏好 + 免打扰 + event_id 幂等 + UX cooldown** 决策 APNs/FCM。  
 Push **只负责唤醒**；正文一致性仍靠 Durable + HTTP 同步。
+
+**现状债 → 终态**：见 [Backend IM Delivery](superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md) B1（UserOnline 接入、Approval target、push_dispatch_log）。
+
+---
+
+### 4.7 可靠性终态（Program 指针）
+
+持久化正确 ≠ 端到端可靠。以下两份 **只描述终态结构**（AGENTS.md Final-Architecture Planning Rule）：
+
+| 半边 | Spec |
+|------|------|
+| 客户端 Sync Engine | [2026-08-03-client-im-sync-engine.md](superpowers/specs/2026-08-03-client-im-sync-engine.md) |
+| 后端投递 / Dispatch / Completion / Session | [2026-08-03-backend-im-delivery-orchestration.md](superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md) |
+| 任务图 | [2026-08-03-im-reliability-program](superpowers/specs/2026-08-03-im-reliability-program/README.md) |
+
+共享契约：`client_message_id`；agent 气泡 id = `agent-result:{conv}:{session}:{origin_message_id}`；`message_seq` 排序；durable `event_id` 可重放可幂等消化。
 
 ---
 
@@ -453,6 +480,10 @@ COMMIT
 ```
 
 这就是业界 **Transactional Outbox** 标准解：业务与投递原子一致，避免「库已写但推丢」或「推了库没写」。
+
+**社交消息路径（已对齐）**：`DefaultConversationService::send_message` / `recall_message` 与 agent 气泡写入在同一事务内完成 `chat_messages` + `durable_event_log` + `outbox_events`（`store/social/delivery::ensure_social_message_delivery_in_tx`）。commit 后才 `publish_durable_event_by_id`；publish 失败由 OutboxDispatcher 重试。确定性 durable `event_id` 使 `client_message_id` 幂等重试可修复「仅插入业务表、未写 durable」的历史空洞。
+
+参考实现：`agent_sessions` / `host_commands` 同模板；社交写入口见 `conversations/use_case.rs`、`http/v1/social.rs`。
 
 ### 5.2 Fanout 引擎
 
@@ -659,11 +690,14 @@ topic_cursors: Map<topic, last_topic_seq>
 | Agent 原始事件与本地工作台 | **Host daemon SQLite** | 主权威 |
 | Session 热流 | Host ingest → Hub Stream | 侧栏 / 底栏，不写扩散进 chat 气泡 |
 
-**目标读路径（Linked）**：打开 conversation → `Subscribe conversation:{id}` + `resume_after` → 冷拉 gap；UI merge「Hub 气泡 + 本地 tool/git 卡」。  
-**目标写路径（Linked）**：Composer → Hub HTTP（`client_message_id` 幂等 + 显式 `message_source`）→ Outbox 可重试；Agent 最终气泡由 **Hub 中心 turn 投影**（Mobile `client_live` → `TurnCompletionProjector`）或 **Host 可信 `host_projection` 上行**（Desktop-native：daemon `conversation_completion` 后 `POST …/agents/message` 同 `agent-result:…` 幂等键）。Desktop merge 按 `conversationId:sessionId` 去重不同 durable 后缀的 sibling agent-result，避免双气泡。
+**目标读路径（Linked）**：打开 conversation → `Subscribe conversation:{id}` + `resume_after` → 冷拉 gap（`before_seq` / `after_seq`）；UI merge「Hub 气泡 + 本地 tool/git 卡」（**同 id 相等**；禁止 body 软去重）。  
+**目标写路径（Linked）**：Composer → Hub HTTP（`client_message_id` 幂等 + 显式 `message_source`）→ 客户端 Outbox 可重试；Agent 最终气泡由 **Hub TurnCompletionProjector**（`client_live`）或 **Host `host_projection`** 上行；id = `agent-result:{conv}:{session}:{origin_message_id}`。
 
-收敛方案（阶段 0–5、文件级清单、与当前桥接对照）：  
-→ [2026-08-02-hub-collaboration-message-ssot.md](superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md)
+Hub SSOT 收敛：  
+→ [2026-08-02-hub-collaboration-message-ssot.md](superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md)  
+
+可靠性终态（客户端 + 后端编排）：  
+→ [2026-08-03-im-reliability-program](superpowers/specs/2026-08-03-im-reliability-program/README.md)
 
 #### 7.4.1 当前实现（Phase 2–5 已收敛主体）
 
@@ -671,18 +705,21 @@ topic_cursors: Map<topic, last_topic_seq>
 |------|------|----------------|------|
 | Conversation 壳 + agent roster | 创建 / 改标题 / 列表 / 起 session | `POST /v1/conversations/upsert` | ✅ 保留 |
 | Host runtime → cloud agent | 首次 resolve runtime | `POST /v1/agents/ensure-host-runtime` + `source=host_runtime` | ✅ |
-| 用户气泡（Desktop 本机工作台） | **native 本地** append + start session；已登录时 Outbox `host_projection` | `…/messages` + `client_message_id` | ✅ Desktop **始终本机执行**；Hub 只投影不二次 dispatch（Hub start 路径留给 Mobile，待 harden） |
-| 用户气泡（Mobile client_live） | Hub POST → `try_agent_dispatch` → HostCommand | 同上 | ✅ `@agent` / `@agent#short` 复用 formal session：chat bind → `agent_sessions`（Host ingest 注册的 Desktop session）→ 仅无会话时 `agent_session.start`；失败可见（`agent_error`）。仍需 **live Host** |
-| Agent 气泡 | **仅** Hub `TurnCompletionProjector`（watcher → last-segment） | `insert_agent_message_with_session` 幂等 `agent-result:…` | ✅ Phase 2；Desktop agent dual-write **已删** |
-| 跳过二次 Agent 调度 | **仅** `message_source=host_projection\|system` | — | ✅ Phase 0.2 |
-| Hub → Desktop 读 | **Sync Engine**：`account:*` + 打开会话 `conversation:{id}` + `resume_after` / SnapshotRequired | Durable + `messages/query` | ✅ Phase 4；**不再** `daemon_append` 云端 IM |
-| 冷路径 gap | 打开 tail + 上翻 `before_ts_ms`（与 Mobile 同语义） | `POST …/messages/query` | ✅ Phase 4.4（`after_seq` 未上线，用 ts 分页） |
-| 撤回 | Hub `POST …/messages/:id/recall` + Durable `*Recalled` 打时间线 | conversation + account topics | ✅ Phase 5.1 接收/API；Desktop 发送入口 `recallMessageOnHub` |
-| Reaction | **本机 daemon only**；无云端 reaction API | — | ⚠️ Phase 5.2 明确 local-only，**禁止**当多端 SSOT |
-| 未读 / mark-read | Linked 打开会话 → `POST …/read` + 本地 badge | Hub + local count | ✅ Phase 5.3 |
-| Mobile `@agent` 派发 | `try_agent_dispatch` + `TurnCompletionProjector` | mention 匹配 id / runtime / 名；session 复用见上 | ✅ Phase 2 + session reuse via formal `agent_sessions` |
+| 用户气泡（Desktop 本机工作台） | **native 本地** append + start session；已登录时 Outbox `host_projection` | `…/messages` + `client_message_id` | ✅ Desktop **始终本机执行**；Hub 只投影不二次 dispatch |
+| 用户气泡（Mobile client_live） | Hub POST → enqueue **AgentDispatchQueue** → worker → HostCommand | 同上 | ✅ 落库后立即 200；dispatch 异步；`@agent` / `@agent#short` 复用 formal session。仍需 **live Host** |
+| Agent 气泡（client_live） | Hub `TurnCompletionProjector`（CompletionWatch per **origin_message_id** → last-segment） | `insert_agent_message_with_session` 幂等 `agent-result:{conv}:{session}:{origin}` | ✅ B4；禁止 session 单 slot 覆盖 |
+| Agent 气泡（Desktop-native） | 本机 daemon 写工作台 `agent-result:…`；Desktop Outbox **`host_projection`** 上行（仅 `isCanonicalAgentResultId`） | `POST …/agents/message` + 同 id | ✅ 可信上行，非 UI 扫时间线；Hub 不二次 dispatch |
+| 跳过二次 Agent 调度 | **仅** `message_source=host_projection\|system` | — | ✅ |
+| Hub → Desktop 读 | **Sync Engine**：`account:*` + 打开会话 `conversation:{id}` + `resume_after` / SnapshotRequired | Durable + `messages/query` | ✅ **不再** `daemon_append` 云端 IM |
+| 冷路径 gap | 打开 tail + 上翻 `before_seq`；Snapshot / 前向补洞 **`after_seq`** | `POST …/messages/query` | ✅ **C3 已接通**（Desktop range reconcile + Mobile loadOlder / Snapshot） |
+| 撤回 | Hub `POST …/messages/:id/recall` + Durable `*Recalled` | conversation + account topics | ✅ |
+| Reaction | Hub toggle + conversation durable | Hub API + Intent Outbox | Desktop/Mobile `reaction_toggle` outbox + B6 `client_op_id` 幂等；conversation-only fanout |
+| 未读 / mark-read | Linked 打开会话 → `POST …/read` + 本地 badge | Hub + local count | ✅ **C4** 增量 inbox |
+| Mobile `@agent` 派发 | 消息落库后 **AgentDispatchQueue** + CompletionWatch(per origin×session) | Backend **B3/B4** | ✅ 异步 enqueue；**多 @ fan-out**（`UNIQUE(origin, agent_id)` 一 agent 一行）；watch 键 = `{origin}:{session_id}` |
+| Agent 表情互动 | teamwork MCP `react_to_message` → daemon 本地 reaction | Host workbench | ✅ **硬门禁**：仅允许对 **@ 了该 agent** 的消息；actor_kind=`agent` |
+| Session 生命周期 | `session_lifecycle` job：失联 host → session `failed` + durable end；watch TTL → 失败气泡 + remove | Backend **B5** | ✅ 非 COUNT-only |
 
-**Desktop Sync 状态机**（`hub-realtime.ts`）：`Disconnected → Connecting → Syncing → Live`；per-topic `topic_seq` 持久化 `localStorage`（`minos.hub.topic_cursors.v1`）；重连 `Subscribe { resume_after }`；`SnapshotRequired` → 清投影窗口 + 冷拉。
+**Desktop Sync 状态机**（`hub-realtime.ts`）：`Disconnected → Connecting → Syncing → Live`；per-topic `topic_seq` 持久化 `localStorage`（`minos.hub.topic_cursors.v1`）；重连 `Subscribe { resume_after }`；`SnapshotRequired` → **range reconcile**（`after_seq=maxLoaded` forward fill + latest page merge，保留已加载窗口；禁止 clear-only）。`focusedConversationId` ≠ timeline `hasWindow`：`loadTimeline` hydrate-only（不写 focus、不 mark-read）；focus/mark-read 在 Timeline 打开路径 + focused 入站 400ms debounce。
 
 **Phase 6.0（已落地）**：
 
@@ -690,15 +727,24 @@ topic_cursors: Map<topic, last_topic_seq>
 - Desktop Hub 重建 / 打开 / loadTimeline **统一** `mergeHubAndLocalTimeline`（禁止 quiet-tail 把本地 chat 气泡合回）  
 - 删除残留 dual-write API：`daemon_append_conversation_message`、timeline 全量 project、agent dual-write no-op、hub→daemon append 路径  
 
+**已收敛（正确性地基）**：
+
+- 社交写路径 Transactional Outbox（`chat_messages` + durable + outbox 同事务）  
+- Hub `chat_messages.message_seq` + `messages/query` `before_seq` / `after_seq`  
+- `conversation_reads.last_read_seq` 作为未读边界  
+- TurnCompletionProjector：dispatch 时 arm watch，host ingest 事件驱动投影（2s settle 复检），不再 100ms 无限轮询  
+
 **仍待 / 已知缺口**：
 
-- messages/query 尚无 `after_seq` / `before_seq`（仅 `before_ts_ms`）  
 - Desktop Linked **会话列表**仍以 daemon 为主（Hub inbox 列表 SSOT 未完成）  
 - Account topic 重连 resume（网关 auto-sub 仍可能从 0 回放）  
-- Hub reaction API + Desktop 切云端（切断本地 reaction 对 Linked 气泡）  
+- Reaction Intent Outbox / Mobile UI / B6 event_id 确定性：**已实现**（见 IM Reliability B6/C5）  
+
 - Desktop 撤回 UI 按钮（API + realtime 已通）  
-- Mobile 端 cursor 持久化与 Desktop 对齐 harden  
-- TurnCompletionProjector 长 poll → durable job  
+- Multi-instance presence / CompletionWatch 跨实例（当前 in-memory registry，单 worker 假设）  
+- Outbox LISTEN/NOTIFY、durable retention、Redis Streams 等运维增强  
+
+
 
 **身份不变量**：本地 bin 名（`codex`/`claude`/…）**不得**当作 cloud `agent_id`；必须经 ensure-host-runtime 映射。  
 Local-only session 在 Host **未** Link 时不得对 Mobile 谎称可见（honesty UX）。

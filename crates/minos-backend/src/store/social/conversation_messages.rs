@@ -3,10 +3,19 @@ use std::collections::HashMap;
 use sqlx::{Postgres, QueryBuilder, Sqlite};
 use uuid::Uuid;
 
+use crate::app::tx::DbTx;
 use crate::error::BackendError;
 use crate::store::{AsStorePool, StorePoolRef};
 
 use super::{store_err, ChatMessageRow, MessageMentionRow};
+
+/// Outcome of an insert that may short-circuit on `client_message_id`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InsertMessageOutcome {
+    pub row: ChatMessageRow,
+    /// `false` when an existing row was returned for the same client id.
+    pub inserted: bool,
+}
 
 pub async fn get_message(
     store: &impl AsStorePool,
@@ -15,7 +24,7 @@ pub async fn get_message(
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, ChatMessageRow>(
-                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type
                    FROM chat_messages
                   WHERE message_id = ?",
             )
@@ -25,7 +34,7 @@ pub async fn get_message(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, ChatMessageRow>(
-                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type
                    FROM chat_messages
                   WHERE message_id = $1",
             )
@@ -37,45 +46,177 @@ pub async fn get_message(
     .map_err(store_err("social::get_message"))
 }
 
+pub async fn get_message_in_tx(
+    tx: &mut DbTx<'_>,
+    message_id: &str,
+) -> Result<Option<ChatMessageRow>, BackendError> {
+    match tx {
+        DbTx::Sqlite(tx) => sqlx::query_as::<_, ChatMessageRow>(
+            "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type
+               FROM chat_messages
+              WHERE message_id = ?",
+        )
+        .bind(message_id)
+        .fetch_optional(&mut **tx)
+        .await,
+        DbTx::Postgres(tx) => sqlx::query_as::<_, ChatMessageRow>(
+            "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type
+               FROM chat_messages
+              WHERE message_id = $1",
+        )
+        .bind(message_id)
+        .fetch_optional(&mut **tx)
+        .await,
+    }
+    .map_err(store_err("social::get_message_in_tx"))
+}
+
+/// List messages with keyset pagination on `message_seq`.
+///
+/// - `before_seq`: older pages (`message_seq < before_seq`), DESC
+/// - `after_seq`: incremental (`message_seq > after_seq`), ASC then reversed to DESC
+/// - both None: latest `limit` messages DESC
 pub async fn list_messages(
     store: &impl AsStorePool,
     conversation_id: &str,
-    before_ts_ms: Option<i64>,
+    before_seq: Option<i64>,
+    after_seq: Option<i64>,
     limit: u32,
 ) -> Result<Vec<ChatMessageRow>, BackendError> {
     let effective_limit = i64::from(limit.min(200));
-    let before = before_ts_ms.unwrap_or(i64::MAX);
+    match (before_seq, after_seq) {
+        (Some(before), _) => {
+            list_messages_before(store, conversation_id, before, effective_limit).await
+        }
+        (None, Some(after)) => {
+            let mut rows =
+                list_messages_after(store, conversation_id, after, effective_limit).await?;
+            // Normalize to DESC (newest first) like other list paths.
+            rows.reverse();
+            Ok(rows)
+        }
+        (None, None) => {
+            list_messages_before(store, conversation_id, i64::MAX, effective_limit).await
+        }
+    }
+}
+
+async fn list_messages_before(
+    store: &impl AsStorePool,
+    conversation_id: &str,
+    before_seq: i64,
+    limit: i64,
+) -> Result<Vec<ChatMessageRow>, BackendError> {
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, ChatMessageRow>(
-                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type
                    FROM chat_messages
-                  WHERE conversation_id = ? AND created_at_ms < ?
-                  ORDER BY created_at_ms DESC
+                  WHERE conversation_id = ? AND message_seq < ?
+                  ORDER BY message_seq DESC
                   LIMIT ?",
             )
             .bind(conversation_id)
-            .bind(before)
-            .bind(effective_limit)
+            .bind(before_seq)
+            .bind(limit)
             .fetch_all(pool)
             .await
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, ChatMessageRow>(
-                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type
                    FROM chat_messages
-                  WHERE conversation_id = $1 AND created_at_ms < $2
-                  ORDER BY created_at_ms DESC
+                  WHERE conversation_id = $1 AND message_seq < $2
+                  ORDER BY message_seq DESC
                   LIMIT $3",
             )
             .bind(conversation_id)
-            .bind(before)
-            .bind(effective_limit)
+            .bind(before_seq)
+            .bind(limit)
             .fetch_all(pool)
             .await
         }
     }
-    .map_err(store_err("social::list_messages"))
+    .map_err(store_err("social::list_messages_before"))
+}
+
+async fn list_messages_after(
+    store: &impl AsStorePool,
+    conversation_id: &str,
+    after_seq: i64,
+    limit: i64,
+) -> Result<Vec<ChatMessageRow>, BackendError> {
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, ChatMessageRow>(
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type
+                   FROM chat_messages
+                  WHERE conversation_id = ? AND message_seq > ?
+                  ORDER BY message_seq ASC
+                  LIMIT ?",
+            )
+            .bind(conversation_id)
+            .bind(after_seq)
+            .bind(limit)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, ChatMessageRow>(
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type
+                   FROM chat_messages
+                  WHERE conversation_id = $1 AND message_seq > $2
+                  ORDER BY message_seq ASC
+                  LIMIT $3",
+            )
+            .bind(conversation_id)
+            .bind(after_seq)
+            .bind(limit)
+            .fetch_all(pool)
+            .await
+        }
+    }
+    .map_err(store_err("social::list_messages_after"))
+}
+
+/// Allocate the next per-conversation `message_seq` and touch `updated_at_ms`.
+pub async fn allocate_message_seq_in_tx(
+    tx: &mut DbTx<'_>,
+    conversation_id: &str,
+    created_at_ms: i64,
+) -> Result<i64, BackendError> {
+    match tx {
+        DbTx::Sqlite(tx) => {
+            let seq = sqlx::query_scalar::<_, i64>(
+                "UPDATE conversations
+                    SET next_message_seq = next_message_seq + 1,
+                        updated_at_ms = ?
+                  WHERE conversation_id = ?
+              RETURNING next_message_seq - 1",
+            )
+            .bind(created_at_ms)
+            .bind(conversation_id)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(store_err("social::allocate_message_seq"))?;
+            Ok(seq)
+        }
+        DbTx::Postgres(tx) => {
+            let seq = sqlx::query_scalar::<_, i64>(
+                "UPDATE conversations
+                    SET next_message_seq = next_message_seq + 1,
+                        updated_at_ms = $1
+                  WHERE conversation_id = $2
+              RETURNING next_message_seq - 1",
+            )
+            .bind(created_at_ms)
+            .bind(conversation_id)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(store_err("social::allocate_message_seq"))?;
+            Ok(seq)
+        }
+    }
 }
 
 pub async fn list_messages_by_ids(
@@ -89,7 +230,7 @@ pub async fn list_messages_by_ids(
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             let mut builder = QueryBuilder::<Sqlite>::new(
-                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type\n           FROM chat_messages\n          WHERE message_id IN (",
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type\n           FROM chat_messages\n          WHERE message_id IN (",
             );
             {
                 let mut separated = builder.separated(", ");
@@ -102,7 +243,7 @@ pub async fn list_messages_by_ids(
         }
         StorePoolRef::Postgres(pool) => {
             let mut builder = QueryBuilder::<Postgres>::new(
-                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, reply_to_message_id, recalled_at_ms, sender_type\n           FROM chat_messages\n          WHERE message_id IN (",
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type\n           FROM chat_messages\n          WHERE message_id IN (",
             );
             {
                 let mut separated = builder.separated(", ");
@@ -210,11 +351,58 @@ pub async fn insert_message_with_id(
     mentioned_account_ids: &[String],
     client_message_id: Option<&str>,
 ) -> Result<ChatMessageRow, BackendError> {
+    let mut tx = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => pool
+            .begin()
+            .await
+            .map(DbTx::Sqlite)
+            .map_err(store_err("social::insert_message.begin"))?,
+        StorePoolRef::Postgres(pool) => pool
+            .begin()
+            .await
+            .map(DbTx::Postgres)
+            .map_err(store_err("social::insert_message.begin"))?,
+    };
+    let outcome = insert_message_with_id_in_tx(
+        &mut tx,
+        conversation_id,
+        sender_account_id,
+        text,
+        created_at_ms,
+        reply_to_message_id,
+        mentioned_account_ids,
+        client_message_id,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(outcome.row)
+}
+
+/// Insert a user message on an open transaction (for Transactional Outbox).
+///
+/// Idempotent hit on `client_message_id` does not write; caller must still
+/// `ensure_social_message_delivery_in_tx` so a prior insert-without-durable can
+/// be repaired.
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_message_with_id_in_tx(
+    tx: &mut DbTx<'_>,
+    conversation_id: &str,
+    sender_account_id: &str,
+    text: &str,
+    created_at_ms: i64,
+    reply_to_message_id: Option<&str>,
+    mentioned_account_ids: &[String],
+    client_message_id: Option<&str>,
+) -> Result<InsertMessageOutcome, BackendError> {
     let message_id = match client_message_id.map(str::trim).filter(|s| !s.is_empty()) {
         Some(id) => {
-            if let Some(existing) = get_message(store, id).await? {
+            // Must read on the open tx — SQLite test pools are single-connection.
+            if let Some(existing) = get_message_in_tx(tx, id).await? {
                 if existing.conversation_id == conversation_id {
-                    return Ok(existing);
+                    return Ok(InsertMessageOutcome {
+                        row: existing,
+                        inserted: false,
+                    });
                 }
                 return Err(BackendError::StoreQuery {
                     operation: "social::insert_message_with_id.conflict".into(),
@@ -230,24 +418,23 @@ pub async fn insert_message_with_id(
     unique_mentions.sort();
     unique_mentions.dedup();
 
-    match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => {
-            let mut tx = pool
-                .begin()
-                .await
-                .map_err(store_err("social::insert_message.begin"))?;
+    let message_seq = allocate_message_seq_in_tx(tx, conversation_id, created_at_ms).await?;
+
+    match tx {
+        DbTx::Sqlite(tx) => {
             sqlx::query(
                 "INSERT INTO chat_messages
-                    (message_id, conversation_id, sender_account_id, text, created_at_ms, reply_to_message_id)
-                 VALUES (?, ?, ?, ?, ?, ?)",
+                    (message_id, conversation_id, sender_account_id, text, created_at_ms, message_seq, reply_to_message_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&message_id)
             .bind(conversation_id)
             .bind(sender_account_id)
             .bind(text)
             .bind(created_at_ms)
+            .bind(message_seq)
             .bind(reply_to_message_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(store_err("social::insert_message.insert"))?;
             for mentioned_account_id in &unique_mentions {
@@ -258,41 +445,25 @@ pub async fn insert_message_with_id(
                 )
                 .bind(&message_id)
                 .bind(mentioned_account_id)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await
                 .map_err(store_err("social::insert_message.insert_mention"))?;
             }
-            sqlx::query(
-                "UPDATE conversations
-                    SET updated_at_ms = ?
-                  WHERE conversation_id = ?",
-            )
-            .bind(created_at_ms)
-            .bind(conversation_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(store_err("social::insert_message.touch_conversation"))?;
-            tx.commit()
-                .await
-                .map_err(store_err("social::insert_message.commit"))?;
         }
-        StorePoolRef::Postgres(pool) => {
-            let mut tx = pool
-                .begin()
-                .await
-                .map_err(store_err("social::insert_message.begin"))?;
+        DbTx::Postgres(tx) => {
             sqlx::query(
                 "INSERT INTO chat_messages
-                    (message_id, conversation_id, sender_account_id, text, created_at_ms, reply_to_message_id)
-                 VALUES ($1, $2, $3, $4, $5, $6)",
+                    (message_id, conversation_id, sender_account_id, text, created_at_ms, message_seq, reply_to_message_id)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
             )
             .bind(&message_id)
             .bind(conversation_id)
             .bind(sender_account_id)
             .bind(text)
             .bind(created_at_ms)
+            .bind(message_seq)
             .bind(reply_to_message_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(store_err("social::insert_message.insert"))?;
             for mentioned_account_id in &unique_mentions {
@@ -303,36 +474,27 @@ pub async fn insert_message_with_id(
                 )
                 .bind(&message_id)
                 .bind(mentioned_account_id)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await
                 .map_err(store_err("social::insert_message.insert_mention"))?;
             }
-            sqlx::query(
-                "UPDATE conversations
-                    SET updated_at_ms = $1
-                  WHERE conversation_id = $2",
-            )
-            .bind(created_at_ms)
-            .bind(conversation_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(store_err("social::insert_message.touch_conversation"))?;
-            tx.commit()
-                .await
-                .map_err(store_err("social::insert_message.commit"))?;
         }
     }
 
-    Ok(ChatMessageRow {
-        message_id,
-        conversation_id: conversation_id.to_string(),
-        sender_account_id: sender_account_id.to_string(),
-        sender_agent_id: None,
-        text: text.to_string(),
-        created_at_ms,
-        reply_to_message_id: reply_to_message_id.map(ToOwned::to_owned),
-        recalled_at_ms: None,
-        sender_type: "user".to_string(),
+    Ok(InsertMessageOutcome {
+        row: ChatMessageRow {
+            message_id,
+            conversation_id: conversation_id.to_string(),
+            sender_account_id: sender_account_id.to_string(),
+            sender_agent_id: None,
+            text: text.to_string(),
+            created_at_ms,
+            message_seq,
+            reply_to_message_id: reply_to_message_id.map(ToOwned::to_owned),
+            recalled_at_ms: None,
+            sender_type: "user".to_string(),
+        },
+        inserted: true,
     })
 }
 
@@ -596,12 +758,40 @@ pub async fn recall_message(
     sender_account_id: &str,
     recalled_at_ms: i64,
 ) -> Result<Option<ChatMessageRow>, BackendError> {
-    match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => {
-            let mut tx = pool
-                .begin()
-                .await
-                .map_err(store_err("social::recall_message.begin"))?;
+    let mut tx = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => pool
+            .begin()
+            .await
+            .map(DbTx::Sqlite)
+            .map_err(store_err("social::recall_message.begin"))?,
+        StorePoolRef::Postgres(pool) => pool
+            .begin()
+            .await
+            .map(DbTx::Postgres)
+            .map_err(store_err("social::recall_message.begin"))?,
+    };
+    recall_message_in_tx(
+        &mut tx,
+        conversation_id,
+        message_id,
+        sender_account_id,
+        recalled_at_ms,
+    )
+    .await?;
+    tx.commit().await?;
+    get_message(store, message_id).await
+}
+
+/// Apply recall mutations on an open transaction (for Transactional Outbox).
+pub async fn recall_message_in_tx(
+    tx: &mut DbTx<'_>,
+    conversation_id: &str,
+    message_id: &str,
+    sender_account_id: &str,
+    recalled_at_ms: i64,
+) -> Result<(), BackendError> {
+    match tx {
+        DbTx::Sqlite(tx) => {
             sqlx::query(
                 "UPDATE chat_messages
                     SET text = '[message recalled]',
@@ -614,7 +804,7 @@ pub async fn recall_message(
             .bind(message_id)
             .bind(conversation_id)
             .bind(sender_account_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(store_err("social::recall_message.update_message"))?;
 
@@ -623,7 +813,7 @@ pub async fn recall_message(
                   WHERE message_id = ?",
             )
             .bind(message_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(store_err("social::recall_message.delete_mentions"))?;
 
@@ -634,21 +824,11 @@ pub async fn recall_message(
             )
             .bind(recalled_at_ms)
             .bind(conversation_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(store_err("social::recall_message.touch_conversation"))?;
-
-            tx.commit()
-                .await
-                .map_err(store_err("social::recall_message.commit"))?;
-
-            get_message(pool, message_id).await
         }
-        StorePoolRef::Postgres(pool) => {
-            let mut tx = pool
-                .begin()
-                .await
-                .map_err(store_err("social::recall_message.begin"))?;
+        DbTx::Postgres(tx) => {
             sqlx::query(
                 "UPDATE chat_messages
                     SET text = '[message recalled]',
@@ -661,7 +841,7 @@ pub async fn recall_message(
             .bind(message_id)
             .bind(conversation_id)
             .bind(sender_account_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(store_err("social::recall_message.update_message"))?;
 
@@ -670,7 +850,7 @@ pub async fn recall_message(
                   WHERE message_id = $1",
             )
             .bind(message_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(store_err("social::recall_message.delete_mentions"))?;
 
@@ -681,15 +861,10 @@ pub async fn recall_message(
             )
             .bind(recalled_at_ms)
             .bind(conversation_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(store_err("social::recall_message.touch_conversation"))?;
-
-            tx.commit()
-                .await
-                .map_err(store_err("social::recall_message.commit"))?;
-
-            get_message(pool, message_id).await
         }
     }
+    Ok(())
 }

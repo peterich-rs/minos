@@ -44,7 +44,7 @@
 | Markdown | `react-markdown` + `remark-gfm` + Shiki `CodeBlock` | 完成态 GFM；streaming 纯文本；fenced code 懒加载 Shiki 高亮 |
 | 主题 | Shiki theme JSON → CSS vars（`ThemeProvider`） | Host → Appearance 选主题/强调色；FOUC 用 localStorage 缓存 vars；默认 `minos`（warm） |
 | 长列表 | `@tanstack/react-virtual`（侧栏）+ `virtua`（conversation timeline） | ConversationList + **Sessions 左栏**（`SessionListPane` + flatten 树）用 `VirtualizedList`；主时间线 `VList` + stick-to-bottom/`shift` prepend；session **transcript** 仍分页 DOM（硬上限 2000），避免与审批/流式测高互殴 |
-| 状态 | Zustand 5 + TanStack Query 5 | **混合**：RQ 管 catalog/index 只读列表（projects/conversations/**projectSessions**/inspectorSessions/clis/profiles/models）；Zustand 管 timeline/transcript/SessionEntity/乐观发送/UI 指针（L0–L6）。**SessionEntity** 是 session status 的 live SSOT（manager `sessionStateChanged` → Entity → inspector/list projection）；Inspector 在 live session 上 quiet re-list 兜底。Timeline 在 `messageCount>0` 但本地空窗时即使 `livePush` 也会 quiet 补拉。 |
+| 状态 | Zustand 5 + TanStack Query 5 | **混合**：RQ 可缓存 catalog 网络；**会 merge 进 SessionEntity 的 list**（inspector / project sessions）一律 `staleTime: 0`，禁止 30s 陈旧 lifecycle。Zustand 管 timeline/transcript/SessionEntity/乐观发送/UI 指针（L0–L6）。**SessionEntity 唯一写漏斗**：`mergeSessionEntity` / `patchSessionEntity` → `commitSessionEntity`（membership 投影 + `conversation.runningCount/approvalCount` 由 Entity Σ 重算）。list hydrate 是 sample（防 stale demote）；manager / resume / resolve 为 authoritative。Inspector 列表只读投影行，禁止组件层再 overlay 全表 Entity。 |)
 | 图标 | Lucide React | 导航与工具栏 |
 | 本机 API | `@tauri-apps/api` | `invoke` → Rust |
 | 自动更新 | `tauri-plugin-updater` + `plugin-process` | 仅 release 构建启用；见 [desktop-auto-update.md](./desktop-auto-update.md) |
@@ -203,13 +203,15 @@ apps/desktop/
         host-status.ts           # Ready · Local only / Linked / This Mac
         account-session.ts       # MinosSession + HostLinkState localStorage
         minos-cloud.ts           # /v1/auth/* + /v1/hosts/* + Hub IM HTTP
-        im-cloud-sync.ts         # Hub shell upsert + user Outbox (no agent dual-write)
-        im-outbox.ts             # durable localStorage Outbox for user messages
+        im-cloud-sync.ts         # Hub shell upsert + user/agent_result Outbox (host_projection uplink)
+        im-outbox.ts             # durable localStorage Outbox (user_message | agent_result | reaction_toggle | approval_resolve)
         im-cloud-inbound.ts      # Hub cold pull → TimelineMessage[] (no daemon append)
-        hub-timeline.ts          # mergeHubAndLocalTimeline (Hub chat + local tool/git)
+        hub-timeline.ts          # mergeHubAndLocalTimeline (Hub chat + local tool/git; same-id only)
         hub-cursors.ts           # per-topic topic_seq resume_after (localStorage)
-        hub-realtime.ts          # Sync SM + conversation:* Subscribe + SnapshotRequired
-        im-hub-bridge.ts         # auth → realtime → messagesByConversation (Hub-first)
+        hub-realtime.ts          # Sync SM + account/conversation Subscribe + SnapshotRequired
+        hub-digest-cache.ts      # Hub list digests: hydrate once, live patchOne
+        conversation-list-merge.ts # daemon rows ∥ Hub digests (isHubImMode ≠ host-linked)
+        im-hub-bridge.ts         # auth → realtime → timeline + rail digest patch
         # 协作气泡：docs/superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md
         supabase.ts              # optional Supabase email/password IdP
         mock-data.ts
@@ -273,7 +275,7 @@ apps/desktop/
 | 已处理 approval 不回潮 | 历史仍保留 `approval/request` 帧；`demoteResolvedApprovalItems` 在 merge/load 后若卡片后有 agent/user progress 则降为 `status` 并清 `requestId`。`resolve_approval` 写 durable `approval/resolved`；assembler 处理 resolved/timeout。Attention/`hasPendingApproval` 只信 working-set 窗口 |
 | Timeline 渲染 | `features/chat`：窄 selector；`sortTimelineMessages`；`MarkdownText` memo + streaming plain；`MessageRow` memo；入场动画仅新增 id；`list-identity` 复用行对象 |
 | MessageRow polish（Wave 2） | 同作者 ~10min 内隐藏 avatar/header；hover/focus-within action bar（Reply + React）；可选 day divider（`createdAtMs`）；保留 delivery/retry/session short-id/markdown/tool_summary |
-| Reactions（local daemon） | `chat_message_reactions` 持久在 daemon SQLite；`list_conversation_messages` 嵌入聚合 `reactions`；`toggle_conversation_message_reaction` 幂等 add/remove（actor=`local`）；`ConversationReactionToggled` 推送完整聚合。Desktop：`reaction-store` 在 daemon bootstrap 时 `enterDurableMode`（丢 mock seed）→ timeline load hydrate → toggle 乐观 + RPC 回写 / 失败 rollback+toast → live `reactionToggled` 直接 apply。Mock seed 仅 browser Vite。**云端 social reactions / Nostr kind:7 延后** |
+| Reactions | **Hub IM 消息**：`POST …/reactions/toggle` + Durable `ConversationMessageReactionUpdated`（conversation topic；`reactions` 聚合 SSOT，`action` 仅动画）。Desktop `reaction-store` 在 authenticated + conversationId 时走 Hub。**Local workbench 消息**：daemon `LocalReaction*` / `chat_message_reactions` 路径。禁止 dual-write 同一气泡。 |
 | Reply draft（Wave 2） | `ui-store.replyToMessageIdByConversation`；Composer 显示 reply chip；`sendMessage(..., { replyToMessageId })` 写乐观行；daemon append 尚未持久化 reply_to |
 | Follow 迟滞 | unfollow 80px / re-follow 12px；wheel-up 后 ~320ms 禁止 re-follow 与 pin，减轻到底回弹再上滑的抢滚动 |
 | Project tab 切换 | Conversations / Sessions / Board **keep-alive**（`hidden` + `inert`，不 unmount）；有缓存时 transcript **quiet append**；`useLayoutEffect` 首帧 pin 到底。**Sessions keep-alive 不得**在 Conversations 下 `selectSession(null)` / auto-select（否则抹掉 Inspector 点选 SessionDetail）。`loadTranscript` quiet peek **不 bump** generation，避免与 hard open 竞态丢弃整页；打开 session 必建 `transcriptsBySession` key 供 ingest 合并 |
@@ -421,7 +423,7 @@ minos_local_read_session_raw_history / subscribe_ingest
 | Raw(approval/*) | `approval` | 审批卡 |
 | Raw(其它) | 丢弃 | 不进 timeline |
 
-**Conversation 主时间线（目标）**：Linked 会话以 **Hub 协作气泡** 为 SSOT 投影；本地 daemon `chat_messages` 不再与 Hub 对等权威。过渡期仍可能读本地 `chat_messages`（含 dual-write 镜像），见 [Hub 协作消息 SSOT 收敛](superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md)。  
+**Conversation 主时间线**：Linked 会话以 **Hub 协作气泡** 为 SSOT；本地 daemon `chat_messages` 提供 tool/git 与未上行 agent-result 缺口填充（**同 id 相等**，禁止 body 软去重）。Desktop-native 回合：daemon 本地 `agent-result:…` + Outbox **`host_projection`** 上行（规范 id）；Mobile `client_live` 回合由 Hub projector 写气泡。见 [Hub 协作消息 SSOT](superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md) 与 [IM Reliability](superpowers/specs/2026-08-03-im-reliability-program/README.md)。  
 **Session transcript** 仍只认 Host（user / assistant / tool / reasoning），**不含**把全过程 tool 流水写进协作气泡——与 TUI 分层一致。
 
 ### Conversation timeline（messenger 气泡）

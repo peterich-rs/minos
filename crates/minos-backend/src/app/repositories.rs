@@ -150,6 +150,7 @@ pub struct OutboxRow {
     pub outbox_id: String,
     pub topic_kind: String,
     pub event_id: String,
+    pub lane: String,
     pub status: String,
     pub available_at_ms: i64,
     pub attempts: i32,
@@ -512,10 +513,16 @@ pub trait OutboxRepository: Send + Sync {
         &self,
         topic_kind: &str,
         event_id: &str,
+        lane: store::outbox_events::OutboxLane,
         available_at_ms: i64,
     ) -> Result<String, BackendError>;
 
-    async fn claim(&self, worker_id: &str, batch: u32) -> Result<Vec<OutboxRow>, BackendError>;
+    async fn claim(
+        &self,
+        worker_id: &str,
+        batch: u32,
+        lane: store::outbox_events::OutboxLane,
+    ) -> Result<Vec<OutboxRow>, BackendError>;
 
     async fn ack(&self, outbox_id: &str, at_ms: i64) -> Result<bool, BackendError>;
 
@@ -2090,9 +2097,10 @@ impl ConversationMessagesRepository for StoreBackedConversationMessagesRepositor
         limit: u32,
         cursor: Option<&str>,
     ) -> Result<Vec<MessageRow>, BackendError> {
-        let before_ts = cursor.and_then(|c| c.parse::<i64>().ok());
+        let before_seq = cursor.and_then(|c| c.parse::<i64>().ok());
         let rows =
-            store::social::list_messages(&self.store, conversation_id, before_ts, limit).await?;
+            store::social::list_messages(&self.store, conversation_id, before_seq, None, limit)
+                .await?;
         Ok(rows.into_iter().map(convert_chat_message).collect())
     }
 
@@ -2329,6 +2337,7 @@ fn convert_outbox_row(row: store::outbox_events::OutboxEventRow) -> OutboxRow {
         outbox_id: row.outbox_id,
         topic_kind: row.topic_kind,
         event_id: row.event_id,
+        lane: row.lane.as_str().to_string(),
         status: status_str.to_string(),
         available_at_ms: row.available_at_ms,
         attempts: i32::try_from(row.attempts).unwrap_or(i32::MAX),
@@ -2350,6 +2359,7 @@ impl OutboxRepository for StoreBackedOutboxRepository {
         &self,
         topic_kind: &str,
         event_id: &str,
+        lane: store::outbox_events::OutboxLane,
         available_at_ms: i64,
     ) -> Result<String, BackendError> {
         let outbox_id = Uuid::new_v4().to_string();
@@ -2358,16 +2368,23 @@ impl OutboxRepository for StoreBackedOutboxRepository {
             &outbox_id,
             topic_kind,
             event_id,
+            lane,
             available_at_ms,
         )
         .await?;
         Ok(outbox_id)
     }
 
-    async fn claim(&self, worker_id: &str, batch: u32) -> Result<Vec<OutboxRow>, BackendError> {
+    async fn claim(
+        &self,
+        worker_id: &str,
+        batch: u32,
+        lane: store::outbox_events::OutboxLane,
+    ) -> Result<Vec<OutboxRow>, BackendError> {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let rows =
-            store::outbox_events::claim_available(&self.store, worker_id, now_ms, batch).await?;
+            store::outbox_events::claim_available(&self.store, worker_id, now_ms, batch, lane)
+                .await?;
         Ok(rows.into_iter().map(convert_outbox_row).collect())
     }
 

@@ -274,6 +274,8 @@ async fn send_user_message_round_trips() {
             [minos_protocol::SendUserMessageRequest {
                 session_id: start_resp.session_id.clone(),
                 text: "hello test".into(),
+                origin_message_id: None,
+                attachments: vec![],
             }],
         )
         .await

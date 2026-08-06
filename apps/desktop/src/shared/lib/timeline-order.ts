@@ -1,15 +1,17 @@
 import type { TimelineMessage } from "@/shared/lib/mock-data";
 
 /**
- * Canonical conversation timeline order.
+ * Canonical conversation timeline order (C2 final).
  *
- * 1. When **both** rows have `messageSeq`, order by seq ASC (daemon durable order).
- * 2. Otherwise fall back to `createdAtMs` ASC — **do not** put every seq-bearing
- *    row before every seq-less row. Hub-mapped bubbles often lack `messageSeq`;
- *    old behavior put local `agent-result` (has seq) above Hub/user rows (no seq)
- *    even when the user message was earlier.
- * 3. Optimistic `sending` rows sort after durable peers at the same clock.
- * 4. Stable tie-break: id.
+ * Cross-source durable rows: order **only** by `messageSeq` ASC when both
+ * have seq. Never coerce missing seq to 0.
+ *
+ * Rows without `messageSeq` are only allowed for **local optimistic** sends
+ * (`sending` / `failed`); they sort after durable seq peers (window tail),
+ * then by `createdAtMs` / id among themselves.
+ *
+ * Mixed durable (has seq) vs durable-without-seq: prefer seq-bearing first by
+ * createdAt only among no-seq peers — do not invent pseudo-seq.
  */
 export function sortTimelineMessages(
   messages: TimelineMessage[],
@@ -17,20 +19,31 @@ export function sortTimelineMessages(
   return [...messages].sort((a, b) => {
     const sa = a.messageSeq;
     const sb = b.messageSeq;
-    if (sa != null && sb != null && sa !== sb) {
-      return sa - sb;
+    const aHas = sa != null && Number.isFinite(sa);
+    const bHas = sb != null && Number.isFinite(sb);
+
+    if (aHas && bHas && sa !== sb) {
+      return (sa as number) - (sb as number);
     }
+
+    const aOpt =
+      a.deliveryStatus === "sending" || a.deliveryStatus === "failed";
+    const bOpt =
+      b.deliveryStatus === "sending" || b.deliveryStatus === "failed";
+
+    // Optimistic without seq: after durable peers.
+    if (aOpt && !bOpt && !aHas) return 1;
+    if (bOpt && !aOpt && !bHas) return -1;
+
+    // One side has seq, the other is optimistic/no-seq: seq first.
+    if (aHas && !bHas) return -1;
+    if (bHas && !aHas) return 1;
 
     const ta = a.createdAtMs ?? 0;
     const tb = b.createdAtMs ?? 0;
     if (ta !== tb) {
       return ta - tb;
     }
-
-    // Same wall clock: prefer lower seq if only one side has it (user often
-    // has seq from daemon; hub peer may not).
-    if (sa != null && sb == null) return -1;
-    if (sa == null && sb != null) return 1;
 
     const aSending = a.deliveryStatus === "sending" ? 1 : 0;
     const bSending = b.deliveryStatus === "sending" ? 1 : 0;

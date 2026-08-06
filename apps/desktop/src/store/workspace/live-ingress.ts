@@ -67,15 +67,9 @@ function scheduleConversationTimelineRefresh(
         // loadConversations above still updates rail preview/count.
         return;
       }
-      // conversation_completion may write a few hundred ms after Idle; burst
-      // re-list so agent-result lands without waiting for the next send.
+      // Single quiet re-list. Agent-result uses canonical Hub id + WS fanout /
+      // outbox uplink — no 0/400/1200 burst poll (C2).
       void get().loadTimeline(conversationId, { quiet: true });
-      window.setTimeout(() => {
-        void get().loadTimeline(conversationId, { quiet: true });
-      }, 400);
-      window.setTimeout(() => {
-        void get().loadTimeline(conversationId, { quiet: true });
-      }, 1200);
     }, 200),
   );
 }
@@ -291,22 +285,24 @@ export function createLiveIngressActions(
       return;
     }
     if (ev.kind === "sessionAdded") {
-      // Entity shell + quiet refresh any project SessionLists we already hold
-      // so Sessions tab does not stay stale while keep-alive / livePush=true.
+      // Entity shell via sole commit (projects membership when conversationId
+      // known from parent). Quiet re-list project SessionLists we already hold.
       if (ev.sessionId) {
         set((s) => {
           if (s.sessionsById[ev.sessionId]) return {};
+          const parent = ev.parentSessionId
+            ? s.sessionsById[ev.parentSessionId]
+            : undefined;
           const entity = patchSessionEntity(undefined, ev.sessionId, {
             daemonStatus: "idle",
             agent: ev.agent || "codex",
             parentId: ev.parentSessionId ?? undefined,
+            conversationId: parent?.conversationId ?? "",
+            conversationTitle: parent?.conversationTitle,
           });
-          return {
-            sessionsById: {
-              ...s.sessionsById,
-              [ev.sessionId]: entity,
-            },
-          };
+          return commitSessionEntity(s, entity, {
+            elevateApprovalCount: false,
+          });
         });
         const projectIds = Object.keys(get().projectSessionsByProject);
         for (const pid of projectIds) {
@@ -330,28 +326,8 @@ export function createLiveIngressActions(
     }
 
     // Message append / roster: debounced quiet re-list of chat_messages.
+    // Background (no window): next open loadTimeline cold-pulls; no dirty flag.
     scheduleConversationTimelineRefresh(get, ev.conversationId);
-    // Background convos without a Timeline window: still mark dirty so open
-    // can force a hard load later if needed.
-    const id = ev.conversationId;
-    const st = get();
-    const focused = st.focusedConversationId === id;
-    const hasWorkingSet = hasTimelineWorkingSet(
-      st.messagesByConversation,
-      id,
-      {
-        messageHistoryByConversation: st.messageHistoryByConversation,
-        timelineStatusByConversation: st.timelineStatusByConversation,
-      },
-    );
-    if (!focused && !hasWorkingSet) {
-      set((s) => ({
-        timelineDirtyByConversation: {
-          ...s.timelineDirtyByConversation,
-          [id]: true,
-        },
-      }));
-    }
   },
 
   };

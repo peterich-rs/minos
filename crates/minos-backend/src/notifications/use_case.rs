@@ -1,7 +1,7 @@
 //! NotificationService trait + DefaultNotificationService implementation.
 //!
 //! Orchestrates push token registration, preference management, and
-//! event-driven notification dispatch.
+//! event-driven notification dispatch with presence + event_id idempotency.
 
 use std::sync::Arc;
 
@@ -10,10 +10,55 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::BackendError;
 use crate::notifications::channels::{PushAttempt, PushChannel, PushKind, PushSendOutcome};
-use crate::notifications::decision::{decide, Decision};
+use crate::notifications::decision::{
+    decide, AccountPresence, Decision, DecisionInput, DecisionReason,
+};
 use crate::notifications::preferences::NotificationPreferences;
 use crate::realtime::event::{DurableEvent, DurableEventEnvelope, SenderRef};
-use crate::store::{notification_preferences, push_tokens, StoreHandle};
+use crate::session::SessionRegistry;
+use crate::store::{
+    agent_sessions, notification_preferences, push_dispatch_log, push_tokens, social, StoreHandle,
+};
+
+/// After the last mobile client WS disconnect, keep suppressing push for this
+/// window so flaky reconnects do not flood the user.
+///
+/// Grace is based on registry-stamped disconnect time (real WS leave edge),
+/// **not** throttled `device_installations.last_seen` (which can lag 30s+).
+pub const DISCONNECT_GRACE_MS: i64 = 15_000;
+
+// ── Presence port ──────────────────────────────────────────────────────
+
+/// Live mobile WS + real disconnect timestamps for push grace.
+pub trait PresencePort: Send + Sync {
+    fn has_live_mobile_client(&self, account_id: &str) -> bool;
+    /// Wall-clock ms when the account last lost its final live mobile WS.
+    fn last_mobile_disconnect_at_ms(&self, account_id: &str) -> Option<i64>;
+}
+
+impl PresencePort for SessionRegistry {
+    fn has_live_mobile_client(&self, account_id: &str) -> bool {
+        self.mobile_client_session_count(account_id) > 0
+    }
+
+    fn last_mobile_disconnect_at_ms(&self, account_id: &str) -> Option<i64> {
+        SessionRegistry::last_mobile_disconnect_at_ms(self, account_id)
+    }
+}
+
+/// Always-offline presence for unit tests that do not inject a registry.
+#[derive(Debug, Default)]
+pub struct OfflinePresence;
+
+impl PresencePort for OfflinePresence {
+    fn has_live_mobile_client(&self, _account_id: &str) -> bool {
+        false
+    }
+
+    fn last_mobile_disconnect_at_ms(&self, _account_id: &str) -> Option<i64> {
+        None
+    }
+}
 
 // ── DTOs ───────────────────────────────────────────────────────────────
 
@@ -59,7 +104,7 @@ pub struct PushTokenDto {
 pub enum DispatchOutcome {
     /// Notifications sent to at least one channel.
     Sent,
-    /// Decision engine skipped the event (not notifiable, user online, cooldown).
+    /// Decision engine skipped the event (not notifiable, user online, cooldown, idempotent).
     Skipped,
     /// No push tokens registered for the target account(s).
     NoTokens,
@@ -128,6 +173,7 @@ fn validate_token(kind: PushKind, token: &str) -> Result<(), NotificationError> 
 pub struct DefaultNotificationService {
     store: StoreHandle,
     channels: Vec<Arc<dyn PushChannel>>,
+    presence: Arc<dyn PresencePort>,
     /// Default cooldown for conversation messages (30 seconds).
     #[allow(dead_code)]
     message_cooldown_ms: i64,
@@ -138,10 +184,15 @@ pub struct DefaultNotificationService {
 
 impl DefaultNotificationService {
     #[must_use]
-    pub fn new(store: StoreHandle, channels: Vec<Arc<dyn PushChannel>>) -> Self {
+    pub fn new(
+        store: StoreHandle,
+        channels: Vec<Arc<dyn PushChannel>>,
+        presence: Arc<dyn PresencePort>,
+    ) -> Self {
         Self {
             store,
             channels,
+            presence,
             message_cooldown_ms: 30_000,
             approval_cooldown_ms: 5_000,
         }
@@ -153,6 +204,27 @@ impl DefaultNotificationService {
             .iter()
             .find(|c| c.kind() == kind)
             .map(|c| c.as_ref())
+    }
+
+    /// Build presence for decide(): live WS + disconnect grace from registry.
+    fn resolve_presence(&self, account_id: &str, now_ms: i64) -> AccountPresence {
+        let online = self.presence.has_live_mobile_client(account_id);
+        if online {
+            return AccountPresence {
+                online: true,
+                within_disconnect_grace: false,
+            };
+        }
+
+        let within_disconnect_grace = self
+            .presence
+            .last_mobile_disconnect_at_ms(account_id)
+            .is_some_and(|at| now_ms >= at && now_ms.saturating_sub(at) < DISCONNECT_GRACE_MS);
+
+        AccountPresence {
+            online: false,
+            within_disconnect_grace,
+        }
     }
 }
 
@@ -256,28 +328,39 @@ impl NotificationService for DefaultNotificationService {
     ) -> Result<DispatchOutcome, NotificationError> {
         let now_ms = chrono::Utc::now().timestamp_millis();
 
-        // Resolve target account IDs from the event.
-        let target_account_ids = resolve_target_accounts(&envelope.payload);
+        let target_account_ids = resolve_target_accounts(&self.store, &envelope.payload).await?;
         if target_account_ids.is_empty() {
             return Ok(DispatchOutcome::Skipped);
         }
 
         let mut any_sent = false;
         let mut any_tokens = false;
+        let mut any_decision_send = false;
 
         for account_id in &target_account_ids {
+            let already_pushed =
+                push_dispatch_log::has_sent(&self.store, &envelope.event_id, account_id).await?;
+            let presence = self.resolve_presence(account_id, now_ms);
             let prefs = notification_preferences::get(&self.store, account_id).await?;
             let prefs = NotificationPreferences::from_row(&prefs);
 
-            let decision = decide(&envelope.payload, &prefs, now_ms);
+            let decision = decide(&DecisionInput {
+                event: &envelope.payload,
+                prefs: &prefs,
+                now_ms,
+                presence,
+                already_pushed_event: already_pushed,
+            });
+
             match decision {
                 Decision::Send {
                     payload,
                     cooldown_key,
                     cooldown_ms,
                 } => {
-                    // Check cooldown
-                    let allowed = crate::store::notification_cooldowns::check_and_update(
+                    any_decision_send = true;
+                    // Check-only first — only stamp cooldown after a true Sent.
+                    let allowed = crate::store::notification_cooldowns::is_allowed(
                         &self.store,
                         account_id,
                         &cooldown_key,
@@ -287,17 +370,17 @@ impl NotificationService for DefaultNotificationService {
                     .await?;
 
                     if !allowed {
+                        crate::telemetry::record_push_decision("skip", "cooldown");
                         continue;
                     }
 
-                    // Get tokens for this account
                     let tokens = push_tokens::list_for_account(&self.store, account_id).await?;
                     if tokens.is_empty() {
                         continue;
                     }
                     any_tokens = true;
 
-                    // Send to each token
+                    let mut account_sent = false;
                     for token_row in &tokens {
                         let kind = match token_row.kind.as_str() {
                             "apns" => PushKind::Apns,
@@ -311,11 +394,11 @@ impl NotificationService for DefaultNotificationService {
                             };
                             match channel.send(attempt).await {
                                 Ok(PushSendOutcome::Sent) => {
+                                    account_sent = true;
                                     any_sent = true;
                                     crate::telemetry::record_push_send(kind.as_str(), "sent");
                                 }
                                 Ok(PushSendOutcome::TokenExpired) => {
-                                    // Revoke expired token
                                     let _ = push_tokens::revoke(
                                         &self.store,
                                         &token_row.token_hash,
@@ -333,22 +416,52 @@ impl NotificationService for DefaultNotificationService {
                                         "rate_limited",
                                     );
                                 }
+                                Ok(PushSendOutcome::NotWired) => {
+                                    // P5: config hooks exist but provider not production-wired.
+                                    // Do not record_sent / do not burn cooldown.
+                                    crate::telemetry::record_push_send(kind.as_str(), "not_wired");
+                                }
                                 Err(_) => {
                                     crate::telemetry::record_push_send(kind.as_str(), "error");
                                 }
                             }
                         }
                     }
+
+                    if account_sent {
+                        push_dispatch_log::record_sent(
+                            &self.store,
+                            &envelope.event_id,
+                            account_id,
+                            now_ms,
+                        )
+                        .await?;
+                        // UX rate limit only after true delivery.
+                        let _ = crate::store::notification_cooldowns::record_sent(
+                            &self.store,
+                            account_id,
+                            &cooldown_key,
+                            now_ms,
+                        )
+                        .await;
+                    }
                 }
-                Decision::Skip { .. } => {
-                    crate::telemetry::record_push_decision("skip", "decision_engine");
+                Decision::Skip { reason } => {
+                    let reason_label = match reason {
+                        DecisionReason::UserOnline => "user_online",
+                        DecisionReason::AlreadyPushed => "already_pushed",
+                        DecisionReason::QuietHours => "quiet_hours",
+                        DecisionReason::PreferenceDisabled => "preference_disabled",
+                        DecisionReason::NotNotifiable => "not_notifiable",
+                    };
+                    crate::telemetry::record_push_decision("skip", reason_label);
                 }
             }
         }
 
         if any_sent {
             Ok(DispatchOutcome::Sent)
-        } else if !any_tokens {
+        } else if any_decision_send && !any_tokens {
             Ok(DispatchOutcome::NoTokens)
         } else {
             Ok(DispatchOutcome::Skipped)
@@ -356,81 +469,367 @@ impl NotificationService for DefaultNotificationService {
     }
 }
 
-/// Resolve the set of account IDs that should receive a notification for
-/// the given event. Returns empty for events that don't trigger push.
-fn resolve_target_accounts(event: &DurableEvent) -> Vec<String> {
+/// Resolve account IDs that should receive a push for the event.
+///
+/// - Message account events: the account topic owner (not self-sender).
+/// - Approval / session ended: conversation members of the agent session.
+async fn resolve_target_accounts(
+    store: &StoreHandle,
+    event: &DurableEvent,
+) -> Result<Vec<String>, NotificationError> {
     match event {
         DurableEvent::AccountConversationMessageAppended {
             account_id, sender, ..
         } => {
             if matches!(sender, SenderRef::User { account_id: sender_id } if sender_id == account_id)
             {
-                Vec::new()
+                Ok(Vec::new())
             } else {
-                vec![account_id.clone()]
+                Ok(vec![account_id.clone()])
             }
         }
         DurableEvent::AccountConversationMessageRecalled { account_id, .. } => {
-            vec![account_id.clone()]
+            Ok(vec![account_id.clone()])
         }
         DurableEvent::ConversationMessageAppended { .. }
-        | DurableEvent::ConversationMessageRecalled { .. } => Vec::new(),
-        DurableEvent::ApprovalRequested { .. } => {
-            // The target account is the session owner; resolved externally
-            // by the fanout job via the agent session lookup.
-            Vec::new()
+        | DurableEvent::ConversationMessageRecalled { .. }
+        | DurableEvent::ConversationMessageReactionUpdated { .. } => Ok(Vec::new()),
+        DurableEvent::ApprovalRequested { session_id, .. }
+        | DurableEvent::AgentSessionEnded { session_id, .. } => {
+            Ok(resolve_session_notification_targets(store, session_id).await?)
         }
-        DurableEvent::AgentSessionEnded { .. } => {
-            // Would need to look up the session owner; for now, empty.
-            // In production, the fanout job resolves this from the session.
-            Vec::new()
-        }
-        _ => Vec::new(),
+        _ => Ok(Vec::new()),
     }
+}
+
+/// Session owner / approvers = conversation members for the agent session.
+async fn resolve_session_notification_targets(
+    store: &StoreHandle,
+    session_id: &str,
+) -> Result<Vec<String>, BackendError> {
+    let Some(session) = agent_sessions::get(store, session_id).await? else {
+        tracing::debug!(
+            target: "minos_backend::notifications",
+            session_id,
+            "no agent_session row for push target resolution"
+        );
+        return Ok(Vec::new());
+    };
+    let members = social::list_conversation_members(store, &session.conversation_id).await?;
+    Ok(members)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use minos_protocol::{ChatMessageSummary, SenderType, UserSummary};
+    use crate::notifications::channels::{PushChannel, PushPayload, PushSendOutcome};
+    use crate::store::test_support::{insert_account, memory_pool, T0};
+    use minos_domain::DeviceId;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
 
-    fn message(sender_account_id: &str) -> ChatMessageSummary {
-        ChatMessageSummary {
-            message_id: "msg-1".into(),
-            conversation_id: "conv-1".into(),
-            sender: UserSummary {
-                account_id: sender_account_id.into(),
-                minos_id: "minos-user".into(),
-                display_name: "Test User".into(),
-            },
-            text: "hello".into(),
-            created_at_ms: 1_700_000_000_000,
-            reply_to: None,
-            recalled_at_ms: None,
-            mentioned_account_ids: Vec::new(),
-            sender_type: SenderType::User,
+    struct CountingChannel {
+        sent: AtomicUsize,
+        payloads: Mutex<Vec<PushPayload>>,
+    }
+
+    impl CountingChannel {
+        fn new() -> Self {
+            Self {
+                sent: AtomicUsize::new(0),
+                payloads: Mutex::new(Vec::new()),
+            }
         }
+    }
+
+    #[async_trait]
+    impl PushChannel for CountingChannel {
+        fn kind(&self) -> PushKind {
+            PushKind::Fcm
+        }
+
+        async fn send(
+            &self,
+            attempt: PushAttempt,
+        ) -> Result<PushSendOutcome, crate::notifications::channels::PushSendError> {
+            self.sent.fetch_add(1, Ordering::SeqCst);
+            self.payloads.lock().unwrap().push(attempt.payload);
+            Ok(PushSendOutcome::Sent)
+        }
+    }
+
+    struct FixedPresence {
+        online: bool,
+        /// When set, simulates registry disconnect stamp for grace tests.
+        last_disconnect_at_ms: Option<i64>,
+    }
+
+    impl PresencePort for FixedPresence {
+        fn has_live_mobile_client(&self, _account_id: &str) -> bool {
+            self.online
+        }
+
+        fn last_mobile_disconnect_at_ms(&self, _account_id: &str) -> Option<i64> {
+            self.last_disconnect_at_ms
+        }
+    }
+
+    async fn seed_account_with_token(
+        store: &StoreHandle,
+        email: &str,
+    ) -> (String, String /* installation_id */) {
+        let account_id = insert_account(store.sqlite_pool().unwrap(), email).await;
+        let installation_id = DeviceId::new().to_string();
+        // Minimal installation so FK on push_tokens / device tables hold if needed.
+        sqlx::query(
+            "INSERT INTO device_installations
+                (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
+             VALUES (?, 'mobile', 'phone', NULL, ?, ?, ?)",
+        )
+        .bind(&installation_id)
+        .bind(T0)
+        .bind(T0 - 60_000) // outside grace
+        .bind(&account_id)
+        .execute(store.sqlite_pool().unwrap())
+        .await
+        .unwrap();
+
+        push_tokens::upsert(
+            store,
+            &account_id,
+            &installation_id,
+            "fcm",
+            "test-fcm-token-value-xxxxxxxxxxxxxxxx",
+            None,
+            T0,
+        )
+        .await
+        .unwrap();
+
+        (account_id, installation_id)
+    }
+
+    fn account_message_envelope(account_id: &str, event_id: &str) -> DurableEventEnvelope {
+        DurableEventEnvelope {
+            topic: format!("account:{account_id}"),
+            topic_seq: 1,
+            event_id: event_id.into(),
+            payload: DurableEvent::AccountConversationMessageAppended {
+                account_id: account_id.into(),
+                conversation_id: "conv-1".into(),
+                message_id: "msg-1".into(),
+                sender: SenderRef::User {
+                    account_id: "sender-other".into(),
+                },
+                at_ms: T0,
+                preview: "hello".into(),
+                sender_display_name: "Test User".into(),
+                mentioned: false,
+                message_seq: Some(1),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn online_presence_skips_push() {
+        let pool = memory_pool().await;
+        let store = StoreHandle::from(pool);
+        let (account_id, _) = seed_account_with_token(&store, "online@example.com").await;
+        let channel = Arc::new(CountingChannel::new());
+        let svc = DefaultNotificationService::new(
+            store,
+            vec![channel.clone()],
+            Arc::new(FixedPresence {
+                online: true,
+                last_disconnect_at_ms: None,
+            }),
+        );
+        let envelope = account_message_envelope(&account_id, "ev-online-1");
+        let outcome = svc.dispatch_for_event(&envelope).await.unwrap();
+        assert_eq!(outcome, DispatchOutcome::Skipped);
+        assert_eq!(channel.sent.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn offline_presence_sends_push() {
+        let pool = memory_pool().await;
+        let store = StoreHandle::from(pool);
+        let (account_id, _) = seed_account_with_token(&store, "offline@example.com").await;
+        let channel = Arc::new(CountingChannel::new());
+        let svc = DefaultNotificationService::new(
+            store,
+            vec![channel.clone()],
+            Arc::new(FixedPresence {
+                online: false,
+                last_disconnect_at_ms: None,
+            }),
+        );
+        let envelope = account_message_envelope(&account_id, "ev-offline-1");
+        let outcome = svc.dispatch_for_event(&envelope).await.unwrap();
+        assert_eq!(outcome, DispatchOutcome::Sent);
+        assert_eq!(channel.sent.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn just_disconnected_still_skips_within_grace() {
+        let pool = memory_pool().await;
+        let store = StoreHandle::from(pool);
+        let (account_id, _) = seed_account_with_token(&store, "grace@example.com").await;
+        let channel = Arc::new(CountingChannel::new());
+        // Disconnect 2s ago — well within DISCONNECT_GRACE_MS (15s).
+        let now = chrono::Utc::now().timestamp_millis();
+        let svc = DefaultNotificationService::new(
+            store,
+            vec![channel.clone()],
+            Arc::new(FixedPresence {
+                online: false,
+                last_disconnect_at_ms: Some(now - 2_000),
+            }),
+        );
+        let envelope = account_message_envelope(&account_id, "ev-grace-1");
+        let outcome = svc.dispatch_for_event(&envelope).await.unwrap();
+        assert_eq!(outcome, DispatchOutcome::Skipped);
+        assert_eq!(channel.sent.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn disconnect_grace_expires_then_sends() {
+        let pool = memory_pool().await;
+        let store = StoreHandle::from(pool);
+        let (account_id, _) = seed_account_with_token(&store, "grace-done@example.com").await;
+        let channel = Arc::new(CountingChannel::new());
+        let now = chrono::Utc::now().timestamp_millis();
+        let svc = DefaultNotificationService::new(
+            store,
+            vec![channel.clone()],
+            Arc::new(FixedPresence {
+                online: false,
+                // Past grace window.
+                last_disconnect_at_ms: Some(now - DISCONNECT_GRACE_MS - 5_000),
+            }),
+        );
+        let envelope = account_message_envelope(&account_id, "ev-grace-2");
+        let outcome = svc.dispatch_for_event(&envelope).await.unwrap();
+        assert_eq!(outcome, DispatchOutcome::Sent);
+        assert_eq!(channel.sent.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn registry_stamps_disconnect_when_last_mobile_leaves() {
+        use minos_domain::DeviceRole;
+        let reg = SessionRegistry::new();
+        let (handle, _rx) = crate::session::SessionHandle::new(
+            minos_domain::DeviceId::new(),
+            DeviceRole::MobileClient,
+        );
+        handle.set_account_id("acct-grace".into());
+        reg.insert(handle.clone());
+        assert!(reg.mobile_client_session_count("acct-grace") > 0);
+        assert!(reg.last_mobile_disconnect_at_ms("acct-grace").is_none());
+
+        let removed = reg.remove(handle.device_id).expect("removed");
+        assert_eq!(removed.device_id, handle.device_id);
+        assert_eq!(reg.mobile_client_session_count("acct-grace"), 0);
+        assert!(
+            reg.last_mobile_disconnect_at_ms("acct-grace").is_some(),
+            "last mobile leave must stamp disconnect for push grace"
+        );
+    }
+
+    #[tokio::test]
+    async fn event_id_idempotency_prevents_second_send() {
+        let pool = memory_pool().await;
+        let store = StoreHandle::from(pool);
+        let (account_id, _) = seed_account_with_token(&store, "idem@example.com").await;
+        let channel = Arc::new(CountingChannel::new());
+        let svc = DefaultNotificationService::new(
+            store.clone(),
+            vec![channel.clone()],
+            Arc::new(FixedPresence {
+                online: false,
+                last_disconnect_at_ms: None,
+            }),
+        );
+        let envelope = account_message_envelope(&account_id, "ev-idem-1");
+        assert_eq!(
+            svc.dispatch_for_event(&envelope).await.unwrap(),
+            DispatchOutcome::Sent
+        );
+        assert_eq!(channel.sent.load(Ordering::SeqCst), 1);
+
+        // Re-dispatch same event_id must not send again.
+        assert_eq!(
+            svc.dispatch_for_event(&envelope).await.unwrap(),
+            DispatchOutcome::Skipped
+        );
+        assert_eq!(channel.sent.load(Ordering::SeqCst), 1);
+        assert!(
+            push_dispatch_log::has_sent(&store, "ev-idem-1", &account_id)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn approval_targets_conversation_members() {
+        let pool = memory_pool().await;
+        let store = StoreHandle::from(pool);
+        let owner = insert_account(store.sqlite_pool().unwrap(), "owner@example.com").await;
+        let member = insert_account(store.sqlite_pool().unwrap(), "member@example.com").await;
+
+        // Conversation + members
+        sqlx::query(
+            "INSERT INTO conversations (conversation_id, kind, title, created_at_ms, updated_at_ms, created_by_account_id)
+             VALUES ('conv-appr', 'group', 'G', ?, ?, ?)",
+        )
+        .bind(T0)
+        .bind(T0)
+        .bind(&owner)
+        .execute(store.sqlite_pool().unwrap())
+        .await
+        .unwrap();
+        for (acc, joined) in [(&owner, T0), (&member, T0 + 1)] {
+            sqlx::query(
+                "INSERT INTO conversation_members (conversation_id, account_id, joined_at_ms)
+                 VALUES ('conv-appr', ?, ?)",
+            )
+            .bind(acc)
+            .bind(joined)
+            .execute(store.sqlite_pool().unwrap())
+            .await
+            .unwrap();
+        }
+        agent_sessions::create(
+            &store,
+            "sess-appr",
+            "conv-appr",
+            None,
+            None,
+            None,
+            "running",
+            T0,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let event = DurableEvent::ApprovalRequested {
+            request_id: "req-1".into(),
+            session_id: "sess-appr".into(),
+            method: "run_command".into(),
+            deadline_at_ms: T0 + 60_000,
+            at_ms: T0,
+        };
+        let targets = resolve_target_accounts(&store, &event).await.unwrap();
+        assert!(!targets.is_empty(), "approval targets must be non-empty");
+        assert!(targets.contains(&owner));
+        assert!(targets.contains(&member));
     }
 
     #[test]
     fn account_conversation_event_targets_account_topic_owner() {
-        let event = DurableEvent::AccountConversationMessageAppended {
-            account_id: "target-account".into(),
-            conversation_id: "conv-1".into(),
-            message_id: "msg-1".into(),
-            sender: SenderRef::Agent {
-                agent_id: "agent-1".into(),
-                session_id: None,
-            },
-            at_ms: 1_700_000_000_000,
-            message: message("agent-account"),
-        };
-
-        assert_eq!(resolve_target_accounts(&event), vec!["target-account"]);
-    }
-
-    #[test]
-    fn account_conversation_event_skips_self_sender() {
+        // Sync helper for pure match on message events — exercised via async path
+        // in integration tests above; keep smoke on resolve for self-skip.
         let event = DurableEvent::AccountConversationMessageAppended {
             account_id: "target-account".into(),
             conversation_id: "conv-1".into(),
@@ -438,25 +837,24 @@ mod tests {
             sender: SenderRef::User {
                 account_id: "target-account".into(),
             },
-            at_ms: 1_700_000_000_000,
-            message: message("target-account"),
+            at_ms: T0,
+            preview: "hello".into(),
+            sender_display_name: "Test User".into(),
+            mentioned: false,
+            message_seq: Some(1),
         };
-
-        assert!(resolve_target_accounts(&event).is_empty());
-    }
-
-    #[test]
-    fn unscoped_conversation_event_has_no_push_target() {
-        let event = DurableEvent::ConversationMessageAppended {
-            conversation_id: "conv-1".into(),
-            message_id: "msg-1".into(),
-            sender: SenderRef::User {
-                account_id: "sender-account".into(),
-            },
-            at_ms: 1_700_000_000_000,
-            message: None,
-        };
-
-        assert!(resolve_target_accounts(&event).is_empty());
+        // Self-sender: empty targets (resolved without DB).
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let pool = memory_pool().await;
+            let store = StoreHandle::from(pool);
+            assert!(resolve_target_accounts(&store, &event)
+                .await
+                .unwrap()
+                .is_empty());
+        });
     }
 }

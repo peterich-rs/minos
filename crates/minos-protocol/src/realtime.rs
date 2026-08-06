@@ -408,15 +408,31 @@ pub enum DurableEvent {
         account_id: String,
         at_ms: i64,
     },
+    /// Account roster: host paired (T2 digest on `account:{id}`).
     HostLinked {
         account_id: String,
         host_installation_id: String,
         pair_id: String,
         at_ms: i64,
+        /// Display name for immediate list upsert without HTTP.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host_display_name: Option<String>,
     },
+    /// Account roster: host unlinked (T2 digest on `account:{id}`).
     HostUnlinked {
         account_id: String,
         host_installation_id: String,
+        at_ms: i64,
+    },
+    /// Social graph: friend request created / accepted / rejected (T2 on account).
+    /// One event per affected account (from and/or to); clients invalidate roster HTTP.
+    FriendRequestUpdated {
+        account_id: String,
+        request_id: String,
+        from_account_id: String,
+        to_account_id: String,
+        /// `"pending"` | `"accepted"` | `"rejected"`
+        status: String,
         at_ms: i64,
     },
     AgentSessionStarted {
@@ -471,20 +487,46 @@ pub enum DurableEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         message: Option<ChatMessageSummary>,
     },
+    /// Conversation-only reaction aggregate update (no account fanout / rail unread).
+    ConversationMessageReactionUpdated {
+        conversation_id: String,
+        message_id: String,
+        emoji: String,
+        /// `"add"` | `"remove"` — animation hint only; not authoritative state.
+        action: String,
+        actor: crate::SenderRef,
+        at_ms: i64,
+        /// AUTHORITATIVE full aggregate for `message_id` (viewer-neutral wire shape;
+        /// clients resolve `reacted_by_me` from actors when needed).
+        reactions: Vec<crate::ReactionGroup>,
+    },
+    /// Account-topic T2 digest for inbox/rail (no full body / reactions).
+    /// Full [`ChatMessageSummary`] lives only on `ConversationMessageAppended`.
     AccountConversationMessageAppended {
         account_id: String,
         conversation_id: String,
         message_id: String,
         sender: SenderRef,
         at_ms: i64,
-        message: ChatMessageSummary,
+        /// Truncated text for preview / push (not full message body).
+        preview: String,
+        sender_display_name: String,
+        /// True when `account_id` is among the message's mentioned accounts.
+        mentioned: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_seq: Option<i64>,
     },
+    /// Account-topic T2 recall digest for inbox/rail.
     AccountConversationMessageRecalled {
         account_id: String,
         conversation_id: String,
         message_id: String,
         at_ms: i64,
-        message: ChatMessageSummary,
+        /// Short rail label (e.g. "Message recalled"); optional for older rows.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        preview: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_seq: Option<i64>,
     },
     ProjectConversationLinked {
         project_id: String,
@@ -535,6 +577,7 @@ impl DurableEvent {
             Self::AccountPasswordChanged { .. } => "account_password_changed",
             Self::HostLinked { .. } => "host_linked",
             Self::HostUnlinked { .. } => "host_unlinked",
+            Self::FriendRequestUpdated { .. } => "friend_request_updated",
             Self::AgentSessionStarted { .. } => "agent_session_started",
             Self::AgentSessionEnded { .. } => "agent_session_ended",
             Self::AgentTurnAppended { .. } => "agent_turn_appended",
@@ -542,6 +585,9 @@ impl DurableEvent {
             Self::ApprovalResolved { .. } => "approval_resolved",
             Self::ConversationMessageAppended { .. } => "conversation_message_appended",
             Self::ConversationMessageRecalled { .. } => "conversation_message_recalled",
+            Self::ConversationMessageReactionUpdated { .. } => {
+                "conversation_message_reaction_updated"
+            }
             Self::AccountConversationMessageAppended { .. } => {
                 "account_conversation_message_appended"
             }
@@ -561,7 +607,10 @@ impl DurableEvent {
             Self::AccountRegistered { account_id, .. }
             | Self::AccountPasswordChanged { account_id, .. }
             | Self::HostLinked { account_id, .. }
-            | Self::HostUnlinked { account_id, .. } => RealtimeTopic::Account(account_id.clone()),
+            | Self::HostUnlinked { account_id, .. }
+            | Self::FriendRequestUpdated { account_id, .. } => {
+                RealtimeTopic::Account(account_id.clone())
+            }
             Self::AgentSessionStarted { session_id, .. }
             | Self::AgentSessionEnded { session_id, .. }
             | Self::AgentTurnAppended { session_id, .. }
@@ -573,6 +622,9 @@ impl DurableEvent {
                 conversation_id, ..
             }
             | Self::ConversationMessageRecalled {
+                conversation_id, ..
+            }
+            | Self::ConversationMessageReactionUpdated {
                 conversation_id, ..
             } => RealtimeTopic::Conversation(conversation_id.clone()),
             Self::AccountConversationMessageAppended { account_id, .. }
@@ -635,6 +687,69 @@ mod tests {
         let json = serde_json::to_string(&frame).unwrap();
         let back: ServerFrame = serde_json::from_str(&json).unwrap();
         assert_eq!(frame, back);
+    }
+
+    #[test]
+    fn account_conversation_message_appended_is_thin_digest() {
+        let event = DurableEvent::AccountConversationMessageAppended {
+            account_id: "acc-1".into(),
+            conversation_id: "conv-1".into(),
+            message_id: "msg-1".into(),
+            sender: SenderRef::User {
+                account_id: "other".into(),
+            },
+            at_ms: 1_700_000_000_000,
+            preview: "hello preview".into(),
+            sender_display_name: "Other".into(),
+            mentioned: true,
+            message_seq: Some(42),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["kind"], "account_conversation_message_appended");
+        assert_eq!(json["preview"], "hello preview");
+        assert_eq!(json["sender_display_name"], "Other");
+        assert_eq!(json["mentioned"], true);
+        assert_eq!(json["message_seq"], 42);
+        // Must not carry full ChatMessageSummary nest.
+        assert!(json.get("message").is_none());
+        let back: DurableEvent = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            back.event_kind_str(),
+            "account_conversation_message_appended"
+        );
+        assert_eq!(back.topic(), RealtimeTopic::Account("acc-1".into()));
+    }
+
+    #[test]
+    fn conversation_message_appended_still_carries_optional_full_message() {
+        let event = DurableEvent::ConversationMessageAppended {
+            conversation_id: "conv-1".into(),
+            message_id: "msg-1".into(),
+            sender: SenderRef::User {
+                account_id: "other".into(),
+            },
+            at_ms: 1,
+            message: Some(ChatMessageSummary {
+                message_id: "msg-1".into(),
+                conversation_id: "conv-1".into(),
+                sender: crate::UserSummary {
+                    account_id: "other".into(),
+                    minos_id: "o".into(),
+                    display_name: "Other".into(),
+                },
+                text: "full body".into(),
+                created_at_ms: 1,
+                message_seq: 1,
+                reply_to: None,
+                recalled_at_ms: None,
+                mentioned_account_ids: vec![],
+                sender_type: crate::SenderType::User,
+                reactions: vec![],
+                attachments: vec![],
+            }),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["message"]["text"], "full body");
     }
 
     #[test]

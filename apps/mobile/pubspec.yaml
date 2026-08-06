@@ -92,7 +92,9 @@ dev_dependencies:
   # freezed / build_runner produce the `*.freezed.dart` part files the
   # generated API references. These are only needed at codegen time.
   build_runner: ^2.4.0
-  freezed: ^3.2.0
+  # Pin stable freezed: 3.2.6-dev.x breaks flutter_rust_bridge_codegen 2.12.0
+  # dep checks (InvalidDep: freezed version >=1.0.0).
+  freezed: 3.2.5
   mocktail: ^1.0.5
   riverpod_generator: ^4.0.3
   riverpod_lint: ^3.1.0

@@ -456,8 +456,16 @@ export const daemonApi = {
     }),
   deleteAgentProfile: (id: string) =>
     call<void>("daemon_delete_agent_profile", { id }),
-  sendUserMessage: (sessionId: string, text: string) =>
-    call<void>("daemon_send_user_message", { sessionId, text }),
+  sendUserMessage: (
+    sessionId: string,
+    text: string,
+    originMessageId?: string | null,
+  ) =>
+    call<void>("daemon_send_user_message", {
+      sessionId,
+      text,
+      originMessageId: originMessageId ?? null,
+    }),
   resumeSession: (sessionId: string, autoContinue = false) =>
     call<void>("daemon_resume_session", {
       sessionId,

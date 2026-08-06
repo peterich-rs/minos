@@ -216,6 +216,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   UserSummary dco_decode_box_autoadd_user_summary(dynamic raw);
 
   @protected
+  ChatMessageAttachment dco_decode_chat_message_attachment(dynamic raw);
+
+  @protected
   ChatMessageReplySummary dco_decode_chat_message_reply_summary(dynamic raw);
 
   @protected
@@ -326,6 +329,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ListAgentsResponse dco_decode_list_agents_response(dynamic raw);
 
   @protected
+  List<ChatMessageAttachment> dco_decode_list_chat_message_attachment(
+    dynamic raw,
+  );
+
+  @protected
   List<ChatMessageSummary> dco_decode_list_chat_message_summary(dynamic raw);
 
   @protected
@@ -388,6 +396,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ListProjectsResponse dco_decode_list_projects_response(dynamic raw);
+
+  @protected
+  List<ReactionActor> dco_decode_list_reaction_actor(dynamic raw);
+
+  @protected
+  List<ReactionGroup> dco_decode_list_reaction_group(dynamic raw);
 
   @protected
   List<RequestTraceRecord> dco_decode_list_request_trace_record(dynamic raw);
@@ -460,6 +474,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ProjectSummary dco_decode_project_summary(dynamic raw);
 
   @protected
+  ReactionActor dco_decode_reaction_actor(dynamic raw);
+
+  @protected
+  ReactionGroup dco_decode_reaction_group(dynamic raw);
+
+  @protected
   ReadSessionParams dco_decode_read_session_params(dynamic raw);
 
   @protected
@@ -485,6 +505,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SubagentStatus dco_decode_subagent_status(dynamic raw);
+
+  @protected
+  ToggleReactionResponse dco_decode_toggle_reaction_response(dynamic raw);
 
   @protected
   int dco_decode_u_16(dynamic raw);
@@ -717,6 +740,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   UserSummary sse_decode_box_autoadd_user_summary(SseDeserializer deserializer);
 
   @protected
+  ChatMessageAttachment sse_decode_chat_message_attachment(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   ChatMessageReplySummary sse_decode_chat_message_reply_summary(
     SseDeserializer deserializer,
   );
@@ -859,6 +887,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<ChatMessageAttachment> sse_decode_list_chat_message_attachment(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<ChatMessageSummary> sse_decode_list_chat_message_summary(
     SseDeserializer deserializer,
   );
@@ -941,6 +974,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ListProjectsResponse sse_decode_list_projects_response(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<ReactionActor> sse_decode_list_reaction_actor(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<ReactionGroup> sse_decode_list_reaction_group(
     SseDeserializer deserializer,
   );
 
@@ -1037,6 +1080,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ProjectSummary sse_decode_project_summary(SseDeserializer deserializer);
 
   @protected
+  ReactionActor sse_decode_reaction_actor(SseDeserializer deserializer);
+
+  @protected
+  ReactionGroup sse_decode_reaction_group(SseDeserializer deserializer);
+
+  @protected
   ReadSessionParams sse_decode_read_session_params(
     SseDeserializer deserializer,
   );
@@ -1072,6 +1121,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SubagentStatus sse_decode_subagent_status(SseDeserializer deserializer);
+
+  @protected
+  ToggleReactionResponse sse_decode_toggle_reaction_response(
+    SseDeserializer deserializer,
+  );
 
   @protected
   int sse_decode_u_16(SseDeserializer deserializer);
@@ -1360,6 +1414,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_chat_message_attachment(
+    ChatMessageAttachment self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_chat_message_reply_summary(
     ChatMessageReplySummary self,
     SseSerializer serializer,
@@ -1547,6 +1607,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_chat_message_attachment(
+    List<ChatMessageAttachment> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_chat_message_summary(
     List<ChatMessageSummary> self,
     SseSerializer serializer,
@@ -1651,6 +1717,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_projects_response(
     ListProjectsResponse self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_reaction_actor(
+    List<ReactionActor> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_reaction_group(
+    List<ReactionGroup> self,
     SseSerializer serializer,
   );
 
@@ -1766,6 +1844,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_reaction_actor(ReactionActor self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_reaction_group(ReactionGroup self, SseSerializer serializer);
+
+  @protected
   void sse_encode_read_session_params(
     ReadSessionParams self,
     SseSerializer serializer,
@@ -1813,6 +1897,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_subagent_status(
     SubagentStatus self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_toggle_reaction_response(
+    ToggleReactionResponse self,
     SseSerializer serializer,
   );
 

@@ -208,6 +208,7 @@ pub struct ExternalSqlPreflight {
 }
 
 pub mod accounts;
+pub mod agent_dispatch_queue;
 pub mod agent_sessions;
 pub mod agent_turn_events;
 pub mod agent_turns;
@@ -217,10 +218,13 @@ pub mod durable_event_log;
 pub mod host_commands;
 pub mod host_installation_tokens;
 pub mod host_links;
+pub mod media_blobs;
+pub mod message_attachments;
 pub mod notification_cooldowns;
 pub mod notification_preferences;
 pub mod outbox_events;
 pub mod projects;
+pub mod push_dispatch_log;
 pub mod push_tokens;
 pub mod raw_events;
 pub mod refresh_tokens;

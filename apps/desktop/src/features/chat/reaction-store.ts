@@ -1,17 +1,16 @@
 /**
- * Desktop message reactions (local-device store).
+ * Desktop message reactions.
  *
- * ## Phase 5.2 — no multi-end reaction SSOT
- *
- * Hub has **no** cloud reaction API yet (`POST …/reactions/toggle` not shipped).
- * Linked Hub chat bubbles must **not** dual-write reactions or pretend cross-device
- * sync: toggles persist only via local daemon SQLite for Host-local message ids.
- * When a Hub reaction API lands, Linked conversations should switch to Hub and
- * retire local aggregates for those message ids (latest-only, no dual SSOT).
+ * - Hub IM mode + Hub message ids → cloud `POST …/reactions/toggle` only
+ * - Local workbench / local message ids → daemon LocalReaction* path
+ * Never dual-write Hub + daemon for the same bubble.
  */
 import { create } from "zustand";
 import { daemonApi, isTauriRuntime } from "@/shared/lib/daemon";
 import { toast } from "@/shared/lib/toast";
+import { isHubImMode } from "@/shared/lib/hub-timeline";
+import { syncReactionToggleToCloud } from "@/shared/lib/im-cloud-sync";
+import { useAccountStore } from "@/store/account-store";
 import {
   hasInFlightToggleCount,
   hydrateReactionsFromMessages,
@@ -22,6 +21,13 @@ import {
   type ReactionGroup,
 } from "./lib/reactions";
 import { seedReactionsByMessageId } from "./lib/reaction-seed";
+
+function newReactionClientOpId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `react-${crypto.randomUUID()}`;
+  }
+  return `react-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 type ReactionState = {
   /**
@@ -67,11 +73,14 @@ type ReactionState = {
   ) => void;
   /**
    * Toggle emoji for the current user.
-   * Optimistic update; when durableMode + Tauri, persists via **local daemon**
-   * RPC only (not Hub). Multi-end reaction SSOT is deferred until cloud API.
+   * Hub IM mode → Hub toggle (aggregate SSOT); else local daemon when durable.
    * Apply/rollback are generation-gated so only the latest toggle wins.
    */
-  toggleReaction: (messageId: string, emoji: string) => void;
+  toggleReaction: (
+    messageId: string,
+    emoji: string,
+    conversationId?: string,
+  ) => void;
   /** Replace groups for a message (e.g. hydrate from fixture). */
   setReactions: (messageId: string, groups: ReactionGroup[]) => void;
   /** Read groups; empty array when none. */
@@ -163,9 +172,20 @@ export const useReactionStore = create<ReactionState>((set, get) => ({
     }));
   },
 
-  toggleReaction: (messageId, emoji) => {
+  toggleReaction: (messageId, emoji, conversationId) => {
     const prev = get().getReactions(messageId);
     const optimistic = toggleReactionGroup(prev, emoji);
+
+    const { session, authPhase } = useAccountStore.getState();
+    const hubMode = isHubImMode({
+      authPhase,
+      accessToken: session?.accessToken,
+    });
+    // Hub message ids are typically UUIDs from cloud; prefer Hub when auth + cid.
+    const useHub =
+      hubMode &&
+      Boolean(session?.accessToken) &&
+      Boolean(conversationId?.trim());
 
     let requestGen = 0;
     set((s) => {
@@ -175,7 +195,7 @@ export const useReactionStore = create<ReactionState>((set, get) => ({
         [messageId]: requestGen,
       };
       const inFlightCountByMessageId = { ...s.inFlightCountByMessageId };
-      if (s.durableMode && isTauriRuntime()) {
+      if (useHub || (s.durableMode && isTauriRuntime())) {
         inFlightCountByMessageId[messageId] =
           (inFlightCountByMessageId[messageId] ?? 0) + 1;
       }
@@ -190,18 +210,70 @@ export const useReactionStore = create<ReactionState>((set, get) => ({
       };
     });
 
-    if (!get().durableMode || !isTauriRuntime()) {
+    if (!useHub && (!get().durableMode || !isTauriRuntime())) {
       return;
     }
 
     void (async () => {
       try {
-        const result = await daemonApi.toggleMessageReaction(messageId, emoji);
-        const currentGen = get().toggleGenByMessageId[messageId] ?? 0;
-        if (shouldApplyToggleResponse(requestGen, currentGen)) {
-          get().applyServerReactions(messageId, result.reactions ?? [], {
-            force: true,
-          });
+        if (useHub && conversationId && session?.accessToken) {
+          // C5.1 single path: enqueue → flush via outbox (same machine as
+          // user_message). No parallel inline POST.
+          const clientOpId = newReactionClientOpId();
+          try {
+            const result = await syncReactionToggleToCloud({
+              conversationId,
+              messageId,
+              emoji,
+              clientOpId,
+            });
+            const currentGen = get().toggleGenByMessageId[messageId] ?? 0;
+            if (
+              result &&
+              shouldApplyToggleResponse(requestGen, currentGen)
+            ) {
+              // Aggregate only — ignore `action` for state.
+              get().applyServerReactions(
+                messageId,
+                result.reactions.map((g) => ({
+                  emoji: g.emoji,
+                  count: g.count,
+                  reactedByMe: g.reactedByMe,
+                  actors: g.actors.map((a) => ({
+                    id: a.actorId,
+                    displayName: a.displayName,
+                  })),
+                })),
+                { force: true },
+              );
+            }
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            // Transient: leave optimistic UI; worker retries same client_op_id.
+            // Permanent: roll back if still latest gen.
+            const permanent =
+              /invalid|forbidden|unauthorized|not found|http 4|status: 4|\b4\d\d\b/i.test(
+                msg,
+              ) && !/408|429|timeout|too many/i.test(msg);
+            if (permanent) {
+              const currentGen = get().toggleGenByMessageId[messageId] ?? 0;
+              if (shouldApplyToggleResponse(requestGen, currentGen)) {
+                get().applyServerReactions(messageId, prev, { force: true });
+                toast.error("Couldn't update reaction", msg);
+              }
+            }
+          }
+        } else {
+          const result = await daemonApi.toggleMessageReaction(
+            messageId,
+            emoji,
+          );
+          const currentGen = get().toggleGenByMessageId[messageId] ?? 0;
+          if (shouldApplyToggleResponse(requestGen, currentGen)) {
+            get().applyServerReactions(messageId, result.reactions ?? [], {
+              force: true,
+            });
+          }
         }
       } catch (e) {
         const currentGen = get().toggleGenByMessageId[messageId] ?? 0;

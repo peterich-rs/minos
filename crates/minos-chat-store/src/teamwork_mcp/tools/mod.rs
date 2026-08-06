@@ -5,6 +5,7 @@ mod list_conversation_messages;
 mod list_conversation_roster;
 mod post_conversation_update;
 mod post_git_update;
+mod react_to_message;
 mod wait_delegation;
 
 use anyhow::{Context, Result};
@@ -22,6 +23,7 @@ pub use list_conversation_messages::ListConversationMessagesTool;
 pub use list_conversation_roster::ListConversationRosterTool;
 pub use post_conversation_update::PostConversationUpdateTool;
 pub use post_git_update::PostGitUpdateTool;
+pub use react_to_message::ReactToMessageTool;
 pub use wait_delegation::WaitDelegationTool;
 
 pub trait TeamworkMcpTool: Send + Sync {

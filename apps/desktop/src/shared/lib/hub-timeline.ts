@@ -1,8 +1,13 @@
 /**
- * Hub conversation messages → Desktop TimelineMessage projection (Phase 3).
+ * Hub conversation messages → Desktop TimelineMessage projection.
  *
  * Linked mode: Hub bubbles are the primary chat SSOT projection.
  * Local daemon tool/git/system cards are merged separately by the timeline loader.
+ *
+ * Agent final bubble id (frozen, IM reliability):
+ *   agent-result:{conversationId}:{sessionId}:{originMessageId}
+ * Merge is by **message id equality** only — no body/time soft-dedupe, no
+ * fuzzy `*:sessionId` keys.
  */
 
 import type { AgentRuntime, TimelineMessage } from "./mock-data.ts";
@@ -59,6 +64,21 @@ export function hubChatMessageToTimeline(
     agent = (fromMap as AgentRuntime | null) ?? runtimeFromHubAgent(message);
   }
 
+  // Preserve explicit empty array so merge treats Hub "no reactions" as SSOT
+  // (do not collapse [] → undefined and fall back to stale local).
+  const reactions =
+    message.reactions === undefined
+      ? undefined
+      : message.reactions.map((g) => ({
+          emoji: g.emoji,
+          count: g.count,
+          reactedByMe: g.reactedByMe,
+          actors: (g.actors ?? []).map((a) => ({
+            id: a.actorId,
+            displayName: a.displayName,
+          })),
+        }));
+
   return {
     id: message.messageId,
     role: message.senderType === "agent" ? "agent" : "user",
@@ -66,9 +86,15 @@ export function hubChatMessageToTimeline(
     body: text,
     time: formatLocalClock(message.createdAtMs),
     createdAtMs: message.createdAtMs,
+    // Missing message_seq stays undefined — never coerce to 0.
+    messageSeq:
+      message.messageSeq != null && Number.isFinite(message.messageSeq)
+        ? message.messageSeq
+        : undefined,
     kind: "text",
     replyToMessageId: message.replyToMessageId ?? undefined,
     deliveryStatus: "sent",
+    reactions,
   };
 }
 
@@ -105,12 +131,8 @@ export function isLocalChatBubbleForHubSsot(m: TimelineMessage): boolean {
 }
 
 /**
- * Session correlation key for `agent-result:{conversationId}:{sessionId}:{durable}`.
- *
- * Hub TurnCompletionProjector uses `…:{trigger_seq}` while daemon
- * conversation_completion uses `…:{message_key|t{ms}}` — different durable
- * suffixes for the **same turn**. Merging without this key produces duplicate
- * Grok rows (one plain + one with reply-to preview).
+ * Session correlation key for `agent-result:{conversationId}:{sessionId}:{origin}`.
+ * Used for diagnostics / projection helpers — **not** for soft-dedupe merge.
  */
 export function agentResultSessionKey(messageId: string): string | null {
   if (!messageId.startsWith("agent-result:")) return null;
@@ -119,7 +141,7 @@ export function agentResultSessionKey(messageId: string): string | null {
   if (first <= 0) return null;
   const second = rest.indexOf(":", first + 1);
   if (second <= first + 1) return null;
-  // conversationId:sessionId (ignore durable suffix)
+  // conversationId:sessionId (ignore origin suffix)
   return rest.slice(0, second);
 }
 
@@ -133,22 +155,21 @@ export function sessionIdFromAgentResultId(messageId: string): string | null {
   return sessionId || null;
 }
 
-function isAgentChatBubble(m: TimelineMessage): boolean {
-  return m.role === "agent" || m.id.startsWith("agent-result:");
+function isOptimisticLocalBubble(m: TimelineMessage): boolean {
+  return m.deliveryStatus === "sending" || m.deliveryStatus === "failed";
 }
 
 /**
  * Merge Hub chat bubbles with local non-bubble cards (tool/git/system).
  *
- * Rules:
+ * Rules (C2 final):
  * - Hub wins on **same message id** for chat bubbles (multi-end SSOT).
  * - Local tool/git/system/approval cards always keep.
- * - Local chat bubbles **missing from Hub** are gap-filled:
- *   Desktop native agent-result rows, optimistic user sends, and any
- *   host-local user rows not yet projected — otherwise Linked merge
- *   would hide agent replies while the session inspector shows Idle+reply.
- * - Local `agent-result:…` is **not** gap-filled when Hub already has any
- *   agent-result for the same conversation+session (id durable suffix differs).
+ * - Local chat bubbles **missing from Hub** are gap-filled only when:
+ *   - optimistic send (`sending` / `failed`), or
+ *   - local user row (host_projection lag: daemon sent, Hub outbox pending), or
+ *   - local `agent-result:…` not yet on Hub (same id space; no body soft-dedupe).
+ * - Bare non-canonical agent rows without Hub id are dropped (no dual SSOT ghosts).
  */
 export function mergeHubAndLocalTimeline(input: {
   hubMessages: TimelineMessage[];
@@ -162,75 +183,46 @@ export function mergeHubAndLocalTimeline(input: {
     byId.set(m.id, m);
   }
 
-  // Hub session keys already represented by multi-end agent bubbles.
-  const hubAgentSessions = new Set<string>();
-  for (const m of input.hubMessages) {
-    if (!isAgentChatBubble(m)) continue;
-    const key = agentResultSessionKey(m.id);
-    if (key) hubAgentSessions.add(key);
-    // Also correlate by explicit sessionId when id is not agent-result-shaped.
-    if (m.sessionId?.trim()) {
-      // Use empty conversation prefix only when id lacks agent-result shape;
-      // prefer full agent-result key when available.
-      if (!key) {
-        hubAgentSessions.add(`*:${m.sessionId.trim()}`);
-      }
-    }
-  }
-
   // Hub bubbles are authoritative when present; keep local messageSeq so sort
   // still works (Hub HTTP rows often omit host-local seq).
+  // Reactions: Hub defined (incl. []) wins; only fall back when Hub omits field.
   for (const m of input.hubMessages) {
     const localPeer = input.localMessages.find((l) => l.id === m.id);
-    if (localPeer?.messageSeq != null && m.messageSeq == null) {
-      byId.set(m.id, { ...m, messageSeq: localPeer.messageSeq });
-    } else {
-      byId.set(m.id, m);
-    }
+    const reactions =
+      m.reactions !== undefined ? m.reactions : localPeer?.reactions;
+    const messageSeq =
+      m.messageSeq != null
+        ? m.messageSeq
+        : localPeer?.messageSeq != null
+          ? localPeer.messageSeq
+          : undefined;
+    byId.set(m.id, { ...m, messageSeq, reactions });
   }
 
   // Gap-fill local chat not yet on Hub (same id → already covered above).
   for (const m of input.localMessages) {
     if (!isLocalChatBubbleForHubSsot(m)) continue;
     if (byId.has(m.id)) {
-      // Same id already from Hub: ensure seq retained if Hub lacked it.
+      // Same id already from Hub: fill seq only; never overwrite Hub reactions
+      // (including explicit empty) with stale local.
       const cur = byId.get(m.id)!;
       if (cur.messageSeq == null && m.messageSeq != null) {
         byId.set(m.id, { ...cur, messageSeq: m.messageSeq });
       }
+      if (cur.reactions === undefined && m.reactions !== undefined) {
+        byId.set(m.id, {
+          ...byId.get(m.id)!,
+          reactions: m.reactions,
+        });
+      }
       continue;
     }
 
-    // Suppress local agent-result siblings when Hub already has the turn.
-    if (isAgentChatBubble(m)) {
-      const sessionKey = agentResultSessionKey(m.id);
-      if (sessionKey && hubAgentSessions.has(sessionKey)) {
-        continue;
-      }
-      if (m.sessionId?.trim() && hubAgentSessions.has(`*:${m.sessionId.trim()}`)) {
-        continue;
-      }
-      // Body+time soft dedupe: Hub agent with same text within 2 minutes.
-      const body = (m.body ?? "").trim();
-      if (body) {
-        const localMs = m.createdAtMs ?? 0;
-        const hubDup = input.hubMessages.some((h) => {
-          if (!isAgentChatBubble(h)) return false;
-          if ((h.body ?? "").trim() !== body) return false;
-          if (!localMs || !h.createdAtMs) return true;
-          return Math.abs(h.createdAtMs - localMs) <= 120_000;
-        });
-        if (hubDup) continue;
-      }
-    }
-
-    // User optimistic / not-yet-synced; agent-result from daemon completion
-    // when Hub projector has not posted yet (Desktop-native turns).
-    if (
+    const keep =
+      isOptimisticLocalBubble(m) ||
       m.role === "user" ||
-      m.role === "agent" ||
-      m.id.startsWith("agent-result:")
-    ) {
+      m.id.startsWith("agent-result:");
+    if (keep) {
       byId.set(m.id, m);
     }
   }
@@ -256,31 +248,7 @@ export function upsertHubMessageIntoTimeline(
     return list;
   }
 
-  // Hub agent-result for a session supersedes local siblings (different durable id).
-  if (isAgentChatBubble(hub)) {
-    const hubSession = agentResultSessionKey(hub.id);
-    const hubSessionId = hub.sessionId?.trim() || sessionIdFromAgentResultId(hub.id);
-    for (const [id, m] of [...byId.entries()]) {
-      if (id === hub.id) continue;
-      if (!isAgentChatBubble(m)) continue;
-      const localSession = agentResultSessionKey(id);
-      if (hubSession && localSession && hubSession === localSession) {
-        byId.delete(id);
-        continue;
-      }
-      if (
-        hubSessionId &&
-        (m.sessionId?.trim() === hubSessionId ||
-          sessionIdFromAgentResultId(id) === hubSessionId)
-      ) {
-        // Prefer Hub row; drop local agent-result for same session.
-        if (id.startsWith("agent-result:") && id !== hub.id) {
-          byId.delete(id);
-        }
-      }
-    }
-  }
-
+  // Same-id supersede only (canonical agent-result ids — no session soft drop).
   byId.set(hub.id, hub);
   return sortTimelineMessages([...byId.values()]);
 }

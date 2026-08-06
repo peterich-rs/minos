@@ -40,6 +40,8 @@ pub struct ApprovalRequestRow {
     pub created_at_ms: i64,
     pub resolved_at_ms: Option<i64>,
     pub resolution_json: Option<Value>,
+    /// Client Intent Outbox id when respond carried `client_request_id` (C5.3).
+    pub client_request_id: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -111,7 +113,7 @@ pub async fn get(
         StorePoolRef::Sqlite(pool) => sqlx::query_as::<_, ApprovalRequestDbRow>(
             "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_installation_id, t.owner_device_id), ar.method,
                         ar.params_json, ar.state, ar.deadline_at_ms, ar.created_at_ms,
-                        ar.resolved_at_ms, ar.resolution_json
+                        ar.resolved_at_ms, ar.resolution_json, ar.client_request_id
                    FROM approval_requests ar
                    LEFT JOIN agent_sessions s
                      ON s.session_id = ar.agent_session_id
@@ -126,7 +128,8 @@ pub async fn get(
             sqlx::query_as::<_, ApprovalRequestDbRow>(
                 "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_installation_id,
                         ar.method, ar.params_json::text, ar.state::text, ar.deadline_at_ms,
-                        ar.created_at_ms, ar.resolved_at_ms, ar.resolution_json::text
+                        ar.created_at_ms, ar.resolved_at_ms, ar.resolution_json::text,
+                        ar.client_request_id
                    FROM approval_requests ar
                    JOIN agent_sessions s
                      ON s.session_id = ar.agent_session_id
@@ -142,12 +145,78 @@ pub async fn get(
     row.map(decode_row).transpose()
 }
 
+/// Lookup by client Intent Outbox id (C5.3 respond idempotency).
+pub async fn get_by_client_request_id(
+    store: &impl AsStorePool,
+    client_request_id: &str,
+) -> Result<Option<ApprovalRequestRow>, BackendError> {
+    let client_request_id = client_request_id.trim();
+    if client_request_id.is_empty() {
+        return Ok(None);
+    }
+    let row = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query_as::<_, ApprovalRequestDbRow>(
+            "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_installation_id, t.owner_device_id), ar.method,
+                        ar.params_json, ar.state, ar.deadline_at_ms, ar.created_at_ms,
+                        ar.resolved_at_ms, ar.resolution_json, ar.client_request_id
+                   FROM approval_requests ar
+                   LEFT JOIN agent_sessions s
+                     ON s.session_id = ar.agent_session_id
+                   LEFT JOIN sessions t
+                     ON t.session_id = ar.agent_session_id
+                  WHERE ar.client_request_id = ?",
+        )
+        .bind(client_request_id)
+        .fetch_optional(pool)
+        .await,
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, ApprovalRequestDbRow>(
+                "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_installation_id,
+                        ar.method, ar.params_json::text, ar.state::text, ar.deadline_at_ms,
+                        ar.created_at_ms, ar.resolved_at_ms, ar.resolution_json::text,
+                        ar.client_request_id
+                   FROM approval_requests ar
+                   JOIN agent_sessions s
+                     ON s.session_id = ar.agent_session_id
+                  WHERE ar.client_request_id = $1",
+            )
+            .bind(client_request_id)
+            .fetch_optional(pool)
+            .await
+        }
+    }
+    .map_err(store_err("approval_requests::get_by_client_request_id"))?;
+
+    row.map(decode_row).transpose()
+}
+
 pub async fn resolve(
     store: &impl AsStorePool,
     request_id: &str,
     state: ApprovalRequestState,
     resolved_at_ms: i64,
     resolution_json: Option<&Value>,
+) -> Result<bool, BackendError> {
+    resolve_with_client_request_id(
+        store,
+        request_id,
+        state,
+        resolved_at_ms,
+        resolution_json,
+        None,
+    )
+    .await
+}
+
+/// Resolve a pending approval, optionally stamping `client_request_id` for
+/// respond idempotency (C5.3).
+pub async fn resolve_with_client_request_id(
+    store: &impl AsStorePool,
+    request_id: &str,
+    state: ApprovalRequestState,
+    resolved_at_ms: i64,
+    resolution_json: Option<&Value>,
+    client_request_id: Option<&str>,
 ) -> Result<bool, BackendError> {
     let resolution_json = resolution_json
         .map(serde_json::to_string)
@@ -156,17 +225,20 @@ pub async fn resolve(
             operation: "approval_requests::resolve.serialize".into(),
             message: error.to_string(),
         })?;
+    let client_request_id = client_request_id.map(str::trim).filter(|s| !s.is_empty());
 
     let rows_affected = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query(
             "UPDATE approval_requests
-                    SET state = ?, resolved_at_ms = ?, resolution_json = ?
+                    SET state = ?, resolved_at_ms = ?, resolution_json = ?,
+                        client_request_id = COALESCE(?, client_request_id)
                   WHERE request_id = ?
                     AND state = ?",
         )
         .bind(state.as_str())
         .bind(resolved_at_ms)
         .bind(resolution_json.as_deref())
+        .bind(client_request_id)
         .bind(request_id)
         .bind(ApprovalRequestState::Pending.as_str())
         .execute(pool)
@@ -174,13 +246,15 @@ pub async fn resolve(
         .map(|result| result.rows_affected()),
         StorePoolRef::Postgres(pool) => sqlx::query(
             "UPDATE approval_requests
-                    SET state = $1::approval_state, resolved_at_ms = $2, resolution_json = $3::jsonb
-                  WHERE request_id = $4
+                    SET state = $1::approval_state, resolved_at_ms = $2, resolution_json = $3::jsonb,
+                        client_request_id = COALESCE($4, client_request_id)
+                  WHERE request_id = $5
                     AND state = 'pending'::approval_state",
         )
         .bind(state.as_str())
         .bind(resolved_at_ms)
         .bind(resolution_json.as_deref())
+        .bind(client_request_id)
         .bind(request_id)
         .execute(pool)
         .await
@@ -200,7 +274,7 @@ pub async fn list_expired_pending(
         StorePoolRef::Sqlite(pool) => sqlx::query_as::<_, ApprovalRequestDbRow>(
             "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_installation_id, t.owner_device_id), ar.method,
                         ar.params_json, ar.state, ar.deadline_at_ms, ar.created_at_ms,
-                        ar.resolved_at_ms, ar.resolution_json
+                        ar.resolved_at_ms, ar.resolution_json, ar.client_request_id
                    FROM approval_requests ar
                    LEFT JOIN agent_sessions s
                      ON s.session_id = ar.agent_session_id
@@ -220,7 +294,8 @@ pub async fn list_expired_pending(
             sqlx::query_as::<_, ApprovalRequestDbRow>(
                 "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_installation_id,
                         ar.method, ar.params_json::text, ar.state::text, ar.deadline_at_ms,
-                        ar.created_at_ms, ar.resolved_at_ms, ar.resolution_json::text
+                        ar.created_at_ms, ar.resolved_at_ms, ar.resolution_json::text,
+                        ar.client_request_id
                    FROM approval_requests ar
                    JOIN agent_sessions s
                      ON s.session_id = ar.agent_session_id
@@ -280,7 +355,7 @@ pub async fn list_pending_for_hosts(
             let mut builder = QueryBuilder::<Sqlite>::new(
                 "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, COALESCE(s.host_installation_id, t.owner_device_id), ar.method,
                         ar.params_json, ar.state, ar.deadline_at_ms, ar.created_at_ms,
-                        ar.resolved_at_ms, ar.resolution_json
+                        ar.resolved_at_ms, ar.resolution_json, ar.client_request_id
                    FROM approval_requests ar
                    LEFT JOIN agent_sessions s
                      ON s.session_id = ar.agent_session_id
@@ -307,7 +382,8 @@ pub async fn list_pending_for_hosts(
             let mut builder = QueryBuilder::<Postgres>::new(
                 "SELECT ar.request_id, ar.agent_session_id, ar.turn_id, s.host_installation_id,
                         ar.method, ar.params_json::text, ar.state::text, ar.deadline_at_ms,
-                        ar.created_at_ms, ar.resolved_at_ms, ar.resolution_json::text
+                        ar.created_at_ms, ar.resolved_at_ms, ar.resolution_json::text,
+                        ar.client_request_id
                    FROM approval_requests ar
                    JOIN agent_sessions s
                      ON s.session_id = ar.agent_session_id
@@ -345,6 +421,7 @@ type ApprovalRequestDbRow = (
     i64,
     Option<i64>,
     Option<String>,
+    Option<String>,
 );
 
 fn decode_row(row: ApprovalRequestDbRow) -> Result<ApprovalRequestRow, BackendError> {
@@ -360,6 +437,7 @@ fn decode_row(row: ApprovalRequestDbRow) -> Result<ApprovalRequestRow, BackendEr
         created_at_ms,
         resolved_at_ms,
         resolution_json,
+        client_request_id,
     ) = row;
 
     let host_device_id = host_device_id.ok_or_else(|| BackendError::StoreDecode {
@@ -396,6 +474,7 @@ fn decode_row(row: ApprovalRequestDbRow) -> Result<ApprovalRequestRow, BackendEr
                 })
             })
             .transpose()?,
+        client_request_id,
     })
 }
 
@@ -420,5 +499,129 @@ fn store_err(operation: &'static str) -> impl FnOnce(sqlx::Error) -> BackendErro
     move |error| BackendError::StoreQuery {
         operation: operation.into(),
         message: error.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::test_support::{insert_account, memory_pool, T0};
+    use serde_json::json;
+
+    async fn seed_pending(pool: &sqlx::SqlitePool, request_id: &str, session_id: &str) {
+        let account = insert_account(pool, &format!("approval-{request_id}@example.com")).await;
+        let conv = crate::store::social::create_group_conversation(
+            pool,
+            &account,
+            &format!("approval-{request_id}"),
+            &[],
+            T0,
+        )
+        .await
+        .unwrap();
+        let host = crate::store::test_support::insert_ios_device(pool, &account).await;
+        sqlx::query(
+            "INSERT INTO agent_sessions
+                (session_id, conversation_id, project_id, host_installation_id, agent_id, status, started_at_ms, ended_at_ms)
+             VALUES (?, ?, NULL, ?, NULL, 'running', ?, NULL)",
+        )
+        .bind(session_id)
+        .bind(&conv.conversation_id)
+        .bind(host.to_string())
+        .bind(T0)
+        .execute(pool)
+        .await
+        .unwrap();
+        insert_pending(
+            pool,
+            request_id,
+            session_id,
+            None,
+            "approval/request",
+            &json!({ "tool": "shell" }),
+            T0,
+            T0 + 60_000,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn resolve_stamps_client_request_id_and_lookup_is_idempotent() {
+        let pool = memory_pool().await;
+        seed_pending(&pool, "req-idem-1", "sess-idem-1").await;
+
+        let decision = json!({ "decision": "accept" });
+        let first = resolve_with_client_request_id(
+            &pool,
+            "req-idem-1",
+            ApprovalRequestState::Decided,
+            T0 + 1,
+            Some(&decision),
+            Some("client-op-same"),
+        )
+        .await
+        .unwrap();
+        assert!(first);
+
+        let by_cid = get_by_client_request_id(&pool, "client-op-same")
+            .await
+            .unwrap()
+            .expect("client_request_id stamped");
+        assert_eq!(by_cid.request_id, "req-idem-1");
+        assert_eq!(by_cid.state, ApprovalRequestState::Decided);
+        assert_eq!(by_cid.client_request_id.as_deref(), Some("client-op-same"));
+
+        // Second resolve on already-decided is a no-op (0 rows).
+        let second = resolve_with_client_request_id(
+            &pool,
+            "req-idem-1",
+            ApprovalRequestState::Decided,
+            T0 + 2,
+            Some(&decision),
+            Some("client-op-same"),
+        )
+        .await
+        .unwrap();
+        assert!(!second);
+
+        // Lookup still returns the same logical result (idempotent read).
+        let again = get_by_client_request_id(&pool, "client-op-same")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(again.request_id, "req-idem-1");
+        assert_eq!(again.resolved_at_ms, Some(T0 + 1));
+    }
+
+    #[tokio::test]
+    async fn different_requests_cannot_reuse_same_client_request_id() {
+        let pool = memory_pool().await;
+        seed_pending(&pool, "req-a", "sess-a").await;
+        seed_pending(&pool, "req-b", "sess-b").await;
+
+        let ok = resolve_with_client_request_id(
+            &pool,
+            "req-a",
+            ApprovalRequestState::Decided,
+            T0 + 1,
+            Some(&json!({"decision":"accept"})),
+            Some("shared-op"),
+        )
+        .await
+        .unwrap();
+        assert!(ok);
+
+        // Unique index on client_request_id: second stamp of same id fails.
+        let err = resolve_with_client_request_id(
+            &pool,
+            "req-b",
+            ApprovalRequestState::Decided,
+            T0 + 2,
+            Some(&json!({"decision":"accept"})),
+            Some("shared-op"),
+        )
+        .await;
+        assert!(err.is_err());
     }
 }

@@ -125,7 +125,17 @@ subagent 也是普通 thread，只是在 `SessionAdded` / `SessionSummary` / `Lo
 
 **Conversation 主时间线排序契约：** `chat_messages.message_seq`（SQLite rowid PK）是唯一排序键；list 按 `message_seq DESC` 分页，客户端 reverse 为 ASC 展示。`message_id` upsert 复用原 `message_seq`（body/metadata 可更新）。`created_at_ms` 仅展示。多 agent 完成顺序 = durable 落库顺序（finish/write order）；因果关系用 `reply_to_message_id` / `mentions` / `delegation_id` 表达（例如 MCP 委托 result 引用 request），不通过重排历史 seq。Agent 回合结果由 `conversation_completion` 在 turn boundary 写入 `agent-result:…`；subagent session 不写 conversation result。
 
-**多端 vs 本机：** 本地 `agent-result:…` 是 **Host 时间线 / 工作台** 权威（local-only 或 Linked 本机 tool/git 合并源）。**多端协作聊天气泡** 的 agent 终态由 Hub `TurnCompletionProjector` 单写者落 `conversation_messages`（Desktop Linked 读路径以 Hub 为主，过滤本地 agent-result 重复）。Daemon **不**负责把 agent-result dual-write 到 Hub；Desktop UI 也不再 project agent 气泡上云。
+**多端 vs 本机（双写者，按路径）：**
+
+| 路径 | 本地 `agent-result:…` | Hub 协作气泡 |
+|------|----------------------|--------------|
+| Local-only / 未 Link | Daemon 工作台 SSOT | 无 |
+| Mobile / `client_live` @agent | Host ingest 仍可写本地 workbench | **Hub TurnCompletionProjector**（per `origin_message_id`） |
+| Desktop-native Linked | Daemon 写本地 workbench（规范 id = `agent-result:{conv}:{session}:{origin}`） | Desktop Outbox **`host_projection`** 上行同一 id（Hub 不二次 dispatch） |
+
+- Daemon **不**在协议层 dual-write 到 Hub；**Desktop** 在 Linked 且 id 规范时仍可 `host_projection` uplink（`isCanonicalAgentResultId`）。  
+- Collab / Hub-bound session：**禁止** message_key / `t{ms}` 回退当 agent-result 后缀；缺 `origin_message_id` 时 skip 写（fail-visible），避免非规范 id 污染 Hub。  
+- Desktop Linked 读路径：Hub 气泡 SSOT + 本地 tool/git 合并；同 id Hub 优先。
 
 **Agent 终态正文（last segment）：** Grok/Gemini 等 ACP agent 常在同一 `message_id` 下用多段 `agent_message_chunk` 输出中间进度（「正在定位…」），工具/思考会把 session 时间线拆成多个气泡。`conversation_completion` 与 session `ChatState` 对齐：tool / reasoning / subagent 事件关闭当前文本 segment，turn 结束时只把**最后一个未关闭的 assistant 文本段**写入 conversation；不会把全过程进度日志与最终摘要拼接成一条。工具后若无新的最终文本，则不回写中间进度。显式 `post_conversation_update` 仍可单独追加中途状态条。 Hub projector 复用同一 last-segment 语义（`minos-ui-protocol` 翻译）。
 

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:minos/application/agent_profiles_provider.dart';
+import 'package:minos/application/im_outbox_worker.dart';
 import 'package:minos/application/minos_providers.dart';
 import 'package:minos/application/project_providers.dart';
 import 'package:minos/application/runtime_actions.dart';
@@ -70,6 +71,9 @@ class _MinosAppState extends ConsumerState<MinosApp>
         ..invalidate(hostSkillsProvider)
         ..invalidate(agentProfilesControllerProvider);
     });
+
+    // C6.2: App-root outbox worker bootstrap (cold start without Messages tab).
+    ref.watch(imOutboxBootstrapProvider);
 
     final router = ref.watch(routerProvider);
 

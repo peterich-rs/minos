@@ -68,6 +68,7 @@ async fn create_friend_request(
         .create_request(&account_id, &req.target_minos_id)
         .await
         .map_err(map_friend_error)?;
+    state.wake_outbox();
     Ok(Json(summary))
 }
 
@@ -115,6 +116,7 @@ async fn resolve_request(
         .resolve_request(&account_id, &request_id, status)
         .await
         .map_err(map_friend_error)?;
+    state.wake_outbox();
     Ok(Json(summary))
 }
 

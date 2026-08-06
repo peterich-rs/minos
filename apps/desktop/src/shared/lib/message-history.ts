@@ -21,8 +21,8 @@ export type MessageHistoryMeta = {
    */
   firstLoadedSeq: number | null;
   /**
-   * Lowest Hub `created_at_ms` in the window (Linked gap API).
-   * Used as `before_ts_ms` for Hub older pages. Null when empty/unknown.
+   * Lowest Hub `created_at_ms` in the window (display/debug).
+   * Hub gap API now uses `firstLoadedSeq` / `before_seq`.
    */
   firstLoadedCreatedAtMs?: number | null;
   /** True when the last older/tail fetch reported more history above. */
@@ -94,6 +94,19 @@ export function firstMessageSeq(
     if (min == null || seq < min) min = seq;
   }
   return min;
+}
+
+/** Highest durable seq in a list, or null if none. */
+export function lastMessageSeq(
+  messages: readonly TimelineMessage[],
+): number | null {
+  let max: number | null = null;
+  for (const m of messages) {
+    const seq = m.messageSeq;
+    if (seq == null) continue;
+    if (max == null || seq > max) max = seq;
+  }
+  return max;
 }
 
 /**

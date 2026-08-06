@@ -1,9 +1,10 @@
-//! Push notification channels: APNs, FCM, SMTP, and a composite dispatcher.
+//! Push notification channels: APNs and FCM.
+//!
+//! Runtime registers channels individually (`runtime.rs`). A composite
+//! dispatcher and SMTP channel were removed — unused dead code (P1 cleanup).
 
 pub mod apns;
-pub mod composite;
 pub mod fcm;
-pub mod smtp;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -64,13 +65,17 @@ pub struct PushAttempt {
 /// Outcome of sending a push to a single device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PushSendOutcome {
-    /// Successfully enqueued / delivered.
+    /// Successfully enqueued / delivered to the provider.
     Sent,
     /// The device token is no longer valid (APNs BadDeviceToken, FCM Unregistered).
     /// The caller should revoke the token.
     TokenExpired,
     /// The push provider is rate-limiting us.
     RateLimited,
+    /// Channel config present but production provider send is not wired
+    /// (P5: ops secrets / provider integration BLOCKED). Must **not** be
+    /// treated as a successful delivery.
+    NotWired,
 }
 
 /// Error from a push channel send operation.

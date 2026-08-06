@@ -13,10 +13,15 @@ class SocialChatMessage {
     required this.deliveryState,
     this.senderType = SenderType.user,
     this.serverMessageId,
+
+    /// Stable idempotency key for Hub insert (= wire client_message_id).
+    /// For pending/sending rows this equals [localId].
+    this.clientMessageId,
     this.serverOrderKey,
     this.replyTo,
     this.recalledAtMs,
     this.mentionedAccountIds = const <String>[],
+    this.reactions = const <ReactionGroup>[],
   });
 
   final String localId;
@@ -28,10 +33,18 @@ class SocialChatMessage {
   final SocialMessageDeliveryState deliveryState;
   final SenderType senderType;
   final String? serverMessageId;
+  final String? clientMessageId;
   final int? serverOrderKey;
   final ChatMessageReplySummary? replyTo;
   final int? recalledAtMs;
   final List<String> mentionedAccountIds;
+
+  /// Hub reaction aggregates (viewer-resolved when available).
+  final List<ReactionGroup> reactions;
+
+  /// Idempotency key used on send/retry (never invent a new one on retry).
+  String get wireClientMessageId =>
+      (clientMessageId ?? serverMessageId ?? localId).trim();
 
   bool get isRecalled => recalledAtMs != null;
 
@@ -70,10 +83,12 @@ class SocialChatMessage {
     SocialMessageDeliveryState? deliveryState,
     SenderType? senderType,
     Object? serverMessageId = _socialMessageUnset,
+    Object? clientMessageId = _socialMessageUnset,
     Object? serverOrderKey = _socialMessageUnset,
     Object? replyTo = _socialMessageUnset,
     Object? recalledAtMs = _socialMessageUnset,
     List<String>? mentionedAccountIds,
+    List<ReactionGroup>? reactions,
   }) {
     return SocialChatMessage(
       localId: localId ?? this.localId,
@@ -87,6 +102,9 @@ class SocialChatMessage {
       serverMessageId: identical(serverMessageId, _socialMessageUnset)
           ? this.serverMessageId
           : serverMessageId as String?,
+      clientMessageId: identical(clientMessageId, _socialMessageUnset)
+          ? this.clientMessageId
+          : clientMessageId as String?,
       serverOrderKey: identical(serverOrderKey, _socialMessageUnset)
           ? this.serverOrderKey
           : serverOrderKey as int?,
@@ -97,6 +115,7 @@ class SocialChatMessage {
           ? this.recalledAtMs
           : recalledAtMs as int?,
       mentionedAccountIds: mentionedAccountIds ?? this.mentionedAccountIds,
+      reactions: reactions ?? this.reactions,
     );
   }
 }

@@ -5,6 +5,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
 import 'package:minos/data/services/services.dart';
 import 'package:minos/domain/minos_core_protocol.dart';
 import 'package:minos/domain/social_message.dart';
+import 'package:minos/infrastructure/im_outbox_store.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
 final socialRepositoryProvider = Provider<SocialRepository>((ref) {
@@ -85,24 +86,141 @@ class SocialRepository {
     required String conversationId,
     required String preview,
     required int createdAtMs,
+    int? unreadCount,
+    int? unreadMentionCount,
   }) {
     return _cacheStore.touchConversationPreview(
       conversationId: conversationId,
       preview: preview,
       createdAtMs: createdAtMs,
+      unreadCount: unreadCount,
+      unreadMentionCount: unreadMentionCount,
     );
+  }
+
+  Future<void> upsertConversation(ConversationSummary conversation) {
+    return _cacheStore.upsertConversation(conversation);
+  }
+
+  Future<ConversationSummary?> bumpUnread(
+    String conversationId, {
+    int unreadDelta = 1,
+    bool mention = false,
+  }) {
+    return _cacheStore.bumpUnread(
+      conversationId,
+      unreadDelta: unreadDelta,
+      mention: mention,
+    );
+  }
+
+  Future<void> clearUnread(String conversationId) {
+    return _cacheStore.clearUnread(conversationId);
+  }
+
+  Future<ConversationSummary?> loadConversation(String conversationId) {
+    return _cacheStore.loadConversation(conversationId);
   }
 
   Future<ChatMessageSummary> sendChatMessage({
     required String conversationId,
     required String text,
     String? replyToMessageId,
+    String? clientMessageId,
   }) {
     return _core.sendChatMessage(
       conversationId: conversationId,
       text: text,
       replyToMessageId: replyToMessageId,
+      clientMessageId: clientMessageId,
     );
+  }
+
+  Future<void> enqueueUserMessageOutbox({
+    required String clientMessageId,
+    required String conversationId,
+    required String text,
+    String? replyToMessageId,
+  }) {
+    return _cacheStore.enqueueUserMessageOutbox(
+      clientMessageId: clientMessageId,
+      conversationId: conversationId,
+      text: text,
+      replyToMessageId: replyToMessageId,
+    );
+  }
+
+  Future<void> enqueueReactionToggleOutbox({
+    required String clientOpId,
+    required String conversationId,
+    required String messageId,
+    required String emoji,
+  }) {
+    return _cacheStore.enqueueReactionToggleOutbox(
+      clientOpId: clientOpId,
+      conversationId: conversationId,
+      messageId: messageId,
+      emoji: emoji,
+    );
+  }
+
+  Future<ToggleReactionResponse> toggleReaction({
+    required String conversationId,
+    required String messageId,
+    required String emoji,
+    required String clientOpId,
+  }) {
+    return _core.toggleReaction(
+      conversationId: conversationId,
+      messageId: messageId,
+      emoji: emoji,
+      clientOpId: clientOpId,
+    );
+  }
+
+  Future<void> updateMessageReactions({
+    required String conversationId,
+    required String messageId,
+    required List<ReactionGroup> reactions,
+  }) {
+    return _cacheStore.updateMessageReactions(
+      conversationId: conversationId,
+      messageId: messageId,
+      reactions: reactions,
+    );
+  }
+
+  Future<void> reclaimStaleOutbox() {
+    return _cacheStore.reclaimStaleOutbox();
+  }
+
+  Future<List<ImOutboxEntry>> listDueOutbox({int? nowMs}) {
+    return _cacheStore.listDueOutbox(nowMs: nowMs);
+  }
+
+  Future<void> markOutboxInflight(String clientOpId) {
+    return _cacheStore.markOutboxInflight(clientOpId);
+  }
+
+  Future<void> markOutboxAcked(String clientOpId) {
+    return _cacheStore.markOutboxAcked(clientOpId);
+  }
+
+  Future<void> markOutboxFailed({
+    required String clientOpId,
+    required String error,
+  }) {
+    return _cacheStore.markOutboxFailed(clientOpId: clientOpId, error: error);
+  }
+
+  Future<SocialChatMessage?> loadMessageByClientMessageId(
+    String clientMessageId,
+  ) {
+    return _cacheStore.loadMessageByClientMessageId(clientMessageId);
+  }
+
+  Future<void> reconcileSendingMessagesOnStartup() {
+    return _cacheStore.reconcileSendingMessagesOnStartup();
   }
 
   Future<List<AgentSessionSummaryDto>> listAgentSessions({
@@ -117,6 +235,16 @@ class SocialRepository {
 
   Future<void> subscribeAgentSession({required String sessionId}) {
     return _core.subscribeAgentSession(sessionId: sessionId);
+  }
+
+  /// R3a: open-chat `conversation:{id}` full T1 frames.
+  Future<void> subscribeConversation({required String conversationId}) {
+    return _core.subscribeConversation(conversationId: conversationId);
+  }
+
+  /// R3a: leave open-chat conversation topic.
+  Future<void> unsubscribeConversation({required String conversationId}) {
+    return _core.unsubscribeConversation(conversationId: conversationId);
   }
 
   Future<SocialChatMessage?> markMessageSent({
@@ -160,9 +288,16 @@ class SocialRepository {
 
   Future<ListChatMessagesResponse> listChatMessages({
     required String conversationId,
+    int? beforeSeq,
+    int? afterSeq,
     int limit = 100,
   }) {
-    return _core.listChatMessages(conversationId: conversationId, limit: limit);
+    return _core.listChatMessages(
+      conversationId: conversationId,
+      beforeSeq: beforeSeq,
+      afterSeq: afterSeq,
+      limit: limit,
+    );
   }
 
   Future<void> markConversationRead({required String conversationId}) {

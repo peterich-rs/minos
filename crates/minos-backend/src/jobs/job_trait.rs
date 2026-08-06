@@ -1,6 +1,8 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use tokio::sync::Notify;
 
 use crate::config::RuntimeMode;
 use crate::store::StoreHandle;
@@ -9,6 +11,10 @@ use crate::store::StoreHandle;
 pub struct JobContext {
     pub store: StoreHandle,
     pub instance_id: String,
+    /// In-process outbox wake (cloned from AppContext). Poll remains the floor.
+    pub outbox_wake: Arc<Notify>,
+    /// In-process agent dispatch wake (enqueue + host online).
+    pub agent_dispatch_wake: Arc<Notify>,
 }
 
 /// Outcome of a single job tick.

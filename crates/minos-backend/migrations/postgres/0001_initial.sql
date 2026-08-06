@@ -170,6 +170,8 @@ CREATE TABLE conversations (
     direct_account_high    TEXT REFERENCES accounts(account_id) ON DELETE CASCADE,
     created_at_ms          BIGINT NOT NULL,
     updated_at_ms          BIGINT NOT NULL,
+    -- Next per-conversation message_seq to allocate (starts at 1).
+    next_message_seq       BIGINT NOT NULL DEFAULT 1,
     CONSTRAINT direct_pair_consistency CHECK (
         (kind = 'direct' AND direct_account_low IS NOT NULL AND direct_account_high IS NOT NULL
                          AND direct_account_low < direct_account_high) OR
@@ -210,13 +212,18 @@ CREATE TABLE chat_messages (
     sender_account_id    TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
     text                 TEXT NOT NULL,
     created_at_ms        BIGINT NOT NULL,
+    -- Per-conversation monotonic ordering / pagination / read cursor authority.
+    message_seq          BIGINT NOT NULL,
     reply_to_message_id  TEXT REFERENCES chat_messages(message_id) ON DELETE SET NULL,
     recalled_at_ms       BIGINT,
     sender_type          TEXT NOT NULL DEFAULT 'user' CHECK (sender_type IN ('user', 'agent')),
     sender_agent_id      TEXT REFERENCES agents(agent_id) ON DELETE CASCADE,
-    agent_session_id     TEXT
+    agent_session_id     TEXT,
+    UNIQUE (conversation_id, message_seq)
 );
 
+CREATE INDEX idx_chat_messages_conversation_seq
+    ON chat_messages(conversation_id, message_seq DESC);
 CREATE INDEX idx_chat_messages_conversation_created
     ON chat_messages(conversation_id, created_at_ms DESC);
 CREATE INDEX idx_chat_messages_reply_to
@@ -235,10 +242,40 @@ CREATE TABLE chat_message_mentions (
 CREATE INDEX idx_chat_message_mentions_account
     ON chat_message_mentions(mentioned_account_id, message_id);
 
+CREATE TABLE message_reactions (
+    reaction_id      TEXT PRIMARY KEY,
+    message_id       TEXT NOT NULL REFERENCES chat_messages(message_id) ON DELETE CASCADE,
+    conversation_id  TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+    emoji            TEXT NOT NULL,
+    actor_kind       TEXT NOT NULL CHECK (actor_kind IN ('user', 'agent')),
+    actor_id         TEXT NOT NULL,
+    display_name     TEXT NOT NULL,
+    created_at_ms    BIGINT NOT NULL,
+    UNIQUE (message_id, emoji, actor_kind, actor_id)
+);
+
+CREATE INDEX idx_message_reactions_message
+    ON message_reactions(message_id, emoji);
+CREATE INDEX idx_message_reactions_conversation
+    ON message_reactions(conversation_id, message_id);
+
+-- Intent Outbox op idempotency for reaction toggle (B6/C5).
+CREATE TABLE reaction_client_ops (
+    client_op_id     TEXT PRIMARY KEY,
+    conversation_id  TEXT NOT NULL,
+    message_id       TEXT NOT NULL,
+    emoji            TEXT NOT NULL,
+    action           TEXT NOT NULL CHECK (action IN ('add', 'remove')),
+    account_id       TEXT NOT NULL,
+    created_at_ms    BIGINT NOT NULL
+);
+
 CREATE TABLE conversation_reads (
     conversation_id  TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
     account_id       TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    last_read_at_ms  BIGINT NOT NULL,
+    last_read_seq    BIGINT NOT NULL DEFAULT 0,
+    -- Display / audit only; unread boundary is last_read_seq.
+    last_read_at_ms  BIGINT NOT NULL DEFAULT 0,
     updated_at_ms    BIGINT NOT NULL,
     PRIMARY KEY (conversation_id, account_id)
 );
@@ -318,13 +355,18 @@ CREATE TABLE approval_requests (
     deadline_at_ms    BIGINT NOT NULL,
     created_at_ms     BIGINT NOT NULL,
     resolved_at_ms    BIGINT,
-    resolution_json   JSONB
+    resolution_json   JSONB,
+    -- Client Intent Outbox id for respond idempotency (C5.3). NULL when absent.
+    client_request_id TEXT
 );
 
 CREATE INDEX idx_approval_session_state
     ON approval_requests(agent_session_id, state);
 CREATE INDEX idx_approval_deadline_state
     ON approval_requests(deadline_at_ms, state);
+CREATE UNIQUE INDEX idx_approval_client_request_id
+    ON approval_requests(client_request_id)
+    WHERE client_request_id IS NOT NULL;
 
 -- Host ingest thread ledger (aligned with SQLite; used by TurnCompletionProjector).
 CREATE TABLE sessions (
@@ -437,6 +479,10 @@ CREATE TABLE outbox_events (
     topic_kind       TEXT NOT NULL,
     event_id         TEXT NOT NULL,
     status           outbox_status NOT NULL,
+    -- social_durable: chat/account/reaction fanout (publish → ack).
+    -- host_command: host RPC delivery (publish → async host ack; expire → dead_letter).
+    lane             TEXT NOT NULL DEFAULT 'social_durable'
+        CHECK (lane IN ('social_durable', 'host_command')),
     available_at_ms  BIGINT NOT NULL,
     attempts         INT NOT NULL DEFAULT 0,
     claimed_by       TEXT,
@@ -447,6 +493,8 @@ CREATE TABLE outbox_events (
     FOREIGN KEY (topic_kind, event_id) REFERENCES durable_event_log(topic_kind, event_id)
 );
 
+CREATE INDEX idx_outbox_lane_status_avail
+    ON outbox_events(lane, status, available_at_ms);
 CREATE INDEX idx_outbox_status_avail
     ON outbox_events(status, available_at_ms);
 CREATE INDEX idx_outbox_event_id
@@ -505,3 +553,75 @@ CREATE TABLE notification_cooldowns (
 
 CREATE INDEX idx_notif_cooldowns_last_sent
     ON notification_cooldowns(last_sent_at_ms);
+
+-- Push idempotency: successful push once per (event_id, account_id).
+CREATE TABLE push_dispatch_log (
+    event_id     TEXT NOT NULL,
+    account_id   TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    sent_at_ms   BIGINT NOT NULL,
+    PRIMARY KEY (event_id, account_id)
+);
+
+CREATE INDEX idx_push_dispatch_log_account
+    ON push_dispatch_log(account_id);
+
+-- Agent dispatch queue: send_message enqueues; worker drains when host is live.
+-- UNIQUE(origin, agent): multi-@ fan-out enqueues one row per mentioned agent.
+CREATE TABLE agent_dispatch_queue (
+    dispatch_id          TEXT PRIMARY KEY,
+    origin_message_id    TEXT NOT NULL,
+    conversation_id      TEXT NOT NULL,
+    account_id           TEXT NOT NULL,
+    agent_id             TEXT NOT NULL,
+    session_id           TEXT,
+    forwarded_text       TEXT NOT NULL,
+    mention_sender       BOOLEAN NOT NULL DEFAULT FALSE,
+    sender_minos_id      TEXT,
+    status               TEXT NOT NULL
+        CHECK (status IN ('pending', 'inflight', 'succeeded', 'failed_terminal')),
+    attempts             INT NOT NULL DEFAULT 0,
+    next_attempt_at_ms   BIGINT NOT NULL,
+    last_error           TEXT,
+    created_at_ms        BIGINT NOT NULL,
+    updated_at_ms        BIGINT NOT NULL,
+    UNIQUE (origin_message_id, agent_id)
+);
+
+CREATE INDEX idx_agent_dispatch_queue_due
+    ON agent_dispatch_queue(status, next_attempt_at_ms);
+CREATE INDEX idx_agent_dispatch_queue_conversation
+    ON agent_dispatch_queue(conversation_id);
+
+-- Media blobs: metadata SSOT in DB; bytes in R2 (or local dir for dev).
+CREATE TABLE media_blobs (
+    blob_id             TEXT PRIMARY KEY,
+    account_id          TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    object_key          TEXT NOT NULL UNIQUE,
+    content_type        TEXT NOT NULL,
+    byte_size           BIGINT NOT NULL,
+    sha256_hex          TEXT,
+    original_filename   TEXT,
+    kind                TEXT NOT NULL
+        CHECK (kind IN ('image', 'file', 'audio', 'video')),
+    status              TEXT NOT NULL
+        CHECK (status IN ('pending', 'ready', 'failed', 'deleted')),
+    created_at_ms       BIGINT NOT NULL,
+    ready_at_ms         BIGINT,
+    deleted_at_ms       BIGINT
+);
+
+CREATE INDEX idx_media_blobs_account_created
+    ON media_blobs(account_id, created_at_ms DESC);
+CREATE INDEX idx_media_blobs_status
+    ON media_blobs(status, created_at_ms);
+
+-- Message ↔ media blob links (order preserved).
+CREATE TABLE chat_message_attachments (
+    message_id   TEXT NOT NULL REFERENCES chat_messages(message_id) ON DELETE CASCADE,
+    blob_id      TEXT NOT NULL REFERENCES media_blobs(blob_id) ON DELETE RESTRICT,
+    sort_order   INT NOT NULL DEFAULT 0,
+    PRIMARY KEY (message_id, blob_id)
+);
+
+CREATE INDEX idx_chat_message_attachments_blob
+    ON chat_message_attachments(blob_id);

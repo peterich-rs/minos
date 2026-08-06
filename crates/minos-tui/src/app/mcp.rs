@@ -100,7 +100,7 @@ impl App {
                 self.refresh_current_conversation_sessions(&conversation_id)
                     .await;
                 self.backend
-                    .send_message(&outcome.session_id, &prompt)
+                    .send_message(&outcome.session_id, &prompt, None)
                     .await?;
                 let delegation = self
                     .state
@@ -294,6 +294,58 @@ impl App {
                     data: Some(serde_json::json!({ "accepted": true })),
                 })
             }
+            SocketRequest::ReactToMessage {
+                conversation_id,
+                source_agent,
+                source_session_id,
+                message_id,
+                emoji,
+            } => {
+                // Production path is daemon-owned; unit-test stub enforces the
+                // same hard mention gate and returns accepted without durable store.
+                self.ensure_mcp_conversation(&conversation_id)?;
+                let source_agent = source_agent
+                    .as_deref()
+                    .map(|agent| {
+                        parse_agent_name(agent)
+                            .ok_or_else(|| anyhow::anyhow!("unknown source agent: {agent}"))
+                    })
+                    .transpose()?
+                    .ok_or_else(|| anyhow::anyhow!("react_to_message requires source_agent"))?;
+                self.validate_mcp_source_session(
+                    &conversation_id,
+                    Some(source_agent),
+                    source_session_id.as_deref(),
+                )
+                .await?;
+                let emoji = emoji.trim();
+                anyhow::ensure!(!emoji.is_empty(), "emoji must not be empty");
+                let messages = self
+                    .backend
+                    .list_conversation_messages(&conversation_id)
+                    .await?;
+                let target = messages
+                    .iter()
+                    .find(|m| m.message_id == message_id)
+                    .ok_or_else(|| anyhow::anyhow!("message not found: {message_id}"))?;
+                let body = target.body.as_str();
+                let mentions_me = body
+                    .to_ascii_lowercase()
+                    .contains(&format!("@{}", source_agent.bin_name()));
+                anyhow::ensure!(
+                    mentions_me,
+                    "react_to_message is only allowed on messages that @mention this agent ({})",
+                    source_agent.bin_name()
+                );
+                Ok(SocketResponse::Ok {
+                    data: Some(serde_json::json!({
+                        "accepted": true,
+                        "added": true,
+                        "message_id": message_id,
+                        "emoji": emoji,
+                    })),
+                })
+            }
         }
     }
 
@@ -356,7 +408,9 @@ impl App {
                         session_short_id
                     )
                 })?;
-            self.backend.send_message(&session_id, &prompt).await?;
+            self.backend
+                .send_message(&session_id, &prompt, None)
+                .await?;
             return Ok(body.to_owned());
         }
         if let Some(error) = self.agent_unavailability_error(target.agent) {
@@ -377,7 +431,7 @@ impl App {
         self.refresh_current_conversation_sessions(conversation_id)
             .await;
         self.backend
-            .send_message(&outcome.session_id, &prompt)
+            .send_message(&outcome.session_id, &prompt, None)
             .await?;
         Ok(delegation_visible_message(
             target.agent,

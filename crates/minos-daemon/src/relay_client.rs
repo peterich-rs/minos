@@ -200,6 +200,7 @@ impl RelayClient {
             peers_store: peers_store.clone(),
             last_error: last_error.clone(),
             ingest_sync: persistence.ingest_sync,
+            host_topic_seq: Arc::new(StdMutex::new(0)),
         };
 
         let task = tokio::spawn(run_dispatch(dispatch_ctx, shutdown_rx));
@@ -379,6 +380,8 @@ struct DispatchCtx {
     peers_store: Arc<StdMutex<Vec<HostPeerSummary>>>,
     last_error: Arc<StdMutex<Option<MinosError>>>,
     ingest_sync: Arc<StdMutex<Option<IngestSyncHandle>>>,
+    /// Last applied durable `topic_seq` on `host:{self}` for Subscribe resume.
+    host_topic_seq: Arc<StdMutex<i64>>,
 }
 
 fn clear_peer_snapshot(
@@ -804,11 +807,20 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
                 heartbeat_interval_ms,
                 "received Hello from realtime gateway"
             );
-            // Auto-subscribe to the host topic.
+            // Hello is register-only; catch-up via Subscribe + resume_after.
             let host_topic = format!("host:{}", ctx.self_device_id);
+            let resume_seq = ctx.host_topic_seq.lock().ok().map(|g| *g).unwrap_or(0);
+            let mut resume_after = HashMap::new();
+            if resume_seq > 0 {
+                resume_after.insert(host_topic.clone(), resume_seq);
+            }
             let subscribe = ClientFrame::Subscribe {
                 topics: vec![host_topic],
-                resume_after: None,
+                resume_after: if resume_after.is_empty() {
+                    None
+                } else {
+                    Some(resume_after)
+                },
                 client_request_id: None,
             };
             if ctx.out_tx.send(subscribe).await.is_err() {
@@ -825,6 +837,8 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
                 "subscription acknowledged"
             );
             let host_topic = format!("host:{}", ctx.self_device_id);
+            // Default-topic ack after Hello is register-only; Connected after
+            // our catch-up SubscribeAck (or default ack if we treat either as armed).
             if topics.iter().any(|topic| topic == &host_topic) {
                 let _ = ctx.link_tx.send(RelayLinkState::Connected);
                 if let Some(sync) = ingest_sync(ctx) {
@@ -832,8 +846,35 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
                 }
             }
         }
-        ServerFrame::DurableEvent { kind, payload, .. } => {
+        ServerFrame::DurableEvent {
+            topic,
+            topic_seq,
+            kind,
+            payload,
+            ..
+        } => {
+            let host_topic = format!("host:{}", ctx.self_device_id);
+            if topic == host_topic {
+                if let Ok(mut guard) = ctx.host_topic_seq.lock() {
+                    if topic_seq > *guard {
+                        *guard = topic_seq;
+                    }
+                }
+            }
             route_durable_event(&kind, &payload, ctx).await;
+        }
+        ServerFrame::SnapshotRequired { topic, .. } => {
+            let host_topic = format!("host:{}", ctx.self_device_id);
+            if topic == host_topic {
+                if let Ok(mut guard) = ctx.host_topic_seq.lock() {
+                    *guard = 0;
+                }
+                tracing::warn!(
+                    target: "minos_daemon::relay_client",
+                    topic,
+                    "host topic SnapshotRequired — cursor cleared"
+                );
+            }
         }
         ServerFrame::HostIngestAck {
             session_id,
@@ -901,13 +942,6 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
                     "ignoring stream event on host side"
                 );
             }
-        }
-        ServerFrame::SnapshotRequired { topic, .. } => {
-            tracing::warn!(
-                target: "minos_daemon::relay_client",
-                topic,
-                "snapshot required — host needs full state rebuild"
-            );
         }
         ServerFrame::SubscriptionDenied { topic, reason } => {
             tracing::warn!(

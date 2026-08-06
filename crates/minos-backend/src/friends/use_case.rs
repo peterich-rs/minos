@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use minos_protocol::{FriendRequestStatus, FriendRequestSummary, FriendSummary};
+use minos_protocol::{DurableEvent, FriendRequestStatus, FriendRequestSummary, FriendSummary};
+use uuid::Uuid;
 
+use crate::app::tx::Storage;
 use crate::error::BackendError;
 use crate::profiles::use_case::to_user_summary;
-use crate::store::{social, StoreHandle};
+use crate::store::{durable_event_log, outbox_events, social, StoreHandle};
 
 #[derive(Debug, thiserror::Error)]
 pub enum FriendError {
@@ -103,6 +105,17 @@ impl FriendService for DefaultFriendService {
             created_at_ms,
         )
         .await?;
+        // T2: notify peer (incoming) + self (outgoing mirror) on account topics.
+        enqueue_friend_request_updated(
+            &self.store,
+            &[&target.account_id, from_account_id],
+            &request_id,
+            from_account_id,
+            &target.account_id,
+            "pending",
+            created_at_ms,
+        )
+        .await?;
         Ok(FriendRequestSummary {
             request_id,
             from: to_user_summary(&me),
@@ -138,6 +151,22 @@ impl FriendService for DefaultFriendService {
         .await?
         {
             social::ResolveFriendRequestTxResult::Resolved(row) => {
+                let status_str = match status {
+                    FriendRequestStatus::Pending => "pending",
+                    FriendRequestStatus::Accepted => "accepted",
+                    FriendRequestStatus::Rejected => "rejected",
+                    FriendRequestStatus::Canceled => "canceled",
+                };
+                enqueue_friend_request_updated(
+                    &self.store,
+                    &[&row.from_account_id, &row.to_account_id],
+                    &row.request_id,
+                    &row.from_account_id,
+                    &row.to_account_id,
+                    status_str,
+                    resolved_at_ms,
+                )
+                .await?;
                 let mut hydrated = hydrate_friend_requests(&self.store, vec![row]).await?;
                 Ok(hydrated.remove(0))
             }
@@ -237,4 +266,51 @@ fn parse_request_status(status: &str) -> Result<FriendRequestStatus, BackendErro
             message: format!("unknown friend request status: {status}"),
         }),
     }
+}
+
+/// Deterministic friend-request durable id (per recipient account).
+#[must_use]
+pub fn friend_request_event_id(account_id: &str, request_id: &str, status: &str) -> String {
+    format!("friend-request-{account_id}-{request_id}-{status}")
+}
+
+/// Fan out T2 `FriendRequestUpdated` on each affected account topic.
+async fn enqueue_friend_request_updated(
+    store: &StoreHandle,
+    account_ids: &[&str],
+    request_id: &str,
+    from_account_id: &str,
+    to_account_id: &str,
+    status: &str,
+    at_ms: i64,
+) -> Result<(), BackendError> {
+    let mut seen = std::collections::HashSet::new();
+    let mut tx = store.begin().await?;
+    for account_id in account_ids {
+        if !seen.insert(*account_id) {
+            continue;
+        }
+        let event_id = friend_request_event_id(account_id, request_id, status);
+        let event = DurableEvent::FriendRequestUpdated {
+            account_id: (*account_id).to_string(),
+            request_id: request_id.to_string(),
+            from_account_id: from_account_id.to_string(),
+            to_account_id: to_account_id.to_string(),
+            status: status.to_string(),
+            at_ms,
+        };
+        let cursor = durable_event_log::record_in_tx(&mut tx, &event_id, &event, at_ms).await?;
+        let outbox_id = Uuid::new_v4().to_string();
+        outbox_events::enqueue_in_tx(
+            &mut tx,
+            &outbox_id,
+            cursor.topic.kind().as_str(),
+            &cursor.event_id,
+            outbox_events::OutboxLane::SocialDurable,
+            at_ms,
+        )
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
 }

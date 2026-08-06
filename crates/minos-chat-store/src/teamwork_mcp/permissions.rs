@@ -8,6 +8,7 @@ pub enum TeamworkMcpPermission {
     CancelDelegation,
     PostConversationUpdate,
     PostGitUpdate,
+    ReactToMessage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +21,7 @@ pub struct TeamworkMcpPermissions {
     pub cancel_delegation: bool,
     pub post_conversation_update: bool,
     pub post_git_update: bool,
+    pub react_to_message: bool,
 }
 
 impl TeamworkMcpPermissions {
@@ -33,6 +35,7 @@ impl TeamworkMcpPermissions {
             TeamworkMcpPermission::CancelDelegation => self.cancel_delegation,
             TeamworkMcpPermission::PostConversationUpdate => self.post_conversation_update,
             TeamworkMcpPermission::PostGitUpdate => self.post_git_update,
+            TeamworkMcpPermission::ReactToMessage => self.react_to_message,
         }
     }
 }
@@ -48,6 +51,7 @@ impl Default for TeamworkMcpPermissions {
             cancel_delegation: true,
             post_conversation_update: true,
             post_git_update: true,
+            react_to_message: true,
         }
     }
 }

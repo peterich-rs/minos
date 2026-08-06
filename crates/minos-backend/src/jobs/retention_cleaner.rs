@@ -8,10 +8,20 @@ use crate::store::durable_event_log;
 
 /// Cleans old entries from the durable event log and agent turn events.
 ///
-/// Retention window: 30 days. This job deletes batches of old rows to avoid
-/// long-running transactions.
-const RETENTION_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+/// Default retention: **90 days** (after Phase A SnapshotRequired path ships).
+/// Override via `MINOS_DURABLE_RETENTION_DAYS`. Multi-batch drain per tick.
+const DEFAULT_RETENTION_DAYS: i64 = 90;
 const BATCH_SIZE: u32 = 1000;
+const MAX_BATCHES_PER_TICK: u32 = 10;
+
+fn retention_window_ms() -> i64 {
+    let days = std::env::var("MINOS_DURABLE_RETENTION_DAYS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(DEFAULT_RETENTION_DAYS)
+        .clamp(1, 3650);
+    days * 24 * 60 * 60 * 1000
+}
 
 pub struct RetentionCleanerJob;
 
@@ -34,11 +44,18 @@ impl Job for RetentionCleanerJob {
     }
 
     async fn tick(&self, ctx: &JobContext) -> Result<JobOutcome, JobError> {
-        let cutoff_ms = chrono::Utc::now().timestamp_millis() - RETENTION_WINDOW_MS;
-        let total_cleaned =
-            durable_event_log::delete_ready_for_retention(&ctx.store, cutoff_ms, BATCH_SIZE)
-                .await
-                .map_err(|e| JobError::Transient(e.to_string()))?;
+        let cutoff_ms = chrono::Utc::now().timestamp_millis() - retention_window_ms();
+        let mut total_cleaned: u64 = 0;
+        for _ in 0..MAX_BATCHES_PER_TICK {
+            let batch =
+                durable_event_log::delete_ready_for_retention(&ctx.store, cutoff_ms, BATCH_SIZE)
+                    .await
+                    .map_err(|e| JobError::Transient(e.to_string()))?;
+            total_cleaned = total_cleaned.saturating_add(batch);
+            if batch < u64::from(BATCH_SIZE) {
+                break;
+            }
+        }
         let total_cleaned = u32::try_from(total_cleaned).map_err(|_| {
             JobError::Fatal(format!(
                 "retention cleaner deleted more rows than u32 can report: {total_cleaned}"
@@ -46,6 +63,12 @@ impl Job for RetentionCleanerJob {
         })?;
 
         if total_cleaned > 0 {
+            tracing::info!(
+                target: "minos_backend::jobs::retention_cleaner",
+                cleaned = total_cleaned,
+                cutoff_ms,
+                "retention drain batch"
+            );
             Ok(JobOutcome::DidWork(total_cleaned))
         } else {
             Ok(JobOutcome::Idle)
@@ -61,7 +84,8 @@ mod tests {
     #[tokio::test]
     async fn tick_cleans_old_durable_events_on_sqlite() {
         let pool = store::test_support::memory_pool().await;
-        let old_created_at_ms = chrono::Utc::now().timestamp_millis() - RETENTION_WINDOW_MS - 1_000;
+        let old_created_at_ms =
+            chrono::Utc::now().timestamp_millis() - retention_window_ms() - 1_000;
 
         durable_event_log::append(
             &pool,
@@ -78,6 +102,8 @@ mod tests {
 
         let ctx = JobContext {
             store: StoreHandle::from(pool.clone()),
+            outbox_wake: std::sync::Arc::new(tokio::sync::Notify::new()),
+            agent_dispatch_wake: std::sync::Arc::new(tokio::sync::Notify::new()),
             instance_id: "test-instance".to_string(),
         };
 

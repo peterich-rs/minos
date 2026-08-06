@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import {
   useWorkspaceStore,
   type ProjectSession,
@@ -9,7 +9,6 @@ import { MessageList } from "./MessageList";
 import { TimelineHeader } from "./TimelineHeader";
 
 const EMPTY_SESSIONS: ProjectSession[] = [];
-const EMPTY_MESSAGES: never[] = [];
 
 /**
  * Declarative conversation timeline: parent passes `conversationId` (and
@@ -19,6 +18,7 @@ const EMPTY_MESSAGES: never[] = [];
 export function Timeline({ conversationId }: { conversationId: string }) {
   const conversations = useWorkspaceStore((s) => s.conversations);
   const loadTimeline = useWorkspaceStore((s) => s.loadTimeline);
+  const markConversationRead = useWorkspaceStore((s) => s.markConversationRead);
   const refreshConversationGitStatus = useWorkspaceStore(
     (s) => s.refreshConversationGitStatus,
   );
@@ -31,15 +31,18 @@ export function Timeline({ conversationId }: { conversationId: string }) {
   const timelineStatus = useWorkspaceStore(
     (s) => s.timelineStatusByConversation[conversationId],
   );
-  const messagesLength = useWorkspaceStore(
-    (s) =>
-      (s.messagesByConversation[conversationId] ?? EMPTY_MESSAGES).length,
-  );
 
   const conversation = conversations.find((c) => c.id === conversationId);
   const phase = timelineStatus?.phase ?? "idle";
+  /** One quiet recovery per error generation — no error→load→error poll loop. */
+  const errorRecoveryGenRef = useRef<number | null>(null);
 
-  // Init: load Timeline only (messages). Inspector hydrates independently when
+  // Open/select path: set focus + clear unread (not loadTimeline's job).
+  useEffect(() => {
+    markConversationRead(conversationId);
+  }, [conversationId, markConversationRead, bootEpoch]);
+
+  // Init: hydrate Timeline only (messages). Inspector hydrates independently when
   // details panel opens or @-mention needs sessions.
   useEffect(() => {
     if (source !== "daemon") return;
@@ -54,57 +57,26 @@ export function Timeline({ conversationId }: { conversationId: string }) {
     bootEpoch,
   ]);
 
-  // Quiet poll recovery:
-  // - expectHistoryEmpty: count/preview says messages exist but window empty.
-  // - hasLiveSession: agent still running (may post agent-result mid-turn via
-  //   post_conversation_update); keep re-listing even under livePush.
-  // - trailing after live→idle: conversation_completion write can lag Idle by
-  //   hundreds of ms; one short burst catches agent-result without forever poll.
-  // - phase error + !livePush: degraded reconnect.
-  const hasLiveSession = sessions.some(
-    (s) => s.status === "running" || s.status === "needs_approval",
-  );
-  const expectHistoryEmpty =
-    (conversation?.messageCount ?? 0) > 0 && messagesLength === 0;
-  const wasLiveRef = useRef(false);
-  const [trailRefresh, setTrailRefresh] = useState(false);
-  useEffect(() => {
-    if (hasLiveSession) {
-      wasLiveRef.current = true;
-      setTrailRefresh(false);
-      return;
-    }
-    if (!wasLiveRef.current) return;
-    wasLiveRef.current = false;
-    setTrailRefresh(true);
-    const t = window.setTimeout(() => setTrailRefresh(false), 3500);
-    return () => window.clearTimeout(t);
-  }, [hasLiveSession]);
-
+  // Agent-result arrives via Hub WS / daemon conversation_event + live-ingress
+  // single quiet loadTimeline. One-shot quiet recovery only when degraded and
+  // live push is off (no generation-loop re-entry).
   useEffect(() => {
     if (source !== "daemon") return;
-    const needPoll =
-      expectHistoryEmpty ||
-      hasLiveSession ||
-      trailRefresh ||
-      (!livePush && phase === "error");
-    if (!needPoll) return;
-    // Immediate refresh when entering trail (turn just ended).
-    if (trailRefresh || hasLiveSession) {
-      void loadTimeline(conversationId, { quiet: true });
+    if (livePush) return;
+    if (phase !== "error") {
+      errorRecoveryGenRef.current = null;
+      return;
     }
-    const id = window.setInterval(() => {
-      void loadTimeline(conversationId, { quiet: true });
-    }, 2000);
-    return () => window.clearInterval(id);
+    const gen = timelineStatus?.generation ?? 0;
+    if (errorRecoveryGenRef.current === gen) return;
+    errorRecoveryGenRef.current = gen;
+    void loadTimeline(conversationId, { quiet: true });
   }, [
     conversationId,
     source,
     livePush,
-    hasLiveSession,
-    trailRefresh,
-    expectHistoryEmpty,
     phase,
+    timelineStatus?.generation,
     loadTimeline,
   ]);
 

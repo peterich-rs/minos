@@ -109,7 +109,7 @@ labels = ["decision", "reason"]
 
 [metrics.outbox_dispatch_total]
 type = "counter"
-help = "Outbox dispatch attempts, labeled by result (ok/error)."
+help = "Outbox dispatch attempts, labeled by result (ok/retry/dead_letter/host_command_expired/host_command_published)."
 labels = ["result"]
 
 [metrics.approval_timeout_resolved_total]
@@ -120,6 +120,11 @@ labels = []
 [metrics.host_command_timeout_total]
 type = "counter"
 help = "Host commands that timed out."
+labels = []
+
+[metrics.outbox_host_command_expired_total]
+type = "counter"
+help = "Host-command outbox rows dead-lettered due to deadline expiry (never success-acked)."
 labels = []
 
 [metrics.job_tick_total]

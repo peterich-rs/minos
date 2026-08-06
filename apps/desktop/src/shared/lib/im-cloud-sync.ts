@@ -19,28 +19,35 @@ import { useAccountStore } from "@/store/account-store";
 import {
   addAgentToConversation,
   ensureHostRuntimeAgent,
+  respondHubApproval,
   sendAgentConversationMessage,
   sendConversationMessage,
+  toggleHubReaction,
   upsertConversation,
 } from "@/shared/lib/minos-cloud";
+import { isHubImMode } from "@/shared/lib/hub-timeline";
 import {
   displayNameForRuntime,
+  isCanonicalAgentResultId,
   isProjectableAgentMessage,
   normalizeHostRuntime,
 } from "@/shared/lib/im-cloud-sync-helpers";
+import { sessionIdFromAgentResultId } from "@/shared/lib/hub-timeline";
 import {
-  agentResultSessionKey,
-  sessionIdFromAgentResultId,
-} from "@/shared/lib/hub-timeline";
-import {
+  enqueueAgentResult,
+  enqueueApprovalResolve,
+  enqueueReactionToggle,
   enqueueUserMessage,
   isAcked,
+  earliestPendingAttemptAt,
   listDuePending,
   markAcked,
   markFailed,
   markInflight,
+  reclaimStaleInflight,
   type ImOutboxEntry,
 } from "@/shared/lib/im-outbox";
+import { daemonApi } from "@/shared/lib/daemon";
 import { toast } from "@/shared/lib/toast";
 import type { TimelineMessage } from "@/shared/lib/mock-data";
 
@@ -197,6 +204,14 @@ export async function attachAgentsToConversationCloud(input: {
   }
 }
 
+const RUNTIMES_FROM_ID = [
+  "codex",
+  "claude",
+  "gemini",
+  "opencode",
+  "grok",
+] as const;
+
 async function postUserMessageFromOutbox(entry: ImOutboxEntry): Promise<void> {
   const auth = cloudAuth();
   if (!auth) {
@@ -227,6 +242,308 @@ async function postUserMessageFromOutbox(entry: ImOutboxEntry): Promise<void> {
       messageSource,
     },
   );
+}
+
+async function postAgentResultFromOutbox(entry: ImOutboxEntry): Promise<void> {
+  const auth = cloudAuth();
+  if (!auth) {
+    throw new Error("Not signed in — agent result not synced to cloud");
+  }
+
+  let agentId = entry.agentId?.trim() || null;
+  if (!agentId) {
+    const runtime =
+      entry.agentRuntimes?.find((r) => !!r?.trim()) ??
+      RUNTIMES_FROM_ID.find((r) =>
+        entry.clientMessageId.toLowerCase().includes(r),
+      ) ??
+      null;
+    if (runtime) {
+      agentId = await resolveCloudAgentId(runtime);
+    }
+  }
+  if (!agentId) {
+    throw new Error("agent_result uplink: no cloud agent id");
+  }
+
+  const sessionId =
+    entry.agentSessionId?.trim() ||
+    sessionIdFromAgentResultId(entry.clientMessageId) ||
+    undefined;
+
+  await sendAgentConversationMessage(
+    auth.deviceId,
+    auth.accessToken,
+    entry.conversationId,
+    {
+      agentId,
+      text: entry.text,
+      clientMessageId: entry.clientMessageId,
+      agentSessionId: sessionId,
+      replyToMessageId: entry.replyToMessageId ?? undefined,
+      messageSource: "host_projection",
+    },
+  );
+}
+
+export type HubReactionToggleResult = {
+  messageId: string;
+  conversationId: string;
+  action: string;
+  reactions: Array<{
+    emoji: string;
+    count: number;
+    reactedByMe: boolean;
+    actors: Array<{
+      actorId: string;
+      actorKind: string;
+      displayName: string;
+    }>;
+  }>;
+};
+
+async function postReactionToggleFromOutbox(
+  entry: ImOutboxEntry,
+): Promise<HubReactionToggleResult> {
+  const auth = cloudAuth();
+  if (!auth) {
+    throw new Error("not authenticated");
+  }
+  let payload: { messageId?: string; emoji?: string };
+  try {
+    payload = JSON.parse(entry.text) as { messageId?: string; emoji?: string };
+  } catch {
+    throw new Error("invalid_payload: reaction_toggle text is not JSON");
+  }
+  const messageId = payload.messageId?.trim() ?? "";
+  const emoji = payload.emoji?.trim() ?? "";
+  if (!messageId || !emoji) {
+    throw new Error("invalid_payload: reaction_toggle requires messageId+emoji");
+  }
+  // clientMessageId == B6 client_op_id; retries reuse the same id.
+  return toggleHubReaction(
+    auth.deviceId,
+    auth.accessToken,
+    entry.conversationId,
+    messageId,
+    emoji,
+    entry.clientMessageId,
+  );
+}
+
+/**
+ * Treat daemon/Hub "already resolved" as success so outbox retries after a
+ * successful-but-unacked first attempt do not burn the entry.
+ */
+function isApprovalAlreadyResolvedError(error: unknown): boolean {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code: unknown }).code ?? "").toLowerCase()
+      : "";
+  const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  // Only treat explicit already-resolved / approval_not_found as success.
+  // Broad "not found" would mask unrelated 404s and burn retries incorrectly.
+  return (
+    code.includes("already_resolved") ||
+    code.includes("approval_already") ||
+    code.includes("approval_not_found") ||
+    msg.includes("already_resolved") ||
+    msg.includes("already resolved") ||
+    msg.includes("approval_already") ||
+    msg.includes("approval_not_found") ||
+    msg.includes("approval not found")
+  );
+}
+
+/**
+ * P3 branch by auth mode (no dual SSOT):
+ * - Hub IM mode: POST /v1/approvals/respond + top-level client_request_id
+ * - Local-only: daemon resolveApproval; decision JSON never carries client_request_id
+ */
+async function postApprovalResolveFromOutbox(
+  entry: ImOutboxEntry,
+): Promise<void> {
+  let payload: {
+    requestId?: string;
+    sessionId?: string;
+    decision?: string | Record<string, unknown>;
+    /** Explicit route stamped at enqueue (`hub` | `daemon`). */
+    route?: string;
+  };
+  try {
+    payload = JSON.parse(entry.text) as typeof payload;
+  } catch {
+    throw new Error("invalid_payload: approval_resolve text is not JSON");
+  }
+  const requestId = payload.requestId?.trim() ?? "";
+  const sessionId = payload.sessionId?.trim() ?? "";
+  if (!requestId || !sessionId || payload.decision == null) {
+    throw new Error(
+      "invalid_payload: approval_resolve requires requestId+sessionId+decision",
+    );
+  }
+  // Clean agent decision only — never nest client_request_id in decision JSON.
+  const decision =
+    typeof payload.decision === "string"
+      ? { decision: payload.decision }
+      : { ...payload.decision };
+  delete (decision as Record<string, unknown>).client_request_id;
+
+  const { session, authPhase } = useAccountStore.getState();
+  const hubRoute =
+    payload.route === "hub" ||
+    (payload.route !== "daemon" &&
+      isHubImMode({
+        authPhase,
+        accessToken: session?.accessToken,
+      }));
+
+  try {
+    if (hubRoute) {
+      const auth = cloudAuth();
+      if (!auth) {
+        throw new Error("not authenticated");
+      }
+      // Top-level client_request_id = outbox logical op id (Intent Outbox).
+      await respondHubApproval(auth.deviceId, auth.accessToken, {
+        requestId,
+        decision,
+        clientRequestId: entry.clientMessageId,
+      });
+    } else {
+      await daemonApi.resolveApproval(requestId, sessionId, decision);
+    }
+  } catch (error) {
+    if (isApprovalAlreadyResolvedError(error)) {
+      return;
+    }
+    throw error;
+  }
+}
+
+async function postOutboxEntry(
+  entry: ImOutboxEntry,
+): Promise<HubReactionToggleResult | void> {
+  switch (entry.kind) {
+    case "user_message":
+      await postUserMessageFromOutbox(entry);
+      return;
+    case "agent_result":
+      await postAgentResultFromOutbox(entry);
+      return;
+    case "reaction_toggle":
+      return postReactionToggleFromOutbox(entry);
+    case "approval_resolve":
+      await postApprovalResolveFromOutbox(entry);
+      return;
+    default: {
+      const _exhaustive: never = entry.kind;
+      throw new Error(`unknown outbox kind: ${_exhaustive}`);
+    }
+  }
+}
+
+/**
+ * C5.1 single path: enqueue reaction_toggle then flush via the shared outbox
+ * machine. Returns Hub aggregate for generation-gated apply.
+ * Logical op id = clientOpId (= B6 client_op_id); row id = outbox:${clientOpId}.
+ */
+export async function syncReactionToggleToCloud(input: {
+  conversationId: string;
+  messageId: string;
+  emoji: string;
+  clientOpId: string;
+}): Promise<HubReactionToggleResult | null> {
+  const conversationId = input.conversationId.trim();
+  const messageId = input.messageId.trim();
+  const emoji = input.emoji.trim();
+  const clientOpId = input.clientOpId.trim();
+  if (!conversationId || !messageId || !emoji || !clientOpId) {
+    throw new Error("invalid_payload: reaction_toggle missing fields");
+  }
+  if (isAcked(clientOpId)) {
+    return null;
+  }
+  if (!cloudAuth()) {
+    throw new Error("not authenticated");
+  }
+
+  const entry = enqueueReactionToggle({
+    conversationId,
+    clientMessageId: clientOpId,
+    text: JSON.stringify({ messageId, emoji }),
+  });
+  if (entry.status === "acked" || isAcked(clientOpId)) {
+    return null;
+  }
+
+  const result = await flushOutboxEntry(entry, {
+    throwOnTerminal: true,
+    silentToast: true,
+  });
+  scheduleOutboxWorker();
+  return (result as HubReactionToggleResult | undefined) ?? null;
+}
+
+/**
+ * C5.3 / P3: durable approval intent via Intent Outbox.
+ *
+ * - Hub authenticated: POST /v1/approvals/respond with top-level
+ *   `client_request_id` (= clientOpId). Decision body is agent-facing only.
+ * - Local / no hub: daemon `resolveApproval` for reachability; never stuff
+ *   client_request_id into decision JSON.
+ */
+export async function syncApprovalResolve(input: {
+  sessionId: string;
+  requestId: string;
+  decision: Record<string, unknown>;
+  clientOpId: string;
+  /** Force route; default derives from Hub IM mode at enqueue. */
+  route?: "hub" | "daemon";
+}): Promise<void> {
+  const sessionId = input.sessionId.trim();
+  const requestId = input.requestId.trim();
+  const clientOpId = input.clientOpId.trim();
+  if (!sessionId || !requestId || !clientOpId) {
+    throw new Error("invalid_payload: approval_resolve missing fields");
+  }
+  if (isAcked(clientOpId)) return;
+
+  const decision = { ...input.decision };
+  delete decision.client_request_id;
+
+  const { session, authPhase } = useAccountStore.getState();
+  const route =
+    input.route ??
+    (isHubImMode({
+      authPhase,
+      accessToken: session?.accessToken,
+    })
+      ? "hub"
+      : "daemon");
+
+  if (route === "hub" && !cloudAuth()) {
+    throw new Error("not authenticated");
+  }
+
+  const entry = enqueueApprovalResolve({
+    // Scope key for local storage only (not a Hub conversation id).
+    conversationId: `approval-session:${sessionId}`,
+    clientMessageId: clientOpId,
+    text: JSON.stringify({
+      requestId,
+      sessionId,
+      decision,
+      route,
+    }),
+  });
+  if (entry.status === "acked" || isAcked(clientOpId)) return;
+
+  await flushOutboxEntry(entry, {
+    throwOnTerminal: true,
+    silentToast: true,
+  });
+  scheduleOutboxWorker();
 }
 
 /**
@@ -272,38 +589,40 @@ export async function syncUserMessageToCloud(input: {
 
 async function flushOutboxEntry(
   entry: ImOutboxEntry,
-  opts?: { throwOnTerminal?: boolean },
-): Promise<void> {
+  opts?: { throwOnTerminal?: boolean; silentToast?: boolean },
+): Promise<HubReactionToggleResult | void> {
   if (entry.status === "acked") return;
   if (isAcked(entry.clientMessageId)) return;
 
   markInflight(entry.clientMessageId);
   try {
-    await postUserMessageFromOutbox(entry);
+    const result = await postOutboxEntry(entry);
     markAcked(entry.clientMessageId);
-    rememberProjected(entry.clientMessageId);
+    if (entry.kind === "user_message" || entry.kind === "agent_result") {
+      rememberProjected(entry.clientMessageId);
+    }
+    return result;
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     const status = markFailed(entry.clientMessageId, msg);
-    console.warn("[im-cloud-sync] send user message failed", error);
-    if (status === "failed_terminal") {
-      toast.error(
-        "Cloud sync failed",
-        `Message not visible on other devices: ${msg}`,
-      );
-      if (opts?.throwOnTerminal) {
-        throw error instanceof Error ? error : new Error(msg);
+    console.warn("[im-cloud-sync] outbox flush failed", entry.kind, error);
+    const isMessageKind =
+      entry.kind === "user_message" || entry.kind === "agent_result";
+    if (!opts?.silentToast && isMessageKind) {
+      if (status === "failed_terminal") {
+        toast.error(
+          "Cloud sync failed",
+          `Message not visible on other devices: ${msg}`,
+        );
+      } else {
+        toast.warning(
+          "Cloud sync delayed",
+          "Will retry sending this message to other devices.",
+        );
       }
-    } else {
-      toast.warning(
-        "Cloud sync delayed",
-        "Will retry sending this message to other devices.",
-      );
-      // Hub-first Linked: first attempt failure still surfaces as send error so
-      // the optimistic row can flip to failed (outbox will retry in background).
-      if (opts?.throwOnTerminal) {
-        throw error instanceof Error ? error : new Error(msg);
-      }
+    }
+    if (opts?.throwOnTerminal) {
+      throw error instanceof Error ? error : new Error(msg);
     }
   }
 }
@@ -323,11 +642,10 @@ export async function flushImOutbox(): Promise<void> {
 }
 
 /**
- * Uplink a Host-local agent final bubble to Hub (host_projection).
+ * Uplink a Host-local agent final bubble to Hub (host_projection) via Outbox.
  *
  * Idempotent via `client_message_id` = local `agent-result:…` id.
- * Skip when Hub already has any agent-result for the same session (Mobile
- * TurnCompletionProjector path uses a different durable suffix).
+ * Enqueue + flush (same status machine as user_message); never fire-and-forget.
  */
 export async function syncAgentResultToCloud(input: {
   conversationId: string;
@@ -343,6 +661,10 @@ export async function syncAgentResultToCloud(input: {
   const messageId = input.messageId.trim();
   const conversationId = input.conversationId.trim();
   if (!text || !messageId || !conversationId) return;
+  // Uplink gate (C2): only canonical agent-result:{conv}:{session}:{origin}.
+  if (!isCanonicalAgentResultId(messageId, conversationId)) {
+    return;
+  }
   if (!isProjectableAgentMessage({ id: messageId, role: "agent", body: text })) {
     return;
   }
@@ -350,65 +672,39 @@ export async function syncAgentResultToCloud(input: {
 
   const runtime =
     normalizeRuntime(input.agentRuntime) ??
-    // Infer from common display names when runtime missing on row.
     normalizeRuntime(
       RUNTIMES_FROM_ID.find((r) => messageId.toLowerCase().includes(r)) ?? null,
     );
-  if (!runtime) {
-    console.warn(
-      "[im-cloud-sync] agent result uplink skipped: unknown runtime",
-      messageId,
-    );
-    return;
-  }
 
-  const agentId = await resolveCloudAgentId(runtime);
-  if (!agentId) {
-    console.warn(
-      "[im-cloud-sync] agent result uplink skipped: no cloud agent id",
-      runtime,
-    );
-    return;
+  // Best-effort resolve at enqueue; worker re-resolves if missing.
+  let agentId: string | null = null;
+  if (runtime) {
+    agentId = await resolveCloudAgentId(runtime);
   }
 
   const sessionId =
     input.agentSessionId?.trim() ||
     sessionIdFromAgentResultId(messageId) ||
-    undefined;
+    null;
 
-  try {
-    await sendAgentConversationMessage(
-      auth.deviceId,
-      auth.accessToken,
-      conversationId,
-      {
-        agentId,
-        text,
-        clientMessageId: messageId,
-        agentSessionId: sessionId,
-        replyToMessageId: input.replyToMessageId ?? undefined,
-        // Never re-dispatch: Host already executed this turn.
-        messageSource: "host_projection",
-      },
-    );
-    rememberProjected(messageId);
-    markAcked(messageId);
-  } catch (error) {
-    console.warn("[im-cloud-sync] agent result uplink failed", messageId, error);
-  }
+  const entry = enqueueAgentResult({
+    conversationId,
+    clientMessageId: messageId,
+    text,
+    agentId,
+    agentSessionId: sessionId,
+    agentRuntimes: runtime ? [runtime] : undefined,
+    replyToMessageId: input.replyToMessageId ?? null,
+  });
+
+  await flushOutboxEntry(entry);
+  scheduleOutboxWorker();
 }
-
-const RUNTIMES_FROM_ID = [
-  "codex",
-  "claude",
-  "gemini",
-  "opencode",
-  "grok",
-] as const;
 
 /**
  * After Linked timeline hydrate: project local agent-result rows that Hub is
- * missing (Desktop-native turns). Skip when Hub already covers the session.
+ * missing (Desktop-native turns). Canonical id only — skip when Hub already
+ * has the same message id (or outbox acked).
  */
 export async function projectMissingLocalAgentResultsToHub(
   conversationId: string,
@@ -417,68 +713,61 @@ export async function projectMissingLocalAgentResultsToHub(
 ): Promise<void> {
   if (!cloudAuth() || !conversationId.trim()) return;
 
-  const hubSessions = new Set<string>();
-  for (const m of hubMessages) {
-    if (m.role !== "agent" && !m.id.startsWith("agent-result:")) continue;
-    const key = agentResultSessionKey(m.id);
-    if (key) hubSessions.add(key);
-    if (m.sessionId?.trim()) hubSessions.add(`*:${m.sessionId.trim()}`);
-  }
+  const hubIds = new Set(hubMessages.map((m) => m.id));
 
   for (const m of localMessages) {
     if (!isProjectableAgentMessage(m)) continue;
+    // Only uplink frozen formula ids.
+    if (!isCanonicalAgentResultId(m.id, conversationId)) continue;
     if (isAcked(m.id) || projectedMessageIds.has(m.id)) continue;
-
-    const sessionKey = agentResultSessionKey(m.id);
-    if (sessionKey && hubSessions.has(sessionKey)) continue;
-    if (m.sessionId?.trim() && hubSessions.has(`*:${m.sessionId.trim()}`)) {
-      continue;
-    }
-
-    // Soft: Hub already has same body from projector (different id).
-    const body = (m.body ?? "").trim();
-    if (
-      body &&
-      hubMessages.some(
-        (h) =>
-          (h.role === "agent" || h.id.startsWith("agent-result:")) &&
-          (h.body ?? "").trim() === body,
-      )
-    ) {
+    // Same canonical id already on Hub — no soft session/body dedupe (C2).
+    if (hubIds.has(m.id)) {
       rememberProjected(m.id);
       continue;
     }
 
+    const body = (m.body ?? "").trim();
     await syncAgentResultToCloud({
       conversationId,
       messageId: m.id,
       text: body,
       agentRuntime: m.agent,
       agentSessionId: m.sessionId ?? sessionIdFromAgentResultId(m.id),
-      // Do not invent reply_to: Mobile projector owns reply causality for
-      // client_live dispatches; Desktop-native turns stay unquoted.
       replyToMessageId: m.replyToMessageId ?? null,
     });
   }
 }
 
-function scheduleOutboxWorker(): void {
+/** Schedule a background outbox drain until no pending rows remain. */
+export function scheduleOutboxWorker(): void {
   if (outboxWorkerTimer != null) return;
+  const now = Date.now();
+  const dueNow = listDuePending(now);
+  const nextAt = earliestPendingAttemptAt(now);
+  if (dueNow.length === 0 && nextAt == null) return;
+  // Sleep until due (min 50ms, default 2s when already due).
+  const delay =
+    dueNow.length > 0
+      ? 50
+      : Math.max(50, Math.min((nextAt as number) - now, 5 * 60_000));
   outboxWorkerTimer = setTimeout(() => {
     outboxWorkerTimer = null;
     void flushImOutbox().then(() => {
-      const still = listDuePending(Date.now() + 60_000);
-      if (still.length > 0 || listDuePending().length > 0) {
+      if (earliestPendingAttemptAt() != null) {
         scheduleOutboxWorker();
       }
     });
-  }, 2_000);
+  }, delay);
 }
 
 /** Start background outbox drain (call once when account session is ready). */
 export function startImOutboxWorker(): void {
-  void flushImOutbox();
-  scheduleOutboxWorker();
+  reclaimStaleInflight();
+  void flushImOutbox().then(() => {
+    if (earliestPendingAttemptAt() != null) {
+      scheduleOutboxWorker();
+    }
+  });
 }
 
 /** Clear process caches (tests / account switch). */

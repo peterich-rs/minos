@@ -136,6 +136,7 @@ impl ChatState {
         }
     }
 
+    #[allow(dead_code)] // exercised by unit tests; used for result-capture helpers
     pub fn last_completed_assistant_text(&self) -> Option<(String, String)> {
         for (idx, item) in self.items.iter().enumerate().rev() {
             match item {
@@ -826,6 +827,7 @@ impl ChatState {
     }
 }
 
+#[allow(dead_code)] // helper for last_completed_assistant_text
 fn assistant_text_before_error(items: &[ChatItem], message_id: &str) -> Option<(String, String)> {
     items.iter().rev().find_map(|item| {
         let ChatItem::AssistantText {
@@ -842,6 +844,7 @@ fn assistant_text_before_error(items: &[ChatItem], message_id: &str) -> Option<(
     })
 }
 
+#[allow(dead_code)] // helper for last_completed_assistant_text
 fn text_parts_to_string(parts: &[TextPart]) -> Option<String> {
     let mut result = Vec::new();
     for part in parts {

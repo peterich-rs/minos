@@ -1,10 +1,11 @@
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { ChevronRight, FolderOpen, X } from "lucide-react";
 import {
   AuxiliaryPanel,
   type AuxiliaryPanelLayout,
 } from "@/shared/layout/AuxiliaryPanel";
 import { agentMeta, type AgentSession } from "@/shared/lib/mock-data";
+import { projectSessionFromEntity } from "@/shared/lib/session-entity";
 import { Avatar } from "@/shared/ui/Avatar";
 import { StatusPill } from "@/shared/ui/StatusPill";
 import { useUiStore } from "@/store/ui-store";
@@ -42,6 +43,8 @@ export function SessionInspector({
   const selectSession = useUiStore((s) => s.selectSession);
   const conversations = useWorkspaceStore((s) => s.conversations);
   const projects = useWorkspaceStore((s) => s.projects);
+  // Membership list is projected from Entity on every commitSessionEntity —
+  // no component-level Entity overlay (that hid dual-writer bugs).
   const sessions = useWorkspaceStore(
     (s) =>
       s.sessionsByConversation[conversationId] ?? EMPTY_INSPECTOR_SESSIONS,
@@ -52,8 +55,7 @@ export function SessionInspector({
   const loadInspector = useWorkspaceStore((s) => s.loadInspector);
   const source = useWorkspaceStore((s) => s.source);
   const bootEpoch = useWorkspaceStore((s) => s.bootEpoch);
-  // Prefer list row; fall back to Entity so a transient list rebuild cannot
-  // hide SessionDetail right after click.
+  // Detail fallback when a brand-new shell is not yet in membership list.
   const selectedEntity = useWorkspaceStore((s) =>
     selectedSessionId ? s.sessionsById[selectedSessionId] : undefined,
   );
@@ -64,11 +66,13 @@ export function SessionInspector({
     void loadInspector(conversationId);
   }, [conversationId, detailsOpen, source, loadInspector, bootEpoch]);
 
-  // While any session is live, quiet-relist even if livePush is healthy.
-  // Manager SessionStateChanged can lag or miss projection after SessionAdded
-  // shells; Sessions tab remount re-list is what users noticed "fixes" status.
+  // While any session is live (or mid-recovery), quiet-relist even if livePush
+  // is healthy — recovery windows must not catch-22 on Paused-only status.
   const hasLiveSession = sessions.some(
-    (s) => s.status === "running" || s.status === "needs_approval",
+    (s) =>
+      s.status === "running" ||
+      s.status === "needs_approval" ||
+      (s.status === "suspended" && Boolean(s.needsContinue)),
   );
   useEffect(() => {
     if (source !== "daemon" || !conversationId || !detailsOpen) return;
@@ -81,57 +85,12 @@ export function SessionInspector({
 
   const conversation = conversations.find((c) => c.id === conversationId);
   const project = projects.find((p) => p.id === projectId);
-  // Subscribe to Entity map so Running→Idle paints without waiting for list re-list.
-  const sessionsById = useWorkspaceStore((s) => s.sessionsById);
-  const sessionsWithEntity = useMemo(() => {
-    return sessions.map((row) => {
-      const ent = sessionsById[row.id];
-      if (!ent) return row;
-      if (
-        ent.conversationId &&
-        ent.conversationId !== conversationId
-      ) {
-        return row;
-      }
-      if (
-        ent.status === row.status &&
-        (ent.summary || "") === (row.summary || "") &&
-        ent.lastTsMs === row.lastTsMs
-      ) {
-        return row;
-      }
-      return {
-        ...row,
-        status: ent.status,
-        summary: ent.summary || row.summary,
-        lastTsMs: ent.lastTsMs ?? row.lastTsMs,
-        needsContinue: ent.needsContinue ?? row.needsContinue,
-        messageCount: ent.messageCount ?? row.messageCount,
-      };
-    });
-  }, [sessions, sessionsById, conversationId]);
-  const roots = sessionsWithEntity.filter((s) => !s.parentId);
-  const selectedFromList = sessionsWithEntity.find(
-    (s) => s.id === selectedSessionId,
-  );
+  const roots = sessions.filter((s) => !s.parentId);
+  const selectedFromList = sessions.find((s) => s.id === selectedSessionId);
   const selected =
     selectedFromList ??
     (selectedEntity && selectedEntity.conversationId === conversationId
-      ? ({
-          id: selectedEntity.sessionId,
-          conversationId: selectedEntity.conversationId,
-          conversationTitle: selectedEntity.conversationTitle,
-          agent: selectedEntity.agent as ProjectSession["agent"],
-          shortId: selectedEntity.shortId,
-          status: selectedEntity.status,
-          model: selectedEntity.model,
-          parentId: selectedEntity.parentId,
-          summary: selectedEntity.summary,
-          needsContinue: selectedEntity.needsContinue,
-          firstTsMs: selectedEntity.firstTsMs,
-          lastTsMs: selectedEntity.lastTsMs,
-          messageCount: selectedEntity.messageCount,
-        } satisfies ProjectSession)
+      ? (projectSessionFromEntity(selectedEntity) as ProjectSession)
       : undefined);
 
   return (

@@ -144,6 +144,7 @@ export interface ConversationMembersResponse {
 }
 
 export interface ConversationReadResponse {
+  last_read_seq?: number | null
   last_read_at_ms?: number | null
 }
 
@@ -160,6 +161,7 @@ export interface ChatMessageSummary {
   sender: UserSummary
   text: string
   created_at_ms: number
+  message_seq: number
   reply_to?: ChatMessageReplySummary | null
   recalled_at_ms?: number | null
   mentioned_account_ids?: string[]
@@ -167,7 +169,7 @@ export interface ChatMessageSummary {
 
 export interface ListChatMessagesResponse {
   messages: ChatMessageSummary[]
-  next_before_ts_ms?: number | null
+  next_before_seq?: number | null
 }
 
 export interface HostSkillSummary {
@@ -820,7 +822,11 @@ export async function listConversationMessages(
   deviceId: string,
   accessToken: string,
   conversationId: string,
-  options: { beforeTsMs?: number | null; limit?: number } = {},
+  options: {
+    beforeSeq?: number | null
+    afterSeq?: number | null
+    limit?: number
+  } = {},
 ): Promise<ListChatMessagesResponse> {
   return requestAuthedQuery<ListChatMessagesResponse>(
     `/v1/conversations/${conversationId}/messages/query`,
@@ -828,7 +834,8 @@ export async function listConversationMessages(
     accessToken,
     {
       limit: options.limit ?? 50,
-      before_ts_ms: options.beforeTsMs ?? undefined,
+      before_seq: options.beforeSeq ?? undefined,
+      after_seq: options.afterSeq ?? undefined,
     },
   )
 }

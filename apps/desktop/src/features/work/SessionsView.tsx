@@ -202,7 +202,10 @@ export function SessionsView({ projectId }: { projectId: string }) {
     if (source !== "daemon") return;
     if (livePush) return;
     const live = displaySessions.some(
-      (s) => s.status === "running" || s.status === "needs_approval",
+      (s) =>
+        s.status === "running" ||
+        s.status === "needs_approval" ||
+        (s.status === "suspended" && Boolean(s.needsContinue)),
     );
     if (!live && listStatus?.phase !== "error") return;
     const id = window.setInterval(() => {

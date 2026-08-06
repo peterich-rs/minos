@@ -131,7 +131,8 @@ abstract class MobileClient implements RustOpaqueInterface {
 
   Future<ListChatMessagesResponse> listChatMessages({
     required String conversationId,
-    PlatformInt64? beforeTsMs,
+    PlatformInt64? beforeSeq,
+    PlatformInt64? afterSeq,
     required int limit,
   });
 
@@ -256,16 +257,21 @@ abstract class MobileClient implements RustOpaqueInterface {
   Future<List<UserSummary>> searchUsers({required String minosId});
 
   /// Submit a user approval decision for a pending host request.
+  ///
+  /// `client_request_id` is the Hub Intent Outbox id (C5.3). When omitted,
+  /// the mobile client generates one so the wire body never hardcodes null.
   Future<void> sendApprovalDecision({
     required String requestId,
     required String sessionId,
     required String decisionJson,
+    String? clientRequestId,
   });
 
   Future<ChatMessageSummary> sendChatMessage({
     required String conversationId,
     required String text,
     String? replyToMessageId,
+    String? clientMessageId,
   });
 
   /// Send a follow-up user message to an existing agent session.
@@ -286,6 +292,9 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// once Dart drops the stream (detected via `sink.add(...).is_err()`).
   Stream<AuthStateFrame> subscribeAuthState();
 
+  /// Open-chat live path (R3a): subscribe `conversation:{id}` for full T1 frames.
+  Future<void> subscribeConversation({required String conversationId});
+
   /// Subscribe to live `SocialEventFrame`s fanned out from the backend.
   Stream<SocialEventFrame> subscribeSocialEvents();
 
@@ -298,6 +307,17 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// Every frb stream sink gets its own broadcast receiver; lagging
   /// subscribers lose old frames rather than blocking the producer.
   Stream<UiEventFrame> subscribeUiEvents();
+
+  /// Toggle Hub reaction; `client_op_id` is the Intent Outbox id (B6/C5).
+  Future<ToggleReactionResponse> toggleReaction({
+    required String conversationId,
+    required String messageId,
+    required String emoji,
+    required String clientOpId,
+  });
+
+  /// Leave open-chat conversation topic (R3a).
+  Future<void> unsubscribeConversation({required String conversationId});
 
   Future<AgentSummary> updateAgent({
     required String agentId,
@@ -599,6 +619,41 @@ class AuthSummary {
           email == other.email;
 }
 
+class ChatMessageAttachment {
+  final String blobId;
+  final String contentType;
+  final PlatformInt64 byteSize;
+  final String kind;
+  final String? originalFilename;
+
+  const ChatMessageAttachment({
+    required this.blobId,
+    required this.contentType,
+    required this.byteSize,
+    required this.kind,
+    this.originalFilename,
+  });
+
+  @override
+  int get hashCode =>
+      blobId.hashCode ^
+      contentType.hashCode ^
+      byteSize.hashCode ^
+      kind.hashCode ^
+      originalFilename.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ChatMessageAttachment &&
+          runtimeType == other.runtimeType &&
+          blobId == other.blobId &&
+          contentType == other.contentType &&
+          byteSize == other.byteSize &&
+          kind == other.kind &&
+          originalFilename == other.originalFilename;
+}
+
 class ChatMessageReplySummary {
   final String messageId;
   final UserSummary sender;
@@ -636,10 +691,13 @@ class ChatMessageSummary {
   final UserSummary sender;
   final String text;
   final PlatformInt64 createdAtMs;
+  final PlatformInt64 messageSeq;
   final ChatMessageReplySummary? replyTo;
   final PlatformInt64? recalledAtMs;
   final List<String> mentionedAccountIds;
   final SenderType senderType;
+  final List<ReactionGroup> reactions;
+  final List<ChatMessageAttachment> attachments;
 
   const ChatMessageSummary({
     required this.messageId,
@@ -647,10 +705,13 @@ class ChatMessageSummary {
     required this.sender,
     required this.text,
     required this.createdAtMs,
+    required this.messageSeq,
     this.replyTo,
     this.recalledAtMs,
     required this.mentionedAccountIds,
     required this.senderType,
+    required this.reactions,
+    required this.attachments,
   });
 
   @override
@@ -660,10 +721,13 @@ class ChatMessageSummary {
       sender.hashCode ^
       text.hashCode ^
       createdAtMs.hashCode ^
+      messageSeq.hashCode ^
       replyTo.hashCode ^
       recalledAtMs.hashCode ^
       mentionedAccountIds.hashCode ^
-      senderType.hashCode;
+      senderType.hashCode ^
+      reactions.hashCode ^
+      attachments.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -675,10 +739,13 @@ class ChatMessageSummary {
           sender == other.sender &&
           text == other.text &&
           createdAtMs == other.createdAtMs &&
+          messageSeq == other.messageSeq &&
           replyTo == other.replyTo &&
           recalledAtMs == other.recalledAtMs &&
           mentionedAccountIds == other.mentionedAccountIds &&
-          senderType == other.senderType;
+          senderType == other.senderType &&
+          reactions == other.reactions &&
+          attachments == other.attachments;
 }
 
 @freezed
@@ -727,18 +794,20 @@ class ConversationMembersResponse {
 }
 
 class ConversationReadResponse {
+  final PlatformInt64? lastReadSeq;
   final PlatformInt64? lastReadAtMs;
 
-  const ConversationReadResponse({this.lastReadAtMs});
+  const ConversationReadResponse({this.lastReadSeq, this.lastReadAtMs});
 
   @override
-  int get hashCode => lastReadAtMs.hashCode;
+  int get hashCode => lastReadSeq.hashCode ^ lastReadAtMs.hashCode;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is ConversationReadResponse &&
           runtimeType == other.runtimeType &&
+          lastReadSeq == other.lastReadSeq &&
           lastReadAtMs == other.lastReadAtMs;
 }
 
@@ -1219,12 +1288,12 @@ class ListAgentsResponse {
 
 class ListChatMessagesResponse {
   final List<ChatMessageSummary> messages;
-  final PlatformInt64? nextBeforeTsMs;
+  final PlatformInt64? nextBeforeSeq;
 
-  const ListChatMessagesResponse({required this.messages, this.nextBeforeTsMs});
+  const ListChatMessagesResponse({required this.messages, this.nextBeforeSeq});
 
   @override
-  int get hashCode => messages.hashCode ^ nextBeforeTsMs.hashCode;
+  int get hashCode => messages.hashCode ^ nextBeforeSeq.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1232,7 +1301,7 @@ class ListChatMessagesResponse {
       other is ListChatMessagesResponse &&
           runtimeType == other.runtimeType &&
           messages == other.messages &&
-          nextBeforeTsMs == other.nextBeforeTsMs;
+          nextBeforeSeq == other.nextBeforeSeq;
 }
 
 class ListHostSkillsResponse {
@@ -1635,6 +1704,59 @@ class ProjectSummary {
           threadCount == other.threadCount;
 }
 
+class ReactionActor {
+  final String actorId;
+  final String actorKind;
+  final String displayName;
+
+  const ReactionActor({
+    required this.actorId,
+    required this.actorKind,
+    required this.displayName,
+  });
+
+  @override
+  int get hashCode =>
+      actorId.hashCode ^ actorKind.hashCode ^ displayName.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ReactionActor &&
+          runtimeType == other.runtimeType &&
+          actorId == other.actorId &&
+          actorKind == other.actorKind &&
+          displayName == other.displayName;
+}
+
+class ReactionGroup {
+  final String emoji;
+  final int count;
+  final bool reactedByMe;
+  final List<ReactionActor> actors;
+
+  const ReactionGroup({
+    required this.emoji,
+    required this.count,
+    required this.reactedByMe,
+    required this.actors,
+  });
+
+  @override
+  int get hashCode =>
+      emoji.hashCode ^ count.hashCode ^ reactedByMe.hashCode ^ actors.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ReactionGroup &&
+          runtimeType == other.runtimeType &&
+          emoji == other.emoji &&
+          count == other.count &&
+          reactedByMe == other.reactedByMe &&
+          actors == other.actors;
+}
+
 class ReadSessionParams {
   final String sessionId;
   final BigInt? fromSeq;
@@ -1773,12 +1895,20 @@ sealed class SessionEndReason with _$SessionEndReason {
 /// Dart-visible shape of `minos_mobile::SocialEventFrame`.
 class SocialEventFrame {
   final String conversationId;
+
+  /// `"message"` | `"reaction_updated"`.
+  final String kind;
   final ChatMessageSummary message;
 
-  const SocialEventFrame({required this.conversationId, required this.message});
+  const SocialEventFrame({
+    required this.conversationId,
+    required this.kind,
+    required this.message,
+  });
 
   @override
-  int get hashCode => conversationId.hashCode ^ message.hashCode;
+  int get hashCode =>
+      conversationId.hashCode ^ kind.hashCode ^ message.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1786,10 +1916,42 @@ class SocialEventFrame {
       other is SocialEventFrame &&
           runtimeType == other.runtimeType &&
           conversationId == other.conversationId &&
+          kind == other.kind &&
           message == other.message;
 }
 
 enum SubagentStatus { running, completed, failed, interrupted }
+
+class ToggleReactionResponse {
+  final String messageId;
+  final String conversationId;
+  final List<ReactionGroup> reactions;
+  final String action;
+
+  const ToggleReactionResponse({
+    required this.messageId,
+    required this.conversationId,
+    required this.reactions,
+    required this.action,
+  });
+
+  @override
+  int get hashCode =>
+      messageId.hashCode ^
+      conversationId.hashCode ^
+      reactions.hashCode ^
+      action.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ToggleReactionResponse &&
+          runtimeType == other.runtimeType &&
+          messageId == other.messageId &&
+          conversationId == other.conversationId &&
+          reactions == other.reactions &&
+          action == other.action;
+}
 
 /// Dart-visible shape of `minos_mobile::UiEventFrame`. Held as a separate
 /// type (rather than mirrored) so the `ui` field lands as the mirrored

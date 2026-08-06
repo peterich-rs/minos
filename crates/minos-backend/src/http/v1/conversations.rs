@@ -6,7 +6,8 @@ use minos_protocol::{
     ChatMessageSummary, ConversationMembersResponse, ConversationReadResponse,
     ConversationResponse, ConversationsResponse, CreateGroupConversationRequest,
     EnsureDirectConversationRequest, ListChatMessagesRequest, ListChatMessagesResponse,
-    SendChatMessageRequest, UpsertConversationRequest,
+    SendChatMessageRequest, ToggleReactionRequest, ToggleReactionResponse,
+    UpsertConversationRequest,
 };
 
 use crate::conversations::{ConversationError, ConversationService, DefaultConversationService};
@@ -44,6 +45,10 @@ pub fn router() -> Router<BackendState> {
         .route(
             "/conversations/:conversation_id/messages/:message_id/recall",
             post(recall_message),
+        )
+        .route(
+            "/conversations/:conversation_id/messages/:message_id/reactions/toggle",
+            post(toggle_reaction),
         )
         .route(
             "/conversations/:conversation_id/members/add",
@@ -236,11 +241,14 @@ async fn mark_conversation_read(
 ) -> Result<Json<ConversationReadResponse>, (StatusCode, Json<ErrorEnvelope>)> {
     let account_id = super::social::require_account_id_from_state(&state, &headers)?;
     let conversations_svc = DefaultConversationService::new(state.store.clone());
-    let last_read_at_ms = conversations_svc
+    let latest = conversations_svc
         .mark_read(&account_id, &conversation_id)
         .await
         .map_err(map_conversation_error)?;
-    Ok(Json(ConversationReadResponse { last_read_at_ms }))
+    Ok(Json(ConversationReadResponse {
+        last_read_seq: latest.map(|(seq, _)| seq),
+        last_read_at_ms: latest.map(|(_, at)| at),
+    }))
 }
 
 async fn list_messages_query(
@@ -255,14 +263,15 @@ async fn list_messages_query(
         .list_messages(
             &account_id,
             &conversation_id,
-            query.before_ts_ms,
+            query.before_seq,
+            query.after_seq,
             query.limit.unwrap_or(50),
         )
         .await
         .map_err(map_conversation_error)?;
     Ok(Json(ListChatMessagesResponse {
         messages: result.messages,
-        next_before_ts_ms: result.next_before_ts_ms,
+        next_before_seq: result.next_before_seq,
     }))
 }
 
@@ -281,6 +290,7 @@ async fn send_message(
         req.client_message_id,
         req.message_source.unwrap_or_default(),
         req.client_sent_at_ms.or(req.created_at_ms),
+        req.attachment_blob_ids,
     )
     .await
 }
@@ -299,6 +309,7 @@ async fn send_message_command(
         req.client_message_id,
         req.message_source.unwrap_or_default(),
         req.client_sent_at_ms.or(req.created_at_ms),
+        req.attachment_blob_ids,
     )
     .await
 }
@@ -312,11 +323,15 @@ async fn send_message_inner(
     client_message_id: Option<String>,
     message_source: minos_protocol::MessageSource,
     client_sent_at_ms: Option<i64>,
+    attachment_blob_ids: Vec<String>,
 ) -> Result<Json<ChatMessageSummary>, (StatusCode, Json<ErrorEnvelope>)> {
     let account_id = super::social::require_account_id_from_state(&state, &headers)?;
     let trimmed = text.trim().to_string();
-    if trimmed.is_empty() {
-        return Err(err("bad_request", "message text is required"));
+    if trimmed.is_empty() && attachment_blob_ids.is_empty() {
+        return Err(err(
+            "bad_request",
+            "message text or attachment_blob_ids is required",
+        ));
     }
 
     let conversations_svc = DefaultConversationService::new(state.store.clone());
@@ -329,6 +344,7 @@ async fn send_message_inner(
             client_message_id.as_deref(),
             message_source,
             client_sent_at_ms,
+            &attachment_blob_ids,
         )
         .await
         .map_err(map_conversation_error)?;
@@ -375,6 +391,50 @@ async fn recall_message(
         .map_err(map_conversation_error)?;
     super::social::fan_out_social_message(&state, &message).await;
     Ok(Json(message))
+}
+
+async fn toggle_reaction(
+    State(state): State<BackendState>,
+    headers: HeaderMap,
+    Path((conversation_id, message_id)): Path<(String, String)>,
+    Json(req): Json<ToggleReactionRequest>,
+) -> Result<Json<ToggleReactionResponse>, (StatusCode, Json<ErrorEnvelope>)> {
+    let account_id = super::social::require_account_id_from_state(&state, &headers)?;
+    let conversations_svc = DefaultConversationService::new(state.store.clone());
+    let (action, reactions, pending) = conversations_svc
+        .toggle_reaction(
+            &account_id,
+            &conversation_id,
+            &message_id,
+            &req.emoji,
+            &req.client_op_id,
+        )
+        .await
+        .map_err(map_conversation_error)?;
+
+    state.wake_outbox();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    if let Err(error) = state
+        .realtime
+        .publish_durable_event_by_id(&pending.topic_kind, &pending.event_id)
+        .await
+    {
+        tracing::warn!(
+            target: "minos_backend::conversations",
+            error = %error,
+            event_id = %pending.event_id,
+            "failed to publish reaction durable; outbox will retry"
+        );
+    } else if let Some(outbox_id) = pending.outbox_id.as_deref() {
+        let _ = crate::store::outbox_events::ack(&state.store, outbox_id, now_ms).await;
+    }
+
+    Ok(Json(ToggleReactionResponse {
+        message_id,
+        conversation_id,
+        reactions,
+        action,
+    }))
 }
 
 async fn add_group_member(

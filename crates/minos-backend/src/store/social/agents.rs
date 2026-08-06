@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::error::BackendError;
 use crate::store::{AsStorePool, StorePoolRef};
 
-use super::{get_message, store_err, AgentRow, ChatMessageRow};
+use super::{store_err, AgentRow, ChatMessageRow};
 
 /// Legacy description marker (no longer used for lookup; kept for display).
 pub const HOST_RUNTIME_AGENT_DESCRIPTION: &str = "minos:host-runtime";
@@ -541,12 +541,57 @@ pub async fn insert_agent_message_with_session(
             operation: "social::insert_agent_message.load_agent".into(),
             message: format!("agent not found: {agent_id}"),
         })?;
+    let mut tx = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => pool
+            .begin()
+            .await
+            .map(crate::app::tx::DbTx::Sqlite)
+            .map_err(store_err("social::insert_agent_message.begin"))?,
+        StorePoolRef::Postgres(pool) => pool
+            .begin()
+            .await
+            .map(crate::app::tx::DbTx::Postgres)
+            .map_err(store_err("social::insert_agent_message.begin"))?,
+    };
+    let outcome = insert_agent_message_with_session_in_tx(
+        &mut tx,
+        &agent,
+        conversation_id,
+        text,
+        now_ms,
+        reply_to_message_id,
+        agent_session_id,
+        mentioned_account_ids,
+        client_message_id,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(outcome.row)
+}
 
+/// Insert an agent message on an open transaction (for Transactional Outbox).
+///
+/// Caller must load `agent` before opening the tx (avoid nested pool checkout).
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_agent_message_with_session_in_tx(
+    tx: &mut crate::app::tx::DbTx<'_>,
+    agent: &AgentRow,
+    conversation_id: &str,
+    text: &str,
+    now_ms: i64,
+    reply_to_message_id: Option<&str>,
+    agent_session_id: Option<&str>,
+    mentioned_account_ids: &[String],
+    client_message_id: Option<&str>,
+) -> Result<super::conversation_messages::InsertMessageOutcome, BackendError> {
     let message_id = match client_message_id.map(str::trim).filter(|s| !s.is_empty()) {
         Some(id) => {
-            if let Some(existing) = get_message(store, id).await? {
+            if let Some(existing) = super::conversation_messages::get_message_in_tx(tx, id).await? {
                 if existing.conversation_id == conversation_id {
-                    return Ok(existing);
+                    return Ok(super::conversation_messages::InsertMessageOutcome {
+                        row: existing,
+                        inserted: false,
+                    });
                 }
                 return Err(BackendError::StoreQuery {
                     operation: "social::insert_agent_message.conflict".into(),
@@ -562,13 +607,12 @@ pub async fn insert_agent_message_with_session(
     unique_mentions.sort();
     unique_mentions.dedup();
 
-    match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => {
-            let mut tx = pool
-                .begin()
-                .await
-                .map_err(store_err("social::insert_agent_message.begin"))?;
+    let message_seq =
+        super::conversation_messages::allocate_message_seq_in_tx(tx, conversation_id, now_ms)
+            .await?;
 
+    match tx {
+        crate::app::tx::DbTx::Sqlite(tx) => {
             sqlx::query(
                 "INSERT INTO chat_messages (
                     message_id,
@@ -577,10 +621,11 @@ pub async fn insert_agent_message_with_session(
                     sender_agent_id,
                     text,
                     created_at_ms,
+                    message_seq,
                     reply_to_message_id,
                     agent_session_id,
                     sender_type
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'agent')",
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'agent')",
             )
             .bind(&message_id)
             .bind(conversation_id)
@@ -588,9 +633,10 @@ pub async fn insert_agent_message_with_session(
             .bind(&agent.agent_id)
             .bind(text)
             .bind(now_ms)
+            .bind(message_seq)
             .bind(reply_to_message_id)
             .bind(agent_session_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(store_err("social::insert_agent_message.insert"))?;
 
@@ -601,32 +647,12 @@ pub async fn insert_agent_message_with_session(
                 )
                 .bind(&message_id)
                 .bind(mentioned_id)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await
                 .map_err(store_err("social::insert_agent_message.mention"))?;
             }
-
-            sqlx::query("UPDATE conversations SET updated_at_ms = ? WHERE conversation_id = ?")
-                .bind(now_ms)
-                .bind(conversation_id)
-                .execute(&mut *tx)
-                .await
-                .map_err(store_err(
-                    "social::insert_agent_message.update_conversation",
-                ))?;
-
-            tx.commit()
-                .await
-                .map_err(store_err("social::insert_agent_message.commit"))?;
-
-            get_message(pool, &message_id).await
         }
-        StorePoolRef::Postgres(pool) => {
-            let mut tx = pool
-                .begin()
-                .await
-                .map_err(store_err("social::insert_agent_message.begin"))?;
-
+        crate::app::tx::DbTx::Postgres(tx) => {
             sqlx::query(
                 "INSERT INTO chat_messages (
                     message_id,
@@ -635,10 +661,11 @@ pub async fn insert_agent_message_with_session(
                     sender_agent_id,
                     text,
                     created_at_ms,
+                    message_seq,
                     reply_to_message_id,
                     agent_session_id,
                     sender_type
-                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'agent')",
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'agent')",
             )
             .bind(&message_id)
             .bind(conversation_id)
@@ -646,9 +673,10 @@ pub async fn insert_agent_message_with_session(
             .bind(&agent.agent_id)
             .bind(text)
             .bind(now_ms)
+            .bind(message_seq)
             .bind(reply_to_message_id)
             .bind(agent_session_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(store_err("social::insert_agent_message.insert"))?;
 
@@ -660,29 +688,26 @@ pub async fn insert_agent_message_with_session(
                 )
                 .bind(&message_id)
                 .bind(mentioned_id)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await
                 .map_err(store_err("social::insert_agent_message.mention"))?;
             }
-
-            sqlx::query("UPDATE conversations SET updated_at_ms = $1 WHERE conversation_id = $2")
-                .bind(now_ms)
-                .bind(conversation_id)
-                .execute(&mut *tx)
-                .await
-                .map_err(store_err(
-                    "social::insert_agent_message.update_conversation",
-                ))?;
-
-            tx.commit()
-                .await
-                .map_err(store_err("social::insert_agent_message.commit"))?;
-
-            get_message(pool, &message_id).await
         }
-    }?
-    .ok_or_else(|| BackendError::StoreQuery {
-        operation: "social::insert_agent_message.load".into(),
-        message: "message missing after insert".into(),
+    }
+
+    Ok(super::conversation_messages::InsertMessageOutcome {
+        row: ChatMessageRow {
+            message_id,
+            conversation_id: conversation_id.to_string(),
+            sender_account_id: agent.owner_account_id.clone(),
+            sender_agent_id: Some(agent.agent_id.clone()),
+            text: text.to_string(),
+            created_at_ms: now_ms,
+            message_seq,
+            reply_to_message_id: reply_to_message_id.map(ToOwned::to_owned),
+            recalled_at_ms: None,
+            sender_type: "agent".to_string(),
+        },
+        inserted: true,
     })
 }

@@ -20,7 +20,7 @@ use crate::host_commands::{HostCommandService, RuntimeHostCommandService};
 use crate::host_link::HostLinkService;
 use crate::http::{self, BackendState, RouteContract};
 use crate::ingest::{translate::SessionTranslators, use_case::IngestUseCase};
-use crate::notifications::channels::composite::CompositeChannel;
+use crate::media::MediaService;
 use crate::notifications::use_case::DefaultNotificationService;
 use crate::notifications::NotificationService;
 use crate::project::ProjectService;
@@ -112,10 +112,28 @@ pub struct AppContext {
     pub translators: Arc<SessionTranslators>,
     pub realtime: Arc<RealtimeFanout>,
     pub notifications: Arc<dyn NotificationService>,
+    /// Blob upload/download (R2 or local). Always present; may be unconfigured.
+    pub media: Arc<MediaService>,
+    /// Agent turn completion watches (ingest-driven TurnCompletionProjector).
+    pub completion_watches: Arc<crate::completion_watch::CompletionWatchRegistry>,
     pub instance_id: String,
+    /// In-process wake for outbox_dispatcher (post-commit notify_one).
+    pub outbox_wake: Arc<tokio::sync::Notify>,
+    /// In-process wake for agent_dispatch_worker (enqueue + host online).
+    pub agent_dispatch_wake: Arc<tokio::sync::Notify>,
 }
 
 impl AppContext {
+    /// Wake outbox_dispatcher after a successful commit that enqueued outbox rows.
+    pub fn wake_outbox(&self) {
+        self.outbox_wake.notify_one();
+    }
+
+    /// Wake agent_dispatch_worker after enqueue or host online.
+    pub fn wake_agent_dispatch(&self) {
+        self.agent_dispatch_wake.notify_one();
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn compose(
         runtime_config: AppRuntimeConfig,
@@ -138,10 +156,23 @@ impl AppContext {
         let run_workers = runtime_config.runtime_mode.runs_supervised_workers();
         // Build notification service before realtime so durable fanout can
         // trigger push as a secondary side effect without owning the outbox.
-        let composite_channel = CompositeChannel::from_env();
-        let notifications: Arc<dyn NotificationService> = Arc::new(
-            DefaultNotificationService::new(store.clone(), vec![Arc::new(composite_channel)]),
-        );
+        // P5: register channel kinds individually so channel_for(Apns|Fcm)
+        // matches. Each send returns NotWired until ops secrets + provider
+        // integration land (never fake Sent).
+        let mut push_channels: Vec<Arc<dyn crate::notifications::channels::PushChannel>> =
+            Vec::new();
+        if let Some(apns) = crate::notifications::channels::apns::ApnsChannel::from_env() {
+            push_channels.push(Arc::new(apns));
+        }
+        if let Some(fcm) = crate::notifications::channels::fcm::FcmChannel::from_env() {
+            push_channels.push(Arc::new(fcm));
+        }
+        let notifications: Arc<dyn NotificationService> =
+            Arc::new(DefaultNotificationService::new(
+                store.clone(),
+                push_channels,
+                Arc::clone(&registry) as Arc<dyn crate::notifications::PresencePort>,
+            ));
         let realtime = RealtimeFanout::new(
             Arc::clone(&registry),
             Arc::clone(&subscription_mgr),
@@ -173,7 +204,7 @@ impl AppContext {
         );
         let auth = AuthUseCase::new_with_realtime_tickets_and_supabase(
             store.clone(),
-            jwt_secret,
+            jwt_secret.clone(),
             realtime_tickets,
             supabase,
         );
@@ -185,6 +216,7 @@ impl AppContext {
             store.clone(),
             Arc::clone(&host_commands),
         );
+        let media = Arc::new(MediaService::from_env(store.clone(), jwt_secret));
         Arc::new(Self {
             config: Arc::new(runtime_config),
             data,
@@ -203,7 +235,11 @@ impl AppContext {
             translators,
             realtime,
             notifications,
+            media,
+            completion_watches: Arc::new(crate::completion_watch::CompletionWatchRegistry::new()),
             instance_id,
+            outbox_wake: Arc::new(tokio::sync::Notify::new()),
+            agent_dispatch_wake: Arc::new(tokio::sync::Notify::new()),
         })
     }
 }
@@ -274,8 +310,11 @@ impl RuntimeShell {
             let ctx = Arc::new(crate::jobs::JobContext {
                 store: app.store.clone(),
                 instance_id: app.instance_id.clone(),
+                outbox_wake: Arc::clone(&app.outbox_wake),
+                agent_dispatch_wake: Arc::clone(&app.agent_dispatch_wake),
             });
-            let jobs = crate::jobs::default_jobs(Some(Arc::clone(&app.realtime)));
+            let jobs =
+                crate::jobs::default_jobs(Some(Arc::clone(&app.realtime)), Some(Arc::clone(&app)));
             Some(crate::jobs::JobSupervisor::spawn_all(
                 jobs,
                 ctx,

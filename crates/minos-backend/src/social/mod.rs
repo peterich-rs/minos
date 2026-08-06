@@ -207,10 +207,13 @@ impl SocialService {
                 sender,
                 text: row.text,
                 created_at_ms: row.created_at_ms,
+                message_seq: row.message_seq,
                 reply_to,
                 recalled_at_ms: row.recalled_at_ms,
                 mentioned_account_ids,
                 sender_type,
+                reactions: vec![],
+                attachments: vec![],
             });
         }
         Ok(output)

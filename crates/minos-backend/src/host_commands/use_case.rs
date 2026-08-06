@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -18,7 +18,6 @@ use crate::store::{durable_event_log, host_commands, outbox_events, AsStorePool,
 const FORWARD_TIMEOUT: Duration = Duration::from_secs(5);
 const APPROVAL_COMMAND_METHOD: &str = "minos_approval_decision";
 const COMMAND_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const POLLER_RETRY_DELAY: Duration = Duration::from_secs(1);
 const LATE_REPLY_GRACE_MS: i64 = 30_000;
 
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
@@ -157,32 +156,26 @@ impl RuntimeHostCommandService {
     pub fn new_with_timeout_worker(
         store: StoreHandle,
         registry: Option<Arc<SessionRegistry>>,
-        enable_timeout_worker: bool,
+        _enable_timeout_worker: bool,
     ) -> Arc<Self> {
-        Self::new_with_timeout_worker_and_realtime(store, registry, enable_timeout_worker, None)
+        Self::new_with_timeout_worker_and_realtime(store, registry, _enable_timeout_worker, None)
     }
 
+    /// Timeout lifecycle is owned solely by [`crate::jobs::host_command_timeout::HostCommandTimeoutJob`]
+    /// via [`expire_open_timed_out_commands`]. The `_enable_timeout_worker` flag is retained for
+    /// call-site stability but no longer spawns a private poller (delete dual ownership).
     pub fn new_with_timeout_worker_and_realtime(
         store: StoreHandle,
         registry: Option<Arc<SessionRegistry>>,
-        enable_timeout_worker: bool,
+        _enable_timeout_worker: bool,
         realtime: Option<Arc<RealtimeFanout>>,
     ) -> Arc<Self> {
-        let service = Arc::new(Self {
+        Arc::new(Self {
             store,
             registry,
             realtime,
             notify: Notify::new(),
-        });
-        if enable_timeout_worker {
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                let weak = Arc::downgrade(&service);
-                handle.spawn(async move {
-                    timeout_poller(weak).await;
-                });
-            }
-        }
-        service
+        })
     }
 
     pub async fn dispatch_approval_decision(
@@ -311,6 +304,7 @@ impl RuntimeHostCommandService {
             &uuid::Uuid::new_v4().to_string(),
             cursor.topic.kind().as_str(),
             &cursor.event_id,
+            outbox_events::OutboxLane::HostCommand,
             command.created_at_ms,
         )
         .await?;
@@ -417,8 +411,14 @@ impl RuntimeHostCommandService {
 
         let finished_at_ms = chrono::Utc::now().timestamp_millis();
         let timeout_error = timeout_error_json(timeout_ms);
-        if host_commands::mark_timed_out(&self.store, command_id, &timeout_error, finished_at_ms)
-            .await?
+        // Same order as job path: dead-letter outbox before mark_timed_out when deadline elapsed.
+        if expire_command_if_deadline_passed(
+            &self.store,
+            command_id,
+            &timeout_error,
+            finished_at_ms,
+        )
+        .await?
         {
             return Err(BackendError::ForwardRpcTimeout {
                 method: method.to_string(),
@@ -451,34 +451,25 @@ impl RuntimeHostCommandService {
         })
     }
 
-    async fn poll_timed_out_commands(&self) -> Result<(), BackendError> {
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let rows = host_commands::list_timed_out_open(&self.store, now_ms, 64).await?;
-        for row in rows {
-            let _ = host_commands::mark_timed_out(
-                &self.store,
-                &row.command_id,
-                &timeout_error_json(
-                    u64::try_from(now_ms.saturating_sub(row.created_at_ms)).unwrap_or(u64::MAX),
-                ),
-                now_ms,
-            )
-            .await?;
-        }
-        clear_expired_pending_host_commands(now_ms);
-        Ok(())
-    }
-
     fn dispatch_outbox_once(&self) {
         let Some(realtime) = self.realtime.clone() else {
             return;
         };
         tokio::spawn(async move {
-            if let Err(error) = realtime.dispatch_outbox_batch().await {
+            // Host commands live on the host_command lane; also drain social so a
+            // single wake remains a general post-commit pipeline nudge.
+            if let Err(error) = realtime.dispatch_host_command_outbox_batch().await {
                 tracing::warn!(
                     target: "minos_backend::host_commands",
                     error = %error,
                     "host command outbox wake failed"
+                );
+            }
+            if let Err(error) = realtime.dispatch_outbox_batch().await {
+                tracing::warn!(
+                    target: "minos_backend::host_commands",
+                    error = %error,
+                    "social outbox wake failed"
                 );
             }
         });
@@ -543,23 +534,110 @@ impl HostCommandService for RuntimeHostCommandService {
     }
 }
 
-async fn timeout_poller(service: Weak<RuntimeHostCommandService>) {
-    loop {
-        let Some(service) = service.upgrade() else {
-            break;
-        };
-        if let Err(error) = service.poll_timed_out_commands().await {
-            tracing::warn!(
-                target: "minos_backend::host_commands",
-                error = %error,
-                "host command timeout poller iteration failed"
-            );
+/// Expire a single host command when its DB deadline has elapsed.
+///
+/// Outbox settlement rule (observation wins):
+/// - **Host observed** (`ack_at_ms` / non-timeout host terminal) → success-ack outbox
+///   (never dead-letter), then `mark_timed_out` if the command is still unfinished.
+/// - **Not observed** → dead-letter host_command outbox first, then `mark_timed_out`.
+///
+/// Returns `true` when the command was newly marked timed out.
+pub async fn expire_command_if_deadline_passed(
+    store: &impl AsStorePool,
+    command_id: &str,
+    timeout_error: &Value,
+    now_ms: i64,
+) -> Result<bool, BackendError> {
+    let Some(row) = host_commands::get(store, command_id).await? else {
+        return Ok(false);
+    };
+    if row.finished_at_ms.is_some() {
+        return Ok(false);
+    }
+    if row.deadline_at_ms > now_ms {
+        return Ok(false);
+    }
+
+    if row.is_host_observed() {
+        // Delivery was confirmed; settle outbox as acked even though we time out the RPC wait.
+        match outbox_events::ack_pending_host_command_events(store, command_id, now_ms).await {
+            Ok(0) => {}
+            Ok(n) => {
+                tracing::debug!(
+                    target: "minos_backend::host_commands",
+                    command_id = %command_id,
+                    acked = n,
+                    "acked host command outbox on deadline after host observation"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_backend::host_commands",
+                    command_id = %command_id,
+                    error = %error,
+                    "failed to ack observed host command outbox at deadline"
+                );
+            }
         }
-        tokio::select! {
-            _ = tokio::time::sleep(POLLER_RETRY_DELAY) => {}
-            _ = service.notify.notified() => {}
+    } else {
+        // No host observation: dead-letter before mark so concurrent ack_pending cannot
+        // success-ack after finished_at_ms is set with kind=timeout.
+        match outbox_events::dead_letter_host_command_events(
+            store,
+            command_id,
+            now_ms,
+            &serde_json::json!({
+                "kind": "host_command_expired",
+                "command_id": command_id,
+            }),
+        )
+        .await
+        {
+            Ok(0) => {}
+            Ok(n) => {
+                crate::telemetry::increment_host_command_outbox_expired();
+                tracing::warn!(
+                    target: "minos_backend::host_commands",
+                    command_id = %command_id,
+                    dead_lettered = n,
+                    "dead-lettered expired host command outbox rows"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_backend::host_commands",
+                    command_id = %command_id,
+                    error = %error,
+                    "failed to dead-letter expired host command outbox"
+                );
+            }
         }
     }
+
+    host_commands::mark_timed_out(store, command_id, timeout_error, now_ms).await
+}
+
+/// Sweep open host commands past deadline (single owner for job + wait path).
+///
+/// Returns the number of commands newly marked timed out.
+pub async fn expire_open_timed_out_commands(
+    store: &impl AsStorePool,
+    now_ms: i64,
+    limit: u32,
+) -> Result<u32, BackendError> {
+    let rows = host_commands::list_timed_out_open(store, now_ms, limit).await?;
+    let mut expired = 0u32;
+    for row in rows {
+        let error_json = timeout_error_json(
+            u64::try_from(now_ms.saturating_sub(row.created_at_ms)).unwrap_or(u64::MAX),
+        );
+        if expire_command_if_deadline_passed(store, &row.command_id, &error_json, now_ms).await? {
+            expired = expired.saturating_add(1);
+            crate::telemetry::increment_host_command_timeout();
+        }
+    }
+    clear_expired_pending_host_commands(now_ms);
+    Ok(expired)
 }
 
 fn terminal_response(

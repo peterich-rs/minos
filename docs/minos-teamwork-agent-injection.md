@@ -25,11 +25,14 @@ runtime, so resumed sessions keep their conversation-bound MCP context.
 The MCP server exposes only conversation-scoped tools:
 
 - `list_conversation_messages`
+- `list_conversation_roster`
 - `delegate_to_agent`
 - `get_delegation_status`
 - `wait_delegation`
 - `cancel_delegation`
 - `post_conversation_update`
+- `post_git_update`
+- `react_to_message` — emoji toggle; **hard-gated** to messages that @mention this agent
 
 `list_conversation_messages` reads daemon conversation messages. Each message may
 include structured `delegation_id`, `reply_to_message_id`, and `mentions` in

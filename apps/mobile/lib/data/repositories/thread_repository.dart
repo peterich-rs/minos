@@ -44,11 +44,13 @@ class ThreadRepository {
     required String requestId,
     required String sessionId,
     required Map<String, dynamic> decision,
+    String? clientRequestId,
   }) {
     return _core.sendApprovalDecision(
       requestId: requestId,
       sessionId: sessionId,
       decision: decision,
+      clientRequestId: clientRequestId,
     );
   }
 

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use futures_util::StreamExt;
 use minos_domain::ConnectionState;
 use minos_protocol::realtime::{ClientFrame, ServerFrame};
-use minos_protocol::{ChatMessageSummary, SenderType, UserSummary};
+use minos_protocol::ChatMessageSummary;
 use minos_ui_protocol::{DisplayPayload, UiEventMessage};
 use openwire_core::websocket::Message;
 use tokio::sync::{broadcast, mpsc, watch};
@@ -33,17 +33,30 @@ impl RealtimeSession {
             return;
         }
 
-        // Auto-subscribe to account topic plus any topic the app requested
-        // before this WebSocket was established.
+        // Subscribe to account topic plus any topic the app requested before
+        // this WebSocket was established. Hello is register-only on the gateway;
+        // catch-up uses resume_after from persisted-in-process cursors (never
+        // force account resume to 0 on reconnect).
         let account_topic = format!("account:{account_id}");
+        // Only seed the topic if absent; keep existing seq for reconnect catch-up.
         subscription_mgr.add_topic(&account_topic, 0).await;
         let mut topics = subscription_mgr.subscribed_topics().await;
         topics.sort();
         topics.dedup();
         let resume_after = subscription_mgr.resume_after_map().await;
+        // Omit zero cursors so gateway treats missing keys as after=0 only when
+        // truly unknown; non-zero values filter replay.
+        let resume_after: std::collections::HashMap<String, i64> = resume_after
+            .into_iter()
+            .filter(|(_, seq)| *seq > 0)
+            .collect();
         let subscribe = ClientFrame::Subscribe {
             topics,
-            resume_after: Some(resume_after),
+            resume_after: if resume_after.is_empty() {
+                None
+            } else {
+                Some(resume_after)
+            },
             client_request_id: None,
         };
         let subscribe_json = match serde_json::to_string(&subscribe) {
@@ -153,15 +166,33 @@ fn dispatch_event(
                     .await;
             });
             match kind.as_str() {
-                "conversation_message_appended"
-                | "conversation_message_recalled"
-                | "account_conversation_message_appended"
-                | "account_conversation_message_recalled" => {
+                // T1 open conversation: full ChatMessageSummary for timeline.
+                "conversation_message_appended" | "conversation_message_recalled" => {
                     if let Some(conv_id) = payload.get("conversation_id").and_then(|v| v.as_str()) {
-                        let _ = social_events_tx.send(SocialEventFrame {
-                            conversation_id: conv_id.to_string(),
-                            message: parse_chat_message(payload),
-                        });
+                        // Fail closed: never fan out empty-shell ChatMessageSummary.
+                        if let Some(message) = parse_chat_message(payload) {
+                            let _ = social_events_tx.send(SocialEventFrame {
+                                conversation_id: conv_id.to_string(),
+                                kind: "message".into(),
+                                message,
+                            });
+                        }
+                    }
+                }
+                // T2 account digest: inbox/rail only (preview stub, not timeline SSOT).
+                "account_conversation_message_appended" => {
+                    if let Some(frame) = parse_account_inbox_digest(payload, false) {
+                        let _ = social_events_tx.send(frame);
+                    }
+                }
+                "account_conversation_message_recalled" => {
+                    if let Some(frame) = parse_account_inbox_digest(payload, true) {
+                        let _ = social_events_tx.send(frame);
+                    }
+                }
+                "conversation_message_reaction_updated" => {
+                    if let Some(frame) = parse_reaction_updated(payload) {
+                        let _ = social_events_tx.send(frame);
                     }
                 }
                 "approval_requested" | "approval_resolved" => {
@@ -171,6 +202,19 @@ fn dispatch_event(
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string(),
+                        seq: 0,
+                        ui: UiEventMessage::Raw {
+                            kind: kind.clone(),
+                            payload_json: payload.to_string(),
+                        },
+                        ts_ms: chrono::Utc::now().timestamp_millis(),
+                    });
+                }
+                // Roster / social graph (Realtime Surface R1/R2): surface as Raw
+                // UiEvent so Flutter can upsert/remove hosts or invalidate friends.
+                "host_linked" | "host_unlinked" | "friend_request_updated" => {
+                    let _ = ui_events_tx.send(UiEventFrame {
+                        session_id: String::new(),
                         seq: 0,
                         ui: UiEventMessage::Raw {
                             kind: kind.clone(),
@@ -243,9 +287,54 @@ fn dispatch_event(
         },
         RealtimeEvent::SnapshotRequired { topic, .. } => {
             tracing::warn!(topic, "snapshot required — need REST rebuild");
+            // Keep topic registered; reset cursor so next Subscribe catch-up is clean.
+            let mgr = subscription_mgr.clone();
+            let topic_clear = topic.clone();
+            tokio::spawn(async move {
+                mgr.clear_cursor(&topic_clear).await;
+            });
+            // Surface as Raw UI so Flutter can invalidate caches and re-query.
+            let _ = ui_events_tx.send(UiEventFrame {
+                session_id: String::new(),
+                seq: 0,
+                ui: UiEventMessage::Raw {
+                    kind: "snapshot_required".into(),
+                    payload_json: serde_json::json!({ "topic": topic }).to_string(),
+                },
+                ts_ms: chrono::Utc::now().timestamp_millis(),
+            });
         }
         RealtimeEvent::SubscriptionDenied { topic, reason } => {
             tracing::warn!(topic, reason, "subscription denied");
+            let _ = ui_events_tx.send(UiEventFrame {
+                session_id: String::new(),
+                seq: 0,
+                ui: UiEventMessage::Raw {
+                    kind: "subscription_denied".into(),
+                    payload_json: serde_json::json!({
+                        "topic": topic,
+                        "reason": reason,
+                    })
+                    .to_string(),
+                },
+                ts_ms: chrono::Utc::now().timestamp_millis(),
+            });
+        }
+        RealtimeEvent::SubscriptionLimitExceeded { limit, current } => {
+            tracing::warn!(limit, current, "subscription limit exceeded");
+            let _ = ui_events_tx.send(UiEventFrame {
+                session_id: String::new(),
+                seq: 0,
+                ui: UiEventMessage::Raw {
+                    kind: "subscription_limit_exceeded".into(),
+                    payload_json: serde_json::json!({
+                        "limit": limit,
+                        "current": current,
+                    })
+                    .to_string(),
+                },
+                ts_ms: chrono::Utc::now().timestamp_millis(),
+            });
         }
         RealtimeEvent::ForceClose { reason, close_code } => {
             tracing::warn!(reason, close_code, "force close from server");
@@ -253,22 +342,191 @@ fn dispatch_event(
     }
 }
 
-fn parse_chat_message(payload: &serde_json::Value) -> ChatMessageSummary {
+/// Parse durable chat payload into a real summary. Returns `None` on
+/// deserialize failure or empty ids — callers must not insert shells.
+fn parse_chat_message(payload: &serde_json::Value) -> Option<ChatMessageSummary> {
     let message_payload = payload.get("message").unwrap_or(payload);
-    serde_json::from_value(message_payload.clone()).unwrap_or_else(|_| ChatMessageSummary {
-        message_id: String::new(),
-        conversation_id: String::new(),
-        sender: UserSummary {
-            account_id: String::new(),
-            minos_id: String::new(),
-            display_name: String::new(),
+    match serde_json::from_value::<ChatMessageSummary>(message_payload.clone()) {
+        Ok(msg) if !msg.message_id.trim().is_empty() && !msg.conversation_id.trim().is_empty() => {
+            Some(msg)
+        }
+        Ok(_) => {
+            tracing::warn!("parse_chat_message: empty message_id or conversation_id; drop");
+            None
+        }
+        Err(error) => {
+            tracing::warn!(%error, "parse_chat_message failed; drop (no empty shell)");
+            None
+        }
+    }
+}
+
+/// Parse R3 account thin digest into an inbox-only SocialEventFrame.
+///
+/// Builds a stub [`ChatMessageSummary`] (`text` = preview) so existing Dart
+/// inbox patch paths can reuse preview/unread without treating this as
+/// timeline-authoritative (kind is `inbox_digest` / `inbox_recall`).
+fn parse_account_inbox_digest(
+    payload: &serde_json::Value,
+    is_recall: bool,
+) -> Option<SocialEventFrame> {
+    use minos_protocol::{SenderType, UserSummary};
+
+    let conversation_id = payload
+        .get("conversation_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let message_id = payload
+        .get("message_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let at_ms = payload
+        .get("at_ms")
+        .and_then(|v| v.as_i64())
+        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+    let preview = if is_recall {
+        payload
+            .get("preview")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Message recalled")
+            .to_string()
+    } else {
+        payload
+            .get("preview")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let sender_display_name = payload
+        .get("sender_display_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let account_id = payload
+        .get("account_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let mentioned = payload
+        .get("mentioned")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let message_seq = payload
+        .get("message_seq")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+
+    // SenderRef on wire: { "kind": "user", "account_id": "..." } or agent.
+    let (sender_account_id, sender_type) = match payload.get("sender") {
+        Some(s)
+            if s.get("agent_id").is_some()
+                || s.get("kind").and_then(|k| k.as_str()) == Some("agent") =>
+        {
+            (
+                s.get("agent_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                SenderType::Agent,
+            )
+        }
+        Some(s) => (
+            s.get("account_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            SenderType::User,
+        ),
+        None => (String::new(), SenderType::User),
+    };
+
+    // When mentioned=true for this account, seed mentioned_account_ids so
+    // inbox mention badge can flip without full message body.
+    let mentioned_account_ids = if mentioned && !account_id.is_empty() {
+        vec![account_id]
+    } else {
+        Vec::new()
+    };
+
+    Some(SocialEventFrame {
+        conversation_id: conversation_id.clone(),
+        kind: if is_recall {
+            "inbox_recall".into()
+        } else {
+            "inbox_digest".into()
         },
-        text: String::new(),
-        created_at_ms: 0,
-        reply_to: None,
-        recalled_at_ms: None,
-        mentioned_account_ids: Vec::new(),
-        sender_type: SenderType::User,
+        message: ChatMessageSummary {
+            message_id,
+            conversation_id,
+            sender: UserSummary {
+                account_id: sender_account_id,
+                minos_id: String::new(),
+                display_name: sender_display_name,
+            },
+            text: preview,
+            created_at_ms: at_ms,
+            message_seq,
+            reply_to: None,
+            recalled_at_ms: if is_recall { Some(at_ms) } else { None },
+            mentioned_account_ids,
+            sender_type,
+            reactions: vec![],
+            attachments: vec![],
+        },
+    })
+}
+
+/// Parse reaction durable into a reaction_updated social frame.
+fn parse_reaction_updated(payload: &serde_json::Value) -> Option<SocialEventFrame> {
+    use minos_protocol::{ReactionGroup, SenderType, UserSummary};
+
+    let conversation_id = payload
+        .get("conversation_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let message_id = payload
+        .get("message_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let at_ms = payload
+        .get("at_ms")
+        .and_then(|v| v.as_i64())
+        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+    let reactions: Vec<ReactionGroup> = payload
+        .get("reactions")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+
+    Some(SocialEventFrame {
+        conversation_id: conversation_id.clone(),
+        kind: "reaction_updated".into(),
+        message: ChatMessageSummary {
+            message_id,
+            conversation_id,
+            sender: UserSummary {
+                account_id: String::new(),
+                minos_id: String::new(),
+                display_name: String::new(),
+            },
+            text: String::new(),
+            created_at_ms: at_ms,
+            message_seq: 0,
+            reply_to: None,
+            recalled_at_ms: None,
+            mentioned_account_ids: vec![],
+            sender_type: SenderType::User,
+            reactions,
+            attachments: vec![],
+        },
     })
 }
 
@@ -406,6 +664,99 @@ fn event_text(payload: &serde_json::Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_chat_message_rejects_empty_shell() {
+        assert!(parse_chat_message(&serde_json::json!({})).is_none());
+        assert!(parse_chat_message(&serde_json::json!({
+            "message_id": "",
+            "conversation_id": "c1",
+            "text": "x",
+            "created_at_ms": 1,
+            "message_seq": 1,
+            "sender": {
+                "account_id": "a",
+                "minos_id": "m",
+                "display_name": "n"
+            },
+            "sender_type": "user",
+            "mentioned_account_ids": []
+        }))
+        .is_none());
+    }
+
+    #[test]
+    fn parse_chat_message_accepts_valid_payload() {
+        let msg = parse_chat_message(&serde_json::json!({
+            "message": {
+                "message_id": "m1",
+                "conversation_id": "c1",
+                "text": "hello",
+                "created_at_ms": 10,
+                "message_seq": 3,
+                "sender": {
+                    "account_id": "a",
+                    "minos_id": "m",
+                    "display_name": "n"
+                },
+                "sender_type": "user",
+                "mentioned_account_ids": []
+            }
+        }))
+        .expect("valid message");
+        assert_eq!(msg.message_id, "m1");
+        assert_eq!(msg.conversation_id, "c1");
+        assert_eq!(msg.message_seq, 3);
+    }
+
+    #[test]
+    fn parse_account_inbox_digest_builds_preview_stub() {
+        let frame = parse_account_inbox_digest(
+            &serde_json::json!({
+                "account_id": "viewer",
+                "conversation_id": "c1",
+                "message_id": "m1",
+                "at_ms": 99,
+                "preview": "hi digest",
+                "sender_display_name": "Other",
+                "mentioned": true,
+                "message_seq": 7,
+                "sender": { "kind": "user", "account_id": "other" }
+            }),
+            false,
+        )
+        .expect("digest");
+        assert_eq!(frame.kind, "inbox_digest");
+        assert_eq!(frame.conversation_id, "c1");
+        assert_eq!(frame.message.text, "hi digest");
+        assert_eq!(frame.message.sender.display_name, "Other");
+        assert_eq!(frame.message.sender.account_id, "other");
+        assert_eq!(frame.message.message_seq, 7);
+        assert_eq!(
+            frame.message.mentioned_account_ids,
+            vec!["viewer".to_string()]
+        );
+        assert!(frame.message.recalled_at_ms.is_none());
+    }
+
+    #[test]
+    fn parse_account_inbox_recall_sets_kind_and_recalled() {
+        let frame = parse_account_inbox_digest(
+            &serde_json::json!({
+                "account_id": "viewer",
+                "conversation_id": "c1",
+                "message_id": "m1",
+                "at_ms": 50,
+                "preview": "Message recalled",
+                "message_seq": 2
+            }),
+            true,
+        )
+        .expect("recall digest");
+        assert_eq!(frame.kind, "inbox_recall");
+        assert_eq!(frame.message.recalled_at_ms, Some(50));
+        assert_eq!(frame.message.text, "Message recalled");
+    }
 
     #[test]
     fn stream_event_to_ui_maps_formal_text_delta() {

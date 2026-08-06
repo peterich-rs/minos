@@ -100,8 +100,22 @@ services:
       MINOS_ENV: ${MINOS_ENV:-prod}
       MINOS_CORS_ORIGINS: ${MINOS_CORS_ORIGINS:?set MINOS_CORS_ORIGINS}
       MINOS_JWT_SECRET: ${MINOS_JWT_SECRET:?set MINOS_JWT_SECRET}
+      # Supabase IdP exchange for POST /v1/auth/supabase (required for prod login).
+      # Without SUPABASE_URL the route returns 503 supabase_not_configured.
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_JWT_AUD: ${SUPABASE_JWT_AUD:-authenticated}
+      # Only needed if tokens are still HS256 (legacy); modern projects use JWKS via SUPABASE_URL.
+      SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-}
       RUST_LOG: ${RUST_LOG:-info,minos_backend=info}
       MINOS_SHUTDOWN_TIMEOUT_SECS: "30"
+      # Optional Cloudflare R2 (chat attachments / media blobs). Omit all to disable.
+      MINOS_R2_ACCOUNT_ID: ${MINOS_R2_ACCOUNT_ID:-}
+      MINOS_R2_ACCESS_KEY_ID: ${MINOS_R2_ACCESS_KEY_ID:-}
+      MINOS_R2_SECRET_ACCESS_KEY: ${MINOS_R2_SECRET_ACCESS_KEY:-}
+      MINOS_R2_BUCKET: ${MINOS_R2_BUCKET:-}
+      MINOS_R2_ENDPOINT: ${MINOS_R2_ENDPOINT:-}
+      MINOS_MEDIA_MAX_BYTES: ${MINOS_MEDIA_MAX_BYTES:-10485760}
+      MINOS_MEDIA_PUBLIC_BASE_URL: ${MINOS_MEDIA_PUBLIC_BASE_URL:-}
     ports:
       - "127.0.0.1:8787:8787"
     healthcheck:

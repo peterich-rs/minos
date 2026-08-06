@@ -483,7 +483,7 @@ pub async fn get_conversation(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, ConversationRow>(
-                "SELECT conversation_id, kind, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms
+                "SELECT conversation_id, kind::text, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms
                    FROM conversations
                   WHERE conversation_id = $1",
             )
@@ -512,7 +512,7 @@ pub async fn list_conversations_for(
                     c.created_at_ms,
                     c.updated_at_ms,
                     (SELECT COUNT(*) FROM conversation_members cm2 WHERE cm2.conversation_id = c.conversation_id) AS member_count,
-                    (SELECT m.text FROM chat_messages m WHERE m.conversation_id = c.conversation_id ORDER BY m.created_at_ms DESC LIMIT 1) AS last_message_preview,
+                    (SELECT m.text FROM chat_messages m WHERE m.conversation_id = c.conversation_id ORDER BY m.message_seq DESC LIMIT 1) AS last_message_preview,
                     COALESCE((SELECT MAX(m.created_at_ms) FROM chat_messages m WHERE m.conversation_id = c.conversation_id), c.updated_at_ms) AS last_message_at_ms,
                     COALESCE((
                         SELECT COUNT(*)
@@ -520,7 +520,7 @@ pub async fn list_conversations_for(
                          WHERE m.conversation_id = c.conversation_id
                            AND m.sender_account_id <> ?
                            AND m.recalled_at_ms IS NULL
-                           AND m.created_at_ms > COALESCE(cr.last_read_at_ms, 0)
+                           AND m.message_seq > COALESCE(cr.last_read_seq, 0)
                            AND m.created_at_ms > COALESCE(cd.deleted_at_ms, 0)
                     ), 0) AS unread_count,
                     COALESCE((
@@ -530,7 +530,7 @@ pub async fn list_conversations_for(
                          WHERE m.conversation_id = c.conversation_id
                            AND m.sender_account_id <> ?
                            AND m.recalled_at_ms IS NULL
-                           AND m.created_at_ms > COALESCE(cr.last_read_at_ms, 0)
+                           AND m.message_seq > COALESCE(cr.last_read_seq, 0)
                            AND m.created_at_ms > COALESCE(cd.deleted_at_ms, 0)
                            AND mm.mentioned_account_id = ?
                     ), 0) AS unread_mention_count
@@ -559,7 +559,7 @@ pub async fn list_conversations_for(
             sqlx::query_as::<_, ConversationDigestRow>(
                 "SELECT
                     c.conversation_id,
-                    c.kind,
+                    c.kind::text,
                     c.title,
                     c.created_by_account_id,
                     c.direct_account_low,
@@ -567,7 +567,7 @@ pub async fn list_conversations_for(
                     c.created_at_ms,
                     c.updated_at_ms,
                     (SELECT COUNT(*) FROM conversation_members cm2 WHERE cm2.conversation_id = c.conversation_id) AS member_count,
-                    (SELECT m.text FROM chat_messages m WHERE m.conversation_id = c.conversation_id ORDER BY m.created_at_ms DESC LIMIT 1) AS last_message_preview,
+                    (SELECT m.text FROM chat_messages m WHERE m.conversation_id = c.conversation_id ORDER BY m.message_seq DESC LIMIT 1) AS last_message_preview,
                     COALESCE((SELECT MAX(m.created_at_ms) FROM chat_messages m WHERE m.conversation_id = c.conversation_id), c.updated_at_ms) AS last_message_at_ms,
                     COALESCE((
                         SELECT COUNT(*)
@@ -575,7 +575,7 @@ pub async fn list_conversations_for(
                          WHERE m.conversation_id = c.conversation_id
                            AND m.sender_account_id <> $1
                            AND m.recalled_at_ms IS NULL
-                           AND m.created_at_ms > COALESCE(cr.last_read_at_ms, 0)
+                           AND m.message_seq > COALESCE(cr.last_read_seq, 0)
                            AND m.created_at_ms > COALESCE(cd.deleted_at_ms, 0)
                     ), 0) AS unread_count,
                     COALESCE((
@@ -585,7 +585,7 @@ pub async fn list_conversations_for(
                          WHERE m.conversation_id = c.conversation_id
                            AND m.sender_account_id <> $2
                            AND m.recalled_at_ms IS NULL
-                           AND m.created_at_ms > COALESCE(cr.last_read_at_ms, 0)
+                           AND m.message_seq > COALESCE(cr.last_read_seq, 0)
                            AND m.created_at_ms > COALESCE(cd.deleted_at_ms, 0)
                            AND mm.mentioned_account_id = $3
                     ), 0) AS unread_mention_count
@@ -847,17 +847,26 @@ pub async fn conversation_deleted_at_for_account(
     .map_err(store_err("social::conversation_deleted_at_for_account"))
 }
 
+/// Mark conversation read through the latest `message_seq`.
+/// Returns `(last_read_seq, last_read_at_ms)` when messages exist.
 pub async fn mark_conversation_read_to_latest(
     store: &impl AsStorePool,
     conversation_id: &str,
     account_id: &str,
     updated_at_ms: i64,
-) -> Result<Option<i64>, BackendError> {
-    let last_read_at_ms = match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => sqlx::query_scalar::<_, Option<i64>>(
-            "SELECT MAX(created_at_ms)
-                   FROM chat_messages
-                  WHERE conversation_id = ?",
+) -> Result<Option<(i64, i64)>, BackendError> {
+    #[derive(sqlx::FromRow)]
+    struct LatestRead {
+        last_read_seq: i64,
+        last_read_at_ms: i64,
+    }
+
+    let latest = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query_as::<_, LatestRead>(
+            "SELECT COALESCE(MAX(message_seq), 0) AS last_read_seq,
+                    COALESCE(MAX(created_at_ms), 0) AS last_read_at_ms
+               FROM chat_messages
+              WHERE conversation_id = ?",
         )
         .bind(conversation_id)
         .fetch_one(pool)
@@ -865,10 +874,11 @@ pub async fn mark_conversation_read_to_latest(
         .map_err(store_err(
             "social::mark_conversation_read_to_latest.fetch_latest",
         ))?,
-        StorePoolRef::Postgres(pool) => sqlx::query_scalar::<_, Option<i64>>(
-            "SELECT MAX(created_at_ms)
-                   FROM chat_messages
-                  WHERE conversation_id = $1",
+        StorePoolRef::Postgres(pool) => sqlx::query_as::<_, LatestRead>(
+            "SELECT COALESCE(MAX(message_seq), 0) AS last_read_seq,
+                    COALESCE(MAX(created_at_ms), 0) AS last_read_at_ms
+               FROM chat_messages
+              WHERE conversation_id = $1",
         )
         .bind(conversation_id)
         .fetch_one(pool)
@@ -877,18 +887,23 @@ pub async fn mark_conversation_read_to_latest(
             "social::mark_conversation_read_to_latest.fetch_latest",
         ))?,
     };
-    let Some(last_read_at_ms) = last_read_at_ms else {
+    if latest.last_read_seq <= 0 {
         return Ok(None);
-    };
+    }
 
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query(
             "INSERT INTO conversation_reads
-                    (conversation_id, account_id, last_read_at_ms, updated_at_ms)
-                 VALUES (?, ?, ?, ?)
+                    (conversation_id, account_id, last_read_seq, last_read_at_ms, updated_at_ms)
+                 VALUES (?, ?, ?, ?, ?)
                  ON CONFLICT(conversation_id, account_id) DO UPDATE SET
+                    last_read_seq = CASE
+                        WHEN excluded.last_read_seq > conversation_reads.last_read_seq
+                            THEN excluded.last_read_seq
+                        ELSE conversation_reads.last_read_seq
+                    END,
                     last_read_at_ms = CASE
-                        WHEN excluded.last_read_at_ms > conversation_reads.last_read_at_ms
+                        WHEN excluded.last_read_seq > conversation_reads.last_read_seq
                             THEN excluded.last_read_at_ms
                         ELSE conversation_reads.last_read_at_ms
                     END,
@@ -896,18 +911,24 @@ pub async fn mark_conversation_read_to_latest(
         )
         .bind(conversation_id)
         .bind(account_id)
-        .bind(last_read_at_ms)
+        .bind(latest.last_read_seq)
+        .bind(latest.last_read_at_ms)
         .bind(updated_at_ms)
         .execute(pool)
         .await
         .map(|_| ()),
         StorePoolRef::Postgres(pool) => sqlx::query(
             "INSERT INTO conversation_reads
-                    (conversation_id, account_id, last_read_at_ms, updated_at_ms)
-                 VALUES ($1, $2, $3, $4)
+                    (conversation_id, account_id, last_read_seq, last_read_at_ms, updated_at_ms)
+                 VALUES ($1, $2, $3, $4, $5)
                  ON CONFLICT(conversation_id, account_id) DO UPDATE SET
+                    last_read_seq = CASE
+                        WHEN EXCLUDED.last_read_seq > conversation_reads.last_read_seq
+                            THEN EXCLUDED.last_read_seq
+                        ELSE conversation_reads.last_read_seq
+                    END,
                     last_read_at_ms = CASE
-                        WHEN EXCLUDED.last_read_at_ms > conversation_reads.last_read_at_ms
+                        WHEN EXCLUDED.last_read_seq > conversation_reads.last_read_seq
                             THEN EXCLUDED.last_read_at_ms
                         ELSE conversation_reads.last_read_at_ms
                     END,
@@ -915,7 +936,8 @@ pub async fn mark_conversation_read_to_latest(
         )
         .bind(conversation_id)
         .bind(account_id)
-        .bind(last_read_at_ms)
+        .bind(latest.last_read_seq)
+        .bind(latest.last_read_at_ms)
         .bind(updated_at_ms)
         .execute(pool)
         .await
@@ -923,7 +945,7 @@ pub async fn mark_conversation_read_to_latest(
     }
     .map_err(store_err("social::mark_conversation_read_to_latest.upsert"))?;
 
-    Ok(Some(last_read_at_ms))
+    Ok(Some((latest.last_read_seq, latest.last_read_at_ms)))
 }
 
 pub(crate) async fn find_direct_conversation(
@@ -947,7 +969,7 @@ pub(crate) async fn find_direct_conversation(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, ConversationRow>(
-                "SELECT conversation_id, kind, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms
+                "SELECT conversation_id, kind::text, title, created_by_account_id, direct_account_low, direct_account_high, created_at_ms, updated_at_ms
                    FROM conversations
                   WHERE kind = 'direct'
                     AND direct_account_low = $1

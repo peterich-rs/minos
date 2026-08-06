@@ -352,6 +352,7 @@ impl AgentSessionService for DefaultAgentSessionService {
             &Uuid::new_v4().to_string(),
             cursor.topic.kind().as_str(),
             &cursor.event_id,
+            outbox_events::OutboxLane::SocialDurable,
             started_at_ms,
         )
         .await?;
@@ -374,8 +375,10 @@ impl AgentSessionService for DefaultAgentSessionService {
                         "workspace": workspace_path.clone().unwrap_or_default(),
                         "workspace_path": workspace_path,
                         "initial_user_message": input.initial_user_message.clone(),
+                        "origin_message_id": input.origin_message_id.clone(),
                         "model": agent_model,
                         "reasoning_effort": agent_effort,
+                        "attachments": input.attachments,
                     }),
                     requested_by_account_id: Some(input.caller_account_id.clone()),
                     deadline_at_ms: started_at_ms.saturating_add(DEFAULT_HOST_COMMAND_DEADLINE_MS),
@@ -481,6 +484,7 @@ impl AgentSessionService for DefaultAgentSessionService {
             &Uuid::new_v4().to_string(),
             cursor.topic.kind().as_str(),
             &cursor.event_id,
+            outbox_events::OutboxLane::SocialDurable,
             now_ms,
         )
         .await?;
@@ -498,6 +502,8 @@ impl AgentSessionService for DefaultAgentSessionService {
                         "turn_id": turn_id.clone(),
                         "text": input.text.clone(),
                         "mentions": input.mentions.clone(),
+                        "origin_message_id": input.origin_message_id.clone(),
+                        "attachments": input.attachments,
                     }),
                     requested_by_account_id: Some(input.caller_account_id),
                     deadline_at_ms: now_ms.saturating_add(DEFAULT_HOST_COMMAND_DEADLINE_MS),

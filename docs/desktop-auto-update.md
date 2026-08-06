@@ -45,7 +45,8 @@ dev binaries never hit a production endpoint.
 | `TAURI_SIGNING_PRIVATE_KEY` | minisign private key for signing updater archives |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | password for the private key (if any) |
 | `MINOS_BACKEND_URL` | required for release `minos-daemon` builds (`crates/minos-daemon/build.rs`) |
-| Apple signing / notarize secrets | codesign + notarize DMG / .app (required for macOS Gatekeeper trust) |
+| Apple **codesign** secrets (CI) | `APPLE_CERTIFICATE` (base64 p12), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY` |
+| Apple **notarize** (local Mac) | `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` — used by `notarize-macos-release.sh`, not by default CI |
 
 Generate a keypair once (see [Tauri updater](https://v2.tauri.app/plugin/updater/)):
 
@@ -119,14 +120,40 @@ Platform keys: `darwin-aarch64`, `darwin-x86_64`, `linux-x86_64`, `windows-x86_6
 Only **AppImage** supports in-app update. `.deb` installs see
 `manual-required` and open the GitHub releases page.
 
-### macOS note
+### macOS: codesign in CI, notarize locally
 
-Codesign + notarize the `.app` / DMG in CI. After notarization, rebuild the
-updater `.tar.gz` from the signed app and re-sign with the Tauri updater key
-(same pattern as Buzz `release.yml`).
+Apple Notary regularly takes a long time (sometimes hours) and has **timed out
+the GitHub Actions 6h job hard cap**. Default policy:
 
-Workflow skeleton: `.github/workflows/desktop-release.yml` (manual
-`workflow_dispatch` until secrets and signing are configured).
+| Step | Where | Secrets |
+|------|--------|---------|
+| `pnpm tauri build` + Developer ID **codesign** | CI (`desktop-release.yml`) | certificate + identity only |
+| **Notarize** + staple + re-pack updater `.tar.gz` + minisign | **Local Mac** after download | `APPLE_ID` / app-specific password / team id |
+| Optional CI notarize | `workflow_dispatch` → `notarize_in_ci=true` | not recommended; job timeout 360m |
+
+Operator flow:
+
+```sh
+# 1) CI: Actions → desktop-release → version X.Y.Z (notarize_in_ci left false)
+# 2) After green, on a Mac with Xcode CLT:
+
+export APPLE_ID=you@example.com
+export APPLE_APP_SPECIFIC_PASSWORD=xxxx-xxxx-xxxx-xxxx
+export APPLE_TEAM_ID=XXXXXXXXXX
+export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/minos.key)"
+# gh auth login  (or GH_TOKEN)
+
+apps/desktop/scripts/notarize-macos-release.sh --version X.Y.Z
+```
+
+The script downloads `Minos_X.Y.Z_aarch64.app.tar.gz` (+ DMG if present),
+runs `notarytool submit --wait`, staples, re-packs the updater archive, signs
+with the Tauri minisign key, re-uploads to `vX.Y.Z` and `minos-desktop-latest`,
+and regenerates `latest.json` so updater signatures stay consistent.
+
+Dry-run without upload: add `--skip-upload` (artifacts left under `$TMPDIR`).
+
+Workflow: `.github/workflows/desktop-release.yml` (manual `workflow_dispatch`).
 
 ## Phase C — process model
 

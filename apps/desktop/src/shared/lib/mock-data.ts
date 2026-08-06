@@ -124,6 +124,19 @@ export type TimelineGitActivity = {
   mergeCommit?: string;
 };
 
+/** Viewer-resolved reaction aggregate carried from Hub cold pull / live frames. */
+export type TimelineReactionActor = {
+  id: string;
+  displayName: string;
+};
+
+export type TimelineReactionGroup = {
+  emoji: string;
+  count: number;
+  reactedByMe: boolean;
+  actors: TimelineReactionActor[];
+};
+
 export type TimelineMessage = {
   id: string;
   /** Durable sort key from daemon; optimistic rows may omit until reload. */
@@ -139,6 +152,11 @@ export type TimelineMessage = {
   delegationId?: string;
   mentions?: TimelineMention[];
   gitActivity?: TimelineGitActivity;
+  /**
+   * Hub (or daemon) reaction aggregates for cold hydrate into reaction-store.
+   * Optional — live frames may omit until a reaction event arrives.
+   */
+  reactions?: TimelineReactionGroup[];
   /**
    * Local delivery lifecycle for user messages.
    * - `sending`: optimistic bubble shown immediately, awaiting append/RPC ack.

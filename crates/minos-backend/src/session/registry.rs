@@ -223,8 +223,16 @@ impl SessionHandle {
 /// `DashMap` gives us per-shard locking; the registry itself is cheap to
 /// clone (just an `Arc` bump) so it can be handed to every async task that
 /// needs to push frames.
+///
+/// Also tracks the last time each account transitioned from ≥1 live mobile
+/// client WS → 0, so push `UserOnline` disconnect grace uses real disconnect
+/// time (not throttled DB `last_seen`).
 #[derive(Debug, Clone, Default)]
-pub struct SessionRegistry(Arc<DashMap<DeviceId, SessionHandle>>);
+pub struct SessionRegistry {
+    sessions: Arc<DashMap<DeviceId, SessionHandle>>,
+    /// account_id → wall-clock ms of last "last mobile client left" edge.
+    last_mobile_disconnect_at_ms: Arc<DashMap<String, i64>>,
+}
 
 impl SessionRegistry {
     /// Construct an empty registry.
@@ -240,16 +248,29 @@ impl SessionRegistry {
     /// caller should typically drop the returned handle to close the old
     /// outbox and shut the prior writer task.
     pub fn insert(&self, handle: SessionHandle) -> Option<SessionHandle> {
-        let previous = self.0.insert(handle.device_id, handle);
+        // Live mobile client clears disconnect grace for that account.
+        if handle.role == DeviceRole::MobileClient {
+            if let Some(account_id) = handle.account_id() {
+                self.last_mobile_disconnect_at_ms.remove(&account_id);
+            }
+        }
+        let previous = self.sessions.insert(handle.device_id, handle);
         crate::telemetry::set_session_registry_size(self.len());
+        // Superseded mobile handle: if another mobile session still lives for
+        // the same account, keep grace cleared; else record disconnect when
+        // the caller drops the returned handle via remove_* — handled there.
+        if let Some(ref prev) = previous {
+            self.note_mobile_session_left(prev);
+        }
         previous
     }
 
     /// Remove and return the handle for `id`, or `None` if none was live.
     pub fn remove(&self, id: DeviceId) -> Option<SessionHandle> {
-        let removed = self.0.remove(&id).map(|(_k, v)| v);
-        if removed.is_some() {
+        let removed = self.sessions.remove(&id).map(|(_k, v)| v);
+        if let Some(ref handle) = removed {
             crate::telemetry::set_session_registry_size(self.len());
+            self.note_mobile_session_left(handle);
         }
         removed
     }
@@ -262,13 +283,49 @@ impl SessionRegistry {
     /// place.
     pub fn remove_current(&self, current: &SessionHandle) -> Option<SessionHandle> {
         let removed = self
-            .0
+            .sessions
             .remove_if(&current.device_id, |_, live| live.same_session(current))
             .map(|(_k, v)| v);
-        if removed.is_some() {
+        if let Some(ref handle) = removed {
             crate::telemetry::set_session_registry_size(self.len());
+            self.note_mobile_session_left(handle);
         }
         removed
+    }
+
+    /// Wall-clock ms when this account last lost its final live mobile WS.
+    /// `None` if never observed offline in this process, or currently online
+    /// cleared the stamp.
+    #[must_use]
+    pub fn last_mobile_disconnect_at_ms(&self, account_id: &str) -> Option<i64> {
+        self.last_mobile_disconnect_at_ms
+            .get(account_id)
+            .map(|v| *v)
+    }
+
+    /// When a mobile session leaves the registry and no other mobile client
+    /// remains for that account, stamp disconnect time for push grace.
+    fn note_mobile_session_left(&self, handle: &SessionHandle) {
+        if handle.role != DeviceRole::MobileClient {
+            return;
+        }
+        let Some(account_id) = handle.account_id() else {
+            return;
+        };
+        if self.mobile_client_session_count(&account_id) > 0 {
+            // Still online via another socket — clear any stale stamp.
+            self.last_mobile_disconnect_at_ms.remove(&account_id);
+            return;
+        }
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        self.last_mobile_disconnect_at_ms.insert(account_id, now_ms);
+    }
+
+    /// Test / clock-injected stamp for disconnect grace unit tests.
+    #[cfg(test)]
+    pub fn stamp_mobile_disconnect_for_tests(&self, account_id: &str, at_ms: i64) {
+        self.last_mobile_disconnect_at_ms
+            .insert(account_id.to_string(), at_ms);
     }
 
     /// Clone the handle for `id` if a session is live.
@@ -277,7 +334,7 @@ impl SessionRegistry {
     /// a `DashMap::Ref` guard so callers can perform async I/O without
     /// holding the shard lock.
     pub fn get(&self, id: DeviceId) -> Option<SessionHandle> {
-        self.0.get(&id).map(|r| r.clone())
+        self.sessions.get(&id).map(|r| r.clone())
     }
 
     /// Queue `frame` only if `current` is still the live registry entry.
@@ -293,7 +350,7 @@ impl SessionRegistry {
         current: &SessionHandle,
         frame: ServerFrame,
     ) -> Result<(), BackendError> {
-        let Some(live) = self.0.get(&current.device_id) else {
+        let Some(live) = self.sessions.get(&current.device_id) else {
             return Err(BackendError::PeerOffline {
                 peer_device_id: current.device_id.to_string(),
             });
@@ -332,7 +389,7 @@ impl SessionRegistry {
     /// Returns the number of sessions actually closed.
     pub fn close_account_sessions(&self, account_id: &str, except: Option<&str>) -> usize {
         let to_close: Vec<DeviceId> = self
-            .0
+            .sessions
             .iter()
             .filter(|entry| {
                 let h = entry.value();
@@ -352,8 +409,9 @@ impl SessionRegistry {
 
         let mut closed = 0;
         for id in to_close {
-            if let Some((_, handle)) = self.0.remove(&id) {
+            if let Some((_, handle)) = self.sessions.remove(&id) {
                 handle.revoke(SessionRevocation::AuthRevoked);
+                self.note_mobile_session_left(&handle);
                 closed += 1;
             }
         }
@@ -364,7 +422,7 @@ impl SessionRegistry {
     /// Count currently-live account-client sessions bound to `account_id`.
     #[must_use]
     pub fn mobile_account_session_count(&self, account_id: &str) -> usize {
-        self.0
+        self.sessions
             .iter()
             .filter(|entry| {
                 let handle = entry.value();
@@ -377,7 +435,7 @@ impl SessionRegistry {
     /// Count currently-live mobile-client sessions bound to `account_id`.
     #[must_use]
     pub fn mobile_client_session_count(&self, account_id: &str) -> usize {
-        self.0
+        self.sessions
             .iter()
             .filter(|entry| {
                 let handle = entry.value();
@@ -391,13 +449,13 @@ impl SessionRegistry {
     /// O(#shards) under the hood.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.sessions.len()
     }
 
     /// True if no sessions are live.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.sessions.is_empty()
     }
 
     /// Best-effort broadcast of `frame` to every currently-registered
@@ -416,7 +474,7 @@ impl SessionRegistry {
     /// caller, whereas `route` builds the `Forwarded` envelope from raw
     /// payload JSON.
     pub fn broadcast(&self, frame: ServerFrame) {
-        for handle in self.0.iter() {
+        for handle in self.sessions.iter() {
             if let Err(err) = handle.outbox.try_send(frame.clone()) {
                 tracing::debug!(
                     target: "minos_backend::session",
@@ -432,7 +490,7 @@ impl SessionRegistry {
     /// `account_id`.
     pub fn broadcast_mobile_account(&self, account_id: &str, frame: ServerFrame) -> usize {
         let mut delivered = 0;
-        for handle in self.0.iter() {
+        for handle in self.sessions.iter() {
             if !handle.role.is_account_client() {
                 continue;
             }
@@ -1071,7 +1129,7 @@ mod tests {
         drop(stale_rx);
         // `stale.outbox` is a different channel from H2's; remove_if must
         // therefore be a no-op.
-        reg.0
+        reg.sessions
             .remove_if(&b, |_, v| v.outbox.same_channel(&stale.outbox));
         assert!(
             reg.get(b).is_some(),

@@ -75,6 +75,33 @@ pub struct HostCommandRow {
     pub finished_at_ms: Option<i64>,
 }
 
+impl HostCommandRow {
+    /// Backend timeout marker written by [`mark_timed_out`] (`error_json.kind == "timeout"`).
+    #[must_use]
+    pub fn is_backend_timeout(&self) -> bool {
+        self.error_json
+            .as_ref()
+            .and_then(|error| error.get("kind").and_then(Value::as_str))
+            == Some("timeout")
+    }
+
+    /// Host confirmed delivery (`ack_at_ms`) or returned a non-timeout terminal result.
+    ///
+    /// Backend deadline expiry (`mark_timed_out`) is **not** observation — outbox must
+    /// dead-letter, never success-ack, for those rows.
+    #[must_use]
+    pub fn is_host_observed(&self) -> bool {
+        if self.ack_at_ms.is_some() {
+            return true;
+        }
+        match self.status {
+            HostCommandStatus::Succeeded => true,
+            HostCommandStatus::Failed => !self.is_backend_timeout(),
+            HostCommandStatus::Pending | HostCommandStatus::Acked => false,
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn enqueue(
     store: &impl AsStorePool,
@@ -205,7 +232,7 @@ pub async fn get(
             .await,
             StorePoolRef::Postgres(pool) => sqlx::query_as::<_, HostCommandRowTuple>(
                 "SELECT command_id, host_installation_id, agent_session_id, method, params_json,
-                        requested_by_account_id, status, response_json, error_json,
+                        requested_by_account_id, status::text, response_json, error_json,
                         deadline_at_ms, created_at_ms, ack_at_ms, finished_at_ms
                    FROM host_commands
                   WHERE command_id = $1",
@@ -338,7 +365,7 @@ pub async fn list_timed_out_open(
             .await,
             StorePoolRef::Postgres(pool) => sqlx::query_as::<_, HostCommandRowTuple>(
                 "SELECT command_id, host_installation_id, agent_session_id, method, params_json,
-                        requested_by_account_id, status, response_json, error_json,
+                        requested_by_account_id, status::text, response_json, error_json,
                         deadline_at_ms, created_at_ms, ack_at_ms, finished_at_ms
                    FROM host_commands
                   WHERE deadline_at_ms <= $1

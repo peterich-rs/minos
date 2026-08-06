@@ -15,6 +15,7 @@
 | 公网域名 | `https://minos.ainexc.com`（Caddy 终止 TLS） |
 | 进程 | 一个 monolith 容器（`MINOS_ENV=prod`） |
 | 存储 | PostgreSQL 16 + Redis 7（本机 Docker，仅 loopback） |
+| 媒体对象 | 可选 **Cloudflare R2**（`media_blobs` 元数据在 DB，字节在 R2；见 [ops/r2-media.md](ops/r2-media.md)） |
 | 镜像 | GHCR 预构建，VPS 只 `docker pull`（见 `deploy/prod/`） |
 | 运维手册 | [ops/vps-deploy.md](ops/vps-deploy.md) |
 
@@ -45,6 +46,16 @@
 | `message_bus_backend` | `MINOS_MESSAGE_BUS_BACKEND` | `inline` |
 | `cors_origins` | `MINOS_CORS_ORIGINS` | `*` |
 
+媒体对象存储（环境变量，非 clap 字段；由 `MediaService::from_env` 读取）：
+
+| 环境变量 | 说明 |
+|---------|------|
+| `MINOS_R2_ACCOUNT_ID` / `MINOS_R2_ACCESS_KEY_ID` / `MINOS_R2_SECRET_ACCESS_KEY` / `MINOS_R2_BUCKET` | 配置完整时使用 Cloudflare R2 |
+| `MINOS_R2_ENDPOINT` | 可选；默认 `https://{account_id}.r2.cloudflarestorage.com` |
+| `MINOS_MEDIA_LOCAL_DIR` | 无 R2 时的本地目录（开发） |
+| `MINOS_MEDIA_MAX_BYTES` | 单对象上限，默认 10 MiB |
+| `MINOS_MEDIA_PUBLIC_BASE_URL` | 下载 URL 绝对前缀（可选） |
+
 **运行模式**：`Monolith`（HTTP + Worker 一体）、`HttpOnly`（仅 API）、`WorkerOnly`（仅后台任务）
 
 ## HTTP 路由 (`src/http/`)
@@ -71,6 +82,7 @@
 /v1/projects/*        POST   项目 CRUD
 /v1/realtime/*        POST   WS 票据签发
 /v1/notifications/*   POST   推送令牌/偏好
+/v1/media/*           GET/POST/PUT  附件 blob（R2 / 本地对象存储）
 /v1/social/*          POST   Agent 注册/对话成员
 ```
 
@@ -170,7 +182,8 @@ Link proof 签名载荷：`"{installation_id}:{nonce}:v1/hosts/link"`（无 lead
 - 持有 `SessionRegistry`、`SubscriptionManager`、`StoreHandle`、`MessageBusBackend`
 - `fanout_ui_event()` — 推送到特定设备会话
 - `fanout_social_message()` — 推送到所有关联账户的移动端会话
-- `dispatch_outbox_batch()` — 从数据库认领 outbox 事件，分发到 topic 订阅者
+- `dispatch_outbox_batch()` — 认领 `social_durable` 车道 outbox，publish 后 ack（不阻塞 host 命令）
+- `dispatch_host_command_outbox_batch()` — 认领 `host_command` 车道；publish 后异步等待 host ack（过期 dead_letter，禁止假成功 ack）
 
 ### MessageBusBackend（多实例集群）
 
@@ -212,7 +225,7 @@ Migrations 为 latest-only 单一初始 schema（`sqlx::migrate!`）：
 | `approval_requests` | 审批请求 |
 | `host_commands` | 持久化命令队列 |
 | `durable_event_log` | 按 topic 排序的事件日志 |
-| `outbox_events` | 分发工作队列 |
+| `outbox_events` | 分发工作队列（`lane`: `social_durable` \| `host_command`） |
 | `raw_events` | Host-local `seq` 的 Agent 原始事件，按 `(host_device_id, session_id, seq)` 幂等 |
 | `thread_sync_state` | Host manifest、backend ack 水位、partial history metadata |
 
@@ -282,11 +295,13 @@ RuntimeShell           -- 拥有 AppContext、后台任务、集群监听
 | `ApprovalTimeoutJob` | 过期审批自动处理 |
 | `HostCommandTimeoutJob` | 超时 host 命令标记失败 |
 | `RetentionCleanerJob` | 清理旧事件/线程 |
-| `StaleSessionSweeperJob` | 清理过期 outbox 认领 |
+| `SessionLifecycleJob`（`stale_session_sweeper` 模块） | 失联 host → open `agent_sessions` → `failed` + durable end；CompletionWatch TTL → 失败气泡 + remove（**非** COUNT-only） |
 | `AuditIndexerJob` | 审计数据索引 |
-| `OutboxDispatcherJob` | 分发待处理 outbox 事件 |
+| `OutboxDispatcherJob` | 分发 `social_durable` 车道 outbox |
+| `HostCommandOutboxJob` | 分发 `host_command` 车道（与 social 隔离 claim/lease） |
+| `AgentDispatchWorkerJob` | 异步 drain `agent_dispatch_queue`；arm CompletionWatch |
 
-所有任务实现 `Job` trait（`run()`, `interval()`, `applies_to(runtime_mode)`）。
+所有任务实现 `Job` trait（`tick()`, `idle_interval()`, `applies_to(runtime_mode)`）。`SessionLifecycleJob` / `AgentDispatchWorkerJob` 需要 `AppContext`（registry + completion_watches）。
 
 ## 错误处理 (`src/error.rs`)
 

@@ -1144,6 +1144,21 @@ impl LocalStore {
         Ok(row.map(|r| r.0))
     }
 
+    /// Load body + conversation for reaction mention gates.
+    pub async fn get_message_body_for_reaction(
+        &self,
+        message_id: &str,
+    ) -> anyhow::Result<Option<(String, String, String)>> {
+        let row: Option<(String, String, String)> = sqlx::query_as(
+            "SELECT conversation_id, body, COALESCE(mentions_json, '[]') \
+             FROM chat_messages WHERE message_id = ?",
+        )
+        .bind(message_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
     /// Idempotent toggle for the host local user: remove if present, else insert.
     /// SELECT + DELETE/INSERT run in one write transaction so concurrent double-clicks
     /// serialize instead of racing on the UNIQUE(message_id, emoji, actor_id) constraint.
@@ -1153,6 +1168,30 @@ impl LocalStore {
         message_id: &str,
         emoji: &str,
         reaction_id: &str,
+        now_ms: i64,
+    ) -> anyhow::Result<(String, bool)> {
+        self.toggle_message_reaction(
+            message_id,
+            emoji,
+            reaction_id,
+            minos_protocol::LOCAL_REACTION_ACTOR_ID,
+            minos_protocol::LOCAL_REACTION_ACTOR_KIND,
+            minos_protocol::LOCAL_REACTION_DISPLAY_NAME,
+            now_ms,
+        )
+        .await
+    }
+
+    /// Toggle reaction for an arbitrary actor (user/local or agent).
+    /// Returns `(conversation_id, added)`.
+    pub async fn toggle_message_reaction(
+        &self,
+        message_id: &str,
+        emoji: &str,
+        reaction_id: &str,
+        actor_id: &str,
+        actor_kind: &str,
+        display_name: &str,
         now_ms: i64,
     ) -> anyhow::Result<(String, bool)> {
         let mut tx = self.pool.begin().await?;
@@ -1175,7 +1214,7 @@ impl LocalStore {
         )
         .bind(message_id)
         .bind(emoji)
-        .bind(minos_protocol::LOCAL_REACTION_ACTOR_ID)
+        .bind(actor_id)
         .fetch_optional(&mut *tx)
         .await?;
 
@@ -1194,9 +1233,9 @@ impl LocalStore {
             .bind(reaction_id)
             .bind(message_id)
             .bind(emoji)
-            .bind(minos_protocol::LOCAL_REACTION_ACTOR_ID)
-            .bind(minos_protocol::LOCAL_REACTION_ACTOR_KIND)
-            .bind(minos_protocol::LOCAL_REACTION_DISPLAY_NAME)
+            .bind(actor_id)
+            .bind(actor_kind)
+            .bind(display_name)
             .bind(now_ms)
             .execute(&mut *tx)
             .await?;

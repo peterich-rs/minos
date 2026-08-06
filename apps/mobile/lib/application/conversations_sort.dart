@@ -2,7 +2,8 @@ import 'package:minos/src/rust/api/minos.dart';
 
 /// Sort conversations by last activity descending (last message time).
 ///
-/// Tie-break: [ConversationSummary.conversationId] descending for stability.
+/// Tie-break (semantic, not UUID noise): title ascending, then conversationId
+/// ascending for stability when titles also match.
 List<ConversationSummary> sortConversationsByLastActive(
   List<ConversationSummary> items,
 ) {
@@ -12,7 +13,9 @@ List<ConversationSummary> sortConversationsByLastActive(
         a.lastMessageAtMs.toInt(),
       );
       if (byTime != 0) return byTime;
-      return b.conversationId.compareTo(a.conversationId);
+      final byTitle = a.title.compareTo(b.title);
+      if (byTitle != 0) return byTitle;
+      return a.conversationId.compareTo(b.conversationId);
     });
   return sorted;
 }

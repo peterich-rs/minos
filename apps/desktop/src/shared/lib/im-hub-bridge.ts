@@ -1,8 +1,9 @@
 /**
  * Lifecycle bridge: Account session → Hub realtime → Desktop timeline store.
  *
- * Phase 3–4: Hub chat messages update `messagesByConversation` directly.
- * Sync Engine: conversation subscribe, resume cursors, SnapshotRequired cold rebuild.
+ * Hub chat messages update `messagesByConversation` directly.
+ * Sync Engine: conversation subscribe, resume cursors, SnapshotRequired range rebuild.
+ * Cold hydrate is owned by loadTimeline (subscribe-only here on open).
  * No daemon_append of cloud IM into Host SQLite.
  */
 
@@ -19,21 +20,158 @@ import {
   upsertHubMessageIntoTimeline,
 } from "@/shared/lib/hub-timeline";
 import { startImOutboxWorker } from "@/shared/lib/im-cloud-sync";
-import { pullHubConversationMessages } from "@/shared/lib/im-cloud-inbound";
+import {
+  pullHubConversationMessagePage,
+  pullHubForwardGap,
+} from "@/shared/lib/im-cloud-inbound";
 import {
   EMPTY_MESSAGE_HISTORY,
   MESSAGE_PAGE_SIZE,
   firstMessageCreatedAtMs,
   firstMessageSeq,
+  lastMessageSeq,
+  mergeMessagesQuietTail,
   trimMessagesHardMax,
 } from "@/shared/lib/message-history";
+import { hubDigestCache } from "@/shared/lib/hub-digest-cache";
+import { ensureHubDigestHydrated } from "@/shared/lib/hub-digest-ensure";
+import { formatRelative } from "@/shared/lib/time";
 import { useAccountStore } from "@/store/account-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import type { HubChatMessage } from "@/shared/lib/minos-cloud";
+import type { TimelineMessage } from "@/shared/lib/mock-data";
 
 let session: HubRealtimeSession | null = null;
 let startedForToken: string | null = null;
 let lastSyncState: HubRealtimeSyncState = "disconnected";
+/** C6.1 lifecycle listeners registered once per process. */
+let lifecycleBound = false;
+
+/**
+ * Process-local set of message ids already counted toward rail unread.
+ * Caps size so T1 conversation frames + T2 account digests for the same
+ * message never double-increment unread.
+ */
+const unreadCountedMessageIds = new Set<string>();
+const MAX_UNREAD_COUNTED_IDS = 4000;
+
+function rememberUnreadCounted(messageId: string): boolean {
+  const id = messageId.trim();
+  if (!id) return false;
+  if (unreadCountedMessageIds.has(id)) return false;
+  unreadCountedMessageIds.add(id);
+  if (unreadCountedMessageIds.size > MAX_UNREAD_COUNTED_IDS) {
+    const drop = unreadCountedMessageIds.size - MAX_UNREAD_COUNTED_IDS;
+    let i = 0;
+    for (const k of unreadCountedMessageIds) {
+      unreadCountedMessageIds.delete(k);
+      i += 1;
+      if (i >= drop) break;
+    }
+  }
+  return true;
+}
+
+/** Debounced Hub mark-read while a focused timeline receives live messages. */
+const MARK_READ_DEBOUNCE_MS = 400;
+let markReadTimer: ReturnType<typeof setTimeout> | null = null;
+let markReadPendingConversationId: string | null = null;
+
+/**
+ * C6.1: visibility / online / focus → pause ping while hidden; force reconnect
+ * when shown or network returns and state is not live.
+ */
+function ensureLifecycleHandlers(): void {
+  if (lifecycleBound || typeof window === "undefined") return;
+  lifecycleBound = true;
+
+  const maybeForceReconnect = (reason: string) => {
+    if (!session) return;
+    // Spec C6.1: show/online → if state ≠ live, force reconnect.
+    if (session.state === "live") return;
+    console.info("[im-hub-bridge] forceReconnect", reason, session.state);
+    session.forceReconnect();
+  };
+
+  const onVisibility = () => {
+    if (!session) return;
+    if (typeof document !== "undefined" && document.hidden) {
+      // Hide: do not close WS; pause ping to reduce noise.
+      session.setPingPaused(true);
+      return;
+    }
+    session.setPingPaused(false);
+    if (session.state !== "live") {
+      session.forceReconnect();
+    }
+  };
+
+  const onOnline = () => {
+    maybeForceReconnect("window.online");
+  };
+
+  const onFocus = () => {
+    if (!session) return;
+    session.setPingPaused(false);
+    if (session.state !== "live") {
+      session.forceReconnect();
+    }
+  };
+
+  document.addEventListener("visibilitychange", onVisibility);
+  window.addEventListener("online", onOnline);
+  window.addEventListener("focus", onFocus);
+
+  // Tauri window focus when available (best-effort; no hard dep).
+  void import("@tauri-apps/api/window")
+    .then(async (mod) => {
+      const win = mod.getCurrentWindow?.() ?? null;
+      if (!win?.onFocusChanged) return;
+      await win.onFocusChanged(({ payload: focused }) => {
+        if (focused) {
+          onFocus();
+        } else {
+          session?.setPingPaused(true);
+        }
+      });
+    })
+    .catch(() => {
+      /* browser / no tauri api */
+    });
+}
+
+/**
+ * Schedule Hub + local mark-read for the focused conversation (C4).
+ * Coalesces bursts of inbound messages — same 400ms semantics as Mobile.
+ * No-op if focus moved away before the timer fires.
+ */
+export function scheduleFocusedMarkRead(conversationId: string): void {
+  const id = conversationId.trim();
+  if (!id) return;
+  markReadPendingConversationId = id;
+  if (markReadTimer) {
+    clearTimeout(markReadTimer);
+  }
+  markReadTimer = setTimeout(() => {
+    markReadTimer = null;
+    const pending = markReadPendingConversationId;
+    markReadPendingConversationId = null;
+    if (!pending) return;
+    const focused =
+      useWorkspaceStore.getState().focusedConversationId === pending;
+    if (!focused) return;
+    useWorkspaceStore.getState().markConversationRead(pending);
+  }, MARK_READ_DEBOUNCE_MS);
+}
+
+/** Test / stop helper: cancel pending debounced mark-read. */
+export function cancelPendingFocusedMarkRead(): void {
+  if (markReadTimer) {
+    clearTimeout(markReadTimer);
+    markReadTimer = null;
+  }
+  markReadPendingConversationId = null;
+}
 
 async function onHubChatMessage(message: HubChatMessage): Promise<void> {
   if (message.recalledAtMs) {
@@ -54,6 +192,8 @@ async function onHubChatMessage(message: HubChatMessage): Promise<void> {
   // Always apply into the open/focused conversation window. Previously we only
   // wrote when a messagesByConversation key already existed — a race with the
   // first loadTimeline left Mobile/Hub messages invisible until re-open.
+  // Open/focused window: apply body. Background: next open loadTimeline always
+  // cold-pulls Hub (no separate dirty flag).
   if (focused || hasWindow) {
     useWorkspaceStore.setState((s) => {
       const prev = s.messagesByConversation[conversationId] ?? [];
@@ -80,37 +220,140 @@ async function onHubChatMessage(message: HubChatMessage): Promise<void> {
         },
       };
     });
-  } else {
-    // Background conversation: mark dirty so the next open forces Hub re-list.
-    useWorkspaceStore.setState((s) => ({
-      timelineDirtyByConversation: {
-        ...s.timelineDirtyByConversation,
-        [conversationId]: true,
-      },
-    }));
   }
 
-  // Refresh conversation rail preview/counts when possible.
-  if (ws.source === "daemon") {
-    const conv = ws.conversations.find((c) => c.id === conversationId);
-    if (conv?.projectId) {
-      void ws.loadConversations(conv.projectId, { quiet: true });
-    } else {
-      // Conversation may live under a project not currently loaded in the
-      // side list (e.g. opened via hub-only id). Refresh project index +
-      // reload conversations for each project so the rail catches up.
-      void ws.refreshProjects().then(() => {
-        const next = useWorkspaceStore.getState();
-        const found = next.conversations.find((c) => c.id === conversationId);
-        if (found?.projectId) {
-          void next.loadConversations(found.projectId, { quiet: true });
-          return;
-        }
-        for (const p of next.projects) {
-          void next.loadConversations(p.id, { quiet: true });
-        }
-      });
+  // Live patch Hub digest + rail row (no per-project Hub re-query).
+  patchRailFromHubMessage(message, { isRecall: false });
+
+  // Focused live inbound: debounce Hub mark-read (not only on open).
+  if (focused) {
+    scheduleFocusedMarkRead(conversationId);
+  }
+}
+
+/** Apply account durable / live message into HubDigestCache + workspace rail. */
+function patchRailFromHubMessage(
+  message: HubChatMessage,
+  opts: { isRecall: boolean },
+): void {
+  patchRailFromDigest({
+    conversationId: message.conversationId,
+    messageId: message.messageId,
+    preview: opts.isRecall
+      ? "Message recalled"
+      : message.text?.trim() || null,
+    lastAt: message.createdAtMs || Date.now(),
+    senderAccountId: message.senderAccountId,
+    isRecall: opts.isRecall,
+  });
+}
+
+/**
+ * R3: account-topic thin digest → rail/inbox only (no timeline body).
+ * Conversation full frames still call {@link patchRailFromHubMessage}.
+ * Unread is messageId-deduped so T1 + T2 never double-count the same bubble.
+ */
+function patchRailFromDigest(input: {
+  conversationId: string;
+  messageId?: string | null;
+  preview: string | null;
+  lastAt: number;
+  senderAccountId: string;
+  isRecall: boolean;
+}): void {
+  const conversationId = input.conversationId?.trim();
+  if (!conversationId) return;
+  const focused =
+    useWorkspaceStore.getState().focusedConversationId === conversationId;
+  const prevDigest = hubDigestCache.get(conversationId);
+  const preview =
+    input.preview?.trim() || prevDigest?.preview || null;
+  const lastAt = input.lastAt || prevDigest?.lastMessageAtMs || Date.now();
+  const myAccountId =
+    useAccountStore.getState().session?.accountId?.trim() ?? "";
+  const isOwn =
+    Boolean(myAccountId) && input.senderAccountId === myAccountId;
+  let unread = prevDigest?.unreadCount ?? 0;
+  // Own multi-end sends must not inflate local unread.
+  // messageId dedupe: same bubble on conversation + account topics once.
+  if (!focused && !input.isRecall && !isOwn) {
+    const mid = input.messageId?.trim() ?? "";
+    if (!mid || rememberUnreadCounted(mid)) {
+      unread = unread + 1;
     }
+  }
+  if (focused) {
+    unread = 0;
+  }
+  hubDigestCache.patchOne(conversationId, {
+    preview,
+    lastMessageAtMs: lastAt,
+    unreadCount: unread,
+    title: prevDigest?.title,
+  });
+
+  useWorkspaceStore.setState((s) => {
+    const idx = s.conversations.findIndex((c) => c.id === conversationId);
+    if (idx < 0) {
+      // Unknown rail row: insert Hub-only shell so multi-end inbox updates.
+      return {
+        conversations: [
+          {
+            id: conversationId,
+            projectId: "",
+            title: prevDigest?.title || "Conversation",
+            preview: preview || "No messages yet",
+            updatedAt: formatRelative(lastAt),
+            updatedAtMs: lastAt,
+            unread: unread > 0 ? unread : undefined,
+            messageCount: 0,
+            boardColumn: "backlog" as const,
+            agentSessionCount: 0,
+            participatingAgents: [],
+            runningCount: 0,
+            approvalCount: 0,
+          },
+          ...s.conversations,
+        ],
+      };
+    }
+    const next = [...s.conversations];
+    const row = next[idx];
+    next[idx] = {
+      ...row,
+      preview: preview || row.preview,
+      updatedAt: formatRelative(lastAt),
+      updatedAtMs: lastAt,
+      unread: unread > 0 ? unread : undefined,
+    };
+    return { conversations: next };
+  });
+}
+
+function onAccountInboxDigest(digest: {
+  conversationId: string;
+  messageId: string;
+  preview: string;
+  atMs: number;
+  senderAccountId: string;
+  isRecall: boolean;
+}): void {
+  const conversationId = digest.conversationId?.trim();
+  if (!conversationId || !digest.messageId?.trim()) return;
+  // Digest is rail-only; timeline body arrives via conversation topic or
+  // next open loadTimeline (no dirty-flag scaffolding).
+  const focused =
+    useWorkspaceStore.getState().focusedConversationId === conversationId;
+  patchRailFromDigest({
+    conversationId,
+    messageId: digest.messageId,
+    preview: digest.preview,
+    lastAt: digest.atMs,
+    senderAccountId: digest.senderAccountId,
+    isRecall: digest.isRecall,
+  });
+  if (focused) {
+    scheduleFocusedMarkRead(conversationId);
   }
 }
 
@@ -138,6 +381,7 @@ async function onHubChatMessageRecalled(message: HubChatMessage): Promise<void> 
       },
     };
   });
+  patchRailFromHubMessage(message, { isRecall: true });
 }
 
 function conversationIdFromTopic(topic: string): string | null {
@@ -148,207 +392,134 @@ function conversationIdFromTopic(topic: string): string | null {
 }
 
 /**
- * SnapshotRequired: clear projection window for conversation, cold-pull page,
- * reset is handled by hub-realtime cursor clear.
+ * SnapshotRequired: range reconcile preferred over clear-only.
+ * Connection layer already cleared the topic cursor; rebuild via after_seq /
+ * latest-page merge while keeping the existing window as skeleton.
  */
 async function onSnapshotRequired(topic: string): Promise<void> {
   const conversationId = conversationIdFromTopic(topic);
   if (!conversationId) {
-    // account:* snapshot — quiet refresh focused conversation list only
+    // account:* snapshot — invalidate digest cache and cold re-hydrate.
+    hubDigestCache.invalidate();
+    try {
+      await ensureHubDigestHydrated({ force: true });
+    } catch (error) {
+      console.warn("[im-hub-bridge] account snapshot hydrate failed", error);
+    }
     const ws = useWorkspaceStore.getState();
-    if (ws.source === "daemon" && ws.focusedConversationId) {
-      const conv = ws.conversations.find(
-        (c) => c.id === ws.focusedConversationId,
+    if (ws.source === "daemon") {
+      for (const p of ws.projects) {
+        void ws.loadConversations(p.id, { quiet: true });
+      }
+    }
+    return;
+  }
+
+  await reconcileConversationFromHub(conversationId);
+}
+
+/**
+ * Range reconcile for a conversation window after SnapshotRequired.
+ * - Keep existing rows as skeleton (no blank flash).
+ * - Multi-page forward-fill with after_seq until empty or cursor stalls.
+ * - Latest page calibrates tail; optional multi-page before_seq repair for floor.
+ */
+async function reconcileConversationFromHub(
+  conversationId: string,
+): Promise<void> {
+  const prev =
+    useWorkspaceStore.getState().messagesByConversation[conversationId] ?? [];
+  const maxSeq = lastMessageSeq(prev);
+  const minSeq = firstMessageSeq(prev);
+
+  const hubChunks: TimelineMessage[] = [];
+
+  if (maxSeq != null) {
+    try {
+      let cursor = maxSeq;
+      // Cap pages to avoid unbounded work on huge gaps (still multi-page).
+      for (let page = 0; page < 20; page += 1) {
+        const forward = await pullHubForwardGap(conversationId, cursor, {
+          limit: MESSAGE_PAGE_SIZE,
+        });
+        if (forward.length === 0) break;
+        hubChunks.push(...forward);
+        const nextMax = lastMessageSeq(forward);
+        if (nextMax == null || nextMax <= cursor) break;
+        cursor = nextMax;
+        if (forward.length < MESSAGE_PAGE_SIZE) break;
+      }
+    } catch (error) {
+      console.warn(
+        "[im-hub-bridge] snapshot forward gap fill failed",
+        error,
       );
-      if (conv?.projectId) {
-        void ws.loadConversations(conv.projectId, { quiet: true });
-      }
     }
-    return;
   }
 
-  // Clear conversation projection then cold-pull snapshot page.
-  useWorkspaceStore.setState((s) => ({
-    messagesByConversation: {
-      ...s.messagesByConversation,
-      [conversationId]: [],
-    },
-    messageHistoryByConversation: {
-      ...s.messageHistoryByConversation,
-      [conversationId]: { ...EMPTY_MESSAGE_HISTORY },
-    },
-  }));
-
-  await rebuildConversationFromHub(conversationId);
-}
-
-async function rebuildConversationFromHub(
-  conversationId: string,
-): Promise<void> {
-  const hubRows = await pullHubConversationMessages(conversationId);
-  useWorkspaceStore.setState((s) => {
-    // Hub SSOT for chat bubbles; keep only local tool/git/system + optimistic.
-    const prev = s.messagesByConversation[conversationId] ?? [];
-    const merged = mergeHubAndLocalTimeline({
-      hubMessages: hubRows,
-      localMessages: prev,
-    });
-    const trimmed = trimMessagesHardMax(merged);
-    return {
-      messagesByConversation: {
-        ...s.messagesByConversation,
-        [conversationId]: trimmed.messages,
-      },
-      messageHistoryByConversation: {
-        ...s.messageHistoryByConversation,
-        [conversationId]: {
-          firstLoadedSeq: firstMessageSeq(trimmed.messages),
-          firstLoadedCreatedAtMs: firstMessageCreatedAtMs(trimmed.messages),
-          hasOlder:
-            hubRows.length >= MESSAGE_PAGE_SIZE || trimmed.trimmed,
-          loadingOlder: false,
-        },
-      },
-    };
+  // Latest page: always calibrate tail (and cold-open when window empty).
+  const latestPage = await pullHubConversationMessagePage(conversationId, {
+    limit: MESSAGE_PAGE_SIZE,
   });
-}
+  hubChunks.push(...latestPage.messages);
 
-/** Start or refresh hub WS when Minos account session is available. */
-export function ensureImHubBridge(): void {
-  const { deviceId, session: account, authPhase } = useAccountStore.getState();
-  if (authPhase !== "authenticated" || !account?.accessToken?.trim()) {
-    stopImHubBridge();
-    return;
-  }
-  const token = account.accessToken;
-  if (session && startedForToken === token) {
-    session.updateAuth(deviceId, token);
-    // Keep focused conversation subscribed.
-    const focused = useWorkspaceStore.getState().focusedConversationId;
-    if (focused) {
-      session.subscribeConversation(focused);
+  // When the window has a known min seq and latest page does not cover down to
+  // it, page older via before_seq until floor is covered or pages exhaust.
+  let latestMin = firstMessageSeq(latestPage.messages);
+  if (minSeq != null && minSeq > 1 && latestMin != null && latestMin > minSeq) {
+    try {
+      for (let page = 0; page < 20; page += 1) {
+        if (latestMin == null || latestMin <= minSeq) break;
+        const older = await pullHubConversationMessagePage(conversationId, {
+          beforeSeq: latestMin,
+          limit: MESSAGE_PAGE_SIZE,
+        });
+        if (older.messages.length === 0) break;
+        hubChunks.push(...older.messages);
+        const nextMin = firstMessageSeq(older.messages);
+        if (nextMin == null || nextMin >= latestMin) break;
+        latestMin = nextMin;
+        if (older.messages.length < MESSAGE_PAGE_SIZE) break;
+      }
+    } catch (error) {
+      console.warn(
+        "[im-hub-bridge] snapshot before_seq repair failed",
+        error,
+      );
     }
-    return;
-  }
-  stopImHubBridge();
-  session = new HubRealtimeSession({
-    onChatMessage: (msg) => {
-      void onHubChatMessage(msg);
-    },
-    onChatMessageRecalled: (msg) => {
-      void onHubChatMessageRecalled(msg);
-    },
-    onSnapshotRequired: (topic) => {
-      void onSnapshotRequired(topic);
-    },
-    onConnectionChange: (state) => {
-      lastSyncState = state;
-      if (state === "live" || state === "syncing") {
-        const focused = useWorkspaceStore.getState().focusedConversationId;
-        if (focused) {
-          session?.subscribeConversation(focused);
-        }
-      }
-    },
-  });
-  startedForToken = token;
-  session.start(deviceId, token);
-  // Drain durable Desktop → Hub user-message Outbox after auth is ready.
-  startImOutboxWorker();
-}
-
-export function stopImHubBridge(): void {
-  session?.stop();
-  session = null;
-  startedForToken = null;
-  lastSyncState = "disconnected";
-}
-
-export function getHubRealtimeState(): HubRealtimeSyncState {
-  return session?.state ?? lastSyncState;
-}
-
-/**
- * Subscribe open conversation topic + cold hydrate (Hub-first).
- * Call on conversation open when account is authenticated.
- */
-export function focusConversationOnHub(conversationId: string): void {
-  if (!conversationId.trim()) return;
-  ensureImHubBridge();
-  const { session: account, authPhase } = useAccountStore.getState();
-  if (
-    !isHubImMode({
-      authPhase,
-      accessToken: account?.accessToken,
-    })
-  ) {
-    return;
-  }
-  // Ensure focused id is tracked for reconnect re-subscribe.
-  session?.subscribeConversation(conversationId);
-  void syncOpenConversationFromHub(conversationId);
-}
-
-/**
- * Cold hydrate open conversation from Hub into timeline store (Hub-first).
- * Call on conversation open when account is authenticated.
- */
-export async function syncOpenConversationFromHub(
-  conversationId: string,
-): Promise<void> {
-  const { session: account, authPhase } = useAccountStore.getState();
-  if (
-    !isHubImMode({
-      authPhase,
-      accessToken: account?.accessToken,
-    })
-  ) {
-    return;
   }
 
-  // Ensure conversation durable topic is subscribed for live append/recall.
-  session?.subscribeConversation(conversationId);
+  // Dedupe hub chunk by id (later chunks win).
+  const hubById = new Map<string, TimelineMessage>();
+  for (const m of hubChunks) {
+    hubById.set(m.id, m);
+  }
+  const hubRows = [...hubById.values()];
 
-  const hubRows = await pullHubConversationMessages(conversationId);
-  if (hubRows.length === 0) {
-    // Still stamp history meta so loadOlder can try Hub paging.
-    useWorkspaceStore.setState((s) => {
-      if (
-        !Object.prototype.hasOwnProperty.call(
-          s.messagesByConversation,
-          conversationId,
-        )
-      ) {
-        return s;
-      }
-      const prevHist =
-        s.messageHistoryByConversation[conversationId] ?? EMPTY_MESSAGE_HISTORY;
-      return {
-        messageHistoryByConversation: {
-          ...s.messageHistoryByConversation,
-          [conversationId]: {
-            ...prevHist,
-            firstLoadedCreatedAtMs:
-              firstMessageCreatedAtMs(
-                s.messagesByConversation[conversationId] ?? [],
-              ) ?? prevHist.firstLoadedCreatedAtMs,
-          },
-        },
-      };
-    });
-    return;
+  // Hydrate reactions from reconciled Hub rows (cold path).
+  try {
+    const { useReactionStore } = await import(
+      "@/features/chat/reaction-store"
+    );
+    useReactionStore.getState().hydrateFromMessages(hubRows);
+  } catch {
+    /* reaction store optional in tests */
   }
 
   useWorkspaceStore.setState((s) => {
-    const prev = s.messagesByConversation[conversationId] ?? [];
-    // Hub SSOT for chat bubbles; strip local user/agent rows that Hub owns.
-    const merged = mergeHubAndLocalTimeline({
-      hubMessages: hubRows,
-      localMessages: prev,
-    });
-    const trimmed = trimMessagesHardMax(merged);
+    const localPrev = s.messagesByConversation[conversationId] ?? [];
     const prevHist =
       s.messageHistoryByConversation[conversationId] ?? EMPTY_MESSAGE_HISTORY;
+    // Quiet-tail union keeps previously loaded older pages across snapshot.
+    const withTail =
+      localPrev.length > 0
+        ? mergeMessagesQuietTail(localPrev, hubRows)
+        : hubRows;
+    const merged = mergeHubAndLocalTimeline({
+      hubMessages: hubRows,
+      localMessages: withTail,
+    });
+    const trimmed = trimMessagesHardMax(merged);
     return {
       messagesByConversation: {
         ...s.messagesByConversation,
@@ -364,21 +535,128 @@ export async function syncOpenConversationFromHub(
             prevHist.firstLoadedCreatedAtMs,
           hasOlder:
             prevHist.hasOlder ||
-            hubRows.length >= MESSAGE_PAGE_SIZE ||
+            latestPage.nextBeforeSeq != null ||
+            latestPage.rawCount >= MESSAGE_PAGE_SIZE ||
             trimmed.trimmed,
           loadingOlder: false,
         },
       },
     };
   });
+}
 
-  const ws = useWorkspaceStore.getState();
-  if (ws.source === "daemon") {
-    const conv = ws.conversations.find((c) => c.id === conversationId);
-    if (conv?.projectId) {
-      void ws.loadConversations(conv.projectId, { quiet: true });
-    }
+/** Start or refresh hub WS when Minos account session is available. */
+export function ensureImHubBridge(): void {
+  const { deviceId, session: account, authPhase } = useAccountStore.getState();
+  if (authPhase !== "authenticated" || !account?.accessToken?.trim()) {
+    stopImHubBridge();
+    return;
   }
+  const token = account.accessToken;
+  const accountId = account.accountId ?? "";
+  if (session && startedForToken === token) {
+    session.updateAuth(deviceId, token, accountId);
+    // Keep focused conversation subscribed.
+    const focused = useWorkspaceStore.getState().focusedConversationId;
+    if (focused) {
+      session.subscribeConversation(focused);
+    }
+    return;
+  }
+  stopImHubBridge();
+  session = new HubRealtimeSession({
+    onChatMessage: (msg) => {
+      void onHubChatMessage(msg);
+    },
+    onChatMessageRecalled: (msg) => {
+      void onHubChatMessageRecalled(msg);
+    },
+    onAccountInboxDigest: (digest) => {
+      onAccountInboxDigest(digest);
+    },
+    onMessageReactions: ({ messageId, reactions }) => {
+      void import("@/features/chat/reaction-store").then(({ useReactionStore }) => {
+        // Durable wire is viewer-neutral; recompute reactedByMe from local account.
+        const myAccountId =
+          useAccountStore.getState().session?.accountId?.trim() ?? "";
+        useReactionStore.getState().applyServerReactions(
+          messageId,
+          reactions.map((g) => {
+            const actors = g.actors.map((a) => ({
+              id: a.actorId,
+              displayName: a.displayName,
+            }));
+            const reactedByMe = myAccountId
+              ? actors.some((a) => a.id === myAccountId)
+              : Boolean(g.reactedByMe);
+            return {
+              emoji: g.emoji,
+              count: g.count,
+              reactedByMe,
+              actors,
+            };
+          }),
+          { force: false },
+        );
+      });
+    },
+    onSnapshotRequired: (topic) => {
+      void onSnapshotRequired(topic);
+    },
+    onConnectionChange: (state) => {
+      lastSyncState = state;
+      if (state === "live" || state === "syncing") {
+        const focused = useWorkspaceStore.getState().focusedConversationId;
+        if (focused) {
+          session?.subscribeConversation(focused);
+        }
+      }
+    },
+  });
+  startedForToken = token;
+  session.start(deviceId, token, accountId);
+  ensureLifecycleHandlers();
+  // Drain durable Desktop → Hub user-message Outbox after auth is ready.
+  startImOutboxWorker();
+}
+
+export function stopImHubBridge(): void {
+  session?.stop();
+  session = null;
+  startedForToken = null;
+  lastSyncState = "disconnected";
+  cancelPendingFocusedMarkRead();
+}
+
+export function getHubRealtimeState(): HubRealtimeSyncState {
+  return session?.state ?? lastSyncState;
+}
+
+/**
+ * Subscribe conversation durable topic only (no timeline merge).
+ * loadTimeline owns cold hydrate to avoid dual writers.
+ */
+export function ensureConversationSubscribedOnHub(conversationId: string): void {
+  if (!conversationId.trim()) return;
+  ensureImHubBridge();
+  const { session: account, authPhase } = useAccountStore.getState();
+  if (
+    !isHubImMode({
+      authPhase,
+      accessToken: account?.accessToken,
+    })
+  ) {
+    return;
+  }
+  session?.subscribeConversation(conversationId);
+}
+
+/**
+ * @deprecated Prefer ensureConversationSubscribedOnHub + loadTimeline.
+ * Kept as alias for call sites that only need subscribe (no dual hydrate).
+ */
+export function focusConversationOnHub(conversationId: string): void {
+  ensureConversationSubscribedOnHub(conversationId);
 }
 
 /**

@@ -212,13 +212,17 @@ export const MessageRow = memo(function MessageRow({
 
       <MessageReactions
         groups={reactions}
-        onToggle={(emoji) => toggleReaction(message.id, emoji)}
+        onToggle={(emoji) =>
+          toggleReaction(message.id, emoji, conversationId)
+        }
       />
 
       <div className="absolute right-2 top-0 z-10 -translate-y-1/2 sm:top-1 sm:translate-y-0 sm:group-hover/message:top-0 sm:group-hover/message:-translate-y-1/2">
         <MessageActionBar
           onReply={() => setReplyTo(conversationId, message.id)}
-          onReact={(emoji) => toggleReaction(message.id, emoji)}
+          onReact={(emoji) =>
+            toggleReaction(message.id, emoji, conversationId)
+          }
         />
       </div>
     </MessageChrome>

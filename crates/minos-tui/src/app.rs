@@ -18,7 +18,7 @@ use crate::backend::AgentBackend;
 use crate::effect::Effect;
 use crate::event::AppEvent;
 use crate::focus::PaneId;
-use crate::state::{self, frame_marks_agent_result_done, rect_contains, thread_is_done, AppState};
+use crate::state::{self, frame_marks_agent_result_done, rect_contains, AppState};
 use crate::translation::{ChatState, PendingAgentRequestKind, PendingQuestionSpec};
 use crate::ui::{SessionEntry, UiState};
 

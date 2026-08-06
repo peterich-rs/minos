@@ -46,17 +46,16 @@ pub struct TurnCompletionProjector;
 impl TurnCompletionProjector {
     /// Stable Hub `client_message_id` for one dispatched turn.
     ///
-    /// Shape matches daemon local `agent-result:…` prefix so UIs can correlate
-    /// projection keys; Hub row is authoritative for multi-end IM.
-    ///
-    /// `turn_write_id` is typically the dispatch-time raw seq (`trigger_seq`).
+    /// Frozen formula (IM reliability program):
+    /// `agent-result:{conversation_id}:{session_id}:{origin_message_id}`
+    /// where `origin_message_id` is the user Hub message that triggered the turn.
     #[must_use]
     pub fn agent_result_client_message_id(
         conversation_id: &str,
         session_id: &str,
-        turn_write_id: impl std::fmt::Display,
+        origin_message_id: impl std::fmt::Display,
     ) -> String {
-        format!("agent-result:{conversation_id}:{session_id}:{turn_write_id}")
+        format!("agent-result:{conversation_id}:{session_id}:{origin_message_id}")
     }
 
     /// Probe raw event rows for a clean final assistant segment.
@@ -506,9 +505,9 @@ mod tests {
 
     #[test]
     fn projector_idempotency_key_is_stable() {
-        let a = TurnCompletionProjector::agent_result_client_message_id("c1", "s1", 42u64);
-        let b = TurnCompletionProjector::agent_result_client_message_id("c1", "s1", 42u64);
-        assert_eq!(a, "agent-result:c1:s1:42");
+        let a = TurnCompletionProjector::agent_result_client_message_id("c1", "s1", "origin-msg");
+        let b = TurnCompletionProjector::agent_result_client_message_id("c1", "s1", "origin-msg");
+        assert_eq!(a, "agent-result:c1:s1:origin-msg");
         assert_eq!(a, b);
     }
 

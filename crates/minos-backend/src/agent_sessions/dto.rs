@@ -17,10 +17,14 @@ pub struct StartAgentSessionInput {
     pub host_installation_id: Option<String>,
     pub workspace_path: Option<String>,
     pub initial_user_message: Option<String>,
+    /// User Hub message id that triggered this turn (frozen agent-result suffix).
+    pub origin_message_id: Option<String>,
     pub client_request_id: String,
     pub caller_account_id: String,
     /// Optional display title for Host local conversation upsert.
     pub conversation_title: Option<String>,
+    /// Media to materialize on Host before the agent prompt.
+    pub attachments: Vec<minos_protocol::DispatchAttachment>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -38,8 +42,12 @@ pub struct SendInputInput {
     pub session_id: String,
     pub text: String,
     pub mentions: Vec<String>,
+    /// User Hub message id that triggered this turn (frozen agent-result suffix).
+    pub origin_message_id: Option<String>,
     pub client_request_id: String,
     pub caller_account_id: String,
+    /// Media to materialize on Host before the agent prompt.
+    pub attachments: Vec<minos_protocol::DispatchAttachment>,
 }
 
 #[derive(Debug, Clone)]

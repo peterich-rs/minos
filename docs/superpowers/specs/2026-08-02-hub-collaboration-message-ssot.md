@@ -52,7 +52,10 @@ Host daemon SQLite = Agent 原始事件 / tool / git / 本地工作台
 | Hub → Desktop 读 | Sync 投影 store；**不** append daemon | ✅ Phase 3–4 |
 | Sync | 状态机 + per-topic cursor + conversation Subscribe + SnapshotRequired + before_ts 上翻 | ✅ Phase 4 |
 | Agent 最终气泡 | Hub TurnCompletionProjector 单写者 | ✅ Phase 2 |
-| Reaction | 无云端 API → Desktop **local-only** 文档隔离 | ⚠️ Phase 5.2 缺口 |
+| Reaction | Hub API + durable 已实现；客户端可靠写 / Mobile UI → [IM Reliability Program](2026-08-03-im-reliability-program/README.md) | ⚠️ 客户端与文档收口中（见 2026-08-03） |
+| Transactional Outbox（社交写） | `insert + durable + outbox` 同事务 | ✅ 2026-08-03 |
+| Hub `message_seq` / 分页 / 已读 | `before_seq`/`after_seq` + `last_read_seq` | ✅ 2026-08-03 |
+| TurnCompletion 事件驱动 | ingest arm + 2s settle（非 100ms 轮询） | ✅ 2026-08-03 |
 
 ### 0.3 已观测故障（与桥接同根）
 
@@ -177,10 +180,12 @@ Host ingest (raw_events 已有)
 **幂等键（稳定）**：
 
 ```text
-client_message_id = "agent-result:{conversation_id}:{session_id}:{turn_write_id}"
+client_message_id = "agent-result:{conversation_id}:{session_id}:{origin_message_id}"
 ```
 
-与今日 daemon 本地 id 同形，便于迁移与对账；**Hub 行是权威**，本地 id 仅作 projection key。
+`origin_message_id` = 触发该 turn 的用户消息 id（Hub `client_message_id` / Desktop 本地 user row id）。  
+与 daemon `conversation_completion` 冻结公式一致；**禁止** `message_key` / `t{ms}` 作 collab 后缀。  
+**Hub 行是权威**，本地 canonical id 仅作 projection / host_projection uplink 键。
 
 ### 2.2 语义对齐 Daemon `conversation_completion`
 
@@ -437,15 +442,18 @@ chat_messages 增加:
 | **4.1** ✅ | Desktop hub-realtime：状态机 + per-topic cursor 持久化 | `Disconnected→Connecting→Syncing→Live`；`hub-cursors` localStorage |
 | **4.2** ✅ | 打开会话 `Subscribe conversation:{id}` + resume_after | Backend fanout `ConversationMessage*` + Desktop subscribe on focus |
 | **4.3** ✅ | SnapshotRequired 处理 | 清投影 + `messages/query` 冷拉；cursor reset |
-| **4.4** ✅ | messages/query gap API 对齐 Mobile | Linked `loadOlder` 用 `before_ts_ms`；`after_seq` 仍未上线 |
+| **4.4** ⚠️ | messages/query gap API | `before_seq` 已用；**`after_seq` 客户端必接** 见 [Client Sync / C3](2026-08-03-client-im-sync-engine.md)；删 `before_ts_ms` 表述 |
 
 ### Phase 5 — 协作能力只在 Hub
 
 | ID | 内容 | 验收 |
 |----|------|------|
 | **5.1** ✅ | recall 多端 | Durable `*Recalled` 删时间线；`recallMessageOnHub` / Hub API |
-| **5.2** ⚠️ | reaction：无云端 API → **明确 local-only**；禁止双 SSOT 伪装 | `reaction-store` 文档隔离；云端 API 后续 |
+| **5.2** ⚠️ | reaction：**Hub 云端 API 已存在**（非 local-only） | 客户端 Outbox + Mobile UI + 文档 → [IM Reliability C5/B6](2026-08-03-im-reliability-program/TASKS.md) |
 | **5.3** ✅ | 未读 / mark-read 走 Hub | Linked `markConversationRead` → `POST …/read` |
+
+> **后续执行入口**（2026-08-03）：客户端半成品与后端投递/编排空洞统一由  
+> [IM Reliability Program](2026-08-03-im-reliability-program/README.md) 终态落地，**禁止**再叠短期补丁。
 
 ---
 

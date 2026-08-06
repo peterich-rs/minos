@@ -1,0 +1,886 @@
+//! Persistent AgentDispatchQueue — decouple HTTP send from host agent RPC.
+//!
+//! Rows are enqueued after the user message is durable; a worker drains when a
+//! live host is available, with backoff and a terminal failed state.
+
+use sqlx::{PgPool, SqlitePool};
+
+use crate::error::BackendError;
+use crate::store::{AsStorePool, StorePoolRef};
+
+pub const STATUS_PENDING: &str = "pending";
+pub const STATUS_INFLIGHT: &str = "inflight";
+pub const STATUS_SUCCEEDED: &str = "succeeded";
+pub const STATUS_FAILED_TERMINAL: &str = "failed_terminal";
+
+/// Max forward attempts before `failed_terminal` + user-visible error bubble.
+pub const MAX_ATTEMPTS: i32 = 12;
+
+/// Inflight rows older than this are reclaimed as pending (worker crash).
+pub const STALE_INFLIGHT_MS: i64 = 60_000;
+
+#[derive(Debug, Clone)]
+pub struct AgentDispatchRow {
+    pub dispatch_id: String,
+    pub origin_message_id: String,
+    pub conversation_id: String,
+    pub account_id: String,
+    pub agent_id: String,
+    pub session_id: Option<String>,
+    pub forwarded_text: String,
+    pub mention_sender: bool,
+    pub sender_minos_id: Option<String>,
+    pub status: String,
+    pub attempts: i32,
+    pub next_attempt_at_ms: i64,
+    pub last_error: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+/// Insert a pending dispatch. Idempotent on `(origin_message_id, agent_id)`.
+/// Multi-@ fan-out enqueues one row per agent for the same origin.
+/// Returns `true` if a new row was inserted.
+pub async fn enqueue<S>(store: &S, row: &AgentDispatchRow) -> Result<bool, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => enqueue_sqlite(pool, row).await,
+        StorePoolRef::Postgres(pool) => enqueue_postgres(pool, row).await,
+    }
+}
+
+/// Claim due pending (and stale inflight) rows for processing.
+pub async fn claim_due<S>(
+    store: &S,
+    now_ms: i64,
+    limit: i64,
+) -> Result<Vec<AgentDispatchRow>, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => claim_due_sqlite(pool, now_ms, limit).await,
+        StorePoolRef::Postgres(pool) => claim_due_postgres(pool, now_ms, limit).await,
+    }
+}
+
+pub async fn mark_succeeded<S>(
+    store: &S,
+    dispatch_id: &str,
+    session_id: &str,
+    now_ms: i64,
+) -> Result<(), BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            mark_status_sqlite(
+                pool,
+                dispatch_id,
+                STATUS_SUCCEEDED,
+                Some(session_id),
+                None,
+                now_ms,
+                None,
+            )
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            mark_status_postgres(
+                pool,
+                dispatch_id,
+                STATUS_SUCCEEDED,
+                Some(session_id),
+                None,
+                now_ms,
+                None,
+            )
+            .await
+        }
+    }
+}
+
+pub async fn mark_failed_terminal<S>(
+    store: &S,
+    dispatch_id: &str,
+    last_error: &str,
+    now_ms: i64,
+) -> Result<(), BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            mark_status_sqlite(
+                pool,
+                dispatch_id,
+                STATUS_FAILED_TERMINAL,
+                None,
+                Some(last_error),
+                now_ms,
+                None,
+            )
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            mark_status_postgres(
+                pool,
+                dispatch_id,
+                STATUS_FAILED_TERMINAL,
+                None,
+                Some(last_error),
+                now_ms,
+                None,
+            )
+            .await
+        }
+    }
+}
+
+/// Requeue as pending with backoff after a transient failure.
+pub async fn requeue_pending<S>(
+    store: &S,
+    dispatch_id: &str,
+    attempts: i32,
+    next_attempt_at_ms: i64,
+    last_error: &str,
+    now_ms: i64,
+) -> Result<(), BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            requeue_sqlite(
+                pool,
+                dispatch_id,
+                attempts,
+                next_attempt_at_ms,
+                last_error,
+                now_ms,
+            )
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            requeue_postgres(
+                pool,
+                dispatch_id,
+                attempts,
+                next_attempt_at_ms,
+                last_error,
+                now_ms,
+            )
+            .await
+        }
+    }
+}
+
+pub async fn get_by_origin<S>(
+    store: &S,
+    origin_message_id: &str,
+) -> Result<Option<AgentDispatchRow>, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => get_by_origin_sqlite(pool, origin_message_id).await,
+        StorePoolRef::Postgres(pool) => get_by_origin_postgres(pool, origin_message_id).await,
+    }
+}
+
+/// Count dispatch rows for an origin (multi-@ fan-out size).
+pub async fn count_by_origin<S>(store: &S, origin_message_id: &str) -> Result<i64, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let n: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM agent_dispatch_queue WHERE origin_message_id = ?1",
+            )
+            .bind(origin_message_id)
+            .fetch_one(pool)
+            .await
+            .map_err(store_err("agent_dispatch_queue::count_by_origin"))?;
+            Ok(n)
+        }
+        StorePoolRef::Postgres(pool) => {
+            let n: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM agent_dispatch_queue WHERE origin_message_id = $1",
+            )
+            .bind(origin_message_id)
+            .fetch_one(pool)
+            .await
+            .map_err(store_err("agent_dispatch_queue::count_by_origin"))?;
+            Ok(n)
+        }
+    }
+}
+
+/// Host-online edge: make pending (and reclaimable inflight) rows for these
+/// accounts immediately due so the worker can drain without waiting backoff.
+///
+/// Sets `status=pending`, `next_attempt_at_ms=now_ms` for matching rows.
+/// Returns number of rows touched.
+pub async fn force_due_for_accounts<S>(
+    store: &S,
+    account_ids: &[String],
+    now_ms: i64,
+) -> Result<u32, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    if account_ids.is_empty() {
+        return Ok(0);
+    }
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => force_due_sqlite(pool, account_ids, now_ms).await,
+        StorePoolRef::Postgres(pool) => force_due_postgres(pool, account_ids, now_ms).await,
+    }
+}
+
+/// Exponential backoff for next attempt (ms from now). Cap 5 minutes.
+#[must_use]
+pub fn backoff_delay_ms(attempts: i32) -> i64 {
+    let exp = attempts.saturating_sub(1).clamp(0, 10) as u32;
+    let base = 500_i64.saturating_mul(1_i64 << exp.min(10));
+    base.min(300_000)
+}
+
+// ── SQLite ─────────────────────────────────────────────────────────────
+
+async fn enqueue_sqlite(pool: &SqlitePool, row: &AgentDispatchRow) -> Result<bool, BackendError> {
+    let mention = i64::from(row.mention_sender);
+    let result = sqlx::query(
+        "INSERT INTO agent_dispatch_queue (
+            dispatch_id, origin_message_id, conversation_id, account_id, agent_id,
+            session_id, forwarded_text, mention_sender, sender_minos_id, status,
+            attempts, next_attempt_at_ms, last_error, created_at_ms, updated_at_ms
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+         ON CONFLICT(origin_message_id, agent_id) DO NOTHING",
+    )
+    .bind(&row.dispatch_id)
+    .bind(&row.origin_message_id)
+    .bind(&row.conversation_id)
+    .bind(&row.account_id)
+    .bind(&row.agent_id)
+    .bind(&row.session_id)
+    .bind(&row.forwarded_text)
+    .bind(mention)
+    .bind(&row.sender_minos_id)
+    .bind(&row.status)
+    .bind(row.attempts)
+    .bind(row.next_attempt_at_ms)
+    .bind(&row.last_error)
+    .bind(row.created_at_ms)
+    .bind(row.updated_at_ms)
+    .execute(pool)
+    .await
+    .map_err(store_err("agent_dispatch_queue::enqueue"))?;
+    Ok(result.rows_affected() > 0)
+}
+
+async fn claim_due_sqlite(
+    pool: &SqlitePool,
+    now_ms: i64,
+    limit: i64,
+) -> Result<Vec<AgentDispatchRow>, BackendError> {
+    let stale_before = now_ms - STALE_INFLIGHT_MS;
+    // Reclaim stale inflight first.
+    sqlx::query(
+        "UPDATE agent_dispatch_queue
+         SET status = ?1, updated_at_ms = ?2
+         WHERE status = ?3 AND updated_at_ms < ?4",
+    )
+    .bind(STATUS_PENDING)
+    .bind(now_ms)
+    .bind(STATUS_INFLIGHT)
+    .bind(stale_before)
+    .execute(pool)
+    .await
+    .map_err(store_err("agent_dispatch_queue::reclaim_stale"))?;
+
+    let candidates: Vec<(String,)> = sqlx::query_as(
+        "SELECT dispatch_id FROM agent_dispatch_queue
+         WHERE status = ?1 AND next_attempt_at_ms <= ?2
+         ORDER BY next_attempt_at_ms ASC
+         LIMIT ?3",
+    )
+    .bind(STATUS_PENDING)
+    .bind(now_ms)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(store_err("agent_dispatch_queue::claim_due.select"))?;
+
+    let mut out = Vec::with_capacity(candidates.len());
+    for (dispatch_id,) in candidates {
+        let result = sqlx::query(
+            "UPDATE agent_dispatch_queue
+             SET status = ?1, attempts = attempts + 1, updated_at_ms = ?2
+             WHERE dispatch_id = ?3 AND status = ?4",
+        )
+        .bind(STATUS_INFLIGHT)
+        .bind(now_ms)
+        .bind(&dispatch_id)
+        .bind(STATUS_PENDING)
+        .execute(pool)
+        .await
+        .map_err(store_err("agent_dispatch_queue::claim_due.update"))?;
+        if result.rows_affected() == 0 {
+            continue;
+        }
+        if let Some(row) = get_by_id_sqlite(pool, &dispatch_id).await? {
+            out.push(row);
+        }
+    }
+    Ok(out)
+}
+
+async fn get_by_id_sqlite(
+    pool: &SqlitePool,
+    dispatch_id: &str,
+) -> Result<Option<AgentDispatchRow>, BackendError> {
+    let row = sqlx::query_as::<_, AgentDispatchSqlRow>(
+        "SELECT dispatch_id, origin_message_id, conversation_id, account_id, agent_id,
+                session_id, forwarded_text, mention_sender, sender_minos_id, status,
+                attempts, next_attempt_at_ms, last_error, created_at_ms, updated_at_ms
+         FROM agent_dispatch_queue WHERE dispatch_id = ?1",
+    )
+    .bind(dispatch_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(store_err("agent_dispatch_queue::get_by_id"))?;
+    Ok(row.map(Into::into))
+}
+
+async fn get_by_origin_sqlite(
+    pool: &SqlitePool,
+    origin_message_id: &str,
+) -> Result<Option<AgentDispatchRow>, BackendError> {
+    let row = sqlx::query_as::<_, AgentDispatchSqlRow>(
+        "SELECT dispatch_id, origin_message_id, conversation_id, account_id, agent_id,
+                session_id, forwarded_text, mention_sender, sender_minos_id, status,
+                attempts, next_attempt_at_ms, last_error, created_at_ms, updated_at_ms
+         FROM agent_dispatch_queue WHERE origin_message_id = ?1",
+    )
+    .bind(origin_message_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(store_err("agent_dispatch_queue::get_by_origin"))?;
+    Ok(row.map(Into::into))
+}
+
+async fn mark_status_sqlite(
+    pool: &SqlitePool,
+    dispatch_id: &str,
+    status: &str,
+    session_id: Option<&str>,
+    last_error: Option<&str>,
+    now_ms: i64,
+    next_attempt_at_ms: Option<i64>,
+) -> Result<(), BackendError> {
+    if let Some(sid) = session_id {
+        sqlx::query(
+            "UPDATE agent_dispatch_queue
+             SET status = ?1, session_id = ?2, last_error = ?3, updated_at_ms = ?4
+             WHERE dispatch_id = ?5",
+        )
+        .bind(status)
+        .bind(sid)
+        .bind(last_error)
+        .bind(now_ms)
+        .bind(dispatch_id)
+        .execute(pool)
+        .await
+        .map_err(store_err("agent_dispatch_queue::mark_status"))?;
+    } else if let Some(next) = next_attempt_at_ms {
+        sqlx::query(
+            "UPDATE agent_dispatch_queue
+             SET status = ?1, last_error = ?2, next_attempt_at_ms = ?3, updated_at_ms = ?4
+             WHERE dispatch_id = ?5",
+        )
+        .bind(status)
+        .bind(last_error)
+        .bind(next)
+        .bind(now_ms)
+        .bind(dispatch_id)
+        .execute(pool)
+        .await
+        .map_err(store_err("agent_dispatch_queue::mark_status"))?;
+    } else {
+        sqlx::query(
+            "UPDATE agent_dispatch_queue
+             SET status = ?1, last_error = ?2, updated_at_ms = ?3
+             WHERE dispatch_id = ?4",
+        )
+        .bind(status)
+        .bind(last_error)
+        .bind(now_ms)
+        .bind(dispatch_id)
+        .execute(pool)
+        .await
+        .map_err(store_err("agent_dispatch_queue::mark_status"))?;
+    }
+    Ok(())
+}
+
+async fn requeue_sqlite(
+    pool: &SqlitePool,
+    dispatch_id: &str,
+    attempts: i32,
+    next_attempt_at_ms: i64,
+    last_error: &str,
+    now_ms: i64,
+) -> Result<(), BackendError> {
+    sqlx::query(
+        "UPDATE agent_dispatch_queue
+         SET status = ?1, attempts = ?2, next_attempt_at_ms = ?3,
+             last_error = ?4, updated_at_ms = ?5
+         WHERE dispatch_id = ?6",
+    )
+    .bind(STATUS_PENDING)
+    .bind(attempts)
+    .bind(next_attempt_at_ms)
+    .bind(last_error)
+    .bind(now_ms)
+    .bind(dispatch_id)
+    .execute(pool)
+    .await
+    .map_err(store_err("agent_dispatch_queue::requeue"))?;
+    Ok(())
+}
+
+async fn force_due_sqlite(
+    pool: &SqlitePool,
+    account_ids: &[String],
+    now_ms: i64,
+) -> Result<u32, BackendError> {
+    // pending always; inflight only when lease is stale (do not steal live work).
+    let stale_before = now_ms - STALE_INFLIGHT_MS;
+    let mut total = 0u32;
+    for account_id in account_ids {
+        let result = sqlx::query(
+            "UPDATE agent_dispatch_queue
+             SET status = ?1, next_attempt_at_ms = ?2, updated_at_ms = ?3
+             WHERE account_id = ?4
+               AND (
+                    status = ?5
+                    OR (status = ?6 AND updated_at_ms < ?7)
+               )",
+        )
+        .bind(STATUS_PENDING)
+        .bind(now_ms)
+        .bind(now_ms)
+        .bind(account_id)
+        .bind(STATUS_PENDING)
+        .bind(STATUS_INFLIGHT)
+        .bind(stale_before)
+        .execute(pool)
+        .await
+        .map_err(store_err("agent_dispatch_queue::force_due"))?;
+        total = total.saturating_add(result.rows_affected() as u32);
+    }
+    Ok(total)
+}
+
+// ── Postgres ───────────────────────────────────────────────────────────
+
+async fn enqueue_postgres(pool: &PgPool, row: &AgentDispatchRow) -> Result<bool, BackendError> {
+    let result = sqlx::query(
+        "INSERT INTO agent_dispatch_queue (
+            dispatch_id, origin_message_id, conversation_id, account_id, agent_id,
+            session_id, forwarded_text, mention_sender, sender_minos_id, status,
+            attempts, next_attempt_at_ms, last_error, created_at_ms, updated_at_ms
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+         ON CONFLICT(origin_message_id, agent_id) DO NOTHING",
+    )
+    .bind(&row.dispatch_id)
+    .bind(&row.origin_message_id)
+    .bind(&row.conversation_id)
+    .bind(&row.account_id)
+    .bind(&row.agent_id)
+    .bind(&row.session_id)
+    .bind(&row.forwarded_text)
+    .bind(row.mention_sender)
+    .bind(&row.sender_minos_id)
+    .bind(&row.status)
+    .bind(row.attempts)
+    .bind(row.next_attempt_at_ms)
+    .bind(&row.last_error)
+    .bind(row.created_at_ms)
+    .bind(row.updated_at_ms)
+    .execute(pool)
+    .await
+    .map_err(store_err("agent_dispatch_queue::enqueue"))?;
+    Ok(result.rows_affected() > 0)
+}
+
+async fn claim_due_postgres(
+    pool: &PgPool,
+    now_ms: i64,
+    limit: i64,
+) -> Result<Vec<AgentDispatchRow>, BackendError> {
+    let stale_before = now_ms - STALE_INFLIGHT_MS;
+    sqlx::query(
+        "UPDATE agent_dispatch_queue
+         SET status = $1, updated_at_ms = $2
+         WHERE status = $3 AND updated_at_ms < $4",
+    )
+    .bind(STATUS_PENDING)
+    .bind(now_ms)
+    .bind(STATUS_INFLIGHT)
+    .bind(stale_before)
+    .execute(pool)
+    .await
+    .map_err(store_err("agent_dispatch_queue::reclaim_stale"))?;
+
+    // Atomic claim with SKIP LOCKED for multi-instance.
+    let rows = sqlx::query_as::<_, AgentDispatchSqlRowPg>(
+        "UPDATE agent_dispatch_queue
+         SET status = $1, attempts = attempts + 1, updated_at_ms = $2
+         WHERE dispatch_id IN (
+           SELECT dispatch_id FROM agent_dispatch_queue
+           WHERE status = $3 AND next_attempt_at_ms <= $2
+           ORDER BY next_attempt_at_ms ASC
+           LIMIT $4
+           FOR UPDATE SKIP LOCKED
+         )
+         RETURNING dispatch_id, origin_message_id, conversation_id, account_id, agent_id,
+                   session_id, forwarded_text, mention_sender, sender_minos_id, status,
+                   attempts, next_attempt_at_ms, last_error, created_at_ms, updated_at_ms",
+    )
+    .bind(STATUS_INFLIGHT)
+    .bind(now_ms)
+    .bind(STATUS_PENDING)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(store_err("agent_dispatch_queue::claim_due"))?;
+    Ok(rows.into_iter().map(Into::into).collect())
+}
+
+async fn get_by_origin_postgres(
+    pool: &PgPool,
+    origin_message_id: &str,
+) -> Result<Option<AgentDispatchRow>, BackendError> {
+    let row = sqlx::query_as::<_, AgentDispatchSqlRowPg>(
+        "SELECT dispatch_id, origin_message_id, conversation_id, account_id, agent_id,
+                session_id, forwarded_text, mention_sender, sender_minos_id, status,
+                attempts, next_attempt_at_ms, last_error, created_at_ms, updated_at_ms
+         FROM agent_dispatch_queue WHERE origin_message_id = $1",
+    )
+    .bind(origin_message_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(store_err("agent_dispatch_queue::get_by_origin"))?;
+    Ok(row.map(Into::into))
+}
+
+async fn mark_status_postgres(
+    pool: &PgPool,
+    dispatch_id: &str,
+    status: &str,
+    session_id: Option<&str>,
+    last_error: Option<&str>,
+    now_ms: i64,
+    next_attempt_at_ms: Option<i64>,
+) -> Result<(), BackendError> {
+    if let Some(sid) = session_id {
+        sqlx::query(
+            "UPDATE agent_dispatch_queue
+             SET status = $1, session_id = $2, last_error = $3, updated_at_ms = $4
+             WHERE dispatch_id = $5",
+        )
+        .bind(status)
+        .bind(sid)
+        .bind(last_error)
+        .bind(now_ms)
+        .bind(dispatch_id)
+        .execute(pool)
+        .await
+        .map_err(store_err("agent_dispatch_queue::mark_status"))?;
+    } else if let Some(next) = next_attempt_at_ms {
+        sqlx::query(
+            "UPDATE agent_dispatch_queue
+             SET status = $1, last_error = $2, next_attempt_at_ms = $3, updated_at_ms = $4
+             WHERE dispatch_id = $5",
+        )
+        .bind(status)
+        .bind(last_error)
+        .bind(next)
+        .bind(now_ms)
+        .bind(dispatch_id)
+        .execute(pool)
+        .await
+        .map_err(store_err("agent_dispatch_queue::mark_status"))?;
+    } else {
+        sqlx::query(
+            "UPDATE agent_dispatch_queue
+             SET status = $1, last_error = $2, updated_at_ms = $3
+             WHERE dispatch_id = $4",
+        )
+        .bind(status)
+        .bind(last_error)
+        .bind(now_ms)
+        .bind(dispatch_id)
+        .execute(pool)
+        .await
+        .map_err(store_err("agent_dispatch_queue::mark_status"))?;
+    }
+    Ok(())
+}
+
+async fn requeue_postgres(
+    pool: &PgPool,
+    dispatch_id: &str,
+    attempts: i32,
+    next_attempt_at_ms: i64,
+    last_error: &str,
+    now_ms: i64,
+) -> Result<(), BackendError> {
+    sqlx::query(
+        "UPDATE agent_dispatch_queue
+         SET status = $1, attempts = $2, next_attempt_at_ms = $3,
+             last_error = $4, updated_at_ms = $5
+         WHERE dispatch_id = $6",
+    )
+    .bind(STATUS_PENDING)
+    .bind(attempts)
+    .bind(next_attempt_at_ms)
+    .bind(last_error)
+    .bind(now_ms)
+    .bind(dispatch_id)
+    .execute(pool)
+    .await
+    .map_err(store_err("agent_dispatch_queue::requeue"))?;
+    Ok(())
+}
+
+async fn force_due_postgres(
+    pool: &PgPool,
+    account_ids: &[String],
+    now_ms: i64,
+) -> Result<u32, BackendError> {
+    let stale_before = now_ms - STALE_INFLIGHT_MS;
+    let result = sqlx::query(
+        "UPDATE agent_dispatch_queue
+         SET status = $1, next_attempt_at_ms = $2, updated_at_ms = $3
+         WHERE account_id = ANY($4)
+           AND (
+                status = $5
+                OR (status = $6 AND updated_at_ms < $7)
+           )",
+    )
+    .bind(STATUS_PENDING)
+    .bind(now_ms)
+    .bind(now_ms)
+    .bind(account_ids)
+    .bind(STATUS_PENDING)
+    .bind(STATUS_INFLIGHT)
+    .bind(stale_before)
+    .execute(pool)
+    .await
+    .map_err(store_err("agent_dispatch_queue::force_due"))?;
+    Ok(result.rows_affected() as u32)
+}
+
+// ── row mapping ────────────────────────────────────────────────────────
+
+#[derive(sqlx::FromRow)]
+struct AgentDispatchSqlRow {
+    dispatch_id: String,
+    origin_message_id: String,
+    conversation_id: String,
+    account_id: String,
+    agent_id: String,
+    session_id: Option<String>,
+    forwarded_text: String,
+    mention_sender: i64,
+    sender_minos_id: Option<String>,
+    status: String,
+    attempts: i32,
+    next_attempt_at_ms: i64,
+    last_error: Option<String>,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+}
+
+impl From<AgentDispatchSqlRow> for AgentDispatchRow {
+    fn from(r: AgentDispatchSqlRow) -> Self {
+        Self {
+            dispatch_id: r.dispatch_id,
+            origin_message_id: r.origin_message_id,
+            conversation_id: r.conversation_id,
+            account_id: r.account_id,
+            agent_id: r.agent_id,
+            session_id: r.session_id,
+            forwarded_text: r.forwarded_text,
+            mention_sender: r.mention_sender != 0,
+            sender_minos_id: r.sender_minos_id,
+            status: r.status,
+            attempts: r.attempts,
+            next_attempt_at_ms: r.next_attempt_at_ms,
+            last_error: r.last_error,
+            created_at_ms: r.created_at_ms,
+            updated_at_ms: r.updated_at_ms,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct AgentDispatchSqlRowPg {
+    dispatch_id: String,
+    origin_message_id: String,
+    conversation_id: String,
+    account_id: String,
+    agent_id: String,
+    session_id: Option<String>,
+    forwarded_text: String,
+    mention_sender: bool,
+    sender_minos_id: Option<String>,
+    status: String,
+    attempts: i32,
+    next_attempt_at_ms: i64,
+    last_error: Option<String>,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+}
+
+impl From<AgentDispatchSqlRowPg> for AgentDispatchRow {
+    fn from(r: AgentDispatchSqlRowPg) -> Self {
+        Self {
+            dispatch_id: r.dispatch_id,
+            origin_message_id: r.origin_message_id,
+            conversation_id: r.conversation_id,
+            account_id: r.account_id,
+            agent_id: r.agent_id,
+            session_id: r.session_id,
+            forwarded_text: r.forwarded_text,
+            mention_sender: r.mention_sender,
+            sender_minos_id: r.sender_minos_id,
+            status: r.status,
+            attempts: r.attempts,
+            next_attempt_at_ms: r.next_attempt_at_ms,
+            last_error: r.last_error,
+            created_at_ms: r.created_at_ms,
+            updated_at_ms: r.updated_at_ms,
+        }
+    }
+}
+
+fn store_err(op: &'static str) -> impl FnOnce(sqlx::Error) -> BackendError {
+    move |e| BackendError::StoreQuery {
+        operation: op.into(),
+        message: e.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::{test_support::memory_pool, StoreHandle};
+
+    async fn mem() -> StoreHandle {
+        StoreHandle::from(memory_pool().await)
+    }
+
+    #[tokio::test]
+    async fn enqueue_is_idempotent_on_origin_and_agent() {
+        let store = mem().await;
+        let now = 1_000_i64;
+        let row = AgentDispatchRow {
+            dispatch_id: "d1".into(),
+            origin_message_id: "origin-1".into(),
+            conversation_id: "c1".into(),
+            account_id: "a1".into(),
+            agent_id: "agent1".into(),
+            session_id: None,
+            forwarded_text: "hi".into(),
+            mention_sender: false,
+            sender_minos_id: None,
+            status: STATUS_PENDING.into(),
+            attempts: 0,
+            next_attempt_at_ms: now,
+            last_error: None,
+            created_at_ms: now,
+            updated_at_ms: now,
+        };
+        assert!(enqueue(&store, &row).await.unwrap());
+        let mut row2 = row.clone();
+        row2.dispatch_id = "d2".into();
+        assert!(!enqueue(&store, &row2).await.unwrap());
+        // Multi-@ fan-out: different agent on same origin is a new row.
+        let mut row3 = row.clone();
+        row3.dispatch_id = "d3".into();
+        row3.agent_id = "agent2".into();
+        assert!(enqueue(&store, &row3).await.unwrap());
+        let got = get_by_origin(&store, "origin-1").await.unwrap().unwrap();
+        assert_eq!(got.dispatch_id, "d1");
+    }
+
+    #[tokio::test]
+    async fn claim_due_marks_inflight_and_increments_attempts() {
+        let store = mem().await;
+        let now = 5_000_i64;
+        let row = AgentDispatchRow {
+            dispatch_id: "d1".into(),
+            origin_message_id: "o1".into(),
+            conversation_id: "c1".into(),
+            account_id: "a1".into(),
+            agent_id: "agent1".into(),
+            session_id: None,
+            forwarded_text: "hi".into(),
+            mention_sender: true,
+            sender_minos_id: Some("alice".into()),
+            status: STATUS_PENDING.into(),
+            attempts: 0,
+            next_attempt_at_ms: now,
+            last_error: None,
+            created_at_ms: now,
+            updated_at_ms: now,
+        };
+        enqueue(&store, &row).await.unwrap();
+        let claimed = claim_due(&store, now, 10).await.unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].status, STATUS_INFLIGHT);
+        assert_eq!(claimed[0].attempts, 1);
+        // Not due again while inflight.
+        assert!(claim_due(&store, now, 10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn force_due_for_accounts_makes_backoff_rows_claimable() {
+        let store = mem().await;
+        let now = 10_000_i64;
+        let row = AgentDispatchRow {
+            dispatch_id: "d1".into(),
+            origin_message_id: "o1".into(),
+            conversation_id: "c1".into(),
+            account_id: "acct-a".into(),
+            agent_id: "agent1".into(),
+            session_id: None,
+            forwarded_text: "hi".into(),
+            mention_sender: false,
+            sender_minos_id: None,
+            status: STATUS_PENDING.into(),
+            attempts: 2,
+            next_attempt_at_ms: now + 60_000,
+            last_error: Some("no live host".into()),
+            created_at_ms: now,
+            updated_at_ms: now,
+        };
+        enqueue(&store, &row).await.unwrap();
+        assert!(claim_due(&store, now, 10).await.unwrap().is_empty());
+        let n = force_due_for_accounts(&store, &["acct-a".into()], now)
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        let claimed = claim_due(&store, now, 10).await.unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].origin_message_id, "o1");
+    }
+}

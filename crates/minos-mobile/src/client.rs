@@ -70,10 +70,21 @@ pub struct UiEventFrame {
     pub ts_ms: i64,
 }
 
-/// One live social-chat message pushed from backend fan-out.
+/// One live social-chat event pushed from backend fan-out.
+///
+/// `kind`:
+/// - `"message"` — open-conversation T1 full append/recall (`conversation:`)
+/// - `"inbox_digest"` — account T2 thin append for inbox/rail only
+/// - `"inbox_recall"` — account T2 thin recall for inbox/rail only
+/// - `"reaction_updated"` — aggregate replace; `message.message_id` +
+///   `message.reactions` are authoritative (other fields may be stubs)
+///
+/// For `inbox_digest` / `inbox_recall`, `message` is a **stub** built from
+/// digest fields (`text` = preview); do not treat as timeline-authoritative.
 #[derive(Debug, Clone)]
 pub struct SocialEventFrame {
     pub conversation_id: String,
+    pub kind: String,
     pub message: ChatMessageSummary,
 }
 
@@ -424,6 +435,67 @@ impl MobileClient {
         Ok(())
     }
 
+    /// Open-chat live path (R3a): subscribe `conversation:{id}` for full T1
+    /// message/reaction frames. Account topic remains digest-only for inbox.
+    pub async fn subscribe_conversation(&self, conversation_id: String) -> Result<(), MinosError> {
+        let id = conversation_id.trim();
+        if id.is_empty() {
+            return Ok(());
+        }
+        let topic = format!("conversation:{id}");
+        let added = self.subscription_mgr.add_topic(&topic, 0).await;
+        if !added || !matches!(*self.state_rx.borrow(), ConnectionState::Connected) {
+            return Ok(());
+        }
+
+        let frame = ClientFrame::Subscribe {
+            topics: vec![topic],
+            resume_after: Some(self.subscription_mgr.resume_after_map().await),
+            client_request_id: None,
+        };
+        let sender = self.outbound_tx.lock().await.clone();
+        if let Some(sender) = sender {
+            if let Err(error) = sender.send(frame).await {
+                tracing::warn!(
+                    target: "minos_mobile::client",
+                    error = %error,
+                    "failed to send conversation subscribe frame",
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Leave open-chat conversation topic (R3a). Safe if not currently subscribed.
+    pub async fn unsubscribe_conversation(
+        &self,
+        conversation_id: String,
+    ) -> Result<(), MinosError> {
+        let id = conversation_id.trim();
+        if id.is_empty() {
+            return Ok(());
+        }
+        let topic = format!("conversation:{id}");
+        self.subscription_mgr.remove_topic(&topic).await;
+        if !matches!(*self.state_rx.borrow(), ConnectionState::Connected) {
+            return Ok(());
+        }
+        let frame = ClientFrame::Unsubscribe {
+            topics: vec![topic],
+        };
+        let sender = self.outbound_tx.lock().await.clone();
+        if let Some(sender) = sender {
+            if let Err(error) = sender.send(frame).await {
+                tracing::warn!(
+                    target: "minos_mobile::client",
+                    error = %error,
+                    "failed to send conversation unsubscribe frame",
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Read a window of translated UI events from one session.
     pub async fn read_session(
         &self,
@@ -674,11 +746,12 @@ impl MobileClient {
     pub async fn list_chat_messages(
         &self,
         conversation_id: String,
-        before_ts_ms: Option<i64>,
+        before_seq: Option<i64>,
+        after_seq: Option<i64>,
         limit: u32,
     ) -> Result<ListChatMessagesResponse, MinosError> {
         auth_http_call!(self, |http, access| {
-            http.list_chat_messages(&access, &conversation_id, before_ts_ms, limit)
+            http.list_chat_messages(&access, &conversation_id, before_seq, after_seq, limit)
         })
     }
 
@@ -687,6 +760,7 @@ impl MobileClient {
         conversation_id: String,
         text: String,
         reply_to_message_id: Option<String>,
+        client_message_id: Option<String>,
     ) -> Result<minos_protocol::ChatMessageSummary, MinosError> {
         auth_http_call!(self, |http, access| {
             http.send_chat_message(
@@ -695,10 +769,12 @@ impl MobileClient {
                 SendChatMessageRequest {
                     text,
                     reply_to_message_id,
-                    client_message_id: None,
-                    message_source: None,
-                    client_sent_at_ms: None,
+                    client_message_id,
+                    // Mobile live sends are client_live so Hub can @-dispatch.
+                    message_source: Some(minos_protocol::MessageSource::ClientLive),
+                    client_sent_at_ms: Some(chrono::Utc::now().timestamp_millis()),
                     created_at_ms: None,
+                    attachment_blob_ids: Vec::new(),
                 },
             )
         })
@@ -711,6 +787,25 @@ impl MobileClient {
     ) -> Result<minos_protocol::ChatMessageSummary, MinosError> {
         auth_http_call!(self, |http, access| {
             http.recall_chat_message(&access, &conversation_id, &message_id)
+        })
+    }
+
+    /// Toggle Hub reaction; `client_op_id` is the Intent Outbox id (B6/C5).
+    pub async fn toggle_reaction(
+        &self,
+        conversation_id: String,
+        message_id: String,
+        emoji: String,
+        client_op_id: String,
+    ) -> Result<minos_protocol::ToggleReactionResponse, MinosError> {
+        auth_http_call!(self, |http, access| {
+            http.toggle_reaction(
+                &access,
+                &conversation_id,
+                &message_id,
+                &emoji,
+                &client_op_id,
+            )
         })
     }
 
@@ -883,20 +978,30 @@ impl MobileClient {
     }
 
     /// Submit a user approval decision back to the backend relay.
+    ///
+    /// `client_request_id` is the Hub Intent Outbox id (C5.3). When `None`, a
+    /// fresh id is generated so the wire body never hardcodes null (retries
+    /// from callers that stable-id should pass the same value).
     pub async fn send_approval_decision(
         &self,
         request_id: String,
         session_id: String,
         decision: serde_json::Value,
+        client_request_id: Option<String>,
     ) -> Result<(), MinosError> {
+        let client_request_id = client_request_id
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!("approval-{}", uuid::Uuid::new_v4()));
         auth_http_call!(self, |http, access| {
             http.submit_approval_decision(
                 &access,
                 ApprovalDecisionRequest {
-                    request_id,
-                    session_id,
-                    decision,
+                    request_id: request_id.clone(),
+                    session_id: session_id.clone(),
+                    decision: decision.clone(),
                 },
+                Some(&client_request_id),
             )
         })
     }
@@ -2099,6 +2204,7 @@ mod tests {
                 "req-1".into(),
                 "thr-1".into(),
                 serde_json::json!({ "decision": "accept" }),
+                Some("approval-op-1".into()),
             )
             .await;
         assert!(matches!(res, Err(MinosError::Unauthorized { .. })));
