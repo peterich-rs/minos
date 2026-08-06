@@ -543,7 +543,7 @@ mod tests {
         let pool = store::connect("sqlite::memory:").await.unwrap();
         // Need an account row for FK.
         sqlx::query(
-            "INSERT INTO accounts (account_id, email, minos_id, display_name, supabase_sub, created_at)
+            "INSERT INTO accounts (account_id, email, minos_id, display_name, supabase_sub, created_at_ms)
              VALUES ('acc_1', 'a@example.com', 'm1', 'A', NULL, 1)",
         )
         .execute(&pool)

@@ -110,8 +110,8 @@ pub async fn authorize_subscription(
 mod tests {
     use super::*;
     use crate::store::test_support::{insert_account, insert_ios_device, memory_pool};
-    use crate::store::{agent_sessions, device_installations, host_links, social};
-    use minos_domain::{DeviceId, DeviceRole};
+    use crate::store::{agent_sessions, host_links, social};
+    use minos_domain::DeviceId;
 
     #[tokio::test]
     async fn account_subscription_authorizer_allows_owned_scopes_and_denies_host_topic() {
@@ -181,9 +181,7 @@ mod tests {
         let account_id = insert_account(&pool, "realtime-host-auth@example.com").await;
         let phone = insert_ios_device(&pool, &account_id).await;
         let host_id = DeviceId::new();
-        device_installations::insert_device(&pool, host_id, "Mac", DeviceRole::AgentHost, 0)
-            .await
-            .unwrap();
+        store::test_support::insert_test_host(&pool, host_id, "Mac", 0).await;
         let members = vec![account_id.clone()];
         let conversation =
             social::create_group_conversation(&pool, &account_id, "Host Scope", &members, 100)

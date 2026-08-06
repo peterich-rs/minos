@@ -54,7 +54,7 @@ pub async fn create(
             sqlx::query(
                 "INSERT INTO agent_turns
                     (turn_id, agent_session_id, turn_seq, role, status, started_at_ms, finished_at_ms, summary_text, usage_json)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                 VALUES ($1, $2, $3, $4::turn_role, $5::turn_status, $6, $7, $8, CAST($9 AS JSONB))",
             )
             .bind(turn_id)
             .bind(agent_session_id)
@@ -212,7 +212,7 @@ pub async fn update_status(
         .map(|result| result.rows_affected()),
         StorePoolRef::Postgres(pool) => sqlx::query(
             "UPDATE agent_turns
-                    SET status = $1, finished_at_ms = $2
+                    SET status = $1::turn_status, finished_at_ms = $2
                   WHERE turn_id = $3",
         )
         .bind(status)

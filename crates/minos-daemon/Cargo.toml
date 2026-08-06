@@ -8,12 +8,6 @@ description = "Mac-side composition root: WS server + file store + RPC handlers 
 
 [features]
 test-support = ["minos-agent-runtime/test-support"]
-uniffi = [
-	"dep:uniffi",
-	"minos-agent-runtime/uniffi",
-	"minos-domain/uniffi",
-	"minos-protocol/uniffi",
-]
 
 [dependencies]
 minos-agent-runtime = { path = "../minos-agent-runtime", version = "0.1.0" }
@@ -48,7 +42,6 @@ async-trait = { workspace = true }
 base64 = { workspace = true }
 ed25519-dalek = { workspace = true }
 getrandom = { workspace = true }
-uniffi = { workspace = true, optional = true, features = ["tokio"] }
 clap = { version = "4", features = ["derive"] }
 reqwest = { workspace = true }
 
@@ -57,7 +50,7 @@ minos-agent-runtime = { path = "../minos-agent-runtime", version = "0.1.0", feat
 # Backend is pulled into dev-deps only so the relay_client_smoke integration
 # test can spin up an in-process broker without leaking a production
 # dependency cycle (daemon is the backend's client, not vice versa).
-minos-backend = { path = "../minos-backend", version = "0.1.0" }
+minos-backend = { path = "../minos-backend", version = "0.1.0", features = ["test-support"] }
 axum = { workspace = true }
 http-body-util = "0.1"
 tempfile = { workspace = true }

@@ -53,7 +53,6 @@ pub struct MePeersResponse {
 }
 
 /// One mobile/account row connected to a host.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct HostPeerSummary {
     pub mobile_device_id: DeviceId,
@@ -65,7 +64,6 @@ pub struct HostPeerSummary {
 }
 
 /// Bearer-authenticated mobile account profile.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct MyProfileResponse {
     pub account_id: String,
@@ -76,7 +74,6 @@ pub struct MyProfileResponse {
 }
 
 /// Minimal user directory card exposed to the mobile app.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct UserSummary {
     pub account_id: String,
@@ -84,38 +81,32 @@ pub struct UserSummary {
     pub display_name: String,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SearchUsersResponse {
     pub users: Vec<UserSummary>,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SearchUsersRequest {
     pub minos_id: String,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SetMinosIdRequest {
     pub minos_id: String,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SetDisplayNameRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct CreateFriendRequestRequest {
     pub target_minos_id: String,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum FriendRequestStatus {
@@ -125,7 +116,6 @@ pub enum FriendRequestStatus {
     Canceled,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FriendRequestSummary {
     pub request_id: String,
@@ -137,14 +127,12 @@ pub struct FriendRequestSummary {
     pub resolved_at_ms: Option<i64>,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FriendRequestsResponse {
     pub incoming: Vec<FriendRequestSummary>,
     pub outgoing: Vec<FriendRequestSummary>,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FriendSummary {
     pub account_id: String,
@@ -153,13 +141,11 @@ pub struct FriendSummary {
     pub created_at_ms: i64,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct FriendsResponse {
     pub friends: Vec<FriendSummary>,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversationKind {
@@ -167,7 +153,6 @@ pub enum ConversationKind {
     Group,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ConversationSummary {
     pub conversation_id: String,
@@ -183,19 +168,16 @@ pub struct ConversationSummary {
     pub unread_mention_count: u32,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ConversationsResponse {
     pub conversations: Vec<ConversationSummary>,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct EnsureDirectConversationRequest {
     pub friend_account_id: String,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct CreateGroupConversationRequest {
     pub title: String,
@@ -206,7 +188,6 @@ pub struct CreateGroupConversationRequest {
 ///
 /// Creates the conversation when missing; updates title and ensures membership
 /// when present. Does not wipe messages.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct UpsertConversationRequest {
     pub conversation_id: String,
@@ -218,19 +199,16 @@ pub struct UpsertConversationRequest {
     pub agent_ids: Vec<String>,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ConversationResponse {
     pub conversation_id: String,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ConversationMembersResponse {
     pub members: Vec<UserSummary>,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ConversationReadResponse {
     /// Highest `message_seq` marked read in this conversation (0 = none).
@@ -241,7 +219,6 @@ pub struct ConversationReadResponse {
     pub last_read_at_ms: Option<i64>,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ChatMessageReplySummary {
     pub message_id: String,
@@ -251,7 +228,6 @@ pub struct ChatMessageReplySummary {
     pub recalled_at_ms: Option<i64>,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ChatMessageSummary {
     pub message_id: String,
@@ -280,7 +256,6 @@ pub struct ChatMessageSummary {
 }
 
 /// Media blob linked to a chat message (metadata; bytes live in object storage).
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ChatMessageAttachment {
     pub blob_id: String,
@@ -293,7 +268,6 @@ pub struct ChatMessageAttachment {
 }
 
 /// Attachment descriptor passed Host-side for materialize-before-agent.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct DispatchAttachment {
     pub blob_id: String,
@@ -307,7 +281,6 @@ pub struct DispatchAttachment {
 
 /// Cloud multi-account reaction actor (`account_id` or `agent_id`).
 /// Distinct from daemon-only [`LocalReactionActor`].
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ReactionActor {
     /// account_id or agent_id
@@ -318,7 +291,6 @@ pub struct ReactionActor {
 }
 
 /// Cloud reaction group for one emoji on a message (aggregate SSOT).
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ReactionGroup {
     pub emoji: String,
@@ -329,7 +301,6 @@ pub struct ReactionGroup {
     pub actors: Vec<ReactionActor>,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ToggleReactionRequest {
     pub emoji: String,
@@ -338,7 +309,6 @@ pub struct ToggleReactionRequest {
     pub client_op_id: String,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ToggleReactionResponse {
     pub message_id: String,
@@ -349,7 +319,6 @@ pub struct ToggleReactionResponse {
     pub action: String,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ListChatMessagesResponse {
     pub messages: Vec<ChatMessageSummary>,
@@ -358,7 +327,6 @@ pub struct ListChatMessagesResponse {
     pub next_before_seq: Option<i64>,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ListChatMessagesRequest {
     /// Load messages with `message_seq < before_seq` (older pages).
@@ -374,7 +342,6 @@ pub struct ListChatMessagesRequest {
 /// Who authored a chat write and whether Hub may dispatch agents.
 ///
 /// `client_message_id` is **only** for idempotency — it must not gate dispatch.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageSource {
@@ -396,7 +363,6 @@ impl MessageSource {
     }
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SendChatMessageRequest {
     pub text: String,
@@ -423,7 +389,6 @@ pub struct SendChatMessageRequest {
 // ─── Agent in Group Chat ───────────────────────────────────────────────
 
 /// The type of sender for a chat message.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SenderType {
@@ -436,7 +401,6 @@ fn default_sender_type() -> SenderType {
 }
 
 /// Request to register a new agent under the caller's account.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct RegisterAgentRequest {
     pub name: String,
@@ -450,7 +414,6 @@ pub struct RegisterAgentRequest {
 }
 
 /// Request to update an existing agent owned by the caller.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct UpdateAgentRequest {
     pub name: String,
@@ -464,7 +427,6 @@ pub struct UpdateAgentRequest {
 }
 
 /// Summary of a registered agent.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct AgentSummary {
     pub agent_id: String,
@@ -480,42 +442,36 @@ pub struct AgentSummary {
 }
 
 /// Response for listing agents owned by the caller.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ListAgentsResponse {
     pub agents: Vec<AgentSummary>,
 }
 
 /// Request to add an agent to a group conversation.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct AddAgentToGroupRequest {
     pub agent_id: String,
 }
 
 /// Request to remove an agent from a group conversation.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct RemoveAgentFromGroupRequest {
     pub agent_id: String,
 }
 
 /// Request to add a user member to an existing group conversation.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct AddGroupMemberRequest {
     pub member_account_id: String,
 }
 
 /// Request to remove a user member from an existing group conversation.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct RemoveGroupMemberRequest {
     pub member_account_id: String,
 }
 
 /// Response listing agent members of a conversation.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ConversationAgentMembersResponse {
     pub agents: Vec<AgentSummary>,
@@ -523,7 +479,6 @@ pub struct ConversationAgentMembersResponse {
 
 /// Request for an agent to send a message in a group conversation.
 /// The agent_id identifies which agent is "speaking".
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SendAgentMessageRequest {
     pub agent_id: String,
@@ -553,7 +508,6 @@ pub struct SendAgentMessageRequest {
 /// Stable identity: one cloud agent per `(owner, source=host_runtime, runtime_agent)`.
 /// Used for Desktop → Hub roster projection so Mobile can list agents without
 /// treating bin names as agent_ids.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct EnsureHostRuntimeAgentRequest {
     pub runtime_agent: String,
@@ -612,7 +566,6 @@ pub type ListClisResponse = Vec<AgentDescriptor>;
 
 /// Parameters for the `list_host_skills` RPC. `workspace` is optional for
 /// mobile clients that still rely on the daemon's default workspace.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ListHostSkillsRequest {
     pub workspace: String,
@@ -632,7 +585,6 @@ pub struct ListHostSkillsCommandRequest {
 /// Parameters for listing host-side workspace directories. `root` is optional;
 /// hosts default it to the current user's home directory and constrain custom
 /// roots to that home tree.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ListHostWorkspacesRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -651,7 +603,6 @@ pub struct ListHostWorkspacesCommandRequest {
     pub limit: u32,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HostWorkspaceSummary {
     pub path: String,
@@ -659,14 +610,12 @@ pub struct HostWorkspaceSummary {
     pub is_git_repo: bool,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ListHostWorkspacesResponse {
     pub root: String,
     pub workspaces: Vec<HostWorkspaceSummary>,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HostSkillSummary {
     pub name: String,
@@ -680,14 +629,12 @@ pub struct HostSkillSummary {
     pub short_description: Option<String>,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HostSkillError {
     pub path: String,
     pub message: String,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HostSkillsEntry {
     pub cwd: String,
@@ -695,7 +642,6 @@ pub struct HostSkillsEntry {
     pub skills: Vec<HostSkillSummary>,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ListHostSkillsResponse {
     pub data: Vec<HostSkillsEntry>,
@@ -703,7 +649,6 @@ pub struct ListHostSkillsResponse {
 
 /// Parameters for the `write_host_skill_config` RPC. The path comes from
 /// a prior `list_host_skills` result.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WriteHostSkillConfigRequest {
     pub workspace: String,
@@ -720,7 +665,6 @@ pub struct WriteHostSkillConfigCommandRequest {
     pub enabled: bool,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WriteHostSkillConfigResponse {
     pub effective_enabled: bool,
@@ -730,7 +674,6 @@ pub struct WriteHostSkillConfigResponse {
 /// surfaces can compare the two paths side-by-side without rebuilding.
 /// `Jsonl` is the production default (`codex exec --json` per turn); `Server`
 /// spawns `codex app-server --listen ws://…` and connects via WebSocket.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 pub enum AgentLaunchMode {
     #[default]
@@ -752,7 +695,6 @@ pub enum AgentLaunchMode {
 ///    Precedence: **explicit request > profile > None**.
 /// 3. When `profile_id` is absent: only the explicit request fields apply
 ///    (same as pre-profile behavior).
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StartAgentRequest {
     pub agent: AgentName,
@@ -760,7 +702,7 @@ pub struct StartAgentRequest {
     /// `cwd`. Multi-session manager keys instances by workspace, so two
     /// `start_agent` calls for the same workspace share an instance and
     /// distinct calls for different workspaces spawn distinct codex children.
-    /// Carried as a string for FFI portability (UniFFI does not lift `PathBuf`).
+    /// Carried as a string for FFI/portability (no `PathBuf` on wire).
     pub workspace: String,
     /// Optional driver selector. Absent ⇒ `Server` post-Phase-C, preserving
     /// the wire shape for clients that pre-date the field. The `Jsonl` variant
@@ -784,7 +726,6 @@ pub struct StartAgentRequest {
 
 /// Result of a successful `start_agent` RPC — carries the codex `session_id`
 /// as `session_id` and the resolved workspace path. See spec §5.2.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StartAgentResponse {
     pub session_id: String,
@@ -793,7 +734,6 @@ pub struct StartAgentResponse {
 
 /// Parameters for the `send_user_message` RPC. `session_id` must match the
 /// active session's id; see spec §5.2 and §5.4.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SendUserMessageRequest {
     pub session_id: String,
@@ -849,14 +789,12 @@ pub struct ApprovalDecisionRequest {
 }
 
 /// Parameters for the `interrupt_session` RPC. See spec §5.2.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InterruptSessionRequest {
     pub session_id: String,
 }
 
 /// Parameters for the `close_session` RPC. See spec §5.2.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CloseSessionRequest {
     pub session_id: String,
@@ -882,7 +820,7 @@ pub struct ResumeSessionRequest {
 /// Mirror of `minos_agent_runtime::SessionState` published over the wire for
 /// the host's JSON-RPC surface. Kept structurally identical to the runtime
 /// enum (same `tag = "kind"` / `snake_case` shape) so the two serialise
-/// interchangeably across the relay. Not exposed to UniFFI — the FFI surface
+/// interchangeably across the relay. Not a public mobile FRB surface
 /// uses `minos_agent_runtime::SessionState` directly so Swift sees one
 /// canonical `SessionState` type.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -999,7 +937,6 @@ pub struct GetSessionLastSeqResponse {
 // ─── Projects ──────────────────────────────────────────────────────────
 
 /// Summary of a project for list views.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProjectSummary {
     pub project_id: String,
@@ -1013,7 +950,6 @@ pub struct ProjectSummary {
 }
 
 /// Request to create a new project.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct CreateProjectRequest {
     pub name: String,
@@ -1023,14 +959,12 @@ pub struct CreateProjectRequest {
 }
 
 /// Response from creating a project.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct CreateProjectResponse {
     pub project: ProjectSummary,
 }
 
 /// Request to update a project's name.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct UpdateProjectRequest {
     pub project_id: String,
@@ -1038,9 +972,14 @@ pub struct UpdateProjectRequest {
 }
 
 /// Request to delete a project.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct DeleteProjectRequest {
+    pub project_id: String,
+}
+
+/// Request to soft-archive a project (hidden from default list).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ArchiveProjectRequest {
     pub project_id: String,
 }
 
@@ -1052,7 +991,6 @@ pub struct AssignProjectThreadRequest {
 }
 
 /// Response from listing projects.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ListProjectsResponse {
     pub projects: Vec<ProjectSummary>,
@@ -1686,7 +1624,6 @@ pub struct AppendConversationMessageResponse {
 }
 
 /// Parameters for listing sessions within a project.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ListProjectSessionsParams {
     pub project_id: String,

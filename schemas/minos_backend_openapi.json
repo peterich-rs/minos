@@ -2607,6 +2607,45 @@
         "x-minos-surface": "account_api"
       }
     },
+    "/v1/projects/archive": {
+      "post": {
+        "description": "Generated from the mounted route inventory for the `account_api` surface with `account_bearer` auth semantics.",
+        "operationId": "post_v1_projects_archive",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": true
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": true
+              }
+            },
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required or rejected"
+          }
+        },
+        "security": [
+          {
+            "AccountBearer": []
+          }
+        ],
+        "summary": "POST /v1/projects/archive",
+        "tags": [
+          "account_api"
+        ],
+        "x-minos-auth": "account_bearer",
+        "x-minos-probe-path": "/v1/projects/archive",
+        "x-minos-surface": "account_api"
+      }
+    },
     "/v1/projects/conversations/link": {
       "post": {
         "description": "Generated from the mounted route inventory for the `account_api` surface with `account_bearer` auth semantics.",

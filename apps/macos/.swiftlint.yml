@@ -1,6 +1,0 @@
-included:
-  - Minos
-  - MinosTests
-
-excluded:
-  - Minos/Generated

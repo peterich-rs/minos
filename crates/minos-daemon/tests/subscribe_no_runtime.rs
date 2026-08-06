@@ -1,6 +1,6 @@
 //! Regression: `DaemonHandle::subscribe_relay_link` and `subscribe_peer`
 //! must work when called from an OS thread that has no current Tokio
-//! runtime — e.g. Swift's main thread after the UniFFI constructor returned.
+//! runtime — e.g. a non-Tokio host thread after construction returned.
 //!
 //! The guard is the `self.inner.rt_handle.enter()` line in each subscribe
 //! method (`crates/minos-daemon/src/handle.rs`). Without it, the

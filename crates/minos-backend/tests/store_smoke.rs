@@ -20,6 +20,9 @@ async fn connect_creates_tables_and_migrates() {
         "host_commands",
         "durable_event_log",
         "outbox_events",
+        "audit_events",
+        "project_members",
+        "projects",
     ] {
         let row: Option<String> =
             sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
@@ -30,14 +33,10 @@ async fn connect_creates_tables_and_migrates() {
         assert!(row.is_some(), "table {table} missing after migrate");
     }
 
-    // Spot-check an index from the renamed pair table to confirm migrations
-    // 0012 + 0013 ran cleanly. STRICT mode has no reflection API, but the
-    // CHECK constraints embedded in STRICT rejections are exercised by
-    // store submodule tests.
+    // Spot-check named indexes (unique on agent_turns is table-level UNIQUE).
     for index in [
         "idx_host_links_account",
         "idx_agent_sessions_conversation_status",
-        "idx_agent_turns_session_seq",
         "idx_host_commands_host_status_deadline",
         "idx_durable_event_log_topic_seq",
         "idx_outbox_events_status_available",

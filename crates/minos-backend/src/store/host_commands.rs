@@ -510,15 +510,12 @@ fn store_err(operation: &'static str) -> impl FnOnce(sqlx::Error) -> BackendErro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::device_installations::insert_device;
+    use crate::store::test_support::insert_test_host;
     use crate::store::test_support::{memory_pool, T0};
-    use minos_domain::DeviceRole;
 
     async fn seed_host(pool: &SqlitePool) -> DeviceId {
         let host = DeviceId::new();
-        insert_device(pool, host, "host", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        insert_test_host(pool, host, "host", T0).await;
         host
     }
 
@@ -531,7 +528,7 @@ mod tests {
             &pool,
             "cmd-1",
             host,
-            Some("session-1"),
+            None,
             "approval/respond",
             &serde_json::json!({ "decision": "approve" }),
             None,
@@ -543,7 +540,7 @@ mod tests {
 
         let row = get(&pool, "cmd-1").await.unwrap().unwrap();
         assert_eq!(row.status, HostCommandStatus::Pending);
-        assert_eq!(row.agent_session_id.as_deref(), Some("session-1"));
+        assert_eq!(row.agent_session_id, None);
         assert_eq!(
             row.params_json,
             serde_json::json!({ "decision": "approve" })

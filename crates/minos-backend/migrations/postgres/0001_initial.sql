@@ -1,7 +1,7 @@
 -- Canonical Postgres schema (latest-only).
--- Incremental migration history has been collapsed; wipe local DBs on upgrade.
+-- Logical SSOT shared with sqlite/0001_initial.sql (dialect types / partitions only differ).
+-- Wipe DB volumes on upgrade. See docs/superpowers/specs/backend-storage-parity-design.md.
 
--- Human accounts are IdP-bound via supabase_sub (no local password / no account_credentials).
 CREATE EXTENSION IF NOT EXISTS citext;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -10,8 +10,6 @@ CREATE TABLE accounts (
     email             CITEXT NOT NULL UNIQUE,
     minos_id          TEXT UNIQUE,
     display_name      TEXT,
-    -- Supabase Auth subject (JWT `sub`). Required for new users via
-    -- POST /v1/auth/supabase exchange. NULL only for rare unbound fixtures.
     supabase_sub      TEXT UNIQUE,
     created_at_ms     BIGINT NOT NULL,
     last_login_at_ms  BIGINT
@@ -28,8 +26,6 @@ CREATE TABLE device_installations (
     display_name      TEXT,
     created_at_ms     BIGINT NOT NULL,
     last_seen_at_ms   BIGINT NOT NULL,
-    -- desktop behaves like mobile/browser: account_id required, public_key null.
-    -- host: account_id null + public_key required (insert with key at TOFU register).
     CONSTRAINT installation_kind_account_consistency CHECK (
         (kind IN ('mobile', 'browser', 'desktop') AND account_id IS NOT NULL AND public_key IS NULL) OR
         (kind = 'host' AND account_id IS NULL AND public_key IS NOT NULL)
@@ -39,6 +35,18 @@ CREATE TABLE device_installations (
 CREATE INDEX idx_installations_account
     ON device_installations(account_id)
     WHERE account_id IS NOT NULL;
+
+CREATE TABLE host_installation_tokens (
+    token_hash             TEXT PRIMARY KEY,
+    host_installation_id   TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
+    issued_at_ms           BIGINT NOT NULL,
+    last_used_at_ms        BIGINT,
+    revoked_at_ms          BIGINT
+);
+
+CREATE INDEX idx_host_token_active
+    ON host_installation_tokens(host_installation_id)
+    WHERE revoked_at_ms IS NULL;
 
 CREATE TABLE refresh_tokens (
     token_hash        TEXT PRIMARY KEY,
@@ -54,23 +62,9 @@ CREATE INDEX idx_refresh_active
     ON refresh_tokens(account_id, installation_id)
     WHERE revoked_at_ms IS NULL;
 
-CREATE TABLE host_installation_tokens (
-    token_hash             TEXT PRIMARY KEY,
-    host_installation_id   TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
-    issued_at_ms           BIGINT NOT NULL,
-    last_used_at_ms        BIGINT,
-    revoked_at_ms          BIGINT
-);
-
-CREATE INDEX idx_host_token_active
-    ON host_installation_tokens(host_installation_id)
-    WHERE revoked_at_ms IS NULL;
-
-
 CREATE TABLE host_links (
     pair_id                    TEXT PRIMARY KEY,
     account_id                 TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    -- Exclusive host ownership: one account per host installation (Host Link).
     host_installation_id       TEXT NOT NULL UNIQUE REFERENCES device_installations(installation_id) ON DELETE CASCADE,
     linked_via_installation_id TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
     link_display_name          TEXT,
@@ -80,7 +74,6 @@ CREATE TABLE host_links (
 
 CREATE INDEX idx_host_links_account ON host_links(account_id);
 
--- Social graph (aligned with SQLite social store; latest-only).
 CREATE TABLE friend_requests (
     request_id        TEXT PRIMARY KEY,
     from_account_id   TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
@@ -114,14 +107,11 @@ CREATE INDEX idx_friendships_low
 CREATE INDEX idx_friendships_high
     ON friendships(account_high_id, created_at_ms DESC);
 
--- Social / host-runtime agents (SSOT shape shared with SQLite).
--- No global seed agents: host_runtime rows are created via ensure-host-runtime.
 CREATE TABLE agents (
     agent_id          TEXT PRIMARY KEY,
     owner_account_id  TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
     name              TEXT NOT NULL,
     description       TEXT NOT NULL DEFAULT '',
-    -- user | host_runtime | system
     source            TEXT NOT NULL DEFAULT 'user'
                         CHECK (source IN ('user', 'host_runtime', 'system')),
     runtime_agent     TEXT NOT NULL CHECK (runtime_agent IN ('codex', 'claude', 'gemini', 'opencode', 'grok')),
@@ -142,13 +132,16 @@ CREATE TABLE projects (
     project_id       TEXT PRIMARY KEY,
     account_id       TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
     name             TEXT NOT NULL,
-    workspace_root   TEXT NOT NULL,
+    workspace_slug   TEXT NOT NULL,
     workspace_path   TEXT,
     created_at_ms    BIGINT NOT NULL,
     updated_at_ms    BIGINT NOT NULL,
     archived_at_ms   BIGINT,
-    UNIQUE (account_id, workspace_root)
+    UNIQUE (account_id, workspace_slug)
 );
+
+CREATE INDEX idx_projects_account_updated
+    ON projects(account_id, updated_at_ms DESC);
 
 CREATE TABLE project_members (
     project_id   TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
@@ -164,13 +157,11 @@ CREATE TABLE conversations (
     conversation_id        TEXT PRIMARY KEY,
     kind                   conversation_kind NOT NULL,
     title                  TEXT,
-    project_id             TEXT REFERENCES projects(project_id) ON DELETE SET NULL,
     created_by_account_id  TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
     direct_account_low     TEXT REFERENCES accounts(account_id) ON DELETE CASCADE,
     direct_account_high    TEXT REFERENCES accounts(account_id) ON DELETE CASCADE,
     created_at_ms          BIGINT NOT NULL,
     updated_at_ms          BIGINT NOT NULL,
-    -- Next per-conversation message_seq to allocate (starts at 1).
     next_message_seq       BIGINT NOT NULL DEFAULT 1,
     CONSTRAINT direct_pair_consistency CHECK (
         (kind = 'direct' AND direct_account_low IS NOT NULL AND direct_account_high IS NOT NULL
@@ -205,14 +196,12 @@ CREATE TABLE conversation_agent_members (
 CREATE INDEX idx_conversation_agent_members_agent
     ON conversation_agent_members(agent_id, joined_at_ms DESC);
 
--- Collaboration chat bubbles (social store SSOT; not the legacy body_json table).
 CREATE TABLE chat_messages (
     message_id           TEXT PRIMARY KEY,
     conversation_id      TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
     sender_account_id    TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
     text                 TEXT NOT NULL,
     created_at_ms        BIGINT NOT NULL,
-    -- Per-conversation monotonic ordering / pagination / read cursor authority.
     message_seq          BIGINT NOT NULL,
     reply_to_message_id  TEXT REFERENCES chat_messages(message_id) ON DELETE SET NULL,
     recalled_at_ms       BIGINT,
@@ -259,7 +248,6 @@ CREATE INDEX idx_message_reactions_message
 CREATE INDEX idx_message_reactions_conversation
     ON message_reactions(conversation_id, message_id);
 
--- Intent Outbox op idempotency for reaction toggle (B6/C5).
 CREATE TABLE reaction_client_ops (
     client_op_id     TEXT PRIMARY KEY,
     conversation_id  TEXT NOT NULL,
@@ -274,7 +262,6 @@ CREATE TABLE conversation_reads (
     conversation_id  TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
     account_id       TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
     last_read_seq    BIGINT NOT NULL DEFAULT 0,
-    -- Display / audit only; unread boundary is last_read_seq.
     last_read_at_ms  BIGINT NOT NULL DEFAULT 0,
     updated_at_ms    BIGINT NOT NULL,
     PRIMARY KEY (conversation_id, account_id)
@@ -297,7 +284,6 @@ CREATE TABLE agent_sessions (
     conversation_id          TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
     project_id               TEXT REFERENCES projects(project_id) ON DELETE SET NULL,
     host_installation_id     TEXT REFERENCES device_installations(installation_id) ON DELETE SET NULL,
-    -- Optional cloud agent id (host-runtime or user agent); matches SQLite nullability.
     agent_id                 TEXT REFERENCES agents(agent_id) ON DELETE SET NULL,
     status                   agent_session_status NOT NULL,
     started_at_ms            BIGINT NOT NULL,
@@ -356,7 +342,6 @@ CREATE TABLE approval_requests (
     created_at_ms     BIGINT NOT NULL,
     resolved_at_ms    BIGINT,
     resolution_json   JSONB,
-    -- Client Intent Outbox id for respond idempotency (C5.3). NULL when absent.
     client_request_id TEXT
 );
 
@@ -368,7 +353,6 @@ CREATE UNIQUE INDEX idx_approval_client_request_id
     ON approval_requests(client_request_id)
     WHERE client_request_id IS NOT NULL;
 
--- Host ingest thread ledger (aligned with SQLite; used by TurnCompletionProjector).
 CREATE TABLE sessions (
     session_id        TEXT PRIMARY KEY,
     agent             TEXT NOT NULL CHECK (agent IN ('codex', 'claude', 'gemini', 'opencode', 'grok')),
@@ -479,8 +463,6 @@ CREATE TABLE outbox_events (
     topic_kind       TEXT NOT NULL,
     event_id         TEXT NOT NULL,
     status           outbox_status NOT NULL,
-    -- social_durable: chat/account/reaction fanout (publish → ack).
-    -- host_command: host RPC delivery (publish → async host ack; expire → dead_letter).
     lane             TEXT NOT NULL DEFAULT 'social_durable'
         CHECK (lane IN ('social_durable', 'host_command')),
     available_at_ms  BIGINT NOT NULL,
@@ -554,7 +536,6 @@ CREATE TABLE notification_cooldowns (
 CREATE INDEX idx_notif_cooldowns_last_sent
     ON notification_cooldowns(last_sent_at_ms);
 
--- Push idempotency: successful push once per (event_id, account_id).
 CREATE TABLE push_dispatch_log (
     event_id     TEXT NOT NULL,
     account_id   TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
@@ -565,8 +546,6 @@ CREATE TABLE push_dispatch_log (
 CREATE INDEX idx_push_dispatch_log_account
     ON push_dispatch_log(account_id);
 
--- Agent dispatch queue: send_message enqueues; worker drains when host is live.
--- UNIQUE(origin, agent): multi-@ fan-out enqueues one row per mentioned agent.
 CREATE TABLE agent_dispatch_queue (
     dispatch_id          TEXT PRIMARY KEY,
     origin_message_id    TEXT NOT NULL,
@@ -592,7 +571,6 @@ CREATE INDEX idx_agent_dispatch_queue_due
 CREATE INDEX idx_agent_dispatch_queue_conversation
     ON agent_dispatch_queue(conversation_id);
 
--- Media blobs: metadata SSOT in DB; bytes in R2 (or local dir for dev).
 CREATE TABLE media_blobs (
     blob_id             TEXT PRIMARY KEY,
     account_id          TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
@@ -615,7 +593,6 @@ CREATE INDEX idx_media_blobs_account_created
 CREATE INDEX idx_media_blobs_status
     ON media_blobs(status, created_at_ms);
 
--- Message ↔ media blob links (order preserved).
 CREATE TABLE chat_message_attachments (
     message_id   TEXT NOT NULL REFERENCES chat_messages(message_id) ON DELETE CASCADE,
     blob_id      TEXT NOT NULL REFERENCES media_blobs(blob_id) ON DELETE RESTRICT,

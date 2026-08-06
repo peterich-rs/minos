@@ -88,26 +88,31 @@ backend:
         --listen "${MINOS_BACKEND_LISTEN:-127.0.0.1:8787}" \
         --db "${MINOS_BACKEND_DB:-./minos-backend.db}"
 
-# Full local gate. Wraps cargo xtask check-all (rust + platform legs).
-# On macOS this includes UniFFI/Xcode/Swift, minos-desktop check, and Flutter.
+# Full local gate. Wraps cargo xtask check-all (rust + desktop check on macOS + Flutter).
 check:
     cargo xtask check-all
 
 # Rust-only gate (fmt/clippy/lints/tests/daemon test-support/schema).
-# Same command as the CI `rust` job.
+# Same command as the CI `backend` job.
 check-rust:
     cargo xtask check-rust
-
-# macOS-native gate (UniFFI/Xcode/Swift + minos-desktop + Flutter ffi).
-# Same command as the CI `macos` job. Requires a macOS host.
-check-macos:
-    cargo xtask check-macos
 
 # Backend-focused verification for formal-cutover work.
 check-backend:
     cargo xtask gen-backend-platform-contract --check
+    cargo xtask lint-schema-parity
     cargo test -p minos-backend
     cargo test -p minos-daemon --features test-support
+
+# Postgres contract smoke (requires Docker Postgres or CI service).
+# Export MINOS_DATABASE_URL=postgres://… and MINOS_PG_TESTS=1.
+check-backend-pg:
+    cargo xtask lint-schema-parity
+    MINOS_PG_TESTS=1 cargo test -p minos-backend --test pg_migration --test pg_contract_smoke
+
+# Logical schema parity between SQLite and Postgres migrations.
+schema-parity:
+    cargo xtask lint-schema-parity
 
 # Regenerate the backend runtime contract, OpenAPI, and websocket schema artifacts.
 gen-backend-platform-contract:
@@ -175,21 +180,6 @@ build-daemon profile='release':
     fi
     MINOS_BACKEND_URL="$MINOS_BACKEND_URL" \
     cargo build -p minos-daemon --bin minos-daemon --profile {{ profile }}
-
-# Build the macOS app through Xcode. The generated project also calls back
-# into just from its build phases, so Xcode IDE Run uses the same env path.
-
-# configuration = Debug | Release
-build-macos configuration='Debug':
-    @just check-env >/dev/null
-    cargo xtask gen-uniffi
-    cargo xtask gen-xcode
-    cd apps/macos && xcodebuild \
-        -project Minos.xcodeproj \
-        -scheme Minos \
-        -configuration {{ configuration }} \
-        -destination 'platform=macOS' \
-        build
 
 # Build the mobile Rust FFI staticlib for a given target.
 # target  = aarch64-apple-ios | aarch64-apple-ios-sim | x86_64-apple-ios | <android targets>

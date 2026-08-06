@@ -1,3 +1,4 @@
+use minos_backend::store::test_support::insert_test_host;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use futures::{SinkExt, StreamExt};
@@ -160,14 +161,7 @@ async fn seed_client_account(relay: &Relay, email: &str) -> anyhow::Result<(Stri
 
 async fn seed_host(relay: &Relay) -> anyhow::Result<DeviceId> {
     let host_id = DeviceId::new();
-    store::device_installations::insert_device(
-        &relay.pool,
-        host_id,
-        "Mac",
-        DeviceRole::AgentHost,
-        0,
-    )
-    .await?;
+    insert_test_host(&relay.pool, host_id, "Mac", 0).await;
     Ok(host_id)
 }
 

@@ -1,6 +1,6 @@
 # Minos
 
-Native macOS status-bar app + Flutter mobile client + shared Rust core for remote AI-coding control. Drive `codex` / `claude` / `gemini` on a Mac from a paired phone.
+Hosted backend + host daemon + Desktop/TUI host consoles + Flutter mobile for remote AI-coding collaboration. Drive `codex` / `claude` / `gemini` / `opencode` / `grok` on a user Mac/Linux host from phone, browser, or desktop.
 
 ## Status
 
@@ -8,62 +8,49 @@ Minos is moving from MVP delivery into formal development.
 
 - Historical planning docs under `docs/superpowers/` have been retired.
 - The active backend architecture source of truth is `docs/backend-formal-development.md`.
-- Current shipped surfaces are the hosted Rust backend, the macOS host app / daemon, the Flutter mobile client, and the browser-admin web client.
+- Current shipped surfaces are the hosted Rust backend, `minos-daemon` (host runtime), Desktop (Tauri) / TUI host consoles, the Flutter mobile client, and the browser-admin web client.
+- The legacy Swift `apps/macos` host UI and UniFFI bridge have been removed; Desktop owns the host GUI.
 
 ## Roadmap
 
-The next backend-facing work is to replace the remaining MVP runtime seams with the formal design in `docs/backend-formal-development.md`, while keeping the existing product scope: account auth, host pairing, agent sessions, approvals, conversations, and projects.
+The next backend-facing work is to replace the remaining MVP runtime seams with the formal design in `docs/backend-formal-development.md`, while keeping the existing product scope: account auth, host link, agent sessions, approvals, conversations, and projects.
 
 ## Quick start (development)
 
 ```bash
-# Bootstrap dev tools.
-# On macOS this also installs xcodegen and swiftlint from apps/macos/Brewfile.
+# Bootstrap dev tools (FRB codegen + mobile Flutter deps; iOS/Android rust targets on macOS).
 cargo xtask bootstrap
 
 # Configure runtime/build env loaded by just.
 cp .env.example .env.local
 
-# Run all checks (rust + platform legs).
-# On macOS this includes UniFFI/XcodeGen, xcodebuild, MinosTests, swiftlint,
-# minos-desktop check, and Flutter when fvm is present.
+# Run all checks (rust + desktop check on macOS + Flutter when fvm is present).
 just check
 
 # Layered gates (same commands CI jobs call):
 just check-rust      # fmt/clippy/tests/daemon test-support/schema
-just check-macos     # Apple native + minos-desktop + Flutter ffi (macOS only)
+just check-backend   # backend-focused schema + tests
 just check-web       # apps/web pnpm check
 just check-desktop   # apps/desktop pnpm check:all
 ```
 
 CI matrix and ownership: [`docs/ci-gates.md`](docs/ci-gates.md).
 
-## macOS app
+## Host desktop shell
 
-The macOS app lives in `apps/macos/` and uses XcodeGen plus UniFFI-generated Swift bindings.
+The host GUI lives in `apps/desktop/` (Tauri + React). It talks to `minos-daemon`
+over local RPC and can manage/start the daemon for local coding.
 
 ```bash
-# Build the app through Xcode with .env.local loaded by just.
-just build-macos Debug
-
-# Regenerate Swift bindings and the Xcode project.
-cargo xtask gen-uniffi
-cargo xtask gen-xcode
-
-# Open the generated project in Xcode.
-open apps/macos/Minos.xcodeproj
+just dev-desktop      # Tauri + Vite
+just check-desktop    # tsc + tests + biome + file-size gates
+just build-desktop    # production Tauri bundle
 ```
-
-The generated Xcode project calls back into `just` before compiling the app
-target, so Xcode IDE Build/Run loads `.env.local` before Rust evaluates
-`option_env!`. A post-build phase patches the built app's `Info.plist` with the
-same runtime relay values for Finder/Xcode launches.
 
 ## Rust daemon CLI
 
-For faster Rust-side validation, `minos-daemon` now has a direct CLI entrypoint.
-By default, the CLI keeps its runtime files under `~/.minos/` so ad hoc testing
-doesn't mix with the macOS app's platform-native paths.
+For faster Rust-side validation, `minos-daemon` has a direct CLI entrypoint.
+By default, the CLI keeps its runtime files under `~/.minos/`.
 
 ```bash
 # Show resolved paths, the local-state.json location, and the compile-time
@@ -255,8 +242,8 @@ Set `VITE_MINOS_BACKEND_URL` when the backend is not running on `http://127.0.0.
 
 ```
 crates/    Rust workspace (9 crates: domain, protocol, pairing, cli-detect,
-           transport, daemon, mobile, ffi-uniffi, ffi-frb)
-apps/      macOS (SwiftUI/UniFFI, XcodeGen-managed) and mobile (Flutter/frb)
+           transport, daemon, mobile, ffi-frb)
+apps/      desktop (Tauri host GUI), mobile (Flutter/frb), web admin
           plus the standalone web admin client (React/Vite)
 xtask/     Build / codegen orchestration in Rust
 docs/      Active architecture docs plus ADRs and operations runbooks

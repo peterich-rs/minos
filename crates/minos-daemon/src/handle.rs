@@ -1,4 +1,4 @@
-//! Public façade exposed to Swift via UniFFI, rewired for the relay-client
+//! Public façade for the host daemon (CLI / Desktop / local RPC), rewired for the relay-client
 //! migration (plan 05 Phase F).
 //!
 //! `DaemonInner` owns the outbound [`RelayClient`] plus its two watch
@@ -36,7 +36,7 @@ struct DaemonInner {
     peer: Arc<StdMutex<Option<PeerRecord>>>,
     /// Full host-side mobile/account snapshot from `GET /v1/me/peers`.
     peers: Arc<StdMutex<Vec<HostPeerSummary>>>,
-    /// Kept on the inner — future trace logging and eventual UniFFI
+    /// Kept on the inner — future trace logging and runtime diagnostics
     /// getters need the display name that was minted into the relay
     /// handshake.
     #[allow(dead_code)]
@@ -49,7 +49,7 @@ struct DaemonInner {
     last_error: Arc<StdMutex<Option<MinosError>>>,
     agent: Arc<AgentGlue>,
     /// Captured under `DaemonHandle::start` (which always runs inside a
-    /// Tokio runtime — either the CLI's `#[tokio::main]` or UniFFI's
+    /// Tokio runtime — either the CLI's `#[tokio::main]` or the host runtime's
     /// tokio runtime) so sync FFI methods can spawn onto it from Swift
     /// sessions that lack a current runtime.
     rt_handle: Handle,
@@ -62,12 +62,10 @@ struct DaemonInner {
     local_rpc_url: Option<String>,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct DaemonHandle {
     inner: Arc<DaemonInner>,
 }
 
-#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 impl DaemonHandle {
     /// Production entry point. Spawns a single `RelayClient` that dials
     /// the resolved relay backend URL and publishes two
@@ -76,7 +74,6 @@ impl DaemonHandle {
     /// `peer` and `secret` are optional warm-start inputs. The macOS app
     /// now passes `None` for both and starts from a fresh in-memory pairing
     /// state on every launch.
-    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
     #[allow(clippy::missing_errors_doc, clippy::unused_async)]
     pub async fn start(
         config: RelayConfig,
@@ -299,7 +296,6 @@ impl DaemonHandle {
     }
 }
 
-#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 impl DaemonHandle {
     /// Snapshot the current relay-link state. Cheap — just a `watch`
     /// borrow.
@@ -319,7 +315,7 @@ impl DaemonHandle {
     /// mirror). Returns `Ok(None)` if we have no paired peer yet.
     #[allow(clippy::missing_errors_doc, clippy::unused_async)]
     pub async fn current_trusted_device(&self) -> Result<Option<PeerRecord>, MinosError> {
-        // `async fn` kept for UniFFI parity with the other getters — the
+        // `async fn` kept for API parity with the other getters — the
         // underlying lock is sync and never held across an await point.
         Ok(self.inner.peer.lock().unwrap().clone())
     }
@@ -423,7 +419,7 @@ impl DaemonHandle {
         self.inner.last_error.lock().unwrap().take()
     }
 
-    /// Push-model relay-link subscription for UniFFI. Delivers the
+    /// Push-model relay-link subscription for callback observers. Delivers the
     /// current snapshot synchronously, then one callback per transition
     /// until the `Subscription` is cancelled.
     #[must_use]
@@ -463,7 +459,6 @@ fn peer_record_from_summary(summary: &HostPeerSummary) -> PeerRecord {
 }
 
 // ── Agent-runtime methods (unchanged from the pre-relay surface) ──
-#[cfg_attr(feature = "uniffi", uniffi::export(async_runtime = "tokio"))]
 impl DaemonHandle {
     #[allow(clippy::missing_errors_doc)]
     pub async fn start_agent(
@@ -519,12 +514,12 @@ impl DaemonHandle {
     }
 }
 
-// ── Agent-runtime methods served only over JSON-RPC, not UniFFI. ──
+// ── Agent-runtime methods served only over JSON-RPC / local RPC. ──
 //
 // `list_sessions` and `get_session` traffic in `minos_protocol::SessionSummary`
-// / `SessionState` mirrors that intentionally do not derive `uniffi::*` (the
+// / `SessionState` mirrors are intentionally not re-exported at the FFI boundary (the
 // canonical FFI-side `SessionState` is the runtime crate's enum; duplicating
-// it via UniFFI would collide in the shared Swift module). Mobile (frb)
+// it as a second mirror would collide on shared type names). Mobile (frb)
 // reaches these methods via the JSON-RPC server in `rpc_server.rs`, which
 // is unaffected. Macos Swift does not call them today.
 impl DaemonHandle {

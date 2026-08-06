@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::DeviceId;
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum RelayLinkState {
@@ -14,7 +13,6 @@ pub enum RelayLinkState {
     Connected,
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PeerState {

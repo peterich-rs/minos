@@ -8,7 +8,6 @@
 
 use minos_domain::AgentName;
 use serde_json::Value;
-use sqlx::SqlitePool;
 
 use crate::error::BackendError;
 use crate::store::{AsStorePool, StorePoolRef};
@@ -57,7 +56,7 @@ fn parse_agent(s: &str) -> Result<AgentName, BackendError> {
 /// is a no-op (retransmit safety) and we return `Ok(false)`; otherwise
 /// `Ok(true)`.
 pub async fn insert_if_absent(
-    pool: &SqlitePool,
+    store: &impl AsStorePool,
     session_id: &str,
     seq: u64,
     agent: AgentName,
@@ -68,22 +67,40 @@ pub async fn insert_if_absent(
         operation: "raw_events.insert_if_absent.serialise".into(),
         message: e.to_string(),
     })?;
-    let result = sqlx::query(
-        r"INSERT OR IGNORE INTO raw_events (session_id, seq, agent, payload_json, ts_ms)
-           VALUES (?1, ?2, ?3, ?4, ?5)",
-    )
-    .bind(session_id)
-    .bind(i64::try_from(seq).unwrap_or(i64::MAX))
-    .bind(agent_str(agent))
-    .bind(payload_s)
-    .bind(ts_ms)
-    .execute(pool)
-    .await
+    let seq_i64 = i64::try_from(seq).unwrap_or(i64::MAX);
+    let agent = agent_str(agent);
+    let rows = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            r"INSERT OR IGNORE INTO raw_events (session_id, seq, agent, payload_json, ts_ms)
+               VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .bind(session_id)
+        .bind(seq_i64)
+        .bind(agent)
+        .bind(&payload_s)
+        .bind(ts_ms)
+        .execute(pool)
+        .await
+        .map(|r| r.rows_affected()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            r"INSERT INTO raw_events (session_id, seq, agent, payload_json, ts_ms)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT (session_id, seq) DO NOTHING",
+        )
+        .bind(session_id)
+        .bind(seq_i64)
+        .bind(agent)
+        .bind(&payload_s)
+        .bind(ts_ms)
+        .execute(pool)
+        .await
+        .map(|r| r.rows_affected()),
+    }
     .map_err(|e| BackendError::StoreQuery {
         operation: "raw_events.insert_if_absent".into(),
         message: e.to_string(),
     })?;
-    Ok(result.rows_affected() == 1)
+    Ok(rows == 1)
 }
 
 /// Insert one raw event and return the persisted sequence number.
@@ -522,11 +539,12 @@ fn contiguous_seq_after(after_seq: u64, seqs: impl IntoIterator<Item = i64>) -> 
 mod tests {
     use super::*;
     use crate::store::test_support::memory_pool;
+    use sqlx::SqlitePool;
 
     async fn seed_host_and_thread(pool: &SqlitePool) {
         sqlx::query(
-            r"INSERT INTO device_installations (installation_id, kind, display_name, created_at_ms, last_seen_at_ms)
-               VALUES ('dev1','host','Dev',0,0)",
+            r"INSERT INTO device_installations (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
+               VALUES ('dev1','host','Dev','test-host-public-key-v1',0,0,NULL)",
         )
         .execute(pool)
         .await
@@ -734,9 +752,9 @@ mod tests {
     async fn last_seq_per_owner_groups_by_thread() {
         let pool = memory_pool().await;
         sqlx::query(
-            r"INSERT INTO device_installations (installation_id, kind, display_name, created_at_ms, last_seen_at_ms)
-               VALUES ('host_a','host','HostA',0,0),
-                      ('host_b','host','HostB',0,0)",
+            r"INSERT INTO device_installations (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id) VALUES
+                      ('host_a','host','HostA','test-host-public-key-v1',0,0,NULL),
+                      ('host_b','host','HostB','test-host-public-key-v1',0,0,NULL)",
         )
         .execute(&pool)
         .await

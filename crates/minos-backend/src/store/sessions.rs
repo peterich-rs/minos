@@ -495,8 +495,8 @@ mod tests {
 
     async fn seed_agent_host(pool: &SqlitePool) {
         sqlx::query(
-            r"INSERT INTO device_installations (installation_id, kind, display_name, created_at_ms, last_seen_at_ms)
-               VALUES ('dev1','host','Dev',0,0)",
+            r"INSERT INTO device_installations (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
+               VALUES ('dev1','host','Dev','test-host-public-key-v1',0,0,NULL)",
         )
         .execute(pool)
         .await
@@ -620,8 +620,7 @@ mod tests {
         let pool = memory_pool().await;
         seed_agent_host(&pool).await;
         sqlx::query(
-            r"INSERT INTO device_installations (installation_id, kind, display_name, created_at_ms, last_seen_at_ms)
-               VALUES ('dev2','host','Other',0,0)",
+            r"INSERT INTO device_installations (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id) VALUES ('dev2','host','Other','test-host-public-key-v1',0,0,NULL)",
         )
         .execute(&pool)
         .await
@@ -655,8 +654,8 @@ mod tests {
             .unwrap();
         sqlx::query(
             r"INSERT INTO device_installations
-                (installation_id, kind, display_name, created_at_ms, last_seen_at_ms, account_id)
-               VALUES ('a-phone','mobile','Phone-A',0,0,?1)",
+                (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
+               VALUES ('a-phone','mobile','Phone-A',NULL,0,0,?1)",
         )
         .bind(&acct_a.account_id)
         .execute(&pool)
@@ -664,18 +663,23 @@ mod tests {
         .unwrap();
         sqlx::query(
             r"INSERT INTO device_installations
-                (installation_id, kind, display_name, created_at_ms, last_seen_at_ms, account_id)
-               VALUES ('b-phone','mobile','Phone-B',0,0,?1)",
+                (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
+               VALUES ('b-phone','mobile','Phone-B',NULL,0,0,?1)",
         )
         .bind(&acct_b.account_id)
         .execute(&pool)
         .await
         .unwrap();
+        // Orphan client without account is no longer allowed by CHECK; skip thr-orphan owner.
+        let orphan_acct = crate::store::accounts::create(&pool, "orphan@example.com")
+            .await
+            .unwrap();
         sqlx::query(
             r"INSERT INTO device_installations
-                (installation_id, kind, display_name, created_at_ms, last_seen_at_ms)
-               VALUES ('orphan','mobile','Phone-O',0,0)",
+                (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
+               VALUES ('orphan','mobile','Phone-O',NULL,0,0,?1)",
         )
+        .bind(&orphan_acct.account_id)
         .execute(&pool)
         .await
         .unwrap();

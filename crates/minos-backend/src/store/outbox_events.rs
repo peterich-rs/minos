@@ -793,11 +793,10 @@ fn store_err(operation: &'static str) -> impl FnOnce(sqlx::Error) -> BackendErro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::device_installations;
     use crate::store::durable_event_log;
     use crate::store::host_commands;
     use crate::store::test_support::{memory_pool, T0};
-    use minos_domain::{DeviceId, DeviceRole};
+    use minos_domain::DeviceId;
 
     #[tokio::test]
     async fn ack_settles_pending_social_row_without_claim() {
@@ -1103,9 +1102,7 @@ mod tests {
     async fn ack_refuses_host_command_until_command_is_observed() {
         let pool = memory_pool().await;
         let host_id = DeviceId::new();
-        device_installations::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        crate::store::test_support::insert_test_host(&pool, host_id, "Test Mac", T0).await;
         durable_event_log::append(
             &pool,
             "evt-host-command",
@@ -1172,9 +1169,7 @@ mod tests {
     async fn expired_host_command_refuses_success_ack_and_dead_letters() {
         let pool = memory_pool().await;
         let host_id = DeviceId::new();
-        device_installations::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        crate::store::test_support::insert_test_host(&pool, host_id, "Test Mac", T0).await;
         durable_event_log::append(
             &pool,
             "evt-host-command-expired",
@@ -1238,9 +1233,7 @@ mod tests {
         // Observation must not treat mark_timed_out finished_at_ms as success unlock.
         let pool = memory_pool().await;
         let host_id = DeviceId::new();
-        device_installations::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        crate::store::test_support::insert_test_host(&pool, host_id, "Test Mac", T0).await;
         durable_event_log::append(
             &pool,
             "evt-timeout-no-unlock",
@@ -1324,9 +1317,7 @@ mod tests {
         // Host acked, outbox still claimed, deadline passed → success-ack settle (not DL).
         let pool = memory_pool().await;
         let host_id = DeviceId::new();
-        device_installations::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        crate::store::test_support::insert_test_host(&pool, host_id, "Test Mac", T0).await;
         durable_event_log::append(
             &pool,
             "evt-obs-past-deadline",
@@ -1400,9 +1391,7 @@ mod tests {
         // expire path: ack_at_ms set, unfinished, deadline passed → outbox acked, command timed out.
         let pool = memory_pool().await;
         let host_id = DeviceId::new();
-        device_installations::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        crate::store::test_support::insert_test_host(&pool, host_id, "Test Mac", T0).await;
         durable_event_log::append(
             &pool,
             "evt-expire-obs",
@@ -1483,9 +1472,7 @@ mod tests {
     async fn expire_deadline_dead_letters_outbox_before_mark_timed_out() {
         let pool = memory_pool().await;
         let host_id = DeviceId::new();
-        device_installations::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        crate::store::test_support::insert_test_host(&pool, host_id, "Test Mac", T0).await;
         durable_event_log::append(
             &pool,
             "evt-expire-dl",
@@ -1569,9 +1556,7 @@ mod tests {
         // Legitimate host terminal (failed) is observation; timeout is not.
         let pool = memory_pool().await;
         let host_id = DeviceId::new();
-        device_installations::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        crate::store::test_support::insert_test_host(&pool, host_id, "Test Mac", T0).await;
         durable_event_log::append(
             &pool,
             "evt-host-failed",
@@ -1647,9 +1632,7 @@ mod tests {
     async fn dead_letter_host_command_events_marks_expired_command_outbox() {
         let pool = memory_pool().await;
         let host_id = DeviceId::new();
-        device_installations::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        crate::store::test_support::insert_test_host(&pool, host_id, "Test Mac", T0).await;
         durable_event_log::append(
             &pool,
             "evt-host-command-dl",
@@ -1700,9 +1683,7 @@ mod tests {
     async fn ack_pending_host_command_events_marks_observed_command_outbox() {
         let pool = memory_pool().await;
         let host_id = DeviceId::new();
-        device_installations::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        crate::store::test_support::insert_test_host(&pool, host_id, "Test Mac", T0).await;
         durable_event_log::append(
             &pool,
             "evt-host-command-pending",
@@ -1775,9 +1756,7 @@ mod tests {
     async fn ack_pending_host_command_events_marks_claimed_observed_command_outbox() {
         let pool = memory_pool().await;
         let host_id = DeviceId::new();
-        device_installations::insert_device(&pool, host_id, "Test Mac", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        crate::store::test_support::insert_test_host(&pool, host_id, "Test Mac", T0).await;
         durable_event_log::append(
             &pool,
             "evt-host-command-claimed",

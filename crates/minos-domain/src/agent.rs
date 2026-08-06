@@ -24,7 +24,6 @@ pub enum ModelDiscovery {
 ///
 /// Expansion is intentional API surface growth: every consumer must opt in
 /// to a new agent (match arms, DB seeds, UI labels, codegen bindings).
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentName {
@@ -103,7 +102,6 @@ impl AgentName {
 }
 
 /// Health state of a single CLI agent on the local machine.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum AgentStatus {
@@ -116,7 +114,6 @@ pub enum AgentStatus {
 ///
 /// Capability fields are filled from [`AgentName`] domain metadata (SSOT).
 /// Install probe fields (`path`, `version`, `status`) come from detection.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentDescriptor {
     pub name: AgentName,

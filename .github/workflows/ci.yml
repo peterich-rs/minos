@@ -19,18 +19,17 @@ env:
 
 jobs:
   # -------------------------------------------------------------------------
-  # rust — primary Rust quality gate (ubuntu). Owns fmt/clippy/tests/schema.
+  # backend — Linux x64 SSOT for Rust backend + host crates.
+  # Owns fmt/clippy/schema-parity/workspace tests (SQLite default).
   # -------------------------------------------------------------------------
-  rust:
-    name: rust (xtask check-rust)
-    # Portability insurance for non-Apple hosts + fast feedback before the
-    # 10x macOS runner starts. Does not run Swift/Flutter/FRB/desktop GUI.
+  backend:
+    name: backend (linux x64)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install rust toolchain (linux-only override)
-        # rust-toolchain.toml lists Apple targets that waste ~2 min on Ubuntu.
+        # rust-toolchain.toml lists Apple targets that waste time on Ubuntu.
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -53,18 +52,35 @@ jobs:
           DATABASE_URL=sqlite://target/sqlx-prepare.sqlite?mode=rwc cargo sqlx prepare --check --workspace -- -p minos-backend --all-targets
 
       - name: cargo xtask check-rust
-        # Single Rust SSOT: fmt, clippy, real lints, workspace tests,
+        # Linux SSOT: fmt, clippy, real lints, schema-parity, workspace tests,
         # daemon --features test-support, backend platform schema drift.
         run: cargo xtask check-rust
 
   # -------------------------------------------------------------------------
-  # windows-host — narrow portability lane for host runtime crates.
+  # backend-pg — Postgres storage-parity contract smoke (MINOS_PG_TESTS=1).
+  # Production dialect authority; runs only when backend SQLite gate is green.
   # -------------------------------------------------------------------------
-  windows-host:
-    name: windows (host crates)
-    # Stops the host runtime from drifting into Unix-only assumptions.
-    # Does not re-run the full workspace suite (rust job owns that).
-    runs-on: windows-latest
+  backend-pg:
+    name: backend postgres smoke
+    needs: [backend]
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: minos
+          POSTGRES_PASSWORD: minos
+          POSTGRES_DB: minos
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U minos"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MINOS_PG_TESTS: "1"
+      MINOS_DATABASE_URL: postgres://minos:minos@localhost:5432/minos
     steps:
       - uses: actions/checkout@v4
 
@@ -72,32 +88,22 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-          components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
         continue-on-error: true
 
-      - name: cargo test -p minos-cli-detect
-        run: cargo test -p minos-cli-detect
+      - name: cargo xtask lint-schema-parity
+        run: cargo xtask lint-schema-parity
 
-      - name: cargo test -p minos-agent-runtime
-        run: cargo test -p minos-agent-runtime
-
-      - name: cargo test -p minos-daemon --features test-support
-        run: cargo test -p minos-daemon --features test-support
-
-      - name: cargo build host binaries
-        run: |
-          cargo build -p minos-cli-detect --bin minos-detect
-          cargo build -p minos-daemon --bin minos-daemon
+      - name: Postgres migration + contract smoke
+        run: cargo test -p minos-backend --test pg_migration --test pg_contract_smoke -- --nocapture
 
   # -------------------------------------------------------------------------
-  # dart — mobile logic gate + sole owner of frb codegen drift.
+  # mobile — Flutter/Dart fmt + analyze + non-ffi tests + FRB drift.
+  # iOS/Android native builds stay on local/release jobs; this owns static gates.
   # -------------------------------------------------------------------------
-  dart:
-    name: dart (apps/mobile analyze + frb drift)
-    # Owns format/analyze/non-ffi tests + frb drift. FFI-coupled tests need a
-    # host dylib and run only on the macOS lane via `check-macos`.
+  mobile:
+    name: mobile (fmt/analyze/test/frb)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -147,11 +153,9 @@ jobs:
         # `dart analyze` indefinitely on ubuntu-latest with no output (30m+).
         # Fail cheaply rather than burn the runner quota.
         timeout-minutes: 5
-        # Warnings/errors fatal; info-level lints stay advisory (prefer_shorthands
-        # and similar can spike on SDK bumps without blocking unrelated PRs).
+        # Warnings/errors fatal; info-level lints stay advisory.
         # Disable analysis_server plugins for this step only — core analyzer +
-        # flutter_lints still run; riverpod_lint remains for local IDE via the
-        # committed analysis_options.yaml when developers analyze with plugins.
+        # flutter_lints still run; riverpod_lint remains for local IDE.
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -165,7 +169,7 @@ jobs:
                   skipping = True
                   out.append(
                       "# [ci] analysis_server plugins disabled for hang safety "
-                      "(see .github/workflows/ci.yml dart analyze)\n"
+                      "(see .github/workflows/ci.yml mobile analyze)\n"
                   )
                   continue
               if skipping:
@@ -200,10 +204,10 @@ jobs:
             "$GITHUB_WORKSPACE/crates/minos-ffi-frb/src/frb_generated.rs"
 
   # -------------------------------------------------------------------------
-  # frontend — web admin + desktop shell (JS/TS gates; no Tauri native link).
+  # web — web admin JS/TS gate (independent of desktop native).
   # -------------------------------------------------------------------------
-  frontend:
-    name: frontend (web + desktop)
+  web:
+    name: web (pnpm check)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -216,9 +220,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: |
-            apps/web/pnpm-lock.yaml
-            apps/desktop/pnpm-lock.yaml
+          cache-dependency-path: apps/web/pnpm-lock.yaml
 
       - name: apps/web pnpm check
         working-directory: apps/web
@@ -226,82 +228,44 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm check
 
+  # -------------------------------------------------------------------------
+  # desktop — macOS shell: TS/biome gates + Tauri/Rust desktop check.
+  # Frontend static checks + cargo check -p minos-desktop on Apple host.
+  # Full signed release remains desktop-release.yml.
+  # -------------------------------------------------------------------------
+  desktop:
+    name: desktop (macos)
+    needs: [backend]
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+
       - name: apps/desktop pnpm check:all
         working-directory: apps/desktop
         run: |
           pnpm install --frozen-lockfile
           pnpm check:all
 
-  # -------------------------------------------------------------------------
-  # macos — Apple-native gate. Needs rust green first (avoid 10x burn on fmt).
-  # -------------------------------------------------------------------------
-  macos:
-    name: macos (xtask check-macos)
-    needs: [rust]
-    runs-on: macos-15
-    env:
-      # Pin to the Xcode used in local development (not runner default).
-      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Verify pinned Xcode
-        run: |
-          test -d "$DEVELOPER_DIR"
-          xcodebuild -version
-
-      - name: Install rust toolchain
-        # Universal macOS staticlib needs both darwin targets. iOS targets keep
-        # bootstrap / future build-ios paths aligned with local rustup state.
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          components: rustfmt, clippy
-          targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim
-
-      - uses: Swatinem/rust-cache@v2
-        continue-on-error: true
-
-      - name: Install Flutter ${{ env.FLUTTER_VERSION }}
-        # check-macos flutter leg drives `fvm flutter` for ffi-tagged tests.
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: stable
-          cache: true
-
-      - name: Install fvm
-        run: |
-          dart pub global activate fvm
-          echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
-
-      - name: Bootstrap macOS build tools
-        # Brewfile (xcodegen/swiftlint/just) + uniffi + frb codegen + fvm pub get.
-        env:
-          HOMEBREW_NO_AUTO_UPDATE: "1"
-        run: cargo xtask bootstrap
-
-      - name: cargo xtask check-macos
-        # Apple SSOT: UniFFI, universal staticlib, XcodeGen, xcodebuild,
-        # MinosTests, swiftlint, cargo check -p minos-desktop, Flutter ffi tests.
-        # Does NOT re-run workspace cargo test / frb drift / dart format+analyze
-        # (owned by rust + dart jobs).
-        run: cargo xtask check-macos
-
-# TODO (plan 09 follow-up): iOS release job. Per ADR 0018, all build
-# invocations go through `just`. The job should:
-#
-#   env:
-#     MINOS_BACKEND_URL: ${{ secrets.MINOS_BACKEND_URL }}
-#   steps:
-#     - uses: extractions/setup-just@v2
-#     - run: just build-mobile-ios Release
-#
-# `just build-mobile-ios` sets MINOS_BUILD_VIA_JUST=1 internally, so the
-# Runner target's Pre-Build guard passes; the release-mode build.rs in
-# both minos-mobile and minos-daemon panics if MINOS_BACKEND_URL is
-# unset, which catches the PR-from-fork case where the secret resolves
-# to empty (gate the job with
-# `if: github.event.pull_request.head.repo.full_name == github.repository`).
-# Then sign + notarize + upload as before. Tracked in
-# ADR 0018 and README.md document the build-through-just requirement.
+      - name: cargo check -p minos-desktop
+        # Compile-check the Tauri host on macOS without full packaging/signing.
+        run: cargo check -p minos-desktop

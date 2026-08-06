@@ -115,9 +115,9 @@ pub struct Config {
 
     /// Storage adapter profile for the runtime shell.
     ///
-    /// `sqlite` remains the dev/test path. `external-sql` now performs a real
-    /// Postgres preflight during boot, but the request-serving runtime still
-    /// stops at the SQLite-specific store boundary after that probe.
+    /// `sqlite` is the local/dev default. `external-sql` opens a live Postgres
+    /// pool (`MINOS_DATABASE_URL`) and serves the full HTTP/WS surface against
+    /// it. Logical schema is shared across dialects (see storage-parity spec).
     #[arg(long, env = "MINOS_STORAGE_MODE", value_enum, default_value = "sqlite")]
     pub storage_mode: StorageMode,
 

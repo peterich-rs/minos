@@ -3,6 +3,7 @@ use axum::http::{Method, Request, StatusCode};
 use minos_backend::auth::jwt;
 use minos_backend::http::{router, test_support::backend_state, test_support::TEST_JWT_SECRET};
 use minos_backend::session::SessionHandle;
+use minos_backend::store::test_support::{insert_test_client, insert_test_host};
 use minos_backend::store::{
     agent_sessions, device_installations, durable_event_log, host_commands, host_links, raw_events,
     sessions, social,
@@ -43,24 +44,24 @@ async fn seed_host_pair_for_account(
     mobile_device_id: DeviceId,
 ) -> DeviceId {
     let host_device_id = DeviceId::new();
-    device_installations::insert_device(
-        &state.store,
-        host_device_id,
-        "Mac",
-        DeviceRole::AgentHost,
-        0,
-    )
-    .await
-    .unwrap();
-    device_installations::insert_device(
-        &state.store,
-        mobile_device_id,
-        "iPhone",
-        DeviceRole::MobileClient,
-        0,
-    )
-    .await
-    .unwrap();
+    insert_test_host(&state.store, host_device_id, "Mac", 0).await;
+    {
+        let _acct = minos_backend::store::accounts::create(
+            &state.store,
+            &format!("fixture-{}@localhost", mobile_device_id),
+        )
+        .await
+        .unwrap();
+        insert_test_client(
+            &state.store,
+            mobile_device_id,
+            DeviceRole::MobileClient,
+            &_acct.account_id,
+            "iPhone",
+            0,
+        )
+        .await;
+    };
     // host account_id stays NULL (kind=host CHECK)
     device_installations::set_account_id(&state.store, &mobile_device_id, account_id)
         .await
@@ -198,7 +199,7 @@ fn expected_social_send_turn_id(
 }
 
 async fn assert_agent_start_host_command(
-    pool: &sqlx::SqlitePool,
+    pool: &minos_backend::store::StoreHandle,
     host_device_id: DeviceId,
     requester_account_id: &str,
     session_id: &str,
@@ -245,7 +246,7 @@ async fn assert_agent_start_host_command(
 }
 
 async fn assert_agent_send_host_command(
-    pool: &sqlx::SqlitePool,
+    pool: &minos_backend::store::StoreHandle,
     host_device_id: DeviceId,
     requester_account_id: &str,
     session_id: &str,

@@ -453,9 +453,8 @@ fn generate_host_installation_token() -> String {
 mod tests {
     use super::*;
     use crate::session::SessionRegistry;
-    use crate::store::device_installations::insert_device;
+    use crate::store::test_support::insert_test_host;
     use crate::store::test_support::{insert_account, insert_ios_device, memory_pool, T0};
-    use minos_domain::DeviceRole;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -487,9 +486,7 @@ mod tests {
         let pool = memory_pool().await;
         let account = insert_account(&pool, "link-durable@example.com").await;
         let host = DeviceId::new();
-        insert_device(&pool, host, "Office Mac", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        insert_test_host(&pool, host, "Office Mac", T0).await;
         let via = insert_ios_device(&pool, &account).await;
         let svc = HostLinkService::new(pool.clone());
         let outcome = svc
@@ -515,9 +512,7 @@ mod tests {
         let pool = memory_pool().await;
         let account = insert_account(&pool, "unlink-durable@example.com").await;
         let host = DeviceId::new();
-        insert_device(&pool, host, "Laptop", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        insert_test_host(&pool, host, "Laptop", T0).await;
         let via = insert_ios_device(&pool, &account).await;
         let svc = HostLinkService::new(pool.clone());
         svc.link_host(host, &account, via, Some("Laptop"))

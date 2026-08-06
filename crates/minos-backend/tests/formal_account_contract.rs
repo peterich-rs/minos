@@ -3,6 +3,7 @@ use axum::http::{Request, StatusCode};
 use minos_backend::auth::jwt;
 use minos_backend::http;
 use minos_backend::http::test_support::{backend_state, TEST_JWT_SECRET};
+use minos_backend::store::test_support::{insert_test_client, insert_test_host};
 use minos_backend::store::{device_installations, host_links};
 use minos_domain::{DeviceId, DeviceRole};
 use serde_json::json;
@@ -94,24 +95,24 @@ async fn formal_hosts_list_uses_account_bearer_without_device_headers() {
     let host = DeviceId::new();
     let mobile = DeviceId::new();
 
-    device_installations::insert_device(
-        &state.store,
-        host,
-        "Mac Studio",
-        DeviceRole::AgentHost,
-        100,
-    )
-    .await
-    .unwrap();
-    device_installations::insert_device(
-        &state.store,
-        mobile,
-        "iPhone",
-        DeviceRole::MobileClient,
-        100,
-    )
-    .await
-    .unwrap();
+    insert_test_host(&state.store, host, "Mac Studio", 100).await;
+    {
+        let _acct = minos_backend::store::accounts::create(
+            &state.store,
+            &format!("fixture-{}@localhost", mobile),
+        )
+        .await
+        .unwrap();
+        insert_test_client(
+            &state.store,
+            mobile,
+            DeviceRole::MobileClient,
+            &_acct.account_id,
+            "iPhone",
+            100,
+        )
+        .await;
+    };
     device_installations::set_account_id(&state.store, &mobile, &account.account_id)
         .await
         .unwrap();

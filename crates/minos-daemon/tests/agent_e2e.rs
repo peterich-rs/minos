@@ -283,24 +283,24 @@ async fn register_formal_host(
     host_id: DeviceId,
     email: &str,
 ) -> anyhow::Result<PairedHost> {
-    store::device_installations::insert_device(
-        &relay.pool,
-        host_id,
-        "Test Mac",
-        DeviceRole::AgentHost,
-        0,
-    )
-    .await?;
+    store::test_support::insert_test_host(&relay.pool, host_id, "Test Mac", 0).await;
     let account = store::accounts::create(&relay.pool, email).await?;
     let mobile_id = DeviceId::new();
-    store::device_installations::insert_device(
-        &relay.pool,
-        mobile_id,
-        "Test iPhone",
-        DeviceRole::MobileClient,
-        0,
-    )
-    .await?;
+    {
+        let _acct =
+            store::accounts::create(&relay.pool, &format!("fixture-{}@localhost", mobile_id))
+                .await
+                .unwrap();
+        store::test_support::insert_test_client(
+            &relay.pool,
+            mobile_id,
+            DeviceRole::MobileClient,
+            &_acct.account_id,
+            "Test iPhone",
+            0,
+        )
+        .await;
+    };
     store::device_installations::set_account_id(&relay.pool, &mobile_id, &account.account_id)
         .await?;
 

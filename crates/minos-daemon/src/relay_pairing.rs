@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 
 /// Linked peer snapshot shown in host status UI after Host Link.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 pub struct PeerRecord {
     pub device_id: DeviceId,
     pub name: String,

@@ -109,7 +109,7 @@ async fn upsert_session_manifest(
     let local_to_seq = i64::try_from(session.local_to_seq).unwrap_or(i64::MAX);
     let bytes = i64::try_from(session.bytes).unwrap_or(i64::MAX);
     let event_count = i64::try_from(session.event_count).unwrap_or(i64::MAX);
-    let running = i64::from(session.running);
+    let running_i64 = i64::from(session.running);
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query(
             "INSERT INTO thread_sync_state( \
@@ -138,7 +138,7 @@ async fn upsert_session_manifest(
         .bind(event_count)
         .bind(session.first_ts_ms)
         .bind(session.last_ts_ms)
-        .bind(running)
+        .bind(running_i64)
         .bind(now_ms)
         .execute(pool)
         .await
@@ -170,7 +170,7 @@ async fn upsert_session_manifest(
         .bind(event_count)
         .bind(session.first_ts_ms)
         .bind(session.last_ts_ms)
-        .bind(running)
+        .bind(session.running)
         .bind(now_ms)
         .execute(pool)
         .await

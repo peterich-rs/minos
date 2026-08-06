@@ -3,6 +3,7 @@ use axum::http::{Method, Request, StatusCode};
 use minos_backend::auth::jwt;
 use minos_backend::http::test_support::TEST_JWT_SECRET;
 use minos_backend::http::{router, test_support::backend_state};
+use minos_backend::store::test_support::{insert_test_client, insert_test_host};
 use minos_domain::{AgentName, DeviceId, DeviceRole};
 
 mod common;
@@ -55,7 +56,7 @@ async fn formal_project_routes_expose_canonical_conversation_and_agent_session_f
         &conversation.conversation_id,
         None,
         None,
-        Some("agent_codex"),
+        None,
         "running",
         1_001,
         None,
@@ -63,26 +64,26 @@ async fn formal_project_routes_expose_canonical_conversation_and_agent_session_f
     .await
     .unwrap();
     let host_device_id = DeviceId::new();
-    minos_backend::store::device_installations::insert_device(
-        &state.store,
-        host_device_id,
-        "Mac",
-        DeviceRole::AgentHost,
-        999,
-    )
-    .await
-    .unwrap();
+    insert_test_host(&state.store, host_device_id, "Mac", 999).await;
     // Host keeps account_id NULL; link via host_links (account ↔ host).
     let mobile = DeviceId::new();
-    minos_backend::store::device_installations::insert_device(
-        &state.store,
-        mobile,
-        "iPhone",
-        DeviceRole::MobileClient,
-        999,
-    )
-    .await
-    .unwrap();
+    {
+        let _acct = minos_backend::store::accounts::create(
+            &state.store,
+            &format!("fixture-{}@localhost", mobile),
+        )
+        .await
+        .unwrap();
+        insert_test_client(
+            &state.store,
+            mobile,
+            DeviceRole::MobileClient,
+            &_acct.account_id,
+            "iPhone",
+            999,
+        )
+        .await;
+    };
     minos_backend::store::device_installations::set_account_id(
         &state.store,
         &mobile,
@@ -210,16 +211,14 @@ async fn formal_project_routes_expose_canonical_conversation_and_agent_session_f
         .sqlite_pool()
         .expect("project compatibility checks run only against sqlite test state");
 
-    let compat_rows: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM project_sessions WHERE project_id = ?")
-            .bind(&project_id)
-            .fetch_one(pool)
-            .await
-            .unwrap();
-    assert_eq!(
-        compat_rows, 0,
-        "project_sessions compatibility storage is retired"
-    );
+    let owner_rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM project_members WHERE project_id = ? AND role = 'owner'",
+    )
+    .bind(&project_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(owner_rows, 1, "project create must insert owner membership");
 
     let linked_project_id: Option<String> =
         sqlx::query_scalar("SELECT project_id FROM agent_sessions WHERE session_id = ?")

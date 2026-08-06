@@ -9,9 +9,7 @@ pub const BACKEND_URL: &str = match option_env!("MINOS_BACKEND_URL") {
 
 /// Runtime relay config. `backend_url` is the only live field.
 ///
-/// Derives `uniffi::Record` so Swift can pass it to
-/// `DaemonHandle::start`; the String field marshals as plain text.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+/// Relay backend configuration passed into `DaemonHandle::start`.
 #[derive(Clone, Debug)]
 pub struct RelayConfig {
     pub backend_url: String,

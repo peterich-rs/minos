@@ -321,9 +321,7 @@ mod tests {
         let pool = memory_pool().await;
         let account = insert_account(&pool, "lifecycle@example.com").await;
         let host = DeviceId::new();
-        device_installations::insert_device(&pool, host, "Host", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        crate::store::test_support::insert_test_host(&pool, host, "Host", T0).await;
 
         seed_session(
             &pool,
@@ -353,9 +351,7 @@ mod tests {
         let pool = memory_pool().await;
         let account = insert_account(&pool, "lifecycle-live@example.com").await;
         let host = DeviceId::new();
-        device_installations::insert_device(&pool, host, "Host", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        crate::store::test_support::insert_test_host(&pool, host, "Host", T0).await;
 
         seed_session(
             &pool,
@@ -389,9 +385,7 @@ mod tests {
         let account = insert_account(&pool, "lifecycle-recent@example.com").await;
         let host = DeviceId::new();
         let now_ms = T0 + 10_000;
-        device_installations::insert_device(&pool, host, "Host", DeviceRole::AgentHost, now_ms)
-            .await
-            .unwrap();
+        crate::store::test_support::insert_test_host(&pool, host, "Host", now_ms).await;
 
         seed_session(
             &pool,

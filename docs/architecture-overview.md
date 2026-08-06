@@ -15,7 +15,7 @@ Minos 是一个 **以 Conversation 协作为核心** 的远程 AI 编码协作�
 │                           客户端层 (Clients)                           │
 │  Mobile (Flutter) · Web · Desktop Account Client                      │
 │       REST + /ws/client  →  public origin (prod: minos.ainexc.com)    │
-│  macOS / Desktop Host Console / TUI  →  local RPC → minos-daemon      │
+│  Desktop Host Console / TUI  →  local RPC → minos-daemon              │
 ├──────────────────────────────────────────────────────────────────────┤
 │                     后端服务 (minos-backend)  [VPS hub]                │
 │  HTTP /v1/*  ·  WebSocket Gateway  ·  Domain/UC  ·  Worker Plane      │
@@ -51,13 +51,11 @@ Minos/
 │   ├── minos-daemon/                # Host 守护进程（Host Link RPC）
 │   ├── minos-mobile/                # 移动端 Rust 核心
 │   ├── minos-tui/                   # 终端 UI
-│   ├── minos-ffi-uniffi/            # UniFFI 绑定（→ Swift）
 │   └── minos-ffi-frb/               # FRB 绑定（→ Dart）
 ├── apps/
-│   ├── macos/                       # macOS 状态栏应用（SwiftUI + UniFFI）
 │   ├── mobile/                      # Flutter 移动应用（iOS/Android）
 │   ├── web/                         # Web 管理控制台（React + Vite）
-│   └── desktop/                     # Host 桌面壳（Tauri + React，替代 TUI 进行中）
+│   └── desktop/                     # Host 桌面壳（Tauri + React；主 Host GUI）
 ├── xtask/                           # 构建/代码生成编排
 ├── docs/                            # 架构文档 + ADR + 运维手册
 ├── schemas/                         # JSON Schema（Codex 协议）
@@ -78,13 +76,13 @@ Minos/
             |              |                   |
       minos-agent-runtime <--------------------+
       /      |       \
-minos-ffi-uniffi <-+-- minos-codex-protocol
-      |             \-- minos-acp-protocol
-      |
+minos-codex-protocol --+
+minos-acp-protocol  --+--> minos-agent-runtime
+                           |
 minos-protocol ----> minos-transport
-      |                    |
-         +--> minos-ffi-frb --> minos-mobile
-         |
+      |
+      +--> minos-ffi-frb --> minos-mobile
+      |
     minos-backend
     minos-daemon
 ```
@@ -93,7 +91,7 @@ minos-protocol ----> minos-transport
 - `minos-domain` 无 workspace 内部依赖（纯值类型叶节点）
 - `minos-acp-protocol` 和 `minos-codex-protocol` 是独立协议镜像，无内部依赖
 - `minos-agent-runtime` 不依赖 `minos-protocol` 或 `minos-ui-protocol`（薄管道设计）
-- FFI crate（`minos-ffi-uniffi`、`minos-ffi-frb`）是聚合 shim，re-export 多个 crate 的类型
+- `minos-ffi-frb` 是移动端 FRB 聚合 shim；Host GUI 通过 Desktop/TUI 直连 `minos-daemon`（无 Swift UniFFI）
 
 ## 详细文档入口
 
@@ -103,7 +101,6 @@ minos-protocol ----> minos-transport
 | Host 守护进程 | [docs/architecture-daemon.md](architecture-daemon.md) |
 | 终端 UI | [docs/architecture-tui.md](architecture-tui.md) |
 | 移动端 | [docs/architecture-mobile.md](architecture-mobile.md) |
-| macOS 应用 | [docs/architecture-macos.md](architecture-macos.md) |
 | Web 应用 | [docs/architecture-web.md](architecture-web.md) |
 | Desktop 应用 | [docs/architecture-desktop.md](architecture-desktop.md) |
 | Desktop 自动更新 | [docs/desktop-auto-update.md](desktop-auto-update.md) |
@@ -131,7 +128,7 @@ minos-protocol ----> minos-transport
 | 后端 | Rust + Tokio + Axum + Tower |
 | 数据库 | PostgreSQL (生产) / SQLite (开发) |
 | 缓存/消息 | Redis (生产) / In-memory (开发) |
-| macOS | SwiftUI + XcodeGen + UniFFI |
+| Desktop Host | Tauri + React + minos-daemon local RPC |
 | 移动端 | Flutter 3.44.0 + flutter_rust_bridge v2 |
 | Web | React 19 + TypeScript 6 + Vite 8 + shadcn/ui |
 | Desktop | Tauri 2 + React 19 + TypeScript + Vite + Tailwind |

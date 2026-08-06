@@ -18,7 +18,7 @@ part 'minos.freezed.dart';
 Future<void> initLogging({required String logDir}) =>
     RustLib.instance.api.crateApiMinosInitLogging(logDir: logDir);
 
-/// Localize an `ErrorKind` into user-facing copy. Mirrors the UniFFI adapter's
+/// Localize an `ErrorKind` into user-facing copy. Mirrors the host error adapter's
 /// `kind_message` so Dart can render localized error strings without hard-
 /// coding them.
 String kindMessage({required ErrorKind kind, required Lang lang}) =>

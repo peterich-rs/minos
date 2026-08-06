@@ -216,17 +216,13 @@ fn decode_host_installation_token_row(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::device_installations;
     use crate::store::test_support::{memory_pool, T0};
-    use minos_domain::DeviceRole;
 
     #[tokio::test]
     async fn verify_active_token_updates_last_used() {
         let pool = memory_pool().await;
         let host = DeviceId::new();
-        device_installations::insert_device(&pool, host, "host", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        crate::store::test_support::insert_test_host(&pool, host, "host", T0).await;
         let mut tx = pool.begin().await.unwrap();
         insert_token_with_executor(&mut *tx, "hash", host, T0)
             .await

@@ -37,24 +37,3 @@ pub use subscription::{
     AgentStateObserver, ConnectionStateObserver, PeerStateObserver, RelayLinkStateObserver,
     Subscription,
 };
-
-#[cfg(feature = "uniffi")]
-uniffi::setup_scaffolding!();
-
-// `DeviceId` / `DeviceSecret` are registered in `minos-domain` with blanket
-// `impl<UT>` coverage under this crate's UniFFI tag.
-//
-// `DateTime<Utc>` is used by `PeerRecord` and is registered locally.
-#[cfg(feature = "uniffi")]
-mod uniffi_reexports {
-    use chrono::{DateTime, Utc};
-    use std::time::SystemTime;
-
-    type DateTimeUtc = DateTime<Utc>;
-
-    uniffi::custom_type!(DateTimeUtc, SystemTime, {
-        remote,
-        lower: |dt| dt.into(),
-        try_lift: |st| Ok(st.into()),
-    });
-}

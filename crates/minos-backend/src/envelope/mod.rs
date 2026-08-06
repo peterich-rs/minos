@@ -800,8 +800,8 @@ pub(crate) fn role_metric_label(role: minos_domain::DeviceRole) -> &'static str 
 mod tests {
     use super::*;
     use crate::session::registry::OUTBOX_CAPACITY;
-    use crate::store::device_installations::insert_device;
     use crate::store::host_links;
+    use crate::store::test_support::insert_test_host;
     use crate::store::test_support::{insert_account, insert_ios_device, memory_pool, T0};
     use minos_domain::{DeviceId, DeviceRole};
     use pretty_assertions::assert_eq;
@@ -813,9 +813,7 @@ mod tests {
         let pool = memory_pool().await;
         let account = insert_account(&pool, "user@example.com").await;
         let mac = DeviceId::new();
-        insert_device(&pool, mac, "Mac", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        insert_test_host(&pool, mac, "Mac", T0).await;
         let ios = insert_ios_device(&pool, &account).await;
         host_links::insert_pair(&pool, mac, &account, ios, T0)
             .await
@@ -947,9 +945,7 @@ mod tests {
         let pool = memory_pool().await;
         let account = insert_account(&pool, "user@example.com").await;
         let mac_id = DeviceId::new();
-        insert_device(&pool, mac_id, "Mac", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        insert_test_host(&pool, mac_id, "Mac", T0).await;
         let ios_a = insert_ios_device(&pool, &account).await;
         let ios_b = insert_ios_device(&pool, &account).await;
         host_links::insert_pair(&pool, mac_id, &account, ios_b, T0)

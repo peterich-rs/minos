@@ -15,7 +15,6 @@
 | `minos-acp-protocol` | ACP 协议类型 | 无 |
 | `minos-codex-protocol` | Codex 协议类型 | 无 |
 | `minos-ui-protocol` | UI 事件协议 | domain |
-| `minos-ffi-uniffi` | UniFFI 绑定 shim | daemon, domain, protocol, ui-protocol, agent-runtime |
 | `minos-ffi-frb` | FRB 绑定 shim | mobile, domain, protocol, ui-protocol |
 
 ---
@@ -216,30 +215,7 @@ Grok file edits (`SearchReplace` / write / `ApplyPatch`) arrive as ACP `ToolCall
 
 ---
 
-## 11. `minos-ffi-uniffi` — UniFFI 绑定 Shim
-
-**路径**: `crates/minos-ffi-uniffi/`
-**特性**: 聚合 FFI surface 供 Swift 消费。产生 `cdylib`（动态）+ `staticlib`（静态）。
-
-### 导出类型（来自上游 crate）
-
-| 来源 | 导出类型 |
-|------|---------|
-| `minos-daemon` | `DaemonHandle`, observer 协议, Host Link RPC, `PeerRecord`, `Subscription` |
-| `minos-domain` | `AgentDescriptor`, `AgentName`, `DeviceId`, `PeerState`, `RelayLinkState` |
-| `minos-agent-runtime` | `SessionState`, `PauseReason`, `CloseReason` |
-| `minos-protocol` | `AgentLaunchMode`, `StartAgentRequest`, `SendUserMessageRequest` 等 |
-| `minos-ui-protocol` | `SessionEndReason` |
-
-### 导出函数
-
-- `init_logging()`, `set_debug()`, `today_log_path()` — 日志控制
-- `swift_log_debug/info/warn/error()` — Swift → Rust tracing 桥接
-- `kind_message(kind, lang)` — 跨语言错误消息查找
-
----
-
-## 12. `minos-ffi-frb` — Flutter Rust Bridge 绑定 Shim
+## 11. `minos-ffi-frb` — Flutter Rust Bridge 绑定 Shim
 
 **路径**: `crates/minos-ffi-frb/`
 **特性**: `flutter_rust_bridge` v2 适配器，暴露 `minos-mobile::MobileClient` 给 Dart。

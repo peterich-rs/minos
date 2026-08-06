@@ -49,61 +49,38 @@ pub struct DeviceRow {
     pub account_id: Option<String>,
 }
 
-/// Insert an installation with null account/public_key.
-///
-/// **SQLite tests / fixtures only.** Postgres CHECK rejects this shape;
-/// production code must use [`insert_client_for_account`] or
-/// [`insert_host_with_public_key`].
-///
-/// Both timestamps are set to `now` (unix epoch ms). `now` is injected from
-/// the caller so tests can use fixed-epoch literals.
-pub async fn insert_device(
-    store: &impl AsStorePool,
-    id: DeviceId,
-    name: &str,
-    role: DeviceRole,
-    now: i64,
-) -> Result<(), BackendError> {
-    match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => insert_device_with_executor(pool, id, name, role, now).await,
-        StorePoolRef::Postgres(_) => Err(BackendError::StoreQuery {
-            operation: "insert_device".into(),
-            message: "postgres CHECK requires insert_client_for_account \
-                      (clients) or insert_host_with_public_key (hosts)"
-                .into(),
-        }),
-    }
-}
-
-pub(crate) async fn insert_device_with_executor<'e, E>(
+/// SQLite-tx host insert with an explicit public_key (host_link / tx paths).
+#[allow(dead_code)] // reserved for in-tx host bootstrap paths
+pub(crate) async fn insert_host_with_executor<'e, E>(
     executor: E,
     id: DeviceId,
     name: &str,
-    role: DeviceRole,
+    public_key: &str,
     now: i64,
 ) -> Result<(), BackendError>
 where
     E: Executor<'e, Database = Sqlite>,
 {
     let id_str = id.to_string();
-    let kind = role.to_installation_kind();
+    let kind = DeviceRole::AgentHost.to_installation_kind();
 
     sqlx::query(
         r#"
         INSERT INTO device_installations
             (installation_id, kind, display_name, public_key, created_at_ms, last_seen_at_ms, account_id)
-        VALUES (?, ?, ?, NULL, ?, ?, NULL)
+        VALUES (?, ?, ?, ?, ?, ?, NULL)
         "#,
     )
     .bind(&id_str)
     .bind(kind)
     .bind(name)
+    .bind(public_key)
     .bind(now)
     .bind(now)
     .execute(executor)
     .await
     .map_err(|e| BackendError::StoreQuery {
-        operation: "insert_device".to_string(),
+        operation: "insert_host_with_executor".to_string(),
         message: e.to_string(),
     })?;
 
@@ -568,16 +545,14 @@ fn _sqlite_pool_type_anchor(_: &SqlitePool) {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::test_support::{memory_pool, T0};
+    use crate::store::test_support::{insert_test_host, memory_pool, T0, TEST_HOST_PUBLIC_KEY};
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
     async fn insert_then_get_round_trips_all_columns() {
         let pool = memory_pool().await;
         let id = DeviceId::new();
-        insert_device(&pool, id, "alice's mac", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        insert_test_host(&pool, id, "alice's mac", T0).await;
 
         let got = get_device(&pool, id).await.unwrap().unwrap();
         assert_eq!(got.device_id, id);
@@ -586,7 +561,7 @@ mod tests {
         assert_eq!(got.created_at, T0);
         assert_eq!(got.last_seen_at, T0);
         assert_eq!(got.account_id, None);
-        assert_eq!(got.public_key, None);
+        assert_eq!(got.public_key.as_deref(), Some(TEST_HOST_PUBLIC_KEY));
     }
 
     #[tokio::test]
@@ -596,12 +571,16 @@ mod tests {
             .await
             .unwrap();
         let id = DeviceId::new();
-        insert_device(&pool, id, "iphone", DeviceRole::MobileClient, T0)
-            .await
-            .unwrap();
-        set_account_id(&pool, &id, &account.account_id)
-            .await
-            .unwrap();
+        insert_client_for_account(
+            &pool,
+            id,
+            "iphone",
+            DeviceRole::MobileClient,
+            &account.account_id,
+            T0,
+        )
+        .await
+        .unwrap();
         let got = get_device(&pool, id).await.unwrap().unwrap();
         assert_eq!(got.account_id.as_deref(), Some(account.account_id.as_str()));
     }
@@ -616,10 +595,20 @@ mod tests {
     #[tokio::test]
     async fn set_display_name_overwrites_existing_name() {
         let pool = memory_pool().await;
-        let id = DeviceId::new();
-        insert_device(&pool, id, "unnamed", DeviceRole::MobileClient, T0)
+        let account = crate::store::accounts::create(&pool, "name@example.com")
             .await
             .unwrap();
+        let id = DeviceId::new();
+        insert_client_for_account(
+            &pool,
+            id,
+            "unnamed",
+            DeviceRole::MobileClient,
+            &account.account_id,
+            T0,
+        )
+        .await
+        .unwrap();
 
         set_display_name(&pool, &id, "Fan's iPhone").await.unwrap();
 
@@ -630,10 +619,20 @@ mod tests {
     #[tokio::test]
     async fn touch_last_seen_updates_timestamp() {
         let pool = memory_pool().await;
-        let id = DeviceId::new();
-        insert_device(&pool, id, "iphone", DeviceRole::MobileClient, T0)
+        let account = crate::store::accounts::create(&pool, "touch@example.com")
             .await
             .unwrap();
+        let id = DeviceId::new();
+        insert_client_for_account(
+            &pool,
+            id,
+            "iphone",
+            DeviceRole::MobileClient,
+            &account.account_id,
+            T0,
+        )
+        .await
+        .unwrap();
 
         touch_last_seen(&pool, &id, T0 + 500).await.unwrap();
 
@@ -650,36 +649,36 @@ mod tests {
         let older_mobile = DeviceId::new();
         let latest_mobile = DeviceId::new();
         let browser = DeviceId::new();
-        insert_device(
+        insert_client_for_account(
             &pool,
             older_mobile,
             "old phone",
             DeviceRole::MobileClient,
+            &account.account_id,
             100,
         )
         .await
         .unwrap();
-        insert_device(
+        insert_client_for_account(
             &pool,
             latest_mobile,
             "current phone",
             DeviceRole::MobileClient,
+            &account.account_id,
             200,
         )
         .await
         .unwrap();
-        insert_device(&pool, browser, "web", DeviceRole::BrowserAdmin, 300)
-            .await
-            .unwrap();
-        set_account_id(&pool, &older_mobile, &account.account_id)
-            .await
-            .unwrap();
-        set_account_id(&pool, &latest_mobile, &account.account_id)
-            .await
-            .unwrap();
-        set_account_id(&pool, &browser, &account.account_id)
-            .await
-            .unwrap();
+        insert_client_for_account(
+            &pool,
+            browser,
+            "web",
+            DeviceRole::BrowserAdmin,
+            &account.account_id,
+            300,
+        )
+        .await
+        .unwrap();
 
         let got = latest_mobile_for_account(&pool, &account.account_id)
             .await
@@ -693,10 +692,20 @@ mod tests {
     #[tokio::test]
     async fn insert_device_stores_kind_as_installation_kind() {
         let pool = memory_pool().await;
-        let id = DeviceId::new();
-        insert_device(&pool, id, "admin", DeviceRole::BrowserAdmin, T0)
+        let account = crate::store::accounts::create(&pool, "kind@example.com")
             .await
             .unwrap();
+        let id = DeviceId::new();
+        insert_client_for_account(
+            &pool,
+            id,
+            "admin",
+            DeviceRole::BrowserAdmin,
+            &account.account_id,
+            T0,
+        )
+        .await
+        .unwrap();
 
         let id_str = id.to_string();
         let raw_kind: String =
@@ -715,9 +724,7 @@ mod tests {
             .await
             .unwrap();
         let id = DeviceId::new();
-        insert_device(&pool, id, "mac", DeviceRole::AgentHost, T0)
-            .await
-            .unwrap();
+        insert_test_host(&pool, id, "mac", T0).await;
         let err = set_account_id(&pool, &id, &account.account_id)
             .await
             .unwrap_err();
