@@ -70,6 +70,13 @@ pub(crate) enum PendingApprovalTarget {
         client: Arc<crate::acp_client::AcpClient>,
         nested_method: String,
     },
+    /// Claude stream-json `control_request` (can_use_tool / AskUserQuestion).
+    /// Reply is written on the live session stdin as `control_response`.
+    ClaudeControl {
+        control_request_id: String,
+        /// Echoed as `updatedInput` on allow (required by older CLIs).
+        tool_input: Value,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -1517,7 +1524,9 @@ impl AgentManager {
             SessionState::Running { .. } => match handle.agent {
                 AgentName::Codex => self.steer_turn(session_id, text).await,
                 AgentName::Opencode => self.send_opencode_prompt(session_id, &text, &handle).await,
-                AgentName::Claude => self.send_claude_prompt(session_id, &text, &handle).await,
+                // Claude control plane: reject mid-turn prompts (queue is protocol-
+                // possible but product-consistent with Gemini/Grok).
+                AgentName::Claude => anyhow::bail!("claude turn is already running"),
                 AgentName::Gemini => anyhow::bail!("gemini turn is already running"),
                 AgentName::Grok => anyhow::bail!("grok turn is already running"),
             },
@@ -1717,9 +1726,7 @@ impl AgentManager {
             }
             AgentName::Claude => {
                 if let Some(session) = self.claude_sessions.lock().await.get_mut(session_id) {
-                    if let Some(child) = session.current_turn_child.as_mut() {
-                        let _ = child.start_kill();
-                    }
+                    let _ = session.interrupt().await;
                 }
             }
             AgentName::Opencode => {
@@ -1803,6 +1810,19 @@ impl AgentManager {
         text: &str,
         handle: &SessionHandle,
     ) -> anyhow::Result<()> {
+        // Prefer live control session (same process, stdin user frame).
+        {
+            let mut guard = self.claude_sessions.lock().await;
+            if let Some(session) = guard.get_mut(session_id) {
+                if session.poll_alive() {
+                    session.send_user_message(text)?;
+                    return Ok(());
+                }
+                // Dead process: drop and re-spawn with --resume below.
+                guard.remove(session_id);
+            }
+        }
+
         let cli_path = PathBuf::from(AgentName::Claude.bin_name());
         let provider_session_id = match provider_resume_session_id(session_id, handle) {
             Some(id) => id.to_string(),
@@ -1813,11 +1833,10 @@ impl AgentManager {
                 new_provider_id
             }
         };
-        let has_runtime_session = self.claude_sessions.lock().await.contains_key(session_id);
         let has_persisted_history = handle.last_seq.load(std::sync::atomic::Ordering::SeqCst) > 0;
-        let resume_sid =
-            (has_runtime_session || has_persisted_history).then_some(provider_session_id.as_str());
-        // Claude CLI --session-id only when not resuming an existing provider session.
+        // Resume provider transcript when we already have history (plane B after
+        // process death). Fresh sessions use --session-id.
+        let resume_sid = has_persisted_history.then_some(provider_session_id.as_str());
         let claude_session_id = resume_sid.is_none().then_some(provider_session_id.as_str());
         let mcp_server = resolve_mcp_server(
             self.config.mcp.as_ref(),
@@ -1827,7 +1846,7 @@ impl AgentManager {
             Some(session_id),
         );
         let claude_mcp_config = mcp_server.as_ref().map(claude_mcp_config_json);
-        let session = crate::claude_driver::ClaudeNdjsonSession::start_turn(
+        let session = crate::claude_driver::ClaudeControlSession::start_turn(
             &cli_path,
             &handle.workspace,
             session_id.to_string(),
@@ -1841,6 +1860,7 @@ impl AgentManager {
             claude_mcp_config.as_deref(),
             handle.model.as_deref(),
             handle.instructions.as_deref(),
+            self.pending_approvals.clone(),
         )
         .await?;
         self.claude_sessions
@@ -1848,17 +1868,6 @@ impl AgentManager {
             .await
             .insert(session_id.to_string(), session);
         Ok(())
-    }
-
-    async fn send_claude_prompt(
-        &self,
-        session_id: &str,
-        text: &str,
-        handle: &SessionHandle,
-    ) -> anyhow::Result<()> {
-        self.synth_user_message_ingest(session_id, text, handle.agent)
-            .await?;
-        self.start_claude_turn(session_id, text, handle).await
     }
 
     async fn ensure_opencode_session_for_session(
@@ -2222,9 +2231,7 @@ impl AgentManager {
             }
             AgentName::Claude => {
                 if let Some(session) = self.claude_sessions.lock().await.get_mut(session_id) {
-                    if let Some(child) = session.current_turn_child.as_mut() {
-                        let _ = child.start_kill();
-                    }
+                    let _ = session.interrupt().await;
                 }
             }
             AgentName::Opencode => {
@@ -2377,6 +2384,9 @@ impl AgentManager {
             PendingApprovalTarget::GrokExtMethod { nested_method, .. } => {
                 crate::approvals::validate_grok_ext_method_decision(nested_method, &decision)?
             }
+            PendingApprovalTarget::ClaudeControl { tool_input, .. } => {
+                crate::approvals::validate_claude_control_decision(&decision, tool_input)?
+            }
         };
         let Some((_, pending)) = self.pending_approvals.remove(request_id) else {
             return Ok(());
@@ -2404,6 +2414,17 @@ impl AgentManager {
                 .reply(request_id, reply)
                 .await
                 .map_err(|error| anyhow::anyhow!("ACP approval reply failed: {error}")),
+            PendingApprovalTarget::ClaudeControl {
+                control_request_id, ..
+            } => {
+                let sessions = self.claude_sessions.lock().await;
+                let session = sessions.get(session_id).ok_or_else(|| {
+                    anyhow::anyhow!("claude control session gone for approval reply")
+                })?;
+                session
+                    .reply_control(&control_request_id, reply)
+                    .map_err(|error| anyhow::anyhow!("Claude control reply failed: {error}"))
+            }
         };
         // Durable resolution marker so history replay / assemblers can demote the
         // interactive approval card (request alone is not enough after approve).
@@ -4910,21 +4931,56 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn running_claude_message_resumes_bound_session_and_synthesizes_user_message() {
+    async fn running_claude_message_is_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.subprocess_env = Arc::new(HashMap::new());
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+        let session_id = "claude-running-thread";
+        mgr.register_persisted_thread(
+            session_id.into(),
+            tmp.path().to_path_buf(),
+            AgentName::Claude,
+            Some("d5f4d81e-c934-4551-a8d0-bf3ef6db96cc".into()),
+            None,
+            None,
+            SessionState::Running {
+                turn_started_at_ms: 1,
+            },
+            1,
+        )
+        .await
+        .unwrap();
+
+        let err = mgr
+            .send_user_message(session_id, "answer while running".into())
+            .await
+            .expect_err("running Claude turn must reject additional prompts");
+        assert!(
+            err.to_string().contains("already running"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn claude_permission_control_request_waits_for_user_decision() {
         let tmp = tempfile::tempdir().unwrap();
         let bin_dir = tmp.path().join("bin");
         std::fs::create_dir(&bin_dir).unwrap();
         let script_path = bin_dir.join("claude");
-        let args_path = tmp.path().join("claude-running-args.txt");
-        let provider_session_id = "d5f4d81e-c934-4551-a8d0-bf3ef6db96cc";
+        let reply_path = tmp.path().join("claude-control-reply.json");
         std::fs::write(
             &script_path,
-            format!(
-                r#"#!/bin/sh
-printf '%s\n' "$*" > "$FAKE_CLAUDE_ARGS"
-printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}}\n'
-"#
-            ),
+            r#"#!/bin/sh
+# Emit a can_use_tool control request, wait for control_response on stdin, then finish.
+printf '{"type":"system","subtype":"init","session_id":"sess-perm","capabilities":["interrupt_receipt_v1"],"tools":[]}\n'
+printf '{"type":"control_request","request_id":"perm-claude-1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"echo hi"}}}\n'
+# Read one control_response line from stdin (after -p prompt already consumed by shell argv).
+IFS= read -r reply || exit 1
+printf '%s\n' "$reply" > "$FAKE_CLAUDE_CONTROL_REPLY"
+printf '{"type":"result","session_id":"sess-perm","is_error":false,"result":"ok"}\n'
+"#,
         )
         .unwrap();
 
@@ -4938,74 +4994,89 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
         cfg.subprocess_env = Arc::new(HashMap::from([
             ("PATH".to_string(), bin_dir.display().to_string()),
             (
-                "FAKE_CLAUDE_ARGS".to_string(),
-                args_path.display().to_string(),
+                "FAKE_CLAUDE_CONTROL_REPLY".to_string(),
+                reply_path.display().to_string(),
             ),
         ]));
         let mgr = AgentManager::new(cfg, InstanceCaps::default());
-        let session_id = "claude-running-thread";
-        mgr.register_persisted_thread(
-            session_id.into(),
-            tmp.path().to_path_buf(),
-            AgentName::Claude,
-            Some(provider_session_id.into()),
-            None,
-            None,
-            SessionState::Running {
-                turn_started_at_ms: 1,
-            },
-            1,
-        )
-        .await
-        .unwrap();
-
-        let mut rx = mgr.ingest_stream();
-        let outcome = mgr
-            .dispatch_message(
-                AgentName::Claude,
-                "/unused".into(),
-                Some(session_id.into()),
-                "answer while running".into(),
-                None,
-            )
+        let started = mgr
+            .start_agent(AgentName::Claude, tmp.path().to_path_buf())
             .await
             .unwrap();
-        assert_eq!(outcome.session_id, session_id);
+        let session_id = started.session_id.clone();
 
-        let args = tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                if let Ok(args) = std::fs::read_to_string(&args_path) {
-                    break args;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("fake Claude args should be written");
-        assert!(args.contains(&format!("--resume {provider_session_id}")));
+        let mut rx = mgr.ingest_stream();
+        mgr.send_user_message(&session_id, "run bash".into())
+            .await
+            .unwrap();
 
-        let user = tokio::time::timeout(Duration::from_secs(2), async {
+        let approval = tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 let ingest = rx.recv().await.expect("ingest stream should stay open");
+                let payload = ingest
+                    .json_value()
+                    .expect("raw ingest should contain JSON payload");
                 if ingest.session_id == session_id
-                    && ingest
-                        .json_value()
-                        .expect("raw ingest should contain JSON payload")
-                        .get("method")
-                        .and_then(Value::as_str)
-                        == Some("item/started")
+                    && payload.get("method").and_then(Value::as_str) == Some("approval/request")
                 {
                     break ingest;
                 }
             }
         })
         .await
-        .expect("synthetic Claude user message should arrive");
-        assert_eq!(
-            user.json_value()
-                .expect("raw ingest should contain JSON payload")["params"]["item"]["content"][0]
-                ["text"],
-            "answer while running"
+        .expect("Claude control permission should surface as approval/request");
+
+        let request_id = approval
+            .json_value()
+            .expect("payload")
+            .get("params")
+            .and_then(|p| p.get("request_id"))
+            .and_then(Value::as_str)
+            .expect("request_id")
+            .to_string();
+        assert_eq!(request_id, "perm-claude-1");
+
+        mgr.resolve_approval(
+            &request_id,
+            &session_id,
+            serde_json::json!({ "decision": "allow" }),
+        )
+        .await
+        .expect("resolve Claude approval");
+
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let ingest = rx.recv().await.expect("ingest");
+                if ingest.session_id == session_id
+                    && ingest
+                        .json_value()
+                        .expect("json")
+                        .get("type")
+                        .and_then(Value::as_str)
+                        == Some("result")
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("result after approval");
+
+        let reply = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(body) = std::fs::read_to_string(&reply_path) {
+                    if !body.trim().is_empty() {
+                        break body;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("control_response written to fake claude");
+        assert!(
+            reply.contains("control_response") && reply.contains("allow"),
+            "unexpected control reply: {reply}"
         );
     }
 

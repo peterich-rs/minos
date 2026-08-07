@@ -373,7 +373,7 @@ pending approval/permission/question 有明确选项时，`ui/approval_overlay.r
 | OpencodePermission | `opencode/permission.updated` | `respond_opencode_permission` |
 | OpencodeQuestion | `opencode/question.asked` | `respond_opencode_question` |
 
-自由文本或多问题 pending request 继续走 Agent Input。Claude 的权限/提问尚未接入。
+自由文本或多问题 pending request 继续走 Agent Input。Claude 权限 / `AskUserQuestion` 经 runtime 归一为 `approval/request`（method `claude/can_use_tool` / `claude/ask_user_question`），与 Gemini/Grok 共用同一审批 overlay。
 
 `ChatItem::ToolCall` 保留自动展开状态 `is_expanded`，并用 `is_user_toggled: Option<bool>` 表示用户覆盖。`e` 键只翻转 transcript 中最后一个 tool call；`None` 时按自动规则渲染，`Some` 时按用户选择渲染。
 

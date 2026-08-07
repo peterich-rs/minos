@@ -342,7 +342,7 @@ Session transcript 组装（`TranscriptAssembler`）消费 daemon 投影后的 `
 | `opencode/permission.updated` | `approval`（method `opencode/permission`） | `minos_local_respond_opencode_permission` |
 | `opencode/question.asked` | `question`（method `opencode/question`） | `minos_local_respond_opencode_question` |
 
-UI：`SessionsView` thin shell + `ui/ApprovalModal` / transcript chips；决策经 `lib/user-action.ts`。Claude 未接。
+UI：`SessionsView` thin shell + `ui/ApprovalModal` / transcript chips；决策经 `lib/user-action.ts`。Claude 与 Codex/Gemini/Grok/OpenCode 共用同一 `approval/request` 路径（host 将 Claude control 权限 park 为 `PendingApprovalTarget::ClaudeControl`）。
 
 | Command | 作用 |
 |---------|------|

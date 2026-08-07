@@ -256,6 +256,73 @@ where
         .map_err(|error| anyhow::anyhow!("failed to serialize decision for {method}: {error}"))
 }
 
+/// Map a TUI/Desktop decision onto Claude stream-json `control_response.response`.
+///
+/// Accepts simple approve/deny tokens (`decision` / `approved`) or a pre-built
+/// body with `behavior`. Always echos `updatedInput` on allow (required by older
+/// Claude Code versions; safe on new ones).
+pub(crate) fn validate_claude_control_decision(
+    decision: &Value,
+    tool_input: &Value,
+) -> anyhow::Result<Value> {
+    if let Some(behavior) = decision.get("behavior").and_then(Value::as_str) {
+        match behavior {
+            "allow" => {
+                let updated = decision
+                    .get("updatedInput")
+                    .or_else(|| decision.get("updated_input"))
+                    .cloned()
+                    .unwrap_or_else(|| tool_input.clone());
+                return Ok(serde_json::json!({
+                    "behavior": "allow",
+                    "updatedInput": updated,
+                }));
+            }
+            "deny" => {
+                let message = decision
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("User denied this action");
+                return Ok(serde_json::json!({
+                    "behavior": "deny",
+                    "message": message,
+                }));
+            }
+            other => anyhow::bail!("invalid Claude control behavior: {other}"),
+        }
+    }
+
+    let approved = decision
+        .get("approved")
+        .and_then(Value::as_bool)
+        .or_else(|| {
+            decision.get("decision").and_then(Value::as_str).map(|s| {
+                matches!(
+                    s,
+                    "accept" | "accepted" | "approve" | "approved" | "allow" | "yes" | "y"
+                )
+            })
+        })
+        .unwrap_or(false);
+
+    if approved {
+        Ok(serde_json::json!({
+            "behavior": "allow",
+            "updatedInput": tool_input,
+        }))
+    } else {
+        let message = decision
+            .get("message")
+            .and_then(Value::as_str)
+            .or_else(|| decision.get("feedback").and_then(Value::as_str))
+            .unwrap_or("User denied this action");
+        Ok(serde_json::json!({
+            "behavior": "deny",
+            "message": message,
+        }))
+    }
+}
+
 /// Accept either a full ACP permission response object or a simple yes/no
 /// shaped decision from the TUI, mapping onto the option ids captured when the
 /// request arrived.
@@ -500,6 +567,28 @@ mod acp_permission_tests {
         )
         .unwrap();
         assert_eq!(cancelled["outcome"]["outcome"].as_str(), Some("cancelled"));
+    }
+
+    #[test]
+    fn claude_control_decision_allow_echoes_updated_input() {
+        let allow = validate_claude_control_decision(
+            &serde_json::json!({ "decision": "allow" }),
+            &serde_json::json!({ "command": "ls" }),
+        )
+        .expect("allow");
+        assert_eq!(allow["behavior"], "allow");
+        assert_eq!(allow["updatedInput"]["command"], "ls");
+    }
+
+    #[test]
+    fn claude_control_decision_deny_carries_message() {
+        let deny = validate_claude_control_decision(
+            &serde_json::json!({ "decision": "deny", "message": "nope" }),
+            &serde_json::json!({}),
+        )
+        .expect("deny");
+        assert_eq!(deny["behavior"], "deny");
+        assert_eq!(deny["message"], "nope");
     }
 }
 

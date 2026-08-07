@@ -46,7 +46,33 @@ pub fn translate(
     state: &mut ClaudeTranslatorState,
     raw: &Value,
 ) -> Result<Vec<UiEventMessage>, TranslationError> {
+    // Minos synthetic envelopes (approval overlay path shared with Gemini/Grok).
+    if let Some(method) = raw.get("method").and_then(Value::as_str) {
+        match method {
+            "approval/request" | "approval/timeout" | "approval/resolved" => {
+                let params = raw.get("params").cloned().unwrap_or(Value::Null);
+                return Ok(vec![UiEventMessage::Raw {
+                    kind: method.to_string(),
+                    payload_json: serde_json::to_string(&params).unwrap_or_default(),
+                }]);
+            }
+            _ => {}
+        }
+    }
+
     if let Some(events) = translate_synthetic_user_message(raw) {
+        return Ok(events);
+    }
+
+    // Driver-normalized closed markers (kill / close) without a CLI `type`.
+    if raw.get("kind").and_then(Value::as_str) == Some("thread_closed") {
+        let mut events = Vec::new();
+        if let Some(message_id) = state.open_assistant_message_id.take() {
+            events.push(UiEventMessage::MessageCompleted {
+                message_id,
+                finished_at_ms: 0,
+            });
+        }
         return Ok(events);
     }
 
@@ -65,8 +91,16 @@ pub fn translate(
         "system" => Ok(translate_system(state, raw)),
         "stream_event" => translate_stream_event(state, raw),
         "assistant" => Ok(translate_assistant_message(state, raw)),
+        "user" => Ok(translate_user_message(state, raw)),
         "result" => Ok(translate_result(state, raw)),
         "error" => Ok(vec![translate_error(state, raw)]),
+        // Control-plane frames are handled by the runtime; surface as Raw if they leak in.
+        "control_request" | "control_response" | "sdk_control_request" | "sdk_control_response" => {
+            Ok(vec![UiEventMessage::Raw {
+                kind: format!("claude/{event_type}"),
+                payload_json: serde_json::to_string(raw).unwrap_or_default(),
+            }])
+        }
         other => Ok(vec![UiEventMessage::Raw {
             kind: format!("claude/{other}"),
             payload_json: serde_json::to_string(raw).unwrap_or_default(),
@@ -299,6 +333,72 @@ fn content_block_index(event: &Value) -> usize {
         .and_then(Value::as_u64)
         .and_then(|value| usize::try_from(value).ok())
         .unwrap_or(usize::MAX)
+}
+
+/// Map `user` frames that carry `tool_result` blocks to `ToolCallCompleted`.
+fn translate_user_message(state: &mut ClaudeTranslatorState, raw: &Value) -> Vec<UiEventMessage> {
+    let message = raw.get("message").cloned().unwrap_or(Value::Null);
+    let content = match message.get("content") {
+        Some(Value::Array(items)) => items.as_slice(),
+        _ => return Vec::new(),
+    };
+
+    let mut events = Vec::new();
+    for block in content {
+        if block.get("type").and_then(Value::as_str) != Some("tool_result") {
+            continue;
+        }
+        let tool_call_id = block
+            .get("tool_use_id")
+            .or_else(|| block.get("tool_call_id"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        if tool_call_id.is_empty() {
+            continue;
+        }
+        let is_error = block
+            .get("is_error")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let output = tool_result_output_text(block);
+        // Close open assistant bubble before tool result lands in the transcript.
+        if let Some(message_id) = state.open_assistant_message_id.take() {
+            events.push(UiEventMessage::MessageCompleted {
+                message_id,
+                finished_at_ms: 0,
+            });
+        }
+        events.push(UiEventMessage::ToolCallCompleted {
+            tool_call_id,
+            output: DisplayPayload::inline(output),
+            is_error,
+        });
+    }
+    events
+}
+
+fn tool_result_output_text(block: &Value) -> String {
+    if let Some(text) = block.get("content").and_then(Value::as_str) {
+        return text.to_string();
+    }
+    if let Some(arr) = block.get("content").and_then(Value::as_array) {
+        let joined = arr
+            .iter()
+            .filter_map(|part| {
+                if part.get("type").and_then(Value::as_str) == Some("text") {
+                    part.get("text").and_then(Value::as_str)
+                } else {
+                    part.as_str()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("");
+        if !joined.is_empty() {
+            return joined;
+        }
+    }
+    serde_json::to_string(block.get("content").unwrap_or(&Value::Null)).unwrap_or_default()
 }
 
 fn translate_assistant_message(
@@ -681,6 +781,102 @@ mod tests {
                     && tool_call_id == "tool_1"
                     && name == "Read"
                     && args_json == "{\"file_path\":\"/tmp/a.rs\"}"
+        ));
+    }
+
+    #[test]
+    fn tool_result_user_frame_emits_tool_call_completed() {
+        let mut state = ClaudeTranslatorState::new("thr_tool_done".into());
+        let _ = translate(
+            &mut state,
+            &val(r#"{
+                "type":"stream_event",
+                "event":{"type":"message_start","message":{"id":"msg_t2","role":"assistant","content":[]}},
+                "session_id":"sess_1"
+            }"#),
+        )
+        .expect("translation should succeed");
+
+        let out = translate(
+            &mut state,
+            &val(r#"{
+                "type":"user",
+                "message":{
+                    "role":"user",
+                    "content":[{
+                        "type":"tool_result",
+                        "tool_use_id":"tool_1",
+                        "content":"file contents here",
+                        "is_error":false
+                    }]
+                },
+                "session_id":"sess_1"
+            }"#),
+        )
+        .expect("translation should succeed");
+
+        assert!(matches!(
+            &out[0],
+            UiEventMessage::MessageCompleted { message_id, .. } if message_id == "msg_t2"
+        ));
+        assert!(matches!(
+            &out[1],
+            UiEventMessage::ToolCallCompleted {
+                tool_call_id,
+                output,
+                is_error: false
+            } if tool_call_id == "tool_1" && output == "file contents here"
+        ));
+    }
+
+    #[test]
+    fn tool_result_error_sets_is_error() {
+        let mut state = ClaudeTranslatorState::new("thr_tool_err".into());
+        let out = translate(
+            &mut state,
+            &val(r#"{
+                "type":"user",
+                "message":{
+                    "role":"user",
+                    "content":[{
+                        "type":"tool_result",
+                        "tool_use_id":"tool_err",
+                        "content":[{"type":"text","text":"boom"}],
+                        "is_error":true
+                    }]
+                }
+            }"#),
+        )
+        .expect("translation should succeed");
+        assert!(matches!(
+            &out[0],
+            UiEventMessage::ToolCallCompleted {
+                tool_call_id,
+                output,
+                is_error: true
+            } if tool_call_id == "tool_err" && output == "boom"
+        ));
+    }
+
+    #[test]
+    fn approval_request_passthrough_as_raw() {
+        let out = translate(
+            &mut ClaudeTranslatorState::new("thr_appr".into()),
+            &val(r#"{
+                "method":"approval/request",
+                "params":{
+                    "request_id":"req_1",
+                    "session_id":"thr_appr",
+                    "method":"claude/can_use_tool",
+                    "params":{"tool_name":"Bash"}
+                }
+            }"#),
+        )
+        .expect("translation should succeed");
+        assert!(matches!(
+            &out[0],
+            UiEventMessage::Raw { kind, payload_json }
+                if kind == "approval/request" && payload_json.contains("claude/can_use_tool")
         ));
     }
 }
