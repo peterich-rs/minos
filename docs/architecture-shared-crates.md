@@ -109,14 +109,14 @@
 | `RawBody` | raw bytes / artifact ref 数据面 |
 | `INLINE_RAW_BODY_THRESHOLD` | 16 KiB，大于等于该阈值由 daemon artifact store 接管 |
 | `CodexClient` | Codex app-server JSON-RPC WS 客户端 |
-| `ClaudeNdjsonSession` | Claude CLI NDJSON 流驱动 |
+| `ClaudeControlSession`（别名 `ClaudeNdjsonSession`） | Claude CLI **双向** stream-json 控制面：stdin 用户轮次 + `control_response` 审批，stdout NDJSON 事件 / `can_use_tool` |
 | `GeminiAcpInstance` | Gemini CLI ACP 协议驱动 |
 | `OpencodeServerInstance` | Opencode CLI 驱动 |
 
 ### 支持的 Agent 驱动
 
 - **Codex**: 通过 WebSocket 连接 codex app-server，JSON-RPC 2.0 协议
-- **Claude**: 通过 NDJSON 流式协议
+- **Claude**: 通过 CLI stream-json 控制面（`--input-format stream-json` + 常开 stdin）；权限经 `PendingApprovalTarget::ClaudeControl` 回写
 - **Gemini**: 通过 ACP（Agent Client Protocol）
 - **Opencode**: 通过自定义协议
 

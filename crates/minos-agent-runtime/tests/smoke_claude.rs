@@ -2,10 +2,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use minos_agent_runtime::{
-    manager_event::ManagerEvent, session_handle::SessionHandle, state_machine::SessionState,
-    IngestSink,
-};
+use minos_agent_runtime::{AgentManager, AgentRuntimeConfig, InstanceCaps};
+use minos_domain::AgentName;
 
 fn should_run() -> bool {
     std::env::var("MINOS_XTASK_WITH_CLAUDE")
@@ -20,50 +18,27 @@ async fn claude_real_smoke_start_and_chat() {
         return;
     }
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let events_tx = IngestSink::new(256);
-    let mut events_rx = events_tx.subscribe();
-    let (manager_tx, _) = tokio::sync::broadcast::channel::<ManagerEvent>(32);
-    let sessions = Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    sessions.lock().await.insert(
-        "smoke_test_thread".into(),
-        SessionHandle::new(
-            "smoke_test_thread".into(),
-            workspace.clone(),
-            minos_domain::AgentName::Claude,
-            SessionState::Running {
-                turn_started_at_ms: 0,
-            },
-            0,
-        ),
-    );
-    let cli_path = PathBuf::from("claude");
-
-    let session = minos_agent_runtime::ClaudeNdjsonSession::start_turn(
-        &cli_path,
-        &workspace,
-        "smoke_test_thread".into(),
-        "Say hello in one word",
-        Some("b0c2c7f6-841b-4af6-9dc7-05d860b4a9b1"),
-        None,
-        sessions,
-        manager_tx,
-        events_tx,
-        &Arc::new(std::collections::HashMap::new()),
-        None,
-        None,
-        None,
-    )
-    .await
-    .expect("claude spawn failed");
+    let mut cfg = AgentRuntimeConfig::new(workspace.clone());
+    cfg.subprocess_env = Arc::new(std::collections::HashMap::new());
+    let mgr = AgentManager::new(cfg, InstanceCaps::default());
+    let started = mgr
+        .start_agent(AgentName::Claude, workspace)
+        .await
+        .expect("start claude agent");
+    let mut rx = mgr.ingest_stream();
+    mgr.send_user_message(&started.session_id, "Say hello in one word".into())
+        .await
+        .expect("send prompt");
 
     let timeout = tokio::time::timeout(Duration::from_secs(60), async {
-        while let Ok(ingest) = events_rx.recv().await {
-            if ingest
-                .json_value()
-                .expect("raw ingest should contain JSON payload")
-                .get("type")
-                .and_then(serde_json::Value::as_str)
-                == Some("result")
+        while let Ok(ingest) = rx.recv().await {
+            if ingest.session_id == started.session_id
+                && ingest
+                    .json_value()
+                    .expect("raw ingest should contain JSON payload")
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("result")
             {
                 return true;
             }
@@ -72,6 +47,8 @@ async fn claude_real_smoke_start_and_chat() {
     })
     .await;
 
-    assert!(timeout.is_ok(), "claude smoke test timed out");
-    drop(session);
+    assert!(
+        timeout.is_ok() && timeout.unwrap(),
+        "claude smoke test timed out"
+    );
 }

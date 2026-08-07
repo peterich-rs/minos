@@ -46,7 +46,8 @@ pub mod store_facing;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 
-pub use claude_driver::ClaudeNdjsonSession;
+pub use claude_driver::{ClaudeControlSession, ClaudeNdjsonSession};
+// ClaudeControlSession::start_turn is pub(crate); hosts drive Claude via AgentManager.
 pub use config::{
     AgentEventProjection, AgentLaunchMode, AgentRuntimeConfig, RawBody, RawIngest, TextLane,
     ToolStatus, ToolStream, INLINE_RAW_BODY_THRESHOLD,

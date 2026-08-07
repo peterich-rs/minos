@@ -1,38 +1,59 @@
 #![allow(unsafe_code)]
 
+//! Claude Code stream-json control session (plane A).
+//!
+//! Long-lived process with piped stdin/stdout NDJSON:
+//! - outbound: user turns + `control_response` permission decisions
+//! - inbound: stream events + permission `control_request` reverse-requests
+//!
+//! Legacy one-shot process-per-turn is replaced by this session. When the child
+//! dies, the manager re-spawns with `--resume <provider_session_id>`.
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use minos_domain::AgentName;
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
 use crate::config::RawIngest;
-use crate::manager::IngestSink;
+use crate::manager::{IngestSink, PendingApprovals};
 use crate::manager_event::ManagerEvent;
 use crate::session_handle::SessionHandle;
 use crate::state_machine::SessionState;
 
 const KILL_ESCALATION: Duration = Duration::from_secs(3);
 
-pub struct ClaudeNdjsonSession {
+/// Long-lived Claude control-plane session (stdin + stdout stream-json).
+pub struct ClaudeControlSession {
     pub session_id: String,
     pub workspace: PathBuf,
     pub claude_session_id: Option<String>,
+    /// Kept for interrupt hard-kill; None after graceful close / reaped wait.
     pub(crate) current_turn_child: Option<Child>,
+    stdin_tx: Option<mpsc::UnboundedSender<String>>,
+    stdin_task: Option<JoinHandle<()>>,
     stdout_task: Option<JoinHandle<()>>,
     stderr_task: Option<JoinHandle<()>>,
+    process_alive: Arc<AtomicBool>,
+    capabilities: Arc<Mutex<Vec<String>>>,
 }
 
-impl ClaudeNdjsonSession {
-    pub async fn start_turn(
+/// Backward-compatible name used by manager / tests / lib re-exports.
+pub type ClaudeNdjsonSession = ClaudeControlSession;
+
+impl ClaudeControlSession {
+    /// Spawn a bidirectional Claude control session and send the first user turn.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn start_turn(
         cli_path: &Path,
         workspace: &Path,
         session_id: String,
@@ -46,6 +67,7 @@ impl ClaudeNdjsonSession {
         mcp_config_json: Option<&str>,
         model: Option<&str>,
         extra_instructions: Option<&str>,
+        pending_approvals: PendingApprovals,
     ) -> anyhow::Result<Self> {
         let args = build_claude_args(
             user_text,
@@ -54,6 +76,7 @@ impl ClaudeNdjsonSession {
             mcp_config_json,
             model,
             extra_instructions,
+            /* bidirectional */ true,
         );
 
         let mut cmd = Command::new(cli_path);
@@ -61,7 +84,7 @@ impl ClaudeNdjsonSession {
             .current_dir(workspace)
             .env_clear()
             .envs(subprocess_env.iter())
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
@@ -79,16 +102,47 @@ impl ClaudeNdjsonSession {
         }
 
         let mut child = cmd.spawn()?;
-        let stdout = child.stdout.take();
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("claude stdin not piped"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("claude stdout not piped"))?;
         let stderr = child.stderr.take();
 
-        let stdout_task = stdout.map(|out| {
+        let process_alive = Arc::new(AtomicBool::new(true));
+        let capabilities = Arc::new(Mutex::new(Vec::new()));
+
+        let (stdin_tx, mut stdin_rx) = mpsc::unbounded_channel::<String>();
+        let stdin_task = tokio::spawn(async move {
+            let mut stdin = stdin;
+            while let Some(line) = stdin_rx.recv().await {
+                if stdin.write_all(line.as_bytes()).await.is_err() {
+                    break;
+                }
+                if !line.ends_with('\n') {
+                    if stdin.write_all(b"\n").await.is_err() {
+                        break;
+                    }
+                }
+                if stdin.flush().await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        let stdout_task = {
             let tx = events_tx.clone();
             let tid = session_id.clone();
             let sessions = sessions.clone();
             let manager_tx = manager_tx.clone();
+            let pending_approvals = pending_approvals.clone();
+            let capabilities = capabilities.clone();
+            let alive = process_alive.clone();
             tokio::spawn(async move {
-                let reader = BufReader::new(out);
+                let reader = BufReader::new(stdout);
                 let mut lines = reader.lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     let payload: Value = match serde_json::from_str(&line) {
@@ -99,6 +153,41 @@ impl ClaudeNdjsonSession {
                             "payload_json": serde_json::to_string(&line).unwrap_or_default()
                         }),
                     };
+
+                    if let Some(caps) = payload
+                        .get("capabilities")
+                        .and_then(Value::as_array)
+                        .filter(|_| {
+                            payload.get("type").and_then(Value::as_str) == Some("system")
+                                && payload.get("subtype").and_then(Value::as_str) == Some("init")
+                        })
+                    {
+                        let list = caps
+                            .iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect::<Vec<_>>();
+                        *capabilities.lock().await = list;
+                    }
+
+                    if is_control_permission_request(&payload) {
+                        if let Err(error) = register_claude_permission_request(
+                            &tid,
+                            &payload,
+                            &tx,
+                            &pending_approvals,
+                        )
+                        .await
+                        {
+                            warn!(
+                                target: "minos_agent_runtime::claude_driver",
+                                error = %error,
+                                session_id = %tid,
+                                "failed to park Claude permission request",
+                            );
+                        }
+                        // Still forward raw frame for debugging / Raw projection.
+                    }
+
                     sync_session_from_payload(&payload, &tid, &sessions, &manager_tx).await;
                     if let Err(error) = tx
                         .emit(RawIngest::from_json(
@@ -118,8 +207,10 @@ impl ClaudeNdjsonSession {
                         break;
                     }
                 }
+                // stdout EOF ⇒ process gone (or pipe closed).
+                alive.store(false, Ordering::SeqCst);
             })
-        });
+        };
 
         let stderr_task = stderr.map(|err_stream| {
             tokio::spawn(async move {
@@ -140,7 +231,7 @@ impl ClaudeNdjsonSession {
             cli = %cli_path.display(),
             workspace = %workspace.display(),
             session_id = %session_id,
-            "claude ndjson session started"
+            "claude control session started"
         );
 
         Ok(Self {
@@ -148,8 +239,12 @@ impl ClaudeNdjsonSession {
             workspace: workspace.to_path_buf(),
             claude_session_id: resume_session_id.or(claude_session_id).map(str::to_string),
             current_turn_child: Some(child),
-            stdout_task,
+            stdin_tx: Some(stdin_tx),
+            stdin_task: Some(stdin_task),
+            stdout_task: Some(stdout_task),
             stderr_task,
+            process_alive,
+            capabilities,
         })
     }
 
@@ -165,7 +260,87 @@ impl ClaudeNdjsonSession {
         &self.workspace
     }
 
-    pub async fn close(mut self, events_tx: &IngestSink) {
+    pub fn is_alive(&self) -> bool {
+        if !self.process_alive.load(Ordering::SeqCst) {
+            return false;
+        }
+        // Best-effort: if child already exited, try_wait and mark dead.
+        // Cannot mutably borrow child easily from &self — use atomic set from stdout end.
+        // When stdout reader ends, mark process dead via a clone of the flag in stdout task.
+        self.process_alive.load(Ordering::SeqCst)
+    }
+
+    /// Write a follow-up user turn on the live stdin control plane.
+    pub fn send_user_message(&self, text: &str) -> anyhow::Result<()> {
+        let tx = self
+            .stdin_tx
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("claude stdin closed"))?;
+        let frame = serde_json::json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": text}]
+            },
+            "parent_tool_use_id": null
+        });
+        let line = serde_json::to_string(&frame)?;
+        tx.send(line)
+            .map_err(|_| anyhow::anyhow!("claude stdin writer gone"))?;
+        Ok(())
+    }
+
+    /// Reply to a parked permission control request.
+    pub fn reply_control(
+        &self,
+        control_request_id: &str,
+        response_body: Value,
+    ) -> anyhow::Result<()> {
+        let tx = self
+            .stdin_tx
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("claude stdin closed"))?;
+        let frame = serde_json::json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": control_request_id,
+                "response": response_body
+            }
+        });
+        let line = serde_json::to_string(&frame)?;
+        tx.send(line)
+            .map_err(|_| anyhow::anyhow!("claude stdin writer gone"))?;
+        Ok(())
+    }
+
+    /// Cooperative interrupt when capabilities advertise it; else hard-kill.
+    pub async fn interrupt(&mut self) -> anyhow::Result<()> {
+        let caps = self.capabilities.lock().await.clone();
+        let supports_interrupt = caps.iter().any(|c| c.starts_with("interrupt_"));
+        if supports_interrupt {
+            if let Some(tx) = self.stdin_tx.as_ref() {
+                let req_id = format!("minos-interrupt-{}", uuid::Uuid::new_v4());
+                let frame = serde_json::json!({
+                    "type": "control_request",
+                    "request_id": req_id,
+                    "request": { "subtype": "interrupt" }
+                });
+                if let Ok(line) = serde_json::to_string(&frame) {
+                    let _ = tx.send(line);
+                    // Give CLI a short window to stop gracefully.
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+        }
+        self.hard_kill().await;
+        Ok(())
+    }
+
+    async fn hard_kill(&mut self) {
+        self.process_alive.store(false, Ordering::SeqCst);
+        // Drop stdin first so CLI notices EOF.
+        self.stdin_tx.take();
         if let Some(mut child) = self.current_turn_child.take() {
             #[cfg(unix)]
             {
@@ -177,7 +352,6 @@ impl ClaudeNdjsonSession {
                     }
                 }
             }
-
             let exited = tokio::time::timeout(KILL_ESCALATION, child.wait()).await;
             if exited.is_err() {
                 warn!(
@@ -188,7 +362,14 @@ impl ClaudeNdjsonSession {
                 let _ = child.kill().await;
             }
         }
+    }
 
+    pub async fn close(mut self, events_tx: &IngestSink) {
+        self.hard_kill().await;
+
+        if let Some(task) = self.stdin_task.take() {
+            task.abort();
+        }
         if let Some(task) = self.stdout_task.take() {
             task.abort();
         }
@@ -221,7 +402,7 @@ impl ClaudeNdjsonSession {
         info!(
             target: "minos_agent_runtime::claude_driver",
             session_id = %self.session_id,
-            "claude ndjson session closed"
+            "claude control session closed"
         );
     }
 }
@@ -233,6 +414,7 @@ fn build_claude_args(
     mcp_config_json: Option<&str>,
     model: Option<&str>,
     extra_instructions: Option<&str>,
+    bidirectional: bool,
 ) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "-p".into(),
@@ -242,6 +424,16 @@ fn build_claude_args(
         "--verbose".into(),
         "--include-partial-messages".into(),
     ];
+    if bidirectional {
+        args.push("--input-format".into());
+        args.push("stream-json".into());
+        // Interactive permission mode (CLI: manual; SDK alias: default).
+        args.push("--permission-mode".into());
+        args.push("manual".into());
+        // Route canUseTool over stdio control protocol when CLI accepts the flag.
+        args.push("--permission-prompt-tool".into());
+        args.push("stdio".into());
+    }
     if let Some(m) = model.map(str::trim).filter(|s| !s.is_empty()) {
         args.push("--model".into());
         args.push(m.into());
@@ -269,6 +461,109 @@ fn build_claude_args(
     args.push("--append-system-prompt".into());
     args.push(system);
     args
+}
+
+fn is_control_permission_request(payload: &Value) -> bool {
+    let ty = payload.get("type").and_then(Value::as_str).unwrap_or("");
+    if !matches!(ty, "control_request" | "sdk_control_request") {
+        return false;
+    }
+    let request = payload
+        .get("request")
+        .or_else(|| payload.get("params"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let subtype = request
+        .get("subtype")
+        .and_then(Value::as_str)
+        .or_else(|| payload.get("subtype").and_then(Value::as_str))
+        .unwrap_or("");
+    matches!(
+        subtype,
+        "can_use_tool" | "permission" | "request_permission"
+    )
+}
+
+fn extract_control_request_id(payload: &Value) -> Option<String> {
+    payload
+        .get("request_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            payload
+                .get("request")
+                .and_then(|r| r.get("request_id"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+}
+
+fn extract_permission_tool_meta(payload: &Value) -> (String, Value) {
+    let request = payload
+        .get("request")
+        .or_else(|| payload.get("params"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let tool_name = request
+        .get("tool_name")
+        .or_else(|| request.get("toolName"))
+        .and_then(Value::as_str)
+        .unwrap_or("tool")
+        .to_string();
+    let tool_input = request
+        .get("input")
+        .or_else(|| request.get("tool_input"))
+        .or_else(|| request.get("toolInput"))
+        .cloned()
+        .unwrap_or(Value::Object(serde_json::Map::default()));
+    (tool_name, tool_input)
+}
+
+async fn register_claude_permission_request(
+    session_id: &str,
+    payload: &Value,
+    events_tx: &IngestSink,
+    pending_approvals: &PendingApprovals,
+) -> anyhow::Result<()> {
+    let control_request_id = extract_control_request_id(payload)
+        .ok_or_else(|| anyhow::anyhow!("control permission request missing request_id"))?;
+    let (tool_name, tool_input) = extract_permission_tool_meta(payload);
+    let is_question = tool_name == "AskUserQuestion";
+    let method = if is_question {
+        "claude/ask_user_question"
+    } else {
+        "claude/can_use_tool"
+    };
+    let params = serde_json::json!({
+        "tool_name": tool_name,
+        "tool_input": tool_input,
+        "control_request_id": control_request_id,
+        "raw": payload,
+    });
+
+    events_tx
+        .emit(crate::manager::approval_request_ingest(
+            AgentName::Claude,
+            session_id.to_string(),
+            control_request_id.clone(),
+            String::new(),
+            method.into(),
+            params,
+        ))
+        .await
+        .map_err(|e| anyhow::anyhow!("ingest closed: {e}"))?;
+
+    pending_approvals.insert(
+        control_request_id.clone(),
+        crate::manager::PendingApproval {
+            session_id: session_id.to_string(),
+            target: crate::manager::PendingApprovalTarget::ClaudeControl {
+                control_request_id,
+                tool_input,
+            },
+        },
+    );
+    Ok(())
 }
 
 async fn sync_session_from_payload(
@@ -320,6 +615,37 @@ async fn sync_session_from_payload(
     }
 }
 
+/// Mark process dead when stdout pump exits (called from manager if needed).
+impl ClaudeControlSession {
+    pub fn mark_dead(&self) {
+        self.process_alive.store(false, Ordering::SeqCst);
+    }
+
+    /// Best-effort liveness: try_wait on child without consuming it permanently.
+    pub fn poll_alive(&mut self) -> bool {
+        if !self.process_alive.load(Ordering::SeqCst) {
+            return false;
+        }
+        if let Some(child) = self.current_turn_child.as_mut() {
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    self.process_alive.store(false, Ordering::SeqCst);
+                    self.stdin_tx.take();
+                    false
+                }
+                Ok(None) => true,
+                Err(_) => {
+                    self.process_alive.store(false, Ordering::SeqCst);
+                    false
+                }
+            }
+        } else {
+            self.process_alive.store(false, Ordering::SeqCst);
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,6 +666,7 @@ mod tests {
             Some(r#"{"mcpServers":{"minos_teamwork":{"command":"minos-teamwork-mcp"}}}"#),
             Some("sonnet"),
             Some("Be concise."),
+            true,
         );
         assert!(args.windows(2).any(|pair| pair == ["--model", "sonnet"]));
         assert!(args.windows(2).any(|pair| {
@@ -354,11 +681,38 @@ mod tests {
             .windows(2)
             .any(|pair| { pair[0] == "--mcp-config" && pair[1].contains(r#""minos_teamwork""#) }));
         assert!(args.iter().any(|arg| arg == "--strict-mcp-config"));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--input-format", "stream-json"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--permission-mode", "manual"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--permission-prompt-tool", "stdio"]));
         assert!(args.windows(2).any(|pair| {
             pair[0] == "--append-system-prompt"
                 && pair[1].contains("Minos teamwork mode")
                 && pair[1].contains("minos_teamwork")
         }));
+    }
+
+    #[test]
+    fn detects_control_permission_shapes() {
+        let a = val(
+            r#"{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}"#,
+        );
+        assert!(is_control_permission_request(&a));
+        assert_eq!(extract_control_request_id(&a).as_deref(), Some("r1"));
+        let (name, input) = extract_permission_tool_meta(&a);
+        assert_eq!(name, "Bash");
+        assert_eq!(input["command"], "ls");
+
+        let b = val(
+            r#"{"type":"sdk_control_request","request":{"subtype":"permission","request_id":"p1","tool_name":"Write","tool_input":{"file_path":"/t"}}}"#,
+        );
+        assert!(is_control_permission_request(&b));
+        assert_eq!(extract_control_request_id(&b).as_deref(), Some("p1"));
     }
 
     #[test]
