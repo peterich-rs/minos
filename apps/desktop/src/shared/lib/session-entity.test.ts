@@ -125,7 +125,10 @@ describe("mergeSessionEntity", () => {
     assert.equal(next.needsContinue, false);
   });
 
-  it("does not demote live running with stale idle sample without newer lastTsMs", () => {
+  it("accepts equal-clock idle sample as turn-end against optimistic running", () => {
+    // Desktop send stamps lastTsMs slightly ahead; list hydrate may return idle
+    // with the same or slightly older last_activity. Still demote so the rail
+    // does not stick on Running after the daemon finished.
     const prev = mergeSessionEntity(
       undefined,
       {
@@ -141,6 +144,55 @@ describe("mergeSessionEntity", () => {
       {
         ...seed,
         status: "idle",
+        needsContinue: false,
+        lastTsMs: 1000,
+      },
+      { nowMs: 2 },
+    );
+    assert.equal(next.daemonStatus, "idle");
+    assert.equal(next.status, "idle");
+  });
+
+  it("accepts older-clock idle sample as turn-end against optimistic running", () => {
+    const prev = mergeSessionEntity(
+      undefined,
+      {
+        ...seed,
+        status: "running",
+        needsContinue: false,
+        lastTsMs: 2000,
+      },
+      { nowMs: 1 },
+    );
+    const next = mergeSessionEntity(
+      prev,
+      {
+        ...seed,
+        status: "idle",
+        needsContinue: false,
+        lastTsMs: 1500,
+      },
+      { nowMs: 2 },
+    );
+    assert.equal(next.daemonStatus, "idle");
+  });
+
+  it("still rejects older suspended sample against live running", () => {
+    const prev = mergeSessionEntity(
+      undefined,
+      {
+        ...seed,
+        status: "running",
+        needsContinue: false,
+        lastTsMs: 2000,
+      },
+      { nowMs: 1 },
+    );
+    const next = mergeSessionEntity(
+      prev,
+      {
+        ...seed,
+        status: "suspended",
         needsContinue: false,
         lastTsMs: 1000,
       },
@@ -208,8 +260,8 @@ describe("mergeSessionEntity", () => {
       { ...seed, status: "running", needsContinue: false, lastTsMs: 100 },
       { nowMs: 1 },
     );
-    // Without newer lastTsMs, sample idle/suspended is sticky-live; use
-    // newer clock for genuine pause.
+    // Without newer lastTsMs, older suspended samples stay sticky-live; use
+    // a newer clock for a genuine pause.
     const next = mergeSessionEntity(
       prev,
       {

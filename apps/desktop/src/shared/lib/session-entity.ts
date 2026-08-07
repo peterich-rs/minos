@@ -207,18 +207,30 @@ export function mergeSampleDaemonStatus(
   const prevTs = prev.lastTsMs ?? 0;
   const seedTs = seed.lastTsMs ?? 0;
   if (prevTs > 0 && seedTs > 0 && seedTs < prevTs) {
-    return {
-      daemonStatus: prevDaemon,
-      needsContinue: prev.needsContinue,
-    };
+    // Exception: authoritative turn-end from list (idle/done/failed) must be
+    // able to demote optimistic Desktop `running` even when the send path
+    // stamped lastTsMs slightly ahead of the daemon's last_activity clock.
+    // Without this, a missed manager idle event + livePush (no poll) leaves
+    // the rail on Running forever while SQLite is already idle.
+    const seedIsTurnEnd =
+      seedDaemon === "idle" ||
+      seedDaemon === "done" ||
+      seedDaemon === "failed";
+    if (!(prevDaemon === "running" && seedIsTurnEnd && !prev.needsContinue)) {
+      return {
+        daemonStatus: prevDaemon,
+        needsContinue: prev.needsContinue,
+      };
+    }
   }
 
-  // Live turn after continue: stale idle/suspended list without a newer clock
+  // Live turn after continue: stale *suspended* list without a newer clock
   // must not demote (manager SessionStateChanged is the demote path).
+  // Idle/done/failed from list are accepted as turn-end reconciliation.
   if (
     prevDaemon === "running" &&
     !prev.needsContinue &&
-    (seedDaemon === "idle" || seedDaemon === "suspended") &&
+    seedDaemon === "suspended" &&
     !(seedTs > prevTs)
   ) {
     return {
