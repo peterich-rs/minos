@@ -39,7 +39,7 @@ Official token docs: [R2 Authentication](https://developers.cloudflare.com/r2/ap
 
 ## Configure production VPS
 
-In `/opt/minos/deploy/.env` (see `deploy/prod/.env.example`):
+In `/opt/minos/deploy/minos.env` (see `deploy/prod/minos.env.example`; `.env` is a symlink):
 
 ```bash
 MINOS_R2_ACCOUNT_ID=...

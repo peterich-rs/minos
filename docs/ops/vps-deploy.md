@@ -16,11 +16,14 @@ Optional alternate ingress (tunnel instead of public 443): [cloudflare-tunnel-se
 
 Optional chat attachments / media blobs on Cloudflare R2 (keeps large files off the VPS disk): [r2-media.md](./r2-media.md).
 
-### Dev/agent binary bypass
+### Binary app path (recommended production)
 
-For urgent agent/local deploys that **only replace the `minos-backend` process** (Postgres, Redis, and Caddy stay), use the binary path documented in **[vps-dev-binary.md](./vps-dev-binary.md)**. That flow builds a linux/amd64 binary off-box, rsyncs to `/opt/minos/releases/<sha>/`, and runs under systemd on `127.0.0.1:8787`.
+The live VPS runs **systemd `minos-backend`** (not the compose backend container). Prefer:
 
-**Do not** run the Docker `minos-backend` container and the systemd binary unit on port 8787 at the same time. Docker + GHCR remains the production SSOT; the binary path is a coexistence bypass, not a replacement for this document.
+1. **CI:** [backend-ci-deploy.md](./backend-ci-deploy.md) — tag `backend-v*` or Actions **backend-release** dispatch  
+2. **Local emergency:** [vps-dev-binary.md](./vps-dev-binary.md) — `just deploy-backend-dev root@vps`
+
+Postgres/Redis remain compose-managed (this document). **Do not** run Docker `minos-backend` and the systemd unit on `:8787` at the same time.
 
 ---
 
@@ -69,7 +72,7 @@ Keep `MINOS_RUNTIME_MODE=monolith`. Split http/worker only after multi-instance 
 
 | Path | Purpose |
 |------|---------|
-| `/opt/minos/deploy` | `docker-compose.yml` + `.env` |
+| `/opt/minos/deploy` | `docker-compose.yml` + `minos.env` (SSOT); `.env` → symlink |
 | `/opt/minos/deploy/caddy` or `/etc/caddy/Caddyfile` | reverse proxy |
 | `/opt/minos/data/postgres` | Postgres volume |
 | `/opt/minos/data/redis` | Redis volume |
@@ -80,9 +83,10 @@ Sync **only** files under `deploy/prod/` from a trusted machine:
 
 ```bash
 # from a laptop with the repo checked out (example)
-rsync -av --delete \
+rsync -av \
   deploy/prod/docker-compose.yml \
-  deploy/prod/.env.example \
+  deploy/prod/minos.env.example \
+  deploy/prod/Caddyfile \
   user@vps:/tmp/minos-prod/
 # then install into /opt/minos as root (see below)
 ```
@@ -102,16 +106,20 @@ sudo chown -R minos:minos /opt/minos
 
 # copy compose + env example from laptop (scp/rsync), then:
 sudo cp docker-compose.yml /opt/minos/deploy/
-sudo cp .env.example /opt/minos/deploy/.env
-sudo chmod 600 /opt/minos/deploy/.env
-sudo chown root:minos /opt/minos/deploy/.env
+sudo cp minos.env.example /opt/minos/deploy/minos.env
+sudo chmod 640 /opt/minos/deploy/minos.env
+sudo chown root:minos /opt/minos/deploy/minos.env
+sudo ln -sfn /opt/minos/deploy/minos.env /opt/minos/deploy/.env
 ```
 
-### 2. Edit `/opt/minos/deploy/.env`
+### 2. Edit `/opt/minos/deploy/minos.env`
+
+Single SSOT for systemd binary **and** compose. Keep `POSTGRES_PASSWORD` and the password inside `MINOS_DATABASE_URL` in sync (systemd does not expand `${VAR}`).
 
 ```bash
 MINOS_BACKEND_IMAGE=ghcr.io/<owner>/minos-backend:sha-<12hex>
 POSTGRES_PASSWORD=<strong>
+MINOS_DATABASE_URL=postgres://minos:<strong>@127.0.0.1:5432/minos
 MINOS_JWT_SECRET=<openssl rand -hex 32>
 MINOS_ENV=prod
 MINOS_CORS_ORIGINS=https://minos.ainexc.com
@@ -165,11 +173,16 @@ If available memory stays under ~300MB under light load, lower Postgres `shared_
 
 ## Update backend
 
+**Preferred (binary / CI):** see [backend-ci-deploy.md](./backend-ci-deploy.md) — push tag `backend-v*` or run **backend-release** with Deploy enabled. Local: `just deploy-backend-dev root@vps`.
+
+**Optional (Docker backend container):**
+
 ```bash
 cd /opt/minos/deploy
-# edit MINOS_BACKEND_IMAGE to the new sha tag
+# edit MINOS_BACKEND_IMAGE in minos.env to the new sha tag
 sudo docker compose pull minos-backend
-sudo docker compose up -d minos-backend
+# only if not using systemd binary on :8787 — use switch-to-docker.sh
+sudo /opt/minos/bin/switch-to-docker.sh
 sudo docker image prune -f
 curl -sS https://minos.ainexc.com/health/ready
 ```
@@ -212,7 +225,7 @@ The **backend** must have IdP verify config in `/opt/minos/deploy/.env` (and com
 
 If `SUPABASE_URL` is missing, exchange returns **503** with `error.code = supabase_not_configured` (register in Supabase can still succeed; Minos session never issues).
 
-For binary/systemd path, set the same keys in the unit environment (`deploy/dev-binary/env.example`).
+Binary/systemd and compose share `/opt/minos/deploy/minos.env` (`deploy/prod/minos.env.example`).
 
 ---
 

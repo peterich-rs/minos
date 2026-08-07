@@ -5,7 +5,7 @@
 # Layout on VPS:
 #   /opt/minos/releases/<git-sha>/minos-backend
 #   /opt/minos/current -> releases/<git-sha>
-#   /opt/minos/deploy/backend.env   (EnvironmentFile for systemd)
+#   /opt/minos/deploy/minos.env   (EnvironmentFile for systemd)
 #   /etc/systemd/system/minos-backend.service
 #
 # Usage:
@@ -187,8 +187,9 @@ echo "==> install helper scripts under ${REMOTE_ROOT}/bin"
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "[dry-run] rsync helpers → ${HOST}:${REMOTE_ROOT}/bin/"
 else
+  merge_src="$ROOT/deploy/dev-binary/merge-minos-env.sh"
   rsync -avz -e "$rsync_ssh" \
-    "$health_src" "$switch_bin_src" "$switch_docker_src" \
+    "$health_src" "$switch_bin_src" "$switch_docker_src" "$merge_src" \
     "${HOST}:${REMOTE_ROOT}/bin/"
   "${ssh_base[@]}" "chmod +x $(printf %q "${REMOTE_ROOT}/bin")/*.sh"
 fi
@@ -199,7 +200,7 @@ if [[ "$INSTALL_UNIT" -eq 1 ]]; then
   unit_tmp="$(mktemp)"
   sed \
     -e "s|/opt/minos/current/minos-backend|${REMOTE_ROOT}/current/minos-backend|g" \
-    -e "s|/opt/minos/deploy/backend.env|${REMOTE_ROOT}/deploy/backend.env|g" \
+    -e "s|/opt/minos/deploy/minos.env|${REMOTE_ROOT}/deploy/minos.env|g" \
     -e "s|WorkingDirectory=/opt/minos|WorkingDirectory=${REMOTE_ROOT}|g" \
     "$unit_src" >"$unit_tmp"
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -217,7 +218,7 @@ if [[ "$RESTART" -eq 1 ]]; then
   remote_restart="$(cat <<EOF
 set -euo pipefail
 COMPOSE="${REMOTE_ROOT}/deploy/docker-compose.yml"
-ENVF="${REMOTE_ROOT}/deploy/backend.env"
+ENVF="${REMOTE_ROOT}/deploy/minos.env"
 if command -v docker >/dev/null 2>&1 && [[ -f "\$COMPOSE" ]]; then
   if sudo docker compose -f "\$COMPOSE" ps minos-backend 2>/dev/null | grep -Eqi 'Up|running'; then
     echo "WARN: Docker minos-backend appears running — stop it before binary mode" >&2
@@ -226,7 +227,7 @@ if command -v docker >/dev/null 2>&1 && [[ -f "\$COMPOSE" ]]; then
 fi
 if [[ ! -f "\$ENVF" ]]; then
   echo "WARN: missing \$ENVF — unit installed but not started" >&2
-  echo "     Copy deploy/dev-binary/env.example there (use 127.0.0.1 for DB/Redis)." >&2
+  echo "     Copy deploy/prod/minos.env.example there (use 127.0.0.1 for DB/Redis)." >&2
   exit 0
 fi
 sudo systemctl enable minos-backend
@@ -245,7 +246,7 @@ fi
 echo "==> done sha=$sha"
 echo "    binary:  $remote_bin"
 echo "    current: $remote_current -> releases/$sha"
-echo "    env:     ${REMOTE_ROOT}/deploy/backend.env"
+echo "    env:     ${REMOTE_ROOT}/deploy/minos.env"
 echo "    unit:    minos-backend.service"
 echo
 echo "First-time switch from Docker backend:"

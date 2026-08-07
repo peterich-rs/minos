@@ -1,11 +1,12 @@
-# systemd unit for minos-backend binary bypass (dev/agent urgency).
+# systemd unit for minos-backend binary (production app path on VPS).
 #
 # Install (usually done by deploy-backend.sh):
 #   sudo install -m 644 minos-backend.service /etc/systemd/system/minos-backend.service
 #   sudo systemctl daemon-reload
 #
-# Env file (host paths, not Docker service DNS names):
-#   /opt/minos/deploy/backend.env
+# Single env SSOT (host loopback URLs for Postgres/Redis):
+#   /opt/minos/deploy/minos.env
+# Compose project `.env` should symlink to the same file.
 #
 # Mutual exclusion: do not run this unit while Docker compose service
 # minos-backend is bound to 127.0.0.1:8787. Use switch-to-binary.sh /
@@ -14,7 +15,7 @@
 # Caddy continues to terminate TLS and reverse_proxy to 127.0.0.1:8787.
 
 [Unit]
-Description=Minos backend (binary bypass)
+Description=Minos backend
 Documentation=https://github.com/peterich-rs/minos/blob/main/docs/ops/vps-dev-binary.md
 After=network-online.target
 Wants=network-online.target
@@ -26,7 +27,7 @@ Type=simple
 User=minos
 Group=minos
 WorkingDirectory=/opt/minos
-EnvironmentFile=/opt/minos/deploy/backend.env
+EnvironmentFile=/opt/minos/deploy/minos.env
 ExecStart=/opt/minos/current/minos-backend
 Restart=on-failure
 RestartSec=3

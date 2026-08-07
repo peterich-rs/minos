@@ -24,7 +24,8 @@ Options:
 
 Requires:
   - /opt/minos/deploy/docker-compose.yml
-  - /opt/minos/deploy/.env with MINOS_BACKEND_IMAGE and secrets
+  - /opt/minos/deploy/minos.env (SSOT; .env should symlink to it)
+  - MINOS_BACKEND_IMAGE set in minos.env
   - docker compose available
 EOF
 }

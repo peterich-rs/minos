@@ -1,13 +1,14 @@
-# VPS dev/agent binary bypass (`minos-backend`)
+# VPS binary deploy (`minos-backend`)
 
-**Urgency path for agents and local ops.** Build a linux/amd64 `minos-backend` binary on a trusted machine, ship it to the VPS, and run it under systemd behind the **existing Caddy**. Postgres, Redis, and Caddy stay as they are (usually Docker compose data plane).
+**Production app path:** linux/amd64 `minos-backend` under systemd behind host **Caddy**. Postgres/Redis stay on Docker compose. Config SSOT: `/opt/minos/deploy/minos.env`.
 
 | Path | Role |
 |------|------|
-| Docker `deploy/prod/` + GHCR | **Production SSOT** — see [vps-deploy.md](./vps-deploy.md) |
-| This binary bypass | Dev/agent speed: no GHCR wait, no monorepo on VPS |
+| [backend-ci-deploy.md](./backend-ci-deploy.md) + `backend-release.yml` | **CI build + tag/manual deploy** (preferred) |
+| `just deploy-backend-dev` / this doc | Local/emergency deploy (same VPS layout) |
+| Docker image backend + GHCR | Optional fallback via `switch-to-docker.sh` — see [vps-deploy.md](./vps-deploy.md) |
 
-Do **not** replace Docker as the long-term production deploy model. Prefer GHCR images for durable releases.
+CI does **not** write secrets; only the binary and unit/helpers are shipped.
 
 ---
 
@@ -28,8 +29,8 @@ Running both fails (bind error) or causes flaky routing. Always use the switch s
 |------|---------|
 | `/opt/minos/releases/<git-sha>/minos-backend` | Immutable release binary |
 | `/opt/minos/current` → `releases/<git-sha>` | Active symlink |
-| `/opt/minos/deploy/backend.env` | systemd `EnvironmentFile` (host loopback URLs) |
-| `/opt/minos/deploy/docker-compose.yml` + `.env` | Unchanged Docker manifests (Postgres/Redis + optional image backend) |
+| `/opt/minos/deploy/minos.env` | systemd `EnvironmentFile` (host loopback URLs) |
+| `/opt/minos/deploy/docker-compose.yml` + `.env` → `minos.env` | Docker manifests (Postgres/Redis + optional image backend); `.env` is a symlink to the SSOT |
 | `/opt/minos/bin/*.sh` | `healthcheck`, `switch-to-binary`, `switch-to-docker` |
 | `/etc/systemd/system/minos-backend.service` | Unit (from `deploy/dev-binary/minos-backend.service`) |
 
@@ -53,11 +54,11 @@ Still **do not clone the monorepo** onto the VPS.
 
 ---
 
-## Env vars (`backend.env`)
+## Env vars (`minos.env` SSOT)
 
-Reuse the same secrets as compose `.env`. Hostnames differ: use **`127.0.0.1`**, not Docker DNS names `postgres` / `redis`.
+Single SSOT shared with compose (`.env` → symlink). For the binary path, DB/Redis hostnames must be **`127.0.0.1`**, not Docker DNS names `postgres` / `redis`.
 
-Canonical template: [`deploy/dev-binary/env.example`](../../deploy/dev-binary/env.example).
+Canonical template: [`deploy/prod/minos.env.example`](../../deploy/prod/minos.env.example).
 
 | Variable | Notes |
 |----------|--------|
@@ -76,9 +77,10 @@ Optional Supabase keys (`SUPABASE_*`) only if that environment uses cloud identi
 
 ```bash
 # one-time on VPS (from laptop)
-scp deploy/dev-binary/env.example user@vps:/tmp/backend.env
-ssh user@vps 'sudo install -m 600 -o root -g minos /tmp/backend.env /opt/minos/deploy/backend.env'
-# edit secrets to match /opt/minos/deploy/.env
+scp deploy/prod/minos.env.example user@vps:/tmp/minos.env
+ssh user@vps 'sudo install -m 640 -o root -g minos /tmp/minos.env /opt/minos/deploy/minos.env'
+ssh user@vps 'sudo ln -sfn /opt/minos/deploy/minos.env /opt/minos/deploy/.env'
+# edit secrets in /opt/minos/deploy/minos.env only
 ```
 
 ---
@@ -177,7 +179,7 @@ Client ──HTTPS/WSS──► :443 Caddy
 | `/health/ready` 503 | `journalctl -u minos-backend -e`, `MINOS_DATABASE_URL` host must be `127.0.0.1`, Postgres container up |
 | Binary is Mach-O | Built on macOS without docker/cross — rebuild with `--method docker` |
 | `Permission denied` on binary | `chown minos:minos` release dir; unit runs as `User=minos` |
-| Missing env | `/opt/minos/deploy/backend.env` from `env.example` |
+| Missing env | `/opt/minos/deploy/minos.env` from `deploy/prod/minos.env.example` |
 | Apple Silicon slow build | Docker `linux/amd64` emulation; use a Linux x86_64 builder or CI artifact when available |
 
 ---
@@ -192,6 +194,7 @@ Client ──HTTPS/WSS──► :443 Caddy
 | `deploy/dev-binary/switch-to-binary.sh` | Docker backend → systemd |
 | `deploy/dev-binary/switch-to-docker.sh` | systemd → Docker backend |
 | `deploy/dev-binary/minos-backend.service` | systemd unit template |
-| `deploy/dev-binary/env.example` | `EnvironmentFile` template |
+| `deploy/prod/minos.env.example` | Single VPS env SSOT template |
+| `deploy/dev-binary/merge-minos-env.sh` | Merge legacy dual env → `minos.env` |
 
 Related: [vps-deploy.md](./vps-deploy.md), `deploy/prod/docker-compose.yml`, `Dockerfile`.

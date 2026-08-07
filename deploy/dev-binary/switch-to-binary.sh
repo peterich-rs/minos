@@ -17,7 +17,7 @@ elif [[ -d /opt/minos/releases ]]; then
   REMOTE_ROOT=/opt/minos
 fi
 COMPOSE_FILE="${COMPOSE_DIR}/docker-compose.yml"
-ENV_FILE="${REMOTE_ROOT}/deploy/backend.env"
+ENV_FILE="${REMOTE_ROOT}/deploy/minos.env"
 HEALTH=1
 
 usage() {
@@ -34,7 +34,7 @@ Options:
 
 Requires:
   - /opt/minos/current/minos-backend (symlink from deploy-backend.sh)
-  - /opt/minos/deploy/backend.env (see env.example)
+  - /opt/minos/deploy/minos.env (see deploy/prod/minos.env.example)
   - minos-backend.service installed
   - Postgres + Redis reachable on 127.0.0.1 (compose or otherwise)
 EOF
@@ -75,8 +75,9 @@ fi
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "error: missing $ENV_FILE" >&2
-  echo "  From laptop: scp deploy/dev-binary/env.example user@vps:/tmp/backend.env" >&2
-  echo "  Then: sudo install -m 600 -o root -g minos /tmp/backend.env $ENV_FILE" >&2
+  echo "  From laptop: scp deploy/prod/minos.env.example user@vps:/tmp/minos.env" >&2
+  echo "  Then: sudo install -m 640 -o root -g minos /tmp/minos.env $ENV_FILE" >&2
+  echo "  And:  sudo ln -sfn $ENV_FILE ${REMOTE_ROOT}/deploy/.env" >&2
   echo "  Use 127.0.0.1 for Postgres/Redis (not docker service hostnames)." >&2
   exit 1
 fi
