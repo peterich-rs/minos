@@ -48,8 +48,11 @@ Procedure:
 1. Generate: `openssl rand -hex 32`
 2. Update GitHub Actions secret `MINOS_JWT_SECRET` (production deploy).
 3. Update each developer's `.env.local`.
-4. Restart the backend (`just backend`).
-5. All existing access tokens become invalid; mobile clients receive
+4. On the VPS, update **only** `/opt/minos/deploy/minos.env` (SSOT), then
+   `sudo systemctl restart minos-backend` (or `docker compose up -d minos-backend`
+   if on the image path). Do not maintain a separate `backend.env`.
+5. Restart local backend (`just backend`).
+6. All existing access tokens become invalid; mobile clients receive
    401s on the next request and re-prompt for login.
 
 There is no overlap-window mechanism — JWT rotation is destructive

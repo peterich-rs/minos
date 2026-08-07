@@ -1,19 +1,24 @@
 # Minos backend — production (image pull only; host Caddy terminates TLS)
 #
 # VPS layout (runtime-only, no monorepo clone):
-#   /opt/minos/deploy          this compose + .env
-#   /opt/minos/data/postgres   PG volume
-#   /opt/minos/data/redis      Redis volume
-#   /opt/minos/logs            Caddy access logs
-#   /opt/minos/backups         pg_dump artifacts
+#   /opt/minos/deploy/minos.env     single env SSOT (systemd + compose)
+#   /opt/minos/deploy/.env          symlink → minos.env (compose project file)
+#   /opt/minos/data/postgres        PG volume
+#   /opt/minos/data/redis           Redis volume
+#   /opt/minos/logs                 Caddy access logs
+#   /opt/minos/backups              pg_dump artifacts
 #
 # Traffic:
 #   Internet → :443 Caddy → 127.0.0.1:8787 minos-backend
 #   Postgres/Redis: loopback only
 #
+# Recommended app path is systemd binary (see docs/ops/vps-dev-binary.md).
+# This compose still owns Postgres/Redis and can run the image backend if needed.
+#
 #   cd /opt/minos/deploy
-#   # set MINOS_BACKEND_IMAGE + secrets in .env
-#   docker compose pull && docker compose up -d
+#   # edit minos.env (SSOT); keep .env → minos.env symlink
+#   docker compose pull && docker compose up -d postgres redis
+#   # full image backend: docker compose up -d  (after switch-to-docker.sh)
 
 services:
   postgres:

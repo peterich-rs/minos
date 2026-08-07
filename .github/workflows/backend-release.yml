@@ -1,0 +1,182 @@
+# Build linux/amd64 minos-backend binary; optionally deploy to the VPS (systemd).
+#
+# Triggers
+#   - push main:              build + artifact only (no deploy)
+#   - tag backend-v*:         build + deploy (auto)
+#   - workflow_dispatch:      build + deploy if inputs.deploy=true (default)
+#
+# Note: no `paths:` filter on purpose — tag pushes must always run. Main builds
+# are cheap enough with rust-cache; tighten later with dorny/paths-filter if needed.
+#
+# VPS layout (unchanged):
+#   /opt/minos/releases/<12-char-sha>/minos-backend
+#   /opt/minos/current → releases/<sha>
+#   /opt/minos/deploy/minos.env   (EnvironmentFile; never written by CI)
+#
+# Required secrets for deploy jobs:
+#   MINOS_VPS_HOST      e.g. root@23.95.95.156
+#   MINOS_VPS_SSH_KEY   private key with access to that host
+#
+# Public health probe is hardcoded to https://minos.ainexc.com (same origin as
+# production clients). Do not add a separate MINOS_HEALTH_PUBLIC secret.
+#
+# Config/secrets on the server stay in minos.env — CI only ships the binary.
+# Local emergency path remains: just deploy-backend-dev root@vps
+#
+# Companion image publish (optional/compat): backend-image.yml → GHCR
+
+name: backend-release
+
+on:
+  push:
+    branches: [main]
+    tags: ["backend-v*"]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Deploy binary to VPS after build"
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  # One deploy/build lane per ref; cancel superseded main builds only.
+  group: backend-release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  RUST_TOOLCHAIN: "1.97.0"
+  BINARY_NAME: minos-backend-linux-amd64
+
+jobs:
+  build:
+    name: Build linux/amd64 binary
+    runs-on: ubuntu-latest
+    outputs:
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+      version_label: ${{ steps.meta.outputs.version_label }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Metadata
+        id: meta
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-12)
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "version_label=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version_label=sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
+        with:
+          key: minos-backend-release
+
+      - name: Build release binary
+        run: |
+          set -euo pipefail
+          cargo build --release -p minos-backend --bin minos-backend
+          strip target/release/minos-backend
+          mkdir -p dist
+          cp target/release/minos-backend "dist/${BINARY_NAME}"
+          file "dist/${BINARY_NAME}"
+          ls -lh "dist/${BINARY_NAME}"
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BINARY_NAME }}-${{ steps.meta.outputs.short_sha }}
+          path: dist/${{ env.BINARY_NAME }}
+          if-no-files-found: error
+          retention-days: 14
+
+  deploy:
+    name: Deploy to VPS
+    needs: [build]
+    runs-on: ubuntu-latest
+    # Tag backend-v* → always deploy.
+    # workflow_dispatch → deploy when inputs.deploy is true.
+    # main path pushes → build only (no deploy).
+    if: >
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/backend-v')) ||
+      (github.event_name == 'workflow_dispatch' && (inputs.deploy == true || inputs.deploy == 'true'))
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.BINARY_NAME }}-${{ needs.build.outputs.short_sha }}
+          path: dist
+
+      - name: Check deploy secrets
+        env:
+          MINOS_VPS_HOST: ${{ secrets.MINOS_VPS_HOST }}
+          MINOS_VPS_SSH_KEY: ${{ secrets.MINOS_VPS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${MINOS_VPS_HOST:-}" || { echo "::error::missing secret MINOS_VPS_HOST (e.g. root@23.95.95.156)"; exit 1; }
+          test -n "${MINOS_VPS_SSH_KEY:-}" || { echo "::error::missing secret MINOS_VPS_SSH_KEY"; exit 1; }
+          test -f "dist/${BINARY_NAME}" || { echo "::error::binary artifact missing"; exit 1; }
+          chmod +x "dist/${BINARY_NAME}"
+          file "dist/${BINARY_NAME}" | grep -qiE 'ELF|Linux' || {
+            echo "::error::artifact is not a Linux ELF binary"
+            file "dist/${BINARY_NAME}" || true
+            exit 1
+          }
+
+      - name: Start ssh-agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.MINOS_VPS_SSH_KEY }}
+
+      - name: Trust VPS host key
+        env:
+          MINOS_VPS_HOST: ${{ secrets.MINOS_VPS_HOST }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          # HOST may be user@ip — keyscan wants the hostname/ip only.
+          HOST_ONLY="${MINOS_VPS_HOST##*@}"
+          ssh-keyscan -H "$HOST_ONLY" >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Deploy binary (releases/<sha> + systemd restart)
+        env:
+          MINOS_VPS_HOST: ${{ secrets.MINOS_VPS_HOST }}
+        run: |
+          set -euo pipefail
+          # Same public origin clients use (HTTPS). Not a GitHub secret.
+          PUBLIC="https://minos.ainexc.com"
+          chmod +x deploy/dev-binary/*.sh
+          # deploy-backend.sh: skip local build, use CI artifact, install unit + helpers, restart, health.
+          ./deploy/dev-binary/deploy-backend.sh \
+            --host "$MINOS_VPS_HOST" \
+            --binary "dist/${BINARY_NAME}" \
+            --skip-build
+          # Extra public probe (script already hits loopback via remote healthcheck).
+          echo "==> public health ${PUBLIC}"
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS "${PUBLIC}/health/live" >/dev/null \
+              && curl -fsS "${PUBLIC}/health/ready" >/dev/null; then
+              curl -fsS "${PUBLIC}/health/live"; echo
+              curl -fsS "${PUBLIC}/health/ready"; echo
+              echo "OK public health (attempt ${i})"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::public health check failed for ${PUBLIC}"
+          exit 1
