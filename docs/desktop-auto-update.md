@@ -44,9 +44,14 @@ dev binaries never hit a production endpoint.
 | `MINOS_UPDATER_PUBLIC_KEY` | minisign public key embedded in the app (also used by conf inject) |
 | `TAURI_SIGNING_PRIVATE_KEY` | minisign private key for signing updater archives |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | password for the private key (if any) |
-| `MINOS_BACKEND_URL` | required for release `minos-daemon` builds (`crates/minos-daemon/build.rs`) |
+| `MINOS_BACKEND_URL` | required for release `minos-daemon` builds (`crates/minos-daemon/build.rs`); prod e.g. `wss://minos.ainexc.com/devices` |
+| `VITE_MINOS_BACKEND_URL` | **Frontend** HTTP origin baked into Desktop webview (prod: `https://minos.ainexc.com`) |
+| `VITE_SUPABASE_URL` | Supabase project URL for Desktop login (Vite bake) |
+| `VITE_SUPABASE_ANON_KEY` | Supabase anon/publishable key for Desktop login (Vite bake) |
 | Apple **codesign** secrets (CI) | `APPLE_CERTIFICATE` (base64 p12), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY` |
 | Apple **notarize** (local Mac) | `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` — used by `notarize-macos-release.sh`, not by default CI |
+
+`VITE_*` secrets are required for release Desktop builds: Vite embeds them at `pnpm tauri build` time. Without them the app UI shows “Set VITE_SUPABASE_URL…”. They are **not** the same as `MINOS_BACKEND_URL` (daemon WSS).
 
 Generate a keypair once (see [Tauri updater](https://v2.tauri.app/plugin/updater/)):
 
