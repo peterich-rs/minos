@@ -226,16 +226,14 @@ impl ClaudeControlSession {
             })
         });
 
-        info!(
-            target: "minos_agent_runtime::claude_driver",
-            cli = %cli_path.display(),
-            workspace = %workspace.display(),
-            session_id = %session_id,
-            "claude control session started"
-        );
-
-        Ok(Self {
-            session_id,
+        // Bidirectional mode opens stdin for the stream-json control plane.
+        // Do not leave the first turn only on argv `-p` with an open empty
+        // stdin: some Claude CLI builds wait on NDJSON input and never emit
+        // system/init (session stuck Running, zero assistant events).
+        // Always enqueue the first user frame on stdin; follow-up turns use
+        // the same path via `send_user_message`.
+        let session = Self {
+            session_id: session_id.clone(),
             workspace: workspace.to_path_buf(),
             claude_session_id: resume_session_id.or(claude_session_id).map(str::to_string),
             current_turn_child: Some(child),
@@ -245,7 +243,25 @@ impl ClaudeControlSession {
             stderr_task,
             process_alive,
             capabilities,
-        })
+        };
+        if let Err(error) = session.send_user_message(user_text) {
+            warn!(
+                target: "minos_agent_runtime::claude_driver",
+                error = %error,
+                session_id = %session_id,
+                "failed to enqueue first Claude stdin user frame; relying on -p only"
+            );
+        }
+
+        info!(
+            target: "minos_agent_runtime::claude_driver",
+            cli = %cli_path.display(),
+            workspace = %workspace.display(),
+            session_id = %session_id,
+            "claude control session started"
+        );
+
+        Ok(session)
     }
 
     pub fn set_claude_session_id(&mut self, id: String) {
@@ -276,14 +292,7 @@ impl ClaudeControlSession {
             .stdin_tx
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("claude stdin closed"))?;
-        let frame = serde_json::json!({
-            "type": "user",
-            "message": {
-                "role": "user",
-                "content": [{"type": "text", "text": text}]
-            },
-            "parent_tool_use_id": null
-        });
+        let frame = build_claude_user_frame(text);
         let line = serde_json::to_string(&frame)?;
         tx.send(line)
             .map_err(|_| anyhow::anyhow!("claude stdin writer gone"))?;
@@ -407,6 +416,17 @@ impl ClaudeControlSession {
     }
 }
 
+fn build_claude_user_frame(text: &str) -> Value {
+    serde_json::json!({
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [{"type": "text", "text": text}]
+        },
+        "parent_tool_use_id": null
+    })
+}
+
 fn build_claude_args(
     user_text: &str,
     session_id: Option<&str>,
@@ -416,6 +436,10 @@ fn build_claude_args(
     extra_instructions: Option<&str>,
     bidirectional: bool,
 ) -> Vec<String> {
+    // Always pass a non-empty `-p` so Claude print mode starts. In bidirectional
+    // mode the same text is also enqueued as a stdin user frame immediately
+    // after spawn — leaving stdin open-and-empty with `--input-format
+    // stream-json` hangs some CLI builds with zero system/init output.
     let mut args: Vec<String> = vec![
         "-p".into(),
         user_text.into(),
@@ -695,6 +719,22 @@ mod tests {
                 && pair[1].contains("Minos teamwork mode")
                 && pair[1].contains("minos_teamwork")
         }));
+    }
+
+    #[test]
+    fn one_shot_args_omit_control_plane_flags() {
+        let args = build_claude_args("hello", None, None, None, None, None, false);
+        assert!(args.windows(2).any(|pair| pair == ["-p", "hello"]));
+        assert!(!args.iter().any(|a| a == "--input-format"));
+        assert!(!args.iter().any(|a| a == "--permission-mode"));
+    }
+
+    #[test]
+    fn user_frame_carries_text_content() {
+        let frame = build_claude_user_frame("你好");
+        assert_eq!(frame["type"], "user");
+        assert_eq!(frame["message"]["content"][0]["text"], "你好");
+        assert!(frame["parent_tool_use_id"].is_null());
     }
 
     #[test]

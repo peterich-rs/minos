@@ -4976,7 +4976,9 @@ printf '{{"type":"result","session_id":"{provider_session_id}","is_error":false}
 # Emit a can_use_tool control request, wait for control_response on stdin, then finish.
 printf '{"type":"system","subtype":"init","session_id":"sess-perm","capabilities":["interrupt_receipt_v1"],"tools":[]}\n'
 printf '{"type":"control_request","request_id":"perm-claude-1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"echo hi"}}}\n'
-# Read one control_response line from stdin (after -p prompt already consumed by shell argv).
+# Bidirectional spawn always enqueues a first stdin user frame before any
+# control_response. Consume that line, then wait for the approval reply.
+IFS= read -r _user_frame || exit 1
 IFS= read -r reply || exit 1
 printf '%s\n' "$reply" > "$FAKE_CLAUDE_CONTROL_REPLY"
 printf '{"type":"result","session_id":"sess-perm","is_error":false,"result":"ok"}\n'

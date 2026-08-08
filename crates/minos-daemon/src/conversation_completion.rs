@@ -108,7 +108,26 @@ struct SessionProjection {
 impl SessionProjection {
     /// Clear turn-scoped fields so a new Running/user turn cannot resurrect
     /// the previous turn's `last_completed` after reset of write flags.
+    ///
+    /// Origin handling (Desktop/Hub):
+    /// - Freshly staged `pending_origin_message_id` always wins (promote).
+    /// - The same logical turn often gets **two** `begin_turn` calls: runtime
+    ///   `Running` and synth/user `MessageStarted`. The second must **not**
+    ///   wipe an already-pinned origin while `require_canonical_origin` stays
+    ///   true — that combination skips `agent-result` entirely (Grok/Claude
+    ///   Desktop turns finish in the session but never land in conversation).
+    /// - A true subsequent turn without a newly staged origin drops the pin so
+    ///   durable ids cannot leak across turns.
     fn begin_turn(&mut self) {
+        let staged = self.pending_origin_message_id.take();
+        // Compute before clearing turn-scoped buffers.
+        let redundant_same_turn = staged.is_none()
+            && self.origin_message_id.is_some()
+            && self.completed.is_empty()
+            && self.assistant_text.is_empty()
+            && !self.turn_recorded
+            && !self.write_in_flight;
+
         self.assistant_text.clear();
         self.assistant_roles.clear();
         self.segment_closed.clear();
@@ -120,10 +139,19 @@ impl SessionProjection {
         self.turn_recorded = false;
         self.write_in_flight = false;
         self.pending_boundary = false;
-        // Promote staged origin for this turn (Desktop/Hub user message id).
-        let origin = self.pending_origin_message_id.take();
-        self.origin_message_id = origin.clone();
-        self.turn_write_id = origin;
+
+        if let Some(origin) = staged {
+            self.origin_message_id = Some(origin.clone());
+            self.turn_write_id = Some(origin);
+        } else if redundant_same_turn {
+            // Keep pinned origin / durable id across Running + user MessageStarted.
+            if let Some(origin) = self.origin_message_id.clone() {
+                self.turn_write_id = Some(origin);
+            }
+        } else {
+            self.origin_message_id = None;
+            self.turn_write_id = None;
+        }
     }
 
     /// Stage origin for the next turn (or apply immediately if turn already open).
@@ -134,6 +162,8 @@ impl SessionProjection {
         }
         self.pending_origin_message_id = Some(origin.clone());
         // If a turn is already open (post-begin_turn), pin durable id now.
+        // Also pin immediately so a redundant begin_turn (before promote) can
+        // recognize same-turn and preserve the Desktop/Hub message id.
         self.origin_message_id = Some(origin.clone());
         self.turn_write_id = Some(origin);
         // Origin-staged turns are collab-shaped: never fall back to message_key.
@@ -1056,6 +1086,88 @@ mod tests {
         assert!(!p.turn_recorded);
         assert!(!p.pending_boundary);
         assert!(p.recorded_key.is_none());
+    }
+
+    #[test]
+    fn desktop_origin_survives_running_then_user_message_started_begin_turns() {
+        // Repro of Host Desktop @agent turns: sendUserMessage notes origin, runtime
+        // flips Running (begin_turn), then synth/user MessageStarted begin_turn
+        // again. Second begin must not clear the pinned origin while
+        // require_canonical_origin stays true — otherwise claim_write skips and
+        // conversation never gets agent-result even though the session finished.
+        let mut p = SessionProjection::default();
+        p.set_origin_message_id("msg_user_origin_1");
+
+        p.begin_turn(); // Running
+        assert_eq!(p.origin_message_id.as_deref(), Some("msg_user_origin_1"));
+        assert!(p.pending_origin_message_id.is_none());
+
+        p.apply_events(AgentName::Grok, &[user_start("synth-user")]); // second begin
+        assert_eq!(
+            p.origin_message_id.as_deref(),
+            Some("msg_user_origin_1"),
+            "redundant same-turn begin_turn must keep Desktop origin"
+        );
+        assert!(p.require_canonical_origin);
+
+        p.apply_events(
+            AgentName::Grok,
+            &[
+                assistant_start("m_final"),
+                delta("m_final", "你好！我是 Grok。"),
+                completed("m_final"),
+            ],
+        );
+        p.pending_boundary = true;
+        let claimed = p
+            .claim_write()
+            .expect("Grok Desktop turn must claim agent-result after dual begin_turn");
+        assert_eq!(claimed.1, "你好！我是 Grok。");
+        assert_eq!(claimed.2, "msg_user_origin_1");
+    }
+
+    #[test]
+    fn origin_noted_between_running_and_user_started_still_pins() {
+        // note_turn_origin can race after Running begin_turn; pin must still
+        // survive the subsequent user MessageStarted begin.
+        let mut p = SessionProjection::default();
+        p.begin_turn(); // Running before origin staged
+        p.set_origin_message_id("msg_late_origin");
+        p.apply_events(AgentName::Grok, &[user_start("u1")]);
+        assert_eq!(p.origin_message_id.as_deref(), Some("msg_late_origin"));
+
+        p.apply_events(
+            AgentName::Grok,
+            &[assistant_start("a1"), delta("a1", "ok"), completed("a1")],
+        );
+        let claimed = p.claim_write().expect("late origin still durable");
+        assert_eq!(claimed.2, "msg_late_origin");
+    }
+
+    #[test]
+    fn true_next_turn_without_new_origin_drops_previous_pin() {
+        // After a completed turn, a later begin without a freshly staged origin
+        // must not reuse the previous Desktop message id.
+        let mut p = SessionProjection::default();
+        p.set_origin_message_id("msg_turn_a");
+        p.begin_turn();
+        p.apply_events(
+            AgentName::Claude,
+            &[assistant_start("m1"), delta("m1", "a"), completed("m1")],
+        );
+        let _ = p.claim_write();
+        p.finish_write_ok();
+
+        p.begin_turn(); // next turn, no new origin staged
+        assert!(p.origin_message_id.is_none());
+        assert!(p.turn_write_id.is_none());
+        // require_canonical_origin stays sticky by design (session collab shape);
+        // without origin, claim must skip non-canonical fallback.
+        p.apply_events(
+            AgentName::Claude,
+            &[assistant_start("m2"), delta("m2", "b"), completed("m2")],
+        );
+        assert!(p.claim_write().is_none());
     }
 
     #[test]

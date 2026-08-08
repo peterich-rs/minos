@@ -173,18 +173,31 @@ export function createLiveIngressActions(
   applyManagerEvent: (ev) => {
     if (ev.kind === "sessionStateChanged") {
       const status = coerceUiSessionStatus(ev.status);
+      const turnEnded =
+        status === "idle" || status === "done" || status === "failed";
       let conversationIdForTimeline: string | undefined;
       set((s) => {
         const prev = s.sessionsById[ev.sessionId];
         const known = findSessionRow(s, ev.sessionId);
         // Lifecycle only — hasPendingApproval prevents demote of needs_approval
         // while daemon still reports running (Grok park on permission/plan).
+        // Turn-end (idle/done/failed) clears sticky pending: mid-turn tool
+        // permission frames can elevate hasPendingApproval without a transcript
+        // window, and elevate-only never clears — leaving needs_approval/Running
+        // forever even after the daemon is idle.
         let entity = applyManagerLifecycleToEntity(
           prev,
           ev.sessionId,
           status,
           { lastTsMs: ev.atMs || undefined },
         );
+        if (turnEnded && entity.hasPendingApproval) {
+          entity = patchSessionEntity(entity, ev.sessionId, {
+            hasPendingApproval: false,
+            daemonStatus: status,
+            lastTsMs: entity.lastTsMs,
+          });
+        }
         // SessionAdded shells often lack conversationId; copy from list hydrate
         // so projection can upsert into the inspector membership list.
         if (!entity.conversationId && known?.conversationId) {
@@ -207,11 +220,11 @@ export function createLiveIngressActions(
       // Turn end (idle/done/failed): conversation_completion may have just
       // written agent-result into chat_messages. Conversation push can lag or
       // drop; do not wait for livePush alone — quiet re-list the timeline.
-      if (
-        conversationIdForTimeline &&
-        (status === "idle" || status === "done" || status === "failed")
-      ) {
+      // Also re-list inspector sessions so membership rows reconcile daemon
+      // idle even if an earlier optimistic running patch raced the event.
+      if (conversationIdForTimeline && turnEnded) {
         scheduleConversationTimelineRefresh(get, conversationIdForTimeline);
+        void get().loadInspector(conversationIdForTimeline, { quiet: true });
       }
       return;
     }
