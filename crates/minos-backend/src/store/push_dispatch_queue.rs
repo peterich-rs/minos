@@ -107,7 +107,15 @@ pub async fn mark_sent<S>(
 where
     S: AsStorePool + ?Sized,
 {
-    mark_terminal(store, queue_id, STATUS_SENT, None, provider_message_id, now_ms).await
+    mark_terminal(
+        store,
+        queue_id,
+        STATUS_SENT,
+        None,
+        provider_message_id,
+        now_ms,
+    )
+    .await
 }
 
 pub async fn mark_skipped<S>(
@@ -176,8 +184,15 @@ where
 {
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
-            mark_terminal_sqlite(pool, queue_id, status, last_error, provider_message_id, now_ms)
-                .await
+            mark_terminal_sqlite(
+                pool,
+                queue_id,
+                status,
+                last_error,
+                provider_message_id,
+                now_ms,
+            )
+            .await
         }
         StorePoolRef::Postgres(pool) => {
             mark_terminal_postgres(
@@ -615,17 +630,9 @@ mod tests {
         let pool = memory_pool().await;
         let account_id = insert_account(&pool, "push-retry@example.com").await;
         let now = 1_000_i64;
-        enqueue(
-            &pool,
-            "ev-r",
-            &account_id,
-            "account:x",
-            1,
-            "{}",
-            now,
-        )
-        .await
-        .unwrap();
+        enqueue(&pool, "ev-r", &account_id, "account:x", 1, "{}", now)
+            .await
+            .unwrap();
         let claimed = claim_due(&pool, now, 10, "w").await.unwrap();
         let row = &claimed[0];
         let next = now + backoff_delay_ms(row.attempts);

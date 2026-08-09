@@ -176,7 +176,13 @@ pub trait ConversationService: Send + Sync {
         actor_account_id: &str,
         conversation_id: &str,
         member_account_id: &str,
-    ) -> Result<(social::MembershipChangeResult, Vec<social::PendingDurablePublish>), ConversationError>;
+    ) -> Result<
+        (
+            social::MembershipChangeResult,
+            Vec<social::PendingDurablePublish>,
+        ),
+        ConversationError,
+    >;
 
     /// Remove member or self-leave. Moderator remove requires owner/admin.
     /// Returns whether membership row changed plus durable publishes.
@@ -185,7 +191,13 @@ pub trait ConversationService: Send + Sync {
         actor_account_id: &str,
         conversation_id: &str,
         member_account_id: &str,
-    ) -> Result<(social::MembershipChangeResult, Vec<social::PendingDurablePublish>), ConversationError>;
+    ) -> Result<
+        (
+            social::MembershipChangeResult,
+            Vec<social::PendingDurablePublish>,
+        ),
+        ConversationError,
+    >;
 
     async fn delete_conversation(
         &self,
@@ -826,8 +838,13 @@ impl ConversationService for DefaultConversationService {
         actor_account_id: &str,
         conversation_id: &str,
         member_account_id: &str,
-    ) -> Result<(social::MembershipChangeResult, Vec<social::PendingDurablePublish>), ConversationError>
-    {
+    ) -> Result<
+        (
+            social::MembershipChangeResult,
+            Vec<social::PendingDurablePublish>,
+        ),
+        ConversationError,
+    > {
         let actor_role =
             social::get_member_role(&self.store, conversation_id, actor_account_id).await?;
         match actor_role.as_deref() {
@@ -836,13 +853,9 @@ impl ConversationService for DefaultConversationService {
             None => return Err(ConversationError::NotFound),
         }
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let change = social::add_member_to_group(
-            &self.store,
-            conversation_id,
-            member_account_id,
-            now_ms,
-        )
-        .await?;
+        let change =
+            social::add_member_to_group(&self.store, conversation_id, member_account_id, now_ms)
+                .await?;
         if !change.changed {
             return Ok((change, Vec::new()));
         }
@@ -869,8 +882,13 @@ impl ConversationService for DefaultConversationService {
         actor_account_id: &str,
         conversation_id: &str,
         member_account_id: &str,
-    ) -> Result<(social::MembershipChangeResult, Vec<social::PendingDurablePublish>), ConversationError>
-    {
+    ) -> Result<
+        (
+            social::MembershipChangeResult,
+            Vec<social::PendingDurablePublish>,
+        ),
+        ConversationError,
+    > {
         let self_leave = actor_account_id == member_account_id;
         if !self_leave {
             let actor_role =

@@ -345,12 +345,10 @@ impl TeamworkStore {
         &self,
         delivery_id: &str,
     ) -> Result<Option<TeamworkSourceDelivery>> {
-        let row = sqlx::query(
-            "SELECT * FROM teamwork_source_deliveries WHERE delivery_id = ?",
-        )
-        .bind(delivery_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row = sqlx::query("SELECT * FROM teamwork_source_deliveries WHERE delivery_id = ?")
+            .bind(delivery_id)
+            .fetch_optional(&self.pool)
+            .await?;
         row.map(source_delivery_from_row).transpose()
     }
 

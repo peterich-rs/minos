@@ -49,9 +49,9 @@ pub fn default_jobs(
         jobs.push(agent_dispatch_worker::AgentDispatchWorkerJob::new(
             Arc::clone(&app),
         ));
-        jobs.push(push_dispatch_worker::PushDispatchWorkerJob::new(Arc::clone(
-            &app,
-        )));
+        jobs.push(push_dispatch_worker::PushDispatchWorkerJob::new(
+            Arc::clone(&app),
+        ));
         jobs.push(stale_session_sweeper::SessionLifecycleJob::new(app));
     }
 

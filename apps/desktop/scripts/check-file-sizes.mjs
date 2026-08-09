@@ -23,6 +23,8 @@ const ALLOWLIST = {
   // SessionsView split into ui/lib (PR A); shell is well under HARD_LINES.
   // Hub IM + auth share request helpers; split to minos-cloud-hub.ts next wave.
   "shared/lib/minos-cloud.ts": 900,
+  // Outbox posts + per-lane worker share one module; split to im-outbox-worker.ts next.
+  "shared/lib/im-cloud-sync.ts": 950,
 };
 
 /**

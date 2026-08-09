@@ -499,21 +499,21 @@ fn complete_tool_item(
         }
         _ => completed_tool_item_is_error(item),
     };
-    let mut events = Vec::new();
     // Re-emit ToolCallPlaced so late completions (no prior item/started, or
     // refined args on completed item) still surface a tool row.
-    events.push(UiEventMessage::ToolCallPlaced {
-        message_id: msg_id,
-        tool_call_id: tool_call_id.clone(),
-        name,
-        args_json: DisplayPayload::inline(args_json),
-    });
-    events.push(UiEventMessage::ToolCallCompleted {
-        tool_call_id,
-        output: DisplayPayload::inline(output),
-        is_error,
-    });
-    events
+    vec![
+        UiEventMessage::ToolCallPlaced {
+            message_id: msg_id,
+            tool_call_id: tool_call_id.clone(),
+            name,
+            args_json: DisplayPayload::inline(args_json),
+        },
+        UiEventMessage::ToolCallCompleted {
+            tool_call_id,
+            output: DisplayPayload::inline(output),
+            is_error,
+        },
+    ]
 }
 
 fn tool_item_name(item_type: &str, item: &Value) -> String {

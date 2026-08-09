@@ -18,13 +18,13 @@ import {
   outboxLaneKey,
   reclaimStaleInflight,
   resetImOutboxForTests,
-  useMemoryOutboxForTests,
+  enableMemoryOutboxForTests,
   STALE_INFLIGHT_MS,
 } from "./im-outbox.ts";
 
 describe("im-outbox", () => {
   beforeEach(async () => {
-    useMemoryOutboxForTests();
+    enableMemoryOutboxForTests();
     await resetImOutboxForTests();
   });
 

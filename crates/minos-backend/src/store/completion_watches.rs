@@ -139,7 +139,10 @@ where
 
 // ── SQLite ─────────────────────────────────────────────────────────────
 
-async fn upsert_armed_sqlite(pool: &SqlitePool, row: &CompletionWatchRow) -> Result<(), BackendError> {
+async fn upsert_armed_sqlite(
+    pool: &SqlitePool,
+    row: &CompletionWatchRow,
+) -> Result<(), BackendError> {
     sqlx::query(
         "INSERT INTO completion_watches (
             watch_key, dispatch_id, origin_message_id, conversation_id, session_id,
@@ -197,7 +200,10 @@ async fn list_by_status_sqlite(
 
 // ── Postgres ───────────────────────────────────────────────────────────
 
-async fn upsert_armed_postgres(pool: &PgPool, row: &CompletionWatchRow) -> Result<(), BackendError> {
+async fn upsert_armed_postgres(
+    pool: &PgPool,
+    row: &CompletionWatchRow,
+) -> Result<(), BackendError> {
     sqlx::query(
         "INSERT INTO completion_watches (
             watch_key, dispatch_id, origin_message_id, conversation_id, session_id,

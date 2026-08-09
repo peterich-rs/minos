@@ -3965,13 +3965,9 @@ async fn reconcile_manager_lifecycle_after_lag(
         // Re-drive completion for states that flush bubbles / source delivery.
         if matches!(
             state,
-            SessionState::Idle
-                | SessionState::Closed { .. }
-                | SessionState::Suspended { .. }
+            SessionState::Idle | SessionState::Closed { .. } | SessionState::Suspended { .. }
         ) {
-            completion
-                .on_session_state(&snap.session_id, state)
-                .await;
+            completion.on_session_state(&snap.session_id, state).await;
         }
         let _ = local_tx.send(LocalManagerEvent::SessionStateChanged {
             session_id: snap.session_id.clone(),
@@ -4000,10 +3996,7 @@ async fn reconcile_manager_lifecycle_after_lag(
         }
         // Idle/closed/suspended in DB without a live handle is normal after
         // process restarts; only mid-flight rows imply a missed Crash/Close.
-        if !matches!(
-            row.status.as_str(),
-            "starting" | "running" | "resuming"
-        ) {
+        if !matches!(row.status.as_str(), "starting" | "running" | "resuming") {
             continue;
         }
         let state = SessionState::Suspended {
@@ -4016,9 +4009,7 @@ async fn reconcile_manager_lifecycle_after_lag(
             "lifecycle reconcile: active SQLite session missing from manager; suspending"
         );
         persist_runtime_state_inner(store, &row.session_id, &state, at_ms).await;
-        completion
-            .on_session_state(&row.session_id, &state)
-            .await;
+        completion.on_session_state(&row.session_id, &state).await;
         let old = row_state_to_proto(&row).unwrap_or(ProtoSessionState::Idle);
         let _ = local_tx.send(LocalManagerEvent::SessionStateChanged {
             session_id: row.session_id.clone(),

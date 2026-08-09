@@ -403,7 +403,18 @@ pub async fn upsert_group_conversation(
                     .map_err(store_err("social::upsert_group_conversation.begin"))?;
                 // Skip placeholder titles so host_projection / empty client titles
                 // cannot wipe a real name already stored on the Hub row.
-                if !is_placeholder_title {
+                if is_placeholder_title {
+                    sqlx::query(
+                        "UPDATE conversations
+                            SET updated_at_ms = ?
+                          WHERE conversation_id = ?",
+                    )
+                    .bind(now_ms)
+                    .bind(conversation_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(store_err("social::upsert_group_conversation.touch"))?;
+                } else {
                     sqlx::query(
                         "UPDATE conversations
                             SET title = ?, updated_at_ms = ?
@@ -415,17 +426,6 @@ pub async fn upsert_group_conversation(
                     .execute(&mut *tx)
                     .await
                     .map_err(store_err("social::upsert_group_conversation.update_title"))?;
-                } else {
-                    sqlx::query(
-                        "UPDATE conversations
-                            SET updated_at_ms = ?
-                          WHERE conversation_id = ?",
-                    )
-                    .bind(now_ms)
-                    .bind(conversation_id)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(store_err("social::upsert_group_conversation.touch"))?;
                 }
                 for member in &members {
                     sqlx::query(
@@ -448,7 +448,18 @@ pub async fn upsert_group_conversation(
                     .begin()
                     .await
                     .map_err(store_err("social::upsert_group_conversation.begin"))?;
-                if !is_placeholder_title {
+                if is_placeholder_title {
+                    sqlx::query(
+                        "UPDATE conversations
+                            SET updated_at_ms = $1
+                          WHERE conversation_id = $2",
+                    )
+                    .bind(now_ms)
+                    .bind(conversation_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(store_err("social::upsert_group_conversation.touch"))?;
+                } else {
                     sqlx::query(
                         "UPDATE conversations
                             SET title = $1, updated_at_ms = $2
@@ -460,17 +471,6 @@ pub async fn upsert_group_conversation(
                     .execute(&mut *tx)
                     .await
                     .map_err(store_err("social::upsert_group_conversation.update_title"))?;
-                } else {
-                    sqlx::query(
-                        "UPDATE conversations
-                            SET updated_at_ms = $1
-                          WHERE conversation_id = $2",
-                    )
-                    .bind(now_ms)
-                    .bind(conversation_id)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(store_err("social::upsert_group_conversation.touch"))?;
                 }
                 for member in &members {
                     sqlx::query(
@@ -1214,24 +1214,15 @@ pub async fn mark_conversation_read_to_latest(
             .fetch_one(pool)
             .await
         }
-        StorePoolRef::Postgres(pool) => {
-            sqlx::query_scalar::<_, i64>(
-                "SELECT COALESCE(MAX(message_seq), 0) FROM chat_messages WHERE conversation_id = $1",
-            )
-            .bind(conversation_id)
-            .fetch_one(pool)
-            .await
-        }
+        StorePoolRef::Postgres(pool) => sqlx::query_scalar::<_, i64>(
+            "SELECT COALESCE(MAX(message_seq), 0) FROM chat_messages WHERE conversation_id = $1",
+        )
+        .bind(conversation_id)
+        .fetch_one(pool)
+        .await,
     }
     .map_err(store_err("social::mark_conversation_read_to_latest.max"))?;
-    mark_conversation_read_to_seq(
-        store,
-        conversation_id,
-        account_id,
-        max_seq,
-        updated_at_ms,
-    )
-    .await
+    mark_conversation_read_to_seq(store, conversation_id, account_id, max_seq, updated_at_ms).await
 }
 
 pub(crate) async fn find_direct_conversation(

@@ -574,9 +574,10 @@ mod tests {
             None,
             &[],
             Some("client-msg-1"),
-        &[],
-        "client_live",
-        ).await
+            &[],
+            "client_live",
+        )
+        .await
         .unwrap();
         assert!(outcome.inserted);
 
@@ -637,9 +638,10 @@ mod tests {
             None,
             &[],
             Some("repair-id"),
-        &[],
-        "client_live",
-        ).await
+            &[],
+            "client_live",
+        )
+        .await
         .unwrap();
         tx.commit().await.unwrap();
         assert!(outcome.inserted);
@@ -655,9 +657,10 @@ mod tests {
             None,
             &[],
             Some("repair-id"),
-        &[],
-        "client_live",
-        ).await
+            &[],
+            "client_live",
+        )
+        .await
         .unwrap();
         assert!(!again.inserted);
         let message = ChatMessageSummary {
@@ -716,9 +719,10 @@ mod tests {
             None,
             std::slice::from_ref(&bob),
             Some("digest-client-1"),
-        &[],
-        "client_live",
-        ).await
+            &[],
+            "client_live",
+        )
+        .await
         .unwrap();
         assert!(outcome.inserted);
 
@@ -826,9 +830,10 @@ mod tests {
                 None,
                 &[],
                 None,
-            &[],
-            "client_live",
-            ).await
+                &[],
+                "client_live",
+            )
+            .await
             .unwrap();
             tx.commit().await.unwrap();
             seqs.push(outcome.row.message_seq);

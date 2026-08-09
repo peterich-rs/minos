@@ -747,8 +747,7 @@ async fn arm_completion_watch(
         mention_account_id,
         mention_minos_id,
     };
-    if let Err(error) =
-        crate::store::completion_watches::upsert_armed(&state.store, &durable).await
+    if let Err(error) = crate::store::completion_watches::upsert_armed(&state.store, &durable).await
     {
         tracing::error!(
             target: "minos_backend::social",
@@ -898,12 +897,8 @@ async fn try_project_completion_for_watch(
         }
         Ok(crate::turn_completion::CompletionProbe::DoneWithoutText) => {
             state.completion_watches.remove(watch_key);
-            let _ = crate::store::completion_watches::mark_projected(
-                &state.store,
-                watch_key,
-                None,
-            )
-            .await;
+            let _ = crate::store::completion_watches::mark_projected(&state.store, watch_key, None)
+                .await;
             tracing::info!(
                 target: "minos_backend::social",
                 conversation_id = %watch.conversation_id,
@@ -2132,9 +2127,11 @@ pub async fn hydrate_completion_watches(
                         agent_id = %row.agent_id,
                         "skip hydrate CompletionWatch: agent missing"
                     );
-                    let _ =
-                        crate::store::completion_watches::mark_expired(&state.store, &row.watch_key)
-                            .await;
+                    let _ = crate::store::completion_watches::mark_expired(
+                        &state.store,
+                        &row.watch_key,
+                    )
+                    .await;
                     continue;
                 }
             }

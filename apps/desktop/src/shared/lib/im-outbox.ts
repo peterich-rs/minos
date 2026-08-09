@@ -3,7 +3,7 @@
  *
  * Persistence: Tauri SQLite (`im_outbox.sqlite3` under app data dir).
  * In-memory mirror is the working set; every mutation fail-closed persists
- * before returning. Tests inject a memory backend via `useMemoryOutboxForTests`.
+ * before returning. Tests inject a memory backend via `enableMemoryOutboxForTests`.
  *
  * Status machine:
  *   pending ──flush──► inflight ──2xx──► acked
@@ -320,8 +320,8 @@ export async function initImOutbox(): Promise<void> {
   await ensureReady();
 }
 
-/** Test helper: pure memory backend (no Tauri). */
-export function useMemoryOutboxForTests(): void {
+/** Test helper: pure memory backend (no Tauri). Not a React hook. */
+export function enableMemoryOutboxForTests(): void {
   useMemoryOnly = true;
   ready = null;
   backend = memoryBackend();
@@ -698,7 +698,7 @@ export async function listPendingForConversation(
 }
 
 export async function resetImOutboxForTests(): Promise<void> {
-  useMemoryOutboxForTests();
+  enableMemoryOutboxForTests();
   await withMutation(async () => {
     entries = [];
     await persistAll();

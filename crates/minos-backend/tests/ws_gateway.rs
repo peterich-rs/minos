@@ -706,8 +706,7 @@ async fn subscribe_below_retention_floor_emits_snapshot_required() -> anyhow::Re
 #[tokio::test]
 async fn subscribe_after_full_retention_empty_log_emits_snapshot_required() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
-    let (account_id, phone_id) =
-        seed_client_account(&relay, "ws-empty-floor@example.com").await?;
+    let (account_id, phone_id) = seed_client_account(&relay, "ws-empty-floor@example.com").await?;
     let topic = format!("account:{account_id}");
     for seq in 1..=5 {
         let event_id = format!("seed-empty-{account_id}-{seq}");
@@ -727,7 +726,8 @@ async fn subscribe_after_full_retention_empty_log_emits_snapshot_required() -> a
     let deleted =
         store::durable_event_log::delete_ready_for_retention(&relay.pool, 10_000, 100).await?;
     assert_eq!(deleted, 5);
-    let meta = store::durable_event_log::topic_sequence_meta(&relay.pool, "account", &topic).await?;
+    let meta =
+        store::durable_event_log::topic_sequence_meta(&relay.pool, "account", &topic).await?;
     assert_eq!(meta.high_watermark, 5);
     assert_eq!(meta.retention_floor, 5);
 

@@ -97,7 +97,10 @@ impl ImOutboxStore {
     }
 
     pub fn list_all(&self) -> Result<Vec<ImOutboxEntryDto>> {
-        let conn = self.conn.lock().map_err(|_| anyhow!("im_outbox lock poisoned"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow!("im_outbox lock poisoned"))?;
         let mut stmt = conn.prepare(
             "SELECT client_message_id, id, kind, conversation_id, text, title,
                     reply_to_message_id, agent_runtimes_json, agent_id, agent_session_id,
@@ -118,7 +121,10 @@ impl ImOutboxStore {
     /// Cap policy: drop oldest **acked** only. Never drops unacked intents —
     /// if unacked alone exceed MAX_ENTRIES, returns error.
     pub fn replace_all(&self, entries: &[ImOutboxEntryDto]) -> Result<()> {
-        let mut conn = self.conn.lock().map_err(|_| anyhow!("im_outbox lock poisoned"))?;
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow!("im_outbox lock poisoned"))?;
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM im_outbox", [])?;
         let mut entries = entries.to_vec();
@@ -160,7 +166,10 @@ impl ImOutboxStore {
     }
 
     pub fn upsert(&self, entry: &ImOutboxEntryDto) -> Result<()> {
-        let conn = self.conn.lock().map_err(|_| anyhow!("im_outbox lock poisoned"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow!("im_outbox lock poisoned"))?;
         conn.execute(
             "INSERT INTO im_outbox (
                 client_message_id, id, kind, conversation_id, text, title,
@@ -224,8 +233,7 @@ impl ImOutboxStore {
     }
 
     fn compact_acked_locked(conn: &Connection) -> Result<()> {
-        let total: i64 =
-            conn.query_row("SELECT COUNT(*) FROM im_outbox", [], |r| r.get(0))?;
+        let total: i64 = conn.query_row("SELECT COUNT(*) FROM im_outbox", [], |r| r.get(0))?;
         if total <= MAX_ENTRIES as i64 {
             return Ok(());
         }
@@ -243,7 +251,10 @@ impl ImOutboxStore {
     }
 
     pub fn clear(&self) -> Result<()> {
-        let conn = self.conn.lock().map_err(|_| anyhow!("im_outbox lock poisoned"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow!("im_outbox lock poisoned"))?;
         conn.execute("DELETE FROM im_outbox", [])?;
         Ok(())
     }
@@ -405,6 +416,8 @@ mod tests {
         let all = store.list_all().unwrap();
         assert!(all.iter().any(|e| e.client_message_id == "pending-new"));
         assert!(all.len() <= MAX_ENTRIES);
-        assert!(all.iter().all(|e| e.status != "acked" || e.client_message_id != "a0"));
+        assert!(all
+            .iter()
+            .all(|e| e.status != "acked" || e.client_message_id != "a0"));
     }
 }

@@ -24,10 +24,7 @@ pub fn im_outbox_replace_all(
 }
 
 #[tauri::command]
-pub fn im_outbox_upsert(
-    state: State<'_, AppState>,
-    entry: ImOutboxEntryDto,
-) -> Result<(), String> {
+pub fn im_outbox_upsert(state: State<'_, AppState>, entry: ImOutboxEntryDto) -> Result<(), String> {
     state
         .im_outbox
         .upsert(&entry)

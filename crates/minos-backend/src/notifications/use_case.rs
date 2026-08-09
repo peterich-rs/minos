@@ -450,12 +450,9 @@ impl NotificationService for DefaultNotificationService {
                             }
                             Ok(PushSendOutcome::TokenExpired) => {
                                 only_not_wired = false;
-                                let _ = push_tokens::revoke(
-                                    &self.store,
-                                    &token_row.token_hash,
-                                    now_ms,
-                                )
-                                .await;
+                                let _ =
+                                    push_tokens::revoke(&self.store, &token_row.token_hash, now_ms)
+                                        .await;
                                 crate::telemetry::record_push_send(kind.as_str(), "token_expired");
                             }
                             Ok(PushSendOutcome::RateLimited) => {

@@ -384,12 +384,9 @@ impl MediaService {
             .await?
             .ok_or(MediaError::NotFound)?;
         // Owner or conversation co-member who can see the attached message.
-        let allowed = store::message_attachments::account_can_read_blob(
-            &self.store,
-            account_id,
-            blob_id,
-        )
-        .await?;
+        let allowed =
+            store::message_attachments::account_can_read_blob(&self.store, account_id, blob_id)
+                .await?;
         if !allowed {
             return Err(MediaError::Forbidden);
         }

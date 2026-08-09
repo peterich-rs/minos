@@ -244,11 +244,7 @@ async fn mark_conversation_read(
     let account_id = super::social::require_account_id_from_state(&state, &headers)?;
     let conversations_svc = DefaultConversationService::new(state.store.clone());
     let latest = conversations_svc
-        .mark_read(
-            &account_id,
-            &conversation_id,
-            req.read_up_to_message_seq,
-        )
+        .mark_read(&account_id, &conversation_id, req.read_up_to_message_seq)
         .await
         .map_err(map_conversation_error)?;
     Ok(Json(ConversationReadResponse {

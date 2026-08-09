@@ -171,23 +171,21 @@ pub use friendships::{
 // Conversation functions
 pub use conversations::{
     add_member_to_group, conversation_deleted_at_for_account, create_group_conversation,
-    get_member_role, MembershipChangeResult,
     ensure_direct_conversation, ensure_group_conversation_with_id, get_conversation,
-    is_conversation_member, list_conversation_member_profiles, list_conversation_members,
-    list_conversations_for, mark_conversation_deleted_for_account,
+    get_member_role, is_conversation_member, list_conversation_member_profiles,
+    list_conversation_members, list_conversations_for, mark_conversation_deleted_for_account,
     mark_conversation_read_to_latest, mark_conversation_read_to_seq, remove_member_from_group,
-    upsert_group_conversation,
+    upsert_group_conversation, MembershipChangeResult,
 };
 
 // Conversation message functions
 pub use conversation_messages::{
     bind_session_to_message, bind_session_to_message_for_agent, get_message,
     has_bound_message_for_session, insert_message, insert_message_with_id,
-    insert_message_with_id_full, insert_message_with_id_in_tx, list_message_mentions, list_messages,
-    list_messages_by_ids,
-    lookup_latest_session_id_for_conversation, lookup_latest_session_id_for_conversation_agent,
-    lookup_session_id_for_message, recall_message, recall_message_in_tx,
-    suppress_live_ui_fanout_for_session, InsertMessageOutcome,
+    insert_message_with_id_full, insert_message_with_id_in_tx, list_message_mentions,
+    list_messages, list_messages_by_ids, lookup_latest_session_id_for_conversation,
+    lookup_latest_session_id_for_conversation_agent, lookup_session_id_for_message, recall_message,
+    recall_message_in_tx, suppress_live_ui_fanout_for_session, InsertMessageOutcome,
 };
 
 // Agent functions

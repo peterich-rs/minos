@@ -308,13 +308,9 @@ impl SubscriptionManager {
 
     /// Force-unsubscribe `topic` on every connection for `account_id` (membership revoke).
     /// Returns how many connections lost the topic.
-    pub fn revoke_topic_for_account(
-        &self,
-        account_id: &str,
-        topic: &RealtimeTopic,
-    ) -> usize {
+    pub fn revoke_topic_for_account(&self, account_id: &str, topic: &RealtimeTopic) -> usize {
         let mut revoked = 0_usize;
-        for entry in self.by_conn.iter() {
+        for entry in &self.by_conn {
             let conn = entry.value();
             let matches = match &conn.principal {
                 ConnectionPrincipal::Account { account_id: aid } => aid == account_id,
