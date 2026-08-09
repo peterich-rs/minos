@@ -242,8 +242,7 @@ List<List<ImOutboxEntry>> buildDueOutboxLanes({
     final entries = byConv[cid]!..sort(compareOutboxFifo);
     if (entries.isEmpty) continue;
     final head = entries.first;
-    if (head.status != ImOutboxStatus.pending ||
-        head.nextAttemptAtMs > nowMs) {
+    if (head.status != ImOutboxStatus.pending || head.nextAttemptAtMs > nowMs) {
       continue;
     }
     final lane = <ImOutboxEntry>[];

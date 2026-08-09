@@ -153,14 +153,14 @@ impl AgentGlue {
                         let Some(ingest) = maybe else { break; };
                         // A failed older write owns the head of the commit lane.
                         // Never let a newly received provider frame allocate seq first.
-                        let commit_lane_ready = drain_prepared_queue(
+                        let commit_lane_ready = Box::pin(drain_prepared_queue(
                             &writer_clone,
                             &coalescer_clone,
                             &ingest_sync_clone,
                             &persisted_ingest_tx_clone,
                             &completion_for_ingest,
                             &manager_for_ingest,
-                        )
+                        ))
                         .await;
                         match coalescer_clone.admit(ingest).await {
                             Ok(Some(prepared)) => {
@@ -212,14 +212,14 @@ impl AgentGlue {
                         }
                     }
                     _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
-                        drain_prepared_queue(
+                        Box::pin(drain_prepared_queue(
                             &writer_clone,
                             &coalescer_clone,
                             &ingest_sync_clone,
                             &persisted_ingest_tx_clone,
                             &completion_for_ingest,
                             &manager_for_ingest,
-                        )
+                        ))
                         .await;
                     }
                 }
@@ -6650,12 +6650,11 @@ mod tests {
             if row.status == "idle" && matches!(live, SessionState::Idle) {
                 break;
             }
-            if std::time::Instant::now() >= deadline {
-                panic!(
-                    "expected idle after failed send; store={} live={live:?}",
-                    row.status
-                );
-            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "expected idle after failed send; store={} live={live:?}",
+                row.status
+            );
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
     }

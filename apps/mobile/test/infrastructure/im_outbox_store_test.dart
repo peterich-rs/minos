@@ -221,10 +221,7 @@ void main() {
       final after = store.listDueLanes(t0 + 12);
       expect(after.length, 1);
       expect(after.single.single.clientOpId, 'c2-a');
-      expect(
-        store.listDue(t0 + 12).any((e) => e.clientOpId == 'c1-b'),
-        isTrue,
-      );
+      expect(store.listDue(t0 + 12).any((e) => e.clientOpId == 'c1-b'), isTrue);
     });
   });
 

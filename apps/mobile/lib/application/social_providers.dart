@@ -713,7 +713,9 @@ class SocialConversation extends _$SocialConversation {
       return;
     }
     try {
-      await ref.read(socialRepositoryProvider).markConversationRead(
+      await ref
+          .read(socialRepositoryProvider)
+          .markConversationRead(
             conversationId: _conversationId,
             readUpToMessageSeq: observedSeq,
           );
