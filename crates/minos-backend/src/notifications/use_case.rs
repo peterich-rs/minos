@@ -110,6 +110,18 @@ pub enum DispatchOutcome {
     NoTokens,
 }
 
+/// Per-account outcome for the durable push queue worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountDispatchOutcome {
+    /// At least one provider accepted the push; success ledger written.
+    Sent,
+    /// Intentional non-send (online, prefs, already pushed, no tokens, cooldown).
+    /// Terminal for the queue row — do not retry.
+    Skipped { reason: String },
+    /// Provider/rate-limit failure — requeue with backoff.
+    Transient { reason: String },
+}
+
 // ── Error ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, thiserror::Error)]
@@ -141,6 +153,13 @@ pub trait NotificationService: Send + Sync {
         &self,
         event: &DurableEventEnvelope,
     ) -> Result<DispatchOutcome, NotificationError>;
+
+    /// Dispatch push for a single account (durable push queue worker).
+    async fn dispatch_for_account(
+        &self,
+        event: &DurableEventEnvelope,
+        account_id: &str,
+    ) -> Result<AccountDispatchOutcome, NotificationError>;
 }
 
 // ── Validation ─────────────────────────────────────────────────────────
@@ -326,145 +345,185 @@ impl NotificationService for DefaultNotificationService {
         &self,
         envelope: &DurableEventEnvelope,
     ) -> Result<DispatchOutcome, NotificationError> {
-        let now_ms = chrono::Utc::now().timestamp_millis();
-
         let target_account_ids = resolve_target_accounts(&self.store, &envelope.payload).await?;
         if target_account_ids.is_empty() {
             return Ok(DispatchOutcome::Skipped);
         }
 
         let mut any_sent = false;
-        let mut any_tokens = false;
-        let mut any_decision_send = false;
+        let mut any_wanted_send_no_tokens = false;
+        let mut any_other = false;
 
         for account_id in &target_account_ids {
-            let already_pushed =
-                push_dispatch_log::has_sent(&self.store, &envelope.event_id, account_id).await?;
-            let presence = self.resolve_presence(account_id, now_ms);
-            let prefs = notification_preferences::get(&self.store, account_id).await?;
-            let prefs = NotificationPreferences::from_row(&prefs);
-
-            let decision = decide(&DecisionInput {
-                event: &envelope.payload,
-                prefs: &prefs,
-                now_ms,
-                presence,
-                already_pushed_event: already_pushed,
-            });
-
-            match decision {
-                Decision::Send {
-                    payload,
-                    cooldown_key,
-                    cooldown_ms,
-                } => {
-                    any_decision_send = true;
-                    // Check-only first — only stamp cooldown after a true Sent.
-                    let allowed = crate::store::notification_cooldowns::is_allowed(
-                        &self.store,
-                        account_id,
-                        &cooldown_key,
-                        cooldown_ms,
-                        now_ms,
-                    )
-                    .await?;
-
-                    if !allowed {
-                        crate::telemetry::record_push_decision("skip", "cooldown");
-                        continue;
-                    }
-
-                    let tokens = push_tokens::list_for_account(&self.store, account_id).await?;
-                    if tokens.is_empty() {
-                        continue;
-                    }
-                    any_tokens = true;
-
-                    let mut account_sent = false;
-                    for token_row in &tokens {
-                        let kind = match token_row.kind.as_str() {
-                            "apns" => PushKind::Apns,
-                            _ => PushKind::Fcm,
-                        };
-                        if let Some(channel) = self.channel_for(kind) {
-                            let attempt = PushAttempt {
-                                token_hash: token_row.token_hash.clone(),
-                                account_id: account_id.clone(),
-                                payload: payload.clone(),
-                            };
-                            match channel.send(attempt).await {
-                                Ok(PushSendOutcome::Sent) => {
-                                    account_sent = true;
-                                    any_sent = true;
-                                    crate::telemetry::record_push_send(kind.as_str(), "sent");
-                                }
-                                Ok(PushSendOutcome::TokenExpired) => {
-                                    let _ = push_tokens::revoke(
-                                        &self.store,
-                                        &token_row.token_hash,
-                                        now_ms,
-                                    )
-                                    .await;
-                                    crate::telemetry::record_push_send(
-                                        kind.as_str(),
-                                        "token_expired",
-                                    );
-                                }
-                                Ok(PushSendOutcome::RateLimited) => {
-                                    crate::telemetry::record_push_send(
-                                        kind.as_str(),
-                                        "rate_limited",
-                                    );
-                                }
-                                Ok(PushSendOutcome::NotWired) => {
-                                    // P5: config hooks exist but provider not production-wired.
-                                    // Do not record_sent / do not burn cooldown.
-                                    crate::telemetry::record_push_send(kind.as_str(), "not_wired");
-                                }
-                                Err(_) => {
-                                    crate::telemetry::record_push_send(kind.as_str(), "error");
-                                }
-                            }
-                        }
-                    }
-
-                    if account_sent {
-                        push_dispatch_log::record_sent(
-                            &self.store,
-                            &envelope.event_id,
-                            account_id,
-                            now_ms,
-                        )
-                        .await?;
-                        // UX rate limit only after true delivery.
-                        let _ = crate::store::notification_cooldowns::record_sent(
-                            &self.store,
-                            account_id,
-                            &cooldown_key,
-                            now_ms,
-                        )
-                        .await;
-                    }
+            match self.dispatch_for_account(envelope, account_id).await? {
+                AccountDispatchOutcome::Sent => any_sent = true,
+                AccountDispatchOutcome::Skipped { reason } if reason == "no_tokens" => {
+                    any_wanted_send_no_tokens = true;
                 }
-                Decision::Skip { reason } => {
-                    let reason_label = match reason {
-                        DecisionReason::UserOnline => "user_online",
-                        DecisionReason::AlreadyPushed => "already_pushed",
-                        DecisionReason::QuietHours => "quiet_hours",
-                        DecisionReason::PreferenceDisabled => "preference_disabled",
-                        DecisionReason::NotNotifiable => "not_notifiable",
-                    };
-                    crate::telemetry::record_push_decision("skip", reason_label);
+                AccountDispatchOutcome::Skipped { .. }
+                | AccountDispatchOutcome::Transient { .. } => {
+                    any_other = true;
                 }
             }
         }
 
         if any_sent {
             Ok(DispatchOutcome::Sent)
-        } else if any_decision_send && !any_tokens {
+        } else if any_wanted_send_no_tokens && !any_other {
             Ok(DispatchOutcome::NoTokens)
         } else {
             Ok(DispatchOutcome::Skipped)
+        }
+    }
+
+    async fn dispatch_for_account(
+        &self,
+        envelope: &DurableEventEnvelope,
+        account_id: &str,
+    ) -> Result<AccountDispatchOutcome, NotificationError> {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+
+        let already_pushed =
+            push_dispatch_log::has_sent(&self.store, &envelope.event_id, account_id).await?;
+        let presence = self.resolve_presence(account_id, now_ms);
+        let prefs = notification_preferences::get(&self.store, account_id).await?;
+        let prefs = NotificationPreferences::from_row(&prefs);
+
+        let decision = decide(&DecisionInput {
+            event: &envelope.payload,
+            prefs: &prefs,
+            now_ms,
+            presence,
+            already_pushed_event: already_pushed,
+        });
+
+        match decision {
+            Decision::Send {
+                payload,
+                cooldown_key,
+                cooldown_ms,
+            } => {
+                let allowed = crate::store::notification_cooldowns::is_allowed(
+                    &self.store,
+                    account_id,
+                    &cooldown_key,
+                    cooldown_ms,
+                    now_ms,
+                )
+                .await?;
+
+                if !allowed {
+                    crate::telemetry::record_push_decision("skip", "cooldown");
+                    return Ok(AccountDispatchOutcome::Skipped {
+                        reason: "cooldown".into(),
+                    });
+                }
+
+                let tokens = push_tokens::list_for_account(&self.store, account_id).await?;
+                if tokens.is_empty() {
+                    return Ok(AccountDispatchOutcome::Skipped {
+                        reason: "no_tokens".into(),
+                    });
+                }
+
+                let mut account_sent = false;
+                let mut saw_rate_limited = false;
+                let mut saw_provider_error = false;
+                let mut only_not_wired = true;
+
+                for token_row in &tokens {
+                    let kind = match token_row.kind.as_str() {
+                        "apns" => PushKind::Apns,
+                        _ => PushKind::Fcm,
+                    };
+                    if let Some(channel) = self.channel_for(kind) {
+                        let attempt = PushAttempt {
+                            token_hash: token_row.token_hash.clone(),
+                            account_id: account_id.to_owned(),
+                            payload: payload.clone(),
+                        };
+                        match channel.send(attempt).await {
+                            Ok(PushSendOutcome::Sent) => {
+                                account_sent = true;
+                                only_not_wired = false;
+                                crate::telemetry::record_push_send(kind.as_str(), "sent");
+                            }
+                            Ok(PushSendOutcome::TokenExpired) => {
+                                only_not_wired = false;
+                                let _ =
+                                    push_tokens::revoke(&self.store, &token_row.token_hash, now_ms)
+                                        .await;
+                                crate::telemetry::record_push_send(kind.as_str(), "token_expired");
+                            }
+                            Ok(PushSendOutcome::RateLimited) => {
+                                only_not_wired = false;
+                                saw_rate_limited = true;
+                                crate::telemetry::record_push_send(kind.as_str(), "rate_limited");
+                            }
+                            Ok(PushSendOutcome::NotWired) => {
+                                // Config present but provider not production-wired.
+                                crate::telemetry::record_push_send(kind.as_str(), "not_wired");
+                            }
+                            Err(_) => {
+                                only_not_wired = false;
+                                saw_provider_error = true;
+                                crate::telemetry::record_push_send(kind.as_str(), "error");
+                            }
+                        }
+                    }
+                }
+
+                if account_sent {
+                    push_dispatch_log::record_sent(
+                        &self.store,
+                        &envelope.event_id,
+                        account_id,
+                        now_ms,
+                    )
+                    .await?;
+                    let _ = crate::store::notification_cooldowns::record_sent(
+                        &self.store,
+                        account_id,
+                        &cooldown_key,
+                        now_ms,
+                    )
+                    .await;
+                    return Ok(AccountDispatchOutcome::Sent);
+                }
+
+                if only_not_wired {
+                    // Dev/unwired: terminal skip so queue does not thrash forever.
+                    return Ok(AccountDispatchOutcome::Skipped {
+                        reason: "not_wired".into(),
+                    });
+                }
+                if saw_rate_limited {
+                    return Ok(AccountDispatchOutcome::Transient {
+                        reason: "rate_limited".into(),
+                    });
+                }
+                if saw_provider_error {
+                    return Ok(AccountDispatchOutcome::Transient {
+                        reason: "provider_error".into(),
+                    });
+                }
+                Ok(AccountDispatchOutcome::Skipped {
+                    reason: "no_successful_send".into(),
+                })
+            }
+            Decision::Skip { reason } => {
+                let reason_label = match reason {
+                    DecisionReason::UserOnline => "user_online",
+                    DecisionReason::AlreadyPushed => "already_pushed",
+                    DecisionReason::QuietHours => "quiet_hours",
+                    DecisionReason::PreferenceDisabled => "preference_disabled",
+                    DecisionReason::NotNotifiable => "not_notifiable",
+                };
+                crate::telemetry::record_push_decision("skip", reason_label);
+                Ok(AccountDispatchOutcome::Skipped {
+                    reason: reason_label.into(),
+                })
+            }
         }
     }
 }
@@ -473,7 +532,7 @@ impl NotificationService for DefaultNotificationService {
 ///
 /// - Message account events: the account topic owner (not self-sender).
 /// - Approval / session ended: conversation members of the agent session.
-async fn resolve_target_accounts(
+pub async fn resolve_target_accounts(
     store: &StoreHandle,
     event: &DurableEvent,
 ) -> Result<Vec<String>, NotificationError> {

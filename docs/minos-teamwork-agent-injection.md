@@ -109,13 +109,22 @@ TUI only subscribes to conversation events for display.
 
 ## Injection Paths
 
-| Agent | Injection path |
-| --- | --- |
-| Codex | `codex app-server` receives `-c mcp_servers.minos_teamwork.command=...`, `-c mcp_servers.minos_teamwork.args=[...]`, and `-c mcp_servers.minos_teamwork.enabled=true`. Teamwork guidance is also set via `thread/start.developerInstructions`. |
-| Claude | `claude -p` receives `--mcp-config <json>` with `mcpServers.minos_teamwork` and `--strict-mcp-config`, plus `--append-system-prompt` with teamwork guidance. |
-| Gemini | ACP `session/new` and `session/resume` receive `mcpServers` containing `minos_teamwork` as a stdio server. |
-| Grok | Spawned as `grok --rules <teamwork guidance> agent --no-leader stdio`. ACP `session/new` and `session/resume` receive `mcpServers` containing `minos_teamwork` (same stdio shape as Gemini). `--rules` is a top-level `grok` flag that appends to the system prompt. Grok `exit_plan_mode` parks on ACP `ext_method` → Minos approval overlay (`a`/`s`/`q`); `ask_user_question` still auto-cancels until a question UI lands. Grok ACP projection (`translate_grok`) parses `SessionNotification._meta` (`streamStartMs` / timestamps / `promptId`), closes assistant text on tool + **agent_message_chunk** `streamStartMs` boundaries (not thought — concurrent thought stream has a different `streamStartMs` and must not shatter text into per-token bubbles), suppresses plumbing tools (todo/wait/task-output), and prefers `rawInput.description` for tool titles — aligned with grok-build `AcpUpdateTracker`. |
-| OpenCode | `opencode serve` receives `OPENCODE_CONFIG_CONTENT` containing a local enabled `mcp.minos_teamwork` server. |
+System-level teamwork/profile text is compiled by **`minos-prompt-runtime`**
+(`compile_session_context` / `compile_for_session`). Adapters only map
+`CompiledPromptBundle.system_instructions` onto provider surfaces.
+
+| Agent | MCP injection | System prompt delivery (Task A) |
+| --- | --- | --- |
+| Codex | `codex app-server` `-c mcp_servers.minos_teamwork.*` | `thread/start.developerInstructions` ← compiler (only when conversation-bound and/or profile non-empty) |
+| Claude | `--mcp-config` + `--strict-mcp-config` | `--append-system-prompt` ← compiler (flag omitted when empty) |
+| Grok | ACP `session/new`/`resume` `mcpServers` | top-level `grok --rules … agent --no-leader stdio` ← compiler (activation is **not** re-checked in the driver) |
+| Gemini | ACP `mcpServers` | **Not delivered in Task A** — profile may sit on `SessionHandle` only until Task C capability probe |
+| OpenCode | `OPENCODE_CONFIG_CONTENT` local `mcp.minos_teamwork` | **Not delivered in Task A** — same gap as Gemini |
+
+Grok control-plane notes (unchanged): `exit_plan_mode` parks on ACP `ext_method`
+→ Minos approval overlay (`a`/`s`/`q`); projection prefers `rawInput.description`
+for tool titles and closes assistant text on tool + `agent_message_chunk`
+`streamStartMs` boundaries (not thought).
 
 The command may be the standalone `minos-teamwork-mcp` binary or the hidden
 sidecar form:
@@ -127,24 +136,36 @@ minos-daemon __minos-teamwork-mcp --conversation-id ... --source-agent ... --sou
 
 ## Skill Locations
 
-The repo carries the Minos teamwork skill inside the TUI crate:
+Canonical skill body (Task B SSOT):
 
-- `crates/minos-tui/skills/minos-teamwork/SKILL.md`
+- `crates/minos-prompt-runtime/packages/minos.teamwork/fragments/skill/SKILL.md`
 
-On TUI startup, Minos installs that embedded skill into global skill folders:
+On TUI startup, Minos installs that embedded package skill into global skill folders:
 
 - `~/.agents/skills/minos-teamwork/SKILL.md`
 - `~/.claude/skills/minos-teamwork/SKILL.md`
 - `~/.gemini/skills/minos-teamwork/SKILL.md`
 - `~/.config/opencode/skills/minos-teamwork/SKILL.md`
 
+MCP `initialize.instructions` uses the same package's
+`fragments/mcp_server_instructions.md` via `minos_prompt_runtime::TEAMWORK_MCP_SERVER_INSTRUCTIONS`.
+
 ## Prompt Guidance
 
-`minos-agent-runtime` also injects Minos teamwork guidance:
+**Task A (landed):** Codex, Claude, and Grok consume `CompiledPromptBundle` only.
 
-- Codex: `thread/start.developerInstructions`
-- Claude: `--append-system-prompt`
-- Gemini/OpenCode: skill plus MCP server instructions
+- **Activation:** `conversation_bound == true` (session has a Minos conversation
+  id) includes the teamwork bootstrap; unbound sessions get profile-only or
+  nothing.
+- **Profile:** host profile / launch `instructions` are layered after bootstrap
+  by the compiler (`\n\n` join). Drivers never reassemble strings.
+- **Digest:** each compile produces `PromptProvenance.compiled_digest` (and
+  bootstrap digest when active). Session persistence of digest is Task D.
+
+Canonical package root:
+`crates/minos-prompt-runtime/packages/minos.teamwork/`  
+(`bootstrap.md`, `mcp_server_instructions.md`, `skill/SKILL.md`, `package.yaml`)  
+Semantic marker for contract tests: `Minos teamwork mode`.
 
 Agents should use `minos_teamwork.list_conversation_messages` when conversation
 history, teammate output, mentions, or coordination state may affect the answer.
@@ -154,3 +175,36 @@ delegated session should only delegate back to its source agent, not to a third
 agent.
 `post_conversation_update` is only for concise updates that should appear in
 the shared conversation.
+
+## Prompt Runtime Contract
+
+Full design:
+[`research-superpowers-prompt-organization.md`](research-superpowers-prompt-organization.md).
+
+Minos prompt delivery is split into layers with distinct ownership:
+
+| Layer | Owner | Delivery |
+| --- | --- | --- |
+| Bootstrap | `minos.teamwork` fragment (Task A single source for runtime inject) | Conversation-bound sessions via provider adapter |
+| Runtime contract | Provider adapter | Tool/MCP names and provider-specific mappings only |
+| Profile instructions | Agent profile resolved by daemon | New sessions using that profile |
+| Conversation briefing | Conversation/session launcher | Roster, role brief, worktree (later) |
+| Skill body | TUI-installed skill catalog (Task D moves reconcile to daemon) | On-demand skill load; not full system prompt |
+
+Compiler seam (final, Task A):
+`compile_session_context(SessionContext) -> CompiledPromptBundle`.
+
+| Runtime | Adapter id | Status |
+| --- | --- | --- |
+| Codex | `codex@developer_instructions` | **Landed** |
+| Claude | `claude@append_system_prompt` | **Landed** |
+| Grok | `grok@rules` | **Landed** |
+| Gemini | (unsupported until probe) | Task C — do not invent ACP instructions field |
+| OpenCode | (unsupported until probe) | Task C |
+
+### Remaining gaps
+
+- Skill reconciliation still runs from TUI startup only (Task D moves install
+  to daemon + ownership/digest state machine).
+- Gemini / OpenCode profile instructions are not proven on the wire (Task C).
+- Session metadata does not yet persist `compiled_prompt_digest` (Task D).

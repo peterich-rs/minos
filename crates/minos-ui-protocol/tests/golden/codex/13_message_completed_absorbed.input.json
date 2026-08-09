@@ -4,8 +4,7 @@
     "sessionId":"thr_fixture","turnId":"t1"
   }},
   {"method":"item/agentMessage/delta","params":{"itemId":"i1","delta":"hi"}},
-  {"method":"item/agentMessage/completed","params":{"itemId":"i1"}},
-  {"method":"item/reasoning/delta","params":{"itemId":"i1","delta":"thought"}},
-  {"method":"item/reasoning/completed","params":{"itemId":"i1"}},
+  {"method":"item/reasoning/textDelta","params":{"itemId":"i1","threadId":"thr_fixture","turnId":"t1","contentIndex":0,"delta":"thought"}},
+  {"method":"item/reasoning/summaryPartAdded","params":{"itemId":"i1","threadId":"thr_fixture","turnId":"t1","summaryIndex":0}},
   {"method":"turn/completed","params":{"finishedAtMs":1714000015000}}
 ]

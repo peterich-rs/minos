@@ -163,10 +163,13 @@ export function TranscriptPane({
   );
 
   // Cursor only while session is live *and* the timeline tail is still an
-  // open text/reasoning bubble. Walking back past tools left a stuck █ on
-  // finished narration (OpenCode task/subagent turns; same for other agents).
+  // open text/reasoning bubble. Prefer Entity status (liveSession) over the
+  // list prop — session.status lags behind manager/ingest patches.
+  // Walking back past tools left a stuck █ on finished narration
+  // (OpenCode task/subagent turns; same for other agents).
   const liveStreaming =
-    session.status === "running" || session.status === "needs_approval";
+    liveSession.status === "running" ||
+    liveSession.status === "needs_approval";
   const streamingTailId = useMemo(() => streamingTailItemId(items), [items]);
 
   const loadOlder = useCallback(async () => {
@@ -343,7 +346,8 @@ export function TranscriptPane({
   useEffect(() => {
     if (source !== "daemon" || livePush) return;
     const live =
-      session.status === "running" || session.status === "needs_approval";
+      liveSession.status === "running" ||
+      liveSession.status === "needs_approval";
     if (!live && status?.phase !== "error") return;
     const id = window.setInterval(() => {
       void loadTranscript(sessionId, {
@@ -355,7 +359,7 @@ export function TranscriptPane({
     return () => window.clearInterval(id);
   }, [
     sessionId,
-    session.status,
+    liveSession.status,
     source,
     livePush,
     status?.phase,
@@ -557,7 +561,7 @@ export function TranscriptPane({
         </div>
 
         {summaryOpen ? (
-          <SessionSummaryPanel session={session} summary={summary} />
+          <SessionSummaryPanel session={liveSession} summary={summary} />
         ) : null}
       </div>
     </section>

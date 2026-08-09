@@ -198,6 +198,11 @@ class SocialRepository {
     return _cacheStore.listDueOutbox(nowMs: nowMs);
   }
 
+  /// Per-conversation FIFO due lanes (see SocialCacheStore.listDueOutboxLanes).
+  Future<List<List<ImOutboxEntry>>> listDueOutboxLanes({int? nowMs}) {
+    return _cacheStore.listDueOutboxLanes(nowMs: nowMs);
+  }
+
   Future<void> markOutboxInflight(String clientOpId) {
     return _cacheStore.markOutboxInflight(clientOpId);
   }
@@ -300,8 +305,14 @@ class SocialRepository {
     );
   }
 
-  Future<void> markConversationRead({required String conversationId}) {
-    return _core.markConversationRead(conversationId: conversationId);
+  Future<void> markConversationRead({
+    required String conversationId,
+    required int readUpToMessageSeq,
+  }) {
+    return _core.markConversationRead(
+      conversationId: conversationId,
+      readUpToMessageSeq: readUpToMessageSeq,
+    );
   }
 
   Future<FriendRequestsResponse> friendRequests() {

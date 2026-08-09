@@ -288,7 +288,8 @@ async fn approval_decision_rpc_is_registered() {
     let url = discovery_addr(&tmp);
     let client = WsClientBuilder::default().build(&url).await.unwrap();
 
-    client
+    // Missing approval must fail-visible (runtime no longer silently Ok).
+    let err = client
         .request::<(), _>(
             "minos_local_approval_decision",
             [ApprovalDecisionRequest {
@@ -298,7 +299,12 @@ async fn approval_decision_rpc_is_registered() {
             }],
         )
         .await
-        .unwrap();
+        .expect_err("missing approval must not silently succeed");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("approval request not found") || msg.contains("not found"),
+        "expected missing-approval error, got: {msg}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

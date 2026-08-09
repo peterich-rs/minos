@@ -1971,15 +1971,21 @@ impl DurableEventStore for StoreBackedDurableEventStore {
         let event_id = Uuid::new_v4().to_string();
         let mut tx = self.store.begin().await?;
 
+        // Allocate from topic_metadata (never MAX(log)+1) so retention cannot reset seq.
         let topic_seq = match &mut tx {
             DbTx::Sqlite(tx) => {
                 let next_seq = sqlx::query_scalar::<_, i64>(
-                    "SELECT COALESCE(MAX(topic_seq), 0) + 1 \
-                     FROM durable_event_log \
-                     WHERE topic_kind = ? AND topic = ?",
+                    "INSERT INTO topic_metadata
+                        (topic_kind, topic, high_watermark, retention_floor, updated_at_ms)
+                     VALUES (?, ?, 1, 0, ?)
+                     ON CONFLICT(topic_kind, topic) DO UPDATE SET
+                        high_watermark = topic_metadata.high_watermark + 1,
+                        updated_at_ms = excluded.updated_at_ms
+                     RETURNING high_watermark",
                 )
                 .bind(topic_kind)
                 .bind(topic)
+                .bind(at_ms)
                 .fetch_one(&mut **tx)
                 .await
                 .map_err(|e| BackendError::StoreQuery {
@@ -2008,7 +2014,6 @@ impl DurableEventStore for StoreBackedDurableEventStore {
                 next_seq
             }
             DbTx::Postgres(tx) => {
-                // Advisory lock for topic-level serialization.
                 sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
                     .bind(topic)
                     .execute(&mut **tx)
@@ -2019,12 +2024,17 @@ impl DurableEventStore for StoreBackedDurableEventStore {
                     })?;
 
                 let next_seq = sqlx::query_scalar::<_, i64>(
-                    "SELECT COALESCE(MAX(topic_seq), 0) + 1 \
-                     FROM durable_event_log \
-                     WHERE topic_kind = $1 AND topic = $2",
+                    "INSERT INTO topic_metadata
+                        (topic_kind, topic, high_watermark, retention_floor, updated_at_ms)
+                     VALUES ($1, $2, 1, 0, $3)
+                     ON CONFLICT(topic_kind, topic) DO UPDATE SET
+                        high_watermark = topic_metadata.high_watermark + 1,
+                        updated_at_ms = EXCLUDED.updated_at_ms
+                     RETURNING high_watermark",
                 )
                 .bind(topic_kind)
                 .bind(topic)
+                .bind(at_ms)
                 .fetch_one(&mut **tx)
                 .await
                 .map_err(|e| BackendError::StoreQuery {

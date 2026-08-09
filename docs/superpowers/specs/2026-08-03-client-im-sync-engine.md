@@ -70,7 +70,7 @@
 
 ### Desktop write / sync
 
-- `apps/desktop/src/shared/lib/im-outbox.ts` — localStorage outbox；inflight 不可回收
+- `apps/desktop/src/shared/lib/im-outbox.ts` — Tauri SQLite outbox（intent lanes；见 full-review C2）
 - `apps/desktop/src/shared/lib/im-cloud-sync.ts` — user flush；agent uplink fire-and-forget
 - `apps/desktop/src/shared/lib/hub-realtime.ts` — WS 状态机；无 visibility
 - `apps/desktop/src/shared/lib/im-hub-bridge.ts` — 入站 merge；SnapshotRequired 清空；unread patch

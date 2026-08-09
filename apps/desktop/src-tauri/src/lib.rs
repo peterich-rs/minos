@@ -3,6 +3,7 @@
 mod app_state;
 mod commands;
 mod daemon;
+mod im_outbox_store;
 mod shutdown;
 mod window_reveal;
 
@@ -51,6 +52,10 @@ pub fn run() {
 
     let daemon = Arc::new(DaemonBridge::new());
     let daemon_for_exit = Arc::clone(&daemon);
+    let im_outbox = Arc::new(
+        im_outbox_store::ImOutboxStore::open_default()
+            .expect("open durable im_outbox sqlite store"),
+    );
     let shutdown_done = Arc::new(AtomicBool::new(false));
 
     #[cfg(unix)]
@@ -96,6 +101,7 @@ pub fn run() {
     builder
         .manage(AppState {
             daemon: Arc::clone(&daemon),
+            im_outbox: Arc::clone(&im_outbox),
         })
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -142,6 +148,10 @@ pub fn run() {
             prepare_for_app_update,
             restore_after_failed_update,
             reset_update_shutdown_guard,
+            im_outbox_list_all,
+            im_outbox_replace_all,
+            im_outbox_upsert,
+            im_outbox_clear,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Minos desktop")

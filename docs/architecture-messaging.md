@@ -358,15 +358,19 @@ Minos 明确区分 **可靠性语义不同** 的消息平面——这是成熟�
 - 线帧：`ServerFrame::DurableEvent { topic, topic_seq, kind, payload, event_id }`
 - 载荷：`DurableEvent`（typed，见 `realtime.rs`）
 - 语义：
-  - 业务事务内写入 `durable_event_log`（**每 topic 单调递增 `topic_seq`**）
+  - **序号权威**在 `topic_metadata`（`high_watermark` 永不回退；`retention_floor` 为已删 payload 上界）
+  - 业务事务内写入 `durable_event_log` payload（**`topic_seq` 由 authority 分配，禁止 `MAX(log)+1`**）
+  - retention 只删 payload、推进 floor，**不能**重置 watermark
   - 同事务入队 `outbox_events`
   - Outbox dispatcher → 在线订阅者推送；多实例经 Redis bus
-  - 客户端用 `resume_after: { topic → last_topic_seq }` 续传
-  - 水位落后保留窗口 → `SnapshotRequired`，走 HTTP 全量/分页重建
+  - Subscribe 路径：**arm replay/live barrier → 注册 live → Ack → replay ≤ HW → 按 seq drain 缓冲**
+  - 客户端用 `resume_after: { topic → last_topic_seq }` 续传；`after < retention_floor`（含空日志）→ `SnapshotRequired`
+  - cursor **仅在 apply/commit 成功后**推进（Mobile/Desktop）
 
 **典型事件**：
 
 - 社交：`ConversationMessageAppended` / `Recalled`、`AccountConversationMessage*`
+- 成员：`ConversationMemberChanged`、`AccountConversationMembershipChanged`（remove 后立即 revoke live sub）
 - 会话：`AgentSessionStarted/Ended`、`AgentTurnAppended`
 - 审批：`ApprovalRequested` / `ApprovalResolved`
 - 控制：`HostCommandIssued`、`HostForceClose`
@@ -714,7 +718,7 @@ Hub SSOT 收敛：
 | 冷路径 gap | 打开 tail + 上翻 `before_seq`；Snapshot / 前向补洞 **`after_seq`** | `POST …/messages/query` | ✅ **C3 已接通**（Desktop range reconcile + Mobile loadOlder / Snapshot） |
 | 撤回 | Hub `POST …/messages/:id/recall` + Durable `*Recalled` | conversation + account topics | ✅ |
 | Reaction | Hub toggle + conversation durable | Hub API + Intent Outbox | Desktop/Mobile `reaction_toggle` outbox + B6 `client_op_id` 幂等；conversation-only fanout |
-| 未读 / mark-read | Linked 打开会话 → `POST …/read` + 本地 badge | Hub + local count | ✅ **C4** 增量 inbox |
+| 未读 / mark-read | Linked 打开会话 → `POST …/read` body `{ read_up_to_message_seq }`（客户端 observed watermark，服务端单调 MAX clamp） | Hub + local count | ✅ **observed-seq**；禁止服务端静默标到最新 |
 | Mobile `@agent` 派发 | 消息落库后 **AgentDispatchQueue** + CompletionWatch(per origin×session) | Backend **B3/B4** | ✅ 异步 enqueue；**多 @ fan-out**（`UNIQUE(origin, agent_id)` 一 agent 一行）；watch 键 = `{origin}:{session_id}` |
 | Agent 表情互动 | teamwork MCP `react_to_message` → daemon 本地 reaction | Host workbench | ✅ **硬门禁**：仅允许对 **@ 了该 agent** 的消息；actor_kind=`agent` |
 | Session 生命周期 | `session_lifecycle` job：失联 host → session `failed` + durable end；watch TTL → 失败气泡 + remove | Backend **B5** | ✅ 非 COUNT-only |
@@ -729,14 +733,24 @@ Hub SSOT 收敛：
 
 **已收敛（正确性地基）**：
 
-- 社交写路径 Transactional Outbox（`chat_messages` + durable + outbox 同事务）  
+- 社交写路径 Transactional Outbox（`chat_messages` + attachments + durable + outbox 同事务）  
 - Hub `chat_messages.message_seq` + `messages/query` `before_seq` / `after_seq`  
-- `conversation_reads.last_read_seq` 作为未读边界  
+- `conversation_reads.last_read_seq` 作为未读边界；mark-read 提交 **observed** `read_up_to_message_seq`  
+- `topic_metadata` 序号权威 + retention floor + Subscribe replay/live barrier  
+- per-conversation FIFO outbox（Desktop/Mobile）  
+- 持久 Push lane（`push_dispatch_queue`）+ 持久 `completion_watches`（启动 hydrate）  
 - TurnCompletionProjector：dispatch 时 arm watch，host ingest 事件驱动投影（2s settle 复检），不再 100ms 无限轮询  
+- 群成员 owner/admin 角色 + remove 后 revoke subscription + durable membership 事件  
+
+**全量 review / 修复追踪**：[2026-08-09-im-reliability-full-review.md](superpowers/specs/2026-08-09-im-reliability-full-review.md)
 
 **仍待 / 已知缺口**：
 
 - Desktop Linked **会话列表**仍以 daemon 为主（Hub inbox 列表 SSOT 未完成）  
+- Desktop IM outbox：**Tauri SQLite**（`im_outbox.sqlite3`，fail-closed；localStorage 仅一次性迁移）  
+- Manager lifecycle lag：**snapshot 对账**（manager live + SQLite mid-flight → reaped；completion redrive）  
+- Web 非正式 IM 客户端  
+
 - Account topic 重连 resume（网关 auto-sub 仍可能从 0 回放）  
 - Reaction Intent Outbox / Mobile UI / B6 event_id 确定性：**已实现**（见 IM Reliability B6/C5）  
 

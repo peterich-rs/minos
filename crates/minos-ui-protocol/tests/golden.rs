@@ -12,11 +12,13 @@
 //! field type changes mobile's display without loud failure at the unit
 //! level. The fixtures make that surface explicit and diff-reviewable.
 //!
-//! UUID handling: `item/started` + `item/toolCall/started` each mint fresh
-//! v4 UUIDs via `Uuid::new_v4()`. The fixture uses the literal string
-//! `"<uuid>"` where a translator-assigned id appears; the harness rewrites
-//! every actual UUID match in the serialised `got` to `"<uuid>"` before
-//! deserialising, so the comparison is deterministic without a regex dep.
+//! UUID handling: some paths still mint fresh v4 UUIDs via `Uuid::new_v4()`
+//! (e.g. missing item ids). The fixture uses the literal string `"<uuid>"`
+//! where a translator-assigned id appears; the harness rewrites every actual
+//! UUID match in the serialised `got` to `"<uuid>"` before deserialising, so
+//! the comparison is deterministic without a regex dep.
+//! Tool items use stable ids (`{item_type}:{item_id}`) from the real
+//! `item/started` + `item/completed` lifecycle.
 
 use std::fs;
 use std::path::PathBuf;

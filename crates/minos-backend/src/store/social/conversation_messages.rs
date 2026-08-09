@@ -24,7 +24,7 @@ pub async fn get_message(
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, ChatMessageRow>(
-                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type, message_source
                    FROM chat_messages
                   WHERE message_id = ?",
             )
@@ -34,7 +34,7 @@ pub async fn get_message(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, ChatMessageRow>(
-                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type, message_source
                    FROM chat_messages
                   WHERE message_id = $1",
             )
@@ -52,7 +52,7 @@ pub async fn get_message_in_tx(
 ) -> Result<Option<ChatMessageRow>, BackendError> {
     match tx {
         DbTx::Sqlite(tx) => sqlx::query_as::<_, ChatMessageRow>(
-            "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type
+            "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type, message_source
                FROM chat_messages
               WHERE message_id = ?",
         )
@@ -60,7 +60,7 @@ pub async fn get_message_in_tx(
         .fetch_optional(&mut **tx)
         .await,
         DbTx::Postgres(tx) => sqlx::query_as::<_, ChatMessageRow>(
-            "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type
+            "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type, message_source
                FROM chat_messages
               WHERE message_id = $1",
         )
@@ -110,7 +110,7 @@ async fn list_messages_before(
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, ChatMessageRow>(
-                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type, message_source
                    FROM chat_messages
                   WHERE conversation_id = ? AND message_seq < ?
                   ORDER BY message_seq DESC
@@ -124,7 +124,7 @@ async fn list_messages_before(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, ChatMessageRow>(
-                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type, message_source
                    FROM chat_messages
                   WHERE conversation_id = $1 AND message_seq < $2
                   ORDER BY message_seq DESC
@@ -149,7 +149,7 @@ async fn list_messages_after(
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, ChatMessageRow>(
-                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type, message_source
                    FROM chat_messages
                   WHERE conversation_id = ? AND message_seq > ?
                   ORDER BY message_seq ASC
@@ -163,7 +163,7 @@ async fn list_messages_after(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, ChatMessageRow>(
-                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type, message_source
                    FROM chat_messages
                   WHERE conversation_id = $1 AND message_seq > $2
                   ORDER BY message_seq ASC
@@ -230,7 +230,7 @@ pub async fn list_messages_by_ids(
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             let mut builder = QueryBuilder::<Sqlite>::new(
-                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type\n           FROM chat_messages\n          WHERE message_id IN (",
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type, message_source\n           FROM chat_messages\n          WHERE message_id IN (",
             );
             {
                 let mut separated = builder.separated(", ");
@@ -243,7 +243,7 @@ pub async fn list_messages_by_ids(
         }
         StorePoolRef::Postgres(pool) => {
             let mut builder = QueryBuilder::<Postgres>::new(
-                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type\n           FROM chat_messages\n          WHERE message_id IN (",
+                "SELECT message_id, conversation_id, sender_account_id, sender_agent_id, text, created_at_ms, message_seq, reply_to_message_id, recalled_at_ms, sender_type, message_source\n           FROM chat_messages\n          WHERE message_id IN (",
             );
             {
                 let mut separated = builder.separated(", ");
@@ -340,7 +340,7 @@ pub async fn insert_message(
 
 /// Insert a user chat message, optionally with a client-owned id for multi-end
 /// idempotent dual-write. If `client_message_id` already exists, returns the
-/// existing row when it belongs to the same conversation.
+/// existing row when the full request fingerprint matches.
 pub async fn insert_message_with_id(
     store: &impl AsStorePool,
     conversation_id: &str,
@@ -350,6 +350,35 @@ pub async fn insert_message_with_id(
     reply_to_message_id: Option<&str>,
     mentioned_account_ids: &[String],
     client_message_id: Option<&str>,
+) -> Result<ChatMessageRow, BackendError> {
+    insert_message_with_id_full(
+        store,
+        conversation_id,
+        sender_account_id,
+        text,
+        created_at_ms,
+        reply_to_message_id,
+        mentioned_account_ids,
+        client_message_id,
+        &[],
+        "client_live",
+    )
+    .await
+}
+
+/// Full fingerprint insert (tests + callers that already open a pool).
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_message_with_id_full(
+    store: &impl AsStorePool,
+    conversation_id: &str,
+    sender_account_id: &str,
+    text: &str,
+    created_at_ms: i64,
+    reply_to_message_id: Option<&str>,
+    mentioned_account_ids: &[String],
+    client_message_id: Option<&str>,
+    attachment_blob_ids: &[String],
+    message_source: &str,
 ) -> Result<ChatMessageRow, BackendError> {
     let mut tx = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => pool
@@ -372,8 +401,18 @@ pub async fn insert_message_with_id(
         reply_to_message_id,
         mentioned_account_ids,
         client_message_id,
+        attachment_blob_ids,
+        message_source,
     )
     .await?;
+    if outcome.inserted && !attachment_blob_ids.is_empty() {
+        crate::store::message_attachments::link_blobs_to_message_in_tx(
+            &mut tx,
+            &outcome.row.message_id,
+            attachment_blob_ids,
+        )
+        .await?;
+    }
     tx.commit().await?;
     Ok(outcome.row)
 }
@@ -383,6 +422,9 @@ pub async fn insert_message_with_id(
 /// Idempotent hit on `client_message_id` does not write; caller must still
 /// `ensure_social_message_delivery_in_tx` so a prior insert-without-durable can
 /// be repaired.
+///
+/// Fingerprint (same intent only): conversation, sender, text, reply,
+/// attachment blob set, `message_source`.
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_message_with_id_in_tx(
     tx: &mut DbTx<'_>,
@@ -393,20 +435,68 @@ pub async fn insert_message_with_id_in_tx(
     reply_to_message_id: Option<&str>,
     mentioned_account_ids: &[String],
     client_message_id: Option<&str>,
+    attachment_blob_ids: &[String],
+    message_source: &str,
 ) -> Result<InsertMessageOutcome, BackendError> {
+    let source = normalize_message_source(message_source);
+    let want_attachments =
+        crate::store::message_attachments::normalize_attachment_fingerprint(attachment_blob_ids);
+
     let message_id = match client_message_id.map(str::trim).filter(|s| !s.is_empty()) {
         Some(id) => {
             // Must read on the open tx — SQLite test pools are single-connection.
             if let Some(existing) = get_message_in_tx(tx, id).await? {
-                if existing.conversation_id == conversation_id {
-                    return Ok(InsertMessageOutcome {
-                        row: existing,
-                        inserted: false,
+                // Idempotency key is (sender, client_message_id) + request fingerprint.
+                if existing.conversation_id != conversation_id {
+                    return Err(BackendError::StoreQuery {
+                        operation: "social::insert_message_with_id.conflict".into(),
+                        message: format!(
+                            "message_id {id} already exists in a different conversation"
+                        ),
                     });
                 }
-                return Err(BackendError::StoreQuery {
-                    operation: "social::insert_message_with_id.conflict".into(),
-                    message: format!("message_id {id} already exists in a different conversation"),
+                if existing.sender_account_id != sender_account_id {
+                    return Err(idempotency_conflict(
+                        id,
+                        "already used by a different sender",
+                    ));
+                }
+                if existing.text != text {
+                    return Err(idempotency_conflict(
+                        id,
+                        "reused with different message body",
+                    ));
+                }
+                let existing_reply = existing.reply_to_message_id.as_deref();
+                if existing_reply != reply_to_message_id {
+                    return Err(idempotency_conflict(
+                        id,
+                        "reused with different reply target",
+                    ));
+                }
+                let existing_source = normalize_message_source(&existing.message_source);
+                if existing_source != source {
+                    return Err(idempotency_conflict(
+                        id,
+                        "reused with different message_source",
+                    ));
+                }
+                let existing_attachments =
+                    crate::store::message_attachments::list_blob_ids_for_message_in_tx(tx, id)
+                        .await?;
+                let existing_fp =
+                    crate::store::message_attachments::normalize_attachment_fingerprint(
+                        &existing_attachments,
+                    );
+                if existing_fp != want_attachments {
+                    return Err(idempotency_conflict(
+                        id,
+                        "reused with different attachments",
+                    ));
+                }
+                return Ok(InsertMessageOutcome {
+                    row: existing,
+                    inserted: false,
                 });
             }
             id.to_string()
@@ -424,8 +514,9 @@ pub async fn insert_message_with_id_in_tx(
         DbTx::Sqlite(tx) => {
             sqlx::query(
                 "INSERT INTO chat_messages
-                    (message_id, conversation_id, sender_account_id, text, created_at_ms, message_seq, reply_to_message_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (message_id, conversation_id, sender_account_id, text, created_at_ms,
+                     message_seq, reply_to_message_id, message_source)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&message_id)
             .bind(conversation_id)
@@ -434,6 +525,7 @@ pub async fn insert_message_with_id_in_tx(
             .bind(created_at_ms)
             .bind(message_seq)
             .bind(reply_to_message_id)
+            .bind(source)
             .execute(&mut **tx)
             .await
             .map_err(store_err("social::insert_message.insert"))?;
@@ -453,8 +545,9 @@ pub async fn insert_message_with_id_in_tx(
         DbTx::Postgres(tx) => {
             sqlx::query(
                 "INSERT INTO chat_messages
-                    (message_id, conversation_id, sender_account_id, text, created_at_ms, message_seq, reply_to_message_id)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                    (message_id, conversation_id, sender_account_id, text, created_at_ms,
+                     message_seq, reply_to_message_id, message_source)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             )
             .bind(&message_id)
             .bind(conversation_id)
@@ -463,6 +556,7 @@ pub async fn insert_message_with_id_in_tx(
             .bind(created_at_ms)
             .bind(message_seq)
             .bind(reply_to_message_id)
+            .bind(source)
             .execute(&mut **tx)
             .await
             .map_err(store_err("social::insert_message.insert"))?;
@@ -493,9 +587,21 @@ pub async fn insert_message_with_id_in_tx(
             reply_to_message_id: reply_to_message_id.map(ToOwned::to_owned),
             recalled_at_ms: None,
             sender_type: "user".to_string(),
+            message_source: source.to_string(),
         },
         inserted: true,
     })
+}
+
+fn normalize_message_source(source: &str) -> &'static str {
+    minos_protocol::MessageSource::parse(source).as_str()
+}
+
+fn idempotency_conflict(client_message_id: &str, detail: &str) -> BackendError {
+    BackendError::StoreQuery {
+        operation: "social::insert_message_with_id.idempotency_conflict".into(),
+        message: format!("client_message_id {client_message_id} {detail}"),
+    }
 }
 
 pub async fn bind_session_to_message(

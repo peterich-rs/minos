@@ -27,10 +27,10 @@ import {
 import {
   EMPTY_MESSAGE_HISTORY,
   MESSAGE_PAGE_SIZE,
-  firstMessageCreatedAtMs,
   firstMessageSeq,
   lastMessageSeq,
   mergeMessagesQuietTail,
+  messageHistoryFromWindow,
   trimMessagesHardMax,
 } from "@/shared/lib/message-history";
 import { hubDigestCache } from "@/shared/lib/hub-digest-cache";
@@ -212,15 +212,12 @@ async function onHubChatMessage(message: HubChatMessage): Promise<void> {
         },
         messageHistoryByConversation: {
           ...s.messageHistoryByConversation,
-          [conversationId]: {
-            firstLoadedSeq:
-              firstMessageSeq(trimmed.messages) ?? prevHist.firstLoadedSeq,
-            firstLoadedCreatedAtMs:
-              firstMessageCreatedAtMs(trimmed.messages) ??
-              prevHist.firstLoadedCreatedAtMs,
-            hasOlder: prevHist.hasOlder || trimmed.trimmed,
+          [conversationId]: messageHistoryFromWindow(trimmed.messages, {
+            prev: prevHist,
+            hasOlderHub: prevHist.hasOlderHub || trimmed.trimmed,
+            hasOlderHost: prevHist.hasOlderHost,
             loadingOlder: false,
-          },
+          }),
         },
       };
     });
@@ -335,7 +332,8 @@ function patchRailFromDigest(input: {
           {
             id: conversationId,
             projectId: "",
-            title: prevDigest?.title || "Conversation",
+            // Prefer digest title; empty is fine — list merge keeps daemon title.
+            title: prevDigest?.title?.trim() || "",
             preview: preview || "No messages yet",
             updatedAtMs: resolvedLastAt,
             unread: unread > 0 ? unread : undefined,
@@ -557,6 +555,10 @@ async function reconcileConversationFromHub(
       localMessages: withTail,
     });
     const trimmed = trimMessagesHardMax(merged);
+    const hubHasOlder =
+      latestPage.nextBeforeSeq != null ||
+      latestPage.rawCount >= MESSAGE_PAGE_SIZE ||
+      trimmed.trimmed;
     return {
       messagesByConversation: {
         ...s.messagesByConversation,
@@ -564,19 +566,12 @@ async function reconcileConversationFromHub(
       },
       messageHistoryByConversation: {
         ...s.messageHistoryByConversation,
-        [conversationId]: {
-          firstLoadedSeq:
-            firstMessageSeq(trimmed.messages) ?? prevHist.firstLoadedSeq,
-          firstLoadedCreatedAtMs:
-            firstMessageCreatedAtMs(trimmed.messages) ??
-            prevHist.firstLoadedCreatedAtMs,
-          hasOlder:
-            prevHist.hasOlder ||
-            latestPage.nextBeforeSeq != null ||
-            latestPage.rawCount >= MESSAGE_PAGE_SIZE ||
-            trimmed.trimmed,
+        [conversationId]: messageHistoryFromWindow(trimmed.messages, {
+          prev: prevHist,
+          hasOlderHub: prevHist.hasOlderHub || hubHasOlder,
+          hasOlderHost: prevHist.hasOlderHost || trimmed.trimmed,
           loadingOlder: false,
-        },
+        }),
       },
     };
   });

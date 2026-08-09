@@ -93,12 +93,15 @@ impl GeminiAcpInstance {
             });
         }
 
-        let client = AcpClient::new(child)?;
+        // Share the real Child with the instance so shutdown_instances can
+        // process-group kill it (AcpClient alone must not own the only handle).
+        let child_handle = Arc::new(tokio::sync::Mutex::new(Some(child)));
+        let client = AcpClient::from_shared_child(child_handle.clone())?;
 
         let now = std::time::Instant::now();
         Ok(Self {
             workspace: workspace.to_path_buf(),
-            child: Arc::new(tokio::sync::Mutex::new(None)),
+            child: child_handle,
             client: Arc::new(client),
             session_id: Mutex::new(None),
             spawned_at: now,

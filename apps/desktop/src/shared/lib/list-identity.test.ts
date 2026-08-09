@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  conversationEqual,
   reuseStableById,
+  reuseStableConversations,
   timelineMessageEqual,
   transcriptItemEqual,
 } from "./list-identity.ts";
@@ -51,6 +53,53 @@ describe("reuseStableById", () => {
     assert.notEqual(out, prev);
     assert.equal(out[0], b);
     assert.equal(out[1], a);
+  });
+});
+
+describe("conversationEqual / reuseStableConversations", () => {
+  it("matches on rail-relevant fields", () => {
+    const base = {
+      id: "c1",
+      projectId: "p1",
+      title: "T",
+      preview: "hi",
+      updatedAtMs: 10,
+      unread: 1,
+      runningCount: 0,
+      approvalCount: 0,
+      participatingAgents: ["grok"],
+    };
+    assert.equal(conversationEqual(base, { ...base }), true);
+    assert.equal(
+      conversationEqual(base, { ...base, preview: "bye" }),
+      false,
+    );
+  });
+
+  it("reuses unchanged conversation row identity after quiet re-list", () => {
+    const a = {
+      id: "a",
+      projectId: "p",
+      title: "A",
+      preview: "old",
+      updatedAtMs: 1,
+    };
+    const b = {
+      id: "b",
+      projectId: "p",
+      title: "B",
+      preview: "x",
+      updatedAtMs: 2,
+    };
+    const prev = [a, b];
+    const next = [
+      { ...a },
+      { ...b, preview: "new", updatedAtMs: 3 },
+    ];
+    const out = reuseStableConversations(prev, next);
+    assert.equal(out[0], a);
+    assert.notEqual(out[1], b);
+    assert.equal(out[1]!.preview, "new");
   });
 });
 

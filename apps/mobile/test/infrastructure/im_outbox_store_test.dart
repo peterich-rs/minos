@@ -186,5 +186,74 @@ void main() {
       );
       expect(stranded, <String>['orphan']);
     });
+
+    test('listDueLanes enforces per-conversation FIFO (no tail overtake)', () {
+      store.enqueueUserMessage(
+        clientOpId: 'c1-a',
+        conversationId: 'c1',
+        payloadJson: '{"text":"first"}',
+        nowMs: t0,
+      );
+      store.enqueueUserMessage(
+        clientOpId: 'c1-b',
+        conversationId: 'c1',
+        payloadJson: '{"text":"second"}',
+        nowMs: t0 + 1,
+      );
+      store.enqueueUserMessage(
+        clientOpId: 'c2-a',
+        conversationId: 'c2',
+        payloadJson: '{"text":"other"}',
+        nowMs: t0,
+      );
+
+      final lanes = store.listDueLanes(t0 + 10);
+      expect(lanes.length, 2);
+      expect(lanes[0].map((e) => e.clientOpId).toList(), <String>[
+        'c1-a',
+        'c1-b',
+      ]);
+      expect(lanes[1].map((e) => e.clientOpId).toList(), <String>['c2-a']);
+
+      // Head backoff blocks c1 tail even when flat due would include c1-b.
+      store.markInflight('c1-a', t0 + 11);
+      store.markFailed('c1-a', 'network', t0 + 12);
+      final after = store.listDueLanes(t0 + 12);
+      expect(after.length, 1);
+      expect(after.single.single.clientOpId, 'c2-a');
+      expect(store.listDue(t0 + 12).any((e) => e.clientOpId == 'c1-b'), isTrue);
+    });
+  });
+
+  group('buildDueOutboxLanes', () {
+    test('skips lane when head is fresh inflight', () {
+      final head = ImOutboxEntry(
+        clientOpId: 'head',
+        kind: ImOutboxKind.userMessage,
+        conversationId: 'c1',
+        payloadJson: '{}',
+        status: ImOutboxStatus.inflight,
+        attempts: 1,
+        nextAttemptAtMs: 0,
+        createdAtMs: 1,
+        updatedAtMs: 100,
+      );
+      final tail = ImOutboxEntry(
+        clientOpId: 'tail',
+        kind: ImOutboxKind.userMessage,
+        conversationId: 'c1',
+        payloadJson: '{}',
+        status: ImOutboxStatus.pending,
+        attempts: 0,
+        nextAttemptAtMs: 0,
+        createdAtMs: 2,
+        updatedAtMs: 100,
+      );
+      final lanes = buildDueOutboxLanes(
+        activeEntries: <ImOutboxEntry>[head, tail],
+        nowMs: 1000,
+      );
+      expect(lanes, isEmpty);
+    });
   });
 }

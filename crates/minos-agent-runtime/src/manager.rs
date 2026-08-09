@@ -28,14 +28,6 @@ use tokio::sync::{broadcast, mpsc, watch, Mutex};
 use tracing::{info, warn};
 use url::Url;
 
-pub const MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS: &str = "\
-You are running inside Minos teamwork mode, where CLI coding agents work in a shared conversation with the user and other agents. \
-Treat the Minos conversation as coordination context, not as a generic terminal session. \
-When conversation history, teammate output, mentions, current chat state, or cross-agent coordination matters, use the `minos_teamwork` MCP server to inspect the bound conversation before answering. \
-Use `list_conversation_messages` for recent conversation history, `list_conversation_roster` for the live agent roster and role briefs (do not assume startup snapshot is complete after roster changes), `delegate_to_agent` with `wait_delegation` when blocked on the result (or `get_delegation_status`/`cancel_delegation` for tracking), and `post_conversation_update` only for concise user-visible updates. \
-When a user message @mentioned you and a short acknowledgement is enough (received, agreed, watching), prefer `react_to_message` with a single emoji (👍 ✅ 👀) instead of a full reply — the tool only allows reactions on messages that @mention you. \
-When shipping code changes, work in the conversation worktree when present (do not edit the default branch directly) and post git milestones with `post_git_update` (commits_made, pr_opened, ready_for_review, checks_failed, merged).";
-
 /// Host-owned one-shot prompt injected when a turn was interrupted by process
 /// death. Synthesized as a normal user message for history consistency.
 pub const CONTINUE_PROMPT: &str = "\
@@ -217,7 +209,10 @@ pub struct AgentManager {
 impl AgentManager {
     pub fn new(config: AgentRuntimeConfig, caps: InstanceCaps) -> Self {
         let events_tx = IngestSink::new(1024);
-        let (manager_tx, _) = broadcast::channel(64);
+        // Lifecycle events are sparse but lossy lag breaks completion + SQLite
+        // checkpointing. Capacity is raised so normal bursts do not drop; the
+        // daemon bridge still reconciles from manager snapshot on Lagged.
+        let (manager_tx, _) = broadcast::channel(512);
         let mgr = Self {
             config: Arc::new(config),
             caps,
@@ -241,6 +236,7 @@ impl AgentManager {
         let instances = self.instances.clone();
         let sessions = self.sessions.clone();
         let manager_tx = self.manager_tx.clone();
+        let pending_approvals = self.pending_approvals.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_mins(1));
             loop {
@@ -265,7 +261,8 @@ impl AgentManager {
                     }
                 }
                 for key in to_reap {
-                    Self::reap_static(&instances, &sessions, &manager_tx, &key).await;
+                    Self::reap_static(&instances, &sessions, &manager_tx, &pending_approvals, &key)
+                        .await;
                 }
             }
         });
@@ -275,6 +272,7 @@ impl AgentManager {
         instances: &Arc<Mutex<HashMap<InstanceKey, Arc<AppServerInstance>>>>,
         sessions: &Arc<Mutex<HashMap<String, SessionHandle>>>,
         manager_tx: &broadcast::Sender<ManagerEvent>,
+        pending_approvals: &PendingApprovals,
         key: &InstanceKey,
     ) {
         let Some(inst) = instances.lock().await.remove(key) else {
@@ -291,6 +289,7 @@ impl AgentManager {
             }
         }
         drop(tg);
+        clear_pending_approvals_for_sessions(pending_approvals, &tids);
         let _ = manager_tx.send(ManagerEvent::InstanceCrashed {
             workspace,
             affected_threads: tids,
@@ -637,22 +636,19 @@ impl AgentManager {
         let model = launch.as_ref().and_then(|l| l.model.clone());
         let effort = launch.as_ref().and_then(|l| l.reasoning_effort.clone());
         let instructions = launch.as_ref().and_then(|l| l.instructions.clone());
-        let developer = match instructions.as_deref() {
-            Some(extra) if !extra.trim().is_empty() => {
-                format!(
-                    "{}\n\n{}",
-                    MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS,
-                    extra.trim()
-                )
-            }
-            _ => MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS.to_string(),
-        };
+        let prompt_bundle = crate::prompt::compile_for_session(
+            agent,
+            conversation_id.is_some(),
+            instructions.as_deref(),
+        );
+        let developer =
+            minos_prompt_runtime::codex_developer_instructions(&prompt_bundle).map(str::to_owned);
         let resp = instance
             .start_thread_with_options(
                 &canon,
                 model.as_deref(),
                 effort.as_deref(),
-                Some(developer.as_str()),
+                developer.as_deref(),
             )
             .await?;
         let session_id = preallocated_session_id.unwrap_or_else(|| resp.codex_session_id.clone());
@@ -1024,24 +1020,14 @@ impl AgentManager {
             .clone()
             .unwrap_or_else(|| PathBuf::from(AgentName::Grok.bin_name()));
         let (crash_tx, _crash_rx) = tokio::sync::mpsc::channel::<()>(1);
-        // Conversation-bound sessions get teamwork guidance via top-level
-        // `grok --rules ...` (appended to the system prompt), matching Claude's
-        // `--append-system-prompt` / Codex developerInstructions.
-        // Profile instructions are always layered on when present.
-        let rules_owned = {
-            let mut parts: Vec<&str> = Vec::new();
-            if conversation_id.is_some() {
-                parts.push(MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS);
-            }
-            if let Some(extra) = instructions.map(str::trim).filter(|s| !s.is_empty()) {
-                parts.push(extra);
-            }
-            if parts.is_empty() {
-                None
-            } else {
-                Some(parts.join("\n\n"))
-            }
-        };
+        // System instructions come only from the prompt compiler. Activation
+        // (conversation_bound) is decided there — this adapter does not re-check.
+        let prompt_bundle = crate::prompt::compile_for_session(
+            AgentName::Grok,
+            conversation_id.is_some(),
+            instructions,
+        );
+        let rules_owned = minos_prompt_runtime::grok_rules(&prompt_bundle).map(str::to_owned);
         let instance = crate::grok_driver::GrokAcpInstance::spawn_with_model(
             &bin_path,
             workspace,
@@ -1161,18 +1147,20 @@ impl AgentManager {
         let instance =
             crate::opencode_driver::OpencodeServerInstance::spawn(workspace, config).await?;
         let instance = Arc::new(Mutex::new(instance));
-        let inst_guard = instance.lock().await;
-        let sse_url = inst_guard.subscribe_sse_url();
-        let auth = inst_guard.auth_header().to_string();
-        drop(inst_guard);
-        crate::opencode_driver::spawn_sse_pump(
-            sse_url,
-            auth,
-            self.opencode_session_map.clone(),
-            self.sessions.clone(),
-            self.manager_tx.clone(),
-            self.events_tx.clone(),
-        );
+        {
+            let mut inst_guard = instance.lock().await;
+            let sse_url = inst_guard.subscribe_sse_url();
+            let auth = inst_guard.auth_header().to_string();
+            let sse_task = crate::opencode_driver::spawn_sse_pump(
+                sse_url,
+                auth,
+                self.opencode_session_map.clone(),
+                self.sessions.clone(),
+                self.manager_tx.clone(),
+                self.events_tx.clone(),
+            );
+            inst_guard.sse_task = Some(sse_task);
+        }
         map.insert(key, instance.clone());
         Ok(instance)
     }
@@ -1248,23 +1236,21 @@ impl AgentManager {
             let watcher_inst = inst.clone();
             let watcher_threads = self.sessions.clone();
             let watcher_mgr_tx = self.manager_tx.clone();
+            let watcher_instances = self.instances.clone();
+            let watcher_pending = self.pending_approvals.clone();
+            let watcher_key = InstanceKey::new(&workspace_buf, conversation_id, source_session_id);
             tokio::spawn(async move {
                 let _ = crash_rx.recv().await;
-                let affected = watcher_inst.session_ids().await;
-                let tg = watcher_threads.lock().await;
-                for tid in &affected {
-                    if let Some(h) = tg.get(tid) {
-                        let _ = h.transition(SessionState::Suspended {
-                            reason: PauseReason::CodexCrashed,
-                        });
-                    }
-                }
-                drop(tg);
-                let _ = watcher_mgr_tx.send(ManagerEvent::InstanceCrashed {
-                    workspace: watcher_inst.workspace.clone(),
-                    affected_threads: affected,
-                    reason: PauseReason::CodexCrashed,
-                });
+                handle_codex_instance_crash(
+                    &watcher_instances,
+                    &watcher_threads,
+                    &watcher_mgr_tx,
+                    &watcher_pending,
+                    &watcher_key,
+                    &watcher_inst,
+                    PauseReason::CodexCrashed,
+                )
+                .await;
             });
             return Ok(inst);
         }
@@ -1373,28 +1359,27 @@ impl AgentManager {
         ));
 
         // Spawn the crash watcher. When the codex child exits or the WS pump
-        // signals end-of-stream, we mark all sessions on this instance as
-        // Suspended { CodexCrashed } and broadcast InstanceCrashed.
+        // signals end-of-stream, remove the instance (like reap_static), suspend
+        // sessions, clear pending approvals, and broadcast InstanceCrashed so
+        // ensure_instance can spawn a fresh process after crash.
         let watcher_inst = inst.clone();
         let watcher_threads = self.sessions.clone();
         let watcher_mgr_tx = self.manager_tx.clone();
+        let watcher_instances = self.instances.clone();
+        let watcher_pending = self.pending_approvals.clone();
+        let watcher_key = InstanceKey::new(&workspace_buf, conversation_id, source_session_id);
         tokio::spawn(async move {
             let _ = crash_rx.recv().await;
-            let affected = watcher_inst.session_ids().await;
-            let tg = watcher_threads.lock().await;
-            for tid in &affected {
-                if let Some(h) = tg.get(tid) {
-                    let _ = h.transition(SessionState::Suspended {
-                        reason: PauseReason::CodexCrashed,
-                    });
-                }
-            }
-            drop(tg);
-            let _ = watcher_mgr_tx.send(ManagerEvent::InstanceCrashed {
-                workspace: watcher_inst.workspace.clone(),
-                affected_threads: affected,
-                reason: PauseReason::CodexCrashed,
-            });
+            handle_codex_instance_crash(
+                &watcher_instances,
+                &watcher_threads,
+                &watcher_mgr_tx,
+                &watcher_pending,
+                &watcher_key,
+                &watcher_inst,
+                PauseReason::CodexCrashed,
+            )
+            .await;
         });
 
         Ok(inst)
@@ -1433,6 +1418,7 @@ impl AgentManager {
             }
         }
         drop(tg);
+        clear_pending_approvals_for_sessions(&self.pending_approvals, &tids);
         let _ = self.manager_tx.send(ManagerEvent::InstanceCrashed {
             workspace,
             affected_threads: tids,
@@ -1505,7 +1491,14 @@ impl AgentManager {
     }
 
     async fn reap_instance(&self, key: &InstanceKey) {
-        Self::reap_static(&self.instances, &self.sessions, &self.manager_tx, key).await;
+        Self::reap_static(
+            &self.instances,
+            &self.sessions,
+            &self.manager_tx,
+            &self.pending_approvals,
+            key,
+        )
+        .await;
     }
 
     pub async fn send_user_message(&self, session_id: &str, text: String) -> anyhow::Result<()> {
@@ -1554,71 +1547,134 @@ impl AgentManager {
         text: String,
         handle: &SessionHandle,
     ) -> anyhow::Result<()> {
-        if !matches!(handle.current_state(), SessionState::Idle) {
-            anyhow::bail!(
-                "send_user_message_while_idle rejected: state={:?}",
-                handle.current_state()
-            );
-        }
         let now_ms = chrono::Utc::now().timestamp_millis();
+        // Atomic Idle→Running claim: concurrent senders cannot both succeed.
+        let prev = match handle.try_begin_turn(now_ms) {
+            Ok(prev) => prev,
+            Err(err) => {
+                anyhow::bail!(
+                    "send_user_message_while_idle rejected: state={:?}",
+                    err.from
+                );
+            }
+        };
         let new_state = SessionState::Running {
             turn_started_at_ms: now_ms,
         };
-        handle.transition(new_state.clone())?;
         let _ = self.manager_tx.send(ManagerEvent::SessionStateChanged {
             session_id: session_id.to_string(),
-            old: SessionState::Idle,
+            old: prev,
             new: new_state,
             at_ms: now_ms,
         });
-        self.synth_user_message_ingest(session_id, &text, handle.agent)
-            .await?;
-        match handle.agent {
-            AgentName::Codex => {
-                let key = InstanceKey::for_handle(handle);
-                let inst = self
-                    .instances
-                    .lock()
-                    .await
-                    .get(&key)
-                    .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("instance for conversation gone"))?;
-                inst.touch().await;
-                let provider_session_id = codex_provider_session_id(session_id, handle);
-                let turn_id = inst.send_user_message(&provider_session_id, &text).await?;
-                handle.set_active_turn_id_if_absent(turn_id);
+
+        // Only after successful claim: synth user message + provider call.
+        // On ANY provider error after claim: roll back to Idle, clear turn id,
+        // emit state change + error ingest.
+        let provider_result = async {
+            self.synth_user_message_ingest(session_id, &text, handle.agent)
+                .await?;
+            match handle.agent {
+                AgentName::Codex => {
+                    let key = InstanceKey::for_handle(handle);
+                    let inst = self
+                        .instances
+                        .lock()
+                        .await
+                        .get(&key)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("instance for conversation gone"))?;
+                    inst.touch().await;
+                    let provider_session_id = codex_provider_session_id(session_id, handle);
+                    let turn_id = inst.send_user_message(&provider_session_id, &text).await?;
+                    handle.set_active_turn_id_if_absent(turn_id);
+                }
+                AgentName::Claude => {
+                    self.start_claude_turn(session_id, &text, handle).await?;
+                }
+                AgentName::Opencode => {
+                    let oc_session_id = self
+                        .ensure_opencode_session_for_session(session_id, handle)
+                        .await?;
+                    let key = InstanceKey::for_handle(handle);
+                    let instance = self
+                        .opencode_instances
+                        .lock()
+                        .await
+                        .get(&key)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("opencode instance not found"))?;
+                    instance
+                        .lock()
+                        .await
+                        .send_prompt(&oc_session_id, &text)
+                        .await?;
+                }
+                AgentName::Gemini => {
+                    self.spawn_gemini_prompt_task(session_id.to_string(), text, handle.clone())
+                        .await?;
+                }
+                AgentName::Grok => {
+                    self.spawn_grok_prompt_task(session_id.to_string(), text, handle.clone())
+                        .await?;
+                }
             }
-            AgentName::Claude => {
-                self.start_claude_turn(session_id, &text, handle).await?;
-            }
-            AgentName::Opencode => {
-                let oc_session_id = self
-                    .ensure_opencode_session_for_session(session_id, handle)
-                    .await?;
-                let key = InstanceKey::for_handle(handle);
-                let instance = self
-                    .opencode_instances
-                    .lock()
-                    .await
-                    .get(&key)
-                    .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("opencode instance not found"))?;
-                instance
-                    .lock()
-                    .await
-                    .send_prompt(&oc_session_id, &text)
-                    .await?;
-            }
-            AgentName::Gemini => {
-                self.spawn_gemini_prompt_task(session_id.to_string(), text, handle.clone())
-                    .await?;
-            }
-            AgentName::Grok => {
-                self.spawn_grok_prompt_task(session_id.to_string(), text, handle.clone())
-                    .await?;
-            }
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+
+        if let Err(error) = provider_result {
+            self.rollback_failed_turn_claim(session_id, handle, &error)
+                .await;
+            return Err(error);
         }
         Ok(())
+    }
+
+    /// After a successful Idle→Running claim, roll the session back when the
+    /// provider call fails so the session is not stuck Running forever.
+    async fn rollback_failed_turn_claim(
+        &self,
+        session_id: &str,
+        handle: &SessionHandle,
+        error: &anyhow::Error,
+    ) {
+        handle.set_active_turn_id(None);
+        let old = handle.current_state();
+        // Prefer Idle rollback; if transport death already suspended, leave it.
+        if matches!(old, SessionState::Running { .. }) {
+            if handle.transition(SessionState::Idle).is_ok() {
+                let _ = self.manager_tx.send(ManagerEvent::SessionStateChanged {
+                    session_id: session_id.to_string(),
+                    old,
+                    new: SessionState::Idle,
+                    at_ms: chrono::Utc::now().timestamp_millis(),
+                });
+            }
+        }
+        let payload = serde_json::json!({
+            "kind": "provider_error",
+            "code": "turn_start_failed",
+            "message": error.to_string(),
+            "sessionId": session_id,
+        });
+        if let Err(emit_err) = self
+            .events_tx
+            .emit(RawIngest::from_json(
+                handle.agent,
+                session_id.to_string(),
+                payload,
+                current_unix_ms(),
+            ))
+            .await
+        {
+            warn!(
+                target: "minos_agent_runtime::manager",
+                error = %emit_err,
+                session_id,
+                "failed to emit provider_error ingest after turn claim rollback",
+            );
+        }
     }
 
     /// Provider reattach for a suspended thread; ends in Idle. No user text, no CONTINUE.
@@ -1721,7 +1777,10 @@ impl AgentManager {
                 let key = InstanceKey::for_handle(handle);
                 if let Some(inst) = self.instances.lock().await.get(&key).cloned() {
                     let provider_session_id = codex_provider_session_id(session_id, handle);
-                    let _ = inst.interrupt_turn(&provider_session_id).await;
+                    let turn_id = handle.active_turn_id();
+                    let _ = inst
+                        .interrupt_turn(&provider_session_id, turn_id.as_deref())
+                        .await;
                 }
             }
             AgentName::Claude => {
@@ -1833,9 +1892,11 @@ impl AgentManager {
                 new_provider_id
             }
         };
-        let has_persisted_history = handle.last_seq.load(std::sync::atomic::Ordering::SeqCst) > 0;
         // Resume provider transcript when we already have history (plane B after
-        // process death). Fresh sessions use --session-id.
+        // process death). last_seq is advanced on live Claude frames so the
+        // first successful turn enables --resume on re-spawn. Fresh sessions
+        // keep last_seq==0 and use --session-id.
+        let has_persisted_history = handle.last_seq.load(std::sync::atomic::Ordering::SeqCst) > 0;
         let resume_sid = has_persisted_history.then_some(provider_session_id.as_str());
         let claude_session_id = resume_sid.is_none().then_some(provider_session_id.as_str());
         let mcp_server = resolve_mcp_server(
@@ -1846,6 +1907,13 @@ impl AgentManager {
             Some(session_id),
         );
         let claude_mcp_config = mcp_server.as_ref().map(claude_mcp_config_json);
+        let prompt_bundle = crate::prompt::compile_for_session(
+            AgentName::Claude,
+            handle.mcp_conversation_id.is_some(),
+            handle.instructions.as_deref(),
+        );
+        let system_prompt =
+            minos_prompt_runtime::claude_append_system_prompt(&prompt_bundle).map(str::to_owned);
         let session = crate::claude_driver::ClaudeControlSession::start_turn(
             &cli_path,
             &handle.workspace,
@@ -1859,7 +1927,7 @@ impl AgentManager {
             &self.config.subprocess_env,
             claude_mcp_config.as_deref(),
             handle.model.as_deref(),
-            handle.instructions.as_deref(),
+            system_prompt.as_deref(),
             self.pending_approvals.clone(),
         )
         .await?;
@@ -2226,7 +2294,10 @@ impl AgentManager {
                 let key = InstanceKey::for_handle(&handle);
                 if let Some(inst) = self.instances.lock().await.get(&key).cloned() {
                     let provider_session_id = codex_provider_session_id(session_id, &handle);
-                    let _ = inst.interrupt_turn(&provider_session_id).await;
+                    let turn_id = handle.active_turn_id();
+                    let _ = inst
+                        .interrupt_turn(&provider_session_id, turn_id.as_deref())
+                        .await;
                 }
             }
             AgentName::Claude => {
@@ -2340,6 +2411,11 @@ impl AgentManager {
                 }
             }
         }
+        let closed_session_id = session_id.to_string();
+        clear_pending_approvals_for_sessions(
+            &self.pending_approvals,
+            std::slice::from_ref(&closed_session_id),
+        );
         let _ = self.manager_tx.send(ManagerEvent::SessionClosed {
             session_id: session_id.to_string(),
             reason: crate::state_machine::CloseReason::UserClose,
@@ -2353,15 +2429,16 @@ impl AgentManager {
         session_id: &str,
         decision: Value,
     ) -> anyhow::Result<()> {
-        let Some(pending) = self
-            .pending_approvals
-            .get(request_id)
-            .map(|entry| entry.value().clone())
-        else {
-            return Ok(());
+        // Claim exclusive ownership first so concurrent resolvers cannot double-reply.
+        // On provider reply failure we re-insert so the client can retry (never silent Ok).
+        let Some((_, pending)) = self.pending_approvals.remove(request_id) else {
+            anyhow::bail!("approval request not found (expired or already resolved): {request_id}");
         };
 
         if pending.session_id != session_id {
+            // Put back so the rightful session can still resolve.
+            self.pending_approvals
+                .insert(request_id.to_owned(), pending.clone());
             anyhow::bail!(
                 "approval request thread mismatch: expected {}, got {session_id}",
                 pending.session_id,
@@ -2370,27 +2447,56 @@ impl AgentManager {
 
         let reply = match &pending.target {
             PendingApprovalTarget::Codex { request, .. } => {
-                crate::approvals::validate_decision(request.as_ref(), &decision)?
+                match crate::approvals::validate_decision(request.as_ref(), &decision) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        self.pending_approvals
+                            .insert(request_id.to_owned(), pending);
+                        return Err(e);
+                    }
+                }
             }
             PendingApprovalTarget::Acp {
                 allow_option_id,
                 reject_option_id,
                 ..
-            } => crate::approvals::validate_acp_permission_decision(
-                &decision,
-                allow_option_id.as_deref(),
-                reject_option_id.as_deref(),
-            )?,
+            } => {
+                match crate::approvals::validate_acp_permission_decision(
+                    &decision,
+                    allow_option_id.as_deref(),
+                    reject_option_id.as_deref(),
+                ) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        self.pending_approvals
+                            .insert(request_id.to_owned(), pending);
+                        return Err(e);
+                    }
+                }
+            }
             PendingApprovalTarget::GrokExtMethod { nested_method, .. } => {
-                crate::approvals::validate_grok_ext_method_decision(nested_method, &decision)?
+                match crate::approvals::validate_grok_ext_method_decision(nested_method, &decision)
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        self.pending_approvals
+                            .insert(request_id.to_owned(), pending);
+                        return Err(e);
+                    }
+                }
             }
             PendingApprovalTarget::ClaudeControl { tool_input, .. } => {
-                crate::approvals::validate_claude_control_decision(&decision, tool_input)?
+                match crate::approvals::validate_claude_control_decision(&decision, tool_input) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        self.pending_approvals
+                            .insert(request_id.to_owned(), pending);
+                        return Err(e);
+                    }
+                }
             }
         };
-        let Some((_, pending)) = self.pending_approvals.remove(request_id) else {
-            return Ok(());
-        };
+
         let agent = self
             .sessions
             .lock()
@@ -2398,20 +2504,26 @@ impl AgentManager {
             .get(session_id)
             .map(|h| h.agent)
             .unwrap_or(AgentName::Codex);
-        let reply_result = match pending.target {
+        let reply_result = match &pending.target {
             PendingApprovalTarget::Codex {
-                request_id, client, ..
+                request_id: rid,
+                client,
+                ..
             } => client
-                .reply(request_id, reply)
+                .reply(rid.clone(), reply)
                 .await
                 .map_err(|error| anyhow::anyhow!("approval reply failed: {error}")),
             PendingApprovalTarget::Acp {
-                request_id, client, ..
+                request_id: rid,
+                client,
+                ..
             }
             | PendingApprovalTarget::GrokExtMethod {
-                request_id, client, ..
+                request_id: rid,
+                client,
+                ..
             } => client
-                .reply(request_id, reply)
+                .reply(rid.clone(), reply)
                 .await
                 .map_err(|error| anyhow::anyhow!("ACP approval reply failed: {error}")),
             PendingApprovalTarget::ClaudeControl {
@@ -2422,42 +2534,48 @@ impl AgentManager {
                     anyhow::anyhow!("claude control session gone for approval reply")
                 })?;
                 session
-                    .reply_control(&control_request_id, reply)
+                    .reply_control(control_request_id, reply)
                     .map_err(|error| anyhow::anyhow!("Claude control reply failed: {error}"))
             }
         };
+
+        if let Err(error) = reply_result {
+            // Provider did not accept — restore pending so retry is possible.
+            self.pending_approvals
+                .insert(request_id.to_owned(), pending);
+            return Err(error);
+        }
+
         // Durable resolution marker so history replay / assemblers can demote the
         // interactive approval card (request alone is not enough after approve).
-        if reply_result.is_ok() {
-            let decision_label = decision
-                .get("decision")
-                .or_else(|| decision.get("outcome"))
-                .and_then(Value::as_str)
-                .unwrap_or("resolved");
-            let ingest = RawIngest::from_json(
-                agent,
-                session_id.to_owned(),
-                serde_json::json!({
-                    "method": "approval/resolved",
-                    "params": {
-                        "request_id": request_id,
-                        "session_id": session_id,
-                        "decision": decision_label,
-                    }
-                }),
-                current_unix_ms(),
+        let decision_label = decision
+            .get("decision")
+            .or_else(|| decision.get("outcome"))
+            .and_then(Value::as_str)
+            .unwrap_or("resolved");
+        let ingest = RawIngest::from_json(
+            agent,
+            session_id.to_owned(),
+            serde_json::json!({
+                "method": "approval/resolved",
+                "params": {
+                    "request_id": request_id,
+                    "session_id": session_id,
+                    "decision": decision_label,
+                }
+            }),
+            current_unix_ms(),
+        );
+        if let Err(error) = self.events_tx.emit(ingest).await {
+            warn!(
+                target: "minos_agent_runtime::manager",
+                error = %error,
+                request_id,
+                session_id,
+                "failed to emit approval/resolved ingest"
             );
-            if let Err(error) = self.events_tx.emit(ingest).await {
-                warn!(
-                    target: "minos_agent_runtime::manager",
-                    error = %error,
-                    request_id,
-                    session_id,
-                    "failed to emit approval/resolved ingest"
-                );
-            }
         }
-        reply_result
+        Ok(())
     }
 
     pub async fn respond_opencode_permission(
@@ -2635,6 +2753,8 @@ impl AgentManager {
                 // Prefer the dedicated close path (SIGTERM → wait → SIGKILL).
                 let taken = {
                     let mut guard = inst.lock().await;
+                    // Abort SSE reconnect loop before killing the process.
+                    guard.abort_sse_task();
                     // Swap out so Drop of Arc doesn't double-kill; close consumes child.
                     let child = guard.child.take();
                     (child, guard.workspace.clone())
@@ -2837,6 +2957,58 @@ fn mark_session_idle_with_tx(
             new: SessionState::Idle,
             at_ms: chrono::Utc::now().timestamp_millis(),
         });
+    }
+}
+
+fn clear_pending_approvals_for_sessions(pending: &PendingApprovals, session_ids: &[String]) {
+    if session_ids.is_empty() {
+        return;
+    }
+    pending.retain(|_, approval| !session_ids.iter().any(|sid| sid == &approval.session_id));
+}
+
+/// Codex instance crash: remove from map (so ensure_instance spawns fresh),
+/// suspend affected sessions, clear pending approvals, emit InstanceCrashed.
+async fn handle_codex_instance_crash(
+    instances: &Arc<Mutex<HashMap<InstanceKey, Arc<AppServerInstance>>>>,
+    sessions: &Arc<Mutex<HashMap<String, SessionHandle>>>,
+    manager_tx: &broadcast::Sender<ManagerEvent>,
+    pending_approvals: &PendingApprovals,
+    key: &InstanceKey,
+    inst: &Arc<AppServerInstance>,
+    reason: PauseReason,
+) {
+    // Drop from the live map first so ensure_instance can re-spawn.
+    {
+        let mut guard = instances.lock().await;
+        if let Some(existing) = guard.get(key) {
+            // Only remove if this is still the crashed instance (not a replacement).
+            if Arc::ptr_eq(existing, inst) {
+                guard.remove(key);
+            }
+        }
+    }
+    let affected = inst.session_ids().await;
+    {
+        let tg = sessions.lock().await;
+        for tid in &affected {
+            if let Some(h) = tg.get(tid) {
+                h.set_active_turn_id(None);
+                let _ = h.transition(SessionState::Suspended {
+                    reason: reason.clone(),
+                });
+            }
+        }
+    }
+    clear_pending_approvals_for_sessions(pending_approvals, &affected);
+    let _ = manager_tx.send(ManagerEvent::InstanceCrashed {
+        workspace: inst.workspace.clone(),
+        affected_threads: affected,
+        reason,
+    });
+    // Best-effort kill leftover child handle.
+    if let Some(mut child) = inst.child.lock().await.take() {
+        let _ = child.kill().await;
     }
 }
 
@@ -3290,6 +3462,8 @@ async fn register_codex_subagent_thread(
         .get(&registration.parent_session_id)
         .map(|handle| handle.workspace.clone())
         .unwrap_or_else(|| fallback_workspace.to_path_buf());
+    // Subagents are live collab threads: register Idle so turn/completed can
+    // idle them (Starting forever would block reaper/UI). Mirror OpenCode.
     guard.insert(
         registration.sub_session_id.clone(),
         SessionHandle::new_subagent(
@@ -3298,7 +3472,7 @@ async fn register_codex_subagent_thread(
             AgentName::Codex,
             registration.parent_session_id.clone(),
             Some(registration.sub_session_id.clone()),
-            SessionState::Starting,
+            SessionState::Idle,
             0,
         ),
     );
@@ -3470,6 +3644,27 @@ async fn event_pump_loop(
                         let tg = sessions.lock().await;
                         if let Some(handle) = tg.get(&session_id) {
                             handle.set_active_turn_id(Some(turn_id));
+                            // Subagent may have been registered Idle; mark Running
+                            // when its turn actually starts.
+                            let old = handle.current_state();
+                            if matches!(old, SessionState::Idle) {
+                                let now = current_unix_ms();
+                                if handle
+                                    .transition(SessionState::Running {
+                                        turn_started_at_ms: now,
+                                    })
+                                    .is_ok()
+                                {
+                                    let _ = manager_tx.send(ManagerEvent::SessionStateChanged {
+                                        session_id: session_id.clone(),
+                                        old,
+                                        new: SessionState::Running {
+                                            turn_started_at_ms: now,
+                                        },
+                                        at_ms: now,
+                                    });
+                                }
+                            }
                         }
                     }
                 }
@@ -3498,12 +3693,23 @@ async fn event_pump_loop(
                     }
                 }
                 // Look up agent kind for the thread; default to Codex if absent
-                // (notifications can race the manager's bookkeeping).
-                let agent = sessions
-                    .lock()
-                    .await
-                    .get(&session_id)
-                    .map_or(AgentName::Codex, |h| h.agent);
+                // (notifications can race the manager's bookkeeping). Advance
+                // last_seq so Claude-style resume decisions and store mirrors
+                // see live activity.
+                let agent = {
+                    let tg = sessions.lock().await;
+                    if let Some(handle) = tg.get(&session_id) {
+                        handle.note_event_seq(
+                            handle
+                                .last_seq
+                                .load(std::sync::atomic::Ordering::SeqCst)
+                                .saturating_add(1),
+                        );
+                        handle.agent
+                    } else {
+                        AgentName::Codex
+                    }
+                };
                 let payload = serde_json::json!({ "method": method, "params": params });
                 let ingest = RawIngest::from_json(agent, session_id, payload, current_unix_ms());
                 if let Err(error) = broadcast_ingest(&events_tx, ingest).await {
@@ -4088,14 +4294,58 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn codex_thread_start_includes_minos_teamwork_developer_instructions() {
+    async fn codex_thread_start_includes_compiled_teamwork_when_conversation_bound() {
         let tmp = tempfile::tempdir().unwrap();
         let session_id = "thr-minos-instructions";
+        let expected = crate::prompt::compile_for_session(AgentName::Codex, true, None);
+        let developer = minos_prompt_runtime::codex_developer_instructions(&expected)
+            .expect("conversation-bound bootstrap");
+        assert!(developer.contains(minos_prompt_runtime::TEAMWORK_SEMANTIC_MARKER));
         let script = vec![Step::ExpectRequestMatching {
             method: "thread/start".into(),
             params_subset: json!({
-                "developerInstructions": MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS,
+                "developerInstructions": developer,
             }),
+            params_absent_keys: vec![],
+            reply: fake_thread_start_reply(session_id),
+        }];
+        let (server, port) = FakeCodexServer::bind(script).await;
+
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(
+            url::Url::parse(&format!("ws://127.0.0.1:{port}")).expect("loopback URL should parse"),
+        );
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+
+        let started = mgr
+            .start_agent_in_conversation(
+                AgentName::Codex,
+                tmp.path().to_path_buf(),
+                "conv-prompt-a".into(),
+            )
+            .await
+            .unwrap();
+
+        // Conversation-bound starts preallocate a host session id; the provider
+        // thread id from the fake reply is stored as provider_session_id.
+        assert!(!started.session_id.is_empty());
+        assert_eq!(started.provider_session_id.as_deref(), Some(session_id));
+        assert_eq!(expected.provenance.compiled_digest.len(), 64);
+        server.stop().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn codex_thread_start_omits_teamwork_when_unbound() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session_id = "thr-unbound";
+        let unbound = crate::prompt::compile_for_session(AgentName::Codex, false, None);
+        assert!(minos_prompt_runtime::codex_developer_instructions(&unbound).is_none());
+        // Prove the live thread/start params omit developerInstructions entirely
+        // (not merely that the compiler returned None).
+        let script = vec![Step::ExpectRequestMatching {
+            method: "thread/start".into(),
+            params_subset: json!({}),
+            params_absent_keys: vec!["developerInstructions".into()],
             reply: fake_thread_start_reply(session_id),
         }];
         let (server, port) = FakeCodexServer::bind(script).await;
@@ -4122,9 +4372,8 @@ mod tests {
             Step::Sleep { ms: 25 },
             Step::ExpectRequestMatching {
                 method: "thread/start".into(),
-                params_subset: json!({
-                    "developerInstructions": MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS,
-                }),
+                params_subset: json!({}),
+                params_absent_keys: vec![],
                 reply: fake_thread_start_reply("thr-too-late"),
             },
         ];
@@ -5162,6 +5411,7 @@ printf '{"type":"result","session_id":"sess-perm","is_error":false,"result":"ok"
                 .unwrap(),
             base_url: format!("http://{addr}"),
             auth_header: "Basic test".into(),
+            sse_task: None,
         };
         let handle = mgr.sessions.lock().await.get(session_id).cloned().unwrap();
         mgr.opencode_instances.lock().await.insert(
@@ -6108,5 +6358,229 @@ printf '{"type":"result","session_id":"sess-perm","is_error":false,"result":"ok"
         assert!(!mgr.pending_approvals.contains_key(&request_id));
 
         server.stop().await;
+    }
+
+    #[tokio::test]
+    async fn send_user_message_rolls_back_to_idle_when_provider_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = AgentManager::new(
+            AgentRuntimeConfig::new(tmp.path().to_path_buf()),
+            InstanceCaps::default(),
+        );
+        let session_id = "no-instance-thread";
+        mgr.register_persisted_thread(
+            session_id.into(),
+            tmp.path().to_path_buf(),
+            AgentName::Codex,
+            Some("provider-sess".into()),
+            None,
+            None,
+            SessionState::Idle,
+            0,
+        )
+        .await
+        .unwrap();
+
+        let mut ingest_rx = mgr.ingest_stream();
+        let err = mgr
+            .send_user_message(session_id, "hello".into())
+            .await
+            .expect_err("missing instance must fail after claim");
+        assert!(
+            err.to_string().contains("instance"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(
+            mgr.session_state(session_id).await,
+            Some(SessionState::Idle),
+            "failed provider call must roll claim back to Idle"
+        );
+
+        // Best-effort: provider_error ingest should be emitted.
+        let saw_error = tokio::time::timeout(Duration::from_millis(200), async {
+            loop {
+                let ingest = ingest_rx.recv().await.ok()?;
+                let payload = ingest.json_value()?;
+                if payload.get("kind").and_then(Value::as_str) == Some("provider_error") {
+                    return Some(());
+                }
+            }
+        })
+        .await
+        .ok()
+        .flatten()
+        .is_some();
+        assert!(saw_error, "expected provider_error ingest after rollback");
+    }
+
+    #[tokio::test]
+    async fn concurrent_idle_sends_only_one_claim_succeeds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = AgentManager::new(
+            AgentRuntimeConfig::new(tmp.path().to_path_buf()),
+            InstanceCaps::default(),
+        );
+        let session_id = "double-claim-thread";
+        mgr.register_persisted_thread(
+            session_id.into(),
+            tmp.path().to_path_buf(),
+            AgentName::Codex,
+            Some("provider-sess".into()),
+            None,
+            None,
+            SessionState::Idle,
+            0,
+        )
+        .await
+        .unwrap();
+
+        // Without an instance both calls fail after claim/reject, but only one
+        // may ever observe Idle→Running success (the loser is rejected by CAS).
+        let mgr = Arc::new(mgr);
+        let a = {
+            let mgr = mgr.clone();
+            tokio::spawn(async move { mgr.send_user_message(session_id, "a".into()).await })
+        };
+        let b = {
+            let mgr = mgr.clone();
+            tokio::spawn(async move { mgr.send_user_message(session_id, "b".into()).await })
+        };
+        let (ra, rb) = tokio::join!(a, b);
+        let ra = ra.expect("join a");
+        let rb = rb.expect("join b");
+        // Both fail (no instance), but neither may leave the session Running.
+        assert!(ra.is_err());
+        assert!(rb.is_err());
+        assert_eq!(
+            mgr.session_state(session_id).await,
+            Some(SessionState::Idle)
+        );
+    }
+
+    #[tokio::test]
+    async fn codex_subagent_registers_as_idle_not_starting() {
+        let sessions = Arc::new(Mutex::new(HashMap::new()));
+        let (manager_tx, _) = broadcast::channel(8);
+        let parent = "parent-thread".to_string();
+        let sub = "sub-thread".to_string();
+        {
+            let mut guard = sessions.lock().await;
+            guard.insert(
+                parent.clone(),
+                SessionHandle::new(
+                    parent.clone(),
+                    "/tmp/ws".into(),
+                    AgentName::Codex,
+                    SessionState::Running {
+                        turn_started_at_ms: 1,
+                    },
+                    0,
+                ),
+            );
+        }
+        register_codex_subagent_thread(
+            &sessions,
+            &manager_tx,
+            Path::new("/tmp/ws"),
+            &CodexSubagentRegistration {
+                parent_session_id: parent,
+                sub_session_id: sub.clone(),
+                tool_call_id: "tool-1".into(),
+            },
+        )
+        .await;
+        let state = sessions
+            .lock()
+            .await
+            .get(&sub)
+            .map(SessionHandle::current_state);
+        assert_eq!(state, Some(SessionState::Idle));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn codex_crash_removes_instance_from_map() {
+        let tmp = tempfile::tempdir().unwrap();
+        let session_id = "thr-crash-remove";
+        // Sleep keeps the WS open long enough for start_agent to insert the
+        // instance, then DieUnexpectedly ends the pump and fires crash_rx.
+        let script = vec![
+            Step::ExpectRequest {
+                method: "thread/start".into(),
+                reply: fake_thread_start_reply(session_id),
+            },
+            Step::Sleep { ms: 200 },
+            Step::DieUnexpectedly,
+        ];
+        let (server, port) = FakeCodexServer::bind(script).await;
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(
+            url::Url::parse(&format!("ws://127.0.0.1:{port}")).expect("loopback URL should parse"),
+        );
+        let mgr = AgentManager::new(cfg, InstanceCaps::default());
+        mgr.start_agent(AgentKind::Codex, tmp.path().to_path_buf())
+            .await
+            .unwrap();
+        assert_eq!(mgr.open_workspaces().await.len(), 1);
+
+        // Wait for crash watcher to remove the instance.
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if mgr.open_workspaces().await.is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("crashed instance should be removed from map");
+
+        // ensure_instance can spawn fresh after crash (map slot free).
+        assert!(mgr.open_workspaces().await.is_empty());
+        server.stop().await;
+    }
+
+    #[tokio::test]
+    async fn close_session_clears_pending_approvals_for_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = AgentManager::new(
+            AgentRuntimeConfig::new(tmp.path().to_path_buf()),
+            InstanceCaps::default(),
+        );
+        let session_id = "close-clear-approvals";
+        mgr.register_persisted_thread(
+            session_id.into(),
+            tmp.path().to_path_buf(),
+            AgentName::Codex,
+            Some("provider".into()),
+            None,
+            None,
+            SessionState::Idle,
+            0,
+        )
+        .await
+        .unwrap();
+        mgr.pending_approvals.insert(
+            "req-1".into(),
+            PendingApproval {
+                session_id: session_id.into(),
+                target: PendingApprovalTarget::ClaudeControl {
+                    control_request_id: "req-1".into(),
+                    tool_input: json!({}),
+                },
+            },
+        );
+        mgr.pending_approvals.insert(
+            "req-other".into(),
+            PendingApproval {
+                session_id: "other".into(),
+                target: PendingApprovalTarget::ClaudeControl {
+                    control_request_id: "req-other".into(),
+                    tool_input: json!({}),
+                },
+            },
+        );
+        mgr.close_session(session_id).await.unwrap();
+        assert!(!mgr.pending_approvals.contains_key("req-1"));
+        assert!(mgr.pending_approvals.contains_key("req-other"));
     }
 }

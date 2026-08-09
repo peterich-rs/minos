@@ -703,8 +703,9 @@ fn fan_out_agent_error(
 
 /// Arm TurnCompletionProjector for one origin user message (event-driven).
 /// Completion is projected on host ingest via [`try_project_completion_for_session`].
+/// Persists to `completion_watches` then updates the in-memory cache.
 #[allow(clippy::too_many_arguments)]
-fn arm_completion_watch(
+async fn arm_completion_watch(
     state: &BackendState,
     dispatch_id: String,
     origin_message_id: String,
@@ -718,20 +719,46 @@ fn arm_completion_watch(
     let now_ms = chrono::Utc::now().timestamp_millis();
     // Watch TTL is enforced by SessionLifecycle (B5); arm with a long ceiling.
     let deadline_at_ms = now_ms + 30 * 60 * 1000;
-    state
-        .completion_watches
-        .arm(crate::completion_watch::CompletionWatch {
-            dispatch_id: dispatch_id.clone(),
-            origin_message_id: origin_message_id.clone(),
-            conversation_id,
-            session_id: session_id.clone(),
-            agent,
-            raw_seq_floor,
-            armed_at_ms: now_ms,
-            deadline_at_ms,
-            mention_account_id,
-            mention_minos_id,
-        });
+    let watch = crate::completion_watch::CompletionWatch {
+        dispatch_id: dispatch_id.clone(),
+        origin_message_id: origin_message_id.clone(),
+        conversation_id: conversation_id.clone(),
+        session_id: session_id.clone(),
+        agent: agent.clone(),
+        raw_seq_floor,
+        armed_at_ms: now_ms,
+        deadline_at_ms,
+        mention_account_id: mention_account_id.clone(),
+        mention_minos_id: mention_minos_id.clone(),
+    };
+    let watch_key = watch.watch_key();
+    let durable = crate::store::completion_watches::CompletionWatchRow {
+        watch_key: watch_key.clone(),
+        dispatch_id: dispatch_id.clone(),
+        origin_message_id: origin_message_id.clone(),
+        conversation_id,
+        session_id: session_id.clone(),
+        agent_id: agent.agent_id.clone(),
+        raw_seq_floor: raw_seq_floor as i64,
+        armed_at_ms: now_ms,
+        deadline_at_ms,
+        status: crate::store::completion_watches::STATUS_ARMED.to_string(),
+        projected_message_id: None,
+        mention_account_id,
+        mention_minos_id,
+    };
+    if let Err(error) = crate::store::completion_watches::upsert_armed(&state.store, &durable).await
+    {
+        tracing::error!(
+            target: "minos_backend::social",
+            session_id = %session_id,
+            origin_message_id = %origin_message_id,
+            dispatch_id = %dispatch_id,
+            error = %error,
+            "failed to persist CompletionWatch; arming memory-only (restart risk)"
+        );
+    }
+    state.completion_watches.arm(watch);
     tracing::info!(
         target: "minos_backend::social",
         session_id = %session_id,
@@ -839,6 +866,12 @@ async fn try_project_completion_for_watch(
             {
                 Ok(()) => {
                     state.completion_watches.remove(watch_key);
+                    let _ = crate::store::completion_watches::mark_projected(
+                        &state.store,
+                        watch_key,
+                        Some(client_message_id.as_str()),
+                    )
+                    .await;
                     tracing::info!(
                         target: "minos_backend::social",
                         conversation_id = %watch.conversation_id,
@@ -864,6 +897,8 @@ async fn try_project_completion_for_watch(
         }
         Ok(crate::turn_completion::CompletionProbe::DoneWithoutText) => {
             state.completion_watches.remove(watch_key);
+            let _ = crate::store::completion_watches::mark_projected(&state.store, watch_key, None)
+                .await;
             tracing::info!(
                 target: "minos_backend::social",
                 conversation_id = %watch.conversation_id,
@@ -1844,7 +1879,8 @@ async fn execute_claimed_dispatch(
                 } else {
                     None
                 },
-            );
+            )
+            .await;
         }
         Err(error) => {
             let (code, detail) = agent_error_from_backend_error(&error);
@@ -2031,6 +2067,8 @@ pub async fn expire_completion_watches(
     }
     let mut n = 0u32;
     for watch in expired {
+        let key = watch.watch_key();
+        let _ = crate::store::completion_watches::mark_expired(&state.store, &key).await;
         let account_id = watch
             .mention_account_id
             .clone()
@@ -2059,6 +2097,65 @@ pub async fn expire_completion_watches(
         .await;
         n = n.saturating_add(1);
     }
+    Ok(n)
+}
+
+/// Hydrate in-memory CompletionWatch registry from durable `armed` rows.
+pub async fn hydrate_completion_watches(
+    state: &BackendState,
+) -> Result<u32, crate::error::BackendError> {
+    let rows = crate::store::completion_watches::list_armed(&state.store).await?;
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    let mut agent_cache: std::collections::HashMap<String, crate::store::social::AgentRow> =
+        std::collections::HashMap::new();
+    let mut hydrated = Vec::with_capacity(rows.len());
+    for row in rows {
+        let agent = if let Some(a) = agent_cache.get(&row.agent_id) {
+            a.clone()
+        } else {
+            match crate::store::social::get_agent(&state.store, &row.agent_id).await? {
+                Some(a) => {
+                    agent_cache.insert(row.agent_id.clone(), a.clone());
+                    a
+                }
+                None => {
+                    tracing::warn!(
+                        target: "minos_backend::social",
+                        watch_key = %row.watch_key,
+                        agent_id = %row.agent_id,
+                        "skip hydrate CompletionWatch: agent missing"
+                    );
+                    let _ = crate::store::completion_watches::mark_expired(
+                        &state.store,
+                        &row.watch_key,
+                    )
+                    .await;
+                    continue;
+                }
+            }
+        };
+        hydrated.push(crate::completion_watch::CompletionWatch {
+            dispatch_id: row.dispatch_id,
+            origin_message_id: row.origin_message_id,
+            conversation_id: row.conversation_id,
+            session_id: row.session_id,
+            agent,
+            raw_seq_floor: row.raw_seq_floor as u64,
+            armed_at_ms: row.armed_at_ms,
+            deadline_at_ms: row.deadline_at_ms,
+            mention_account_id: row.mention_account_id,
+            mention_minos_id: row.mention_minos_id,
+        });
+    }
+    let n = hydrated.len() as u32;
+    state.completion_watches.hydrate(hydrated);
+    tracing::info!(
+        target: "minos_backend::social",
+        count = n,
+        "hydrated CompletionWatch registry from durable store"
+    );
     Ok(n)
 }
 

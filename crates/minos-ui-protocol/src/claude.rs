@@ -185,7 +185,10 @@ fn translate_stream_event(
         "content_block_start" => Ok(translate_content_block_start(state, event)),
         "content_block_delta" => Ok(translate_content_block_delta(state, event)),
         "content_block_stop" => Ok(translate_content_block_stop(state, event)),
-        "message_delta" | "message_stop" => Ok(Vec::new()),
+        "message_delta" => Ok(Vec::new()),
+        // Close the assistant bubble once per message at the stream boundary.
+        // Tool results must not MessageCompleted early (they can arrive mid-turn).
+        "message_stop" => Ok(complete_open_assistant(state, 0)),
         other => Ok(vec![UiEventMessage::Raw {
             kind: format!("claude/stream_event/{other}"),
             payload_json: serde_json::to_string(raw).unwrap_or_default(),
@@ -336,7 +339,10 @@ fn content_block_index(event: &Value) -> usize {
 }
 
 /// Map `user` frames that carry `tool_result` blocks to `ToolCallCompleted`.
-fn translate_user_message(state: &mut ClaudeTranslatorState, raw: &Value) -> Vec<UiEventMessage> {
+/// Does **not** close the assistant bubble — tool results often arrive mid-turn
+/// while the same assistant message is still open for later content. Completion
+/// is deferred to `message_stop` / `result` / thread_closed.
+fn translate_user_message(_state: &mut ClaudeTranslatorState, raw: &Value) -> Vec<UiEventMessage> {
     let message = raw.get("message").cloned().unwrap_or(Value::Null);
     let content = match message.get("content") {
         Some(Value::Array(items)) => items.as_slice(),
@@ -362,13 +368,6 @@ fn translate_user_message(state: &mut ClaudeTranslatorState, raw: &Value) -> Vec
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let output = tool_result_output_text(block);
-        // Close open assistant bubble before tool result lands in the transcript.
-        if let Some(message_id) = state.open_assistant_message_id.take() {
-            events.push(UiEventMessage::MessageCompleted {
-                message_id,
-                finished_at_ms: 0,
-            });
-        }
         events.push(UiEventMessage::ToolCallCompleted {
             tool_call_id,
             output: DisplayPayload::inline(output),
@@ -487,14 +486,15 @@ fn translate_assistant_message(
 }
 
 fn translate_result(state: &mut ClaudeTranslatorState, raw: &Value) -> Vec<UiEventMessage> {
-    let mut events = Vec::new();
+    // Prefer a real duration from the result envelope when present; otherwise
+    // leave finished_at_ms at 0 rather than inventing a wall-clock stamp.
+    let finished_at_ms = raw
+        .get("duration_ms")
+        .and_then(Value::as_i64)
+        .or_else(|| raw.get("duration_api_ms").and_then(Value::as_i64))
+        .unwrap_or(0);
     let open_message_id = state.open_assistant_message_id.clone();
-    if let Some(message_id) = state.open_assistant_message_id.take() {
-        events.push(UiEventMessage::MessageCompleted {
-            message_id,
-            finished_at_ms: 0,
-        });
-    }
+    let mut events = complete_open_assistant(state, finished_at_ms);
 
     if raw
         .get("is_error")
@@ -519,6 +519,19 @@ fn translate_result(state: &mut ClaudeTranslatorState, raw: &Value) -> Vec<UiEve
     }
 
     events
+}
+
+fn complete_open_assistant(
+    state: &mut ClaudeTranslatorState,
+    finished_at_ms: i64,
+) -> Vec<UiEventMessage> {
+    let Some(message_id) = state.open_assistant_message_id.take() else {
+        return Vec::new();
+    };
+    vec![UiEventMessage::MessageCompleted {
+        message_id,
+        finished_at_ms,
+    }]
 }
 
 fn translate_error(state: &ClaudeTranslatorState, raw: &Value) -> UiEventMessage {
@@ -817,15 +830,76 @@ mod tests {
 
         assert!(matches!(
             &out[0],
-            UiEventMessage::MessageCompleted { message_id, .. } if message_id == "msg_t2"
-        ));
-        assert!(matches!(
-            &out[1],
             UiEventMessage::ToolCallCompleted {
                 tool_call_id,
                 output,
                 is_error: false
             } if tool_call_id == "tool_1" && output == "file contents here"
+        ));
+        assert!(
+            !out.iter()
+                .any(|e| matches!(e, UiEventMessage::MessageCompleted { .. })),
+            "tool_result must not close the assistant bubble: {out:?}"
+        );
+        assert_eq!(state.open_assistant_message_id.as_deref(), Some("msg_t2"));
+    }
+
+    #[test]
+    fn message_stop_completes_open_assistant() {
+        let mut state = ClaudeTranslatorState::new("thr_stop".into());
+        let _ = translate(
+            &mut state,
+            &val(r#"{
+                "type":"stream_event",
+                "event":{"type":"message_start","message":{"id":"msg_stop","role":"assistant","content":[]}},
+                "session_id":"sess_1"
+            }"#),
+        )
+        .expect("translation should succeed");
+
+        let out = translate(
+            &mut state,
+            &val(r#"{
+                "type":"stream_event",
+                "event":{"type":"message_stop"},
+                "session_id":"sess_1"
+            }"#),
+        )
+        .expect("translation should succeed");
+        assert!(matches!(
+            out.as_slice(),
+            [UiEventMessage::MessageCompleted {
+                message_id,
+                finished_at_ms: 0
+            }] if message_id == "msg_stop"
+        ));
+        assert!(state.open_assistant_message_id.is_none());
+    }
+
+    #[test]
+    fn result_uses_duration_ms_when_present() {
+        let mut state = ClaudeTranslatorState::new("thr_dur".into());
+        let _ = translate(
+            &mut state,
+            &val(r#"{
+                "type":"stream_event",
+                "event":{"type":"message_start","message":{"id":"msg_dur","role":"assistant","content":[]}},
+                "session_id":"sess_1"
+            }"#),
+        )
+        .expect("translation should succeed");
+
+        let out = translate(
+            &mut state,
+            &val(r#"{"type":"result","subtype":"success","result":"done","is_error":false,"duration_ms":1234}"#),
+        )
+        .expect("translation should succeed");
+        assert!(matches!(
+            out.as_slice(),
+            [UiEventMessage::MessageCompleted {
+                message_id,
+                finished_at_ms: 1234
+            }] if message_id == "msg_dur"
         ));
     }
 

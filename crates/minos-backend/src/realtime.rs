@@ -782,7 +782,7 @@ impl RealtimeFanout {
             event_id: row.event_id.clone(),
         };
         self.broadcast_durable_event_local(&topic, &row.event_id, frame);
-        self.spawn_push_dispatch(row);
+        self.enqueue_push_dispatch(row).await;
         Ok(())
     }
 
@@ -847,10 +847,12 @@ impl RealtimeFanout {
         self.publish_social_durable_row(row).await
     }
 
-    fn spawn_push_dispatch(&self, row: &durable_event_log::DurableEventRow) {
-        let Some(notification_service) = self.notification_service.clone() else {
+    /// Enqueue durable push work for target accounts (worker claims + retries).
+    /// Failures are logged; social outbox ack is independent of push delivery.
+    async fn enqueue_push_dispatch(&self, row: &durable_event_log::DurableEventRow) {
+        if self.notification_service.is_none() {
             return;
-        };
+        }
         let payload = match serde_json::from_value::<DurableEvent>(row.payload_json.clone()) {
             Ok(payload) => payload,
             Err(error) => {
@@ -858,37 +860,74 @@ impl RealtimeFanout {
                     target: "minos_backend::notifications",
                     event_id = %row.event_id,
                     error = %error,
-                    "skipping push dispatch for undecodable durable event"
+                    "skipping push enqueue for undecodable durable event"
                 );
                 return;
             }
         };
-        let envelope = DurableEventEnvelope {
-            topic: row.topic.clone(),
-            topic_seq: row.topic_seq,
-            event_id: row.event_id.clone(),
-            payload,
-        };
-        tokio::spawn(async move {
-            match notification_service.dispatch_for_event(&envelope).await {
-                Ok(outcome) => {
-                    tracing::debug!(
-                        target: "minos_backend::notifications",
-                        event_id = %envelope.event_id,
-                        ?outcome,
-                        "push dispatch completed for durable event"
-                    );
-                }
+        let targets =
+            match crate::notifications::resolve_target_accounts(&self.store, &payload).await {
+                Ok(t) => t,
                 Err(error) => {
                     tracing::warn!(
                         target: "minos_backend::notifications",
-                        event_id = %envelope.event_id,
+                        event_id = %row.event_id,
                         error = %error,
-                        "push dispatch failed for durable event"
+                        "failed to resolve push targets; push not enqueued"
+                    );
+                    return;
+                }
+            };
+        if targets.is_empty() {
+            return;
+        }
+        let payload_json = match serde_json::to_string(&payload) {
+            Ok(s) => s,
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_backend::notifications",
+                    event_id = %row.event_id,
+                    error = %error,
+                    "failed to serialize push payload"
+                );
+                return;
+            }
+        };
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let mut enqueued = 0u32;
+        for account_id in &targets {
+            match crate::store::push_dispatch_queue::enqueue(
+                &self.store,
+                &row.event_id,
+                account_id,
+                &row.topic,
+                row.topic_seq,
+                &payload_json,
+                now_ms,
+            )
+            .await
+            {
+                Ok(true) => enqueued = enqueued.saturating_add(1),
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        target: "minos_backend::notifications",
+                        event_id = %row.event_id,
+                        account_id = %account_id,
+                        error = %error,
+                        "failed to enqueue push dispatch row"
                     );
                 }
             }
-        });
+        }
+        if enqueued > 0 {
+            tracing::debug!(
+                target: "minos_backend::notifications",
+                event_id = %row.event_id,
+                enqueued,
+                "enqueued durable push dispatch work"
+            );
+        }
     }
 
     async fn requeue_outbox_row(&self, row: &outbox_events::OutboxEventRow, message: &str) {
@@ -1018,6 +1057,10 @@ impl RealtimeFanout {
             match target.send_durable_event(event_id, frame.clone()) {
                 Ok(DurableSendResult::Delivered) => stats.delivered += 1,
                 Ok(DurableSendResult::AlreadySeen) => stats.already_seen += 1,
+                Ok(DurableSendResult::Buffered) => {
+                    // Held for ordered drain after Subscribe replay — still "delivered" to conn.
+                    stats.delivered += 1;
+                }
                 Err(error) => {
                     stats.failed += 1;
                     tracing::warn!(

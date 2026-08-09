@@ -62,6 +62,33 @@ export function bumpStatus(
 }
 
 /**
+ * Quiet peeks reuse generation when already ready; only hard opens bump.
+ * Concurrent quiet must not stale a hard open that already advanced generation
+ * (transcript + timeline parity).
+ */
+export function statusForLoad(
+  prev: ResourceFetchStatus | undefined,
+  quiet: boolean,
+): { next: ResourceFetchStatus; generation: number } {
+  if (quiet) {
+    let generation = prev?.generation ?? 0;
+    const next: ResourceFetchStatus =
+      prev?.phase === "ready"
+        ? { phase: "ready", generation }
+        : { phase: "loading", generation: Math.max(generation, 1) };
+    if (next.generation !== generation) {
+      generation = next.generation;
+    }
+    return { next, generation };
+  }
+  const bumped = bumpStatus(prev, false);
+  return {
+    generation: bumped.generation,
+    next: { phase: "loading", generation: bumped.generation },
+  };
+}
+
+/**
  * Synthetic host-only project created by legacy agent start without Hub
  * conversation_id (`ensure_workspace_conversation`). Hide from the main
  * project rail so Hub collab does not appear as a second "Direct agent

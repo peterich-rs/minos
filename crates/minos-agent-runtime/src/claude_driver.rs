@@ -28,7 +28,7 @@ use crate::config::RawIngest;
 use crate::manager::{IngestSink, PendingApprovals};
 use crate::manager_event::ManagerEvent;
 use crate::session_handle::SessionHandle;
-use crate::state_machine::SessionState;
+use crate::state_machine::{PauseReason, SessionState};
 
 const KILL_ESCALATION: Duration = Duration::from_secs(3);
 
@@ -207,8 +207,10 @@ impl ClaudeControlSession {
                         break;
                     }
                 }
-                // stdout EOF ⇒ process gone (or pipe closed).
+                // stdout EOF ⇒ process gone (or pipe closed). Never leave the
+                // session stuck Running/Resuming after transport death.
                 alive.store(false, Ordering::SeqCst);
+                suspend_session_on_process_death(&tid, &sessions, &manager_tx).await;
             })
         };
 
@@ -427,7 +429,9 @@ fn build_claude_user_frame(text: &str) -> Value {
     })
 }
 
-fn build_claude_args(
+/// Build Claude CLI argv. `extra_instructions` is the full compiled system
+/// prompt from `minos-prompt-runtime` (not raw profile text).
+pub(crate) fn build_claude_args(
     user_text: &str,
     session_id: Option<&str>,
     resume_session_id: Option<&str>,
@@ -474,16 +478,12 @@ fn build_claude_args(
         args.push(config_json.into());
         args.push("--strict-mcp-config".into());
     }
-    let system = match extra_instructions.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(extra) => format!(
-            "{}\n\n{}",
-            crate::manager::MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS,
-            extra
-        ),
-        None => crate::manager::MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS.to_string(),
-    };
-    args.push("--append-system-prompt".into());
-    args.push(system);
+    // `extra_instructions` is the full compiled system prompt from
+    // `minos-prompt-runtime` (bootstrap ± profile). Do not reassemble here.
+    if let Some(system) = extra_instructions.map(str::trim).filter(|s| !s.is_empty()) {
+        args.push("--append-system-prompt".into());
+        args.push(system.to_owned());
+    }
     args
 }
 
@@ -611,6 +611,9 @@ async fn sync_session_from_payload(
         if let Some(provider_session_id) = provider_session_id {
             handle.codex_session_id = Some(provider_session_id.to_string());
         }
+        // Any live Claude frame associated with this session advances the
+        // in-memory last_seq watermark so later resume can prefer --resume.
+        handle.note_event_seq(handle.last_seq.load(Ordering::SeqCst).saturating_add(1));
 
         if should_idle {
             handle.set_active_turn_id(None);
@@ -636,6 +639,47 @@ async fn sync_session_from_payload(
             new,
             at_ms: chrono::Utc::now().timestamp_millis(),
         });
+    }
+}
+
+/// stdout EOF / process exit while a turn is mid-flight: suspend so reattach
+/// can re-spawn with --resume instead of leaving permanent Running.
+async fn suspend_session_on_process_death(
+    session_id: &str,
+    sessions: &Arc<Mutex<HashMap<String, SessionHandle>>>,
+    manager_tx: &broadcast::Sender<ManagerEvent>,
+) {
+    let maybe_transition = {
+        let guard = sessions.lock().await;
+        let Some(handle) = guard.get(session_id) else {
+            return;
+        };
+        let old = handle.current_state();
+        if !matches!(old, SessionState::Running { .. } | SessionState::Resuming) {
+            return;
+        }
+        handle.set_active_turn_id(None);
+        let new = SessionState::Suspended {
+            reason: PauseReason::CodexCrashed,
+        };
+        if handle.transition(new.clone()).is_ok() {
+            Some((old, new))
+        } else {
+            None
+        }
+    };
+    if let Some((old, new)) = maybe_transition {
+        let _ = manager_tx.send(ManagerEvent::SessionStateChanged {
+            session_id: session_id.to_string(),
+            old,
+            new,
+            at_ms: chrono::Utc::now().timestamp_millis(),
+        });
+        warn!(
+            target: "minos_agent_runtime::claude_driver",
+            session_id = %session_id,
+            "claude process died; session suspended for resume",
+        );
     }
 }
 
@@ -682,14 +726,21 @@ mod tests {
     }
 
     #[test]
-    fn claude_args_include_mcp_config_and_minos_system_prompt_append() {
+    fn claude_args_include_mcp_config_and_compiled_system_prompt_append() {
+        let system = crate::prompt::compile_for_session(
+            minos_domain::AgentName::Claude,
+            true,
+            Some("Be concise."),
+        );
+        let system_text =
+            minos_prompt_runtime::claude_append_system_prompt(&system).expect("compiled system");
         let args = build_claude_args(
             "hello",
             Some("session-1"),
             None,
             Some(r#"{"mcpServers":{"minos_teamwork":{"command":"minos-teamwork-mcp"}}}"#),
             Some("sonnet"),
-            Some("Be concise."),
+            Some(system_text),
             true,
         );
         assert!(args.windows(2).any(|pair| pair == ["--model", "sonnet"]));
@@ -716,9 +767,16 @@ mod tests {
             .any(|pair| pair == ["--permission-prompt-tool", "stdio"]));
         assert!(args.windows(2).any(|pair| {
             pair[0] == "--append-system-prompt"
-                && pair[1].contains("Minos teamwork mode")
+                && pair[1].contains(minos_prompt_runtime::TEAMWORK_SEMANTIC_MARKER)
                 && pair[1].contains("minos_teamwork")
+                && pair[1] == system_text
         }));
+    }
+
+    #[test]
+    fn claude_args_omit_system_prompt_when_compiler_returns_none() {
+        let args = build_claude_args("hello", None, None, None, None, None, true);
+        assert!(!args.iter().any(|a| a == "--append-system-prompt"));
     }
 
     #[test]

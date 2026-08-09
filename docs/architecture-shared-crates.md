@@ -10,8 +10,9 @@
 | `minos-protocol` | 线协议定义 | domain, ui-protocol |
 | `minos-transport` | 传输层 | domain, protocol |
 | `minos-cli-detect` | CLI agent 检测 | domain |
-| `minos-agent-runtime` | Agent 运行时 | domain, codex-protocol, acp-protocol, chat-store |
-| `minos-chat-store` | 聊天持久化 | domain, protocol |
+| `minos-prompt-runtime` | Session 提示词编译 + `minos.teamwork` package SSOT | 无（仅 sha2/serde） |
+| `minos-agent-runtime` | Agent 运行时 | domain, codex-protocol, acp-protocol, chat-store, **prompt-runtime** |
+| `minos-chat-store` | 聊天持久化 + teamwork MCP | domain, protocol, **prompt-runtime** |
 | `minos-acp-protocol` | ACP 协议类型 | 无 |
 | `minos-codex-protocol` | Codex 协议类型 | 无 |
 | `minos-ui-protocol` | UI 事件协议 | domain |
@@ -89,6 +90,50 @@
 
 ---
 
+## 5. `minos-prompt-runtime` — Session 提示词编译 + package SSOT
+
+**路径**: `crates/minos-prompt-runtime/`  
+**特性**: 纯编译器深模块，无 I/O、无 agent 进程。  
+**Consumers**: `minos-agent-runtime`（compile + delivery）、`minos-chat-store`（MCP instructions）、`minos-tui`（skill install body）。
+
+### Canonical package
+
+```text
+packages/minos.teamwork/
+  package.yaml                          # id / version / schema / token budgets
+  fragments/bootstrap.md                # conversation-bound system inject
+  fragments/mcp_server_instructions.md  # MCP initialize.instructions
+  fragments/skill/SKILL.md              # on-demand skill handbook
+```
+
+Rust 只 `include_str!` 上述 artifact；**禁止**在 manager / mcp_server / TUI 再手写第二份。
+
+### 公开接口
+
+| 类型 / 函数 | 描述 |
+|-------------|------|
+| `SessionContext` | `runtime` + `conversation_bound` + `profile_instructions` |
+| `compile_session_context` | 确定性 `SessionContext` → `CompiledPromptBundle` |
+| `CompiledPromptBundle` | `bootstrap` / `profile` / `system_instructions` + `PromptProvenance` |
+| `PromptProvenance` | package id/version、adapter id、bootstrap/compiled digests |
+| `codex_developer_instructions` | Codex `thread/start.developerInstructions` 投递面 |
+| `claude_append_system_prompt` | Claude `--append-system-prompt` 投递面 |
+| `grok_rules` | Grok `--rules` 投递面 |
+| `TEAMWORK_BOOTSTRAP` / `TEAMWORK_MCP_SERVER_INSTRUCTIONS` / `TEAMWORK_SKILL_MD` | package fragments |
+| `teamwork_package_digests()` | 规范化 fragment digests + package aggregate |
+
+### 不变量
+
+- **Activation 唯一真相**：`conversation_bound` 决定是否包含 teamwork bootstrap；adapter 禁止再 `if conversation_id`。
+- **拼接唯一真相**：bootstrap 与 profile 的顺序/换行/空段丢弃只在 compiler 内完成。
+- **Digest 确定性**：同输入 → 同 `compiled_digest`；body 相同而 runtime 不同时 digest 可不同（含 runtime id）。
+- **Token budgets**：package.yaml + unit tests 锁定 bootstrap / MCP / skill 字符上限。
+- **Gemini / OpenCode**：`PromptRuntime` 枚举已占位；**不**提供投递 helper，直至 Task C capability probe。
+
+后续切片：Task C Gemini/OpenCode 真实投递；Task D `reconcile_host_packages` + session 持久化 digest。
+
+---
+
 ## 6. `minos-agent-runtime` — Agent 运行时
 
 **路径**: `crates/minos-agent-runtime/`
@@ -101,6 +146,7 @@
 | 类型 | 描述 |
 |------|------|
 | `AgentRuntimeConfig` | runtime 配置。Codex initialize handshake 默认 5 秒，`thread/start` 默认 30 秒（`thread_start_timeout`），避免冷启动或 workspace 初始化偏慢时误判失败。Teamwork MCP command 优先使用 `MINOS_TEAMWORK_MCP_BIN` / 同目录 `minos-teamwork-mcp`，开发态可回落到 `minos-tui` 或 `minos-daemon` 的 `__minos-teamwork-mcp` hidden sidecar |
+| `prompt`（内部） | `compile_for_session` 桥接到 `minos-prompt-runtime`；Codex/Claude/Grok 启动路径只消费 `CompiledPromptBundle` |
 | `AgentManager` | 多工作区 agent 管理器。每个工作区一个 `AppServerInstance`，N 个 `SessionHandle` |
 | `SessionState` | Starting, Idle, Running, Suspended, Resuming, Closed |
 | `PauseReason` | UserInterrupt, CodexCrashed, DaemonRestart, InstanceReaped |

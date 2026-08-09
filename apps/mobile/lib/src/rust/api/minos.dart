@@ -59,6 +59,12 @@ Stream<RequestTraceRecord> subscribeRequestTraces() =>
 abstract class MobileClient implements RustOpaqueInterface {
   Future<FriendRequestSummary> acceptFriendRequest({required String requestId});
 
+  /// Advance durable topic cursor after Dart cache/reducer commit.
+  Future<void> ackDurableApplied({
+    required String topic,
+    required PlatformInt64 topicSeq,
+  });
+
   /// Read the current active Mac id, or `None` if no pair has been
   /// completed yet.
   Future<String?> activeHost();
@@ -179,6 +185,7 @@ abstract class MobileClient implements RustOpaqueInterface {
 
   Future<ConversationReadResponse> markConversationRead({
     required String conversationId,
+    required PlatformInt64 readUpToMessageSeq,
   });
 
   Future<MyProfileResponse> myProfile();
@@ -1900,15 +1907,27 @@ class SocialEventFrame {
   final String kind;
   final ChatMessageSummary message;
 
+  /// Durable topic for apply-ack (e.g. `conversation:{id}` / `account:{id}`).
+  final String topic;
+
+  /// Durable topic_seq; ack after cache commit via `ack_durable_applied`.
+  final PlatformInt64 topicSeq;
+
   const SocialEventFrame({
     required this.conversationId,
     required this.kind,
     required this.message,
+    required this.topic,
+    required this.topicSeq,
   });
 
   @override
   int get hashCode =>
-      conversationId.hashCode ^ kind.hashCode ^ message.hashCode;
+      conversationId.hashCode ^
+      kind.hashCode ^
+      message.hashCode ^
+      topic.hashCode ^
+      topicSeq.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -1917,7 +1936,9 @@ class SocialEventFrame {
           runtimeType == other.runtimeType &&
           conversationId == other.conversationId &&
           kind == other.kind &&
-          message == other.message;
+          message == other.message &&
+          topic == other.topic &&
+          topicSeq == other.topicSeq;
 }
 
 enum SubagentStatus { running, completed, failed, interrupted }

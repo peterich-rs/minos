@@ -16,16 +16,23 @@ export const MESSAGE_AUTOFILL_SLACK_PX = 96;
 
 export type MessageHistoryMeta = {
   /**
-   * Lowest durable `messageSeq` currently loaded (inclusive).
-   * Used as `before_seq` for the next older page (local daemon). Null when empty/unknown.
+   * @deprecated Prefer hubMinLoadedSeq / hostMinLoadedSeq. Kept as
+   * hubMinLoadedSeq when linked, hostMinLoadedSeq for local-only.
    */
   firstLoadedSeq: number | null;
+  /** Lowest Hub social message_seq in the window (Hub before_seq). */
+  hubMinLoadedSeq: number | null;
+  /** Highest Hub social message_seq in the window. */
+  hubMaxLoadedSeq: number | null;
+  /** Lowest host daemon seq among host-only cards / local-only chat. */
+  hostMinLoadedSeq: number | null;
   /**
-   * Lowest Hub `created_at_ms` in the window (display/debug).
-   * Hub gap API now uses `firstLoadedSeq` / `before_seq`.
+   * Lowest Hub `created_at_ms` in the window (display/debug only).
    */
   firstLoadedCreatedAtMs?: number | null;
-  /** True when the last older/tail fetch reported more history above. */
+  hasOlderHub: boolean;
+  hasOlderHost: boolean;
+  /** True when either Hub or host has older history. */
   hasOlder: boolean;
   /** Quiet older-page fetch in flight. */
   loadingOlder: boolean;
@@ -33,13 +40,51 @@ export type MessageHistoryMeta = {
 
 export const EMPTY_MESSAGE_HISTORY: MessageHistoryMeta = Object.freeze({
   firstLoadedSeq: null,
+  hubMinLoadedSeq: null,
+  hubMaxLoadedSeq: null,
+  hostMinLoadedSeq: null,
   firstLoadedCreatedAtMs: null,
+  hasOlderHub: false,
+  hasOlderHost: false,
   hasOlder: false,
   loadingOlder: false,
 });
 
 export function emptyMessageHistoryMeta(): MessageHistoryMeta {
-  return EMPTY_MESSAGE_HISTORY;
+  return { ...EMPTY_MESSAGE_HISTORY };
+}
+
+/** Build meta from a merged window + independent has-more flags. */
+export function messageHistoryFromWindow(
+  messages: readonly TimelineMessage[],
+  opts: {
+    hasOlderHub?: boolean;
+    hasOlderHost?: boolean;
+    loadingOlder?: boolean;
+    firstLoadedCreatedAtMs?: number | null;
+    prev?: MessageHistoryMeta;
+  } = {},
+): MessageHistoryMeta {
+  const hubMin = firstMessageSeq(messages);
+  const hubMax = lastMessageSeq(messages);
+  const hostMin = firstHostMessageSeq(messages);
+  const hasOlderHub = opts.hasOlderHub ?? opts.prev?.hasOlderHub ?? false;
+  const hasOlderHost = opts.hasOlderHost ?? opts.prev?.hasOlderHost ?? false;
+  return {
+    firstLoadedSeq: hubMin ?? hostMin,
+    hubMinLoadedSeq: hubMin,
+    hubMaxLoadedSeq: hubMax,
+    hostMinLoadedSeq: hostMin,
+    firstLoadedCreatedAtMs:
+      opts.firstLoadedCreatedAtMs ??
+      firstMessageCreatedAtMs(messages) ??
+      opts.prev?.firstLoadedCreatedAtMs ??
+      null,
+    hasOlderHub,
+    hasOlderHost,
+    hasOlder: hasOlderHub || hasOlderHost,
+    loadingOlder: opts.loadingOlder ?? false,
+  };
 }
 
 /**
@@ -83,12 +128,16 @@ export function hasTimelineWorkingSet(
   return false;
 }
 
-/** Lowest durable seq in a list, or null if none. */
+/** Lowest social `messageSeq` (Hub or pure-local chat), ignoring host cards. */
 export function firstMessageSeq(
   messages: readonly TimelineMessage[],
 ): number | null {
   let min: number | null = null;
   for (const m of messages) {
+    if (m.kind === "tool_summary" || m.kind === "git_activity" || m.kind === "approval") {
+      continue;
+    }
+    if (m.kind === "system" && m.role === "system") continue;
     const seq = m.messageSeq;
     if (seq == null) continue;
     if (min == null || seq < min) min = seq;
@@ -96,12 +145,16 @@ export function firstMessageSeq(
   return min;
 }
 
-/** Highest durable seq in a list, or null if none. */
+/** Highest social `messageSeq` in a list, or null if none. */
 export function lastMessageSeq(
   messages: readonly TimelineMessage[],
 ): number | null {
   let max: number | null = null;
   for (const m of messages) {
+    if (m.kind === "tool_summary" || m.kind === "git_activity" || m.kind === "approval") {
+      continue;
+    }
+    if (m.kind === "system" && m.role === "system") continue;
     const seq = m.messageSeq;
     if (seq == null) continue;
     if (max == null || seq > max) max = seq;
@@ -109,18 +162,50 @@ export function lastMessageSeq(
   return max;
 }
 
+/** Lowest host daemon seq among host-only cards (or hostMessageSeq). */
+export function firstHostMessageSeq(
+  messages: readonly TimelineMessage[],
+): number | null {
+  let min: number | null = null;
+  for (const m of messages) {
+    const seq = m.hostMessageSeq ?? (
+      m.kind === "tool_summary" ||
+      m.kind === "git_activity" ||
+      m.kind === "approval" ||
+      (m.kind === "system" && m.role === "system")
+        ? m.messageSeq
+        : undefined
+    );
+    if (seq == null || !Number.isFinite(seq)) continue;
+    if (min == null || seq < min) min = seq;
+  }
+  return min;
+}
+
 /**
- * Meta after a tail (or full open) page: `hasOlder` from the daemon flag.
+ * Meta after a tail (or full open) page.
+ * `hasMoreHost` / `hasMoreHub` are independent namespace flags.
  */
 export function metaAfterMessageTail(
   messages: readonly TimelineMessage[],
   hasMore: boolean,
   firstLoadedCreatedAtMs?: number | null,
+  opts?: { hasMoreHub?: boolean; hasMoreHost?: boolean },
 ): MessageHistoryMeta {
+  const hubMin = firstMessageSeq(messages);
+  const hubMax = lastMessageSeq(messages);
+  const hostMin = firstHostMessageSeq(messages);
+  const hasOlderHub = opts?.hasMoreHub ?? hasMore;
+  const hasOlderHost = opts?.hasMoreHost ?? hasMore;
   return {
-    firstLoadedSeq: firstMessageSeq(messages),
+    firstLoadedSeq: hubMin ?? hostMin,
+    hubMinLoadedSeq: hubMin,
+    hubMaxLoadedSeq: hubMax,
+    hostMinLoadedSeq: hostMin,
     firstLoadedCreatedAtMs: firstLoadedCreatedAtMs ?? null,
-    hasOlder: hasMore,
+    hasOlderHub,
+    hasOlderHost,
+    hasOlder: hasOlderHub || hasOlderHost,
     loadingOlder: false,
   };
 }

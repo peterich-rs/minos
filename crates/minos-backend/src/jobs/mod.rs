@@ -11,6 +11,7 @@ pub mod health;
 pub mod host_command_timeout;
 pub mod job_trait;
 pub mod outbox_dispatcher;
+pub mod push_dispatch_worker;
 pub mod refresh_token_gc;
 pub mod retention_cleaner;
 pub mod stale_session_sweeper;
@@ -46,6 +47,9 @@ pub fn default_jobs(
 
     if let Some(app) = app {
         jobs.push(agent_dispatch_worker::AgentDispatchWorkerJob::new(
+            Arc::clone(&app),
+        ));
+        jobs.push(push_dispatch_worker::PushDispatchWorkerJob::new(
             Arc::clone(&app),
         ));
         jobs.push(stale_session_sweeper::SessionLifecycleJob::new(app));

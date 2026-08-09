@@ -45,9 +45,10 @@ pub struct CodexTranslatorState {
     /// id. Message ids alone cannot collapse that case, so we suppress a
     /// second identical user text until the turn completes.
     pending_user_message_texts: HashSet<String>,
-    /// CLI tool-call-id → buffered state (args JSON fragments, stable UUID
-    /// the translator assigned when `toolCall/started` was seen, plus the
-    /// message id the tool call belongs to).
+    /// Item id → open tool-call state for real codex tool items
+    /// (`commandExecution` / `fileChange` / `mcpToolCall` / `dynamicToolCall`).
+    /// Populated on `item/started`, refined by progress/output deltas, and
+    /// closed on `item/completed`.
     tool_calls: HashMap<String, OpenToolCall>,
     /// Completed thread items can arrive after later assistant content has
     /// started. Remember the assistant message that was open when each item
@@ -58,9 +59,10 @@ pub struct CodexTranslatorState {
 
 struct OpenToolCall {
     message_id: String,
-    tool_call_id_stable: String,
+    tool_call_id: String,
     name: String,
-    args_buf: String,
+    /// Progressive stdout/stderr (or MCP progress text) for live tool rows.
+    output_buf: String,
 }
 
 impl CodexTranslatorState {
@@ -213,10 +215,7 @@ pub fn translate(
                     }])
                 }
                 "commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall" => {
-                    if let Some(msg_id) = state.open_assistant_message_id.clone() {
-                        state.item_message_ids.insert(item_id.clone(), msg_id);
-                    }
-                    Ok(vec![])
+                    Ok(place_tool_item_started(state, &item, item_type, &item_id))
                 }
                 "collabAgentToolCall" => Ok(collab_spawn_events(state, &params, &item, &item_id)),
                 _ => Ok(vec![UiEventMessage::Raw {
@@ -240,16 +239,18 @@ pub fn translate(
                 text: DisplayPayload::inline(text),
             }])
         }
-        // Note: spec §12.1 (2026-04 codex app-server) canonicalises reasoning
-        // deltas on `item/reasoning/delta`. Older codex releases exposed
-        // `item/reasoning/textDelta` and `item/reasoning/summaryTextDelta`
-        // as separate notifications; those names are no longer emitted.
-        "item/reasoning/delta" => {
+        // Real codex app-server methods (minos-codex-protocol):
+        // `item/reasoning/textDelta` and `item/reasoning/summaryTextDelta`.
+        // Both stream into the open assistant bubble as ReasoningDelta.
+        "item/reasoning/textDelta" | "item/reasoning/summaryTextDelta" => {
             let text = params
                 .get("delta")
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
+            if text.is_empty() {
+                return Ok(vec![]);
+            }
             let Some(msg_id) = state.open_assistant_message_id.clone() else {
                 return Ok(vec![]);
             };
@@ -258,98 +259,15 @@ pub fn translate(
                 text: DisplayPayload::inline(text),
             }])
         }
-        // `*/completed` markers are signal-absorbed per spec §12.1: the
-        // `MessageCompleted` UI event awaits `turn/completed`, not the
-        // per-item completion. Returning `vec![]` keeps these off the mobile
-        // timeline without falling through to the Raw escape hatch.
-        "item/agentMessage/completed" | "item/reasoning/completed" => Ok(vec![]),
+        // Summary part boundaries carry no text; absorb so they stay off the
+        // timeline instead of falling through to Raw.
+        "item/reasoning/summaryPartAdded" => Ok(vec![]),
         "item/completed" => Ok(translate_item_completed(state, &params)),
-        "item/toolCall/started" => {
-            let cli_id = params
-                .get("toolCallId")
-                .and_then(Value::as_str)
-                .ok_or_else(|| TranslationError::Malformed {
-                    reason: "toolCallId missing".into(),
-                })?
-                .to_string();
-            let name = params
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let Some(msg_id) = state.open_assistant_message_id.clone() else {
-                return Ok(vec![]);
-            };
-            let stable_id = Uuid::new_v4().to_string();
-            state.tool_calls.insert(
-                cli_id,
-                OpenToolCall {
-                    message_id: msg_id,
-                    tool_call_id_stable: stable_id,
-                    name,
-                    args_buf: String::new(),
-                },
-            );
-            Ok(vec![])
+        // Progressive tool output while a command/file/MCP item is in flight.
+        "item/commandExecution/outputDelta" | "item/fileChange/outputDelta" => {
+            Ok(progressive_tool_output_delta(state, &params, "delta"))
         }
-        "item/toolCall/arguments" => {
-            let cli_id = params
-                .get("toolCallId")
-                .and_then(Value::as_str)
-                .ok_or_else(|| TranslationError::Malformed {
-                    reason: "toolCallId missing".into(),
-                })?;
-            if let Some(tc) = state.tool_calls.get_mut(cli_id) {
-                if let Some(delta) = params.get("argumentsDelta").and_then(Value::as_str) {
-                    push_bounded_display(&mut tc.args_buf, delta, TOOL_ARGS_DISPLAY_LIMIT);
-                }
-            }
-            Ok(vec![])
-        }
-        "item/toolCall/argumentsCompleted" => {
-            let cli_id = params
-                .get("toolCallId")
-                .and_then(Value::as_str)
-                .ok_or_else(|| TranslationError::Malformed {
-                    reason: "toolCallId missing".into(),
-                })?;
-            if let Some(tc) = state.tool_calls.get(cli_id) {
-                Ok(vec![UiEventMessage::ToolCallPlaced {
-                    message_id: tc.message_id.clone(),
-                    tool_call_id: tc.tool_call_id_stable.clone(),
-                    name: tc.name.clone(),
-                    args_json: DisplayPayload::inline(tc.args_buf.clone()),
-                }])
-            } else {
-                Ok(vec![])
-            }
-        }
-        "item/toolCall/completed" => {
-            let cli_id = params
-                .get("toolCallId")
-                .and_then(Value::as_str)
-                .ok_or_else(|| TranslationError::Malformed {
-                    reason: "toolCallId missing".into(),
-                })?;
-            let output = params
-                .get("output")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let is_error = params
-                .get("isError")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            if let Some(tc) = state.tool_calls.remove(cli_id) {
-                Ok(vec![UiEventMessage::ToolCallCompleted {
-                    tool_call_id: tc.tool_call_id_stable,
-                    output: DisplayPayload::inline(output),
-                    is_error,
-                }])
-            } else {
-                Ok(vec![])
-            }
-        }
+        "item/mcpToolCall/progress" => Ok(progressive_tool_output_delta(state, &params, "message")),
         "turn/completed" => {
             let finished_at_ms = params
                 .get("finishedAtMs")
@@ -409,6 +327,68 @@ fn push_bounded_display(buf: &mut String, delta: &str, limit: usize) {
     buf.push_str("\n[truncated display buffer; full raw event is stored separately]");
 }
 
+fn place_tool_item_started(
+    state: &mut CodexTranslatorState,
+    item: &Value,
+    item_type: &str,
+    item_id: &str,
+) -> Vec<UiEventMessage> {
+    let Some(msg_id) = state.open_assistant_message_id.clone() else {
+        return Vec::new();
+    };
+    if item_id.is_empty() {
+        return Vec::new();
+    }
+    state
+        .item_message_ids
+        .insert(item_id.to_string(), msg_id.clone());
+    let tool_call_id = stable_item_tool_call_id(item_id, item_type);
+    let name = tool_item_name(item_type, item);
+    let args_json = tool_item_args_json(item_type, item);
+    state.tool_calls.insert(
+        item_id.to_string(),
+        OpenToolCall {
+            message_id: msg_id.clone(),
+            tool_call_id: tool_call_id.clone(),
+            name: name.clone(),
+            output_buf: String::new(),
+        },
+    );
+    vec![UiEventMessage::ToolCallPlaced {
+        message_id: msg_id,
+        tool_call_id,
+        name,
+        args_json: DisplayPayload::inline(args_json),
+    }]
+}
+
+fn progressive_tool_output_delta(
+    state: &mut CodexTranslatorState,
+    params: &Value,
+    field: &str,
+) -> Vec<UiEventMessage> {
+    let item_id = params.get("itemId").and_then(Value::as_str).unwrap_or("");
+    if item_id.is_empty() {
+        return Vec::new();
+    }
+    let delta = params.get(field).and_then(Value::as_str).unwrap_or("");
+    if delta.is_empty() {
+        return Vec::new();
+    }
+    let Some(tc) = state.tool_calls.get_mut(item_id) else {
+        return Vec::new();
+    };
+    if !tc.output_buf.is_empty() && field == "message" {
+        push_bounded_display(&mut tc.output_buf, "\n", TOOL_ARGS_DISPLAY_LIMIT);
+    }
+    push_bounded_display(&mut tc.output_buf, delta, TOOL_ARGS_DISPLAY_LIMIT);
+    vec![UiEventMessage::ToolCallCompleted {
+        tool_call_id: tc.tool_call_id.clone(),
+        output: DisplayPayload::inline(tc.output_buf.clone()),
+        is_error: false,
+    }]
+}
+
 fn translate_item_completed(
     state: &mut CodexTranslatorState,
     params: &Value,
@@ -463,68 +443,9 @@ fn translate_item_completed(
                 }]
             }
         }
-        "commandExecution" => {
-            let Some(msg_id) = completed_item_message_id(state, item_id) else {
-                return Vec::new();
-            };
-            let tool_call_id = stable_item_tool_call_id(item_id, item_type);
-            let name = "commandExecution".to_string();
-            let args_json = serde_json::json!({
-                "command": item.get("command").cloned().unwrap_or(Value::Null),
-                "cwd": item.get("cwd").cloned().unwrap_or(Value::Null),
-                "status": item.get("status").cloned().unwrap_or(Value::Null),
-                "exitCode": item.get("exitCode").cloned().unwrap_or(Value::Null),
-            })
-            .to_string();
-            let output = item
-                .get("aggregatedOutput")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let is_error = !matches!(
-                item.get("status").and_then(Value::as_str),
-                Some("completed" | "succeeded")
-            ) || item.get("exitCode").and_then(Value::as_i64).unwrap_or(0) != 0;
-            vec![
-                UiEventMessage::ToolCallPlaced {
-                    message_id: msg_id,
-                    tool_call_id: tool_call_id.clone(),
-                    name,
-                    args_json: DisplayPayload::inline(args_json),
-                },
-                UiEventMessage::ToolCallCompleted {
-                    tool_call_id,
-                    output: DisplayPayload::inline(output),
-                    is_error,
-                },
-            ]
-        }
+        "commandExecution" => complete_tool_item(state, item, item_type, item_id),
         "fileChange" | "mcpToolCall" | "dynamicToolCall" => {
-            let Some(msg_id) = completed_item_message_id(state, item_id) else {
-                return Vec::new();
-            };
-            let tool_call_id = stable_item_tool_call_id(item_id, item_type);
-            let name = item
-                .get("tool")
-                .or_else(|| item.get("server"))
-                .and_then(Value::as_str)
-                .map_or_else(|| item_type.to_string(), str::to_string);
-            let args_json = serde_json::to_string(item).unwrap_or_default();
-            let output = summarize_completed_tool_item(item_type, item);
-            let is_error = completed_tool_item_is_error(item);
-            vec![
-                UiEventMessage::ToolCallPlaced {
-                    message_id: msg_id,
-                    tool_call_id: tool_call_id.clone(),
-                    name,
-                    args_json: DisplayPayload::inline(args_json),
-                },
-                UiEventMessage::ToolCallCompleted {
-                    tool_call_id,
-                    output: DisplayPayload::inline(output),
-                    is_error,
-                },
-            ]
+            complete_tool_item(state, item, item_type, item_id)
         }
         "collabAgentToolCall" => {
             let mut events = collab_spawn_events(state, params, item, item_id);
@@ -538,6 +459,84 @@ fn translate_item_completed(
             events
         }
         _ => Vec::new(),
+    }
+}
+
+fn complete_tool_item(
+    state: &mut CodexTranslatorState,
+    item: &Value,
+    item_type: &str,
+    item_id: &str,
+) -> Vec<UiEventMessage> {
+    let open = state.tool_calls.remove(item_id);
+    let Some(msg_id) = completed_item_message_id(state, item_id)
+        .or_else(|| open.as_ref().map(|tc| tc.message_id.clone()))
+    else {
+        return Vec::new();
+    };
+    let tool_call_id = open
+        .as_ref()
+        .map(|tc| tc.tool_call_id.clone())
+        .unwrap_or_else(|| stable_item_tool_call_id(item_id, item_type));
+    let name = open
+        .as_ref()
+        .map(|tc| tc.name.clone())
+        .unwrap_or_else(|| tool_item_name(item_type, item));
+    let args_json = tool_item_args_json(item_type, item);
+    let progressive = open.map(|tc| tc.output_buf).unwrap_or_default();
+    let final_output = summarize_completed_tool_item(item_type, item);
+    let output = if final_output.is_empty() {
+        progressive
+    } else {
+        final_output
+    };
+    let is_error = match item_type {
+        "commandExecution" => {
+            !matches!(
+                item.get("status").and_then(Value::as_str),
+                Some("completed" | "succeeded")
+            ) || item.get("exitCode").and_then(Value::as_i64).unwrap_or(0) != 0
+        }
+        _ => completed_tool_item_is_error(item),
+    };
+    // Re-emit ToolCallPlaced so late completions (no prior item/started, or
+    // refined args on completed item) still surface a tool row.
+    vec![
+        UiEventMessage::ToolCallPlaced {
+            message_id: msg_id,
+            tool_call_id: tool_call_id.clone(),
+            name,
+            args_json: DisplayPayload::inline(args_json),
+        },
+        UiEventMessage::ToolCallCompleted {
+            tool_call_id,
+            output: DisplayPayload::inline(output),
+            is_error,
+        },
+    ]
+}
+
+fn tool_item_name(item_type: &str, item: &Value) -> String {
+    match item_type {
+        "commandExecution" => "commandExecution".to_string(),
+        _ => item
+            .get("tool")
+            .or_else(|| item.get("server"))
+            .and_then(Value::as_str)
+            .map_or_else(|| item_type.to_string(), str::to_string),
+    }
+}
+
+fn tool_item_args_json(item_type: &str, item: &Value) -> String {
+    match item_type {
+        "commandExecution" => serde_json::json!({
+            "command": item.get("command").cloned().unwrap_or(Value::Null),
+            "cwd": item.get("cwd").cloned().unwrap_or(Value::Null),
+            "status": item.get("status").cloned().unwrap_or(Value::Null),
+            "exitCode": item.get("exitCode").cloned().unwrap_or(Value::Null),
+        })
+        .to_string(),
+        _ => serde_json::to_string(item).unwrap_or_default(),
     }
 }
 
@@ -643,6 +642,11 @@ fn completed_tool_item_is_error(item: &Value) -> bool {
 
 fn summarize_completed_tool_item(item_type: &str, item: &Value) -> String {
     match item_type {
+        "commandExecution" => item
+            .get("aggregatedOutput")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
         "fileChange" => item
             .get("changes")
             .map(|changes| serde_json::to_string_pretty(changes).unwrap_or_default())
@@ -1024,7 +1028,7 @@ mod state_tests {
     }
 
     #[test]
-    fn tool_call_buffers_args_then_emits_placed() {
+    fn tool_item_started_places_and_completed_closes() {
         let mut s = CodexTranslatorState::new("thr".into());
 
         // Bracket with a MessageStarted so the tool is associated.
@@ -1039,66 +1043,104 @@ mod state_tests {
 
         let o1 = translate(
             &mut s,
-            &val(
-                r#"{"method":"item/toolCall/started","params":{"itemId":"i1","toolCallId":"tc_1","name":"run_command"}}"#,
-            ),
-        )
-        .unwrap();
-        assert!(o1.is_empty(), "emitted too early: {o1:?}");
-
-        let o2 = translate(
-            &mut s,
-            &val(
-                r#"{"method":"item/toolCall/arguments","params":{"toolCallId":"tc_1","argumentsDelta":"{\"cmd\":\"ls"}}"#,
-            ),
-        )
-        .unwrap();
-        assert!(o2.is_empty());
-
-        let o3 = translate(
-            &mut s,
-            &val(
-                r#"{"method":"item/toolCall/arguments","params":{"toolCallId":"tc_1","argumentsDelta":"\"}"}}"#,
-            ),
-        )
-        .unwrap();
-        assert!(o3.is_empty());
-
-        let o4 = translate(
-            &mut s,
-            &val(r#"{"method":"item/toolCall/argumentsCompleted","params":{"toolCallId":"tc_1"}}"#),
-        )
-        .unwrap();
-        assert_eq!(o4.len(), 1);
-        match &o4[0] {
-            UiEventMessage::ToolCallPlaced {
-                tool_call_id,
-                name,
-                args_json,
-                ..
-            } => {
-                assert_eq!(name, "run_command");
-                assert_eq!(args_json, r#"{"cmd":"ls"}"#);
-                // tool_call_id is translator-assigned (UUID); just assert non-empty.
-                assert!(!tool_call_id.is_empty());
-            }
-            _ => panic!(),
-        }
-
-        let o5 = translate(
-            &mut s,
-            &val(
-                r#"{"method":"item/toolCall/completed","params":{"toolCallId":"tc_1","output":"file1\nfile2","isError":false}}"#,
-            ),
+            &val(r#"{"method":"item/started","params":{
+                    "item":{"type":"commandExecution","id":"cmd1","command":"ls","commandActions":[],"cwd":"/tmp","status":"inProgress"},
+                    "threadId":"thr","turnId":"t1"
+                }}"#),
         )
         .unwrap();
         assert!(matches!(
-            o5.as_slice(),
-            [UiEventMessage::ToolCallCompleted {
-                output,
-                is_error: false,
+            o1.as_slice(),
+            [UiEventMessage::ToolCallPlaced {
+                message_id,
+                tool_call_id,
+                name,
                 ..
-            }] if output == "file1\nfile2"
+            }] if message_id == "i1"
+                && tool_call_id == "commandExecution:cmd1"
+                && name == "commandExecution"
+        ));
+
+        let o2 = translate(
+            &mut s,
+            &val(r#"{"method":"item/commandExecution/outputDelta","params":{
+                    "itemId":"cmd1","threadId":"thr","turnId":"t1","delta":"file1\n"
+                }}"#),
+        )
+        .unwrap();
+        assert!(matches!(
+            o2.as_slice(),
+            [UiEventMessage::ToolCallCompleted {
+                tool_call_id,
+                output,
+                is_error: false
+            }] if tool_call_id == "commandExecution:cmd1" && output == "file1\n"
+        ));
+
+        let o3 = translate(
+            &mut s,
+            &val(r#"{"method":"item/completed","params":{
+                    "item":{"type":"commandExecution","id":"cmd1","command":"ls","commandActions":[],"cwd":"/tmp","status":"completed","aggregatedOutput":"file1\nfile2","exitCode":0},
+                    "threadId":"thr","turnId":"t1","completedAtMs":2
+                }}"#),
+        )
+        .unwrap();
+        assert!(matches!(
+            o3.as_slice(),
+            [
+                UiEventMessage::ToolCallPlaced {
+                    tool_call_id,
+                    name,
+                    ..
+                },
+                UiEventMessage::ToolCallCompleted {
+                    tool_call_id: done_id,
+                    output,
+                    is_error: false
+                }
+            ] if tool_call_id == "commandExecution:cmd1"
+                && done_id == "commandExecution:cmd1"
+                && name == "commandExecution"
+                && output == "file1\nfile2"
+        ));
+    }
+
+    #[test]
+    fn reasoning_text_and_summary_deltas_emit_reasoning_delta() {
+        let mut s = CodexTranslatorState::new("thr".into());
+        let _ = translate(
+            &mut s,
+            &val(r#"{"method":"item/started","params":{
+                    "item":{"type":"agentMessage","id":"i1","text":""},
+                    "threadId":"thr","turnId":"t1"
+                }}"#),
+        )
+        .unwrap();
+
+        let text = translate(
+            &mut s,
+            &val(r#"{"method":"item/reasoning/textDelta","params":{
+                    "itemId":"i1","threadId":"thr","turnId":"t1","contentIndex":0,"delta":"think"
+                }}"#),
+        )
+        .unwrap();
+        assert!(matches!(
+            text.as_slice(),
+            [UiEventMessage::ReasoningDelta { message_id, text }]
+                if message_id == "i1" && text == "think"
+        ));
+
+        let summary = translate(
+            &mut s,
+            &val(r#"{"method":"item/reasoning/summaryTextDelta","params":{
+                    "itemId":"i1","threadId":"thr","turnId":"t1","summaryIndex":0,"delta":"sum"
+                }}"#),
+        )
+        .unwrap();
+        assert!(matches!(
+            summary.as_slice(),
+            [UiEventMessage::ReasoningDelta { message_id, text }]
+                if message_id == "i1" && text == "sum"
         ));
     }
 

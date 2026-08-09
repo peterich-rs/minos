@@ -27,6 +27,7 @@ export {
 export {
   coerceUiSessionStatus,
   bumpStatus,
+  statusForLoad,
   toUiProject,
   toUiProjects,
   normalizeDaemonConversation,

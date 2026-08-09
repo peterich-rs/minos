@@ -14,7 +14,10 @@ import type { AgentRuntime, TimelineMessage } from "./mock-data.ts";
 import type { HubChatMessage } from "./minos-cloud.ts";
 import { formatLocalClock } from "./time.ts";
 import { normalizeHostRuntime } from "./im-cloud-sync-helpers.ts";
-import { sortTimelineMessages } from "./timeline-order.ts";
+import {
+  isHostOnlyTimelineCard,
+  sortTimelineMessages,
+} from "./timeline-order.ts";
 
 const RUNTIMES: AgentRuntime[] = [
   "codex",
@@ -160,60 +163,104 @@ function isOptimisticLocalBubble(m: TimelineMessage): boolean {
 }
 
 /**
+ * Pick Hub message_seq to hang a host card after (anchor).
+ * Prefer last Hub bubble with createdAtMs ≤ card time among loaded hub rows.
+ */
+function anchorForHostCard(
+  card: TimelineMessage,
+  hubBubbles: TimelineMessage[],
+): number | undefined {
+  let best: number | undefined;
+  let bestTs = -Infinity;
+  const cardTs = card.createdAtMs ?? Number.POSITIVE_INFINITY;
+  for (const h of hubBubbles) {
+    if (h.messageSeq == null || !Number.isFinite(h.messageSeq)) continue;
+    const ts = h.createdAtMs ?? 0;
+    if (ts <= cardTs && ts >= bestTs) {
+      bestTs = ts;
+      best = h.messageSeq;
+    }
+  }
+  return best;
+}
+
+/**
  * Merge Hub chat bubbles with local non-bubble cards (tool/git/system).
  *
- * Rules (C2 final):
- * - Hub wins on **same message id** for chat bubbles (multi-end SSOT).
- * - Local tool/git/system/approval cards always keep.
- * - Local chat bubbles **missing from Hub** are gap-filled only when:
- *   - optimistic send (`sending` / `failed`), or
- *   - local user row (host_projection lag: daemon sent, Hub outbox pending), or
- *   - local `agent-result:…` not yet on Hub (same id space; no body soft-dedupe).
- * - Bare non-canonical agent rows without Hub id are dropped (no dual SSOT ghosts).
+ * Rules (final):
+ * - Hub wins on **same message id** for chat content (multi-end SSOT).
+ * - Hub `message_seq` is the **only** social total-order key for chat bubbles.
+ * - Host tool/git/system/approval cards use `anchorHubMessageSeq` + `suborder`
+ *   (never inject host daemon seq into social `messageSeq`).
+ * - Local chat missing from Hub: optimistic / user / agent-result gap-fill only.
  */
 export function mergeHubAndLocalTimeline(input: {
   hubMessages: TimelineMessage[];
   localMessages: TimelineMessage[];
 }): TimelineMessage[] {
   const byId = new Map<string, TimelineMessage>();
+  const hubBubbles = input.hubMessages.filter(
+    (m) => m.messageSeq != null && Number.isFinite(m.messageSeq),
+  );
 
-  // Local non-chat cards first (gaps in timeline).
+  // Local host-only cards with Hub-space anchors.
   for (const m of input.localMessages) {
     if (isLocalChatBubbleForHubSsot(m)) continue;
-    byId.set(m.id, m);
+    if (!isHostOnlyTimelineCard(m) && m.kind !== "system") {
+      // Non-chat local rows that are not host cards (defensive).
+      byId.set(m.id, m);
+      continue;
+    }
+    const hostSeq =
+      m.hostMessageSeq ??
+      (m.messageSeq != null && Number.isFinite(m.messageSeq)
+        ? m.messageSeq
+        : undefined);
+    const anchor =
+      m.anchorHubMessageSeq ?? anchorForHostCard(m, hubBubbles);
+    byId.set(m.id, {
+      ...m,
+      // Host cards never participate in Hub social messageSeq order.
+      messageSeq: undefined,
+      hostMessageSeq: hostSeq,
+      anchorHubMessageSeq: anchor,
+      suborder: m.suborder ?? hostSeq ?? 0,
+    });
   }
 
-  // Hub bubbles are authoritative when present; keep local messageSeq so sort
-  // still works (Hub HTTP rows often omit host-local seq).
-  // Reactions: Hub defined (incl. []) wins; only fall back when Hub omits field.
+  // Hub bubbles: content + Hub message_seq are authoritative.
   for (const m of input.hubMessages) {
     const localPeer = input.localMessages.find((l) => l.id === m.id);
     const reactions =
       m.reactions !== undefined ? m.reactions : localPeer?.reactions;
     const messageSeq =
-      m.messageSeq != null
+      m.messageSeq != null && Number.isFinite(m.messageSeq)
         ? m.messageSeq
-        : localPeer?.messageSeq != null
-          ? localPeer.messageSeq
-          : undefined;
-    byId.set(m.id, { ...m, messageSeq, reactions });
+        : undefined;
+    const createdAtMs =
+      localPeer?.createdAtMs != null && Number.isFinite(localPeer.createdAtMs)
+        ? localPeer.createdAtMs
+        : m.createdAtMs;
+    byId.set(m.id, {
+      ...m,
+      messageSeq,
+      createdAtMs,
+      reactions,
+      // Chat bubbles are not host cards.
+      anchorHubMessageSeq: undefined,
+      hostMessageSeq: undefined,
+      suborder: undefined,
+    });
   }
 
-  // Gap-fill local chat not yet on Hub (same id → already covered above).
+  // Gap-fill local chat not yet on Hub.
   for (const m of input.localMessages) {
     if (!isLocalChatBubbleForHubSsot(m)) continue;
     if (byId.has(m.id)) {
-      // Same id already from Hub: fill seq only; never overwrite Hub reactions
-      // (including explicit empty) with stale local.
       const cur = byId.get(m.id)!;
-      if (cur.messageSeq == null && m.messageSeq != null) {
-        byId.set(m.id, { ...cur, messageSeq: m.messageSeq });
-      }
+      // Never overwrite Hub messageSeq with host daemon seq.
       if (cur.reactions === undefined && m.reactions !== undefined) {
-        byId.set(m.id, {
-          ...byId.get(m.id)!,
-          reactions: m.reactions,
-        });
+        byId.set(m.id, { ...cur, reactions: m.reactions });
       }
       continue;
     }
@@ -223,7 +270,18 @@ export function mergeHubAndLocalTimeline(input: {
       m.role === "user" ||
       m.id.startsWith("agent-result:");
     if (keep) {
-      byId.set(m.id, m);
+      // Pending uplink / optimistic: do not treat host daemon seq as Hub social
+      // order when any Hub seq exists in the window.
+      const hubSpaceActive = hubBubbles.length > 0;
+      if (hubSpaceActive && !isOptimisticLocalBubble(m)) {
+        byId.set(m.id, {
+          ...m,
+          hostMessageSeq: m.messageSeq,
+          messageSeq: undefined,
+        });
+      } else {
+        byId.set(m.id, m);
+      }
     }
   }
 

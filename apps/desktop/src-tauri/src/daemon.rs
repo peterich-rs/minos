@@ -1669,6 +1669,22 @@ impl TranscriptAssembler {
         self.items
     }
 
+    /// Live frames: only emit rows touched at `seq` so Desktop merge stays a
+    /// delta while the assembler keeps cumulative text/state across frames.
+    fn items_touching_seq(&self, seq: u64) -> Vec<TranscriptItemDto> {
+        self.items
+            .iter()
+            .filter(|item| item.seq == seq)
+            .cloned()
+            .collect()
+    }
+
+    fn has_pending_approval_card(&self) -> bool {
+        self.items
+            .iter()
+            .any(|it| (it.kind == "approval" || it.kind == "question") && it.request_id.is_some())
+    }
+
     /// Mark a reverse-request card non-actionable (clears request_id).
     fn resolve_approval_card(&mut self, request_id: &str, text: &str) {
         for item in self.items.iter_mut().rev() {
@@ -1816,6 +1832,108 @@ impl TranscriptAssembler {
         });
     }
 
+    /// Reasoning stream/replace. Delta appends; Replace sets text (empty clears
+    /// the segment) — TUI chat_state parity. Stable ids so per-frame assemblers
+    /// merge by id instead of minting `{session}-think-N` every frame.
+    fn append_reasoning(
+        &mut self,
+        seq: u64,
+        ts_ms: i64,
+        message_id: String,
+        chunk: String,
+        replace: bool,
+    ) {
+        // Empty replace drops the reasoning segment (TUI retain-filter).
+        if chunk.is_empty() {
+            if replace {
+                self.items.retain(|item| {
+                    !(item.kind == "reasoning"
+                        && item.message_id.as_deref() == Some(message_id.as_str()))
+                });
+            }
+            return;
+        }
+
+        // 1) Tail match → in-place stream/replace (active thinking bubble).
+        if self.tail_text_matches(&message_id, "reasoning") {
+            if let Some(last) = self.items.last_mut() {
+                if replace {
+                    last.text = chunk;
+                } else {
+                    last.text.push_str(&chunk);
+                }
+                last.ts_ms = ts_ms;
+                last.seq = seq;
+                return;
+            }
+        }
+
+        // 2) Non-tail ReasoningReplace for an existing segment: freeze mid-timeline
+        //    when body is identical; otherwise append a new row at the end.
+        if replace {
+            if let Some(item) = self.items.iter().rev().find(|i| {
+                i.kind == "reasoning" && i.message_id.as_deref() == Some(message_id.as_str())
+            }) {
+                if item.text == chunk {
+                    return;
+                }
+                // Fall through to append a new bubble with the new body.
+            }
+        }
+
+        // 3) Delta/replace when not tail → new or stable-id segment at end.
+        let id = self.stable_text_id("reasoning", &message_id);
+        if let Some(pos) = self.items.iter().position(|i| i.id == id) {
+            if pos + 1 == self.items.len() {
+                let existing = &mut self.items[pos];
+                if replace {
+                    existing.text = chunk;
+                } else {
+                    existing.text.push_str(&chunk);
+                }
+                existing.ts_ms = ts_ms;
+                existing.seq = seq;
+                return;
+            }
+            // Id exists above later rows — append with a distinct id for the new segment.
+            self.counter += 1;
+            self.items.push(TranscriptItemDto {
+                id: format!("{id}:s{}", self.counter),
+                kind: "reasoning".into(),
+                role: Some("assistant".into()),
+                text: chunk,
+                detail: None,
+                title: Some("Thinking".into()),
+                ts_ms,
+                seq,
+                message_id: Some(message_id),
+                request_id: None,
+                approval_method: None,
+                options: None,
+                approve_response: None,
+                decline_response: None,
+            });
+            return;
+        }
+
+        self.items.push(TranscriptItemDto {
+            id,
+            kind: "reasoning".into(),
+            role: Some("assistant".into()),
+            text: chunk,
+            detail: None,
+            title: Some("Thinking".into()),
+            ts_ms,
+            seq,
+            message_id: Some(message_id),
+            request_id: None,
+            approval_method: None,
+            options: None,
+            approve_response: None,
+            decline_response: None,
+        });
+    }
+
     fn push_simple(
         &mut self,
         seq: u64,
@@ -1863,37 +1981,11 @@ impl TranscriptAssembler {
             UiEventMessage::TextReplace { message_id, text } => {
                 self.append_text(seq, ts_ms, message_id, text.render_preview(), true);
             }
-            UiEventMessage::ReasoningDelta { message_id, text }
-            | UiEventMessage::ReasoningReplace { message_id, text } => {
-                let chunk = text.render_preview();
-                if chunk.is_empty() {
-                    return;
-                }
-                if self.tail_text_matches(&message_id, "reasoning") {
-                    if let Some(last) = self.items.last_mut() {
-                        last.text.push_str(&chunk);
-                        last.ts_ms = ts_ms;
-                        last.seq = seq;
-                    }
-                } else {
-                    let id = self.next_id("think");
-                    self.items.push(TranscriptItemDto {
-                        id,
-                        kind: "reasoning".into(),
-                        role: Some("assistant".into()),
-                        text: chunk,
-                        detail: None,
-                        title: Some("Thinking".into()),
-                        ts_ms,
-                        seq,
-                        message_id: Some(message_id),
-                        request_id: None,
-                        approval_method: None,
-                        options: None,
-                        approve_response: None,
-                        decline_response: None,
-                    });
-                }
+            UiEventMessage::ReasoningDelta { message_id, text } => {
+                self.append_reasoning(seq, ts_ms, message_id, text.render_preview(), false);
+            }
+            UiEventMessage::ReasoningReplace { message_id, text } => {
+                self.append_reasoning(seq, ts_ms, message_id, text.render_preview(), true);
             }
             UiEventMessage::ToolCallPlaced {
                 message_id,
@@ -3538,13 +3630,19 @@ fn map_manager_event(ev: LocalManagerEvent) -> ManagerEventDto {
     }
 }
 
-fn frame_to_ingest_dto(frame: LocalIngestFrame) -> IngestEventDto {
-    let mut assembler = TranscriptAssembler::new(frame.session_id.clone());
+/// Live path: long-lived per-session assembler (correct cumulative text / ids).
+/// Emits only rows touched by this frame's seq for Desktop merge.
+fn frame_to_ingest_dto_live(
+    assemblers: &mut std::collections::HashMap<String, TranscriptAssembler>,
+    frame: LocalIngestFrame,
+) -> IngestEventDto {
+    let session_id = frame.session_id.clone();
+    let assembler = assemblers
+        .entry(session_id.clone())
+        .or_insert_with(|| TranscriptAssembler::new(session_id.clone()));
     assembler.ingest_frame(frame.seq, frame.ts_ms, frame.ui_events);
-    let items = assembler.finish();
-    let has_pending_approval = items
-        .iter()
-        .any(|it| (it.kind == "approval" || it.kind == "question") && it.request_id.is_some());
+    let items = assembler.items_touching_seq(frame.seq);
+    let has_pending_approval = assembler.has_pending_approval_card();
     IngestEventDto {
         session_id: frame.session_id,
         seq: frame.seq,
@@ -3577,13 +3675,17 @@ fn spawn_ingest_pump(app: AppHandle, client: Arc<WsClient>, my_gen: u64, gen_fla
             }
         };
         let mut stream = sub.into_stream();
+        // Per-session assemblers survive across live frames (history path still
+        // uses a fresh assembler over multi-page load).
+        let mut live_assemblers: std::collections::HashMap<String, TranscriptAssembler> =
+            std::collections::HashMap::new();
         while pump_still_current(my_gen, &gen_flag) {
             match stream.next().await {
                 Some(Ok(frame)) => {
                     if !pump_still_current(my_gen, &gen_flag) {
                         break;
                     }
-                    let dto = frame_to_ingest_dto(frame);
+                    let dto = frame_to_ingest_dto_live(&mut live_assemblers, frame);
                     if let Err(e) = app.emit(EVENT_INGEST, &dto) {
                         warn!(
                             target: "minos_desktop",
@@ -3880,7 +3982,7 @@ mod conversation_message_kind_tests {
         ];
         for body in bodies {
             assert_eq!(
-                conversation_timeline_kind(body),
+                conversation_timeline_kind("assistant", false),
                 "text",
                 "body={body:?} must stay text on conversation timeline"
             );
@@ -4228,6 +4330,152 @@ mod transcript_assembler_tests {
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].kind, "tool_result");
         assert_eq!(tools[0].title.as_deref(), Some("edit: a.ts"));
+    }
+
+    #[test]
+    fn reasoning_uses_stable_id_and_delta_appends() {
+        let mut a = TranscriptAssembler::new("thr-reason".into());
+        let mid = "msg_think".to_string();
+        a.ingest_frame(
+            1,
+            1,
+            vec![UiEventMessage::ReasoningDelta {
+                message_id: mid.clone(),
+                text: "first ".into(),
+            }],
+        );
+        a.ingest_frame(
+            2,
+            2,
+            vec![UiEventMessage::ReasoningDelta {
+                message_id: mid.clone(),
+                text: "second".into(),
+            }],
+        );
+        let items = a.finish();
+        let reasoning: Vec<_> = items.iter().filter(|i| i.kind == "reasoning").collect();
+        assert_eq!(reasoning.len(), 1);
+        assert_eq!(reasoning[0].text, "first second");
+        assert_eq!(
+            reasoning[0].id, "thr-reason:reasoning:msg_think",
+            "must use stable id, not next_id(think)"
+        );
+    }
+
+    #[test]
+    fn reasoning_replace_sets_text_and_empty_clears() {
+        let mid = "msg_r".to_string();
+
+        // Replace overwrites delta body (not append).
+        let mut a = TranscriptAssembler::new("thr-reason2".into());
+        a.ingest_frame(
+            1,
+            1,
+            vec![UiEventMessage::ReasoningDelta {
+                message_id: mid.clone(),
+                text: "scratch thought".into(),
+            }],
+        );
+        a.ingest_frame(
+            2,
+            2,
+            vec![UiEventMessage::ReasoningReplace {
+                message_id: mid.clone(),
+                text: "final thought".into(),
+            }],
+        );
+        let items = a.finish();
+        let reasoning: Vec<_> = items.iter().filter(|i| i.kind == "reasoning").collect();
+        assert_eq!(reasoning.len(), 1);
+        assert_eq!(reasoning[0].text, "final thought");
+
+        // Empty replace drops the reasoning segment (TUI parity).
+        let mut b = TranscriptAssembler::new("thr-reason2".into());
+        b.ingest_frame(
+            1,
+            1,
+            vec![UiEventMessage::ReasoningDelta {
+                message_id: mid.clone(),
+                text: "scratch thought".into(),
+            }],
+        );
+        b.ingest_frame(
+            2,
+            2,
+            vec![UiEventMessage::ReasoningReplace {
+                message_id: mid,
+                text: "".into(),
+            }],
+        );
+        let items = b.finish();
+        assert!(
+            items.iter().all(|i| i.kind != "reasoning"),
+            "empty replace must drop reasoning segment: {:?}",
+            items.iter().map(|i| i.kind.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn reasoning_stable_id_matches_across_fresh_assemblers() {
+        // Ids stay stable even if a consumer rebuilt assemblers (history pages).
+        let mid = "msg_stable".to_string();
+        let mut a1 = TranscriptAssembler::new("sess".into());
+        a1.ingest_frame(
+            1,
+            1,
+            vec![UiEventMessage::ReasoningDelta {
+                message_id: mid.clone(),
+                text: "a".into(),
+            }],
+        );
+        let id1 = a1.finish()[0].id.clone();
+
+        let mut a2 = TranscriptAssembler::new("sess".into());
+        a2.ingest_frame(
+            2,
+            2,
+            vec![UiEventMessage::ReasoningDelta {
+                message_id: mid,
+                text: "ab".into(),
+            }],
+        );
+        let id2 = a2.finish()[0].id.clone();
+        assert_eq!(id1, id2);
+        assert_eq!(id1, "sess:reasoning:msg_stable");
+    }
+
+    #[test]
+    fn live_long_lived_assembler_emits_cumulative_touching_seq() {
+        let mut assemblers = std::collections::HashMap::new();
+        let mid = "msg_live".to_string();
+        let f1 = LocalIngestFrame {
+            session_id: "sess-live".into(),
+            seq: 1,
+            agent: AgentName::Codex,
+            ui_events: vec![UiEventMessage::ReasoningDelta {
+                message_id: mid.clone(),
+                text: "hello ".into(),
+            }],
+            ts_ms: 1,
+        };
+        let d1 = frame_to_ingest_dto_live(&mut assemblers, f1);
+        assert_eq!(d1.items.len(), 1);
+        assert_eq!(d1.items[0].text, "hello ");
+
+        let f2 = LocalIngestFrame {
+            session_id: "sess-live".into(),
+            seq: 2,
+            agent: AgentName::Codex,
+            ui_events: vec![UiEventMessage::ReasoningDelta {
+                message_id: mid,
+                text: "world".into(),
+            }],
+            ts_ms: 2,
+        };
+        let d2 = frame_to_ingest_dto_live(&mut assemblers, f2);
+        assert_eq!(d2.items.len(), 1);
+        assert_eq!(d2.items[0].text, "hello world");
+        assert_eq!(d1.items[0].id, d2.items[0].id);
     }
 }
 

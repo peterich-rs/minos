@@ -1,6 +1,6 @@
 ---
 name: minos-teamwork
-description: Use when working inside Minos TUI/teamwork conversations, coordinating with the user or other CLI agents, reading current conversation context, using the minos_teamwork MCP server, or deciding whether to post conversation-visible updates.
+description: Use when working inside Minos teamwork conversations, coordinating with the user or other CLI agents, reading conversation context, using the minos_teamwork MCP server, reacting to @mentions, or deciding whether to post conversation-visible updates.
 ---
 
 # Minos Teamwork

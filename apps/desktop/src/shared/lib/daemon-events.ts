@@ -29,27 +29,51 @@ export async function startDaemonEventBridge(
 ): Promise<void> {
   if (!isTauriRuntime()) return;
   if (started) return;
-  started = true;
 
-  const u1 = await listen<DaemonIngestEvent>(DAEMON_EVENT.ingest, (e) => {
-    handlers.onIngest(e.payload);
-  });
-  const u2 = await listen<DaemonManagerEvent>(DAEMON_EVENT.manager, (e) => {
-    handlers.onManager(e.payload);
-  });
-  const u3 = await listen<DaemonConversationEvent>(
-    DAEMON_EVENT.conversation,
-    (e) => {
-      handlers.onConversation(e.payload);
-    },
-  );
-  const u4 = await listen<DaemonPushStatusEvent>(
-    DAEMON_EVENT.pushStatus,
-    (e) => {
-      handlers.onPushStatus?.(e.payload);
-    },
-  );
-  unsubs = [u1, u2, u3, u4];
+  // Only flip `started` after every listen succeeds. A partial failure must
+  // leave the bridge restartable (cleanup any arms that did attach).
+  const pending: UnlistenFn[] = [];
+  try {
+    pending.push(
+      await listen<DaemonIngestEvent>(DAEMON_EVENT.ingest, (e) => {
+        handlers.onIngest(e.payload);
+      }),
+    );
+    pending.push(
+      await listen<DaemonManagerEvent>(DAEMON_EVENT.manager, (e) => {
+        handlers.onManager(e.payload);
+      }),
+    );
+    pending.push(
+      await listen<DaemonConversationEvent>(
+        DAEMON_EVENT.conversation,
+        (e) => {
+          handlers.onConversation(e.payload);
+        },
+      ),
+    );
+    pending.push(
+      await listen<DaemonPushStatusEvent>(
+        DAEMON_EVENT.pushStatus,
+        (e) => {
+          handlers.onPushStatus?.(e.payload);
+        },
+      ),
+    );
+    unsubs = pending;
+    started = true;
+  } catch (err) {
+    for (const u of pending) {
+      try {
+        u();
+      } catch {
+        /* ignore */
+      }
+    }
+    unsubs = [];
+    started = false;
+    throw err;
+  }
 }
 
 export function stopDaemonEventBridge(): void {

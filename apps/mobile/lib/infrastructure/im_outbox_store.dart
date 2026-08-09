@@ -211,6 +211,52 @@ bool isStaleInflight({
   return nowMs - updatedAtMs >= staleMs;
 }
 
+/// Per-conversation FIFO compare: createdAtMs ASC, then clientOpId.
+int compareOutboxFifo(ImOutboxEntry a, ImOutboxEntry b) {
+  final byCreated = a.createdAtMs.compareTo(b.createdAtMs);
+  if (byCreated != 0) return byCreated;
+  return a.clientOpId.compareTo(b.clientOpId);
+}
+
+/// Group active (pending/inflight) entries into due send lanes.
+///
+/// - Strict FIFO per conversationId by createdAtMs / clientOpId
+/// - If lane head is blocked (inflight or pending with future nextAttempt),
+///   the whole lane is omitted (no tail overtake)
+/// - Otherwise returns the contiguous due-pending prefix
+List<List<ImOutboxEntry>> buildDueOutboxLanes({
+  required Iterable<ImOutboxEntry> activeEntries,
+  required int nowMs,
+}) {
+  final byConv = <String, List<ImOutboxEntry>>{};
+  for (final e in activeEntries) {
+    if (e.status != ImOutboxStatus.pending &&
+        e.status != ImOutboxStatus.inflight) {
+      continue;
+    }
+    byConv.putIfAbsent(e.conversationId, () => <ImOutboxEntry>[]).add(e);
+  }
+  final convIds = byConv.keys.toList()..sort();
+  final lanes = <List<ImOutboxEntry>>[];
+  for (final cid in convIds) {
+    final entries = byConv[cid]!..sort(compareOutboxFifo);
+    if (entries.isEmpty) continue;
+    final head = entries.first;
+    if (head.status != ImOutboxStatus.pending || head.nextAttemptAtMs > nowMs) {
+      continue;
+    }
+    final lane = <ImOutboxEntry>[];
+    for (final e in entries) {
+      if (e.status != ImOutboxStatus.pending || e.nextAttemptAtMs > nowMs) {
+        break;
+      }
+      lane.add(e);
+    }
+    if (lane.isNotEmpty) lanes.add(List<ImOutboxEntry>.unmodifiable(lane));
+  }
+  return List<List<ImOutboxEntry>>.unmodifiable(lanes);
+}
+
 /// In-memory outbox for unit tests — same status machine as SQL store.
 class ImOutboxMemory {
   final Map<String, ImOutboxEntry> _entries = <String, ImOutboxEntry>{};
@@ -278,6 +324,12 @@ class ImOutboxMemory {
               e.status == ImOutboxStatus.pending && e.nextAttemptAtMs <= nowMs,
         )
         .toList(growable: false);
+  }
+
+  /// Per-conversation due lanes (FIFO); see [buildDueOutboxLanes].
+  List<List<ImOutboxEntry>> listDueLanes(int nowMs) {
+    reclaimStaleInflight(nowMs);
+    return buildDueOutboxLanes(activeEntries: snapshot, nowMs: nowMs);
   }
 
   void markInflight(String clientOpId, int nowMs) {

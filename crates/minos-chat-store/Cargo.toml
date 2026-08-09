@@ -11,6 +11,7 @@ rust-version.workspace = true
 [dependencies]
 minos-domain = { path = "../minos-domain", version = "0.1.0" }
 minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
+minos-prompt-runtime = { path = "../minos-prompt-runtime", version = "0.1.0" }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }

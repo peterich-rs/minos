@@ -24,12 +24,13 @@ use minos_protocol::{
     ListChatMessagesResponse, ListHostClisRequest, ListHostSkillsCommandRequest,
     ListHostSkillsResponse, ListHostWorkspacesCommandRequest, ListHostWorkspacesResponse,
     ListProjectSessionsParams, ListProjectSessionsResponse, ListProjectsResponse,
-    ListSessionsParams, ListSessionsResponse, LogoutRequest, MeHostsResponse, MyProfileResponse,
-    ReadSessionParams, ReadSessionResponse, RealtimeWsTicketRequest, RealtimeWsTicketResponse,
-    RefreshRequest, RefreshResponse, RegisterAgentRequest, RemoveAgentFromGroupRequest,
-    RemoveGroupMemberRequest, SearchUsersRequest, SearchUsersResponse, SendChatMessageRequest,
-    SetMinosIdRequest, UpdateAgentRequest, UpdateProjectRequest,
-    WriteHostSkillConfigCommandRequest, WriteHostSkillConfigResponse,
+    ListSessionsParams, ListSessionsResponse, LogoutRequest, MarkConversationReadRequest,
+    MeHostsResponse, MyProfileResponse, ReadSessionParams, ReadSessionResponse,
+    RealtimeWsTicketRequest, RealtimeWsTicketResponse, RefreshRequest, RefreshResponse,
+    RegisterAgentRequest, RemoveAgentFromGroupRequest, RemoveGroupMemberRequest,
+    SearchUsersRequest, SearchUsersResponse, SendChatMessageRequest, SetMinosIdRequest,
+    UpdateAgentRequest, UpdateProjectRequest, WriteHostSkillConfigCommandRequest,
+    WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::{DisplayPayload, MessageRole, SessionEndReason, UiEventMessage};
 use openwire::{Client, RequestBody, ResponseBody, WireError};
@@ -1506,6 +1507,7 @@ impl MobileHttpClient {
         &self,
         access_token: &str,
         conversation_id: &str,
+        read_up_to_message_seq: i64,
     ) -> Result<ConversationReadResponse, MinosError> {
         let path = format!("/v1/conversations/{conversation_id}/read");
         let url = format!("{}{}", self.base, path);
@@ -1513,9 +1515,12 @@ impl MobileHttpClient {
             Method::POST.as_str(),
             &path,
             Some(conversation_id.into()),
-            Some("mark_read".into()),
+            Some(format!("mark_read seq={read_up_to_message_seq}")),
         );
-        let request = self.request_without_body(Method::POST, &url, Some(access_token))?;
+        let req = MarkConversationReadRequest {
+            read_up_to_message_seq,
+        };
+        let request = self.request_with_json(Method::POST, &url, Some(access_token), &req)?;
         let resp = self.execute_with_trace(trace_id, &url, request).await?;
         let status = resp.status();
         if status.is_success() {

@@ -1,0 +1,31 @@
+# Canonical Minos teamwork prompt package (SSOT for bootstrap / MCP / skill).
+# Consumers must `include_str!` fragments from this directory — no hand-copied strings.
+id: minos.teamwork
+version: 1.0.0
+schema_version: 1
+min_minos_version: "0.x"
+
+activation:
+  when: conversation_bound
+
+assets:
+  bootstrap: fragments/bootstrap.md
+  mcp_server_instructions: fragments/mcp_server_instructions.md
+  skill: fragments/skill/SKILL.md
+
+# Approximate char budgets (UTF-8). CI/unit tests enforce these ceilings.
+token_budgets:
+  # ~800 tokens × ~4 chars; bootstrap is always injected for bound sessions.
+  bootstrap_max_chars: 3200
+  # MCP initialize instructions — tool surface only, not full skill body.
+  mcp_server_instructions_max_chars: 2400
+  # Skill is loaded on demand; keep readable but not a novel.
+  skill_max_chars: 12000
+
+adapters:
+  codex: developer_instructions
+  claude: append_system_prompt
+  grok: rules
+  # Task C: capability probe before delivery.
+  gemini: unsupported
+  opencode: unsupported

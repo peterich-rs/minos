@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { sortTimelineMessages } from "./timeline-order.ts";
 import type { TimelineMessage } from "./mock-data.ts";
+import { sortTimelineMessages } from "./timeline-order.ts";
 
-function msg(
-  partial: Partial<TimelineMessage> & Pick<TimelineMessage, "id">,
-): TimelineMessage {
+function msg(partial: Partial<TimelineMessage> & Pick<TimelineMessage, "id">): TimelineMessage {
   return {
     role: "user",
     body: partial.body ?? partial.id,
@@ -15,7 +13,7 @@ function msg(
 }
 
 describe("sortTimelineMessages", () => {
-  it("orders durable messages by messageSeq ASC", () => {
+  it("orders durable chat by messageSeq ASC (Hub social)", () => {
     const sorted = sortTimelineMessages([
       msg({ id: "c", messageSeq: 30, body: "c" }),
       msg({ id: "a", messageSeq: 10, body: "a" }),
@@ -27,7 +25,7 @@ describe("sortTimelineMessages", () => {
     );
   });
 
-  it("keeps sending rows after earlier durable by createdAtMs when mixed seq", () => {
+  it("keeps sending rows after durable by hub seq", () => {
     const sorted = sortTimelineMessages([
       msg({ id: "pending", deliveryStatus: "sending", createdAtMs: 999 }),
       msg({ id: "durable", messageSeq: 5, createdAtMs: 1 }),
@@ -36,7 +34,7 @@ describe("sortTimelineMessages", () => {
     assert.equal(sorted[1]?.id, "pending");
   });
 
-  it("does not reorder by wall clock when both have seq", () => {
+  it("does not reorder by wall clock when both have hub seq", () => {
     const sorted = sortTimelineMessages([
       msg({ id: "late-clock", messageSeq: 1, createdAtMs: 9_000 }),
       msg({ id: "early-clock", messageSeq: 2, createdAtMs: 1 }),
@@ -47,9 +45,7 @@ describe("sortTimelineMessages", () => {
     );
   });
 
-  it("puts seq-bearing durable rows before optimistic no-seq peers", () => {
-    // C2: cross-source order is seq-only when present; optimistic (sending)
-    // without seq is pinned after durable.
+  it("puts hub-seq durable before optimistic no-seq peers", () => {
     const sorted = sortTimelineMessages([
       msg({
         id: "pending",
@@ -72,7 +68,7 @@ describe("sortTimelineMessages", () => {
     );
   });
 
-  it("orders user then agent when both have seq", () => {
+  it("orders user then agent when both have hub seq", () => {
     const sorted = sortTimelineMessages([
       msg({
         id: "agent-result:c:s:1",
@@ -91,5 +87,94 @@ describe("sortTimelineMessages", () => {
       sorted.map((m) => m.id),
       ["user-1", "agent-result:c:s:1"],
     );
+  });
+
+  it("orders hub-only mobile bubble by hub seq among host-known peers", () => {
+    // Hub SSOT: mobile-only row keeps its hub seq (not stripped to wall clock).
+    const sorted = sortTimelineMessages([
+      msg({
+        id: "agent",
+        role: "agent",
+        messageSeq: 12,
+        createdAtMs: 200,
+      }),
+      msg({
+        id: "mobile",
+        role: "user",
+        messageSeq: 11,
+        createdAtMs: 50,
+      }),
+      msg({
+        id: "host-user",
+        role: "user",
+        messageSeq: 10,
+        createdAtMs: 100,
+      }),
+    ]);
+    assert.deepEqual(
+      sorted.map((m) => m.id),
+      ["host-user", "mobile", "agent"],
+    );
+  });
+
+  it("places host tool cards after their hub anchor, not by wall clock", () => {
+    const sorted = sortTimelineMessages([
+      msg({
+        id: "tool",
+        role: "system",
+        kind: "tool_summary",
+        body: "rg",
+        anchorHubMessageSeq: 10,
+        suborder: 1,
+        createdAtMs: 1,
+      }),
+      msg({
+        id: "user",
+        role: "user",
+        messageSeq: 10,
+        createdAtMs: 100,
+      }),
+      msg({
+        id: "agent",
+        role: "agent",
+        messageSeq: 11,
+        createdAtMs: 200,
+      }),
+    ]);
+    assert.deepEqual(
+      sorted.map((m) => m.id),
+      ["user", "tool", "agent"],
+    );
+  });
+
+  it("is stable across input permutations for hub+anchor windows", () => {
+    const rows = [
+      msg({ id: "a", messageSeq: 1, createdAtMs: 100 }),
+      msg({ id: "b", messageSeq: 2, createdAtMs: 10 }),
+      msg({
+        id: "tool",
+        role: "system",
+        kind: "tool_summary",
+        body: "t",
+        anchorHubMessageSeq: 1,
+        suborder: 1,
+        createdAtMs: 50,
+      }),
+    ];
+    const expected = ["a", "tool", "b"];
+    const permutations = [
+      [rows[0], rows[1], rows[2]],
+      [rows[0], rows[2], rows[1]],
+      [rows[1], rows[0], rows[2]],
+      [rows[1], rows[2], rows[0]],
+      [rows[2], rows[0], rows[1]],
+      [rows[2], rows[1], rows[0]],
+    ];
+    for (const permutation of permutations) {
+      assert.deepEqual(
+        sortTimelineMessages(permutation as TimelineMessage[]).map((m) => m.id),
+        expected,
+      );
+    }
   });
 });

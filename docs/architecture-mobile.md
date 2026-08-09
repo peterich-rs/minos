@@ -278,7 +278,7 @@ SessionIdle --send()--> SessionSending --first UI frame--> SessionStreaming
 | `MobileClient` | `client.rs` | 管理连接 |
 | `RealtimeSession` | `realtime/session.rs` | WS 循环 |
 | `FrameHandler` | `realtime/frame_handler.rs` | 解析 ServerFrame |
-| `SubscriptionManager` | `realtime/subscription.rs` | Topic + seq cursor |
+| `SubscriptionManager` | `realtime/subscription.rs` | **desired / pending / confirmed** topics + **applied** seq cursors |
 | `ReconnectController` | `reconnect.rs` | 指数退避重连 |
 | `MobileHttpClient` | `http.rs` (2736 行) | REST API 客户端 |
 
@@ -286,9 +286,10 @@ SessionIdle --send()--> SessionSending --first UI frame--> SessionStreaming
 
 1. 连接: WS 升级带 Bearer token + 设备头
 2. Hello: 接收 `conn_id` + `heartbeat_interval_ms`
-3. Subscribe: 订阅 topic 带 `resume_after` cursor
-4. 主循环: inbound `ServerFrame` / outbound `ClientFrame`
-5. Agent realtime: backend 推送 `StreamEvent { kind: "ui_event" }`，Rust 侧反序列化为 `UiEventMessage`，再经 FRB 传给 Dart。
+3. Subscribe: 对 **desired** topics 发送 Subscribe + `resume_after`（applied cursors）；发送成功 → pending；`SubscribeAck` → confirmed。发送失败保持 desired 未 confirmed，下次 desire/reconnect 会重发
+4. Durable social：parse → fanout（`topic`/`topic_seq`）→ Dart SQLite/reducer commit → `ackDurableApplied` 才推进 cursor；无 subscriber / parse 失败 hold cursor
+5. 主循环: inbound `ServerFrame` / outbound `ClientFrame`
+6. Agent realtime: backend 推送 `StreamEvent { kind: "ui_event" }`，Rust 侧反序列化为 `UiEventMessage`，再经 FRB 传给 Dart。
 
 ### 重连策略
 

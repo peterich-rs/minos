@@ -65,7 +65,9 @@ pub struct AcpClient {
     outbound_tx: mpsc::Sender<Outbound>,
     inbound_rx: Arc<Mutex<mpsc::Receiver<Inbound>>>,
     pump_task: JoinHandle<()>,
-    _child: Arc<tokio::sync::Mutex<Option<Child>>>,
+    /// Shared with the owning Gemini/Grok instance so shutdown can process-group
+    /// kill the real child (not a None placeholder).
+    child: Arc<tokio::sync::Mutex<Option<Child>>>,
 }
 
 impl Drop for AcpClient {
@@ -76,7 +78,13 @@ impl Drop for AcpClient {
 
 impl AcpClient {
     pub fn new(child: Child) -> Result<Self, MinosError> {
-        let child = Arc::new(tokio::sync::Mutex::new(Some(child)));
+        Self::from_shared_child(Arc::new(tokio::sync::Mutex::new(Some(child))))
+    }
+
+    /// Build a client that shares `child` ownership with the host instance.
+    pub fn from_shared_child(
+        child: Arc<tokio::sync::Mutex<Option<Child>>>,
+    ) -> Result<Self, MinosError> {
         let (outbound_tx, outbound_rx) = mpsc::channel::<Outbound>(32);
         let (inbound_tx, inbound_rx) = mpsc::channel::<Inbound>(64);
 
@@ -122,8 +130,14 @@ impl AcpClient {
             outbound_tx,
             inbound_rx: Arc::new(Mutex::new(inbound_rx)),
             pump_task,
-            _child: child,
+            child,
         })
+    }
+
+    /// Shared child handle for process-group kill on manager shutdown.
+    #[must_use]
+    pub fn child_handle(&self) -> Arc<tokio::sync::Mutex<Option<Child>>> {
+        self.child.clone()
     }
 
     pub async fn call(&self, method: &str, params: Value) -> Result<Value, MinosError> {

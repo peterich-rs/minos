@@ -529,7 +529,9 @@ export async function listHubConversations(
   });
   return (resp.conversations ?? []).map((c) => ({
     conversationId: c.conversation_id,
-    title: c.title ?? "Conversation",
+    // Keep empty when Hub has no title so rail merge can keep a real local title
+    // instead of clobbering with the "Conversation" placeholder.
+    title: (c.title ?? "").trim(),
     preview: c.last_message_preview ?? null,
     lastMessageAtMs: c.last_message_at_ms ?? 0,
     unreadCount: c.unread_count ?? 0,
@@ -617,12 +619,21 @@ export async function respondHubApproval(
   });
 }
 
-/** Hub mark-read (Linked inbox unread). */
+/**
+ * Hub mark-read (Linked inbox unread).
+ *
+ * `readUpToMessageSeq` is the highest Hub `message_seq` this client has
+ * actually observed/loaded — never the server "latest" watermark.
+ */
 export async function markHubConversationRead(
   deviceId: string,
   accessToken: string,
   conversationId: string,
+  readUpToMessageSeq: number,
 ): Promise<{ lastReadSeq: number | null; lastReadAtMs: number | null }> {
+  if (!Number.isFinite(readUpToMessageSeq) || readUpToMessageSeq <= 0) {
+    throw new Error("readUpToMessageSeq must be a positive message_seq");
+  }
   const resp = await requestJson<{
     last_read_seq?: number | null;
     last_read_at_ms?: number | null;
@@ -631,7 +642,9 @@ export async function markHubConversationRead(
     {
       method: "POST",
       headers: deviceHeaders(deviceId, accessToken),
-      body: JSON.stringify({}),
+      body: JSON.stringify({
+        read_up_to_message_seq: Math.trunc(readUpToMessageSeq),
+      }),
     },
   );
   return {

@@ -41,10 +41,16 @@ tracing-subscriber = { workspace = true }
 ctrlc = "3"
 minisign-verify = "0.2"
 base64 = "0.22"
+# Durable Desktop IM outbox (replaces localStorage for cloud intent).
+rusqlite = { version = "0.32", features = ["bundled"] }
+dirs = "5"
 
 [[bin]]
 name = "verify-updater-sig"
 path = "src/bin/verify_updater_sig.rs"
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

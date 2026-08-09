@@ -171,6 +171,8 @@ CREATE TABLE conversations (
     created_at_ms          INTEGER NOT NULL,
     updated_at_ms          INTEGER NOT NULL,
     next_message_seq       INTEGER NOT NULL DEFAULT 1,
+    -- Bumped on membership changes; clients treat lower versions as stale.
+    membership_version     INTEGER NOT NULL DEFAULT 1,
     CHECK (
         (kind = 'direct' AND direct_account_low IS NOT NULL AND direct_account_high IS NOT NULL
                          AND direct_account_low < direct_account_high) OR
@@ -188,6 +190,8 @@ CREATE TABLE conversation_members (
     conversation_id    TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
     account_id         TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
     joined_at_ms       INTEGER NOT NULL,
+    role               TEXT NOT NULL DEFAULT 'member'
+        CHECK (role IN ('owner', 'admin', 'member')),
     PRIMARY KEY (conversation_id, account_id)
 ) STRICT;
 
@@ -239,6 +243,9 @@ CREATE TABLE chat_messages (
     sender_type          TEXT NOT NULL DEFAULT 'user' CHECK (sender_type IN ('user', 'agent')),
     sender_agent_id      TEXT REFERENCES agents(agent_id) ON DELETE CASCADE,
     agent_session_id     TEXT,
+    -- Request provenance for client_message_id fingerprint (idempotency conflict).
+    message_source       TEXT NOT NULL DEFAULT 'client_live'
+        CHECK (message_source IN ('client_live', 'host_projection', 'system')),
     UNIQUE (conversation_id, message_seq)
 ) STRICT;
 
@@ -451,6 +458,20 @@ CREATE UNIQUE INDEX idx_durable_event_log_topic_seq
 CREATE INDEX idx_durable_event_log_topic_created
     ON durable_event_log(topic, created_at_ms);
 
+-- Sequence authority for durable topics. Retention may delete log payloads
+-- but must never reset high_watermark; retention_floor tracks deleted upper bound.
+CREATE TABLE topic_metadata (
+    topic_kind         TEXT NOT NULL,
+    topic              TEXT NOT NULL,
+    high_watermark     INTEGER NOT NULL DEFAULT 0,
+    retention_floor    INTEGER NOT NULL DEFAULT 0,
+    updated_at_ms      INTEGER NOT NULL,
+    PRIMARY KEY (topic_kind, topic),
+    CHECK (high_watermark >= 0),
+    CHECK (retention_floor >= 0),
+    CHECK (retention_floor <= high_watermark)
+) STRICT;
+
 CREATE TABLE outbox_events (
     outbox_id         TEXT PRIMARY KEY,
     topic_kind        TEXT NOT NULL,
@@ -537,6 +558,29 @@ CREATE TABLE push_dispatch_log (
 CREATE INDEX idx_push_dispatch_log_account
     ON push_dispatch_log(account_id);
 
+-- Durable push work queue: claim/retry/backoff; push_dispatch_log remains success ledger.
+CREATE TABLE push_dispatch_queue (
+    queue_id              TEXT PRIMARY KEY,
+    event_id              TEXT NOT NULL,
+    account_id            TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    topic                 TEXT NOT NULL,
+    topic_seq             INTEGER NOT NULL,
+    payload_json          TEXT NOT NULL,
+    status                TEXT NOT NULL
+        CHECK (status IN ('pending', 'claimed', 'sent', 'skipped', 'dead')),
+    attempts              INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at_ms    INTEGER NOT NULL,
+    last_error            TEXT,
+    provider_message_id   TEXT,
+    created_at_ms         INTEGER NOT NULL,
+    claimed_by            TEXT,
+    claimed_at_ms         INTEGER,
+    UNIQUE (event_id, account_id)
+) STRICT;
+
+CREATE INDEX idx_push_dispatch_queue_due
+    ON push_dispatch_queue(status, next_attempt_at_ms);
+
 CREATE TABLE agent_dispatch_queue (
     dispatch_id          TEXT PRIMARY KEY,
     origin_message_id    TEXT NOT NULL,
@@ -561,6 +605,29 @@ CREATE INDEX idx_agent_dispatch_queue_due
     ON agent_dispatch_queue(status, next_attempt_at_ms);
 CREATE INDEX idx_agent_dispatch_queue_conversation
     ON agent_dispatch_queue(conversation_id);
+
+-- Durable CompletionWatch: restart-safe turn projection (in-memory is cache).
+CREATE TABLE completion_watches (
+    watch_key              TEXT PRIMARY KEY,
+    dispatch_id            TEXT NOT NULL,
+    origin_message_id      TEXT NOT NULL,
+    conversation_id        TEXT NOT NULL,
+    session_id             TEXT NOT NULL,
+    agent_id               TEXT NOT NULL,
+    raw_seq_floor          INTEGER NOT NULL,
+    armed_at_ms            INTEGER NOT NULL,
+    deadline_at_ms         INTEGER NOT NULL,
+    status                 TEXT NOT NULL
+        CHECK (status IN ('armed', 'projected', 'expired')),
+    projected_message_id   TEXT,
+    mention_account_id     TEXT,
+    mention_minos_id       TEXT
+) STRICT;
+
+CREATE INDEX idx_completion_watches_session
+    ON completion_watches(session_id, status);
+CREATE INDEX idx_completion_watches_deadline
+    ON completion_watches(status, deadline_at_ms);
 
 CREATE TABLE media_blobs (
     blob_id             TEXT PRIMARY KEY,

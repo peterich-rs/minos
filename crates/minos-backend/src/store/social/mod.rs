@@ -93,6 +93,8 @@ pub struct ChatMessageRow {
     pub reply_to_message_id: Option<String>,
     pub recalled_at_ms: Option<i64>,
     pub sender_type: String,
+    /// `client_live` | `host_projection` | `system` — part of idempotency fingerprint.
+    pub message_source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
@@ -170,19 +172,20 @@ pub use friendships::{
 pub use conversations::{
     add_member_to_group, conversation_deleted_at_for_account, create_group_conversation,
     ensure_direct_conversation, ensure_group_conversation_with_id, get_conversation,
-    is_conversation_member, list_conversation_member_profiles, list_conversation_members,
-    list_conversations_for, mark_conversation_deleted_for_account,
-    mark_conversation_read_to_latest, remove_member_from_group, upsert_group_conversation,
+    get_member_role, is_conversation_member, list_conversation_member_profiles,
+    list_conversation_members, list_conversations_for, mark_conversation_deleted_for_account,
+    mark_conversation_read_to_latest, mark_conversation_read_to_seq, remove_member_from_group,
+    upsert_group_conversation, MembershipChangeResult,
 };
 
 // Conversation message functions
 pub use conversation_messages::{
     bind_session_to_message, bind_session_to_message_for_agent, get_message,
     has_bound_message_for_session, insert_message, insert_message_with_id,
-    insert_message_with_id_in_tx, list_message_mentions, list_messages, list_messages_by_ids,
-    lookup_latest_session_id_for_conversation, lookup_latest_session_id_for_conversation_agent,
-    lookup_session_id_for_message, recall_message, recall_message_in_tx,
-    suppress_live_ui_fanout_for_session, InsertMessageOutcome,
+    insert_message_with_id_full, insert_message_with_id_in_tx, list_message_mentions,
+    list_messages, list_messages_by_ids, lookup_latest_session_id_for_conversation,
+    lookup_latest_session_id_for_conversation_agent, lookup_session_id_for_message, recall_message,
+    recall_message_in_tx, suppress_live_ui_fanout_for_session, InsertMessageOutcome,
 };
 
 // Agent functions
@@ -197,7 +200,8 @@ pub use agents::{
 
 // Transactional outbox delivery for social messages
 pub use delivery::{
-    ensure_reaction_delivery_in_tx, ensure_social_message_delivery_in_tx, PendingDurablePublish,
+    ensure_membership_change_delivery_in_tx, ensure_reaction_delivery_in_tx,
+    ensure_social_message_delivery_in_tx, PendingDurablePublish,
 };
 
 // Cloud reactions
@@ -487,6 +491,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upsert_group_conversation_skips_placeholder_title_overwrite() {
+        let pool = memory_pool().await;
+        let alice = insert_account(&pool, "alice-ph@example.com").await;
+        let conv_id = "work-conv-placeholder";
+
+        upsert_group_conversation(&pool, conv_id, &alice, "Real Name", &[], T0)
+            .await
+            .unwrap();
+        let after_placeholder =
+            upsert_group_conversation(&pool, conv_id, &alice, "Conversation", &[], T0 + 1)
+                .await
+                .unwrap();
+        assert_eq!(
+            after_placeholder.title.as_deref(),
+            Some("Real Name"),
+            "placeholder title must not clobber a real Hub title"
+        );
+
+        let after_real =
+            upsert_group_conversation(&pool, conv_id, &alice, "Renamed Real", &[], T0 + 2)
+                .await
+                .unwrap();
+        assert_eq!(after_real.title.as_deref(), Some("Renamed Real"));
+    }
+
+    #[tokio::test]
     async fn insert_message_with_client_id_is_idempotent() {
         let pool = memory_pool().await;
         let alice = insert_account(&pool, "alice@example.com").await;
@@ -507,11 +537,12 @@ mod tests {
         )
         .await
         .unwrap();
+        // Same fingerprint → idempotent success.
         let second = insert_message_with_id(
             &pool,
             &conversation.conversation_id,
             &alice,
-            "hello again ignored",
+            "hello",
             T0 + 2,
             None,
             &[],
@@ -527,6 +558,75 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(messages.len(), 1);
+
+        // Different body with same client_message_id → conflict (not silent success).
+        let conflict = insert_message_with_id(
+            &pool,
+            &conversation.conversation_id,
+            &alice,
+            "different body",
+            T0 + 3,
+            None,
+            &[],
+            Some(client_id),
+        )
+        .await;
+        assert!(
+            matches!(
+                &conflict,
+                Err(crate::error::BackendError::StoreQuery { operation, .. })
+                    if operation == "social::insert_message_with_id.idempotency_conflict"
+            ),
+            "expected body fingerprint conflict, got {conflict:?}"
+        );
+
+        // Different message_source with same body → conflict.
+        let source_conflict = insert_message_with_id_full(
+            &pool,
+            &conversation.conversation_id,
+            &alice,
+            "hello",
+            T0 + 4,
+            None,
+            &[],
+            Some(client_id),
+            &[],
+            "host_projection",
+        )
+        .await;
+        assert!(
+            matches!(
+                &source_conflict,
+                Err(crate::error::BackendError::StoreQuery { operation, message })
+                    if operation == "social::insert_message_with_id.idempotency_conflict"
+                        && message.contains("message_source")
+            ),
+            "expected source fingerprint conflict, got {source_conflict:?}"
+        );
+
+        // Different attachment set with same body → conflict.
+        let attach_conflict = insert_message_with_id_full(
+            &pool,
+            &conversation.conversation_id,
+            &alice,
+            "hello",
+            T0 + 5,
+            None,
+            &[],
+            Some(client_id),
+            &["blob-a".into()],
+            "client_live",
+        )
+        .await;
+        assert!(
+            matches!(
+                &attach_conflict,
+                Err(crate::error::BackendError::StoreQuery { operation, message })
+                    if operation == "social::insert_message_with_id.idempotency_conflict"
+                        && message.contains("attachments")
+            ),
+            "expected attachments fingerprint conflict, got {attach_conflict:?}"
+        );
     }
 
     #[tokio::test]
@@ -578,11 +678,12 @@ mod tests {
         )
         .await
         .unwrap();
+        // Same fingerprint → idempotent hit returns original text.
         let second = insert_agent_message_with_session(
             &pool,
             &conversation.conversation_id,
             &agent.agent_id,
-            "ignored",
+            "done",
             T0 + 2,
             None,
             Some("sess-1"),
@@ -600,6 +701,27 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+        // Different body → conflict (no silent overwrite).
+        let conflict = insert_agent_message_with_session(
+            &pool,
+            &conversation.conversation_id,
+            &agent.agent_id,
+            "ignored",
+            T0 + 3,
+            None,
+            Some("sess-1"),
+            &[],
+            Some(client_id),
+        )
+        .await;
+        assert!(
+            matches!(
+                &conflict,
+                Err(crate::error::BackendError::StoreQuery { operation, .. })
+                    if operation == "social::insert_agent_message.idempotency_conflict"
+            ),
+            "expected agent body fingerprint conflict, got {conflict:?}"
         );
     }
 }

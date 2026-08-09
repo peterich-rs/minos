@@ -9,7 +9,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use crate::mcp_socket::{SocketRequest, SocketResponse};
 use crate::teamwork_mcp::{TeamworkMcpToolCatalog, ToolCallContext};
 
-const SERVER_INSTRUCTIONS: &str = "This MCP server exposes the Minos conversation bound to the current agent session. Use list_conversation_messages to read recent conversation history before answering when conversation context matters. Use list_conversation_roster for the live agent roster and role briefs (membership can change; do not rely only on session-start memory). Use delegate_to_agent for focused work assigned to another Minos agent (optional profile_id or target_profile name; bare target_agent applies the newest host profile for that runtime when one exists), then wait_delegation when the next critical-path step needs the result, or get_delegation_status/cancel_delegation when tracking that work. If this session was itself delegated from another agent, delegate_to_agent may only delegate back to that source agent. Use post_conversation_update only for concise user-visible updates. For git delivery milestones (worktree, commits, PR opened, ready for review, checks failed, merged) use post_git_update instead of free-form text. Prefer an isolated worktree over editing the default branch when the conversation has one.";
+/// Canonical MCP initialize instructions from `minos-prompt-runtime` package.
+use minos_prompt_runtime::TEAMWORK_MCP_SERVER_INSTRUCTIONS as SERVER_INSTRUCTIONS;
 
 /// Margin added on top of `wait_delegation.timeout_ms` so the socket read does
 /// not race the daemon assembling the terminal response frame.

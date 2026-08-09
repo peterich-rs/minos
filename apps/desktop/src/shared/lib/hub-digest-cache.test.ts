@@ -210,6 +210,62 @@ describe("mergeConversationList", () => {
     assert.equal(merged[0].runningCount, 1);
   });
 
+  it("keeps daemon title when Hub only has Conversation placeholder", () => {
+    const merged = mergeConversationList({
+      projectId: "p1",
+      unreadSource: "hub",
+      daemonRows: [
+        {
+          id: "c1",
+          projectId: "p1",
+          title: "JWT auth refactor",
+          preview: "local",
+          updatedAtMs: 50,
+        },
+      ],
+      hubDigests: [
+        {
+          conversationId: "c1",
+          title: "Conversation",
+          preview: "hub",
+          lastMessageAtMs: 100,
+          unreadCount: 0,
+          unreadMentionCount: 0,
+          kind: "group",
+          memberCount: 1,
+        },
+      ],
+    });
+    assert.equal(merged[0].title, "JWT auth refactor");
+  });
+
+  it("keeps daemon title when Hub title is empty", () => {
+    const merged = mergeConversationList({
+      projectId: "p1",
+      unreadSource: "hub",
+      daemonRows: [
+        {
+          id: "c1",
+          projectId: "p1",
+          title: "Local named chat",
+        },
+      ],
+      hubDigests: [
+        {
+          conversationId: "c1",
+          title: "",
+          preview: null,
+          lastMessageAtMs: 0,
+          unreadCount: 0,
+          unreadMentionCount: 0,
+          kind: "group",
+          memberCount: 1,
+        },
+      ],
+    });
+    assert.equal(merged[0].title, "Local named chat");
+  });
+
   it("does not pin list time to a stale Hub digest when daemon is newer", () => {
     const merged = mergeConversationList({
       projectId: "p1",

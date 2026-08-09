@@ -8,6 +8,7 @@ import 'package:minos/application/conversations_sort.dart';
 import 'package:minos/application/im_outbox_worker.dart';
 import 'package:minos/data/repositories/social_repository.dart';
 import 'package:minos/data/repositories/thread_repository.dart';
+import 'package:minos/data/services/minos_core_service.dart';
 import 'package:minos/domain/social_message.dart';
 import 'package:minos/domain/social_message_order.dart';
 import 'package:minos/src/rust/api/minos.dart';
@@ -491,8 +492,6 @@ class SocialConversation extends _$SocialConversation {
         messages: response.messages,
       );
       await repository.clearUnread(_conversationId);
-      // Single mark-read on open (not per inbound).
-      unawaited(_markConversationReadNow());
       final messages = await repository.loadMessages(_conversationId);
       final hasOlder =
           response.nextBeforeSeq != null ||
@@ -507,6 +506,8 @@ class SocialConversation extends _$SocialConversation {
         isLoading: false,
         error: null,
       );
+      // Mark-read after state has observed maxLoadedSeq (not before).
+      unawaited(_markConversationReadNow());
       ref.invalidate(conversationAgentSessionsProvider(_conversationId));
       unawaited(
         ref
@@ -541,7 +542,11 @@ class SocialConversation extends _$SocialConversation {
     if (frame.kind == 'reaction_updated') {
       final mid = frame.message.messageId.trim();
       if (mid.isEmpty) return;
-      unawaited(_applyRemoteReactions(mid, frame.message.reactions));
+      unawaited(
+        _applyRemoteReactions(mid, frame.message.reactions).then((_) {
+          return _ackDurable(frame);
+        }),
+      );
       return;
     }
     // Full T1 conversation frames only.
@@ -552,7 +557,24 @@ class SocialConversation extends _$SocialConversation {
     if (frame.message.messageId.trim().isEmpty) {
       return;
     }
-    unawaited(_applyRemoteMessage(frame.message));
+    unawaited(
+      _applyRemoteMessage(frame.message).then((_) => _ackDurable(frame)),
+    );
+  }
+
+  Future<void> _ackDurable(SocialEventFrame frame) async {
+    final topic = frame.topic.trim();
+    final seq = frame.topicSeq.toInt();
+    if (topic.isEmpty || seq <= 0) return;
+    try {
+      await ref
+          .read(minosCoreServiceProvider)
+          .ackDurableApplied(topic: topic, topicSeq: seq);
+    } catch (e, st) {
+      // Hold cursor on failure — do not swallow without log.
+      // ignore: avoid_print
+      print('ackDurableApplied failed: $e\n$st');
+    }
   }
 
   Future<void> _applyRemoteReactions(
@@ -675,10 +697,28 @@ class SocialConversation extends _$SocialConversation {
   }
 
   Future<void> _markConversationReadNow() async {
+    // Only mark up to the highest Hub message_seq actually loaded/observed.
+    // Skip HTTP when no observed seq (avoids silently marking unread rows).
+    final observedSeq = state.maxLoadedSeq ?? maxLoadedSeqOf(state.messages);
+    if (observedSeq == null || observedSeq <= 0) {
+      // Still clear local badge; server watermark stays until we observe seq.
+      try {
+        await ref.read(socialRepositoryProvider).clearUnread(_conversationId);
+        unawaited(
+          ref
+              .read(conversationsProvider.notifier)
+              .applyMarkReadLocal(_conversationId),
+        );
+      } catch (_) {}
+      return;
+    }
     try {
       await ref
           .read(socialRepositoryProvider)
-          .markConversationRead(conversationId: _conversationId);
+          .markConversationRead(
+            conversationId: _conversationId,
+            readUpToMessageSeq: observedSeq,
+          );
       await ref.read(socialRepositoryProvider).clearUnread(_conversationId);
       unawaited(
         ref
@@ -1095,6 +1135,7 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
 
   Future<void> _onSocialEvent(SocialEventFrame frame) async {
     // Reactions are conversation-only; do not bump sidebar unread (B6.2).
+    // Open conversation controller acks conversation reaction topics.
     if (frame.kind == 'reaction_updated') {
       return;
     }
@@ -1118,11 +1159,36 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
           .read(socialRepositoryProvider)
           .loadCurrentAccountId();
     } catch (_) {}
-    await patchFromInbound(
-      message: frame.message,
-      focused: focused,
-      myAccountId: myAccountId,
-    );
+    try {
+      await patchFromInbound(
+        message: frame.message,
+        focused: focused,
+        myAccountId: myAccountId,
+      );
+      // Account digests must ack here (conversation controller ignores them).
+      // Conversation message frames: open chat acks; when not open, inbox still
+      // needs cursor advance after digest/rail patch.
+      final topic = frame.topic.trim();
+      final seq = frame.topicSeq.toInt();
+      if (topic.isNotEmpty && seq > 0) {
+        final isAccountTopic = topic.startsWith('account:');
+        final isConversationMessage =
+            frame.kind == 'message' && topic.startsWith('conversation:');
+        // Open conversation owns conversation: topic ack for messages.
+        if (isAccountTopic ||
+            frame.kind == 'inbox_digest' ||
+            frame.kind == 'inbox_recall' ||
+            (isConversationMessage && !focused)) {
+          await ref
+              .read(minosCoreServiceProvider)
+              .ackDurableApplied(topic: topic, topicSeq: seq);
+        }
+      }
+    } catch (e, st) {
+      // Do not ack on failure — resume will redeliver.
+      // ignore: avoid_print
+      print('inbox social apply failed (cursor held): $e\n$st');
+    }
   }
 
   Future<ConversationsResponse> _fetchRemoteConversations() async {

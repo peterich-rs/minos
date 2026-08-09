@@ -166,8 +166,10 @@ impl SessionProjection {
         // recognize same-turn and preserve the Desktop/Hub message id.
         self.origin_message_id = Some(origin.clone());
         self.turn_write_id = Some(origin);
-        // Origin-staged turns are collab-shaped: never fall back to message_key.
-        self.require_canonical_origin = true;
+        // Do NOT sticky-set require_canonical_origin here. Hub/collab sessions
+        // call note_require_canonical_origin / set_require_canonical_origin
+        // separately. Local turns may stage an origin without forbidding
+        // message_key fallback on a later origin-less turn.
     }
 
     /// Mark this session as Hub collab so completion refuses non-canonical ids.
@@ -526,7 +528,10 @@ impl ConversationCompletion {
             }
             SessionState::Suspended { .. } => {
                 // Crash/suspend does not complete a turn into the conversation
-                // timeline (product: no partial write on instance death).
+                // timeline (product: no partial write on instance death). Still
+                // flush any queued source deliveries so teamwork handoffs are
+                // not stuck behind a dead session.
+                self.flush_pending_source_deliveries(session_id).await;
             }
         }
     }
@@ -689,8 +694,12 @@ impl ConversationCompletion {
             },
         );
 
-        if delegation.is_some() {
-            match teamwork
+        // Result bubble + delegation completion are fail-closed together:
+        // if complete fails after the upsert, return Err so claim_write can
+        // retry (upsert is idempotent on message_id). Source delivery uses
+        // outbox-first with stable delivery id so partial retries are safe.
+        if let Some(ref del) = delegation {
+            teamwork
                 .complete_delegation_for_thread(
                     conversation_id,
                     session_id,
@@ -698,20 +707,13 @@ impl ConversationCompletion {
                     text,
                 )
                 .await
-            {
-                Ok(Some(completed)) => {
-                    self.deliver_to_source(&teamwork, &completed, session_id, &body)
-                        .await;
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    debug!(
-                        target: "minos_daemon::conversation_completion",
-                        error = %error,
-                        "complete_delegation skipped"
-                    );
-                }
-            }
+                .map_err(|error| {
+                    anyhow::anyhow!("complete_delegation failed after result bubble: {error}")
+                })?;
+            // Whether complete just ran or was already done (Ok(None)), ensure
+            // source delivery outbox exists and attempt send.
+            self.deliver_to_source(&teamwork, del, session_id, &body)
+                .await?;
         }
 
         info!(
@@ -724,18 +726,19 @@ impl ConversationCompletion {
         Ok(())
     }
 
+    /// Outbox-first source delivery: durable row with stable id before provider send.
     async fn deliver_to_source(
         &self,
         teamwork: &TeamworkStore,
         delegation: &minos_chat_store::TeamworkDelegation,
         target_session_id: &str,
         visible_body: &str,
-    ) {
+    ) -> anyhow::Result<()> {
         let Some(source_session_id) = delegation.source_session_id.as_deref() else {
-            return;
+            return Ok(());
         };
         if source_session_id == target_session_id {
-            return;
+            return Ok(());
         }
         let source_body = format!(
             "[{}#{}] {}",
@@ -744,71 +747,64 @@ impl ConversationCompletion {
             visible_body
         );
 
+        // Create/update delivery record BEFORE provider send (outbox pattern).
+        let delivery = teamwork
+            .enqueue_source_delivery(
+                &delegation.conversation_id,
+                &delegation.delegation_id,
+                source_session_id,
+                &source_body,
+            )
+            .await?;
+        if delivery.status == TeamworkSourceDeliveryStatus::Delivered {
+            debug!(
+                target: "minos_daemon::conversation_completion",
+                delivery_id = %delivery.delivery_id,
+                "source delivery already delivered; skip resend"
+            );
+            return Ok(());
+        }
+
         match self
             .try_send_to_source(source_session_id, &source_body)
             .await
         {
             Ok(()) => {
-                if let Ok(delivery) = teamwork
-                    .enqueue_source_delivery(
-                        &delegation.conversation_id,
-                        &delegation.delegation_id,
-                        source_session_id,
-                        &source_body,
+                teamwork
+                    .mark_source_delivery(
+                        &delivery.delivery_id,
+                        TeamworkSourceDeliveryStatus::Delivered,
+                        None,
                     )
-                    .await
-                {
-                    let _ = teamwork
-                        .mark_source_delivery(
-                            &delivery.delivery_id,
-                            TeamworkSourceDeliveryStatus::Delivered,
-                            None,
-                        )
-                        .await;
-                }
+                    .await?;
             }
             Err(error) if should_queue_delivery(&error) => {
                 warn!(
                     target: "minos_daemon::conversation_completion",
                     error = %error,
                     source_session_id,
-                    "source busy; queueing delegation result delivery"
+                    delivery_id = %delivery.delivery_id,
+                    "source busy; delivery remains pending for flush"
                 );
-                let _ = teamwork
-                    .enqueue_source_delivery(
-                        &delegation.conversation_id,
-                        &delegation.delegation_id,
-                        source_session_id,
-                        &source_body,
-                    )
-                    .await;
             }
             Err(error) => {
                 warn!(
                     target: "minos_daemon::conversation_completion",
                     error = %error,
                     source_session_id,
+                    delivery_id = %delivery.delivery_id,
                     "failed to deliver delegation result to source"
                 );
-                if let Ok(delivery) = teamwork
-                    .enqueue_source_delivery(
-                        &delegation.conversation_id,
-                        &delegation.delegation_id,
-                        source_session_id,
-                        &source_body,
+                let _ = teamwork
+                    .mark_source_delivery(
+                        &delivery.delivery_id,
+                        TeamworkSourceDeliveryStatus::Failed,
+                        Some(&error.to_string()),
                     )
-                    .await
-                {
-                    let _ = teamwork
-                        .mark_source_delivery(
-                            &delivery.delivery_id,
-                            TeamworkSourceDeliveryStatus::Failed,
-                            Some(&error.to_string()),
-                        )
-                        .await;
-                }
+                    .await;
             }
         }
+        Ok(())
     }
 
     async fn try_send_to_source(&self, source_session_id: &str, body: &str) -> anyhow::Result<()> {
@@ -1092,10 +1088,10 @@ mod tests {
     fn desktop_origin_survives_running_then_user_message_started_begin_turns() {
         // Repro of Host Desktop @agent turns: sendUserMessage notes origin, runtime
         // flips Running (begin_turn), then synth/user MessageStarted begin_turn
-        // again. Second begin must not clear the pinned origin while
-        // require_canonical_origin stays true — otherwise claim_write skips and
-        // conversation never gets agent-result even though the session finished.
+        // again. Second begin must not clear the pinned origin — otherwise
+        // claim_write loses the durable Hub id even though the session finished.
         let mut p = SessionProjection::default();
+        p.set_require_canonical_origin(); // Hub collab bind (separate from origin pin)
         p.set_origin_message_id("msg_user_origin_1");
 
         p.begin_turn(); // Running
@@ -1149,6 +1145,7 @@ mod tests {
         // After a completed turn, a later begin without a freshly staged origin
         // must not reuse the previous Desktop message id.
         let mut p = SessionProjection::default();
+        p.set_require_canonical_origin();
         p.set_origin_message_id("msg_turn_a");
         p.begin_turn();
         p.apply_events(
@@ -1161,13 +1158,36 @@ mod tests {
         p.begin_turn(); // next turn, no new origin staged
         assert!(p.origin_message_id.is_none());
         assert!(p.turn_write_id.is_none());
-        // require_canonical_origin stays sticky by design (session collab shape);
-        // without origin, claim must skip non-canonical fallback.
+        // Hub collab require is sticky; without origin, claim must skip fallback.
         p.apply_events(
             AgentName::Claude,
             &[assistant_start("m2"), delta("m2", "b"), completed("m2")],
         );
         assert!(p.claim_write().is_none());
+    }
+
+    #[test]
+    fn local_origin_pin_does_not_force_canonical_on_later_turns() {
+        // Origin alone is not collab shape — only note_require_canonical_origin is.
+        let mut p = SessionProjection::default();
+        p.set_origin_message_id("msg_local_a");
+        assert!(!p.require_canonical_origin);
+        p.begin_turn();
+        p.apply_events(
+            AgentName::Claude,
+            &[assistant_start("m1"), delta("m1", "a"), completed("m1")],
+        );
+        let claimed = p.claim_write().expect("first turn with origin");
+        assert_eq!(claimed.2, "msg_local_a");
+        p.finish_write_ok();
+
+        p.begin_turn(); // next local turn, no origin
+        p.apply_events(
+            AgentName::Claude,
+            &[assistant_start("m2"), delta("m2", "b"), completed("m2")],
+        );
+        let claimed = p.claim_write().expect("local fallback still allowed");
+        assert_eq!(claimed.2, "m2");
     }
 
     #[test]

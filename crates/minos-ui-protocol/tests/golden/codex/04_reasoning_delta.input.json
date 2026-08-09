@@ -3,6 +3,6 @@
     "item":{"type":"agentMessage","id":"i1","text":""},
     "sessionId":"thr_fixture","turnId":"t1"
   }},
-  {"method":"item/reasoning/delta","params":{"itemId":"i1","delta":"Thinking…"}},
+  {"method":"item/reasoning/textDelta","params":{"itemId":"i1","threadId":"thr_fixture","turnId":"t1","contentIndex":0,"delta":"Thinking…"}},
   {"method":"turn/completed","params":{"finishedAtMs":1714000005000}}
 ]

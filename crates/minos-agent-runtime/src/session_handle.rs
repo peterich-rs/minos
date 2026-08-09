@@ -98,10 +98,46 @@ impl SessionHandle {
         &self,
         new: SessionState,
     ) -> Result<(), crate::state_machine::IllegalTransition> {
-        let from = self.current_state();
+        let _ = self.transition_if(|_| true, new)?;
+        Ok(())
+    }
+
+    /// Compare-and-swap session state under the active-turn mutex so concurrent
+    /// claimers cannot both succeed on the same transition (e.g. Idle→Running).
+    ///
+    /// On success returns the previous state. On predicate failure or illegal
+    /// transition, leaves state unchanged and returns `IllegalTransition` with
+    /// the observed `from`.
+    pub fn transition_if<F>(
+        &self,
+        predicate: F,
+        new: SessionState,
+    ) -> Result<SessionState, crate::state_machine::IllegalTransition>
+    where
+        F: FnOnce(&SessionState) -> bool,
+    {
+        // Serialize CAS with active_turn_id mutations so claim + turn-id clear
+        // cannot race mid-transition.
+        let _turn_guard = self.active_turn_id.lock().unwrap();
+        let from = self.state_rx.borrow().clone();
+        if !predicate(&from) {
+            return Err(crate::state_machine::IllegalTransition { from, to: new });
+        }
         crate::state_machine::validate_transition(&from, &new)?;
         let _ = self.state_tx.send(new);
-        Ok(())
+        Ok(from)
+    }
+
+    /// Atomic Idle→Running claim for a new turn. Returns previous state (Idle)
+    /// on success; rejects if not Idle or if another claimer already won.
+    pub fn try_begin_turn(
+        &self,
+        turn_started_at_ms: i64,
+    ) -> Result<SessionState, crate::state_machine::IllegalTransition> {
+        self.transition_if(
+            |from| matches!(from, SessionState::Idle),
+            SessionState::Running { turn_started_at_ms },
+        )
     }
 
     pub fn active_turn_id(&self) -> Option<String> {
@@ -116,6 +152,22 @@ impl SessionHandle {
         let mut guard = self.active_turn_id.lock().unwrap();
         if guard.is_none() {
             *guard = Some(turn_id);
+        }
+    }
+
+    /// Bump the in-memory last_seq watermark when durable/live events are
+    /// associated with this session (monotonic).
+    pub fn note_event_seq(&self, seq: u64) {
+        use std::sync::atomic::Ordering;
+        let mut cur = self.last_seq.load(Ordering::SeqCst);
+        while seq > cur {
+            match self
+                .last_seq
+                .compare_exchange_weak(cur, seq, Ordering::SeqCst, Ordering::SeqCst)
+            {
+                Ok(_) => break,
+                Err(observed) => cur = observed,
+            }
         }
     }
 }
@@ -169,5 +221,63 @@ mod tests {
         assert_eq!(clone.active_turn_id().as_deref(), Some("turn-1"));
         clone.set_active_turn_id(None);
         assert_eq!(h.active_turn_id(), None);
+    }
+
+    #[test]
+    fn try_begin_turn_rejects_double_claim() {
+        let h = SessionHandle::new(
+            "t".into(),
+            "/w".into(),
+            AgentKind::Codex,
+            SessionState::Idle,
+            0,
+        );
+        let prev = h.try_begin_turn(1).unwrap();
+        assert_eq!(prev, SessionState::Idle);
+        assert!(matches!(h.current_state(), SessionState::Running { .. }));
+        let err = h.try_begin_turn(2).unwrap_err();
+        assert!(format!("{err}").contains("illegal"));
+        assert!(matches!(
+            h.current_state(),
+            SessionState::Running {
+                turn_started_at_ms: 1
+            }
+        ));
+    }
+
+    #[test]
+    fn transition_if_predicate_rejects_without_mutating() {
+        let h = SessionHandle::new(
+            "t".into(),
+            "/w".into(),
+            AgentKind::Codex,
+            SessionState::Idle,
+            0,
+        );
+        let err = h
+            .transition_if(
+                |from| matches!(from, SessionState::Running { .. }),
+                SessionState::Suspended {
+                    reason: crate::state_machine::PauseReason::CodexCrashed,
+                },
+            )
+            .unwrap_err();
+        assert_eq!(err.from, SessionState::Idle);
+        assert_eq!(h.current_state(), SessionState::Idle);
+    }
+
+    #[test]
+    fn note_event_seq_is_monotonic() {
+        let h = SessionHandle::new(
+            "t".into(),
+            "/w".into(),
+            AgentKind::Codex,
+            SessionState::Idle,
+            3,
+        );
+        h.note_event_seq(2);
+        assert_eq!(h.last_seq.load(std::sync::atomic::Ordering::SeqCst), 3);
+        h.note_event_seq(5);
+        assert_eq!(h.last_seq.load(std::sync::atomic::Ordering::SeqCst), 5);
     }
 }

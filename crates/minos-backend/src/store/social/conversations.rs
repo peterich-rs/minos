@@ -175,14 +175,20 @@ pub async fn create_group_conversation(
             .execute(&mut *tx)
             .await
             .map_err(store_err("social::create_group_conversation.insert_conversation"))?;
-            for member in members {
+            for member in &members {
+                let role = if member == creator_account_id {
+                    "owner"
+                } else {
+                    "member"
+                };
                 sqlx::query(
-                    "INSERT INTO conversation_members (conversation_id, account_id, joined_at_ms)
-                     VALUES (?, ?, ?)",
+                    "INSERT INTO conversation_members (conversation_id, account_id, joined_at_ms, role)
+                     VALUES (?, ?, ?, ?)",
                 )
                 .bind(&conversation_id)
                 .bind(member)
                 .bind(now_ms)
+                .bind(role)
                 .execute(&mut *tx)
                 .await
                 .map_err(store_err("social::create_group_conversation.insert_member"))?;
@@ -216,14 +222,20 @@ pub async fn create_group_conversation(
             .execute(&mut *tx)
             .await
             .map_err(store_err("social::create_group_conversation.insert_conversation"))?;
-            for member in members {
+            for member in &members {
+                let role = if member == creator_account_id {
+                    "owner"
+                } else {
+                    "member"
+                };
                 sqlx::query(
-                    "INSERT INTO conversation_members (conversation_id, account_id, joined_at_ms)
-                     VALUES ($1, $2, $3)",
+                    "INSERT INTO conversation_members (conversation_id, account_id, joined_at_ms, role)
+                     VALUES ($1, $2, $3, $4)",
                 )
                 .bind(&conversation_id)
                 .bind(member)
                 .bind(now_ms)
+                .bind(role)
                 .execute(&mut *tx)
                 .await
                 .map_err(store_err("social::create_group_conversation.insert_member"))?;
@@ -370,6 +382,10 @@ pub async fn upsert_group_conversation(
             message: "group title is required".into(),
         });
     }
+    // Client placeholders must not clobber a real title already on the Hub row.
+    let is_placeholder_title = title.eq_ignore_ascii_case("conversation")
+        || title.eq_ignore_ascii_case("group chat")
+        || title.eq_ignore_ascii_case("direct agent sessions");
 
     let mut members = member_account_ids.to_vec();
     if !members.iter().any(|m| m == creator_account_id) {
@@ -385,17 +401,32 @@ pub async fn upsert_group_conversation(
                     .begin()
                     .await
                     .map_err(store_err("social::upsert_group_conversation.begin"))?;
-                sqlx::query(
-                    "UPDATE conversations
-                        SET title = ?, updated_at_ms = ?
-                      WHERE conversation_id = ?",
-                )
-                .bind(title)
-                .bind(now_ms)
-                .bind(conversation_id)
-                .execute(&mut *tx)
-                .await
-                .map_err(store_err("social::upsert_group_conversation.update_title"))?;
+                // Skip placeholder titles so host_projection / empty client titles
+                // cannot wipe a real name already stored on the Hub row.
+                if is_placeholder_title {
+                    sqlx::query(
+                        "UPDATE conversations
+                            SET updated_at_ms = ?
+                          WHERE conversation_id = ?",
+                    )
+                    .bind(now_ms)
+                    .bind(conversation_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(store_err("social::upsert_group_conversation.touch"))?;
+                } else {
+                    sqlx::query(
+                        "UPDATE conversations
+                            SET title = ?, updated_at_ms = ?
+                          WHERE conversation_id = ?",
+                    )
+                    .bind(title)
+                    .bind(now_ms)
+                    .bind(conversation_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(store_err("social::upsert_group_conversation.update_title"))?;
+                }
                 for member in &members {
                     sqlx::query(
                         "INSERT OR IGNORE INTO conversation_members (conversation_id, account_id, joined_at_ms)
@@ -417,17 +448,30 @@ pub async fn upsert_group_conversation(
                     .begin()
                     .await
                     .map_err(store_err("social::upsert_group_conversation.begin"))?;
-                sqlx::query(
-                    "UPDATE conversations
-                        SET title = $1, updated_at_ms = $2
-                      WHERE conversation_id = $3",
-                )
-                .bind(title)
-                .bind(now_ms)
-                .bind(conversation_id)
-                .execute(&mut *tx)
-                .await
-                .map_err(store_err("social::upsert_group_conversation.update_title"))?;
+                if is_placeholder_title {
+                    sqlx::query(
+                        "UPDATE conversations
+                            SET updated_at_ms = $1
+                          WHERE conversation_id = $2",
+                    )
+                    .bind(now_ms)
+                    .bind(conversation_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(store_err("social::upsert_group_conversation.touch"))?;
+                } else {
+                    sqlx::query(
+                        "UPDATE conversations
+                            SET title = $1, updated_at_ms = $2
+                          WHERE conversation_id = $3",
+                    )
+                    .bind(title)
+                    .bind(now_ms)
+                    .bind(conversation_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(store_err("social::upsert_group_conversation.update_title"))?;
+                }
                 for member in &members {
                     sqlx::query(
                         "INSERT INTO conversation_members (conversation_id, account_id, joined_at_ms)
@@ -712,68 +756,260 @@ pub async fn is_conversation_member(
     Ok(row > 0)
 }
 
+/// Member role in a conversation (`owner` | `admin` | `member`).
+pub async fn get_member_role(
+    store: &impl AsStorePool,
+    conversation_id: &str,
+    account_id: &str,
+) -> Result<Option<String>, BackendError> {
+    let role = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar::<_, String>(
+                "SELECT role FROM conversation_members
+                  WHERE conversation_id = ? AND account_id = ?",
+            )
+            .bind(conversation_id)
+            .bind(account_id)
+            .fetch_optional(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_scalar::<_, String>(
+                "SELECT role FROM conversation_members
+                  WHERE conversation_id = $1 AND account_id = $2",
+            )
+            .bind(conversation_id)
+            .bind(account_id)
+            .fetch_optional(pool)
+            .await
+        }
+    }
+    .map_err(store_err("social::get_member_role"))?;
+    Ok(role)
+}
+
+/// Result of a membership mutation that must be published + may revoke live subs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MembershipChangeResult {
+    pub membership_version: i64,
+    pub action: String,
+    pub member_account_id: String,
+    pub role: Option<String>,
+    /// True when a row was inserted/deleted (false = no-op idempotent).
+    pub changed: bool,
+}
+
 pub async fn add_member_to_group(
     store: &impl AsStorePool,
     conversation_id: &str,
     account_id: &str,
     now_ms: i64,
-) -> Result<(), BackendError> {
+) -> Result<MembershipChangeResult, BackendError> {
     match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => sqlx::query(
-            "INSERT OR IGNORE INTO conversation_members (conversation_id, account_id, joined_at_ms)
-                 VALUES (?, ?, ?)",
-        )
-        .bind(conversation_id)
-        .bind(account_id)
-        .bind(now_ms)
-        .execute(pool)
-        .await
-        .map(|_| ()),
-        StorePoolRef::Postgres(pool) => sqlx::query(
-            "INSERT INTO conversation_members (conversation_id, account_id, joined_at_ms)
-                 VALUES ($1, $2, $3)
+        StorePoolRef::Sqlite(pool) => {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(store_err("social::add_member_to_group.begin"))?;
+            let result = sqlx::query(
+                "INSERT OR IGNORE INTO conversation_members
+                    (conversation_id, account_id, joined_at_ms, role)
+                 VALUES (?, ?, ?, 'member')",
+            )
+            .bind(conversation_id)
+            .bind(account_id)
+            .bind(now_ms)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err("social::add_member_to_group.insert"))?;
+            let changed = result.rows_affected() > 0;
+            let version = if changed {
+                bump_membership_version_sqlite(&mut tx, conversation_id, now_ms).await?
+            } else {
+                read_membership_version_sqlite(&mut tx, conversation_id).await?
+            };
+            tx.commit()
+                .await
+                .map_err(store_err("social::add_member_to_group.commit"))?;
+            Ok(MembershipChangeResult {
+                membership_version: version,
+                action: "added".into(),
+                member_account_id: account_id.to_string(),
+                role: Some("member".into()),
+                changed,
+            })
+        }
+        StorePoolRef::Postgres(pool) => {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(store_err("social::add_member_to_group.begin"))?;
+            let result = sqlx::query(
+                "INSERT INTO conversation_members
+                    (conversation_id, account_id, joined_at_ms, role)
+                 VALUES ($1, $2, $3, 'member')
                  ON CONFLICT DO NOTHING",
-        )
-        .bind(conversation_id)
-        .bind(account_id)
-        .bind(now_ms)
-        .execute(pool)
-        .await
-        .map(|_| ()),
+            )
+            .bind(conversation_id)
+            .bind(account_id)
+            .bind(now_ms)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err("social::add_member_to_group.insert"))?;
+            let changed = result.rows_affected() > 0;
+            let version = if changed {
+                bump_membership_version_postgres(&mut tx, conversation_id, now_ms).await?
+            } else {
+                read_membership_version_postgres(&mut tx, conversation_id).await?
+            };
+            tx.commit()
+                .await
+                .map_err(store_err("social::add_member_to_group.commit"))?;
+            Ok(MembershipChangeResult {
+                membership_version: version,
+                action: "added".into(),
+                member_account_id: account_id.to_string(),
+                role: Some("member".into()),
+                changed,
+            })
+        }
     }
-    .map_err(store_err("social::add_member_to_group"))?;
-
-    Ok(())
 }
 
 pub async fn remove_member_from_group(
     store: &impl AsStorePool,
     conversation_id: &str,
     account_id: &str,
-) -> Result<bool, BackendError> {
-    let result = match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => sqlx::query(
-            "DELETE FROM conversation_members
+    now_ms: i64,
+) -> Result<MembershipChangeResult, BackendError> {
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(store_err("social::remove_member_from_group.begin"))?;
+            let result = sqlx::query(
+                "DELETE FROM conversation_members
                   WHERE conversation_id = ? AND account_id = ?",
-        )
-        .bind(conversation_id)
-        .bind(account_id)
-        .execute(pool)
-        .await
-        .map(|result| result.rows_affected()),
-        StorePoolRef::Postgres(pool) => sqlx::query(
-            "DELETE FROM conversation_members
+            )
+            .bind(conversation_id)
+            .bind(account_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err("social::remove_member_from_group.delete"))?;
+            let changed = result.rows_affected() > 0;
+            let version = if changed {
+                bump_membership_version_sqlite(&mut tx, conversation_id, now_ms).await?
+            } else {
+                read_membership_version_sqlite(&mut tx, conversation_id).await?
+            };
+            tx.commit()
+                .await
+                .map_err(store_err("social::remove_member_from_group.commit"))?;
+            Ok(MembershipChangeResult {
+                membership_version: version,
+                action: "removed".into(),
+                member_account_id: account_id.to_string(),
+                role: None,
+                changed,
+            })
+        }
+        StorePoolRef::Postgres(pool) => {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(store_err("social::remove_member_from_group.begin"))?;
+            let result = sqlx::query(
+                "DELETE FROM conversation_members
                   WHERE conversation_id = $1 AND account_id = $2",
-        )
-        .bind(conversation_id)
-        .bind(account_id)
-        .execute(pool)
-        .await
-        .map(|result| result.rows_affected()),
+            )
+            .bind(conversation_id)
+            .bind(account_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err("social::remove_member_from_group.delete"))?;
+            let changed = result.rows_affected() > 0;
+            let version = if changed {
+                bump_membership_version_postgres(&mut tx, conversation_id, now_ms).await?
+            } else {
+                read_membership_version_postgres(&mut tx, conversation_id).await?
+            };
+            tx.commit()
+                .await
+                .map_err(store_err("social::remove_member_from_group.commit"))?;
+            Ok(MembershipChangeResult {
+                membership_version: version,
+                action: "removed".into(),
+                member_account_id: account_id.to_string(),
+                role: None,
+                changed,
+            })
+        }
     }
-    .map_err(store_err("social::remove_member_from_group"))?;
+}
 
-    Ok(result > 0)
+async fn bump_membership_version_sqlite(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    conversation_id: &str,
+    now_ms: i64,
+) -> Result<i64, BackendError> {
+    sqlx::query_scalar::<_, i64>(
+        "UPDATE conversations
+            SET membership_version = membership_version + 1,
+                updated_at_ms = ?
+          WHERE conversation_id = ?
+      RETURNING membership_version",
+    )
+    .bind(now_ms)
+    .bind(conversation_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(store_err("social::bump_membership_version"))
+}
+
+async fn bump_membership_version_postgres(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    conversation_id: &str,
+    now_ms: i64,
+) -> Result<i64, BackendError> {
+    sqlx::query_scalar::<_, i64>(
+        "UPDATE conversations
+            SET membership_version = membership_version + 1,
+                updated_at_ms = $1
+          WHERE conversation_id = $2
+      RETURNING membership_version",
+    )
+    .bind(now_ms)
+    .bind(conversation_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(store_err("social::bump_membership_version"))
+}
+
+async fn read_membership_version_sqlite(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    conversation_id: &str,
+) -> Result<i64, BackendError> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT membership_version FROM conversations WHERE conversation_id = ?",
+    )
+    .bind(conversation_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(store_err("social::read_membership_version"))
+}
+
+async fn read_membership_version_postgres(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    conversation_id: &str,
+) -> Result<i64, BackendError> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT membership_version FROM conversations WHERE conversation_id = $1",
+    )
+    .bind(conversation_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(store_err("social::read_membership_version"))
 }
 
 pub async fn mark_conversation_deleted_for_account(
@@ -847,44 +1083,58 @@ pub async fn conversation_deleted_at_for_account(
     .map_err(store_err("social::conversation_deleted_at_for_account"))
 }
 
-/// Mark conversation read through the latest `message_seq`.
-/// Returns `(last_read_seq, last_read_at_ms)` when messages exist.
-pub async fn mark_conversation_read_to_latest(
+/// Mark conversation read through a client-observed `message_seq` watermark.
+///
+/// Server clamps to the latest existing seq and applies monotonic MAX on the
+/// stored watermark so multi-device merge never rewinds.
+/// Returns `(last_read_seq, last_read_at_ms)` after the update, or `None` when
+/// there are no messages / observed seq is non-positive.
+pub async fn mark_conversation_read_to_seq(
     store: &impl AsStorePool,
     conversation_id: &str,
     account_id: &str,
+    read_up_to_message_seq: i64,
     updated_at_ms: i64,
 ) -> Result<Option<(i64, i64)>, BackendError> {
+    if read_up_to_message_seq <= 0 {
+        return Ok(None);
+    }
+
     #[derive(sqlx::FromRow)]
     struct LatestRead {
         last_read_seq: i64,
         last_read_at_ms: i64,
     }
 
+    // Clamp observed watermark to messages that actually exist (never invent seqs).
     let latest = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query_as::<_, LatestRead>(
             "SELECT COALESCE(MAX(message_seq), 0) AS last_read_seq,
                     COALESCE(MAX(created_at_ms), 0) AS last_read_at_ms
                FROM chat_messages
-              WHERE conversation_id = ?",
+              WHERE conversation_id = ?
+                AND message_seq <= ?",
         )
         .bind(conversation_id)
+        .bind(read_up_to_message_seq)
         .fetch_one(pool)
         .await
         .map_err(store_err(
-            "social::mark_conversation_read_to_latest.fetch_latest",
+            "social::mark_conversation_read_to_seq.fetch_observed",
         ))?,
         StorePoolRef::Postgres(pool) => sqlx::query_as::<_, LatestRead>(
             "SELECT COALESCE(MAX(message_seq), 0) AS last_read_seq,
                     COALESCE(MAX(created_at_ms), 0) AS last_read_at_ms
                FROM chat_messages
-              WHERE conversation_id = $1",
+              WHERE conversation_id = $1
+                AND message_seq <= $2",
         )
         .bind(conversation_id)
+        .bind(read_up_to_message_seq)
         .fetch_one(pool)
         .await
         .map_err(store_err(
-            "social::mark_conversation_read_to_latest.fetch_latest",
+            "social::mark_conversation_read_to_seq.fetch_observed",
         ))?,
     };
     if latest.last_read_seq <= 0 {
@@ -943,9 +1193,36 @@ pub async fn mark_conversation_read_to_latest(
         .await
         .map(|_| ()),
     }
-    .map_err(store_err("social::mark_conversation_read_to_latest.upsert"))?;
+    .map_err(store_err("social::mark_conversation_read_to_seq.upsert"))?;
 
     Ok(Some((latest.last_read_seq, latest.last_read_at_ms)))
+}
+
+/// Test/admin helper: mark read through the absolute latest message seq.
+pub async fn mark_conversation_read_to_latest(
+    store: &impl AsStorePool,
+    conversation_id: &str,
+    account_id: &str,
+    updated_at_ms: i64,
+) -> Result<Option<(i64, i64)>, BackendError> {
+    let max_seq = match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COALESCE(MAX(message_seq), 0) FROM chat_messages WHERE conversation_id = ?",
+            )
+            .bind(conversation_id)
+            .fetch_one(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => sqlx::query_scalar::<_, i64>(
+            "SELECT COALESCE(MAX(message_seq), 0) FROM chat_messages WHERE conversation_id = $1",
+        )
+        .bind(conversation_id)
+        .fetch_one(pool)
+        .await,
+    }
+    .map_err(store_err("social::mark_conversation_read_to_latest.max"))?;
+    mark_conversation_read_to_seq(store, conversation_id, account_id, max_seq, updated_at_ms).await
 }
 
 pub(crate) async fn find_direct_conversation(
