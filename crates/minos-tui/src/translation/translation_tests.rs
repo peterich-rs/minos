@@ -346,10 +346,6 @@ fn codex_projected_events_render_final_text_and_tool_as_separate_items() {
             "item":{"type":"commandExecution","id":"cmd1","command":"ls","commandActions":[],"cwd":"/tmp","status":"inProgress"},
             "sessionId":"thr","turnId":"t1"
         }}),
-        serde_json::json!({"method":"item/started","params":{
-            "item":{"type":"agentMessage","id":"a2","text":""},
-            "sessionId":"thr","turnId":"t1"
-        }}),
         serde_json::json!({"method":"item/completed","params":{
             "item":{"type":"agentMessage","id":"a1","text":"partial final answer"},
             "sessionId":"thr","turnId":"t1","completedAtMs":2
@@ -363,18 +359,26 @@ fn codex_projected_events_render_final_text_and_tool_as_separate_items() {
         cs.apply_ui_events(events);
     }
 
-    assert_eq!(cs.items.len(), 2);
+    // Tool starts after intermediate assistant text, so completed agentMessage
+    // lands as a separate final text row (not rewritten above the tool).
+    assert_eq!(cs.items.len(), 3);
     match &cs.items[0] {
         ChatItem::AssistantText { text_parts, .. } => {
-            assert_eq!(*text_parts, plain_parts("partial final answer"));
+            assert_eq!(*text_parts, plain_parts("partial"));
         }
-        other => panic!("expected AssistantText, got {other:?}"),
+        other => panic!("expected intermediate AssistantText, got {other:?}"),
     }
     match &cs.items[1] {
         ChatItem::ToolCall { output_summary, .. } => {
             assert_eq!(output_summary.as_deref(), Some("ok"));
         }
         other => panic!("expected ToolCall, got {other:?}"),
+    }
+    match &cs.items[2] {
+        ChatItem::AssistantText { text_parts, .. } => {
+            assert_eq!(*text_parts, plain_parts("partial final answer"));
+        }
+        other => panic!("expected final AssistantText, got {other:?}"),
     }
 }
 
