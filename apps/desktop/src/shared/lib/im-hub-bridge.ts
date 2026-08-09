@@ -637,6 +637,8 @@ export function ensureImHubBridge(): void {
     },
     onConnectionChange: (state) => {
       lastSyncState = state;
+      // Primary product Online = Account IM (`/ws/client`), not Host alone.
+      useAccountStore.getState().syncAccountFromHub(state);
       if (state === "live" || state === "syncing") {
         const focused = useWorkspaceStore.getState().focusedConversationId;
         if (focused) {
@@ -646,6 +648,8 @@ export function ensureImHubBridge(): void {
     },
   });
   startedForToken = token;
+  // Connecting until first onConnectionChange.
+  useAccountStore.getState().syncAccountFromHub("connecting");
   session.start(deviceId, token, accountId);
   ensureLifecycleHandlers();
   // Drain durable Desktop → Hub user-message Outbox after auth is ready.
@@ -657,6 +661,7 @@ export function stopImHubBridge(): void {
   session = null;
   startedForToken = null;
   lastSyncState = "disconnected";
+  useAccountStore.getState().syncAccountFromHub("disconnected");
   cancelPendingFocusedMarkRead();
 }
 

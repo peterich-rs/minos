@@ -136,7 +136,7 @@ impl SocialService {
             .iter()
             .map(|row| row.message_id.clone())
             .collect::<Vec<_>>();
-        let mut mentions_by_message = social::list_message_mentions(&self.store, &message_ids)
+        let mut mentions_by_message = social::list_message_mentions_full(&self.store, &message_ids)
             .await
             .map_err(SocialViewError::Internal)?;
 
@@ -179,7 +179,7 @@ impl SocialService {
 
         let mut output = Vec::with_capacity(rows.len());
         for row in rows {
-            let mentioned_account_ids = mentions_by_message
+            let mentions = mentions_by_message
                 .remove(&row.message_id)
                 .unwrap_or_default();
             let reply_to = row
@@ -210,7 +210,8 @@ impl SocialService {
                 message_seq: row.message_seq,
                 reply_to,
                 recalled_at_ms: row.recalled_at_ms,
-                mentioned_account_ids,
+                mentioned_account_ids: mentions.account_ids,
+                mentioned_agent_ids: mentions.agent_ids,
                 sender_type,
                 reactions: vec![],
                 attachments: vec![],

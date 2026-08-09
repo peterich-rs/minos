@@ -17,54 +17,61 @@
 | [superpowers/specs/2026-08-03-im-reliability-program/README.md](superpowers/specs/2026-08-03-im-reliability-program/README.md) | **IM 可靠性总计划**（客户端 Sync + 后端投递/编排）；[TASKS](superpowers/specs/2026-08-03-im-reliability-program/TASKS.md) |
 | [superpowers/specs/2026-08-03-realtime-surface-model.md](superpowers/specs/2026-08-03-realtime-surface-model.md) | **全局实时面**：Tier T0–T4、订阅拓扑、payload 厚度、新增功能 checklist；非 case-by-case |
 | [superpowers/specs/2026-08-03-client-im-sync-engine.md](superpowers/specs/2026-08-03-client-im-sync-engine.md) | 客户端 Sync Engine 终态 |
-| [superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md](superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md) | 后端 Outbox 车道 / Push / Dispatch / CompletionWatch 终态 |
+| [superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md](superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md) | 后端 Outbox 车道 / Push / **Agent inbox**（表名可仍为 dispatch）/ CompletionWatch 终态 |
+| [superpowers/specs/2026-08-09-agent-participant-delivery.md](superpowers/specs/2026-08-09-agent-participant-delivery.md) | **Agent = bot participant**：mention → participant delivery → runtime → agent 回消息 |
+| [adr/0021-agent-as-conversation-bot-participant.md](adr/0021-agent-as-conversation-bot-participant.md) | 产品决策：消息驱动协作；Host 为 runtime port |
 | ADR 0004 / 0009 / 0011 | JSON-RPC、Broker 拓扑、Envelope 历史决策 |
+| ADR 0020 | Account vs Host 人机分权（与 bot participant 正交） |
 
 线类型源码：`crates/minos-protocol/src/realtime.rs`。
 
+**文档权威阶梯（冲突时）**：ADR 0021 + 本文 §1/§3 → participant-delivery spec → Hub SSOT / delivery orchestration 实现细节 → 各端 architecture-* 。
+
 ---
 
-## 1. 定位：协作 Conversation IM 为主轴，Agent 是对话内能力
+## 1. 定位：协作 Conversation IM 为主轴，Agent 是对话内 bot 成员
 
 ### 1.1 产品主语
 
-Minos 的**产品核心是对话协作**（Project → Conversation → Timeline），而不是「远程 Agent 运维台」。
+Minos 的**产品核心是对话协作**（Project → Conversation → Timeline），形态对齐成熟 IM（Slack / 企微 / Discord）：同一账号多端连续聊天；**不是**「远程 Agent 运维台」，也**不是**以 HostCommand 总线当协作主协议。
 
-- **主场景**：多人 / 多 Agent 在同一 Conversation 里聊天协作（发消息、@、回复、撤回、reaction、未读与通知）。  
-- **Agent 能力**：挂在对话里的可执行参与者（@agent 启动/输入、session 流式投影、审批、结果回写时间线）。  
-- **Host / Daemon**：对话里 Agent 落地的算力与工具边界；对用户是能力面，不是每天打开的主隐喻。  
+- **主场景**：人与人、人与 **bot 成员（Agent）** 在同一 Conversation 时间线协作（发消息、@、回复、撤回、reaction、未读与通知）。  
+- **Agent**：Conversation 的 **一等参与者（bot）**——可进 roster、可被 @、可发气泡；**不是**真人 Account（无登录 JWT）。类比 Slack Bot / Discord Bot。  
+- **协作驱动**：**纯消息**。`@人` 与 `@agent` 都是 mention → participant delivery；bot 的「身体」是 Host 上的 daemon/CLI，属于 **runtime 适配**，不是第二套协作模型。  
+- **Host / Daemon**：bot 落地的算力与工具边界；对用户是能力面，不是每天打开的主隐喻。`/ws/host` 是 **执行面传输**，不是 IM 主轴。
 
-Desktop 已按此落地：主舞台是 **Timeline + Composer**；Session / Approval 是侧栏或 Attention 入口，不是独立产品。
+Desktop：主舞台是 **Timeline + Composer**；Session / Approval 是侧栏或 Attention，不是独立产品。
 
-成熟 IM（Slack / Discord / Telegram / 微信）解决的基础能力，**全部是一等公民**：
+成熟 IM 基础能力 **全部是一等公民**：
 
 - 长连接、可靠投递、多端水位、会话成员、热推 + 冷拉  
 - **@mention、未读、推送偏好、撤回、reaction、列表摘要**  
 - 读扩散 / 写扩散的投递模型（随群规模演进）
 
-Minos **额外**叠加 Agent 执行与 Host 控制，但不应用「远程 Agent」心智吞掉 IM 主轴。
-
 ### 1.2 三轴模型（按产品优先级）
 
 | 优先级 | 轴 | IM 类比 | Minos 实体 |
 |--------|----|---------|------------|
-| **P0 主轴** | A. 协作消息 | 用户/机器人聊天消息 + 群协作 | `conversation` + `conversation_members` + `conversation_messages` + mentions/reads/recall + `message_reactions` |
+| **P0 主轴** | A. 协作消息 | 用户 + **bot** 聊天消息 + 群协作 | `conversations` + `conversation_members` + `conversation_agent_members` + `chat_messages` + mentions/reads/recall + `message_reactions` |
 | **P1 嵌入** | B. Agent 热投影 | 直播流 / typing / 工具过程卡片 | Host ingest → `StreamEvent(ui_event)` + session transcript；关键状态落 Durable |
-| **P1 嵌入** | C. Attention / 特殊 @ | @人、@here、待办、审批 | `message_mentions`、`ApprovalRequested`、列表 `unread_*` / `needs_attention`、Push |
-| **P2 能力** | D. Host 控制与上行 | 设备信令 + 边缘日志 | `host_commands`、ingest 幂等、Gap Pull |
+| **P1 嵌入** | C. Attention / @ | @人、@bot、@here、待办、审批 | 结构化 mentions、`ApprovalRequested`、列表 `unread_*` / `needs_attention`、Push |
+| **P2 能力** | D. Host runtime port | bot 身体的设备信令 + 边缘日志 | `host_commands`（**adapter**）、ingest 幂等、Gap Pull |
 
 **核心原则（产品与投递不变量）**：
 
-1. **对话是 SSOT 容器**。Agent session 从属于 `conversation_id`；列表、未读、@、reaction 都以 conversation 为协作单元。  
-2. **Cloud 不跑 Agent**。云端是 **IM + 投影 + 协调中枢**；执行在用户 Host。  
-3. **Hub 是多端协作 SSOT（人读的聊天气泡、@、未读、recall）**；Host 本地 SQLite 是 **Agent 原始事件 / 本地工作台的长期 SSOT**。二者不可做成「聊天气泡对等双权威」。收敛见 [Hub 协作消息 SSOT 方案](superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md)。  
-4. **写路径先事务后推送**（Transactional Outbox），禁止「只推不存」；端上 best-effort 静默 dual-write **不算**满足本条。  
-5. **Attention 统一建模**（见 §3.4）：人 @、审批、失败 session 等共享「谁需要被打扰 / 进 Attention 列表」的逻辑，而不是各做一套通知。  
-6. **最新架构优先**，不做历史 wire 兼容双写（见 AGENTS.md Development-State Policy）。  
-7. **Agent 最终聊天气泡按路径的写者（双写者，非对等权威）**：  
-   - **Mobile / client_live @agent**：Hub `TurnCompletionProjector`（CompletionWatch per `origin_message_id`）写 Hub 气泡。  
-   - **Desktop-native Linked**：本机 daemon 写本地 `agent-result:…` 工作台行；Desktop Outbox 以 **`host_projection`** 上行同一规范 id（Hub 不二次 dispatch）。  
-   - 禁止 UI 扫本地时间线无 id 回放投影当主路径；禁止 body 软去重。
+1. **对话是 SSOT 容器**。列表、未读、@、reaction、agent session 都从属于 `conversation_id`。  
+2. **Cloud 不跑 Agent**。云端是 **IM + participant delivery + 投影中枢**；CLI 只在用户 Host。  
+3. **Hub 是多端协作 SSOT（人读气泡、@、未读、recall）**；Host 本地 SQLite 是 **Agent 原始事件 / 本地工作台** SSOT。禁止聊天气泡对等双权威。见 [Hub SSOT](superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md)。  
+4. **写路径先事务后推送**（Transactional Outbox）；端上静默 dual-write **不算**满足。  
+5. **Attention 统一建模**（§3.4）：人 @、bot @、审批、失败 session 共享「谁需要被打扰」。  
+6. **最新架构优先**（AGENTS.md Development-State Policy）。  
+7. **Agent = bot participant**（[ADR 0021](adr/0021-agent-as-conversation-bot-participant.md) / [participant delivery](superpowers/specs/2026-08-09-agent-participant-delivery.md)）：  
+   - 发送成功 = 用户消息落库；bot 投递进 **Agent inbox**（异步）。  
+   - Runtime 调用（今日 HostCommand）是 inbox consumer 的私有适配，**不是**产品层「命令式协作」。  
+8. **Agent 最终气泡写者（路径不同，Hub 权威唯一）**：  
+   - **client_live**（如 Mobile）：Hub `TurnCompletionProjector`（CompletionWatch per `origin_message_id`）或显式 agent reply。  
+   - **Desktop-native Linked**：本机 `agent-result:…` + Outbox **`host_projection`** 上行同 id（Hub **不**二次投递 bot）。  
+   - 禁止 UI 扫本地时间线无 id 投影；禁止 body 软去重。
 
 ---
 
@@ -149,7 +156,7 @@ Gateway ──推送──► 订阅方（online / offline / last_seen）
 | **长连接** | Ticket 升级 → `Hello` → 默认 topic 自动订阅 → 业务 Subscribe |
 | **心跳** | `Hello.heartbeat_interval_ms`（25s 建议）；服务端每 15s WS `Ping` 探测；**90s 无入站活动** → close `1011 heartbeat_timeout` |
 | **活动定义** | 入站 text / WS Ping·Pong / 应用层 `ClientFrame::Ping` 均刷新 liveness；`last_seen_at_ms` 节流写库（≥30s） |
-| **Online（IM 语义）** | **账号在线** = 该 account 至少一条 Mobile `/ws/client` live（`mobile_client_session_count`）；**设备在线** = 该 Host installation 有 live `/ws/host`（`SessionRegistry.get`） |
+| **Online（分层语义）** | **Account sync（人类 IM）** = 该 account 至少一条 account-client `/ws/client` live（实现上 Mobile 计数见 `mobile_client_session_count`；Desktop/Web 同轨）；**Host online（设备）** = installation 有 live `/ws/host`；**Agent available** = bot 在 roster 且 bound Host online。**产品主 Online（能发能收）必须以 Account sync 为准**，不得仅用 Host 冒充 |
 | **last_seen** | 耐久：`device_installations.last_seen_at_ms`；HTTP 列表返回；连接 open/close 强制 touch（冷路径展示，不冒充 online） |
 | **Presence 推送** |  ephemeral `StreamEvent{kind:presence}`：Host 上下线 → 各 linked `account:{id}`（Mobile 改设备 online）；Account client 上下线 → 各 linked `host:{id}`（Host peer list） |
 | **吊销踢连接** | 同 installation 重连 `session_superseded`（4401）；auth/unlink `auth_revoked`（4401）；Host 可先收 `HostForceClose` 再 close |
@@ -206,8 +213,8 @@ SubscribeAck / SubscriptionDenied / SnapshotRequired
 
 | Attention 类型 | 触发源 | 目标 | 现有落点 | 产品语义 |
 |----------------|--------|------|----------|----------|
-| **人 @mention** | 消息正文解析 `@display` / 成员匹配 | `mentioned_account_id` | 表 `message_mentions`；列表 `unread_mention_count` | 经典 IM 艾特 |
-| **Agent @mention** | Composer `@codex` 等 | Agent 成员 / 启动 session | Desktop 本地 `ConversationMention`；云端成员 `conversation_agent_members` | 「在对话里叫某个工人」 |
+| **人 @mention** | 解析 `@` → **human participant** | `target_kind=account` | 表 `chat_message_mentions`（终态：多态 mention targets）；`unread_mention_count` | 经典 IM 艾特 |
+| **Agent @mention（bot）** | 解析 `@` → **agent participant** | `target_kind=agent` + roster | 终态写入 mention SSOT + **Agent inbox** 投递；过渡期仍可能仅文本路由 + `conversation_agent_members` | 与 @人同一 mention 管线；**不是**平行 RPC 产品 |
 | **Approval（特殊 @）** | Agent 需要权限 | 可审批的人类成员（会话/对话 ACL） | Durable `ApprovalRequested` / `ApprovalResolved`；Push category `approval`；Desktop Attention | **语义等同高优 @**：必须有人介入，否则任务卡住 |
 | **Needs you / 失败** | session 失败、超时、断连 | 相关账户 | 列表 `needs_attention_count`；Attention 视图 | 非消息体的状态 Attention |
 | **普通新消息** | 任意 append | 未读成员（除发送者） | `conversation_reads` + `unread_count` | 列表角标；可按偏好降噪 |
@@ -230,26 +237,32 @@ created_at_ms, read_at_ms?, resolved_at_ms?
 
 当前实现可继续由 `message_mentions` + approvals + 列表聚合 **派生**；产品与端侧应按统一 Attention 心智渲染。
 
-#### 3.4.2 @Mention（人）
+#### 3.4.2 @Mention（人 + bot，统一管线）
 
-**写路径（已实现骨架）**：
+**目标写路径（participant delivery；[规范](superpowers/specs/2026-08-09-agent-participant-delivery.md)）**：
 
 ```
-POST send-message
-  → extract_mentioned_account_ids(text, members)  // 仅成员可被 @
-  → insert conversation_messages + message_mentions
-  → Durable ConversationMessageAppended (topic conversation:*)  // T1 full body
-  → 对成员写 AccountConversationMessageAppended thin digest (topic account:*)  // T2 列表/inbox
-  → 未读：相对 conversation_reads 计算 unread_count / unread_mention_count
-  → Push：偏好 direct_message / group_mention；在线则可不推
+POST send-message (Account)
+  → parse @tokens against conversation participants only  // human ∪ agent
+  → TX: chat_messages
+       + mention targets (account* and/or agent*)
+       + social durable + outbox
+       + Agent inbox rows when bot delivery rules match
+  → Durable ConversationMessageAppended (conversation:*)
+  → Account digests (account:*) for human members
+  → Human: unread / Push
+  → Bot: Agent inbox worker → runtime port (Host) → agent reply message
 ```
+
+**现状（过渡）**：人类 mention 已进 `chat_message_mentions`；agent @ 仍多在发送后 `try_agent_dispatch` / 文本路由（`http/v1/social.rs`），**尚未**与 mention 表同构——Phase 1 收敛。
 
 不变量：
 
-- **只能 @ 当前 conversation 成员**（防泄漏）。  
+- **只能 @ 当前 conversation participants**（人 ∈ `conversation_members`，bot ∈ `conversation_agent_members`）。  
 - 发送者对自己的 @ 不计入自己的 mention 未读。  
-- 撤回消息后，mention 行随 `message_id` CASCADE 删除或消息带 `recalled_at_ms` 后客户端隐藏正文；未读是否回滚以实现为准，规划上 **recall 应修正未读/mention 计数**。  
-- 后续：`@everyone` / 角色 @、Agent 作为 mention target 的云端结构化字段（不仅文本解析）。
+- 撤回后 mention 随消息处理；规划上 **recall 修正未读/mention 计数**。  
+- `message_source=host_projection|system`：**永不**再投递 agent inbox（防环）。  
+- 后续：`@everyone` / 角色 @；wire 上 `mentions: [{kind,id}]`。
 
 #### 3.4.3 Approval ≈ 特殊 @
 
@@ -709,17 +722,17 @@ Hub SSOT 收敛：
 |------|------|----------------|------|
 | Conversation 壳 + agent roster | 创建 / 改标题 / 列表 / 起 session | `POST /v1/conversations/upsert` | ✅ 保留 |
 | Host runtime → cloud agent | 首次 resolve runtime | `POST /v1/agents/ensure-host-runtime` + `source=host_runtime` | ✅ |
-| 用户气泡（Desktop 本机工作台） | **native 本地** append + start session；已登录时 Outbox `host_projection` | `…/messages` + `client_message_id` | ✅ Desktop **始终本机执行**；Hub 只投影不二次 dispatch |
-| 用户气泡（Mobile client_live） | Hub POST → enqueue **AgentDispatchQueue** → worker → HostCommand | 同上 | ✅ 落库后立即 200；dispatch 异步；`@agent` / `@agent#short` 复用 formal session。仍需 **live Host** |
+| 用户气泡（Desktop 本机工作台） | **native 本地** append + 本机 bot 消费；已登录时 Outbox `host_projection` | `…/messages` + `client_message_id` | ✅ Desktop **本机执行**；Hub 投影；**不**二次 agent inbox |
+| 用户气泡（Mobile / client_live） | Hub POST → **Agent inbox**（表 `agent_dispatch_queue`）→ worker → **runtime port**（HostCommand） | 同上 | ✅ 落库后立即 200；投递异步；领域语义 = bot participant delivery。仍需 **live Host** 才执行 |
 | Agent 气泡（client_live） | Hub `TurnCompletionProjector`（CompletionWatch per **origin_message_id** → last-segment） | `insert_agent_message_with_session` 幂等 `agent-result:{conv}:{session}:{origin}` | ✅ B4；禁止 session 单 slot 覆盖 |
-| Agent 气泡（Desktop-native） | 本机 daemon 写工作台 `agent-result:…`；Desktop Outbox **`host_projection`** 上行（仅 `isCanonicalAgentResultId`） | `POST …/agents/message` + 同 id | ✅ 可信上行，非 UI 扫时间线；Hub 不二次 dispatch |
-| 跳过二次 Agent 调度 | **仅** `message_source=host_projection\|system` | — | ✅ |
+| Agent 气泡（Desktop-native） | 本机 daemon 写工作台 `agent-result:…`；Desktop Outbox **`host_projection`** 上行（仅 `isCanonicalAgentResultId`） | `POST …/agents/message` + 同 id | ✅ 可信上行，非 UI 扫时间线；Hub 不二次投递 |
+| 跳过二次 bot 投递 | **仅** `message_source=host_projection\|system` | — | ✅ 防环（provenance 门控） |
 | Hub → Desktop 读 | **Sync Engine**：`account:*` + 打开会话 `conversation:{id}` + `resume_after` / SnapshotRequired | Durable + `messages/query` | ✅ **不再** `daemon_append` 云端 IM |
 | 冷路径 gap | 打开 tail + 上翻 `before_seq`；Snapshot / 前向补洞 **`after_seq`** | `POST …/messages/query` | ✅ **C3 已接通**（Desktop range reconcile + Mobile loadOlder / Snapshot） |
 | 撤回 | Hub `POST …/messages/:id/recall` + Durable `*Recalled` | conversation + account topics | ✅ |
 | Reaction | Hub toggle + conversation durable | Hub API + Intent Outbox | Desktop/Mobile `reaction_toggle` outbox + B6 `client_op_id` 幂等；conversation-only fanout |
 | 未读 / mark-read | Linked 打开会话 → `POST …/read` body `{ read_up_to_message_seq }`（客户端 observed watermark，服务端单调 MAX clamp） | Hub + local count | ✅ **observed-seq**；禁止服务端静默标到最新 |
-| Mobile `@agent` 派发 | 消息落库后 **AgentDispatchQueue** + CompletionWatch(per origin×session) | Backend **B3/B4** | ✅ 异步 enqueue；**多 @ fan-out**（`UNIQUE(origin, agent_id)` 一 agent 一行）；watch 键 = `{origin}:{session_id}` |
+| Mobile `@agent` → bot 投递 | 消息落库后 **Agent inbox** + CompletionWatch(per origin×session) | Backend **B3/B4**；产品语义见 [participant delivery](superpowers/specs/2026-08-09-agent-participant-delivery.md) | ✅ 异步 enqueue；**多 @ fan-out**（`UNIQUE(origin, agent_id)`）；watch 键 = `{origin}:{session_id}`。实现表名可仍为 dispatch |
 | Agent 表情互动 | teamwork MCP `react_to_message` → daemon 本地 reaction | Host workbench | ✅ **硬门禁**：仅允许对 **@ 了该 agent** 的消息；actor_kind=`agent` |
 | Session 生命周期 | `session_lifecycle` job：失联 host → session `failed` + durable end；watch TTL → 失败气泡 + remove | Backend **B5** | ✅ 非 COUNT-only |
 

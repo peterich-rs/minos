@@ -75,6 +75,7 @@ export function HostView() {
   const session = useAccountStore((s) => s.session);
   const hostBind = useAccountStore((s) => s.hostBind);
   const cloudStatus = useAccountStore((s) => s.cloudStatus);
+  const accountSyncStatus = useAccountStore((s) => s.accountSyncStatus);
   const cloudError = useAccountStore((s) => s.cloudError);
   const accountBusy = useAccountStore((s) => s.busy);
   const accountError = useAccountStore((s) => s.error);
@@ -87,7 +88,9 @@ export function HostView() {
   const presence = deriveHostPresence({
     source,
     daemonConnected: daemonReady,
+    accountSync: session ? accountSyncStatus : "unknown",
     cloud: session ? cloudStatus : "unknown",
+    hubOnline: connection?.hubOnline,
   });
 
   const lastError =

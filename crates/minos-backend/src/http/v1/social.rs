@@ -1,4 +1,3 @@
-use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
 use axum::extract::{Path, State};
@@ -17,9 +16,9 @@ use axum::{Json, Router};
 use minos_domain::AgentName;
 use minos_protocol::{
     AddAgentToGroupRequest, AgentSummary, ChatMessageSummary, ConversationAgentMembersResponse,
-    EnsureHostRuntimeAgentRequest, Envelope, EventKind, ListAgentsResponse, RealtimeTopic,
-    RegisterAgentRequest, RemoveAgentFromGroupRequest, SendAgentMessageRequest, SenderType,
-    UpdateAgentRequest,
+    ConversationParticipantsResponse, EnsureHostRuntimeAgentRequest, Envelope, EventKind,
+    ListAgentsResponse, RealtimeTopic, RegisterAgentRequest, RemoveAgentFromGroupRequest,
+    SendAgentMessageRequest, SenderType, UpdateAgentRequest,
 };
 use serde_json::json;
 
@@ -40,6 +39,10 @@ pub fn router() -> Router<BackendState> {
         .route(
             "/conversations/:conversation_id/agents",
             post(list_conversation_agents_handler),
+        )
+        .route(
+            "/conversations/:conversation_id/participants",
+            post(list_conversation_participants_handler),
         )
         .route(
             "/conversations/:conversation_id/agents/add",
@@ -204,14 +207,19 @@ struct ForwardedAgentDispatch {
     watcher_from_seq: u64,
 }
 
-/// Build zero or more dispatch plans for a user message.
+/// Plan agent inbox deliveries for a committed user message (participant delivery).
 ///
-/// Multi-@ fan-out: every unique roster agent mentioned in the body gets its own
-/// plan (parallel host sessions). Reply-to-agent and single-agent rooms stay
-/// single-plan.
-async fn build_agent_dispatch_plans(
+/// Selection order (ADR 0021 / agent-participant-delivery):
+/// 1. reply-to agent message → that agent (reuse session when bound)
+/// 2. structured `mentioned_agent_ids` on the message (SSOT after polymorphic mentions)
+/// 3. text `@agent` / `@agent#short` routes (covers auto-attach that runs after extract)
+/// 4. group with exactly 1 human + 1 agent → sole agent auto-route
+///
+/// Implementation table remains `agent_dispatch_queue`; domain name is Agent inbox.
+async fn plan_agent_deliveries(
     state: &BackendState,
     conversation_id: &str,
+    message: &ChatMessageSummary,
     text: &str,
     reply_target: Option<&crate::store::social::ChatMessageRow>,
 ) -> Result<Vec<AgentDispatchPlan>, (StatusCode, Json<ErrorEnvelope>)> {
@@ -230,6 +238,7 @@ async fn build_agent_dispatch_plans(
             .await
             .map_err(|e| err("internal", e.to_string()))?;
     let mention_sender = human_members.len() > 1;
+    let text_routes = all_mentioned_agent_routes(text, &agents);
 
     if let Some(reply_target) = reply_target {
         if reply_target.sender_type == "agent" {
@@ -259,11 +268,46 @@ async fn build_agent_dispatch_plans(
         }
     }
 
-    // Explicit multi-@ / @agent#short fan-out (order = first appearance).
-    let routes = all_mentioned_agent_routes(text, &agents);
-    if !routes.is_empty() {
-        let mut plans = Vec::with_capacity(routes.len());
-        for route in routes {
+    // Structured agent mentions written with the user bubble (Phase 1 SSOT).
+    if !message.mentioned_agent_ids.is_empty() {
+        let mut plans = Vec::with_capacity(message.mentioned_agent_ids.len());
+        let mut seen = std::collections::HashSet::new();
+        for agent_id in &message.mentioned_agent_ids {
+            if !seen.insert(agent_id.clone()) {
+                continue;
+            }
+            let Some(agent) = agents.iter().find(|a| a.agent_id == *agent_id).cloned() else {
+                // Mention row without current roster membership: skip (stale/removed).
+                continue;
+            };
+            let session_short = text_routes
+                .iter()
+                .find(|r| r.agent.agent_id == agent.agent_id)
+                .and_then(|r| r.session_short_id.clone());
+            let session_id = resolve_dispatch_session_id(
+                state,
+                conversation_id,
+                &agent,
+                session_short.as_deref(),
+            )
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
+            plans.push(AgentDispatchPlan {
+                agent,
+                session_id,
+                forwarded_text: text.to_string(),
+                mention_sender: true,
+            });
+        }
+        if !plans.is_empty() {
+            return Ok(plans);
+        }
+    }
+
+    // Text route fallback: auto-attach may have joined agents after mention extract.
+    if !text_routes.is_empty() {
+        let mut plans = Vec::with_capacity(text_routes.len());
+        for route in text_routes {
             let session_id = resolve_dispatch_session_id(
                 state,
                 conversation_id,
@@ -1068,6 +1112,7 @@ async fn persist_agent_message_with_delivery(
             reply_to,
             recalled_at_ms: None,
             mentioned_account_ids: mentioned_account_ids.to_vec(),
+            mentioned_agent_ids: vec![],
             sender_type: SenderType::Agent,
             reactions: vec![],
             attachments: vec![],
@@ -1141,61 +1186,17 @@ fn extract_mentioned_account_ids(
     sender_account_id: &str,
     members: &[crate::store::social::ProfileRow],
 ) -> Vec<String> {
-    let by_minos_id = members
-        .iter()
-        .map(|member| (member.minos_id.as_str(), member.account_id.as_str()))
-        .collect::<HashMap<_, _>>();
-    let mut mentions = BTreeSet::<String>::new();
-
-    for token in collect_mention_tokens(text) {
-        let Some(account_id) = by_minos_id.get(token) else {
-            continue;
-        };
-        if *account_id == sender_account_id {
-            continue;
-        }
-        mentions.insert((*account_id).to_string());
-    }
-
-    mentions.into_iter().collect()
+    // Keep account-only helper for agent-message path; full extract lives in
+    // conversations::use_case::extract_participant_mentions.
+    crate::conversations::use_case::extract_mentioned_account_ids(
+        text,
+        sender_account_id,
+        members,
+    )
 }
 
 fn collect_mention_tokens(text: &str) -> Vec<&str> {
-    let bytes = text.as_bytes();
-    let mut tokens = Vec::new();
-    let mut index = 0;
-
-    while index < bytes.len() {
-        if bytes[index] != b'@' {
-            index += 1;
-            continue;
-        }
-        if index > 0 && bytes[index - 1].is_ascii_alphanumeric() {
-            index += 1;
-            continue;
-        }
-
-        let start = index + 1;
-        let mut end = start;
-        // Allow `#short` so mid-body `@codex#abcd` keeps session targeting
-        // (Desktop `parseAllAgentRoutings` parity).
-        while end < bytes.len()
-            && (bytes[end].is_ascii_alphanumeric()
-                || bytes[end] == b'-'
-                || bytes[end] == b'_'
-                || bytes[end] == b'#')
-        {
-            end += 1;
-        }
-        if end > start {
-            tokens.push(&text[start..end]);
-            index = end;
-            continue;
-        }
-        index += 1;
-    }
-
-    tokens
+    crate::conversations::use_case::collect_mention_tokens(text)
 }
 
 // ─── Agent Handlers ────────────────────────────────────────────────────
@@ -1372,6 +1373,35 @@ async fn list_conversation_agents_handler(
     Ok(Json(ConversationAgentMembersResponse { agents }))
 }
 
+/// Unified participants read model: humans ∪ bot agents (ADR 0021 Phase A).
+async fn list_conversation_participants_handler(
+    State(state): State<BackendState>,
+    headers: HeaderMap,
+    Path(conversation_id): Path<String>,
+) -> Result<Json<ConversationParticipantsResponse>, (StatusCode, Json<ErrorEnvelope>)> {
+    let account_id = require_account_id(&state, &headers).await?;
+    if !crate::store::social::is_conversation_member(&state.store, &conversation_id, &account_id)
+        .await
+        .map_err(|e| err("internal", e.to_string()))?
+    {
+        return Err(err("not_found", "conversation not found"));
+    }
+    let human_rows =
+        crate::store::social::list_conversation_member_profiles(&state.store, &conversation_id)
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
+    let agent_rows =
+        crate::store::social::list_conversation_agents(&state.store, &conversation_id)
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
+    let humans = human_rows
+        .iter()
+        .map(crate::profiles::use_case::to_user_summary)
+        .collect();
+    let agents = agent_rows.iter().map(agent_row_to_summary).collect();
+    Ok(Json(ConversationParticipantsResponse { humans, agents }))
+}
+
 async fn add_agent_to_group(
     State(state): State<BackendState>,
     headers: HeaderMap,
@@ -1543,12 +1573,13 @@ async fn send_agent_message(
     Ok(Json(message))
 }
 
-/// Try to dispatch a message to an agent in the conversation (Mobile / client_live).
-/// Plan + enqueue agent dispatch after the user bubble is durable.
+/// Plan + enqueue Agent inbox items after the user bubble is durable (participant delivery).
 ///
-/// HTTP path returns after this; host RPC runs on [`process_agent_dispatch_batch`].
+/// HTTP path returns after this; Host runtime port runs on [`process_agent_dispatch_batch`].
 /// Immediate user-visible errors only for plan-time intent failures (no agent
 /// match). Host offline / RPC failures are queued with backoff, then terminal.
+///
+/// Callers must gate on `message_source.allows_agent_dispatch()` (client_live only).
 pub async fn try_agent_dispatch(
     state: &BackendState,
     account_id: &str,
@@ -1559,6 +1590,7 @@ pub async fn try_agent_dispatch(
 ) -> Result<(), crate::error::BackendError> {
     // Auto-attach @codex/@grok/… host-runtime agents so Mobile mentions work
     // even when Desktop never upserted the roster for this conversation.
+    // Transition: membership-first is preferred (Phase 4); attach remains ensure-only.
     ensure_host_runtime_agents_for_mentions(state, account_id, conversation_id, trimmed_text)
         .await?;
 
@@ -1566,13 +1598,18 @@ pub async fn try_agent_dispatch(
         Some(message_id) => crate::store::social::get_message(&state.store, message_id).await?,
         None => None,
     };
-    let plans =
-        build_agent_dispatch_plans(state, conversation_id, trimmed_text, reply_target.as_ref())
-            .await
-            .map_err(|(_, body)| crate::error::BackendError::StoreQuery {
-                operation: "social::try_agent_dispatch.plan".into(),
-                message: body.0.error.message,
-            })?;
+    let plans = plan_agent_deliveries(
+        state,
+        conversation_id,
+        message,
+        trimmed_text,
+        reply_target.as_ref(),
+    )
+    .await
+    .map_err(|(_, body)| crate::error::BackendError::StoreQuery {
+        operation: "social::plan_agent_deliveries".into(),
+        message: body.0.error.message,
+    })?;
 
     if plans.is_empty() {
         if let Some((code, detail)) =
@@ -1584,7 +1621,7 @@ pub async fn try_agent_dispatch(
                 account_id = %account_id,
                 code = %code,
                 detail = %detail,
-                "agent dispatch skipped with user-visible intent"
+                "agent inbox skipped with user-visible intent"
             );
             notify_agent_dispatch_failure(
                 state,
@@ -1941,7 +1978,12 @@ async fn execute_claimed_dispatch(
     Ok(())
 }
 
-/// Attach host-runtime agents for `@codex` / `@grok` / … tokens missing from roster.
+/// Transitional ensure: attach host-runtime agents for `@codex` / `@grok` / …
+/// tokens missing from the conversation roster so Mobile text mentions still
+/// deliver (Phase 4 debt — prefer membership-first via Desktop/upsert roster).
+///
+/// Only ensures agents owned by the sender (`account_id`); never invents
+/// Account login for bots. Silent join is limited to known `HOST_RUNTIME_MENTIONS`.
 async fn ensure_host_runtime_agents_for_mentions(
     state: &BackendState,
     account_id: &str,
@@ -2348,5 +2390,13 @@ mod tests {
         assert_eq!(routes.len(), 2);
         assert_eq!(routes[0].agent.runtime_agent, "codex");
         assert_eq!(routes[1].agent.runtime_agent, "claude");
+    }
+
+    #[test]
+    fn host_projection_and_system_never_allow_agent_dispatch() {
+        use minos_protocol::MessageSource;
+        assert!(MessageSource::ClientLive.allows_agent_dispatch());
+        assert!(!MessageSource::HostProjection.allows_agent_dispatch());
+        assert!(!MessageSource::System.allows_agent_dispatch());
     }
 }

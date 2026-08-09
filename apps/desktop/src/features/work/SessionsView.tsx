@@ -68,30 +68,53 @@ export function SessionsView({ projectId }: { projectId: string }) {
     return map;
   }, [conversations]);
 
-  // Merge deep-linked session into the list only if it belongs to this project.
+  // Project list + same-project Inspector/live membership so the current
+  // conversation's runs paint immediately (not only after list_project_sessions).
+  // Deep-link selected session is included when resolve allows it.
   const displaySessions = useStableArrayShallow(
     useMemo(() => {
-      if (!selectedSessionId) return projectSessions;
-      if (sessionBelongsToProject(selectedSessionId, projectSessions)) {
-        return projectSessions;
+      const byId = new Map<string, ProjectSession>();
+      for (const s of projectSessions) byId.set(s.id, s);
+      for (const c of conversations) {
+        if (c.projectId !== projectId) continue;
+        for (const s of sessionsByConversation[c.id] ?? []) {
+          if (!byId.has(s.id)) byId.set(s.id, s);
+        }
       }
-      const fallback = resolveSessionForView(
-        selectedSessionId,
-        projectId,
-        projectSessions,
-        sessionsByConversation,
-        conversationProjectById,
-      );
-      if (!fallback) return projectSessions;
-      // Still only inject while list is empty (deep-link race), never a foreign id.
-      if (projectSessions.length > 0) return projectSessions;
-      return [fallback, ...projectSessions];
+      if (
+        selectedSessionId &&
+        !byId.has(selectedSessionId) &&
+        !sessionBelongsToProject(selectedSessionId, projectSessions)
+      ) {
+        const fallback = resolveSessionForView(
+          selectedSessionId,
+          projectId,
+          projectSessions,
+          sessionsByConversation,
+          conversationProjectById,
+        );
+        if (fallback) byId.set(fallback.id, fallback);
+      }
+      if (byId.size === 0) return projectSessions;
+      if (byId.size === projectSessions.length) {
+        // Same membership — keep projectSessions identity when possible.
+        let same = true;
+        for (const s of projectSessions) {
+          if (byId.get(s.id) !== s) {
+            same = false;
+            break;
+          }
+        }
+        if (same) return projectSessions;
+      }
+      return Array.from(byId.values());
     }, [
       projectSessions,
       selectedSessionId,
       sessionsByConversation,
       conversationProjectById,
       projectId,
+      conversations,
     ]),
   );
 
@@ -246,7 +269,7 @@ export function SessionsView({ projectId }: { projectId: string }) {
       ) : (
         <SessionListPane
           groups={groups}
-          projectSessionCount={projectSessions.length}
+          projectSessionCount={displaySessions.length}
           phase={phase}
           error={listStatus?.error}
           selectedSessionId={selectedSessionId}
@@ -255,6 +278,7 @@ export function SessionsView({ projectId }: { projectId: string }) {
           onSelectSession={selectSession}
           onRetry={() => void loadProjectSessions(projectId)}
           onCollapseList={toggleSessionsList}
+          active={projectView === "sessions"}
         />
       )}
 

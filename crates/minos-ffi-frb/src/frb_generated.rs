@@ -5294,6 +5294,7 @@ const _: fn() = || {
         let _: Option<crate::api::minos::ChatMessageReplySummary> = ChatMessageSummary.reply_to;
         let _: Option<i64> = ChatMessageSummary.recalled_at_ms;
         let _: Vec<String> = ChatMessageSummary.mentioned_account_ids;
+        let _: Vec<String> = ChatMessageSummary.mentioned_agent_ids;
         let _: crate::api::minos::SenderType = ChatMessageSummary.sender_type;
         let _: Vec<crate::api::minos::ReactionGroup> = ChatMessageSummary.reactions;
         let _: Vec<crate::api::minos::ChatMessageAttachment> = ChatMessageSummary.attachments;
@@ -6166,6 +6167,7 @@ impl SseDecode for crate::api::minos::ChatMessageSummary {
             <Option<crate::api::minos::ChatMessageReplySummary>>::sse_decode(deserializer);
         let mut var_recalledAtMs = <Option<i64>>::sse_decode(deserializer);
         let mut var_mentionedAccountIds = <Vec<String>>::sse_decode(deserializer);
+        let mut var_mentionedAgentIds = <Vec<String>>::sse_decode(deserializer);
         let mut var_senderType = <crate::api::minos::SenderType>::sse_decode(deserializer);
         let mut var_reactions = <Vec<crate::api::minos::ReactionGroup>>::sse_decode(deserializer);
         let mut var_attachments =
@@ -6180,6 +6182,7 @@ impl SseDecode for crate::api::minos::ChatMessageSummary {
             reply_to: var_replyTo,
             recalled_at_ms: var_recalledAtMs,
             mentioned_account_ids: var_mentionedAccountIds,
+            mentioned_agent_ids: var_mentionedAgentIds,
             sender_type: var_senderType,
             reactions: var_reactions,
             attachments: var_attachments,
@@ -8767,6 +8770,7 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ChatMessage
             self.0.reply_to.into_into_dart().into_dart(),
             self.0.recalled_at_ms.into_into_dart().into_dart(),
             self.0.mentioned_account_ids.into_into_dart().into_dart(),
+            self.0.mentioned_agent_ids.into_into_dart().into_dart(),
             self.0.sender_type.into_into_dart().into_dart(),
             self.0.reactions.into_into_dart().into_dart(),
             self.0.attachments.into_into_dart().into_dart(),
@@ -10682,6 +10686,7 @@ impl SseEncode for crate::api::minos::ChatMessageSummary {
         <Option<crate::api::minos::ChatMessageReplySummary>>::sse_encode(self.reply_to, serializer);
         <Option<i64>>::sse_encode(self.recalled_at_ms, serializer);
         <Vec<String>>::sse_encode(self.mentioned_account_ids, serializer);
+        <Vec<String>>::sse_encode(self.mentioned_agent_ids, serializer);
         <crate::api::minos::SenderType>::sse_encode(self.sender_type, serializer);
         <Vec<crate::api::minos::ReactionGroup>>::sse_encode(self.reactions, serializer);
         <Vec<crate::api::minos::ChatMessageAttachment>>::sse_encode(self.attachments, serializer);

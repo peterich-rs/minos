@@ -702,6 +702,7 @@ class ChatMessageSummary {
   final ChatMessageReplySummary? replyTo;
   final PlatformInt64? recalledAtMs;
   final List<String> mentionedAccountIds;
+  final List<String> mentionedAgentIds;
   final SenderType senderType;
   final List<ReactionGroup> reactions;
   final List<ChatMessageAttachment> attachments;
@@ -716,6 +717,7 @@ class ChatMessageSummary {
     this.replyTo,
     this.recalledAtMs,
     required this.mentionedAccountIds,
+    required this.mentionedAgentIds,
     required this.senderType,
     required this.reactions,
     required this.attachments,
@@ -732,6 +734,7 @@ class ChatMessageSummary {
       replyTo.hashCode ^
       recalledAtMs.hashCode ^
       mentionedAccountIds.hashCode ^
+      mentionedAgentIds.hashCode ^
       senderType.hashCode ^
       reactions.hashCode ^
       attachments.hashCode;
@@ -750,6 +753,7 @@ class ChatMessageSummary {
           replyTo == other.replyTo &&
           recalledAtMs == other.recalledAtMs &&
           mentionedAccountIds == other.mentionedAccountIds &&
+          mentionedAgentIds == other.mentionedAgentIds &&
           senderType == other.senderType &&
           reactions == other.reactions &&
           attachments == other.attachments;

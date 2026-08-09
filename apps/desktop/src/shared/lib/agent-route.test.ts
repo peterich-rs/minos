@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   buildAgentMentionOptions,
+  buildHumanMentionOptions,
   isProfileNameCleanToken,
   isProfileNameUnique,
   parseAgentRouting,
@@ -169,7 +170,10 @@ describe("buildAgentMentionOptions", () => {
     assert.ok(labels.includes("@grok"), `expected bare @grok in ${labels}`);
     assert.ok(labels.includes("@grok#689035af"));
     assert.ok(labels.includes("@grok#a27a67a7"));
-    assert.equal(opts.find((o) => o.label === "@grok")?.hint, "new session");
+    assert.match(
+      opts.find((o) => o.label === "@grok")?.hint ?? "",
+      /new session/,
+    );
     assert.match(
       opts.find((o) => o.label === "@grok#689035af")?.hint ?? "",
       /continue/,
@@ -279,5 +283,26 @@ describe("buildAgentMentionOptions", () => {
       memberAgents: [],
     });
     assert.deepEqual(opts, []);
+  });
+});
+
+describe("buildHumanMentionOptions", () => {
+  const humans = [
+    { accountId: "a1", minosId: "alice", displayName: "Alice" },
+    { accountId: "a2", minosId: "bob", displayName: "Bob" },
+  ];
+
+  it("inserts @minos_id and skips self", () => {
+    const opts = buildHumanMentionOptions("", humans, { selfAccountId: "a1" });
+    assert.equal(opts.length, 1);
+    assert.equal(opts[0]?.label, "@bob");
+    assert.equal(opts[0]?.insert, "@bob ");
+    assert.equal(opts[0]?.kind, "human");
+  });
+
+  it("filters by query against minos_id and display name", () => {
+    const opts = buildHumanMentionOptions("ali", humans);
+    assert.equal(opts.length, 1);
+    assert.equal(opts[0]?.label, "@alice");
   });
 });

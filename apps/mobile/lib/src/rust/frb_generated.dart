@@ -4551,8 +4551,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ChatMessageSummary dco_decode_chat_message_summary(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 12)
-      throw Exception('unexpected arr length: expect 12 but see ${arr.length}');
+    if (arr.length != 13)
+      throw Exception('unexpected arr length: expect 13 but see ${arr.length}');
     return ChatMessageSummary(
       messageId: dco_decode_String(arr[0]),
       conversationId: dco_decode_String(arr[1]),
@@ -4563,9 +4563,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       replyTo: dco_decode_opt_box_autoadd_chat_message_reply_summary(arr[6]),
       recalledAtMs: dco_decode_opt_box_autoadd_i_64(arr[7]),
       mentionedAccountIds: dco_decode_list_String(arr[8]),
-      senderType: dco_decode_sender_type(arr[9]),
-      reactions: dco_decode_list_reaction_group(arr[10]),
-      attachments: dco_decode_list_chat_message_attachment(arr[11]),
+      mentionedAgentIds: dco_decode_list_String(arr[9]),
+      senderType: dco_decode_sender_type(arr[10]),
+      reactions: dco_decode_list_reaction_group(arr[11]),
+      attachments: dco_decode_list_chat_message_attachment(arr[12]),
     );
   }
 
@@ -6281,6 +6282,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     );
     var var_recalledAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
     var var_mentionedAccountIds = sse_decode_list_String(deserializer);
+    var var_mentionedAgentIds = sse_decode_list_String(deserializer);
     var var_senderType = sse_decode_sender_type(deserializer);
     var var_reactions = sse_decode_list_reaction_group(deserializer);
     var var_attachments = sse_decode_list_chat_message_attachment(deserializer);
@@ -6294,6 +6296,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       replyTo: var_replyTo,
       recalledAtMs: var_recalledAtMs,
       mentionedAccountIds: var_mentionedAccountIds,
+      mentionedAgentIds: var_mentionedAgentIds,
       senderType: var_senderType,
       reactions: var_reactions,
       attachments: var_attachments,
@@ -8390,6 +8393,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     );
     sse_encode_opt_box_autoadd_i_64(self.recalledAtMs, serializer);
     sse_encode_list_String(self.mentionedAccountIds, serializer);
+    sse_encode_list_String(self.mentionedAgentIds, serializer);
     sse_encode_sender_type(self.senderType, serializer);
     sse_encode_list_reaction_group(self.reactions, serializer);
     sse_encode_list_chat_message_attachment(self.attachments, serializer);

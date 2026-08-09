@@ -117,7 +117,9 @@ export function rederiveAttentionFromEntities(
  *
  * Inspector (`sessionsByConversation`): upserts when `conversationId` is known
  * so live SessionStateChanged can surface without a full re-list.
- * Project SessionList: still membership-only (hydrate owns project scope).
+ * Project SessionList: membership patch only here (status refresh). New
+ * project membership is upserted in `commitSessionEntity` once `projectId`
+ * can be resolved from the conversation row — hydrate still owns full history.
  * Attention: re-derive when ready; else update/drop only.
  */
 export function projectEntityIntoLists(
@@ -258,4 +260,24 @@ export function mergeRowsIntoProjectSessionList(
     ...projectSessionsByProject,
     [projectId]: merged,
   };
+}
+
+/**
+ * Resolve which project SessionList a conversation belongs to.
+ * Prefer conversation.projectId; fall back to an existing project list that
+ * already contains a row for this conversationId (weak signal).
+ */
+export function resolveProjectIdForConversation(
+  conversationId: string,
+  conversationProjectById: Readonly<Record<string, string>>,
+  projectSessionsByProject: Readonly<Record<string, SessionListRow[]>>,
+): string | undefined {
+  const cid = conversationId.trim();
+  if (!cid) return undefined;
+  const fromRow = conversationProjectById[cid]?.trim();
+  if (fromRow) return fromRow;
+  for (const [projectId, rows] of Object.entries(projectSessionsByProject)) {
+    if (rows.some((r) => r.conversationId === cid)) return projectId;
+  }
+  return undefined;
 }

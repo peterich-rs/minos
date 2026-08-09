@@ -280,7 +280,48 @@ export type MentionOption = {
   hint: string;
   insert: string;
   disabled: boolean;
+  /** `human` | `agent` for picker grouping / a11y. */
+  kind?: "human" | "agent";
 };
+
+/** Human participant for unified @ picker (minos_id insert token). */
+export type MentionHuman = {
+  accountId: string;
+  minosId: string;
+  displayName: string;
+};
+
+/**
+ * Human participant rows for the composer @ picker.
+ * Insert token is `@minos_id ` (server extract resolves by minos_id).
+ */
+export function buildHumanMentionOptions(
+  query: string,
+  humans: readonly MentionHuman[],
+  opts?: { selfAccountId?: string | null; limit?: number },
+): MentionOption[] {
+  const q = query.toLowerCase();
+  const self = opts?.selfAccountId?.trim() ?? "";
+  const limit = opts?.limit ?? 16;
+  const matches = (s: string) => !q || s.toLowerCase().includes(q);
+  return humans
+    .filter((h) => !self || h.accountId !== self)
+    .filter(
+      (h) =>
+        matches(h.minosId) ||
+        matches(h.displayName) ||
+        matches(`@${h.minosId}`),
+    )
+    .map((h) => ({
+      id: `human:${h.accountId}`,
+      label: `@${h.minosId}`,
+      hint: h.displayName && h.displayName !== h.minosId ? h.displayName : "member",
+      insert: `@${h.minosId} `,
+      disabled: false,
+      kind: "human" as const,
+    }))
+    .slice(0, limit);
+}
 
 export type MentionCli = {
   agent: string;
@@ -366,9 +407,10 @@ export function buildAgentMentionOptions(
     .map((c) => ({
       id: `new:${c.agent}`,
       label: `@${c.agent}`,
-      hint: c.installed ? "new session" : "not installed",
+      hint: c.installed ? "bot · new session" : "not installed",
       insert: `@${c.agent} `,
       disabled: !c.installed,
+      kind: "agent" as const,
     }));
 
   const fromKnown =
@@ -379,9 +421,10 @@ export function buildAgentMentionOptions(
             (a) => ({
               id: `new:${a}`,
               label: `@${a}`,
-              hint: "new session",
+              hint: "bot · new session",
               insert: `@${a} `,
               disabled: false,
+              kind: "agent" as const,
             }),
           )
         : // Roster set but CLI inventory empty: still offer bare member tokens.
@@ -390,9 +433,10 @@ export function buildAgentMentionOptions(
             .map((a) => ({
               id: `new:${a}`,
               label: `@${a}`,
-              hint: "new session",
+              hint: "bot · new session",
               insert: `@${a} `,
               disabled: false,
+              kind: "agent" as const,
             }));
 
   const runtimeNames = [
@@ -422,9 +466,10 @@ export function buildAgentMentionOptions(
       return {
         id: `profile:${p.id}`,
         label,
-        hint: `profile · ${p.runtimeAgent}`,
+        hint: `bot profile · ${p.runtimeAgent}`,
         insert: profileMentionInsert(p, profiles, runtimeNames),
         disabled: false,
+        kind: "agent" as const,
       };
     });
 
@@ -441,9 +486,10 @@ export function buildAgentMentionOptions(
     .map((s) => ({
       id: `sess:${s.id}`,
       label: `@${s.agent}#${s.shortId}`,
-      hint: `continue · ${s.status}`,
+      hint: `bot · continue · ${s.status}`,
       insert: `@${s.agent}#${s.shortId} `,
       disabled: false,
+      kind: "agent" as const,
     }));
 
   return [...fromKnown, ...fromProfiles, ...fromSessions].slice(0, limit);

@@ -3178,7 +3178,10 @@ fn resolve_mcp_server(
         config.socket_path.display().to_string(),
     ]);
     if let Some(source_session_id) = source_session_id {
-        args.extend(["--source-thread-id".into(), source_session_id.to_owned()]);
+        // Must match CLI long name on minos-teamwork-mcp / desktop / daemon / tui
+        // (`--source-session-id`). The historical `--source-thread-id` name is
+        // rejected by clap and makes release Desktop teamwork MCP exit immediately.
+        args.extend(["--source-session-id".into(), source_session_id.to_owned()]);
     }
     args.extend(mcp_permission_args(config.permissions));
     Some(ResolvedMcpServer {
@@ -4150,7 +4153,7 @@ mod tests {
                 "gemini",
                 "--socket-path",
                 "/tmp/mcp-test.sock",
-                "--source-thread-id",
+                "--source-session-id",
                 "thread-source-1234"
             ]
         );
@@ -4732,7 +4735,9 @@ done
             .as_array()
             .unwrap()
             .windows(2)
-            .any(|pair| pair[0] == "--source-thread-id" && pair[1] == started.session_id.as_str()));
+            .any(|pair| {
+                pair[0] == "--source-session-id" && pair[1] == started.session_id.as_str()
+            }));
         assert!(mcp_server.get("transportType").is_none());
         assert!(mcp_server.get("type").is_none());
         assert_eq!(mcp_server["env"], json!([]));

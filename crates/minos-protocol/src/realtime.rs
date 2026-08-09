@@ -775,6 +775,7 @@ mod tests {
                 reply_to: None,
                 recalled_at_ms: None,
                 mentioned_account_ids: vec![],
+                mentioned_agent_ids: vec![],
                 sender_type: crate::SenderType::User,
                 reactions: vec![],
                 attachments: vec![],

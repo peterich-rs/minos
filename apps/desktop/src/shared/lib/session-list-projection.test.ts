@@ -9,6 +9,7 @@ import {
   projectEntityIntoLists,
   projectSessionIdsIntoLists,
   rederiveAttentionFromEntities,
+  resolveProjectIdForConversation,
   rowsFromEntities,
   type SessionListRow,
 } from "./session-list-projection.ts";
@@ -180,6 +181,44 @@ describe("mergeRowsIntoProjectSessionList", () => {
     assert.ok(out.p1!.some((s) => s.id === "old"));
     assert.ok(out.p1!.some((s) => s.id === "new"));
     assert.equal(out.p1![0]!.id, "new"); // sorted by lastTsMs desc
+  });
+});
+
+describe("resolveProjectIdForConversation", () => {
+  it("prefers conversation.projectId map", () => {
+    assert.equal(
+      resolveProjectIdForConversation(
+        "c1",
+        { c1: "proj-a" },
+        { "proj-b": [row("s1")] },
+      ),
+      "proj-a",
+    );
+  });
+
+  it("falls back to project list that already contains the conversation", () => {
+    assert.equal(
+      resolveProjectIdForConversation(
+        "c1",
+        {},
+        { "proj-a": [{ ...row("s1"), conversationId: "c1" }] },
+      ),
+      "proj-a",
+    );
+  });
+
+  it("returns undefined when neither signal exists", () => {
+    assert.equal(
+      resolveProjectIdForConversation("c-missing", { c1: "proj-a" }, {}),
+      undefined,
+    );
+  });
+
+  it("ignores blank conversationId", () => {
+    assert.equal(
+      resolveProjectIdForConversation("  ", { "": "proj-a" }, {}),
+      undefined,
+    );
   });
 });
 

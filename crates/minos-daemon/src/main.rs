@@ -78,7 +78,9 @@ struct McpSidecarArgs {
     #[arg(long)]
     source_agent: Option<String>,
 
-    #[arg(long)]
+    /// Minos session id of the invoking agent (manager injects this for bound MCP).
+    /// Accepts the historical alias used in older docs/configs.
+    #[arg(long = "source-session-id", alias = "source-thread-id")]
     source_session_id: Option<String>,
 
     #[arg(long)]

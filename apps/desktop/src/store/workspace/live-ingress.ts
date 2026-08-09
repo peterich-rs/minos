@@ -369,9 +369,11 @@ export function createLiveIngressActions(
             elevateApprovalCount: false,
           });
         });
+        // Quiet re-list every project SessionList we already hold (including
+        // single-row membership from live commit upsert) so full history
+        // catches up without waiting for the user to re-open Sessions.
         const projectIds = Object.keys(get().projectSessionsByProject);
         for (const pid of projectIds) {
-          if ((get().projectSessionsByProject[pid] ?? []).length === 0) continue;
           void get().loadProjectSessions(pid, { quiet: true });
         }
       }

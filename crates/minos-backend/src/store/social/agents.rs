@@ -632,9 +632,8 @@ pub async fn insert_agent_message_with_session_in_tx(
         None => Uuid::new_v4().to_string(),
     };
 
-    let mut unique_mentions = mentioned_account_ids.to_vec();
-    unique_mentions.sort();
-    unique_mentions.dedup();
+    let mentions =
+        super::MessageMentions::accounts(mentioned_account_ids.iter().cloned());
 
     let message_seq =
         super::conversation_messages::allocate_message_seq_in_tx(tx, conversation_id, now_ms)
@@ -670,13 +669,14 @@ pub async fn insert_agent_message_with_session_in_tx(
             .await
             .map_err(store_err("social::insert_agent_message.insert"))?;
 
-            for mentioned_id in &unique_mentions {
+            for target_id in &mentions.account_ids {
                 sqlx::query(
-                    "INSERT OR IGNORE INTO chat_message_mentions (message_id, mentioned_account_id)
-                     VALUES (?, ?)",
+                    "INSERT OR IGNORE INTO chat_message_mentions
+                        (message_id, target_kind, target_id)
+                     VALUES (?, 'account', ?)",
                 )
                 .bind(&message_id)
-                .bind(mentioned_id)
+                .bind(target_id)
                 .execute(&mut **tx)
                 .await
                 .map_err(store_err("social::insert_agent_message.mention"))?;
@@ -711,14 +711,15 @@ pub async fn insert_agent_message_with_session_in_tx(
             .await
             .map_err(store_err("social::insert_agent_message.insert"))?;
 
-            for mentioned_id in &unique_mentions {
+            for target_id in &mentions.account_ids {
                 sqlx::query(
-                    "INSERT INTO chat_message_mentions (message_id, mentioned_account_id)
-                     VALUES ($1, $2)
+                    "INSERT INTO chat_message_mentions
+                        (message_id, target_kind, target_id)
+                     VALUES ($1, 'account', $2)
                      ON CONFLICT DO NOTHING",
                 )
                 .bind(&message_id)
-                .bind(mentioned_id)
+                .bind(target_id)
                 .execute(&mut **tx)
                 .await
                 .map_err(store_err("social::insert_agent_message.mention"))?;

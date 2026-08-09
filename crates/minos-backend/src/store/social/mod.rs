@@ -100,7 +100,35 @@ pub struct ChatMessageRow {
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
 pub(crate) struct MessageMentionRow {
     pub(crate) message_id: String,
-    pub(crate) mentioned_account_id: String,
+    pub(crate) target_kind: String,
+    pub(crate) target_id: String,
+}
+
+/// Structured mention targets for one message (human accounts + bot agents).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MessageMentions {
+    pub account_ids: Vec<String>,
+    pub agent_ids: Vec<String>,
+}
+
+impl MessageMentions {
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    pub fn accounts(account_ids: impl IntoIterator<Item = String>) -> Self {
+        let mut account_ids: Vec<String> = account_ids.into_iter().collect();
+        account_ids.sort();
+        account_ids.dedup();
+        Self {
+            account_ids,
+            agent_ids: Vec::new(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.account_ids.is_empty() && self.agent_ids.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
@@ -182,10 +210,11 @@ pub use conversations::{
 pub use conversation_messages::{
     bind_session_to_message, bind_session_to_message_for_agent, get_message,
     has_bound_message_for_session, insert_message, insert_message_with_id,
-    insert_message_with_id_full, insert_message_with_id_in_tx, list_message_mentions,
-    list_messages, list_messages_by_ids, lookup_latest_session_id_for_conversation,
-    lookup_latest_session_id_for_conversation_agent, lookup_session_id_for_message, recall_message,
-    recall_message_in_tx, suppress_live_ui_fanout_for_session, InsertMessageOutcome,
+    insert_message_with_id_full, insert_message_with_id_in_tx, insert_message_with_mentions,
+    list_message_mentions, list_message_mentions_full, list_messages, list_messages_by_ids,
+    lookup_latest_session_id_for_conversation, lookup_latest_session_id_for_conversation_agent,
+    lookup_session_id_for_message, recall_message, recall_message_in_tx,
+    suppress_live_ui_fanout_for_session, InsertMessageOutcome,
 };
 
 // Agent functions
@@ -303,6 +332,51 @@ mod tests {
             .unwrap();
         assert_eq!(mentions.len(), 1);
         assert_eq!(mentions.values().next().unwrap(), &vec![carol]);
+    }
+
+    #[tokio::test]
+    async fn insert_message_persists_agent_mentions() {
+        let pool = memory_pool().await;
+        let (conversation_id, alice, bob, _carol) = seed_group(&pool).await;
+        let agent = register_agent(
+            &pool,
+            &alice,
+            "Codex",
+            "",
+            "codex",
+            "",
+            None,
+            T0,
+        )
+        .await
+        .unwrap();
+        add_agent_to_conversation(&pool, &conversation_id, &agent.agent_id, &alice, T0)
+            .await
+            .unwrap();
+
+        let mentions = MessageMentions {
+            account_ids: vec![bob.clone()],
+            agent_ids: vec![agent.agent_id.clone()],
+        };
+        let message = insert_message_with_mentions(
+            &pool,
+            &conversation_id,
+            &alice,
+            "@bob @codex please review",
+            T0 + 6,
+            None,
+            &mentions,
+        )
+        .await
+        .unwrap();
+
+        let message_id = message.message_id.clone();
+        let full = list_message_mentions_full(&pool, &[message_id.clone()])
+            .await
+            .unwrap();
+        let got = full.get(&message_id).expect("mentions");
+        assert_eq!(got.account_ids, vec![bob]);
+        assert_eq!(got.agent_ids, vec![agent.agent_id]);
     }
 
     #[tokio::test]
@@ -588,7 +662,7 @@ mod tests {
             "hello",
             T0 + 4,
             None,
-            &[],
+            &crate::store::social::MessageMentions::empty(),
             Some(client_id),
             &[],
             "host_projection",
@@ -612,7 +686,7 @@ mod tests {
             "hello",
             T0 + 5,
             None,
-            &[],
+            &crate::store::social::MessageMentions::empty(),
             Some(client_id),
             &["blob-a".into()],
             "client_live",

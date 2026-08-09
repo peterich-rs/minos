@@ -53,12 +53,13 @@ export function Sidebar() {
   const source = useWorkspaceStore((s) => s.source);
   const refreshDaemonStatus = useWorkspaceStore((s) => s.refreshDaemonStatus);
   const cloudStatus = useAccountStore((s) => s.cloudStatus);
+  const accountSyncStatus = useAccountStore((s) => s.accountSyncStatus);
   const session = useAccountStore((s) => s.session);
   const syncCloudFromHub = useAccountStore((s) => s.syncCloudFromHub);
   const [updateDismissed, setUpdateDismissed] = useState(false);
   const attention = projects.reduce((sum, p) => sum + p.needsAttention, 0);
 
-  // Keep hubOnline fresh for the brand presence line + cloud status.
+  // Keep Host hubOnline fresh (secondary readiness for bot runtime).
   useEffect(() => {
     if (source !== "daemon") return;
     void refreshDaemonStatus();
@@ -72,10 +73,13 @@ export function Sidebar() {
     syncCloudFromHub(connection?.hubOnline);
   }, [connection?.hubOnline, syncCloudFromHub]);
 
+  // Primary Online = Account IM sync; Host is secondary (bot runtime).
   const presence = deriveHostPresence({
     source,
     daemonConnected: source === "daemon" && connection?.connected === true,
+    accountSync: session ? accountSyncStatus : "unknown",
     cloud: session ? cloudStatus : "unknown",
+    hubOnline: connection?.hubOnline,
   });
 
   return (

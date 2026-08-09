@@ -8,10 +8,11 @@
 | Program | [2026-08-03-im-reliability-program](2026-08-03-im-reliability-program/README.md) · [TASKS](2026-08-03-im-reliability-program/TASKS.md) |
 | Pair | [Backend Delivery & Orchestration](2026-08-03-backend-im-delivery-orchestration.md) |
 | Supersedes (partial) | [2026-08-02-hub-collaboration-message-ssot.md](2026-08-02-hub-collaboration-message-ssot.md) Phase 4–5 客户端半成品描述；reaction Phase 5.2 ⚠️ |
-| Related | [architecture-messaging.md](../../architecture-messaging.md)；Hub SSOT 方案 2026-08-02 |
+| Related | [architecture-messaging.md](../../architecture-messaging.md)；Hub SSOT 2026-08-02；[ADR 0021](../../adr/0021-agent-as-conversation-bot-participant.md)；[agent-participant-delivery](2026-08-09-agent-participant-delivery.md) |
 | Non-goals | E2EE；百万群写扩散；改 Grok/Codex 协议；为旧客户端保留兼容层（latest-only）；短期补丁路线 |
 
-> **一句话目标**：两端客户端对 Hub 协作消息具备 **同一套** 可靠性原语——幂等写、持久 Outbox、水位 Sync、增量 Inbox、seq 主键排序、定向 gap 恢复；删除一切时间轮询、软去重、全量 invalidate、伪 seq 默认值与文档谎言。
+> **一句话目标**：两端客户端对 Hub 协作消息具备 **同一套** 可靠性原语——幂等写、持久 Outbox、水位 Sync、增量 Inbox、seq 主键排序、定向 gap 恢复；删除一切时间轮询、软去重、全量 invalidate、伪 seq 默认值与文档谎言。  
+> **连接语义**：人类 IM 主连接 = Account `/ws/client`（**Account sync live** 才是「能发能收」）；Host `/ws/host` 是 bot runtime，**不得**单独定义产品 Online。Agent 不可用应表现为 bot/host readiness，而非假 Offline 聊天。
 
 **规划约束**：遵守 [AGENTS.md Final-Architecture Planning Rule](../../../Agents.md) — 只设计终态代码结构；Phase 是终态切片，不是临时行为。
 

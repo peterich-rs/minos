@@ -1900,7 +1900,7 @@ impl ConversationMessagesRepository for StoreBackedConversationMessagesRepositor
                 for account_id in account_ids {
                     sqlx::query(
                         "INSERT OR IGNORE INTO chat_message_mentions \
-                         (message_id, mentioned_account_id) VALUES (?, ?)",
+                         (message_id, target_kind, target_id) VALUES (?, 'account', ?)",
                     )
                     .bind(message_id)
                     .bind(account_id)
@@ -1916,7 +1916,7 @@ impl ConversationMessagesRepository for StoreBackedConversationMessagesRepositor
                 for account_id in account_ids {
                     sqlx::query(
                         "INSERT INTO chat_message_mentions \
-                         (message_id, mentioned_account_id) VALUES ($1, $2) \
+                         (message_id, target_kind, target_id) VALUES ($1, 'account', $2) \
                          ON CONFLICT DO NOTHING",
                     )
                     .bind(message_id)

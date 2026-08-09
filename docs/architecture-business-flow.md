@@ -5,8 +5,15 @@
 ## 流程总览
 
 ```
-注册/登录 → 配对 → 建立 WebSocket → 创建项目 → 启动 Agent → 流式交互 → 审批/停止
+注册/登录 → Host link（可选，要跑 bot 时）→ Account /ws/client
+  → 创建项目/对话 → 发消息（@人 | @bot）→ 时间线同步
+  → @bot：participant delivery → Host runtime → agent 回消息
+  → 流式投影 / 审批 Attention（嵌入，非主轴）
 ```
+
+> **产品主轴是消息驱动 IM**（[ADR 0021](adr/0021-agent-as-conversation-bot-participant.md)）。  
+> `POST /v1/agent-sessions/*` / HostCommand 是 **bot runtime 控制面**，不是「远程协作 = 下命令」的产品定义。  
+> 细节 SSOT：[architecture-messaging.md](architecture-messaging.md)、[agent-participant-delivery](superpowers/specs/2026-08-09-agent-participant-delivery.md)。
 
 ---
 
@@ -39,8 +46,8 @@
 
 ### 参与方
 
-- **macOS 应用** (SwiftUI → UniFFI → minos-daemon)
-- **移动端** 或 **Web 端**
+- **Desktop / Host**（Tauri + 内嵌 `minos-daemon`；或 headless daemon）
+- **移动端** 或 **Web 端**（Account 客户端）
 - **后端**
 
 ### Step 1: Host 引导
@@ -118,34 +125,45 @@
 
 ---
 
-## 5. Agent 会话生命周期
+## 5. 消息驱动协作与 Agent（bot）投递
 
-### 启动 Agent 会话
+### 5.0 主路径：发消息（人 ↔ 人，企微同款）
 
-1. 移动端调用 `POST /v1/agent-sessions/start`，携带 agent_id、conversation_id、可选 project_id、幂等键
-2. 后端事务:
-   - 验证调用者是对话成员
-   - 选择 host_installation_id（显式指定或默认）
-   - 创建 `agent_sessions` 行（status=pending）
-   - 追加 `DurableEvent::AgentSessionStarted` 到 `durable_event_log`
-   - 入队 `outbox_events`
-   - 入队 `host_commands`（method=`agent_session.start`）
-3. Outbox dispatcher 发布到 `host:<installation_id>` topic
-4. Host gateway 接收命令，daemon spawn agent 子进程
+1. 客户端（Mobile / Desktop Account / Web）`POST /v1/conversations/{id}/messages`（Account bearer；`message_source=client_live`）
+2. 后端事务：校验成员 → 写 `chat_messages` + 人类 mentions → durable + outbox
+3. 立即 200；`/ws/client` 订阅方收 `ConversationMessageAppended`；冷路径 HTTP 分页
+
+同一 Account 多端连续对话：**只依赖 Hub 消息**，不要求「命令另一台设备代发」。
+
+### 5.1 @bot：participant delivery（主协作触发）
+
+1. 用户消息正文 @ 对话内 **agent participant**（或 reply-to agent / 单 bot 房规）
+2. 消息落库后（与 IM fanout 并行）写入 **Agent inbox**（实现表 `agent_dispatch_queue`，幂等 `(origin_message_id, agent_id)`）
+3. Worker 在 bound Host online 时 drain → **runtime port**（今日 `agent_session.start` / `send_input` → `host_commands` → `/ws/host`）
+4. daemon 跑 CLI；ingest 上行；Hub `TurnCompletionProjector`（client_live）或 Desktop `host_projection` 写入 **agent 气泡**  
+   `client_message_id = agent-result:{conv}:{session}:{origin_message_id}`
+5. 所有人类端只订阅时间线即可看到 bot 回复
+
+规范：[agent-participant-delivery](superpowers/specs/2026-08-09-agent-participant-delivery.md)。
+
+### 5.2 Runtime 控制面（非产品主轴）：Agent 会话生命周期
+
+显式 `POST /v1/agent-sessions/start` 等仍可用于工具/高级控制，但 **日常 @bot 不应要求用户理解「启动会话 RPC」**。
+
+1. 调用方可触发 start/send_input（或由 inbox worker 内部调用）
+2. 后端事务：成员校验 → 选 host → `agent_sessions` / turns → durable → `host_commands`
+3. Outbox → `host:{installation_id}` → daemon spawn / 喂入
 
 ### Agent 执行与流式传输
 
 1. daemon 运行 agent，将 `RawIngest` 降为 canonical `IngestChunk`，预分配 host-local `seq`。
-2. daemon 同时批量写本地 SQLite，并在 WS 在线时通过 `/ws/host` 发送 `HostIngestLiveBatch`。本地写库不等待 relay outbound queue。
-2. 后端:
-   - 按 `(host_device_id, session_id, seq)` 幂等写入 `raw_events`
-   - 同 key 同 checksum 视为重复；同 key 不同 checksum 是不变量错误
-   - 将 chunk 内 projection 发布为 `StreamEvent`
-   - Client gateway 推送到订阅客户端
-3. Agent 轮次完成时:
-   - daemon 回送 `host_command_result`
-   - 后端更新 `agent_turns`，写入 `DurableEvent::AgentTurnAppended`
-   - 通过 outbox → 所有订阅客户端
+2. daemon 批量写本地 SQLite，在线时 `/ws/host` 发 `HostIngestLiveBatch`（本地写不等待 relay）。
+3. 后端：
+   - 按 `(host_device_id, session_id, seq)` 幂等写 `raw_events`
+   - projection → `StreamEvent` → 订阅 `/ws/client` 的端（热路径，非最终气泡 SSOT）
+4. 轮次完成：
+   - host_command_result / turn 状态更新
+   - **人读最终文本** 以 Hub `chat_messages`（`sender_type=agent`）为准，经 social durable fanout
 
 ### 审批流程
 

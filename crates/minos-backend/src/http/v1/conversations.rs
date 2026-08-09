@@ -353,8 +353,8 @@ async fn send_message_inner(
 
     super::social::fan_out_social_message(&state, &message).await;
 
-    // Dispatch only for live client sends (Mobile / multi-end). Desktop uses
-    // host_projection after native local execution so Hub never double-starts.
+    // Participant delivery (Agent inbox) only for live client sends.
+    // host_projection / system never re-deliver (anti-loop; Desktop native path).
     // Failures are user-visible (timeline bubble + StreamEvent agent_error).
     if message_source.allows_agent_dispatch() {
         if let Err(e) = super::social::try_agent_dispatch(
@@ -372,7 +372,7 @@ async fn send_message_inner(
                 error = %e,
                 conversation_id = %conversation_id,
                 message_id = %message.message_id,
-                "agent dispatch pipeline error after message send"
+                "agent inbox pipeline error after message send"
             );
         }
     }

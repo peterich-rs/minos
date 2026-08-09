@@ -301,6 +301,7 @@ mod tests {
                     reply_to: None,
                     recalled_at_ms: None,
                     mentioned_account_ids: Vec::new(),
+                    mentioned_agent_ids: Vec::new(),
                     sender_type: crate::SenderType::User,
                     reactions: vec![],
                     attachments: vec![],

@@ -249,8 +249,13 @@ pub struct ChatMessageSummary {
     pub reply_to: Option<ChatMessageReplySummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recalled_at_ms: Option<i64>,
+    /// Human participants mentioned in this message (`target_kind=account`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mentioned_account_ids: Vec<String>,
+    /// Bot agent participants mentioned in this message (`target_kind=agent`).
+    /// Structured SSOT alongside account mentions; agent inbox delivery keys off this.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentioned_agent_ids: Vec<String>,
     /// Distinguishes user-sent messages from agent-sent messages.
     /// Defaults to "user" for backward compatibility.
     #[serde(default = "default_sender_type")]
@@ -364,7 +369,10 @@ pub enum MessageSource {
 }
 
 impl MessageSource {
-    /// Whether Hub should run `@agent` dispatch after inserting this user message.
+    /// Whether Hub should enqueue Agent inbox delivery after inserting this user message.
+    ///
+    /// Only live client sends may deliver to agent participants. `host_projection`
+    /// and `system` never re-deliver (anti-loop; Desktop-native uplink).
     #[must_use]
     pub fn allows_agent_dispatch(self) -> bool {
         matches!(self, Self::ClientLive)
@@ -502,6 +510,14 @@ pub struct RemoveGroupMemberRequest {
 /// Response listing agent members of a conversation.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ConversationAgentMembersResponse {
+    pub agents: Vec<AgentSummary>,
+}
+
+/// Unified conversation participants (human ∪ bot). Phase A read model over dual tables.
+/// See ADR 0021 / agent-participant-delivery.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ConversationParticipantsResponse {
+    pub humans: Vec<UserSummary>,
     pub agents: Vec<AgentSummary>,
 }
 
@@ -1670,6 +1686,17 @@ pub struct ListProjectSessionsResponse {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn message_source_only_client_live_allows_agent_dispatch() {
+        assert!(MessageSource::ClientLive.allows_agent_dispatch());
+        assert!(!MessageSource::HostProjection.allows_agent_dispatch());
+        assert!(!MessageSource::System.allows_agent_dispatch());
+        assert_eq!(MessageSource::parse("host_projection"), MessageSource::HostProjection);
+        assert_eq!(MessageSource::parse("system"), MessageSource::System);
+        assert_eq!(MessageSource::parse("client_live"), MessageSource::ClientLive);
+        assert_eq!(MessageSource::parse("unknown"), MessageSource::ClientLive);
+    }
 
     #[test]
     fn me_hosts_response_round_trips() {

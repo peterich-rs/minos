@@ -7,8 +7,8 @@
 | 项 | 值 |
 |----|-----|
 | 源码路径 | `apps/desktop/` |
-| 产品定位 | **Conversation 协作工作台**（Project → Timeline 为主舞台；Session/Approval 为对话内能力与 Attention）。本机对标 TUI 能力；**account-first**：在本机登录 Desktop 即拥有 host 控制权；手机/Web 远程依赖 cloud **Online**（live `/ws/host`） |
-| 当前阶段 | **Daemon-backed**：Tauri 宿主嵌 daemon；bootstrap 经 `daemonApi` 拉 projects / CLIs / live push。浏览器 `vite` 直开时 fallback mock 数据。**根门禁 account-first**：冷启动 `hydrateAuth` → 无 session 则 `LoginPage`；有 session 进 `AppShell`。**登录后自动** `ensureCloudConnection`（内部 prepare/sign/`POST /v1/hosts/link`/apply + 等待 hub online）。用户只见 **Online / Connecting / Offline**（顶栏 banner + 品牌副标题），无 Link/Unlink 主路径。**Hub conversation_id** 经 `agent_session.start` 透传到 Host 落库（禁止再造 Direct agent sessions 假会话） |
+| 产品定位 | **Conversation 协作工作台**（Timeline 主舞台；Agent 为对话内 **bot 成员**；Session/Approval 为 Attention）。本机对标 TUI；**account-first** 登录即绑定本机 Host 控制权。手机远程驱动 bot 依赖 **Host online**（`/ws/host`）；人类多端聊天依赖 **Account IM**（`/ws/client` + Hub）。见 [ADR 0021](adr/0021-agent-as-conversation-bot-participant.md) |
+| 当前阶段 | **Daemon-backed**：Tauri 嵌 daemon。**根门禁 account-first**：`hydrateAuth` → 无 session 则 `LoginPage`。登录后 `ensureCloudConnection`（host link + dial `/ws/host`）。**双角色**：Account UI → `/ws/client` 发/收 Hub 消息；daemon → `/ws/host` 作 bot runtime。**Online 组合**：主状态 = Account IM sync（`accountSyncStatus` / `/ws/client`）；次状态 = Host readiness（`cloudStatus` / `hubOnline`）。禁止仅 Host live 显示可发送 Online。无 Link/Unlink 主路径。Hub `conversation_id` 透传 Host（禁止假 Direct session） |
 | 视觉 | 暖色多栏（参考 `res/desktop.jpeg` 气质，非客服 Inbox 语义） |
 | 产品 spec | [2026-07-18-desktop-product-experience.md](superpowers/specs/2026-07-18-desktop-product-experience.md) |
 | 状态拆分 spec | [2026-07-21-desktop-state-by-consumption.md](superpowers/specs/2026-07-21-desktop-state-by-consumption.md)（**P0–P4 done**；P5 cleanup reviewed；编码入口 §18） |
@@ -43,7 +43,7 @@
 | 动效 | `motion`（layout 导航指示）+ CSS `duration-150/200`（`--duration-fast/normal`） | 克制动效；全局尊重 `prefers-reduced-motion`（`animate-spin` 除外） |
 | Markdown | `react-markdown` + `remark-gfm` + Shiki `CodeBlock` | 完成态 GFM；streaming 纯文本；fenced code 懒加载 Shiki 高亮 |
 | 主题 | Shiki theme JSON → CSS vars（`ThemeProvider`） | Host → Appearance 选主题/强调色；FOUC 用 localStorage 缓存 vars；默认 `minos`（warm） |
-| 长列表 | `@tanstack/react-virtual`（侧栏）+ `virtua`（conversation timeline） | ConversationList + **Sessions 左栏**（`SessionListPane` + flatten 树）用 `VirtualizedList`；主时间线 `VList` + stick-to-bottom/`shift` prepend；session **transcript** 仍分页 DOM（硬上限 2000），避免与审批/流式测高互殴 |
+| 长列表 | `@tanstack/react-virtual`（侧栏）+ `virtua`（conversation timeline） | ConversationList + **Sessions 左栏**（`SessionListPane` + flatten 树）用 `VirtualizedList`；主时间线 `VList` + stick-to-bottom/`shift` prepend；session **transcript** 仍分页 DOM（硬上限 2000），避免与审批/流式测高互殴。**Keep-alive 注意**：Work 三页用 CSS `hidden` 挂载；虚拟列表在 `display:none` 下 scrollport 高度为 0，切回 tab 时必须 remount 或 `measure()`（`VirtualizedList` 在 0→有高度时重测 + 仅在 tab active 时挂载侧栏 virtualizer），否则会出现空白/条目挤在底部、要点一下才出来 |
 | 状态 | Zustand 5 + TanStack Query 5 | **混合**：RQ 可缓存 catalog 网络；**会 merge 进 SessionEntity 的 list**（inspector / project sessions）一律 `staleTime: 0`，禁止 30s 陈旧 lifecycle。Zustand 管 timeline/transcript/SessionEntity/乐观发送/UI 指针（L0–L6）。**SessionEntity 唯一写漏斗**：`mergeSessionEntity` / `patchSessionEntity` → `commitSessionEntity`（membership 投影 + `conversation.runningCount/approvalCount` 由 Entity Σ 重算）。list hydrate 是 sample（防 stale demote）；manager / resume / resolve 为 authoritative。Inspector 列表只读投影行，禁止组件层再 overlay 全表 Entity。 |)
 | 图标 | Lucide React | 导航与工具栏 |
 | 本机 API | `@tauri-apps/api` | `invoke` → Rust |

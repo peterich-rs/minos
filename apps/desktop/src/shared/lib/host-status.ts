@@ -1,16 +1,17 @@
 /**
- * Product-facing host / cloud presence for the desktop shell.
+ * Product-facing presence for the desktop shell (ADR 0021 / participant delivery).
  *
- * User model (simple):
+ * User model:
  * - Local runtime: Ready / Unavailable / Preview
- * - Cloud: Online / Connecting / Offline (login implies host control; no "Link")
+ * - **Primary Online** = Account IM sync (`/ws/client` live → can send/receive)
+ * - Host readiness (`/ws/host`) = secondary "This Mac ready" for bot runtime
  *
- * Mobile "device online" === cloud Online (live `/ws/host`).
+ * Never show full Online solely because Host is live while Account cannot sync.
  */
 
 export type DataSource = "mock" | "daemon";
 
-/** Live hub session for this host installation. */
+/** Product cloud/IM mode for Account-primary Online. */
 export type CloudMode = "online" | "connecting" | "offline" | "unknown";
 
 /** App-level readiness shown under the brand mark. */
@@ -20,7 +21,7 @@ export type HostPresence = {
   tone: HostPresenceTone;
   /**
    * Primary label under Minos, e.g. "Online", "Connecting…", "Offline".
-   * Never exposes managed / discovery / Host Link implementation detail.
+   * Reflects Account IM ability to send/receive — not Host alone.
    */
   label: string;
   readinessLabel: "Ready" | "Unavailable" | "Preview";
@@ -28,6 +29,9 @@ export type HostPresence = {
   cloudLabel: "Online" | "Connecting" | "Offline" | "—";
   /** True when local coding runtime is usable. */
   runtimeReady: boolean;
+  /** Secondary: Host `/ws/host` live (bot runtime). */
+  hostReady: boolean;
+  hostLabel: "Host ready" | "Host offline" | "—";
 };
 
 export type HostPresenceInput = {
@@ -35,13 +39,17 @@ export type HostPresenceInput = {
   /** True when Tauri bridge reports daemon connected. */
   daemonConnected: boolean;
   /**
-   * Cloud connection (account signed in + hub).
-   * Prefer store-driven status over raw hubOnline alone.
+   * Account IM sync status (primary Online). Prefer this over host-only signals.
+   * Maps from `/ws/client` HubRealtimeSyncState via account-store.
+   */
+  accountSync?: CloudMode;
+  /**
+   * @deprecated Host-centric cloud status. Used only when `accountSync` omitted
+   * (legacy callers). New UI should pass `accountSync`.
    */
   cloud?: CloudMode;
   /**
-   * Live `/ws/host` when cloud status is not provided.
-   * @deprecated Prefer `cloud`.
+   * Live `/ws/host` for bot runtime readiness (secondary).
    */
   hubOnline?: boolean;
 };
@@ -50,6 +58,14 @@ export type HostPresenceInput = {
 export const PROJECT_HOST_THIS_MAC = "This Mac";
 
 export function deriveHostPresence(input: HostPresenceInput): HostPresence {
+  const hostReady = input.hubOnline === true;
+  const hostLabel: HostPresence["hostLabel"] =
+    input.hubOnline === true
+      ? "Host ready"
+      : input.hubOnline === false
+        ? "Host offline"
+        : "—";
+
   if (input.source === "mock") {
     return {
       tone: "preview",
@@ -58,6 +74,8 @@ export function deriveHostPresence(input: HostPresenceInput): HostPresence {
       cloud: "unknown",
       cloudLabel: "—",
       runtimeReady: false,
+      hostReady: false,
+      hostLabel: "—",
     };
   }
 
@@ -69,10 +87,15 @@ export function deriveHostPresence(input: HostPresenceInput): HostPresence {
       cloud: "offline",
       cloudLabel: "Offline",
       runtimeReady: false,
+      hostReady: false,
+      hostLabel: "Host offline",
     };
   }
 
+  // Primary Online = Account IM sync. Fall back to legacy `cloud` only when
+  // accountSync is not provided (unit tests / old call sites).
   const cloud: CloudMode =
+    input.accountSync ??
     input.cloud ??
     (input.hubOnline === true
       ? "online"
@@ -88,6 +111,8 @@ export function deriveHostPresence(input: HostPresenceInput): HostPresence {
       cloud: "connecting",
       cloudLabel: "Connecting",
       runtimeReady: true,
+      hostReady,
+      hostLabel,
     };
   }
 
@@ -99,6 +124,8 @@ export function deriveHostPresence(input: HostPresenceInput): HostPresence {
       cloud: "online",
       cloudLabel: "Online",
       runtimeReady: true,
+      hostReady,
+      hostLabel,
     };
   }
 
@@ -110,6 +137,8 @@ export function deriveHostPresence(input: HostPresenceInput): HostPresence {
       cloud: "offline",
       cloudLabel: "Offline",
       runtimeReady: true,
+      hostReady,
+      hostLabel,
     };
   }
 
@@ -120,7 +149,30 @@ export function deriveHostPresence(input: HostPresenceInput): HostPresence {
     cloud: "unknown",
     cloudLabel: "—",
     runtimeReady: true,
+    hostReady,
+    hostLabel,
   };
+}
+
+/**
+ * Map Hub `/ws/client` realtime state → product CloudMode (Account IM).
+ * live/syncing → online (can send/receive); connecting → connecting; else offline.
+ */
+export function cloudModeFromAccountSync(
+  state: "disconnected" | "connecting" | "syncing" | "live" | "error" | string,
+): CloudMode {
+  switch (state) {
+    case "live":
+    case "syncing":
+      return "online";
+    case "connecting":
+      return "connecting";
+    case "disconnected":
+    case "error":
+      return "offline";
+    default:
+      return "unknown";
+  }
 }
 
 /**

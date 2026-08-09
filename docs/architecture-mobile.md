@@ -6,6 +6,8 @@
 
 Minos 移动端由 Flutter 应用（Dart UI）和 Rust 核心（通过 flutter_rust_bridge v2 桥接）组成。采用严格的四层架构：UI → Application → Data → Domain。
 
+**产品角色**：纯 **Account 客户端**——`/ws/client` + Hub HTTP 发/收协作消息；**不**拨 `/ws/host`。与 Desktop Account 壳同一人类身份模型：在对话里 @人 / @bot 都是消息；@bot 由 Hub **Agent inbox** 投递到已 link 的 Host runtime，结果以 agent 气泡回时间线（[ADR 0021](adr/0021-agent-as-conversation-bot-participant.md)、[participant delivery](superpowers/specs/2026-08-09-agent-participant-delivery.md)）。列表里的 Host「在线」= 该 installation 的 `/ws/host` live（设备/bot 身体），与本机 Account 连接是两层信号。
+
 **Flutter 源码路径**: `apps/mobile/`
 **Rust crate 路径**: `crates/minos-mobile/`
 

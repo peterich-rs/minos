@@ -1,6 +1,8 @@
 # Rebuild Minos Backend for Formal Development
 
-本文件是 Minos backend 进入正式开发阶段后的唯一主动设计文档。`docs/superpowers/` 下的 MVP 规划与实施文档已整体退休；后续 backend 的架构、接口、数据模型、部署方式与实现阶段划分，以本文件和保留的 ADR 为准。
+> **Authority（2026-08-09）**：本文是 formal cutover **历史纲领**（account bearer / host installation rail / 拆分 `/ws/client`·`/ws/host`）。  
+> **协作消息与 bot participant 的现行 SSOT** 以 [architecture-messaging.md](architecture-messaging.md)、[ADR 0021](adr/0021-agent-as-conversation-bot-participant.md)、[agent-participant-delivery](superpowers/specs/2026-08-09-agent-participant-delivery.md) 及 2026-08 IM reliability / Hub SSOT specs 为准。  
+> 不再声称「唯一主动设计文档」或「superpowers 全体退休」。
 
 ## Breaking Change Notice
 

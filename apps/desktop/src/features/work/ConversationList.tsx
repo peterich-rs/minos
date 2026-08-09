@@ -41,8 +41,11 @@ export function ConversationList({
   fill?: boolean;
 }) {
   const conversationId = useUiStore((s) => s.conversationId);
+  const projectView = useUiStore((s) => s.projectView);
   const selectConversation = useUiStore((s) => s.selectConversation);
   const toggleConversationList = useUiStore((s) => s.toggleConversationList);
+  /** Keep-alive under Sessions/Board — only mount virtualizer while visible. */
+  const listActive = projectView === "conversations";
   const conversations = useWorkspaceStore((s) => s.conversations);
   const source = useWorkspaceStore((s) => s.source);
   const bootEpoch = useWorkspaceStore((s) => s.bootEpoch);
@@ -191,8 +194,9 @@ export function ConversationList({
           Loading conversations…
         </p>
       ) : null}
-      {items.length > 0 ? (
+      {listActive && items.length > 0 ? (
         <VirtualizedList
+          key="conversation-rail-active"
           className="min-h-0 flex-1"
           items={items}
           getItemKey={(item) => item.id}

@@ -34,6 +34,12 @@ export function SessionListPane({
   onSelectSession,
   onRetry,
   onCollapseList,
+  /**
+   * Sessions tab keep-alive is CSS-hidden under Conversations. Only mount the
+   * virtualizer while active so scrollport size is real on first paint (avoids
+   * empty / bottom-stuck rows after tab switch).
+   */
+  active = true,
 }: {
   groups: ConversationSessionGroup[];
   projectSessionCount: number;
@@ -45,6 +51,7 @@ export function SessionListPane({
   onSelectSession: (id: string) => void;
   onRetry: () => void;
   onCollapseList: () => void;
+  active?: boolean;
 }) {
   const rows = useStableArrayShallow(
     useMemo(
@@ -81,7 +88,7 @@ export function SessionListPane({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col">
-        {phase === "error" && projectSessionCount === 0 ? (
+        {active && phase === "error" && projectSessionCount === 0 ? (
           <div className="flex flex-col items-center gap-2 px-2 py-8 text-center">
             <p className="text-xs text-rose-600">
               {error ?? "Failed to load sessions"}
@@ -95,18 +102,20 @@ export function SessionListPane({
             </button>
           </div>
         ) : null}
-        {phase === "loading" && projectSessionCount === 0 ? (
+        {active && phase === "loading" && projectSessionCount === 0 ? (
           <p className="px-2 py-8 text-center text-xs text-ink-muted">
             Loading sessions…
           </p>
         ) : null}
-        {phase === "ready" && projectSessionCount === 0 ? (
+        {active && phase === "ready" && projectSessionCount === 0 ? (
           <p className="px-2 py-8 text-center text-xs text-ink-muted">
             No agent sessions yet. Use @agent in a conversation.
           </p>
         ) : null}
-        {rows.length > 0 ? (
+        {active && rows.length > 0 ? (
           <VirtualizedList
+            // Remount when the tab becomes active so range/measure start clean.
+            key="sessions-rail-active"
             className="min-h-0 flex-1 px-2 py-2"
             items={rows}
             getItemKey={(row) => row.key}

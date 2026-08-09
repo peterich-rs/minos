@@ -501,7 +501,8 @@ impl ConversationService for DefaultConversationService {
             .iter()
             .map(|m| m.account_id.clone())
             .collect::<Vec<_>>();
-        let mentioned_account_ids = extract_mentioned_account_ids(text, account_id, &members);
+        let agents = social::list_conversation_agents(&self.store, conversation_id).await?;
+        let mentions = extract_participant_mentions(text, account_id, &members, &agents);
         // Hub server clock is the sole ordering authority for created_at_ms.
         // client_sent_at_ms is accepted for future display/debug only.
         let _ = client_sent_at_ms;
@@ -516,19 +517,19 @@ impl ConversationService for DefaultConversationService {
                         .iter()
                         .map(|p| (p.account_id.clone(), p.clone()))
                         .collect::<HashMap<_, _>>();
-                    let mut agents = HashMap::new();
+                    let mut agent_map = HashMap::new();
                     if reply_row.sender_type == "agent" {
                         let agent_id = reply_row
                             .sender_agent_id
                             .clone()
                             .unwrap_or_else(|| reply_row.sender_account_id.clone());
                         if let Some(agent) = social::get_agent(&self.store, &agent_id).await? {
-                            agents.insert(agent_id, agent);
+                            agent_map.insert(agent_id, agent);
                         }
                     }
                     Some(ChatMessageReplySummary {
                         message_id: reply_row.message_id.clone(),
-                        sender: sender_summary(&reply_row, &profiles, &agents)?,
+                        sender: sender_summary(&reply_row, &profiles, &agent_map)?,
                         text: reply_row.text.clone(),
                         recalled_at_ms: reply_row.recalled_at_ms,
                     })
@@ -553,7 +554,7 @@ impl ConversationService for DefaultConversationService {
             text,
             now_ms,
             reply_to_id.as_deref(),
-            &mentioned_account_ids,
+            &mentions,
             client_message_id,
             &attachment_ids,
             message_source.as_str(),
@@ -579,7 +580,8 @@ impl ConversationService for DefaultConversationService {
                 message_seq: outcome.row.message_seq,
                 reply_to,
                 recalled_at_ms: None,
-                mentioned_account_ids: mentioned_account_ids.clone(),
+                mentioned_account_ids: mentions.account_ids.clone(),
+                mentioned_agent_ids: mentions.agent_ids.clone(),
                 sender_type: SenderType::User,
                 reactions: vec![],
                 attachments: attachments_wire.clone(),
@@ -637,6 +639,7 @@ impl ConversationService for DefaultConversationService {
         message.text = "[message recalled]".to_string();
         message.recalled_at_ms = Some(message.recalled_at_ms.unwrap_or(now_ms));
         message.mentioned_account_ids.clear();
+        message.mentioned_agent_ids.clear();
         social::ensure_social_message_delivery_in_tx(&mut tx, &message, &member_ids).await?;
         tx.commit().await?;
         Ok(message)
@@ -1050,7 +1053,7 @@ pub async fn hydrate_messages_for_viewer(
         .iter()
         .map(|row| row.message_id.clone())
         .collect::<Vec<_>>();
-    let mut mentions_by_message = social::list_message_mentions(store, &message_ids).await?;
+    let mut mentions_by_message = social::list_message_mentions_full(store, &message_ids).await?;
     let reaction_rows = social::list_for_messages(store, &message_ids).await?;
     let mut reactions_by_message: HashMap<String, Vec<social::MessageReactionRow>> = HashMap::new();
     for row in reaction_rows {
@@ -1110,7 +1113,7 @@ pub async fn hydrate_messages_for_viewer(
 
     let mut output = Vec::with_capacity(rows.len());
     for row in rows {
-        let mentioned_account_ids = mentions_by_message
+        let mentions = mentions_by_message
             .remove(&row.message_id)
             .unwrap_or_default();
         let reply_to = row
@@ -1150,7 +1153,8 @@ pub async fn hydrate_messages_for_viewer(
             message_seq: row.message_seq,
             reply_to,
             recalled_at_ms: row.recalled_at_ms,
-            mentioned_account_ids,
+            mentioned_account_ids: mentions.account_ids,
+            mentioned_agent_ids: mentions.agent_ids,
             sender_type,
             reactions,
             attachments,
@@ -1221,28 +1225,49 @@ fn agent_sender_summary(agent: Option<&social::AgentRow>, agent_id: &str) -> Use
     }
 }
 
+/// Unified participant mention extraction (human accounts + bot agents).
+///
+/// Only conversation participants match. Human tokens resolve by `minos_id`;
+/// agent tokens resolve by agent_id / runtime_agent / display name (and optional
+/// `#session_short` suffix is stripped for matching).
+pub(crate) fn extract_participant_mentions(
+    text: &str,
+    sender_account_id: &str,
+    members: &[social::ProfileRow],
+    agents: &[social::AgentRow],
+) -> social::MessageMentions {
+    let by_minos_id = members
+        .iter()
+        .map(|member| (member.minos_id.as_str(), member.account_id.as_str()))
+        .collect::<HashMap<_, _>>();
+    let mut account_ids = std::collections::BTreeSet::<String>::new();
+    let mut agent_ids = std::collections::BTreeSet::<String>::new();
+
+    for token in collect_mention_tokens(text) {
+        let (name_part, _session_short) = split_agent_session_token(token);
+        if let Some(account_id) = by_minos_id.get(name_part) {
+            if *account_id != sender_account_id {
+                account_ids.insert((*account_id).to_string());
+            }
+            continue;
+        }
+        if let Some(agent) = match_agent_token(name_part, agents) {
+            agent_ids.insert(agent.agent_id.clone());
+        }
+    }
+
+    social::MessageMentions {
+        account_ids: account_ids.into_iter().collect(),
+        agent_ids: agent_ids.into_iter().collect(),
+    }
+}
+
 pub(crate) fn extract_mentioned_account_ids(
     text: &str,
     sender_account_id: &str,
     members: &[social::ProfileRow],
 ) -> Vec<String> {
-    let by_minos_id = members
-        .iter()
-        .map(|member| (member.minos_id.as_str(), member.account_id.as_str()))
-        .collect::<HashMap<_, _>>();
-    let mut mentions = std::collections::BTreeSet::<String>::new();
-
-    for token in collect_mention_tokens(text) {
-        let Some(account_id) = by_minos_id.get(token) else {
-            continue;
-        };
-        if *account_id == sender_account_id {
-            continue;
-        }
-        mentions.insert((*account_id).to_string());
-    }
-
-    mentions.into_iter().collect()
+    extract_participant_mentions(text, sender_account_id, members, &[]).account_ids
 }
 
 pub(crate) fn collect_mention_tokens(text: &str) -> Vec<&str> {
@@ -1262,7 +1287,14 @@ pub(crate) fn collect_mention_tokens(text: &str) -> Vec<&str> {
 
         let start = index + 1;
         let mut end = start;
-        while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'-') {
+        // Allow `#short` so mid-body `@codex#abcd` keeps session targeting parity
+        // with agent routing / Desktop parseAllAgentRoutings.
+        while end < bytes.len()
+            && (bytes[end].is_ascii_alphanumeric()
+                || bytes[end] == b'-'
+                || bytes[end] == b'_'
+                || bytes[end] == b'#')
+        {
             end += 1;
         }
         if end > start {
@@ -1274,4 +1306,94 @@ pub(crate) fn collect_mention_tokens(text: &str) -> Vec<&str> {
     }
 
     tokens
+}
+
+fn split_agent_session_token(token: &str) -> (&str, Option<&str>) {
+    match token.split_once('#') {
+        Some((name, short)) if !name.is_empty() && !short.is_empty() => (name, Some(short)),
+        _ => (token, None),
+    }
+}
+
+fn match_agent_token<'a>(
+    token: &str,
+    agents: &'a [social::AgentRow],
+) -> Option<&'a social::AgentRow> {
+    let t = token.trim();
+    if t.is_empty() {
+        return None;
+    }
+    let lower = t.to_ascii_lowercase();
+    agents.iter().find(|agent| {
+        agent.agent_id.eq_ignore_ascii_case(t)
+            || agent.runtime_agent.eq_ignore_ascii_case(&lower)
+            || agent.name.eq_ignore_ascii_case(t)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::social::{AgentRow, ProfileRow};
+
+    fn profile(account_id: &str, minos_id: &str) -> ProfileRow {
+        ProfileRow {
+            account_id: account_id.into(),
+            email: format!("{minos_id}@example.com"),
+            minos_id: minos_id.into(),
+            display_name: Some(minos_id.into()),
+        }
+    }
+
+    fn agent(agent_id: &str, name: &str, runtime: &str) -> AgentRow {
+        AgentRow {
+            agent_id: agent_id.into(),
+            owner_account_id: "owner".into(),
+            name: name.into(),
+            description: String::new(),
+            source: "host_runtime".into(),
+            runtime_agent: runtime.into(),
+            model: String::new(),
+            workspace_path: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+        }
+    }
+
+    #[test]
+    fn extract_participant_mentions_splits_humans_and_agents() {
+        let members = vec![
+            profile("acct-alice", "alice"),
+            profile("acct-bob", "bob"),
+        ];
+        let agents = vec![
+            agent("bot-1", "Codex", "codex"),
+            agent("bot-2", "Claude", "claude"),
+        ];
+        let mentions = extract_participant_mentions(
+            "@bob please and @codex#abcd fix it @claude",
+            "acct-alice",
+            &members,
+            &agents,
+        );
+        assert_eq!(mentions.account_ids, vec!["acct-bob".to_string()]);
+        assert_eq!(
+            mentions.agent_ids,
+            vec!["bot-1".to_string(), "bot-2".to_string()]
+        );
+    }
+
+    #[test]
+    fn extract_participant_mentions_skips_self_and_unknown_tokens() {
+        let members = vec![profile("acct-alice", "alice")];
+        let agents = vec![agent("bot-1", "Codex", "codex")];
+        let mentions = extract_participant_mentions(
+            "@alice @nobody @codex",
+            "acct-alice",
+            &members,
+            &agents,
+        );
+        assert!(mentions.account_ids.is_empty());
+        assert_eq!(mentions.agent_ids, vec!["bot-1".to_string()]);
+    }
 }

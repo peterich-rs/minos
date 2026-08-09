@@ -1983,3 +1983,306 @@ async fn two_rapid_dispatches_project_two_agent_bubbles() {
         .unwrap();
     assert_eq!(rows2.iter().filter(|r| r.sender_type == "agent").count(), 2);
 }
+
+/// Phase 1+2: `@agent` tokens write structured agent mentions and enqueue inbox rows.
+#[tokio::test]
+async fn send_message_persists_agent_mentions_and_enqueues_inbox() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let conversation =
+        social::create_group_conversation(&state.store, &alice.account_id, "Agent DM", &[], 100)
+            .await
+            .unwrap();
+    let agent = social::register_agent(
+        &state.store,
+        &alice.account_id,
+        "Codex",
+        "Assistant",
+        "codex",
+        "gpt-5",
+        None,
+        100,
+    )
+    .await
+    .unwrap();
+    social::add_agent_to_conversation(
+        &state.store,
+        &conversation.conversation_id,
+        &agent.agent_id,
+        &alice.account_id,
+        100,
+    )
+    .await
+    .unwrap();
+
+    let text = format!("@{} please help", agent.agent_id);
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(serde_json::json!({ "text": text }).to_string()),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let origin = body["message_id"].as_str().unwrap().to_string();
+
+    // Wire response carries structured agent mentions (SSOT for plan_agent_deliveries).
+    let mentioned: Vec<String> = body["mentioned_agent_ids"]
+        .as_array()
+        .expect("mentioned_agent_ids array")
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect();
+    assert_eq!(mentioned, vec![agent.agent_id.clone()]);
+
+    let full = social::list_message_mentions_full(&state.store, &[origin.clone()])
+        .await
+        .unwrap();
+    let mentions = full.get(&origin).expect("mention rows for origin");
+    assert!(mentions.account_ids.is_empty());
+    assert_eq!(mentions.agent_ids, vec![agent.agent_id.clone()]);
+
+    let row = minos_backend::store::agent_dispatch_queue::get_by_origin(&state.store, &origin)
+        .await
+        .unwrap()
+        .expect("agent inbox row for structured @agent");
+    assert_eq!(row.agent_id, agent.agent_id);
+    assert_eq!(
+        row.status,
+        minos_backend::store::agent_dispatch_queue::STATUS_PENDING
+    );
+}
+
+/// Phase 2 multi-@: each structured agent mention becomes its own inbox row.
+#[tokio::test]
+async fn multi_agent_mentions_fan_out_inbox_rows() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let conversation =
+        social::create_group_conversation(&state.store, &alice.account_id, "Multi agent", &[], 100)
+            .await
+            .unwrap();
+    let codex = social::register_agent(
+        &state.store,
+        &alice.account_id,
+        "Codex",
+        "Assistant",
+        "codex",
+        "gpt-5",
+        None,
+        100,
+    )
+    .await
+    .unwrap();
+    let claude = social::register_agent(
+        &state.store,
+        &alice.account_id,
+        "Claude",
+        "Assistant",
+        "claude",
+        "opus",
+        None,
+        101,
+    )
+    .await
+    .unwrap();
+    for agent in [&codex, &claude] {
+        social::add_agent_to_conversation(
+            &state.store,
+            &conversation.conversation_id,
+            &agent.agent_id,
+            &alice.account_id,
+            100,
+        )
+        .await
+        .unwrap();
+    }
+
+    let text = format!("@{} @{} count off", codex.agent_id, claude.agent_id);
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(serde_json::json!({ "text": text }).to_string()),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let origin = body["message_id"].as_str().unwrap().to_string();
+
+    let mentioned: Vec<String> = body["mentioned_agent_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect();
+    assert_eq!(mentioned.len(), 2);
+    assert!(mentioned.contains(&codex.agent_id));
+    assert!(mentioned.contains(&claude.agent_id));
+
+    let count = minos_backend::store::agent_dispatch_queue::count_by_origin(&state.store, &origin)
+        .await
+        .unwrap();
+    assert_eq!(count, 2, "multi-@ must enqueue one inbox row per agent");
+}
+
+/// Phase 2 invariant: host_projection never re-delivers to Agent inbox.
+#[tokio::test]
+async fn host_projection_message_does_not_enqueue_agent_inbox() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let conversation =
+        social::create_group_conversation(&state.store, &alice.account_id, "Projection", &[], 100)
+            .await
+            .unwrap();
+    let agent = social::register_agent(
+        &state.store,
+        &alice.account_id,
+        "Codex",
+        "Assistant",
+        "codex",
+        "gpt-5",
+        None,
+        100,
+    )
+    .await
+    .unwrap();
+    social::add_agent_to_conversation(
+        &state.store,
+        &conversation.conversation_id,
+        &agent.agent_id,
+        &alice.account_id,
+        100,
+    )
+    .await
+    .unwrap();
+
+    let text = format!("@{} already ran on desktop", agent.agent_id);
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "text": text,
+                    "message_source": "host_projection"
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let origin = body["message_id"].as_str().unwrap().to_string();
+
+    // Mentions may still be recorded for display, but inbox must stay empty.
+    let count = minos_backend::store::agent_dispatch_queue::count_by_origin(&state.store, &origin)
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "host_projection must never enqueue agent inbox");
+    assert!(
+        minos_backend::store::agent_dispatch_queue::get_by_origin(&state.store, &origin)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// system message_source also never re-delivers.
+#[tokio::test]
+async fn system_message_does_not_enqueue_agent_inbox() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let conversation =
+        social::create_group_conversation(&state.store, &alice.account_id, "System", &[], 100)
+            .await
+            .unwrap();
+    let agent = social::register_agent(
+        &state.store,
+        &alice.account_id,
+        "Codex",
+        "Assistant",
+        "codex",
+        "gpt-5",
+        None,
+        100,
+    )
+    .await
+    .unwrap();
+    social::add_agent_to_conversation(
+        &state.store,
+        &conversation.conversation_id,
+        &agent.agent_id,
+        &alice.account_id,
+        100,
+    )
+    .await
+    .unwrap();
+
+    let text = format!("@{} system note", agent.agent_id);
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "text": text,
+                    "message_source": "system"
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let origin = body["message_id"].as_str().unwrap().to_string();
+    let count = minos_backend::store::agent_dispatch_queue::count_by_origin(&state.store, &origin)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}

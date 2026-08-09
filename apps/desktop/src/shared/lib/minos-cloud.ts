@@ -413,6 +413,61 @@ export async function addAgentToConversation(
   );
 }
 
+/** Human participant summary (conversation members / participants API). */
+export type CloudUserSummary = {
+  accountId: string;
+  minosId: string;
+  displayName: string;
+};
+
+/** Unified conversation participants (humans ∪ bot agents). ADR 0021 Phase A. */
+export type ConversationParticipants = {
+  humans: CloudUserSummary[];
+  agents: CloudAgentSummary[];
+};
+
+function mapUserSummary(raw: {
+  account_id: string;
+  minos_id: string;
+  display_name: string;
+}): CloudUserSummary {
+  return {
+    accountId: raw.account_id,
+    minosId: raw.minos_id,
+    displayName: raw.display_name || raw.minos_id,
+  };
+}
+
+/**
+ * List conversation participants (humans + agents) for composer @ picker.
+ * POST …/participants — Phase A dual-table aggregate.
+ */
+export async function listConversationParticipants(
+  deviceId: string,
+  accessToken: string,
+  conversationId: string,
+): Promise<ConversationParticipants> {
+  const raw = await requestJson<{
+    humans?: Array<{
+      account_id: string;
+      minos_id: string;
+      display_name: string;
+    }>;
+    agents?: Array<Parameters<typeof mapAgentSummary>[0]>;
+  }>(
+    `/v1/conversations/${encodeURIComponent(conversationId)}/participants`,
+    {
+      method: "POST",
+      headers: deviceHeaders(deviceId, accessToken),
+      body: JSON.stringify({}),
+    },
+  );
+  return {
+    humans: (raw.humans ?? []).map(mapUserSummary),
+    agents: (raw.agents ?? []).map(mapAgentSummary),
+  };
+}
+
 export type HubReactionGroup = {
   emoji: string;
   count: number;

@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AtSign, Bold, Paperclip, X } from "lucide-react";
 import {
   buildAgentMentionOptions,
+  buildHumanMentionOptions,
   mentionQueryAtCursor,
+  type MentionHuman,
   type MentionProfile,
 } from "@/shared/lib/agent-route";
 import type { TimelineMessage } from "@/shared/lib/mock-data";
@@ -10,10 +12,12 @@ import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
 import { cn } from "@/shared/lib/utils";
 import { toast } from "@/shared/lib/toast";
 import { daemonApi, isTauriRuntime } from "@/shared/lib/daemon";
+import { listConversationParticipants } from "@/shared/lib/minos-cloud";
 import {
   ComposerChrome,
   ComposerToolBtn,
 } from "@/shared/ui/ComposerChrome";
+import { useAccountStore } from "@/store/account-store";
 import { useUiStore } from "@/store/ui-store";
 import {
   useWorkspaceStore,
@@ -25,6 +29,7 @@ import { replyAuthorLabel, replyPreviewBody } from "./lib/format";
 const EMPTY_SESSIONS: ProjectSession[] = [];
 const EMPTY_MESSAGES: TimelineMessage[] = [];
 const EMPTY_PROFILES: MentionProfile[] = [];
+const EMPTY_HUMANS: MentionHuman[] = [];
 
 export function Composer({ conversationId }: { conversationId: string }) {
   const draft = useUiStore(
@@ -65,9 +70,13 @@ export function Composer({ conversationId }: { conversationId: string }) {
   const hasCachedMessages = useWorkspaceStore(
     (s) => conversationId in s.messagesByConversation,
   );
+  const accountSyncStatus = useAccountStore((s) => s.accountSyncStatus);
+  const session = useAccountStore((s) => s.session);
+  const deviceId = useAccountStore((s) => s.deviceId);
 
   const phase = timelineStatus?.phase ?? "idle";
   const detailError = timelineStatus?.error;
+  const accountOffline = accountSyncStatus === "offline";
 
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -75,20 +84,39 @@ export function Composer({ conversationId }: { conversationId: string }) {
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionProfiles, setMentionProfiles] =
     useState<MentionProfile[]>(EMPTY_PROFILES);
+  const [mentionHumans, setMentionHumans] =
+    useState<MentionHuman[]>(EMPTY_HUMANS);
+  const [participantAgents, setParticipantAgents] = useState<string[] | null>(
+    null,
+  );
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const mention = mentionQueryAtCursor(draft, cursor);
+  const memberAgents = participantAgents ?? participatingAgents;
   const mentionOptions = useMemo(() => {
     if (!mention) return [];
-    // Membership-gated: only conversation roster agents + their profiles/sessions.
-    return buildAgentMentionOptions({
+    const humans = buildHumanMentionOptions(mention.query, mentionHumans, {
+      selfAccountId: session?.accountId,
+      limit: 8,
+    });
+    // Membership-gated bots: participants API agents preferred, else roster.
+    const agents = buildAgentMentionOptions({
       query: mention.query,
       clis,
       sessions,
       profiles: mentionProfiles,
-      memberAgents: participatingAgents,
+      memberAgents,
     });
-  }, [mention, clis, sessions, mentionProfiles, participatingAgents]);
+    return [...humans, ...agents];
+  }, [
+    mention,
+    mentionHumans,
+    clis,
+    sessions,
+    mentionProfiles,
+    memberAgents,
+    session?.accountId,
+  ]);
 
   // When @-mention UI opens and sessions are empty, ensure Inspector working set
   // so @agent#short options can list existing sessions without opening the rail.
@@ -124,6 +152,45 @@ export function Composer({ conversationId }: { conversationId: string }) {
       cancelled = true;
     };
   }, [mentionActive, source]);
+
+  // Unified participants (humans ∪ agents) for @ picker — ADR 0021.
+  useEffect(() => {
+    if (!mentionActive) return;
+    const token = session?.accessToken?.trim();
+    if (!token || !conversationId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const parts = await listConversationParticipants(
+          deviceId,
+          token,
+          conversationId,
+        );
+        if (cancelled) return;
+        setMentionHumans(
+          parts.humans.map((h) => ({
+            accountId: h.accountId,
+            minosId: h.minosId,
+            displayName: h.displayName,
+          })),
+        );
+        const runtimes = parts.agents
+          .map((a) => a.runtimeAgent.trim().toLowerCase())
+          .filter(Boolean);
+        if (runtimes.length > 0) {
+          setParticipantAgents(runtimes);
+        }
+      } catch {
+        if (!cancelled) {
+          setMentionHumans(EMPTY_HUMANS);
+          setParticipantAgents(null);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mentionActive, conversationId, deviceId, session?.accessToken]);
 
   useEffect(() => {
     setMentionIndex(0);
@@ -168,6 +235,14 @@ export function Composer({ conversationId }: { conversationId: string }) {
   const onSend = async () => {
     const text = draft.trim();
     if (!text || !conversationId) return;
+    if (accountOffline) {
+      toast.error(
+        "Messages offline",
+        "Account sync is disconnected — reconnect to send chat.",
+      );
+      setSendError("Messages offline — Account sync disconnected");
+      return;
+    }
     // WeChat-style: empty the composer immediately. The message body is
     // already captured in `text`; the optimistic `sending` row (inserted by
     // sendMessage before any throwing step) carries it. On failure the row
@@ -193,9 +268,11 @@ export function Composer({ conversationId }: { conversationId: string }) {
 
   const hint = (
     <>
-      {source === "daemon"
-        ? "Connected · @member agent · @agent#id continue · ⌘/Ctrl+Enter send"
-        : "Mock mode"}
+      {accountOffline
+        ? "Messages offline · cannot send until Account reconnects"
+        : source === "daemon"
+          ? "Connected · @member or @agent · ⌘/Ctrl+Enter send"
+          : "Mock mode"}
       {phase === "loading" && hasCachedMessages ? " · refreshing…" : ""}
       {sendError || (phase === "error" && detailError) ? (
         <span className="mt-1 block text-xs text-status-failed">
@@ -211,7 +288,7 @@ export function Composer({ conversationId }: { conversationId: string }) {
       {mention && mentionOptions.length > 0 ? (
         <div className="absolute bottom-full left-5 right-5 z-20 mb-2 max-h-52 overflow-y-auto rounded-xl border border-ink/10 bg-surface py-1 shadow-lg">
           <div className="px-3 py-1.5 text-2xs font-semibold uppercase tracking-wide text-ink-muted">
-            Agents & profiles
+            Participants
           </div>
           {mentionOptions.map((opt, i) => (
             <button
@@ -312,8 +389,10 @@ export function Composer({ conversationId }: { conversationId: string }) {
             }
           },
           rows: 3,
-          placeholder:
-            "Message… type @ to mention an agent (e.g. @grok hello)",
+          placeholder: accountOffline
+            ? "Messages offline — reconnect Account to send"
+            : "Message… type @ to mention a member or bot",
+          disabled: accountOffline,
         }}
         toolbarStart={
           <>

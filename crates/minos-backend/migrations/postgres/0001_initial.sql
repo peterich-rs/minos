@@ -228,14 +228,18 @@ CREATE INDEX idx_chat_messages_agent_session
     ON chat_messages(agent_session_id)
     WHERE agent_session_id IS NOT NULL;
 
+-- Polymorphic mention targets: human account or bot agent participant.
+-- target_id is account_id when target_kind='account', agent_id when 'agent'.
+-- No FK on target_id (cross-kind polymorphic); membership validated at write time.
 CREATE TABLE chat_message_mentions (
-    message_id            TEXT NOT NULL REFERENCES chat_messages(message_id) ON DELETE CASCADE,
-    mentioned_account_id  TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    PRIMARY KEY (message_id, mentioned_account_id)
+    message_id   TEXT NOT NULL REFERENCES chat_messages(message_id) ON DELETE CASCADE,
+    target_kind  TEXT NOT NULL CHECK (target_kind IN ('account', 'agent')),
+    target_id    TEXT NOT NULL,
+    PRIMARY KEY (message_id, target_kind, target_id)
 );
 
-CREATE INDEX idx_chat_message_mentions_account
-    ON chat_message_mentions(mentioned_account_id, message_id);
+CREATE INDEX idx_chat_message_mentions_target
+    ON chat_message_mentions(target_kind, target_id, message_id);
 
 CREATE TABLE message_reactions (
     reaction_id      TEXT PRIMARY KEY,

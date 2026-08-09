@@ -2,8 +2,9 @@
  * Desktop account session + automatic cloud (host) connection.
  *
  * Product rule: signing into Desktop on this Mac owns host control.
- * After auth, we silently bind + dial `/ws/host`. UI only shows Online /
- * Connecting / Offline — never Link / Unlink.
+ * After auth, we silently bind + dial `/ws/host` (runtime). Account IM uses
+ * `/ws/client` (im-hub-bridge). Product Online is Account sync primary;
+ * Host readiness is secondary — never Link / Unlink.
  */
 
 import { create } from "zustand";
@@ -33,14 +34,17 @@ import {
   signOutSupabase,
   signUpWithSupabasePassword,
 } from "@/shared/lib/supabase";
-import { PROJECT_HOST_THIS_MAC } from "@/shared/lib/host-status";
+import {
+  cloudModeFromAccountSync,
+  PROJECT_HOST_THIS_MAC,
+  type CloudMode,
+} from "@/shared/lib/host-status";
 import { daemonApi } from "@/shared/lib/daemon";
 import {
   registerHostCredential,
   waitForHubOnline,
 } from "@/features/host/lib/ensure-host-connection";
 import type { DesktopAuthPhase } from "@/shared/lib/desktop-root-gate";
-import type { CloudMode } from "@/shared/lib/host-status";
 
 export type AuthMode = "login" | "register";
 
@@ -52,10 +56,15 @@ type AccountState = {
   /** Internal bind snapshot (diagnostics); not a product "Link" flag. */
   hostBind: HostBindState;
   /**
-   * User-facing cloud connection: online | connecting | offline | unknown.
-   * Driven by auto ensure + hubOnline polling.
+   * Host runtime readiness (`/ws/host`): online | connecting | offline | unknown.
+   * Secondary signal — bot execution on this Mac. Not product primary Online.
    */
   cloudStatus: CloudConnectionStatus;
+  /**
+   * Account IM sync (`/ws/client`): primary product Online for send/receive.
+   * Driven by im-hub-bridge HubRealtimeSyncState.
+   */
+  accountSyncStatus: CloudConnectionStatus;
   cloudError: string | null;
   authMode: AuthMode;
   authPhase: DesktopAuthPhase;
@@ -82,8 +91,12 @@ type AccountState = {
   /** Banner Retry: force re-register credential then dial. */
   retryCloudConnection: () => Promise<void>;
 
-  /** Sync cloudStatus from latest daemon hubOnline (polling). */
+  /** Sync Host readiness from latest daemon hubOnline (polling). */
   syncCloudFromHub: (hubOnline: boolean | undefined) => void;
+  /** Sync Account IM Online from `/ws/client` realtime state. */
+  syncAccountFromHub: (
+    state: "disconnected" | "connecting" | "syncing" | "live" | "error" | string,
+  ) => void;
 
   isCloudConfigured: () => boolean;
   isSupabaseReady: () => boolean;
@@ -139,6 +152,7 @@ function applyAuthSuccess(
     session,
     hostBind,
     cloudStatus: "connecting",
+    accountSyncStatus: "connecting",
     cloudError: null,
     authPhase: "authenticated",
     busy: false,
@@ -156,6 +170,7 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
   session: null,
   hostBind: { ...EMPTY_HOST_BIND },
   cloudStatus: "unknown",
+  accountSyncStatus: "unknown",
   cloudError: null,
   authMode: "login",
   authPhase: "booting",
@@ -177,6 +192,7 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
         session: null,
         hostBind: { ...EMPTY_HOST_BIND },
         cloudStatus: "unknown",
+        accountSyncStatus: "unknown",
         cloudError: null,
         authPhase: "unauthenticated",
         hydrated: true,
@@ -189,6 +205,7 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
         session: stored,
         hostBind: loadStoredHostBind(stored.accountId),
         cloudStatus: "connecting",
+        accountSyncStatus: "connecting",
         cloudError: null,
         authPhase: "authenticated",
         hydrated: true,
@@ -219,6 +236,7 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
         session: null,
         hostBind: { ...EMPTY_HOST_BIND },
         cloudStatus: "unknown",
+        accountSyncStatus: "unknown",
         cloudError: null,
         authPhase: "unauthenticated",
         hydrated: true,
@@ -287,6 +305,7 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
       session: null,
       hostBind: { ...EMPTY_HOST_BIND },
       cloudStatus: "unknown",
+      accountSyncStatus: "unknown",
       cloudError: null,
       authPhase: "unauthenticated",
       busy: false,
@@ -428,6 +447,20 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
         cloudStatus: "offline",
         cloudError: "Disconnected from server",
       });
+    }
+  },
+
+  syncAccountFromHub: (state) => {
+    const { session } = get();
+    if (!session) {
+      if (get().accountSyncStatus !== "unknown") {
+        set({ accountSyncStatus: "unknown" });
+      }
+      return;
+    }
+    const next = cloudModeFromAccountSync(state);
+    if (get().accountSyncStatus !== next) {
+      set({ accountSyncStatus: next });
     }
   },
 }));

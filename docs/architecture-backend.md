@@ -69,22 +69,24 @@
 /health/jobs          GET    后台任务健康
 /metrics              GET    Prometheus 指标
 /openapi.json         GET    OpenAPI 规范
-/ws/client            GET    WebSocket 升级（移动端/Web）
-/ws/host              GET    WebSocket 升级（Host 守护进程）
+/ws/client            GET    WebSocket 升级（人类 Account 客户端：Mobile/Web/Desktop UI）
+/ws/host              GET    WebSocket 升级（Host 守护进程 / bot runtime 身体；非 IM 主轴）
 /v1/auth/*            POST   认证（注册/登录/刷新/登出/改密/Supabase exchange）
 /v1/pairing/*         POST   配对确认/撤销/列表
 /v1/host/*            POST   Host 引导/配对码/安装令牌
-/v1/agent-sessions/*  POST   Agent 会话管理
+/v1/agent-sessions/*  POST   Agent 会话 runtime 控制（非协作主轴；日常 @bot 走消息+inbox）
 /v1/approvals/*       POST   审批请求
-/v1/conversations/*   POST   对话/消息
+/v1/conversations/*   POST   对话/消息（人类发送；commit 后可 enqueue Agent inbox）
 /v1/friends/*         POST   好友/好友请求
 /v1/profiles/*        POST   个人资料
 /v1/projects/*        POST   项目 CRUD
-/v1/realtime/*        POST   WS 票据签发
+/v1/realtime/*        POST   Account WS 票据
 /v1/notifications/*   POST   推送令牌/偏好
 /v1/media/*           GET/POST/PUT  附件 blob（R2 / 本地对象存储）
-/v1/social/*          POST   Agent 注册/对话成员
+/v1/social/* · /v1/agents/*  POST   Agent 注册 / conversation bot roster / agent 气泡上行
 ```
+
+协作模型 SSOT：[architecture-messaging.md](architecture-messaging.md)；bot 投递：[agent-participant-delivery](superpowers/specs/2026-08-09-agent-participant-delivery.md)；人机分权：[ADR 0020](adr/0020-server-centric-auth-and-account-pairs.md) + [ADR 0021](adr/0021-agent-as-conversation-bot-participant.md)。
 
 ### 中间件栈（自底向上）
 

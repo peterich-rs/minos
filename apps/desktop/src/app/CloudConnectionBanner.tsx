@@ -5,12 +5,16 @@ import { useWorkspaceStore } from "@/store/workspace-store";
 import { cn } from "@/shared/lib/utils";
 
 /**
- * Persistent top banner for cloud (server) connection.
- * Online: hidden. Connecting / Offline: shown with optional Retry.
+ * Persistent top banner for Account IM + Host connection.
+ *
+ * Product Online = Account sync (`/ws/client`). Host readiness is secondary.
+ * Hidden only when Account can send/receive (accountSync online).
+ * Host-only online while Account is offline still shows this banner.
  */
 export function CloudConnectionBanner() {
   const session = useAccountStore((s) => s.session);
   const cloudStatus = useAccountStore((s) => s.cloudStatus);
+  const accountSyncStatus = useAccountStore((s) => s.accountSyncStatus);
   const cloudError = useAccountStore((s) => s.cloudError);
   const retry = useAccountStore((s) => s.retryCloudConnection);
   const syncCloudFromHub = useAccountStore((s) => s.syncCloudFromHub);
@@ -32,9 +36,46 @@ export function CloudConnectionBanner() {
   }, [hubOnline, syncCloudFromHub]);
 
   if (!session) return null;
-  if (cloudStatus === "online" || cloudStatus === "unknown") return null;
 
-  const connecting = cloudStatus === "connecting";
+  // Primary Online = Account IM. Host-only live is never enough to hide this.
+  const accountOnline = accountSyncStatus === "online";
+  const accountConnecting = accountSyncStatus === "connecting";
+  const accountOffline = accountSyncStatus === "offline";
+  const hostOffline =
+    cloudStatus === "offline" ||
+    (cloudStatus !== "online" &&
+      cloudStatus !== "unknown" &&
+      cloudStatus !== "connecting");
+
+  // Fully healthy: Account can send/receive (Host readiness is optional secondary).
+  if (accountOnline && (cloudStatus === "online" || cloudStatus === "unknown")) {
+    return null;
+  }
+  // Account online but Host offline → soft secondary banner still useful for @agent.
+  // Account unknown (boot) without host failure → stay quiet.
+  if (accountSyncStatus === "unknown" && cloudStatus !== "offline") {
+    return null;
+  }
+
+  const connecting =
+    accountConnecting ||
+    (accountSyncStatus === "unknown" && cloudStatus === "connecting") ||
+    (accountOnline && cloudStatus === "connecting");
+
+  const title = connecting
+    ? "Connecting…"
+    : accountOffline
+      ? "Messages offline"
+      : hostOffline || cloudStatus === "offline"
+        ? "Host offline"
+        : "Connecting…";
+
+  const detail = connecting
+    ? "Account sync and host runtime will work once online."
+    : accountOffline
+      ? "Cannot send or receive chat until Account reconnects. Local coding may still work."
+      : cloudError ??
+        "This Mac host runtime is offline. Chat still works; @agent may wait until host reconnects.";
 
   return (
     <div
@@ -43,7 +84,9 @@ export function CloudConnectionBanner() {
         "flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2 text-2xs",
         connecting
           ? "border-amber-500/25 bg-amber-500/10 text-amber-950 dark:text-amber-100"
-          : "border-status-failed/30 bg-status-failed/10 text-status-failed",
+          : accountOffline
+            ? "border-status-failed/30 bg-status-failed/10 text-status-failed"
+            : "border-amber-500/25 bg-amber-500/10 text-amber-950 dark:text-amber-100",
       )}
     >
       <div className="flex min-w-0 items-center gap-2">
@@ -53,17 +96,8 @@ export function CloudConnectionBanner() {
           <WifiOff className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
         )}
         <div className="min-w-0">
-          <p className="font-semibold">
-            {connecting
-              ? "Connecting to server…"
-              : "Disconnected from server"}
-          </p>
-          <p className="truncate opacity-90">
-            {connecting
-              ? "Phone and remote control will work once online."
-              : cloudError ??
-                "Local coding still works. Remote / phone control is unavailable."}
-          </p>
+          <p className="font-semibold">{title}</p>
+          <p className="truncate opacity-90">{detail}</p>
         </div>
       </div>
       {!connecting ? (

@@ -4,27 +4,28 @@
 
 ## 项目定位
 
-Minos 是一个 **以 Conversation 协作为核心** 的远程 AI 编码协作产品：在 Project 下的对话时间线中，人与人、人与 Agent、Agent 与 Agent 协作；Agent 在用户 Mac/Linux Host 上执行 `codex` / `claude` / `gemini` / `opencode` 等 CLI，手机 / 浏览器 / Desktop 通过云端 IM 中枢同步消息、@、审批 Attention 与投影。
+Minos 是一个 **以 Conversation 协作为核心** 的远程 AI 编码协作产品（Slack / 企微式 IM + 对话内 bot）：在 Project 下的时间线中，人与人、人与 **Agent（bot 成员）** 协作；手机 / 浏览器 / Desktop 经云端 Hub 同步消息、@、未读与审批 Attention。Agent **不是**真人登录账号，而是 conversation 一等参与者；其执行身体在用户 Mac/Linux Host 上的 `codex` / `claude` / `gemini` / `opencode` 等 CLI。
 
-技术上仍包含 Host 守护进程与远程驱动能力，但 **产品主轴是聊天协作 IM**，Agent 是对话内可执行能力，而不是「运维台外挂聊天」。消息体系 SSOT 见 [architecture-messaging.md](architecture-messaging.md)。
+**产品主轴是消息驱动的聊天协作**；HostCommand / `/ws/host` 是 bot runtime 传输，不是协作主协议。决策见 [ADR 0021](adr/0021-agent-as-conversation-bot-participant.md)；投递模型见 [agent-participant-delivery](superpowers/specs/2026-08-09-agent-participant-delivery.md)；消息体系 SSOT 见 [architecture-messaging.md](architecture-messaging.md)。
 
 ## 顶层架构
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                           客户端层 (Clients)                           │
-│  Mobile (Flutter) · Web · Desktop Account Client                      │
-│       REST + /ws/client  →  public origin (prod: minos.ainexc.com)    │
-│  Desktop Host Console / TUI  →  local RPC → minos-daemon              │
+│  人类客户端 (Account participants)                                     │
+│  Mobile · Web · Desktop Account UI                                    │
+│  REST + /ws/client  →  Hub IM（发消息 / 收推送 / @人·@bot）            │
 ├──────────────────────────────────────────────────────────────────────┤
-│                     后端服务 (minos-backend)  [VPS hub]                │
-│  HTTP /v1/*  ·  WebSocket Gateway  ·  Domain/UC  ·  Worker Plane      │
-│  Prod: Caddy TLS · PostgreSQL · Redis · monolith container (GHCR)     │
+│  minos-backend  [VPS hub]                                             │
+│  Conversation SSOT · participant delivery · Agent inbox · Outbox      │
+│  /ws/client (人) · /ws/host (机器 runtime) · HTTP /v1/*               │
 ├──────────────────────────────────────────────────────────────────────┤
-│                     Host 端 (minos-daemon)  [user Mac/Linux]           │
-│  Agent Runtime · /ws/host → backend · Local RPC (TUI / Desktop)       │
+│  Host runtime (bot 身体)  minos-daemon  [user Mac/Linux]               │
+│  CLI Agent Runtime · /ws/host ingest/commands · Local RPC (Desktop/TUI)│
 └──────────────────────────────────────────────────────────────────────┘
 ```
+
+Desktop 同机双角色：Account UI 走 `/ws/client` 聊天；内嵌 daemon 走 `/ws/host` 执行。产品 Online 以 **Account sync** 为主，Host/agent readiness 为次。
 
 生产部署（runtime-only VPS，不在机器上 clone 源码）：[ops/vps-deploy.md](ops/vps-deploy.md)。
 

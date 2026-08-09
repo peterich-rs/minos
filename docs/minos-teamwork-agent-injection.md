@@ -10,7 +10,7 @@ All Minos MCP injections name the server `minos_teamwork`. The server is bound
 to the conversation that started the agent with:
 
 ```text
---conversation-id <conversation_id> --source-agent <agent> --source-thread-id <session_id> --socket-path <path>
+--conversation-id <conversation_id> --source-agent <agent> --source-session-id <session_id> --socket-path <path>
 ```
 
 Agents started outside a conversation do not receive the teamwork MCP server.
@@ -130,8 +130,9 @@ The command may be the standalone `minos-teamwork-mcp` binary or the hidden
 sidecar form:
 
 ```text
-minos-tui __minos-teamwork-mcp --conversation-id ... --source-agent ... --source-thread-id ... --socket-path ...
-minos-daemon __minos-teamwork-mcp --conversation-id ... --source-agent ... --source-thread-id ... --socket-path ...
+minos-tui __minos-teamwork-mcp --conversation-id ... --source-agent ... --source-session-id ... --socket-path ...
+minos-daemon __minos-teamwork-mcp --conversation-id ... --source-agent ... --source-session-id ... --socket-path ...
+minos-desktop / Minos.app binary __minos-teamwork-mcp --conversation-id ... --source-agent ... --source-session-id ... --socket-path ...
 ```
 
 ## Skill Locations

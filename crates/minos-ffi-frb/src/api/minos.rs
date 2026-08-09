@@ -1621,6 +1621,7 @@ pub struct _ChatMessageSummary {
     pub reply_to: Option<ChatMessageReplySummary>,
     pub recalled_at_ms: Option<i64>,
     pub mentioned_account_ids: Vec<String>,
+    pub mentioned_agent_ids: Vec<String>,
     pub sender_type: SenderType,
     pub reactions: Vec<ReactionGroup>,
     pub attachments: Vec<ChatMessageAttachment>,

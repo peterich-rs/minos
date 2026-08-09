@@ -258,10 +258,27 @@ pub async fn list_messages_by_ids(
     .map_err(store_err("social::list_messages_by_ids"))
 }
 
+/// List polymorphic mentions for the given message ids.
+///
+/// Returns account-only ids for backward-compatible call sites that only need
+/// human unread/push targeting. Prefer [`list_message_mentions_full`] when
+/// agent targets are required.
 pub async fn list_message_mentions(
     store: &impl AsStorePool,
     message_ids: &[String],
 ) -> Result<HashMap<String, Vec<String>>, BackendError> {
+    let full = list_message_mentions_full(store, message_ids).await?;
+    Ok(full
+        .into_iter()
+        .map(|(message_id, mentions)| (message_id, mentions.account_ids))
+        .collect())
+}
+
+/// List polymorphic mentions (account + agent) for the given message ids.
+pub async fn list_message_mentions_full(
+    store: &impl AsStorePool,
+    message_ids: &[String],
+) -> Result<HashMap<String, super::MessageMentions>, BackendError> {
     if message_ids.is_empty() {
         return Ok(HashMap::new());
     }
@@ -269,7 +286,7 @@ pub async fn list_message_mentions(
     let rows = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             let mut builder = QueryBuilder::<Sqlite>::new(
-                "SELECT message_id, mentioned_account_id
+                "SELECT message_id, target_kind, target_id
                    FROM chat_message_mentions
                   WHERE message_id IN (",
             );
@@ -279,7 +296,7 @@ pub async fn list_message_mentions(
                     separated.push_bind(message_id);
                 }
             }
-            builder.push(") ORDER BY message_id ASC, mentioned_account_id ASC");
+            builder.push(") ORDER BY message_id ASC, target_kind ASC, target_id ASC");
             builder
                 .build_query_as::<MessageMentionRow>()
                 .fetch_all(pool)
@@ -287,7 +304,7 @@ pub async fn list_message_mentions(
         }
         StorePoolRef::Postgres(pool) => {
             let mut builder = QueryBuilder::<Postgres>::new(
-                "SELECT message_id, mentioned_account_id
+                "SELECT message_id, target_kind, target_id
                    FROM chat_message_mentions
                   WHERE message_id IN (",
             );
@@ -297,7 +314,7 @@ pub async fn list_message_mentions(
                     separated.push_bind(message_id);
                 }
             }
-            builder.push(") ORDER BY message_id ASC, mentioned_account_id ASC");
+            builder.push(") ORDER BY message_id ASC, target_kind ASC, target_id ASC");
             builder
                 .build_query_as::<MessageMentionRow>()
                 .fetch_all(pool)
@@ -306,12 +323,15 @@ pub async fn list_message_mentions(
     }
     .map_err(store_err("social::list_message_mentions"))?;
 
-    let mut mentions_by_message = HashMap::<String, Vec<String>>::new();
+    let mut mentions_by_message = HashMap::<String, super::MessageMentions>::new();
     for row in rows {
-        mentions_by_message
+        let entry = mentions_by_message
             .entry(row.message_id)
-            .or_default()
-            .push(row.mentioned_account_id);
+            .or_default();
+        match row.target_kind.as_str() {
+            "agent" => entry.agent_ids.push(row.target_id),
+            _ => entry.account_ids.push(row.target_id),
+        }
     }
     Ok(mentions_by_message)
 }
@@ -325,17 +345,41 @@ pub async fn insert_message(
     reply_to_message_id: Option<&str>,
     mentioned_account_ids: &[String],
 ) -> Result<ChatMessageRow, BackendError> {
-    insert_message_with_id(
+    insert_message_with_mentions(
         store,
         conversation_id,
         sender_account_id,
         text,
         created_at_ms,
         reply_to_message_id,
-        mentioned_account_ids,
-        None,
+        &super::MessageMentions::accounts(mentioned_account_ids.iter().cloned()),
     )
     .await
+}
+
+pub async fn insert_message_with_mentions(
+    store: &impl AsStorePool,
+    conversation_id: &str,
+    sender_account_id: &str,
+    text: &str,
+    created_at_ms: i64,
+    reply_to_message_id: Option<&str>,
+    mentions: &super::MessageMentions,
+) -> Result<ChatMessageRow, BackendError> {
+    insert_message_with_id_full(
+        store,
+        conversation_id,
+        sender_account_id,
+        text,
+        created_at_ms,
+        reply_to_message_id,
+        mentions,
+        None,
+        &[],
+        minos_protocol::MessageSource::ClientLive.as_str(),
+    )
+    .await
+    .map(|outcome| outcome.row)
 }
 
 /// Insert a user chat message, optionally with a client-owned id for multi-end
@@ -358,12 +402,13 @@ pub async fn insert_message_with_id(
         text,
         created_at_ms,
         reply_to_message_id,
-        mentioned_account_ids,
+        &super::MessageMentions::accounts(mentioned_account_ids.iter().cloned()),
         client_message_id,
         &[],
         "client_live",
     )
     .await
+    .map(|outcome| outcome.row)
 }
 
 /// Full fingerprint insert (tests + callers that already open a pool).
@@ -375,11 +420,11 @@ pub async fn insert_message_with_id_full(
     text: &str,
     created_at_ms: i64,
     reply_to_message_id: Option<&str>,
-    mentioned_account_ids: &[String],
+    mentions: &super::MessageMentions,
     client_message_id: Option<&str>,
     attachment_blob_ids: &[String],
     message_source: &str,
-) -> Result<ChatMessageRow, BackendError> {
+) -> Result<InsertMessageOutcome, BackendError> {
     let mut tx = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => pool
             .begin()
@@ -399,7 +444,7 @@ pub async fn insert_message_with_id_full(
         text,
         created_at_ms,
         reply_to_message_id,
-        mentioned_account_ids,
+        mentions,
         client_message_id,
         attachment_blob_ids,
         message_source,
@@ -414,7 +459,7 @@ pub async fn insert_message_with_id_full(
         .await?;
     }
     tx.commit().await?;
-    Ok(outcome.row)
+    Ok(outcome)
 }
 
 /// Insert a user message on an open transaction (for Transactional Outbox).
@@ -433,7 +478,7 @@ pub async fn insert_message_with_id_in_tx(
     text: &str,
     created_at_ms: i64,
     reply_to_message_id: Option<&str>,
-    mentioned_account_ids: &[String],
+    mentions: &super::MessageMentions,
     client_message_id: Option<&str>,
     attachment_blob_ids: &[String],
     message_source: &str,
@@ -504,10 +549,6 @@ pub async fn insert_message_with_id_in_tx(
         None => Uuid::new_v4().to_string(),
     };
 
-    let mut unique_mentions = mentioned_account_ids.to_vec();
-    unique_mentions.sort();
-    unique_mentions.dedup();
-
     let message_seq = allocate_message_seq_in_tx(tx, conversation_id, created_at_ms).await?;
 
     match tx {
@@ -529,18 +570,7 @@ pub async fn insert_message_with_id_in_tx(
             .execute(&mut **tx)
             .await
             .map_err(store_err("social::insert_message.insert"))?;
-            for mentioned_account_id in &unique_mentions {
-                sqlx::query(
-                    "INSERT INTO chat_message_mentions
-                        (message_id, mentioned_account_id)
-                     VALUES (?, ?)",
-                )
-                .bind(&message_id)
-                .bind(mentioned_account_id)
-                .execute(&mut **tx)
-                .await
-                .map_err(store_err("social::insert_message.insert_mention"))?;
-            }
+            insert_mention_rows_sqlite(tx, &message_id, mentions).await?;
         }
         DbTx::Postgres(tx) => {
             sqlx::query(
@@ -560,18 +590,7 @@ pub async fn insert_message_with_id_in_tx(
             .execute(&mut **tx)
             .await
             .map_err(store_err("social::insert_message.insert"))?;
-            for mentioned_account_id in &unique_mentions {
-                sqlx::query(
-                    "INSERT INTO chat_message_mentions
-                        (message_id, mentioned_account_id)
-                     VALUES ($1, $2)",
-                )
-                .bind(&message_id)
-                .bind(mentioned_account_id)
-                .execute(&mut **tx)
-                .await
-                .map_err(store_err("social::insert_message.insert_mention"))?;
-            }
+            insert_mention_rows_postgres(tx, &message_id, mentions).await?;
         }
     }
 
@@ -591,6 +610,82 @@ pub async fn insert_message_with_id_in_tx(
         },
         inserted: true,
     })
+}
+
+async fn insert_mention_rows_sqlite(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+    message_id: &str,
+    mentions: &super::MessageMentions,
+) -> Result<(), BackendError> {
+    let mut account_ids = mentions.account_ids.clone();
+    account_ids.sort();
+    account_ids.dedup();
+    let mut agent_ids = mentions.agent_ids.clone();
+    agent_ids.sort();
+    agent_ids.dedup();
+    for target_id in account_ids {
+        sqlx::query(
+            "INSERT INTO chat_message_mentions
+                (message_id, target_kind, target_id)
+             VALUES (?, 'account', ?)",
+        )
+        .bind(message_id)
+        .bind(target_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(store_err("social::insert_message.insert_mention"))?;
+    }
+    for target_id in agent_ids {
+        sqlx::query(
+            "INSERT INTO chat_message_mentions
+                (message_id, target_kind, target_id)
+             VALUES (?, 'agent', ?)",
+        )
+        .bind(message_id)
+        .bind(target_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(store_err("social::insert_message.insert_mention"))?;
+    }
+    Ok(())
+}
+
+async fn insert_mention_rows_postgres(
+    tx: &mut sqlx::Transaction<'_, Postgres>,
+    message_id: &str,
+    mentions: &super::MessageMentions,
+) -> Result<(), BackendError> {
+    let mut account_ids = mentions.account_ids.clone();
+    account_ids.sort();
+    account_ids.dedup();
+    let mut agent_ids = mentions.agent_ids.clone();
+    agent_ids.sort();
+    agent_ids.dedup();
+    for target_id in account_ids {
+        sqlx::query(
+            "INSERT INTO chat_message_mentions
+                (message_id, target_kind, target_id)
+             VALUES ($1, 'account', $2)",
+        )
+        .bind(message_id)
+        .bind(target_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(store_err("social::insert_message.insert_mention"))?;
+    }
+    for target_id in agent_ids {
+        sqlx::query(
+            "INSERT INTO chat_message_mentions
+                (message_id, target_kind, target_id)
+             VALUES ($1, 'agent', $2)",
+        )
+        .bind(message_id)
+        .bind(target_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(store_err("social::insert_message.insert_mention"))?;
+    }
+    Ok(())
 }
 
 fn normalize_message_source(source: &str) -> &'static str {
