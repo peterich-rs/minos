@@ -943,6 +943,20 @@ async fn handle_subscribe(
         return Ok(());
     }
 
+    // Replay/live barrier: arm buffering *before* live registration so concurrent
+    // durable fanout cannot race ahead of catch-up on the wire.
+    let resume_after = resume_after.unwrap_or_default();
+    for topic in &authorized_topics {
+        let topic_string = topic.topic_string();
+        let meta = durable_event_log::topic_sequence_meta(
+            &state.store,
+            topic.kind().as_str(),
+            &topic_string,
+        )
+        .await?;
+        conn.arm_catchup_barrier(topic, meta.high_watermark);
+    }
+
     // Register for live fanout (may already be registered via Hello default topic).
     let _newly = state
         .subscription_mgr
@@ -964,7 +978,6 @@ async fn handle_subscribe(
     // Catch-up for every topic in this Subscribe, including already-registered
     // default topics (Hello is register-only). Clients pass resume_after cursors;
     // missing key → after=0 (full retained history).
-    let resume_after = resume_after.unwrap_or_default();
     for topic in &authorized_topics {
         let after = resume_after
             .get(&topic.topic_string())
@@ -985,13 +998,16 @@ async fn replay_topic(
 ) -> Result<(), BackendError> {
     let topic_string = topic.topic_string();
     let topic_kind = topic.kind().as_str();
-    let first =
-        durable_event_log::read_topic_after(&state.store, topic_kind, &topic_string, 0, 1).await?;
-    let retention_floor_seq = first
-        .first()
-        .map(|row| row.topic_seq.saturating_sub(1))
-        .unwrap_or(0);
+    // Sequence authority is independent of retained payload rows: empty log after
+    // full retention still has non-zero floor so clients cannot silently miss events.
+    let meta =
+        durable_event_log::topic_sequence_meta(&state.store, topic_kind, &topic_string).await?;
+    let retention_floor_seq = meta.retention_floor;
     if after < retention_floor_seq {
+        // Snapshot rebuild path: drop barrier buffer (live frames are not useful
+        // without a full cold snapshot) and leave the connection unsubscribed from
+        // ordered catch-up — client must re-subscribe after snapshot.
+        let _ = conn.drain_catchup_barrier(topic, i64::MAX);
         let _ = send_server_frame(
             ws,
             &ServerFrame::SnapshotRequired {
@@ -1004,8 +1020,11 @@ async fn replay_topic(
         return Ok(());
     }
 
+    // Replay only through the watermark observed at barrier arm so live events
+    // buffered during catch-up are not mixed into the DB page stream.
+    let replay_through = meta.high_watermark;
     let mut next_after = after;
-    loop {
+    while next_after < replay_through {
         let batch = durable_event_log::read_topic_after(
             &state.store,
             topic_kind,
@@ -1019,6 +1038,9 @@ async fn replay_topic(
         }
 
         for row in &batch {
+            if row.topic_seq > replay_through {
+                break;
+            }
             if conn.has_seen_durable_event(&row.event_id) {
                 continue;
             }
@@ -1036,6 +1058,7 @@ async fn replay_topic(
             .await
             .is_err()
             {
+                let _ = conn.drain_catchup_barrier(topic, i64::MAX);
                 return Err(BackendError::MessageBus {
                     operation: "gateway.replay.send".into(),
                     message: "websocket closed while replaying durable events".into(),
@@ -1048,6 +1071,24 @@ async fn replay_topic(
         if batch.len() < usize::try_from(REPLAY_BATCH_SIZE).unwrap_or(usize::MAX) {
             break;
         }
+    }
+
+    // Drain live frames that arrived during replay, in topic_seq order.
+    // Skip event_ids already sent via DB replay (dedupe by seen set).
+    let buffered = conn.drain_catchup_barrier(topic, next_after.max(after));
+    for (event_id, frame) in buffered {
+        if conn.has_seen_durable_event(&event_id) {
+            continue;
+        }
+        if send_server_frame(ws, &frame).await.is_err() {
+            return Err(BackendError::MessageBus {
+                operation: "gateway.replay.drain_barrier".into(),
+                message: format!(
+                    "websocket closed while draining catchup buffer for event {event_id}"
+                ),
+            });
+        }
+        let _ = conn.remember_durable_event(&event_id);
     }
 
     Ok(())

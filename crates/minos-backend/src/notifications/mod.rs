@@ -9,6 +9,7 @@ pub mod use_case;
 pub use decision::{AccountPresence, Decision, DecisionInput, DecisionReason};
 pub use preferences::NotificationPreferences;
 pub use use_case::{
-    DispatchOutcome, NotificationError, NotificationService, OfflinePresence, PresencePort,
-    PushTokenDto, RegisterTokenInput, UnregisterTokenInput, UpdatePreferencesInput,
+    resolve_target_accounts, AccountDispatchOutcome, DispatchOutcome, NotificationError,
+    NotificationService, OfflinePresence, PresencePort, PushTokenDto, RegisterTokenInput,
+    UnregisterTokenInput, UpdatePreferencesInput,
 };

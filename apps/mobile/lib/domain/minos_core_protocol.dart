@@ -107,6 +107,7 @@ abstract class MinosCoreProtocol {
 
   Future<ConversationReadResponse> markConversationRead({
     required String conversationId,
+    required int readUpToMessageSeq,
   });
 
   Future<ListChatMessagesResponse> listChatMessages({
@@ -152,6 +153,12 @@ abstract class MinosCoreProtocol {
 
   /// Leave open-chat conversation topic (R3a).
   Future<void> unsubscribeConversation({required String conversationId});
+
+  /// Advance durable topic cursor after local cache/reducer commit.
+  Future<void> ackDurableApplied({
+    required String topic,
+    required int topicSeq,
+  });
 
   /// Translated UI event history for one session.
   Future<ReadSessionResponse> readThread(ReadSessionParams params);

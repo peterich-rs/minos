@@ -24,8 +24,8 @@ pub struct SkillRef {
 }
 
 pub const MINOS_TEAMWORK_SKILL: SkillRef = SkillRef {
-    id: "minos-teamwork",
-    path: "crates/minos-tui/skills/minos-teamwork/SKILL.md",
+    id: minos_prompt_runtime::TEAMWORK_SKILL_ID,
+    path: minos_prompt_runtime::TEAMWORK_SKILL_REPO_PATH,
     inject_when: SkillInjectWhen::ServerEnabled,
 };
 

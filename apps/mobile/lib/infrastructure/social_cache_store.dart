@@ -514,19 +514,33 @@ class SocialCacheStore {
   }
 
   Future<List<ImOutboxEntry>> listDueOutbox({int? nowMs}) async {
+    final lanes = await listDueOutboxLanes(nowMs: nowMs);
+    return lanes.expand((lane) => lane).toList(growable: false);
+  }
+
+  /// Per-conversation FIFO send lanes whose head is currently due.
+  ///
+  /// Head blocked (backoff / inflight) → whole lane omitted so tails cannot
+  /// overtake. Contiguous due-pending prefix is returned per conversation.
+  Future<List<List<ImOutboxEntry>>> listDueOutboxLanes({int? nowMs}) async {
     final db = await _database();
     if (db == null) {
-      return const <ImOutboxEntry>[];
+      return const <List<ImOutboxEntry>>[];
     }
     final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
     await reclaimStaleOutbox(nowMs: now);
+    // Active rows only (pending + inflight) so a backoff head blocks the lane.
     final rows = await db.query(
       'im_outbox',
-      where: 'status = ? AND next_attempt_at_ms <= ?',
-      whereArgs: <Object>[imOutboxStatusWire(ImOutboxStatus.pending), now],
-      orderBy: 'next_attempt_at_ms ASC',
+      where: 'status = ? OR status = ?',
+      whereArgs: <Object>[
+        imOutboxStatusWire(ImOutboxStatus.pending),
+        imOutboxStatusWire(ImOutboxStatus.inflight),
+      ],
+      orderBy: 'created_at_ms ASC, client_op_id ASC',
     );
-    return rows.map(_outboxFromRow).toList(growable: false);
+    final active = rows.map(_outboxFromRow).toList(growable: false);
+    return buildDueOutboxLanes(activeEntries: active, nowMs: now);
   }
 
   Future<void> markOutboxInflight(String clientOpId) async {

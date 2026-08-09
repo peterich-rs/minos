@@ -8,14 +8,27 @@
   {
     "kind":"tool_call_placed",
     "message_id":"i1",
-    "tool_call_id":"<uuid>",
+    "tool_call_id":"fileChange:fc1",
     "name":"apply_patch",
-    "args_json":{"kind":"inline","text":"{\"diff\":\"...\"}"}
+    "args_json":{"kind":"inline","text":"{\"changes\":[{\"kind\":\"update\",\"path\":\"a.rs\"}],\"id\":\"fc1\",\"status\":\"inProgress\",\"tool\":\"apply_patch\",\"type\":\"fileChange\"}"}
   },
   {
     "kind":"tool_call_completed",
-    "tool_call_id":"<uuid>",
-    "output":{"kind":"inline","text":"patched 1 file"},
+    "tool_call_id":"fileChange:fc1",
+    "output":{"kind":"inline","text":"patching…"},
+    "is_error":false
+  },
+  {
+    "kind":"tool_call_placed",
+    "message_id":"i1",
+    "tool_call_id":"fileChange:fc1",
+    "name":"apply_patch",
+    "args_json":{"kind":"inline","text":"{\"changes\":[{\"kind\":\"update\",\"path\":\"a.rs\"}],\"id\":\"fc1\",\"status\":\"completed\",\"tool\":\"apply_patch\",\"type\":\"fileChange\"}"}
+  },
+  {
+    "kind":"tool_call_completed",
+    "tool_call_id":"fileChange:fc1",
+    "output":{"kind":"inline","text":"[\n  {\n    \"kind\": \"update\",\n    \"path\": \"a.rs\"\n  }\n]"},
     "is_error":false
   }
 ]

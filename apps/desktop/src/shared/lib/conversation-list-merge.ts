@@ -54,6 +54,39 @@ function hubPreview(d: HubConversationDigest): string {
 }
 
 /**
+ * Placeholder titles invented when Hub/local lack a real name.
+ * Never let these override a concrete title from the other source.
+ */
+const PLACEHOLDER_TITLES = new Set([
+  "",
+  "conversation",
+  "direct agent sessions",
+]);
+
+/** True when title is missing or a known placeholder (case-insensitive). */
+export function isPlaceholderConversationTitle(
+  title: string | null | undefined,
+): boolean {
+  const t = title?.trim() ?? "";
+  return PLACEHOLDER_TITLES.has(t.toLowerCase());
+}
+
+/**
+ * Pick display title: real Hub title wins (multi-end rename SSOT);
+ * Hub placeholder must not clobber a real local/daemon title.
+ */
+export function resolveConversationTitle(input: {
+  hubTitle?: string | null;
+  daemonTitle?: string | null;
+}): string {
+  const hub = input.hubTitle?.trim() ?? "";
+  const daemon = input.daemonTitle?.trim() ?? "";
+  if (!isPlaceholderConversationTitle(hub)) return hub;
+  if (!isPlaceholderConversationTitle(daemon)) return daemon;
+  return hub || daemon || "Conversation";
+}
+
+/**
  * Last-activity ms: newer of Hub digest and local daemon row.
  * Either side may lag (Hub outbox vs local-only tool noise); max is correct
  * for sort + list clock.
@@ -173,7 +206,10 @@ export function mergeConversationList(input: {
     out.push({
       id,
       projectId: row.projectId || projectId,
-      title: hub?.title?.trim() || row.title || "Conversation",
+      title: resolveConversationTitle({
+        hubTitle: hub?.title,
+        daemonTitle: row.title,
+      }),
       preview: resolveListPreview({
         hub,
         daemonPreview: row.preview,
@@ -207,7 +243,10 @@ export function mergeConversationList(input: {
       out.push({
         id,
         projectId: projectId || "",
-        title: hub.title?.trim() || "Conversation",
+        title: resolveConversationTitle({
+          hubTitle: hub.title,
+          daemonTitle: null,
+        }),
         preview: hubPreview(hub),
         updatedAtMs: lastMs,
         unread: resolveRailUnread({

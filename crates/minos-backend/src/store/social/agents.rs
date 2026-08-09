@@ -587,15 +587,44 @@ pub async fn insert_agent_message_with_session_in_tx(
     let message_id = match client_message_id.map(str::trim).filter(|s| !s.is_empty()) {
         Some(id) => {
             if let Some(existing) = super::conversation_messages::get_message_in_tx(tx, id).await? {
-                if existing.conversation_id == conversation_id {
-                    return Ok(super::conversation_messages::InsertMessageOutcome {
-                        row: existing,
-                        inserted: false,
+                if existing.conversation_id != conversation_id {
+                    return Err(BackendError::StoreQuery {
+                        operation: "social::insert_agent_message.conflict".into(),
+                        message: format!(
+                            "message_id {id} already exists in a different conversation"
+                        ),
                     });
                 }
-                return Err(BackendError::StoreQuery {
-                    operation: "social::insert_agent_message.conflict".into(),
-                    message: format!("message_id {id} already exists in a different conversation"),
+                // Agent bubble fingerprint: same text/reply/agent (not silent body swap).
+                if existing.sender_type != "agent"
+                    || existing.sender_agent_id.as_deref() != Some(agent.agent_id.as_str())
+                {
+                    return Err(BackendError::StoreQuery {
+                        operation: "social::insert_agent_message.idempotency_conflict".into(),
+                        message: format!(
+                            "client_message_id {id} already used by a non-matching agent sender"
+                        ),
+                    });
+                }
+                if existing.text != text {
+                    return Err(BackendError::StoreQuery {
+                        operation: "social::insert_agent_message.idempotency_conflict".into(),
+                        message: format!(
+                            "client_message_id {id} reused with different message body"
+                        ),
+                    });
+                }
+                if existing.reply_to_message_id.as_deref() != reply_to_message_id {
+                    return Err(BackendError::StoreQuery {
+                        operation: "social::insert_agent_message.idempotency_conflict".into(),
+                        message: format!(
+                            "client_message_id {id} reused with different reply target"
+                        ),
+                    });
+                }
+                return Ok(super::conversation_messages::InsertMessageOutcome {
+                    row: existing,
+                    inserted: false,
                 });
             }
             id.to_string()
@@ -624,8 +653,9 @@ pub async fn insert_agent_message_with_session_in_tx(
                     message_seq,
                     reply_to_message_id,
                     agent_session_id,
-                    sender_type
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'agent')",
+                    sender_type,
+                    message_source
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'agent', 'host_projection')",
             )
             .bind(&message_id)
             .bind(conversation_id)
@@ -664,8 +694,9 @@ pub async fn insert_agent_message_with_session_in_tx(
                     message_seq,
                     reply_to_message_id,
                     agent_session_id,
-                    sender_type
-                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'agent')",
+                    sender_type,
+                    message_source
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'agent', 'host_projection')",
             )
             .bind(&message_id)
             .bind(conversation_id)
@@ -707,6 +738,7 @@ pub async fn insert_agent_message_with_session_in_tx(
             reply_to_message_id: reply_to_message_id.map(ToOwned::to_owned),
             recalled_at_ms: None,
             sender_type: "agent".to_string(),
+            message_source: "host_projection".to_string(),
         },
         inserted: true,
     })

@@ -11,16 +11,16 @@
  * live on open/select (Timeline mount) and debounced focused inbound.
  */
 import type { WorkspaceGet, WorkspaceSet, WorkspaceState } from "./types";
-import { bumpStatus, toUiMessage } from "./helpers";
+import { statusForLoad, toUiMessage } from "./helpers";
 import { daemonApi } from "@/shared/lib/daemon";
 import { singleFlightLoad } from "@/shared/lib/desktop-inflight";
 import {
   EMPTY_MESSAGE_HISTORY,
   MESSAGE_PAGE_SIZE,
   firstMessageCreatedAtMs,
-  firstMessageSeq,
   mergeMessagesOlder,
   mergeMessagesQuietTail,
+  messageHistoryFromWindow,
   metaAfterMessageTail,
   type MessageHistoryMeta,
   trimMessagesHardMax,
@@ -61,8 +61,13 @@ export function createTimelineActions(
     return singleFlightLoad(
       `timeline:${conversationId}:${quiet ? "q" : "h"}`,
       async () => {
+        // Quiet peeks must NOT bump generation: concurrent hard opens would
+        // otherwise complete as "stale" and discard the full page (transcript
+        // parity — see loadTranscript quiet path).
         const prev = get().timelineStatusByConversation[conversationId];
-        const { next, generation } = bumpStatus(prev, quiet);
+        const { next, generation } = statusForLoad(prev, quiet);
+        // Quiet is stale when a hard open bumped generation past what we saw.
+        // Hard open is stale when a newer hard open superseded us.
         const isStale = () =>
           get().timelineStatusByConversation[conversationId]?.generation !==
           generation;
@@ -102,25 +107,32 @@ export function createTimelineActions(
             );
           }
 
-          // Hub-first cold/hot hydrate (no daemon append of cloud IM).
-          const hubPromise = linked
-            ? pullHubConversationMessagePage(conversationId, {
-                limit: MESSAGE_PAGE_SIZE,
-              })
-            : Promise.resolve({
-                messages: [] as Awaited<
-                  ReturnType<typeof pullHubConversationMessagePage>
-                >["messages"],
-                nextBeforeSeq: null as number | null,
-                rawCount: 0,
-              });
-
+          // Local daemon list first so agent-result is visible even if Hub is down.
+          // Hub failure must never block applying the workbench window.
           const messagePage = await daemonApi.listMessages(conversationId, {
             limit: MESSAGE_PAGE_SIZE,
           });
           if (isStale()) return;
 
-          const hubPage = await hubPromise;
+          let hubPage: Awaited<
+            ReturnType<typeof pullHubConversationMessagePage>
+          > = {
+            messages: [],
+            nextBeforeSeq: null,
+            rawCount: 0,
+          };
+          if (linked) {
+            try {
+              hubPage = await pullHubConversationMessagePage(conversationId, {
+                limit: MESSAGE_PAGE_SIZE,
+              });
+            } catch (hubErr) {
+              console.warn(
+                "[timeline] hub message pull failed; applying local only",
+                hubErr,
+              );
+            }
+          }
           if (isStale()) return;
           const hubRows = hubPage.messages;
 
@@ -139,8 +151,9 @@ export function createTimelineActions(
             const prevMessages = s.messagesByConversation[conversationId];
             let merged: typeof localUi;
             if (linked) {
-              // Hub SSOT for chat bubbles. Include prev window so optimistic
-              // sending/failed + local tool cards survive; strip local chat rows.
+              // Hub SSOT for chat bubbles when present. Always include localUi so
+              // host agent-result appears before / without Hub uplink.
+              // prev window keeps optimistic sending/failed + local tool cards.
               merged = mergeHubAndLocalTimeline({
                 hubMessages: hubRows,
                 localMessages: [...localUi, ...(prevMessages ?? [])],
@@ -158,27 +171,28 @@ export function createTimelineActions(
               linked &&
               (hubPage.nextBeforeSeq != null ||
                 hubPage.rawCount >= MESSAGE_PAGE_SIZE);
+            const hostHasOlder = messagePage.hasMore;
             const firstCreated = firstMessageCreatedAtMs(merged);
             const nextHist: MessageHistoryMeta = quiet
-              ? {
-                  firstLoadedSeq:
-                    firstMessageSeq(merged) ?? prevHist.firstLoadedSeq,
+              ? messageHistoryFromWindow(merged, {
+                  prev: prevHist,
                   firstLoadedCreatedAtMs:
                     firstCreated ?? prevHist.firstLoadedCreatedAtMs,
-                  hasOlder:
-                    prevHist.hasOlder ||
-                    messagePage.hasMore ||
-                    hubHasOlder ||
-                    trimmed.trimmed,
+                  hasOlderHub:
+                    prevHist.hasOlderHub || hubHasOlder || trimmed.trimmed,
+                  hasOlderHost:
+                    prevHist.hasOlderHost || hostHasOlder || trimmed.trimmed,
                   loadingOlder: false,
-                }
-              : {
-                  ...metaAfterMessageTail(
-                    merged,
-                    messagePage.hasMore || hubHasOlder || trimmed.trimmed,
-                    firstCreated,
-                  ),
-                };
+                })
+              : metaAfterMessageTail(
+                  merged,
+                  hostHasOlder || hubHasOlder || trimmed.trimmed,
+                  firstCreated,
+                  {
+                    hasMoreHub: hubHasOlder || trimmed.trimmed,
+                    hasMoreHost: hostHasOlder || trimmed.trimmed,
+                  },
+                );
             return {
               messagesByConversation: {
                 ...s.messagesByConversation,
@@ -241,6 +255,22 @@ export function createTimelineActions(
         } catch (e) {
           if (isStale()) return;
           const message = e instanceof Error ? e.message : String(e);
+          // Quiet peeks must not clobber a ready window with an error phase —
+          // release loading only when we still own generation (transcript parity).
+          if (quiet) {
+            set((s) => {
+              const cur = s.timelineStatusByConversation[conversationId];
+              if (cur?.generation !== generation) return {};
+              if (cur.phase === "ready") return {};
+              return {
+                timelineStatusByConversation: {
+                  ...s.timelineStatusByConversation,
+                  [conversationId]: { phase: "ready", generation },
+                },
+              };
+            });
+            return;
+          }
           set((s) => ({
             timelineStatusByConversation: {
               ...s.timelineStatusByConversation,
@@ -264,19 +294,27 @@ export function createTimelineActions(
     if (hist.loadingOlder || !hist.hasOlder) return;
 
     const linked = hubImEnabled();
-    const beforeSeq = hist.firstLoadedSeq;
+    // Independent namespaces: never feed host min into Hub before_seq.
+    const hubBefore =
+      hist.hubMinLoadedSeq ?? (linked ? hist.firstLoadedSeq : null);
+    const hostBefore =
+      hist.hostMinLoadedSeq ?? (!linked ? hist.firstLoadedSeq : null);
 
-    // Nothing to page with (daemon and Hub both use message_seq cursors).
-    if (beforeSeq == null || beforeSeq <= 1) {
+    const canPageHub = linked && hubBefore != null && hubBefore > 1;
+    const canPageHost = hostBefore != null && hostBefore > 1;
+    if (!canPageHub && !canPageHost) {
       set((s) => ({
         messageHistoryByConversation: {
           ...s.messageHistoryByConversation,
-          [conversationId]: {
-            firstLoadedSeq: hist.firstLoadedSeq,
-            firstLoadedCreatedAtMs: hist.firstLoadedCreatedAtMs,
-            hasOlder: false,
-            loadingOlder: false,
-          },
+          [conversationId]: messageHistoryFromWindow(
+            s.messagesByConversation[conversationId] ?? [],
+            {
+              prev: hist,
+              hasOlderHub: false,
+              hasOlderHost: false,
+              loadingOlder: false,
+            },
+          ),
         },
       }));
       return;
@@ -293,18 +331,16 @@ export function createTimelineActions(
     }));
 
     try {
-      // Local-only: page daemon by seq. Linked: Hub before_seq + local tool cards.
-      const daemonPagePromise =
-        beforeSeq > 1
-          ? daemonApi.listMessages(conversationId, {
-              beforeSeq,
-              limit: MESSAGE_PAGE_SIZE,
-            })
-          : Promise.resolve({ messages: [], hasMore: false });
+      const daemonPagePromise = canPageHost
+        ? daemonApi.listMessages(conversationId, {
+            beforeSeq: hostBefore!,
+            limit: MESSAGE_PAGE_SIZE,
+          })
+        : Promise.resolve({ messages: [], hasMore: false });
 
-      const hubPagePromise = linked
+      const hubPagePromise = canPageHub
         ? pullHubConversationMessagePage(conversationId, {
-            beforeSeq,
+            beforeSeq: hubBefore!,
             limit: MESSAGE_PAGE_SIZE,
           })
         : Promise.resolve({
@@ -320,7 +356,6 @@ export function createTimelineActions(
         hubPagePromise,
       ]);
       if (get().source !== "daemon") return;
-      // Linked: Hub page carries viewer-resolved reactions; local-only: daemon.
       useReactionStore
         .getState()
         .hydrateFromMessages(
@@ -352,12 +387,11 @@ export function createTimelineActions(
           },
           messageHistoryByConversation: {
             ...s.messageHistoryByConversation,
-            [conversationId]: {
-              firstLoadedSeq: firstMessageSeq(merged),
-              firstLoadedCreatedAtMs: firstMessageCreatedAtMs(merged),
-              hasOlder: page.hasMore || hubHasOlder || trimmed.trimmed,
+            [conversationId]: messageHistoryFromWindow(merged, {
+              hasOlderHub: hubHasOlder || trimmed.trimmed,
+              hasOlderHost: page.hasMore || trimmed.trimmed,
               loadingOlder: false,
-            },
+            }),
           },
         };
       });
@@ -370,9 +404,7 @@ export function createTimelineActions(
           messageHistoryByConversation: {
             ...s.messageHistoryByConversation,
             [conversationId]: {
-              firstLoadedSeq: prev.firstLoadedSeq,
-              firstLoadedCreatedAtMs: prev.firstLoadedCreatedAtMs,
-              hasOlder: prev.hasOlder,
+              ...prev,
               loadingOlder: false,
             },
           },

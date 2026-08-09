@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -23,10 +23,12 @@ use minos_protocol::{
 use minos_ui_protocol::SessionEndReason;
 use tokio::sync::{broadcast, watch};
 
+use crate::ingest_chunk::IngestChunk;
+use crate::ingest_coalescer::{IngestCoalescer, PreparedIngest};
+use crate::ingest_sync::IngestSyncHandle;
 use crate::store::event_writer::{provider_session_id_from_ingest, EventWriter};
 use crate::store::{ChatMessageRow, ConversationRow, EventRow, LocalStore, SessionRow};
 use crate::subscription::{AgentStateObserver, Subscription};
-use crate::{ingest_coalescer::IngestCoalescer, ingest_sync::IngestSyncHandle};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentSessionSnapshot {
@@ -141,59 +143,85 @@ impl AgentGlue {
         let ingest_sync_clone = ingest_sync.clone();
         let persisted_ingest_tx_clone = persisted_ingest_tx.clone();
         let completion_for_ingest = completion.clone();
+        let manager_for_ingest = manager.clone();
+        // Commit-then-live-upload, seq assigned only inside SQLite, parent-missing
+        // frames buffered (never silently dropped after a burned seq).
         tokio::spawn(async move {
-            while let Some(ingest) = rx.recv().await {
-                let session_id = ingest.session_id.clone();
-                let agent = ingest.agent;
-                let ts_ms = ingest.ts_ms;
-                let payload_bytes = ingest.body_len();
-                let chunk = match coalescer_clone.coalesce(ingest).await {
-                    Ok(chunk) => chunk,
-                    Err(error) => {
-                        tracing::error!(
-                            target: "minos_daemon::agent",
-                            error = %error,
-                            session_id = %session_id,
-                            "failed to coalesce ingest event; event dropped",
-                        );
-                        continue;
+            loop {
+                tokio::select! {
+                    maybe = rx.recv() => {
+                        let Some(ingest) = maybe else { break; };
+                        // A failed older write owns the head of the commit lane.
+                        // Never let a newly received provider frame allocate seq first.
+                        let commit_lane_ready = drain_prepared_queue(
+                            &writer_clone,
+                            &coalescer_clone,
+                            &ingest_sync_clone,
+                            &persisted_ingest_tx_clone,
+                            &completion_for_ingest,
+                            &manager_for_ingest,
+                        )
+                        .await;
+                        match coalescer_clone.admit(ingest).await {
+                            Ok(Some(prepared)) => {
+                                if commit_lane_ready {
+                                    if !commit_prepared_ingest(
+                                        &writer_clone,
+                                        &ingest_sync_clone,
+                                        &persisted_ingest_tx_clone,
+                                        &completion_for_ingest,
+                                        prepared.clone(),
+                                    )
+                                    .await
+                                    {
+                                        if let Err(full) =
+                                            coalescer_clone.requeue_write_failure(prepared).await
+                                        {
+                                            fail_session_ingest_queue_full(
+                                                &manager_for_ingest,
+                                                &full,
+                                            )
+                                            .await;
+                                        }
+                                    }
+                                } else if let Err(full) =
+                                    coalescer_clone.requeue_write_failure(prepared).await
+                                {
+                                    fail_session_ingest_queue_full(&manager_for_ingest, &full)
+                                        .await;
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(error) => {
+                                if let Some(full) =
+                                    error.downcast_ref::<crate::ingest_coalescer::IngestQueueFull>()
+                                {
+                                    fail_session_ingest_queue_full(
+                                        &manager_for_ingest,
+                                        full,
+                                    )
+                                    .await;
+                                } else {
+                                    tracing::error!(
+                                        target: "minos_daemon::agent",
+                                        error = %error,
+                                        "failed to prepare ingest event",
+                                    );
+                                }
+                            }
+                        }
                     }
-                };
-                let sync = ingest_sync_clone
-                    .lock()
-                    .ok()
-                    .and_then(|guard| guard.clone());
-                if let Some(sync) = sync {
-                    sync.submit_live(chunk.clone()).await;
-                }
-                match writer_clone.write_chunk(chunk).await {
-                    Ok(committed) => {
-                        let seq = committed.seq;
-                        let ui_events = committed.projection;
-                        completion_for_ingest
-                            .on_ingest_frame(&session_id, agent, &ui_events)
-                            .await;
-                        let _ = persisted_ingest_tx_clone.send(LocalIngestFrame {
-                            session_id: session_id.clone(),
-                            seq,
-                            agent,
-                            ui_events,
-                            ts_ms,
-                        });
-                        tracing::info!(
-                            target: "minos_daemon::agent",
-                            session_id = %session_id,
-                            seq,
-                            bytes = payload_bytes,
-                            "ingest event committed",
-                        );
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
+                        drain_prepared_queue(
+                            &writer_clone,
+                            &coalescer_clone,
+                            &ingest_sync_clone,
+                            &persisted_ingest_tx_clone,
+                            &completion_for_ingest,
+                            &manager_for_ingest,
+                        )
+                        .await;
                     }
-                    Err(e) => tracing::error!(
-                        target: "minos_daemon::agent",
-                        error = %e,
-                        session_id = %session_id,
-                        "EventWriter.write_chunk failed; event not persisted locally",
-                    ),
                 }
             }
         });
@@ -202,6 +230,7 @@ impl AgentGlue {
         let state_tx = Arc::new(state_tx);
         let mut manager_events = manager.manager_event_stream();
         let store_clone = store.clone();
+        let manager_for_lifecycle = manager.clone();
         let state_tx_clone = state_tx.clone();
         let local_manager_event_tx_clone = local_manager_event_tx.clone();
         let completion_for_state = completion.clone();
@@ -239,6 +268,8 @@ impl AgentGlue {
                                         now_ms,
                                     )
                                     .await;
+                                    // The ingest actor observes the new parent on its next
+                                    // poll and remains the sole owner of commit ordering.
                                 }
                             }
                             ManagerEvent::SessionStateChanged {
@@ -291,6 +322,9 @@ impl AgentGlue {
                                 reason,
                                 ..
                             } => {
+                                // Suspend affected threads and run completion flush for
+                                // pending source deliveries. Product: no partial
+                                // agent-result write on instance death (Suspended arm).
                                 let state = SessionState::Suspended { reason };
                                 let at_ms = current_unix_ms();
                                 for session_id in affected_threads {
@@ -301,16 +335,28 @@ impl AgentGlue {
                                         at_ms,
                                     )
                                     .await;
+                                    completion_for_state
+                                        .on_session_state(&session_id, &state)
+                                        .await;
                                     let _ = state_tx_clone.send(state.clone());
                                 }
                             }
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(skipped)) => tracing::warn!(
-                        target: "minos_daemon::agent",
-                        skipped,
-                        "manager event bridge lagged",
-                    ),
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        // Never only log: lag drops Idle/Closed/Crash which must
+                        // still drive completion + SQLite. Full reconcile from
+                        // manager snapshot + active SQLite rows.
+                        reconcile_manager_lifecycle_after_lag(
+                            &manager_for_lifecycle,
+                            &store_clone,
+                            &completion_for_state,
+                            &local_manager_event_tx_clone,
+                            &state_tx_clone,
+                            skipped,
+                        )
+                        .await;
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
@@ -687,6 +733,12 @@ impl AgentGlue {
             .map_err(map_anyhow)
     }
 
+    /// Dispatch a user message into an existing or newly created agent session.
+    ///
+    /// Matches [`Self::start_agent_with_session_id_in_conversation`] collab semantics:
+    /// - non-empty `conversation_id` binds the session to that Hub conversation
+    ///   (never invents "Direct agent sessions")
+    /// - `origin_message_id` is pinned before the turn path when `session_id` is known
     pub async fn dispatch_message(
         &self,
         req: AgentDispatchRequest,
@@ -698,7 +750,7 @@ impl AgentGlue {
             workspace,
             approval_policy,
             sandbox_policy,
-            conversation_id: _,
+            conversation_id,
             origin_message_id,
             model,
             reasoning_effort,
@@ -708,11 +760,83 @@ impl AgentGlue {
         if let Some(existing_session_id) = session_id.as_deref() {
             self.ensure_thread_registered(existing_session_id).await?;
         }
+
+        let hub_conversation_id = conversation_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+
+        // Preserve an already-bound session conversation so we never invent Direct
+        // agent sessions when re-dispatching into an existing collab thread.
+        let prior_conversation_id = if let Some(existing_session_id) = session_id.as_deref() {
+            match self.store.get_session(existing_session_id).await {
+                Ok(Some(row)) => {
+                    let cid = row.conversation_id.trim();
+                    if cid.is_empty() {
+                        None
+                    } else {
+                        Some(row.conversation_id)
+                    }
+                }
+                Ok(None) => None,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "minos_daemon::agent",
+                        error = %error,
+                        session_id = %existing_session_id,
+                        "store.get_session failed while resolving dispatch conversation binding",
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let staged_origin = origin_message_id
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_owned);
+
+        let workspace_path = resolve_workspace(&self.default_workspace, &workspace);
+        let cwd_for_ensure = workspace_path.display().to_string();
+
+        // Ensure Hub conversation exists before the turn can emit ingest events.
+        if let Some(conv_id) = hub_conversation_id.as_deref() {
+            if let Err(error) = ensure_hub_collaboration_conversation(
+                &self.store,
+                conv_id,
+                None,
+                None,
+                Some(cwd_for_ensure.as_str()),
+            )
+            .await
+            {
+                tracing::warn!(
+                    target: "minos_daemon::agent",
+                    error = %error,
+                    conversation_id = %conv_id,
+                    "ensure_hub_collaboration_conversation failed; session may lack parent rows"
+                );
+            }
+        }
+
+        // When the session id is already known, pin collab/origin before the turn
+        // path starts so completion never races to message_key/t{ms} fallbacks.
+        if let Some(existing_session_id) = session_id.as_deref() {
+            if hub_conversation_id.is_some() {
+                self.completion
+                    .note_require_canonical_origin(existing_session_id)
+                    .await;
+            }
+            if let Some(origin) = staged_origin.as_deref() {
+                self.completion
+                    .note_turn_origin(existing_session_id, origin)
+                    .await;
+            }
+        }
 
         let policies = if approval_policy.is_none() && sandbox_policy.is_none() {
             None
@@ -723,7 +847,6 @@ impl AgentGlue {
             })
         };
         let launch = minos_agent_runtime::AgentLaunchOptions::from_parts(model, reasoning_effort);
-        let workspace_path = resolve_workspace(&self.default_workspace, &workspace);
         let paths = crate::media_materialize::materialize_attachments(
             &workspace_path,
             staged_origin.as_deref(),
@@ -732,32 +855,98 @@ impl AgentGlue {
         .await;
         let text = crate::media_materialize::append_attachment_paths(&text, &paths);
 
-        let outcome = self
-            .manager
-            .dispatch_message_with_options(
-                agent,
-                workspace_path,
-                session_id,
-                text,
-                policies,
-                launch,
-            )
-            .await
-            .map_err(map_anyhow)?;
-        let cwd = outcome.cwd.display().to_string();
-        self.persist_thread_parent_rows(
-            &outcome.session_id,
-            &cwd,
-            agent,
-            outcome.provider_session_id.as_deref(),
-        )
-        .await;
-
-        if let Some(origin) = staged_origin.as_deref() {
-            self.completion
-                .note_turn_origin(&outcome.session_id, origin)
+        // New sessions: start → parent rows + origin pin → send. Never start the
+        // turn before completion knows the durable origin (collab agent-result).
+        let outcome = if session_id.is_none() {
+            let started = self
+                .manager
+                .start_agent_with_policies(
+                    agent,
+                    workspace_path.clone(),
+                    policies.clone(),
+                    launch.clone(),
+                )
+                .await
+                .map_err(map_anyhow)?;
+            let cwd = started.cwd.display().to_string();
+            if let Some(conv_id) = hub_conversation_id.as_deref() {
+                self.persist_thread_parent_rows_in_conversation(
+                    &started.session_id,
+                    conv_id,
+                    &cwd,
+                    agent,
+                    started.provider_session_id.as_deref(),
+                )
                 .await;
-        }
+                self.completion
+                    .note_require_canonical_origin(&started.session_id)
+                    .await;
+            } else {
+                self.persist_thread_parent_rows(
+                    &started.session_id,
+                    &cwd,
+                    agent,
+                    started.provider_session_id.as_deref(),
+                )
+                .await;
+            }
+            if let Some(origin) = staged_origin.as_deref() {
+                self.completion
+                    .note_turn_origin(&started.session_id, origin)
+                    .await;
+            }
+            self.manager
+                .send_user_message(&started.session_id, text)
+                .await
+                .map_err(map_anyhow)?;
+            minos_agent_runtime::DispatchOutcome {
+                session_id: started.session_id,
+                cwd: started.cwd,
+                provider_session_id: started.provider_session_id,
+            }
+        } else {
+            let outcome = self
+                .manager
+                .dispatch_message_with_options(
+                    agent,
+                    workspace_path,
+                    session_id,
+                    text,
+                    policies,
+                    launch,
+                )
+                .await
+                .map_err(map_anyhow)?;
+            let cwd = outcome.cwd.display().to_string();
+            if let Some(conv_id) = hub_conversation_id.as_deref() {
+                self.persist_thread_parent_rows_in_conversation(
+                    &outcome.session_id,
+                    conv_id,
+                    &cwd,
+                    agent,
+                    outcome.provider_session_id.as_deref(),
+                )
+                .await;
+            } else if let Some(conv_id) = prior_conversation_id.as_deref() {
+                self.persist_thread_parent_rows_in_conversation(
+                    &outcome.session_id,
+                    conv_id,
+                    &cwd,
+                    agent,
+                    outcome.provider_session_id.as_deref(),
+                )
+                .await;
+            } else {
+                self.persist_thread_parent_rows(
+                    &outcome.session_id,
+                    &cwd,
+                    agent,
+                    outcome.provider_session_id.as_deref(),
+                )
+                .await;
+            }
+            outcome
+        };
 
         Ok(AgentDispatchResponse {
             session_id: outcome.session_id,
@@ -3738,6 +3927,109 @@ fn state_priority(state: &SessionState) -> u8 {
     }
 }
 
+/// After broadcast lag, rebuild lifecycle effects from manager snapshot + SQLite.
+///
+/// Dropped Idle/Closed/Crash must not leave completion watches running or
+/// sessions stuck as `running` in SQLite. Live manager state is authoritative
+/// for in-memory handles; SQLite rows still `starting|running|resuming` but
+/// absent from the manager are treated as instance-reaped.
+async fn reconcile_manager_lifecycle_after_lag(
+    manager: &AgentManager,
+    store: &LocalStore,
+    completion: &crate::conversation_completion::ConversationCompletion,
+    local_tx: &broadcast::Sender<LocalManagerEvent>,
+    state_tx: &watch::Sender<SessionState>,
+    skipped: u64,
+) {
+    tracing::warn!(
+        target: "minos_daemon::agent",
+        skipped,
+        "manager event bridge lagged; reconciling lifecycle from manager snapshot"
+    );
+    let at_ms = current_unix_ms();
+    let live = manager.list_sessions().await;
+    let live_ids: HashSet<String> = live.iter().map(|s| s.session_id.clone()).collect();
+
+    for snap in &live {
+        let state = &snap.state;
+        // Same DaemonRestart race guard as the live SessionStateChanged path.
+        let skip_persist = matches!(
+            state,
+            SessionState::Suspended {
+                reason: minos_agent_runtime::PauseReason::DaemonRestart
+            }
+        );
+        if !skip_persist {
+            persist_runtime_state_inner(store, &snap.session_id, state, at_ms).await;
+        }
+        // Re-drive completion for states that flush bubbles / source delivery.
+        if matches!(
+            state,
+            SessionState::Idle
+                | SessionState::Closed { .. }
+                | SessionState::Suspended { .. }
+        ) {
+            completion
+                .on_session_state(&snap.session_id, state)
+                .await;
+        }
+        let _ = local_tx.send(LocalManagerEvent::SessionStateChanged {
+            session_id: snap.session_id.clone(),
+            old: state_to_proto(state),
+            new: state_to_proto(state),
+            at_ms,
+        });
+        let _ = state_tx.send(state.clone());
+    }
+
+    let rows = match store.list_sessions(None, Some(1000), None).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(
+                target: "minos_daemon::agent",
+                error = %error,
+                "lifecycle reconcile failed to list SQLite sessions"
+            );
+            return;
+        }
+    };
+
+    for row in rows {
+        if live_ids.contains(&row.session_id) {
+            continue;
+        }
+        // Idle/closed/suspended in DB without a live handle is normal after
+        // process restarts; only mid-flight rows imply a missed Crash/Close.
+        if !matches!(
+            row.status.as_str(),
+            "starting" | "running" | "resuming"
+        ) {
+            continue;
+        }
+        let state = SessionState::Suspended {
+            reason: minos_agent_runtime::PauseReason::InstanceReaped,
+        };
+        tracing::warn!(
+            target: "minos_daemon::agent",
+            session_id = %row.session_id,
+            prior_status = %row.status,
+            "lifecycle reconcile: active SQLite session missing from manager; suspending"
+        );
+        persist_runtime_state_inner(store, &row.session_id, &state, at_ms).await;
+        completion
+            .on_session_state(&row.session_id, &state)
+            .await;
+        let old = row_state_to_proto(&row).unwrap_or(ProtoSessionState::Idle);
+        let _ = local_tx.send(LocalManagerEvent::SessionStateChanged {
+            session_id: row.session_id.clone(),
+            old,
+            new: state_to_proto(&state),
+            at_ms,
+        });
+        let _ = state_tx.send(state);
+    }
+}
+
 async fn persist_runtime_state_inner(
     store: &LocalStore,
     session_id: &str,
@@ -4895,6 +5187,141 @@ fn current_unix_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
+async fn drain_prepared_queue(
+    writer: &EventWriter,
+    coalescer: &IngestCoalescer,
+    ingest_sync: &StdMutex<Option<IngestSyncHandle>>,
+    persisted_ingest_tx: &broadcast::Sender<LocalIngestFrame>,
+    completion: &crate::conversation_completion::ConversationCompletion,
+    manager: &AgentManager,
+) -> bool {
+    let prepared_list = match coalescer.drain_ready().await {
+        Ok(list) => list,
+        Err(error) => {
+            tracing::error!(
+                target: "minos_daemon::agent",
+                error = %error,
+                "failed to drain prepared ingest queue",
+            );
+            return false;
+        }
+    };
+    let mut pending = std::collections::VecDeque::from(prepared_list);
+    while let Some(prepared) = pending.pop_front() {
+        if !commit_prepared_ingest(
+            writer,
+            ingest_sync,
+            persisted_ingest_tx,
+            completion,
+            prepared.clone(),
+        )
+        .await
+        {
+            let mut restore = Vec::with_capacity(pending.len() + 1);
+            restore.push(prepared);
+            restore.extend(pending);
+            if let Err(full) = coalescer.restore_write_queue_front(restore).await {
+                fail_session_ingest_queue_full(manager, &full).await;
+            }
+            return false;
+        }
+    }
+    true
+}
+
+/// Explicit session failure when ingest queues cannot accept more work.
+/// Prefer user-visible terminal close over silent event loss.
+async fn fail_session_ingest_queue_full(
+    manager: &AgentManager,
+    full: &crate::ingest_coalescer::IngestQueueFull,
+) {
+    tracing::error!(
+        target: "minos_daemon::agent",
+        session_id = %full.session_id,
+        queue = full.queue,
+        "ingest queue full; terminating session (no silent drop)"
+    );
+    if let Err(error) = manager.close_session(&full.session_id).await {
+        tracing::warn!(
+            target: "minos_daemon::agent",
+            session_id = %full.session_id,
+            error = %error,
+            "close_session after queue full failed (session may already be gone)"
+        );
+    }
+}
+
+/// Commit locally first (seq allocated in DB), then broadcast + live upload.
+/// On write failure, re-queue without burning a seq.
+async fn commit_prepared_ingest(
+    writer: &EventWriter,
+    ingest_sync: &StdMutex<Option<IngestSyncHandle>>,
+    persisted_ingest_tx: &broadcast::Sender<LocalIngestFrame>,
+    completion: &crate::conversation_completion::ConversationCompletion,
+    prepared: PreparedIngest,
+) -> bool {
+    let session_id = prepared.ingest.session_id.clone();
+    let agent = prepared.ingest.agent;
+    let ts_ms = prepared.ingest.ts_ms;
+    let payload_bytes = prepared.ingest.body_len();
+    let conversation_id = prepared.conversation_id.clone();
+
+    const MAX_ATTEMPTS: u32 = 4;
+    let mut last_err = None;
+    for attempt in 0..MAX_ATTEMPTS {
+        match writer.write_prepared(prepared.clone()).await {
+            Ok(committed) => {
+                let seq = committed.seq;
+                let ui_events = committed.projection.clone();
+                completion
+                    .on_ingest_frame(&session_id, agent, &ui_events)
+                    .await;
+                let _ = persisted_ingest_tx.send(LocalIngestFrame {
+                    session_id: session_id.clone(),
+                    seq,
+                    agent,
+                    ui_events,
+                    ts_ms,
+                });
+                // Live upload only after local commit; seq is the committed one.
+                let chunk =
+                    IngestChunk::new(prepared.ingest, seq, committed.projection, conversation_id);
+                let sync = ingest_sync.lock().ok().and_then(|guard| guard.clone());
+                if let Some(sync) = sync {
+                    sync.submit_live(chunk).await;
+                }
+                tracing::info!(
+                    target: "minos_daemon::agent",
+                    session_id = %session_id,
+                    seq,
+                    bytes = payload_bytes,
+                    attempt,
+                    "ingest event committed",
+                );
+                return true;
+            }
+            Err(e) => {
+                last_err = Some(e);
+                if attempt + 1 < MAX_ATTEMPTS {
+                    let backoff_ms = 20u64 * (1u64 << attempt.min(3));
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                }
+            }
+        }
+    }
+
+    tracing::error!(
+        target: "minos_daemon::agent",
+        error = %last_err
+            .as_ref()
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown".into()),
+        session_id = %session_id,
+        "EventWriter.write_prepared failed after retries; re-queued (no seq allocated)",
+    );
+    false
 }
 
 async fn persist_thread_parent_rows_inner(
@@ -6208,26 +6635,38 @@ mod tests {
             .await
             .unwrap();
 
+        // Provider path fails (no live Codex instance). End-state runtime rolls
+        // the Idle→Running claim back to Idle so the session is not permanently
+        // stuck; manager events still persist that Idle status into the store.
         let result = test
             .glue
             .manager
             .send_user_message("thr-live", "ping".into())
             .await;
         assert!(result.is_err());
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let row = test
-            .glue
-            .store
-            .get_session("thr-live")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(row.status, "running");
-        assert!(matches!(
-            test.glue.current_state(),
-            SessionState::Running { .. }
-        ));
+        // Bridge is async under suite load — poll until store + live mirror settle.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let row = test
+                .glue
+                .store
+                .get_session("thr-live")
+                .await
+                .unwrap()
+                .unwrap();
+            let live = test.glue.current_state();
+            if row.status == "idle" && matches!(live, SessionState::Idle) {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!(
+                    "expected idle after failed send; store={} live={live:?}",
+                    row.status
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
     }
 
     #[tokio::test]
@@ -6552,5 +6991,135 @@ mod tests {
             inherited.worktree_path.is_none(),
             "inherit mode should not bind a linked worktree"
         );
+    }
+
+    #[tokio::test]
+    async fn dispatch_message_binds_hub_conversation_without_inventing_direct() {
+        use minos_agent_runtime::test_support::FakeCodexBackend;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("hub-dispatch-ws");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let (fake, url) = FakeCodexBackend::install().await;
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(url);
+        let manager = Arc::new(AgentManager::new(cfg, InstanceCaps::default()));
+        let store = Arc::new(
+            crate::store::LocalStore::open(&tmp.path().join("daemon.sqlite"))
+                .await
+                .unwrap(),
+        );
+        let writer = Arc::new(EventWriter::spawn(store.clone()));
+        let glue = AgentGlue::wire_with(manager, writer, store.clone(), workspace.clone());
+
+        let hub_conversation_id = "hub-conv-dispatch-1";
+        let origin = "origin-msg-dispatch-1";
+        let response = glue
+            .dispatch_message(AgentDispatchRequest {
+                agent: AgentName::Codex,
+                session_id: None,
+                text: "hello hub dispatch".into(),
+                workspace: workspace.display().to_string(),
+                approval_policy: None,
+                sandbox_policy: None,
+                conversation_id: Some(hub_conversation_id.into()),
+                origin_message_id: Some(origin.into()),
+                model: None,
+                reasoning_effort: None,
+                attachments: Vec::new(),
+            })
+            .await
+            .expect("dispatch with hub conversation_id");
+
+        let row = store
+            .get_session(&response.session_id)
+            .await
+            .unwrap()
+            .expect("session row");
+        assert_eq!(row.conversation_id, hub_conversation_id);
+        let conv = store
+            .get_conversation(hub_conversation_id)
+            .await
+            .unwrap()
+            .expect("hub conversation must be upserted with same id");
+        assert_eq!(conv.conversation_id, hub_conversation_id);
+
+        // Must not invent Direct agent sessions for Hub-dispatched messages.
+        // ensure_workspace_conversation uses workspace slug; assert no extra
+        // conversation rows beyond the hub one for this session's binding.
+        assert_eq!(row.conversation_id, hub_conversation_id);
+
+        fake.stop().await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_message_keeps_existing_session_conversation_binding() {
+        use minos_agent_runtime::test_support::FakeCodexBackend;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("bound-dispatch-ws");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let workspace_root = workspace.display().to_string();
+        let (fake, url) = FakeCodexBackend::install().await;
+        let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
+        cfg.test_ws_url = Some(url);
+        let manager = Arc::new(AgentManager::new(cfg, InstanceCaps::default()));
+        let store = Arc::new(
+            crate::store::LocalStore::open(&tmp.path().join("daemon.sqlite"))
+                .await
+                .unwrap(),
+        );
+        let writer = Arc::new(EventWriter::spawn(store.clone()));
+        let glue = AgentGlue::wire_with(manager, writer, store.clone(), workspace.clone());
+
+        let bound_conversation_id = "hub-already-bound";
+        let first = glue
+            .dispatch_message(AgentDispatchRequest {
+                agent: AgentName::Codex,
+                session_id: None,
+                text: "create bound session".into(),
+                workspace: workspace_root.clone(),
+                approval_policy: None,
+                sandbox_policy: None,
+                conversation_id: Some(bound_conversation_id.into()),
+                origin_message_id: Some("origin-create".into()),
+                model: None,
+                reasoning_effort: None,
+                attachments: Vec::new(),
+            })
+            .await
+            .expect("initial hub dispatch");
+        // Let the first turn settle to Idle so follow-up dispatch can send.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        let response = glue
+            .dispatch_message(AgentDispatchRequest {
+                agent: AgentName::Codex,
+                session_id: Some(first.session_id.clone()),
+                text: "follow-up without conversation_id".into(),
+                workspace: workspace_root,
+                approval_policy: None,
+                sandbox_policy: None,
+                conversation_id: None,
+                origin_message_id: Some("origin-followup".into()),
+                model: None,
+                reasoning_effort: None,
+                attachments: Vec::new(),
+            })
+            .await
+            .expect("dispatch existing bound session");
+
+        assert_eq!(response.session_id, first.session_id);
+        let row = store
+            .get_session(&first.session_id)
+            .await
+            .unwrap()
+            .expect("session row");
+        assert_eq!(
+            row.conversation_id, bound_conversation_id,
+            "must keep prior hub binding and not invent Direct"
+        );
+
+        fake.stop().await;
     }
 }

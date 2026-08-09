@@ -554,6 +554,30 @@ pub enum DurableEvent {
         deadline_at_ms: i64,
         at_ms: i64,
     },
+    /// Conversation membership change on `conversation:{id}` (all current members + actor).
+    ConversationMemberChanged {
+        conversation_id: String,
+        /// Account whose membership changed.
+        member_account_id: String,
+        /// `"added"` | `"removed"` | `"role_changed"`
+        action: String,
+        /// Role after change when still a member; omitted on remove.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role: Option<String>,
+        actor_account_id: String,
+        /// Monotonic membership version for the conversation (visibility epoch).
+        membership_version: i64,
+        at_ms: i64,
+    },
+    /// Account-topic digest so removed members still receive revoke signal on their inbox topic.
+    AccountConversationMembershipChanged {
+        account_id: String,
+        conversation_id: String,
+        /// `"added"` | `"removed"`
+        action: String,
+        membership_version: i64,
+        at_ms: i64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -598,6 +622,10 @@ impl DurableEvent {
             Self::ProjectArchived { .. } => "project_archived",
             Self::HostForceClose { .. } => "host_force_close",
             Self::HostCommandIssued { .. } => "host_command_issued",
+            Self::ConversationMemberChanged { .. } => "conversation_member_changed",
+            Self::AccountConversationMembershipChanged { .. } => {
+                "account_conversation_membership_changed"
+            }
         }
     }
 
@@ -608,7 +636,8 @@ impl DurableEvent {
             | Self::AccountPasswordChanged { account_id, .. }
             | Self::HostLinked { account_id, .. }
             | Self::HostUnlinked { account_id, .. }
-            | Self::FriendRequestUpdated { account_id, .. } => {
+            | Self::FriendRequestUpdated { account_id, .. }
+            | Self::AccountConversationMembershipChanged { account_id, .. } => {
                 RealtimeTopic::Account(account_id.clone())
             }
             Self::AgentSessionStarted { session_id, .. }
@@ -625,6 +654,9 @@ impl DurableEvent {
                 conversation_id, ..
             }
             | Self::ConversationMessageReactionUpdated {
+                conversation_id, ..
+            }
+            | Self::ConversationMemberChanged {
                 conversation_id, ..
             } => RealtimeTopic::Conversation(conversation_id.clone()),
             Self::AccountConversationMessageAppended { account_id, .. }

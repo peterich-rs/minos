@@ -3,7 +3,7 @@
     "item":{"type":"agentMessage","id":"i1","text":""},
     "sessionId":"thr_fixture","turnId":"t1"
   }},
-  {"method":"item/reasoning/delta","params":{"itemId":"i1","delta":"planning…"}},
+  {"method":"item/reasoning/summaryTextDelta","params":{"itemId":"i1","threadId":"thr_fixture","turnId":"t1","summaryIndex":0,"delta":"planning…"}},
   {"method":"item/agentMessage/delta","params":{"itemId":"i1","delta":"Here it is."}},
   {"method":"turn/completed","params":{"finishedAtMs":1714000013000}}
 ]

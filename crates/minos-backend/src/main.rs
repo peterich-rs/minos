@@ -137,6 +137,10 @@ async fn main() -> Result<()> {
         http::parse_cors_origins(&cfg.cors_origins),
     )
     .context("compose runtime shell")?;
+    shell
+        .hydrate_durable_state()
+        .await
+        .context("hydrate durable completion watches")?;
     let instance_id = shell.app.instance_id.clone();
 
     if cfg.runtime_mode.serves_http() {

@@ -383,7 +383,14 @@ impl MediaService {
         let row = store::media_blobs::get_by_id(&self.store, blob_id)
             .await?
             .ok_or(MediaError::NotFound)?;
-        if row.account_id != account_id {
+        // Owner or conversation co-member who can see the attached message.
+        let allowed = store::message_attachments::account_can_read_blob(
+            &self.store,
+            account_id,
+            blob_id,
+        )
+        .await?;
+        if !allowed {
             return Err(MediaError::Forbidden);
         }
         if row.status != "ready" {
@@ -391,6 +398,7 @@ impl MediaService {
         }
         let expires_at_ms =
             now_ms() + i64::try_from(self.config.download_ttl.as_millis()).unwrap_or(900_000);
+        // Token remains bound to the requesting account (not only blob owner).
         let token = self.sign_download_token(blob_id, account_id, expires_at_ms);
         let path = format!("/v1/media/blobs/{blob_id}/content?token={token}");
         let download_url = match &self.config.public_base_url {
@@ -404,7 +412,8 @@ impl MediaService {
         })
     }
 
-    /// Authorize content read via bearer account **or** signed download token.
+    /// Authorize content read via bearer account (owner or conversation member)
+    /// **or** signed download token.
     pub async fn authorize_read(
         &self,
         blob_id: &str,
@@ -418,13 +427,25 @@ impl MediaService {
             return Err(MediaError::NotFound);
         }
         if let Some(aid) = account_id {
-            if row.account_id == aid {
+            let allowed =
+                store::message_attachments::account_can_read_blob(&self.store, aid, blob_id)
+                    .await?;
+            if allowed {
                 return Ok(row);
             }
         }
         if let Some(tok) = token {
-            if self.verify_download_token(tok, blob_id, &row.account_id)? {
-                return Ok(row);
+            if let Some(subject) = self.verify_download_token_subject(tok, blob_id)? {
+                // Subject must still have membership/ownership at read time.
+                let allowed = store::message_attachments::account_can_read_blob(
+                    &self.store,
+                    &subject,
+                    blob_id,
+                )
+                .await?;
+                if allowed {
+                    return Ok(row);
+                }
             }
         }
         Err(MediaError::Forbidden)
@@ -467,6 +488,8 @@ impl MediaService {
         Ok(MediaBlobDto::from(&deleted))
     }
 
+    /// Token format: `{expires_at_ms}.{account_id}.{sig}` so content GETs can
+    /// authorize member-issued tokens without a separate bearer.
     fn sign_download_token(&self, blob_id: &str, account_id: &str, expires_at_ms: i64) -> String {
         let payload = format!("{blob_id}|{account_id}|{expires_at_ms}");
         let mut mac =
@@ -474,17 +497,25 @@ impl MediaService {
         mac.update(payload.as_bytes());
         let sig = mac.finalize().into_bytes();
         let sig_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig);
-        format!("{expires_at_ms}.{sig_b64}")
+        format!("{expires_at_ms}.{account_id}.{sig_b64}")
     }
 
-    fn verify_download_token(
+    /// Verify token and return the subject account_id it was issued for.
+    fn verify_download_token_subject(
         &self,
         token: &str,
         blob_id: &str,
-        account_id: &str,
-    ) -> Result<bool, MediaError> {
-        let (exp_s, _sig_b64) = token
-            .split_once('.')
+    ) -> Result<Option<String>, MediaError> {
+        let mut parts = token.splitn(3, '.');
+        let exp_s = parts
+            .next()
+            .ok_or_else(|| MediaError::Invalid("malformed download token".into()))?;
+        let subject = parts
+            .next()
+            .ok_or_else(|| MediaError::Invalid("malformed download token".into()))?
+            .to_string();
+        let _sig = parts
+            .next()
             .ok_or_else(|| MediaError::Invalid("malformed download token".into()))?;
         let expires_at_ms: i64 = exp_s
             .parse()
@@ -492,9 +523,13 @@ impl MediaService {
         if expires_at_ms < now_ms() {
             return Err(MediaError::Invalid("download token expired".into()));
         }
-        let expected = self.sign_download_token(blob_id, account_id, expires_at_ms);
+        let expected = self.sign_download_token(blob_id, &subject, expires_at_ms);
         use subtle::ConstantTimeEq;
-        Ok(expected.as_bytes().ct_eq(token.as_bytes()).into())
+        if expected.as_bytes().ct_eq(token.as_bytes()).into() {
+            Ok(Some(subject))
+        } else {
+            Ok(None)
+        }
     }
 }
 

@@ -310,9 +310,13 @@ fn translate_acp_notification(
                 .get("status")
                 .and_then(Value::as_str)
                 .unwrap_or("")
-                .to_string();
+                .to_ascii_lowercase();
 
-            if status == "completed" {
+            // Mirror Grok: completed | failed | cancelled are terminal tool rows.
+            if matches!(
+                status.as_str(),
+                "completed" | "failed" | "cancelled" | "canceled"
+            ) {
                 let content = update
                     .get("content")
                     .and_then(|c| {
@@ -332,12 +336,13 @@ fn translate_acp_notification(
                     })
                     .unwrap_or_default();
                 let content = crate::strip_ansi_escapes(&content);
+                let is_error = matches!(status.as_str(), "failed" | "cancelled" | "canceled");
 
                 state.tool_calls.remove(&tool_call_id);
                 Ok(vec![UiEventMessage::ToolCallCompleted {
                     tool_call_id,
                     output: DisplayPayload::inline(content),
-                    is_error: false,
+                    is_error,
                 }])
             } else {
                 Ok(vec![])
@@ -725,6 +730,60 @@ mod tests {
             out.iter()
                 .any(|e| matches!(e, UiEventMessage::ToolCallCompleted { tool_call_id, is_error: false, .. } if tool_call_id == "tc_1"))
         );
+    }
+
+    #[test]
+    fn acp_notification_tool_call_update_failed_sets_is_error() {
+        let mut s = GeminiTranslatorState::new("thr".into());
+        let _ = translate(
+            &mut s,
+            &val(
+                r#"{"kind":"acp_notification","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"tc_fail","title":"Edit","kind":"edit","status":"pending"}}}"#,
+            ),
+        )
+        .unwrap();
+        let out = translate(
+            &mut s,
+            &val(
+                r#"{"kind":"acp_notification","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"tc_fail","status":"failed","content":[{"content":{"type":"text","text":"boom"}}]}}}"#,
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            out.as_slice(),
+            [UiEventMessage::ToolCallCompleted {
+                tool_call_id,
+                output,
+                is_error: true
+            }] if tool_call_id == "tc_fail" && output == "boom"
+        ));
+    }
+
+    #[test]
+    fn acp_notification_tool_call_update_cancelled_sets_is_error() {
+        let mut s = GeminiTranslatorState::new("thr".into());
+        let _ = translate(
+            &mut s,
+            &val(
+                r#"{"kind":"acp_notification","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"tc_cancel","title":"Edit","kind":"edit","status":"pending"}}}"#,
+            ),
+        )
+        .unwrap();
+        let out = translate(
+            &mut s,
+            &val(
+                r#"{"kind":"acp_notification","params":{"update":{"sessionUpdate":"tool_call_update","toolCallId":"tc_cancel","status":"cancelled","content":null}}}"#,
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            out.as_slice(),
+            [UiEventMessage::ToolCallCompleted {
+                tool_call_id,
+                is_error: true,
+                ..
+            }] if tool_call_id == "tc_cancel"
+        ));
     }
 
     #[test]

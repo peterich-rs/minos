@@ -8,19 +8,14 @@ import { daemonApi } from "@/shared/lib/daemon";
 import { minosQueryClient } from "@/shared/api/queryClient";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { transcriptHasPendingApproval } from "@/shared/lib/session-status";
-import {
-  parseAgentRouting,
-  parseAllAgentRoutings,
-  type KnownAgent,
-  type MentionProfile,
-} from "@/shared/lib/agent-route";
+import type { MentionProfile } from "@/shared/lib/agent-route";
 import type { DeliveryStatus, TimelineMessage } from "@/shared/lib/mock-data";
 import type { TranscriptItem } from "@/shared/lib/daemon";
+import { quietRefreshConversationSlices } from "./shared";
 import {
-  ensureSessionsForRouting,
-  quietRefreshConversationSlices,
-  startNewAgentSession,
-} from "./shared";
+  fanOutAgentTurns,
+  resolveDispatchTargets,
+} from "./send-dispatch";
 import { syncUserMessageToCloud } from "@/shared/lib/im-cloud-sync";
 import { isHubImMode } from "@/shared/lib/hub-timeline";
 import { formatLocalClock } from "@/shared/lib/time";
@@ -146,14 +141,11 @@ export function createUseCasesActions(
     const { syncApprovalResolve } = await import(
       "@/shared/lib/im-cloud-sync"
     );
-    await syncApprovalResolve({
-      sessionId,
-      requestId,
-      decision: payload,
-      clientOpId,
-      route: hubAuthenticated() ? "hub" : "daemon",
-    });
-    // Drop local approval/question cards; Entity aggregates recompute via commit.
+
+    // Optimistic demote before RPC so the card leaves the actionable state
+    // immediately (sendMessage delivery pattern). Restore on failure.
+    const snapshotItems = get().transcriptsBySession[sessionId] ?? [];
+    const snapshotEntity = get().sessionsById[sessionId];
     set((s) => {
       const items = (s.transcriptsBySession[sessionId] ?? []).map((it) =>
         it.requestId === requestId &&
@@ -173,17 +165,46 @@ export function createUseCasesActions(
       );
       return commitResolvedApprovalState(s, sessionId, items);
     });
-    // Pull fresh tail after the agent continues.
-    await get().loadTranscript(sessionId, {
-      tailWindow: 200,
-      quiet: true,
-      approvalStatusPolicy: "sync",
-    });
+
+    try {
+      await syncApprovalResolve({
+        sessionId,
+        requestId,
+        decision: payload,
+        clientOpId,
+        route: hubAuthenticated() ? "hub" : "daemon",
+      });
+      set({ actionError: null });
+      // Pull fresh tail after the agent continues.
+      await get().loadTranscript(sessionId, {
+        tailWindow: 200,
+        quiet: true,
+        approvalStatusPolicy: "sync",
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      set((s) => {
+        const committed =
+          snapshotEntity != null
+            ? commitSessionEntity(s, snapshotEntity)
+            : {};
+        return {
+          ...committed,
+          transcriptsBySession: {
+            ...s.transcriptsBySession,
+            [sessionId]: snapshotItems,
+          },
+          actionError: message,
+        };
+      });
+      throw e;
+    }
   },
 
   respondOpencodePermission: async (sessionId, permissionId, response) => {
     if (get().source !== "daemon") return;
-    await daemonApi.respondOpencodePermission(sessionId, permissionId, response);
+    const snapshotItems = get().transcriptsBySession[sessionId] ?? [];
+    const snapshotEntity = get().sessionsById[sessionId];
     set((s) => {
       const items = (s.transcriptsBySession[sessionId] ?? []).map((it) =>
         it.requestId === permissionId
@@ -198,16 +219,42 @@ export function createUseCasesActions(
       );
       return commitResolvedApprovalState(s, sessionId, items);
     });
-    await get().loadTranscript(sessionId, {
-      tailWindow: 200,
-      quiet: true,
-      approvalStatusPolicy: "sync",
-    });
+    try {
+      await daemonApi.respondOpencodePermission(
+        sessionId,
+        permissionId,
+        response,
+      );
+      set({ actionError: null });
+      await get().loadTranscript(sessionId, {
+        tailWindow: 200,
+        quiet: true,
+        approvalStatusPolicy: "sync",
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      set((s) => {
+        const committed =
+          snapshotEntity != null
+            ? commitSessionEntity(s, snapshotEntity)
+            : {};
+        return {
+          ...committed,
+          transcriptsBySession: {
+            ...s.transcriptsBySession,
+            [sessionId]: snapshotItems,
+          },
+          actionError: message,
+        };
+      });
+      throw e;
+    }
   },
 
   respondOpencodeQuestion: async (sessionId, questionId, answers) => {
     if (get().source !== "daemon") return;
-    await daemonApi.respondOpencodeQuestion(sessionId, questionId, answers);
+    const snapshotItems = get().transcriptsBySession[sessionId] ?? [];
+    const snapshotEntity = get().sessionsById[sessionId];
     set((s) => {
       const items = (s.transcriptsBySession[sessionId] ?? []).map((it) =>
         it.requestId === questionId
@@ -223,11 +270,32 @@ export function createUseCasesActions(
       );
       return commitResolvedApprovalState(s, sessionId, items);
     });
-    await get().loadTranscript(sessionId, {
-      tailWindow: 200,
-      quiet: true,
-      approvalStatusPolicy: "sync",
-    });
+    try {
+      await daemonApi.respondOpencodeQuestion(sessionId, questionId, answers);
+      set({ actionError: null });
+      await get().loadTranscript(sessionId, {
+        tailWindow: 200,
+        quiet: true,
+        approvalStatusPolicy: "sync",
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      set((s) => {
+        const committed =
+          snapshotEntity != null
+            ? commitSessionEntity(s, snapshotEntity)
+            : {};
+        return {
+          ...committed,
+          transcriptsBySession: {
+            ...s.transcriptsBySession,
+            [sessionId]: snapshotItems,
+          },
+          actionError: message,
+        };
+      });
+      throw e;
+    }
   },
 
   markConversationRead: (conversationId) => {
@@ -253,8 +321,11 @@ export function createUseCasesActions(
       });
     });
     // Phase 5.3: Linked / authenticated → Hub mark-read (multi-end inbox).
+    // Only submit max *observed* Hub message_seq from the loaded timeline —
+    // never server-latest (would silently mark unread rows as read).
     void import("@/shared/lib/minos-cloud").then(async (cloud) => {
       const { isHubImMode } = await import("@/shared/lib/hub-timeline");
+      const { lastMessageSeq } = await import("@/shared/lib/message-history");
       const { useAccountStore } = await import("@/store/account-store");
       const { deviceId, session, authPhase } = useAccountStore.getState();
       if (
@@ -266,11 +337,18 @@ export function createUseCasesActions(
       ) {
         return;
       }
+      const timeline = get().messagesByConversation[conversationId] ?? [];
+      const observedSeq = lastMessageSeq(timeline);
+      if (observedSeq == null || observedSeq <= 0) {
+        // No Hub seq loaded yet — skip HTTP; local rail already cleared.
+        return;
+      }
       try {
         await cloud.markHubConversationRead(
           deviceId,
           session.accessToken,
           conversationId,
+          observedSeq,
         );
       } catch (error) {
         console.warn("[workspace] hub mark-read failed", error);
@@ -354,75 +432,34 @@ export function createUseCasesActions(
         throw new Error("conversation or project not found");
       }
 
+      // Validate routing BEFORE durable append (same order as retry).
       const mentionProfiles = await loadMentionProfiles();
-      const multiRouted = parseAllAgentRoutings(messageBody, mentionProfiles);
-      const members = new Set(
-        (conv.participatingAgents ?? []).map((a) => a.toLowerCase()),
+      const installedAgents = new Set(
+        get()
+          .clis.filter((c) => c.installed)
+          .map((c) => c.agent.toLowerCase()),
       );
-
-      // Multi-@ fan-out: one native session turn per unique mentioned agent.
-      // Bare text (no @): single default member agent (legacy Desktop behavior).
-      type DispatchTarget = {
-        agent: KnownAgent;
-        prompt: string;
-        sessionShortId?: string;
-        profileId?: string;
-      };
-      const targets: DispatchTarget[] = [];
-      if (multiRouted.length > 0) {
-        for (const routed of multiRouted) {
-          const agent = routed.target.agent;
-          if (!members.has(agent)) {
-            throw new Error(
-              members.size === 0
-                ? "No agents in this conversation. Select agents when creating it before @mentioning."
-                : `@${agent} is not a member of this conversation. Only roster agents can be @mentioned.`,
-            );
-          }
-          targets.push({
-            agent,
-            prompt: routed.prompt,
-            sessionShortId: routed.target.sessionShortId,
-            profileId: routed.target.profileId,
-          });
-        }
-      } else {
-        const firstMember = (conv.participatingAgents ?? []).find((name) =>
-          get().clis.some((c) => c.agent === name && c.installed),
-        );
-        const agent = (firstMember as KnownAgent | undefined) ?? null;
-        if (!agent) {
-          throw new Error(
-            members.size === 0
-              ? "No agents in this conversation. Select agents when creating it."
-              : "No installed agents among conversation members. Install a member runtime or recreate with different agents.",
-          );
-        }
-        if (!messageBody.trim()) {
-          throw new Error("Cannot start an agent session with an empty prompt.");
-        }
-        targets.push({ agent, prompt: messageBody });
-      }
+      const { targets, multiRoutedCount } = resolveDispatchTargets({
+        messageBody,
+        participatingAgents: conv.participatingAgents,
+        installedAgents,
+        mentionProfiles,
+      });
 
       const convTitle = conv.title;
       const agentRuntimes = conv.participatingAgents;
       const accountOn = hubAuthenticated();
 
       // Desktop workbench always executes agents natively on this Host.
-      // Linked/Hub is multi-end IM projection only — never the primary start path
-      // (Hub try_agent_dispatch is for Mobile multi-@ fan-out).
-      // Append is idempotent by message_id (store upsert). Constraint #3:
-      // success here only means durable; later session steps may still throw.
+      // Linked/Hub is multi-end IM projection only — never the primary start path.
+      // Append is idempotent by message_id. Success here only means durable.
       const { messageSeq } = await daemonApi.appendUserMessage(
         conversationId,
         messageBody,
         resolvedId,
       );
       patchDelivery("sent", messageSeq, clock);
-      // Keep rail clock in sync even if Hub digest still lags.
       patchRailActivity(set, conversationId, railPreview, createdAtMs);
-      // Multi-end visibility: project user bubble with host_projection so Hub
-      // does not re-dispatch (this machine already owns execution).
       if (accountOn) {
         void syncUserMessageToCloud({
           conversationId,
@@ -437,99 +474,16 @@ export function createUseCasesActions(
       }
       void get().loadTimeline(conversationId, { quiet: true });
 
-      await ensureSessionsForRouting(get, conversationId);
-
-      // Parallel fan-out after durable user bubble. Partial agent failures
-      // must not flip the user row to failed (append already succeeded).
-      const fanoutResults = await Promise.allSettled(
-        targets.map(async (target) => {
-          const sessions =
-            get().sessionsByConversation[conversationId] ?? [];
-          let sessionId: string | undefined;
-          if (target.sessionShortId) {
-            const match = sessions.find(
-              (s) =>
-                s.agent === target.agent &&
-                s.status !== "done" &&
-                (s.shortId === target.sessionShortId ||
-                  s.id.endsWith(target.sessionShortId!) ||
-                  s.id.startsWith(target.sessionShortId!)),
-            );
-            if (!match) {
-              throw new Error(
-                `No existing ${target.agent} session matches #${target.sessionShortId}`,
-              );
-            }
-            sessionId = match.id;
-          } else if (target.profileId) {
-            sessionId = await startNewAgentSession(
-              conversationId,
-              target.agent,
-              project.workspacePath,
-              target.profileId,
-            );
-          } else {
-            const reusable = sessions
-              .filter(
-                (s) =>
-                  s.agent === target.agent &&
-                  !s.parentId &&
-                  s.status !== "done" &&
-                  s.status !== "failed",
-              )
-              .sort((a, b) => (b.lastTsMs ?? 0) - (a.lastTsMs ?? 0))[0];
-            sessionId = reusable
-              ? reusable.id
-              : await startNewAgentSession(
-                  conversationId,
-                  target.agent,
-                  project.workspacePath,
-                );
-          }
-
-          // Full body for co-mention awareness (Hub multi-@ parity).
-          const prompt =
-            multiRouted.length > 0
-              ? messageBody
-              : target.prompt.trim() || messageBody;
-          if (!prompt.trim()) {
-            throw new Error(`Empty prompt for @${target.agent}`);
-          }
-
-          try {
-            await daemonApi.resumeSession(sessionId, false);
-            set((s) => {
-              const prev = s.sessionsById[sessionId!];
-              const row = findSessionRow(s, sessionId!);
-              const entity = patchSessionEntity(prev, sessionId!, {
-                daemonStatus: "running",
-                needsContinue: false,
-                conversationId:
-                  prev?.conversationId ||
-                  row?.conversationId ||
-                  conversationId,
-                agent: prev?.agent || row?.agent,
-                shortId: prev?.shortId || row?.shortId,
-                model: prev?.model || row?.model,
-                summary: prev?.summary || row?.summary,
-                parentId: prev?.parentId ?? row?.parentId,
-                lastTsMs: Date.now(),
-              });
-              return commitSessionEntity(s, entity);
-            });
-          } catch {
-            /* not needed when already live */
-          }
-          // Same origin message id for all agents in this multi-@ turn.
-          await daemonApi.sendUserMessage(sessionId, prompt, resolvedId);
-        }),
-      );
-
-      const fanoutErrors = fanoutResults
-        .filter((r): r is PromiseRejectedResult => r.status === "rejected")
-        .map((r) =>
-          r.reason instanceof Error ? r.reason.message : String(r.reason),
-        );
+      const fanoutErrors = await fanOutAgentTurns({
+        get,
+        set,
+        conversationId,
+        workspacePath: project.workspacePath,
+        messageBody,
+        originMessageId: resolvedId,
+        targets,
+        multiRoutedCount,
+      });
       if (fanoutErrors.length > 0) {
         set({
           actionError:
@@ -571,9 +525,8 @@ export function createUseCasesActions(
   },
 
   retryFailedMessage: async (conversationId, messageId) => {
-    // Constraint #2: never insert a new optimistic row on retry. The original
-    // failed bubble already exists; reuse its message_id (store append is
-    // idempotent by id) and patch delivery status in place.
+    // Constraint #2: never insert a new optimistic row on retry. Reuse
+    // message_id (store append is idempotent) and patch delivery in place.
     const list = get().messagesByConversation[conversationId] ?? [];
     const failed = list.find((m) => m.id === messageId);
     if (!failed) throw new Error("message not found");
@@ -581,6 +534,7 @@ export function createUseCasesActions(
       throw new Error("message is not in a failed state");
     }
     const messageBody = failed.body;
+    const replyToMessageId = failed.replyToMessageId;
 
     const patchDelivery = (
       status: DeliveryStatus,
@@ -605,7 +559,6 @@ export function createUseCasesActions(
 
     patchDelivery("sending");
 
-    // Mock backend has no RPC: flip to sent synchronously.
     if (get().source !== "daemon") {
       patchDelivery("sent");
       return;
@@ -618,9 +571,20 @@ export function createUseCasesActions(
         throw new Error("conversation or project not found");
       }
 
-      // Same as sendMessage: native local execution first; Hub is projection only.
-      // Idempotent append by message_id — durable row (if any) is updated in
-      // place rather than duplicated. This is the A9 main path.
+      // Same pipeline as sendMessage: validate → append → sent → fan-out.
+      const mentionProfiles = await loadMentionProfiles();
+      const installedAgents = new Set(
+        get()
+          .clis.filter((c) => c.installed)
+          .map((c) => c.agent.toLowerCase()),
+      );
+      const { targets, multiRoutedCount } = resolveDispatchTargets({
+        messageBody,
+        participatingAgents: conv.participatingAgents,
+        installedAgents,
+        mentionProfiles,
+      });
+
       const { messageSeq } = await daemonApi.appendUserMessage(
         conversationId,
         messageBody,
@@ -629,7 +593,6 @@ export function createUseCasesActions(
       const retryAt = failed.createdAtMs ?? Date.now();
       const retryClock = formatLocalClock(retryAt) || formatLocalClock(Date.now());
       patchDelivery("sent", messageSeq);
-      // Ensure bubble shows a real local clock (legacy rows may still say "now").
       set((s) => ({
         messagesByConversation: {
           ...s.messagesByConversation,
@@ -652,6 +615,7 @@ export function createUseCasesActions(
           messageId,
           text: messageBody,
           title: conv.title,
+          replyToMessageId,
           createdAtMs: retryAt,
           agentRuntimes: conv.participatingAgents,
           messageSource: "host_projection",
@@ -659,107 +623,25 @@ export function createUseCasesActions(
       }
       void get().loadTimeline(conversationId, { quiet: true });
 
-      const mentionProfiles = await loadMentionProfiles();
-      const routed = parseAgentRouting(messageBody, mentionProfiles);
-      let agent: KnownAgent | null = routed?.target.agent ?? null;
-      const prompt = routed?.prompt ?? messageBody;
-      const routeProfileId = routed?.target.profileId;
-      const members = new Set(
-        (conv.participatingAgents ?? []).map((a) => a.toLowerCase()),
-      );
-      if (agent && !members.has(agent)) {
-        throw new Error(
-          members.size === 0
-            ? "No agents in this conversation. Select agents when creating it before @mentioning."
-            : `@${agent} is not a member of this conversation. Only roster agents can be @mentioned.`,
-        );
-      }
-      if (!agent) {
-        const firstMember = (conv.participatingAgents ?? []).find((name) =>
-          get().clis.some((c) => c.agent === name && c.installed),
-        );
-        agent = (firstMember as KnownAgent | undefined) ?? null;
-      }
-      if (!agent) {
-        throw new Error(
-          members.size === 0
-            ? "No agents in this conversation. Select agents when creating it."
-            : "No installed agents among conversation members. Install a member runtime or recreate with different agents.",
-        );
-      }
-
-      // Re-run the session segment: resolve or create a thread, then deliver.
-      let sessionId: string | undefined;
-      await ensureSessionsForRouting(get, conversationId);
-      const sessions = get().sessionsByConversation[conversationId] ?? [];
-      if (routed?.target.sessionShortId) {
-        const match = sessions.find(
-          (s) =>
-            s.agent === agent &&
-            (s.shortId === routed.target.sessionShortId ||
-              s.id.endsWith(routed.target.sessionShortId!) ||
-              s.id.startsWith(routed.target.sessionShortId!)),
-        );
-        if (!match) {
-          throw new Error(
-            `No existing ${agent} session matches #${routed.target.sessionShortId}`,
-          );
-        }
-        sessionId = match.id;
-      } else if (routeProfileId) {
-        sessionId = await startNewAgentSession(
-          conversationId,
-          agent,
-          project.workspacePath,
-          routeProfileId,
-        );
+      const fanoutErrors = await fanOutAgentTurns({
+        get,
+        set,
+        conversationId,
+        workspacePath: project.workspacePath,
+        messageBody,
+        originMessageId: messageId,
+        targets,
+        multiRoutedCount,
+      });
+      if (fanoutErrors.length > 0) {
+        set({
+          actionError:
+            fanoutErrors.length === targets.length
+              ? fanoutErrors[0] ?? "Agent fan-out failed"
+              : `Partial fan-out failure (${fanoutErrors.length}/${targets.length}): ${fanoutErrors[0]}`,
+        });
       } else {
-        const reusable = sessions
-          .filter(
-            (s) =>
-              s.agent === agent &&
-              !s.parentId &&
-              s.status !== "done" &&
-              s.status !== "failed",
-          )
-          .sort((a, b) => (b.lastTsMs ?? 0) - (a.lastTsMs ?? 0))[0];
-        if (reusable) {
-          sessionId = reusable.id;
-        } else {
-          sessionId = await startNewAgentSession(
-            conversationId,
-            agent,
-            project.workspacePath,
-          );
-        }
-      }
-
-      if (prompt.trim()) {
-        try {
-          await daemonApi.resumeSession(sessionId, false);
-          set((s) => {
-            const prev = s.sessionsById[sessionId];
-            const row = findSessionRow(s, sessionId);
-            const entity = patchSessionEntity(prev, sessionId, {
-              daemonStatus: "running",
-              needsContinue: false,
-              conversationId:
-                prev?.conversationId ||
-                row?.conversationId ||
-                conversationId,
-              agent: prev?.agent || row?.agent,
-              shortId: prev?.shortId || row?.shortId,
-              model: prev?.model || row?.model,
-              summary: prev?.summary || row?.summary,
-              parentId: prev?.parentId ?? row?.parentId,
-              lastTsMs: Date.now(),
-            });
-            return commitSessionEntity(s, entity);
-          });
-        } catch {
-          /* not needed when already live */
-        }
-        await daemonApi.sendUserMessage(sessionId, prompt, messageId);
+        set({ actionError: null });
       }
 
       await quietRefreshConversationSlices(get, conversationId);
@@ -773,11 +655,19 @@ export function createUseCasesActions(
         queryKey: queryKeys.inspectorSessions(conversationId),
       });
       await get().loadConversations(conv.projectId);
-      set({ actionError: null });
+      if (fanoutErrors.length === targets.length) {
+        throw new Error(fanoutErrors[0] ?? "Agent fan-out failed");
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       set({ actionError: message });
-      patchDelivery("failed");
+      // Only flip to failed when still sending (append never succeeded).
+      const stillSending = (get().messagesByConversation[conversationId] ?? [])
+        .find((m) => m.id === messageId)
+        ?.deliveryStatus === "sending";
+      if (stillSending) {
+        patchDelivery("failed");
+      }
       await quietRefreshConversationSlices(get, conversationId);
       throw e;
     }

@@ -228,8 +228,11 @@ Postgres 集成 smoke（默认 skip）：`MINOS_PG_TESTS=1 MINOS_DATABASE_URL=po
 | `agent_turn_events` | 轮次流事件 |
 | `approval_requests` | 审批请求 |
 | `host_commands` | 持久化命令队列 |
-| `durable_event_log` | 按 topic 排序的事件日志 |
+| `durable_event_log` | 按 topic 排序的事件日志（payload；可被 retention 删除） |
+| `topic_metadata` | **序号权威**：`high_watermark`（永不回退）+ `retention_floor`（payload 删除上界） |
 | `outbox_events` | 分发工作队列（`lane`: `social_durable` \| `host_command`） |
+| `push_dispatch_queue` | 持久 Push 投递队列（claim / backoff / dead-letter） |
+| `completion_watches` | Agent turn completion projector 持久状态（启动 hydrate） |
 | `raw_events` | Host-local `seq` 的 Agent 原始事件，按 `(host_device_id, session_id, seq)` 幂等 |
 | `thread_sync_state` | Host manifest、backend ack 水位、partial history metadata |
 

@@ -323,12 +323,23 @@ impl RuntimeShell {
         } else {
             None
         };
+        // Hydrate durable CompletionWatch into memory cache (restart-safe).
+        // Best-effort at compose time: shell construction is sync; main awaits
+        // via RuntimeShell::hydrate_durable_state after from_config.
         Ok(Self {
             app,
             cors_origins,
             cluster_listener,
             job_supervisor,
         })
+    }
+
+    /// Load durable CompletionWatch rows into the in-memory registry.
+    /// Call once after [`Self::from_config`] before serving traffic.
+    pub async fn hydrate_durable_state(&self) -> Result<(), crate::error::BackendError> {
+        let state = self.backend_state();
+        crate::http::v1::social::hydrate_completion_watches(&state).await?;
+        Ok(())
     }
 
     #[must_use]

@@ -47,6 +47,8 @@ pub struct OpencodeServerInstance {
     pub http_client: Client,
     pub base_url: String,
     pub auth_header: String,
+    /// SSE pump task; aborted on drop/shutdown so reconnect loops do not leak.
+    pub(crate) sse_task: Option<JoinHandle<()>>,
 }
 
 impl OpencodeServerInstance {
@@ -116,6 +118,7 @@ impl OpencodeServerInstance {
             http_client,
             base_url: base_url.clone(),
             auth_header: auth_header.clone(),
+            sse_task: None,
         };
 
         let health_url = format!("{base_url}/global/health");
@@ -250,7 +253,14 @@ impl OpencodeServerInstance {
         &self.workspace
     }
 
+    pub fn abort_sse_task(&mut self) {
+        if let Some(task) = self.sse_task.take() {
+            task.abort();
+        }
+    }
+
     pub async fn close(mut self) {
+        self.abort_sse_task();
         if let Some(mut child) = self.child.take() {
             #[cfg(unix)]
             {
@@ -278,6 +288,12 @@ impl OpencodeServerInstance {
             workspace = %self.workspace.display(),
             "opencode server instance closed"
         );
+    }
+}
+
+impl Drop for OpencodeServerInstance {
+    fn drop(&mut self) {
+        self.abort_sse_task();
     }
 }
 
@@ -745,6 +761,7 @@ mod tests {
             http_client: Client::builder().build().expect("client should build"),
             base_url: "http://127.0.0.1:4311".into(),
             auth_header: "Basic xxx".into(),
+            sse_task: None,
         };
 
         assert_eq!(instance.subscribe_sse_url(), "http://127.0.0.1:4311/event");
@@ -780,6 +797,7 @@ mod tests {
                 .unwrap(),
             base_url: format!("http://{addr}"),
             auth_header: "Basic test".into(),
+            sse_task: None,
         };
 
         let error = instance
@@ -821,6 +839,7 @@ mod tests {
                 .unwrap(),
             base_url: format!("http://{addr}"),
             auth_header: "Basic test".into(),
+            sse_task: None,
         };
 
         instance

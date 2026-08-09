@@ -6,8 +6,8 @@ use minos_protocol::{
     ChatMessageSummary, ConversationMembersResponse, ConversationReadResponse,
     ConversationResponse, ConversationsResponse, CreateGroupConversationRequest,
     EnsureDirectConversationRequest, ListChatMessagesRequest, ListChatMessagesResponse,
-    SendChatMessageRequest, ToggleReactionRequest, ToggleReactionResponse,
-    UpsertConversationRequest,
+    MarkConversationReadRequest, SendChatMessageRequest, ToggleReactionRequest,
+    ToggleReactionResponse, UpsertConversationRequest,
 };
 
 use crate::conversations::{ConversationError, ConversationService, DefaultConversationService};
@@ -71,7 +71,7 @@ fn err(code: &'static str, message: impl Into<String>) -> (StatusCode, Json<Erro
 fn map_conversation_error(e: ConversationError) -> (StatusCode, Json<ErrorEnvelope>) {
     match e {
         ConversationError::NotFound => err("not_found", "conversation not found"),
-        ConversationError::Forbidden => err("not_found", "conversation not found"),
+        ConversationError::Forbidden => err("forbidden", "insufficient membership privilege"),
         ConversationError::NotFriends => err("conflict", "users are not friends"),
         ConversationError::TitleRequired => err("bad_request", "group title is required"),
         ConversationError::InvalidKind(msg) => err("internal", msg),
@@ -79,6 +79,7 @@ fn map_conversation_error(e: ConversationError) -> (StatusCode, Json<ErrorEnvelo
             err("internal", format!("profile not found: {id}"))
         }
         ConversationError::ValidationFormat(msg) => err("bad_request", msg),
+        ConversationError::IdempotencyConflict(msg) => err("conflict", msg),
         ConversationError::Internal(e) => err("internal", e.to_string()),
     }
 }
@@ -238,11 +239,16 @@ async fn mark_conversation_read(
     State(state): State<BackendState>,
     headers: HeaderMap,
     Path(conversation_id): Path<String>,
+    Json(req): Json<MarkConversationReadRequest>,
 ) -> Result<Json<ConversationReadResponse>, (StatusCode, Json<ErrorEnvelope>)> {
     let account_id = super::social::require_account_id_from_state(&state, &headers)?;
     let conversations_svc = DefaultConversationService::new(state.store.clone());
     let latest = conversations_svc
-        .mark_read(&account_id, &conversation_id)
+        .mark_read(
+            &account_id,
+            &conversation_id,
+            req.read_up_to_message_seq,
+        )
         .await
         .map_err(map_conversation_error)?;
     Ok(Json(ConversationReadResponse {
@@ -446,15 +452,6 @@ async fn add_group_member(
     let account_id = super::social::require_account_id_from_state(&state, &headers)?;
     let conversations_svc = DefaultConversationService::new(state.store.clone());
 
-    // Verify caller is a member
-    if !conversations_svc
-        .is_member(&conversation_id, &account_id)
-        .await
-        .map_err(map_conversation_error)?
-    {
-        return Err(err("not_found", "conversation not found"));
-    }
-    // Verify conversation is a group
     let conversation = conversations_svc
         .get_conversation(&conversation_id)
         .await
@@ -474,10 +471,24 @@ async fn add_group_member(
     if !friendships {
         return Err(err("conflict", "new member must be your friend"));
     }
-    conversations_svc
-        .add_member(&conversation_id, &req.member_account_id)
+    let (_change, pending) = conversations_svc
+        .add_member(&account_id, &conversation_id, &req.member_account_id)
         .await
         .map_err(map_conversation_error)?;
+    for p in pending {
+        if let Err(error) = state
+            .realtime
+            .publish_durable_event_by_id(&p.topic_kind, &p.event_id)
+            .await
+        {
+            tracing::warn!(
+                target: "minos_backend::http::conversations",
+                error = %error,
+                event_id = %p.event_id,
+                "membership durable publish failed (outbox will retry)"
+            );
+        }
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -488,19 +499,8 @@ async fn remove_group_member(
     Json(req): Json<minos_protocol::RemoveGroupMemberRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorEnvelope>)> {
     let account_id = super::social::require_account_id_from_state(&state, &headers)?;
-    if req.member_account_id == account_id {
-        return Err(err("bad_request", "leaving a group is not supported yet"));
-    }
 
     let conversations_svc = DefaultConversationService::new(state.store.clone());
-    if !conversations_svc
-        .is_member(&conversation_id, &account_id)
-        .await
-        .map_err(map_conversation_error)?
-    {
-        return Err(err("not_found", "conversation not found"));
-    }
-
     let conversation = conversations_svc
         .get_conversation(&conversation_id)
         .await
@@ -513,12 +513,42 @@ async fn remove_group_member(
         ));
     }
 
-    let removed = conversations_svc
-        .remove_member(&conversation_id, &req.member_account_id)
+    let (change, pending) = conversations_svc
+        .remove_member(&account_id, &conversation_id, &req.member_account_id)
         .await
         .map_err(map_conversation_error)?;
-    if !removed {
+    if !change.changed {
         return Err(err("not_found", "member not in this conversation"));
+    }
+
+    // Immediate live revoke so the removed member cannot keep receiving fanout.
+    let topic = crate::realtime::RealtimeTopic::Conversation(conversation_id.clone());
+    let revoked = state
+        .subscription_mgr
+        .revoke_topic_for_account(&req.member_account_id, &topic);
+    if revoked > 0 {
+        tracing::info!(
+            target: "minos_backend::http::conversations",
+            conversation_id = %conversation_id,
+            member_account_id = %req.member_account_id,
+            revoked_connections = revoked,
+            "revoked conversation subscription after membership remove"
+        );
+    }
+
+    for p in pending {
+        if let Err(error) = state
+            .realtime
+            .publish_durable_event_by_id(&p.topic_kind, &p.event_id)
+            .await
+        {
+            tracing::warn!(
+                target: "minos_backend::http::conversations",
+                error = %error,
+                event_id = %p.event_id,
+                "membership durable publish failed (outbox will retry)"
+            );
+        }
     }
     Ok(StatusCode::NO_CONTENT)
 }

@@ -209,6 +209,14 @@ pub struct ConversationMembersResponse {
     pub members: Vec<UserSummary>,
 }
 
+/// Client-observed watermark for mark-read. Server applies monotonic MAX.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct MarkConversationReadRequest {
+    /// Highest `message_seq` the client has actually observed/rendered.
+    /// Omitted or null is rejected by new clients; legacy empty body is not supported.
+    pub read_up_to_message_seq: i64,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ConversationReadResponse {
     /// Highest `message_seq` marked read in this conversation (0 = none).
@@ -360,6 +368,26 @@ impl MessageSource {
     #[must_use]
     pub fn allows_agent_dispatch(self) -> bool {
         matches!(self, Self::ClientLive)
+    }
+
+    /// Wire / storage form (`snake_case`).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ClientLive => "client_live",
+            Self::HostProjection => "host_projection",
+            Self::System => "system",
+        }
+    }
+
+    /// Parse storage/wire value; unknown → `ClientLive` (latest-only default).
+    #[must_use]
+    pub fn parse(s: &str) -> Self {
+        match s.trim() {
+            "host_projection" => Self::HostProjection,
+            "system" => Self::System,
+            _ => Self::ClientLive,
+        }
     }
 }
 

@@ -67,30 +67,10 @@ impl AppServerInstance {
         self.sessions.lock().await.iter().cloned().collect()
     }
 
-    /// Issue `thread/start` and return the provider id used for resume.
-    #[allow(dead_code)]
-    pub(crate) async fn start_thread(
-        &self,
-        cwd: &Path,
-    ) -> anyhow::Result<crate::manager::StartThreadResult> {
-        self.start_thread_with_model(cwd, None, None).await
-    }
-
-    pub(crate) async fn start_thread_with_model(
-        &self,
-        cwd: &Path,
-        model: Option<&str>,
-        reasoning_effort: Option<&str>,
-    ) -> anyhow::Result<crate::manager::StartThreadResult> {
-        self.start_thread_with_options(
-            cwd,
-            model,
-            reasoning_effort,
-            Some(crate::manager::MINOS_TEAMWORK_DEVELOPER_INSTRUCTIONS),
-        )
-        .await
-    }
-
+    /// Issue `thread/start` with compiler-owned `developer_instructions`.
+    ///
+    /// Callers must pass the result of `minos-prompt-runtime` delivery helpers
+    /// (`codex_developer_instructions`); never assemble teamwork/profile here.
     pub(crate) async fn start_thread_with_options(
         &self,
         cwd: &Path,
@@ -232,12 +212,19 @@ impl AppServerInstance {
     /// Best-effort interrupt of an in-flight turn. Sends `turn/interrupt`; the
     /// codex side responds with an error if there is no active turn — that is
     /// fine, callers always treat interrupt as best-effort.
+    ///
+    /// Prefer the real `active_turn_id` when known; empty string is only a
+    /// last-resort fallback for hosts that never observed `turn/started`.
     #[allow(dead_code)]
-    pub(crate) async fn interrupt_turn(&self, session_id: &str) -> anyhow::Result<()> {
+    pub(crate) async fn interrupt_turn(
+        &self,
+        session_id: &str,
+        turn_id: Option<&str>,
+    ) -> anyhow::Result<()> {
         let params = TurnInterruptParams {
             // Codex app-server wire field (not Minos session_id).
             thread_id: session_id.to_string(),
-            turn_id: String::new(),
+            turn_id: turn_id.unwrap_or("").to_string(),
         };
         let _ =
             tokio::time::timeout(Duration::from_millis(500), self.client.call_typed(params)).await;

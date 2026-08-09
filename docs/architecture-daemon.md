@@ -118,7 +118,7 @@ DaemonInner {
 
 桥接三个关注点：
 1. **`AgentManager`**（来自 `minos-agent-runtime`）：多工作区 CLI 实例管理
-2. **`IngestCoalescer` + `EventWriter`**：预分配 seq/projection，单写者 SQLite 本地持久化
+2. **`IngestCoalescer` + `EventWriter`**：projection + 父行就绪缓冲；**seq 仅在 SQLite 事务内分配**，单写者本地持久化
 3. **Watch channel**：镜像最新线程状态
 
 subagent 也是普通 thread，只是在 `SessionAdded` / `SessionSummary` / `LocalSessionSnapshot` 上携带 `parent_session_id`。daemon 收到 `SessionAdded { parent_session_id: Some(parent) }` 时复用父线程的 conversation 插入子线程行，且不增加 `conversations.agent_session_count`。TUI 通过现有 `list_conversation_agent_sessions` 得到父子 thread，不新增 `list_subagents` RPC。conversation message 读路径会过滤 `session_id` 指向 subagent 的旧消息行，summary 的 preview/count 也只计算可见消息，避免 subagent transcript/result 污染 conversation 主时间线。
@@ -208,11 +208,11 @@ Starting → Idle → Running { turn_started_at_ms }
 ### 事件持久化流程
 
 1. `AgentManager` 发出 `RawIngest`。`RawIngest` 不再以 `serde_json::Value` 作为主数据面，而是携带 `RawBody::InlineBytes` 或 `RawBody::Artifact`。
-2. `AgentGlue` bridge 先交给 `IngestCoalescer`，按线程读取本地 `last_seq`，在本地/live fanout 之前生成稳定 `seq`、projection、checksum 和 canonical `IngestChunk`。
-3. `AgentGlue` 将同一个 `IngestChunk` 分两路处理：`EventWriter::write_chunk()` 批量写 SQLite；`IngestSyncHandle::submit_live()` 非阻塞尝试实时上传。
-4. 大于等于 `INLINE_RAW_BODY_THRESHOLD`（16 KiB）的 raw body 写入本地 `ArtifactStore`，SQLite `events` 行只保存 artifact metadata；小 body 以内联 bytes 保存。
-5. `EventWriter` 只负责本地事务提交和 `projection_json` 持久化，不再构造 relay frame，也不 await relay outbound queue。
-6. SQLite 提交后，daemon 本地订阅者收到 `LocalIngestFrame { seq, ui_events }`。WS 在线时，live sync worker 发送 `ClientFrame::HostIngestLiveBatch`；WS 断开或 live 队列满时只记录 dirty range，不保留 payload backlog。
+2. `AgentGlue` bridge 交给 `IngestCoalescer::admit`：父 `sessions` 行就绪则生成 **无 seq** 的 `PreparedIngest`（projection + conversation_id）；父行晚到则 **按 session 缓冲**（不静默 drop、不预先烧 seq），`SessionAdded` / 短轮询后 `drain_ready`。
+3. `EventWriter::write_prepared` 在 SQLite 事务内用 `last_seq + 1` **分配 seq 并 commit**；失败则 backoff 重试 / 回写 FIFO retry 队首（seq 从未提交，无空洞）。Ingest actor 是唯一提交者；旧 frame 成功前不允许新 frame 进入 writer，保证 provider 顺序与 durable seq 一致。
+4. **仅本地 commit 成功后** 才 `submit_live` + 向 Desktop 广播 `LocalIngestFrame { seq, ui_events }`（commit-then-upload）。
+5. 大于等于 `INLINE_RAW_BODY_THRESHOLD`（16 KiB）的 raw body 写入本地 `ArtifactStore`，SQLite `events` 行只保存 artifact metadata；小 body 以内联 bytes 保存。
+6. `EventWriter` 只负责本地事务提交和 `projection_json` 持久化，不再构造 relay frame，也不 await relay outbound queue。WS 在线时 live sync 发 `HostIngestLiveBatch`；断开或队列满时只记 dirty range。
 
 ## 本地存储 (`src/store/`)
 
@@ -355,4 +355,3 @@ Desktop 在登录后调用：
 1. `minos_local_host_prepare_link` — 返回 `installation_id` + `public_key` + backend nonce
 2. Desktop 用 account bearer 调 `POST /v1/hosts/link`（签名可由 `minos_local_host_sign_link_proof` 生成）
 3. `minos_local_host_apply_link_token` — 持久化 `hit_*` 并 `secret_notify` 唤醒 relay 拨号 `/ws/host`
-

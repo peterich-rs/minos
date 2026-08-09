@@ -112,6 +112,10 @@ pub struct SocialEventFrame {
     /// `"message"` | `"reaction_updated"`.
     pub kind: String,
     pub message: ChatMessageSummary,
+    /// Durable topic for apply-ack (e.g. `conversation:{id}` / `account:{id}`).
+    pub topic: String,
+    /// Durable topic_seq; ack after cache commit via `ack_durable_applied`.
+    pub topic_seq: i64,
 }
 
 /// Durable mobile pairing snapshot mirrored into the iOS keychain.
@@ -201,6 +205,8 @@ impl From<MobileSocialEventFrame> for SocialEventFrame {
             conversation_id: f.conversation_id,
             kind: f.kind,
             message: f.message,
+            topic: f.topic,
+            topic_seq: f.topic_seq,
         }
     }
 }
@@ -437,8 +443,11 @@ impl MobileClient {
     pub async fn mark_conversation_read(
         &self,
         conversation_id: String,
+        read_up_to_message_seq: i64,
     ) -> Result<ConversationReadResponse, MinosError> {
-        self.0.mark_conversation_read(conversation_id).await
+        self.0
+            .mark_conversation_read(conversation_id, read_up_to_message_seq)
+            .await
     }
 
     pub async fn list_chat_messages(
@@ -539,6 +548,11 @@ impl MobileClient {
         conversation_id: String,
     ) -> Result<(), MinosError> {
         self.0.unsubscribe_conversation(conversation_id).await
+    }
+
+    /// Advance durable topic cursor after Dart cache/reducer commit.
+    pub async fn ack_durable_applied(&self, topic: String, topic_seq: i64) {
+        self.0.ack_durable_applied(topic, topic_seq).await;
     }
 
     /// Read a window of translated UI events for one session.

@@ -16,7 +16,11 @@ const EMPTY_SESSIONS: ProjectSession[] = [];
  * children subscribe to workspace state for their slices.
  */
 export function Timeline({ conversationId }: { conversationId: string }) {
-  const conversations = useWorkspaceStore((s) => s.conversations);
+  // Select the active row only — full `conversations` array would re-render
+  // the timeline shell on every quiet rail re-list (preview/count thrash).
+  const conversation = useWorkspaceStore((s) =>
+    s.conversations.find((c) => c.id === conversationId),
+  );
   const loadTimeline = useWorkspaceStore((s) => s.loadTimeline);
   const markConversationRead = useWorkspaceStore((s) => s.markConversationRead);
   const refreshConversationGitStatus = useWorkspaceStore(
@@ -32,7 +36,6 @@ export function Timeline({ conversationId }: { conversationId: string }) {
     (s) => s.timelineStatusByConversation[conversationId],
   );
 
-  const conversation = conversations.find((c) => c.id === conversationId);
   const phase = timelineStatus?.phase ?? "idle";
   /** One quiet recovery per error generation — no error→load→error poll loop. */
   const errorRecoveryGenRef = useRef<number | null>(null);

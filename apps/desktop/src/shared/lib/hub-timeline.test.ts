@@ -111,6 +111,101 @@ describe("mergeHubAndLocalTimeline", () => {
     assert.deepEqual(row?.reactions, []);
   });
 
+  it("uses Hub messageSeq as social SSOT (not host daemon seq)", () => {
+    // Hub insert order is the multi-end social order. Host finish seq stays
+    // local-only and must not overwrite Hub message_seq on same id.
+    const merged = mergeHubAndLocalTimeline({
+      hubMessages: [
+        local({
+          id: "msg_user",
+          role: "user",
+          body: "@grok hi",
+          createdAtMs: 100,
+          messageSeq: 10,
+        }),
+        local({
+          id: "agent-result:c:s:msg_user",
+          role: "agent",
+          body: "hub reply",
+          createdAtMs: 200,
+          messageSeq: 11,
+        }),
+      ],
+      localMessages: [
+        local({
+          id: "msg_user",
+          role: "user",
+          body: "@grok hi",
+          createdAtMs: 100,
+          messageSeq: 8,
+        }),
+        local({
+          id: "agent-result:c:s:msg_user",
+          role: "agent",
+          body: "local reply",
+          createdAtMs: 200,
+          messageSeq: 9,
+        }),
+      ],
+    });
+    const user = merged.find((m) => m.id === "msg_user");
+    const agent = merged.find((m) => m.id === "agent-result:c:s:msg_user");
+    assert.equal(user?.messageSeq, 10, "hub seq is social SSOT");
+    assert.equal(agent?.messageSeq, 11, "hub seq is social SSOT");
+    assert.equal(agent?.body, "hub reply", "hub body still wins on same id");
+    assert.equal(merged[0]?.id, "msg_user");
+    assert.equal(merged[1]?.id, "agent-result:c:s:msg_user");
+  });
+
+  it("keeps hub-only mobile messageSeq for social order", () => {
+    const merged = mergeHubAndLocalTimeline({
+      hubMessages: [
+        local({
+          id: "mobile-only",
+          role: "user",
+          body: "from phone",
+          createdAtMs: 150,
+          messageSeq: 11,
+        }),
+        local({
+          id: "host-user",
+          role: "user",
+          body: "@grok hi",
+          createdAtMs: 100,
+          messageSeq: 10,
+        }),
+      ],
+      localMessages: [
+        local({
+          id: "host-user",
+          role: "user",
+          body: "@grok hi",
+          createdAtMs: 100,
+          messageSeq: 8,
+        }),
+        local({
+          id: "agent-result:c:s:host-user",
+          role: "agent",
+          body: "reply",
+          createdAtMs: 200,
+          messageSeq: 9,
+        }),
+      ],
+    });
+    const mobile = merged.find((m) => m.id === "mobile-only");
+    assert.equal(
+      mobile?.messageSeq,
+      11,
+      "hub-only peer keeps Hub message_seq",
+    );
+    const ids = merged.map((m) => m.id);
+    assert.deepEqual(ids, [
+      "host-user",
+      "mobile-only",
+      "agent-result:c:s:host-user",
+    ]);
+  });
+
   it("drops bare non-canonical agent locals not on hub (no dual SSOT ghosts)", () => {
     const merged = mergeHubAndLocalTimeline({
       hubMessages: [

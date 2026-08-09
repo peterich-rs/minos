@@ -61,10 +61,28 @@ impl EventWriter {
             .await
     }
 
+    /// Persist a pre-projected live frame. **Seq is always assigned inside the
+    /// SQLite transaction** (`last_seq + 1`) so a failed write never burns a
+    /// host-local sequence number (commit-then-upload invariant).
+    pub async fn write_prepared(
+        &self,
+        prepared: crate::ingest_coalescer::PreparedIngest,
+    ) -> Result<CommittedIngest> {
+        self.write_internal(
+            prepared.ingest,
+            None,
+            Some(prepared.projection),
+            EventSource::Live,
+        )
+        .await
+    }
+
+    /// Legacy helper: projection may be precomputed, but seq on `chunk` is
+    /// ignored — DB is the sole allocator for live writes.
     pub async fn write_chunk(&self, chunk: IngestChunk) -> Result<CommittedIngest> {
         self.write_internal(
             chunk.ingest,
-            Some(chunk.seq),
+            None,
             Some(chunk.projection),
             EventSource::Live,
         )

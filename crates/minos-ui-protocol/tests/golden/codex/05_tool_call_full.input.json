@@ -3,9 +3,13 @@
     "item":{"type":"agentMessage","id":"i1","text":""},
     "sessionId":"thr_fixture","turnId":"t1"
   }},
-  {"method":"item/toolCall/started","params":{"itemId":"i1","toolCallId":"tc_1","name":"apply_patch"}},
-  {"method":"item/toolCall/arguments","params":{"toolCallId":"tc_1","argumentsDelta":"{\"diff\":"}},
-  {"method":"item/toolCall/arguments","params":{"toolCallId":"tc_1","argumentsDelta":"\"...\"}"}},
-  {"method":"item/toolCall/argumentsCompleted","params":{"toolCallId":"tc_1"}},
-  {"method":"item/toolCall/completed","params":{"toolCallId":"tc_1","output":"patched 1 file","isError":false}}
+  {"method":"item/started","params":{
+    "item":{"type":"fileChange","id":"fc1","tool":"apply_patch","status":"inProgress","changes":[{"path":"a.rs","kind":"update"}]},
+    "sessionId":"thr_fixture","turnId":"t1"
+  }},
+  {"method":"item/fileChange/outputDelta","params":{"itemId":"fc1","threadId":"thr_fixture","turnId":"t1","delta":"patching…"}},
+  {"method":"item/completed","params":{
+    "item":{"type":"fileChange","id":"fc1","tool":"apply_patch","status":"completed","changes":[{"path":"a.rs","kind":"update"}]},
+    "sessionId":"thr_fixture","turnId":"t1","completedAtMs":2
+  }}
 ]

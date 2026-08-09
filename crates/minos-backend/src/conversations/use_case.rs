@@ -28,8 +28,22 @@ pub enum ConversationError {
     MissingProfile(String),
     #[error("validation_format: {0}")]
     ValidationFormat(String),
+    /// Same `client_message_id` with a different request fingerprint.
+    #[error("idempotency_conflict: {0}")]
+    IdempotencyConflict(String),
     #[error(transparent)]
     Internal(#[from] BackendError),
+}
+
+fn map_store_write(error: BackendError) -> ConversationError {
+    match &error {
+        BackendError::StoreQuery { operation, message }
+            if operation.ends_with("idempotency_conflict") =>
+        {
+            ConversationError::IdempotencyConflict(message.clone())
+        }
+        _ => ConversationError::Internal(error),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +93,7 @@ pub trait ConversationService: Send + Sync {
         &self,
         account_id: &str,
         conversation_id: &str,
+        read_up_to_message_seq: i64,
     ) -> Result<Option<(i64, i64)>, ConversationError>;
 
     async fn list_messages(
@@ -155,17 +170,22 @@ pub trait ConversationService: Send + Sync {
         conversation_id: &str,
     ) -> Result<Vec<String>, ConversationError>;
 
+    /// Add member. Caller must be owner/admin. Returns durable publishes + change metadata.
     async fn add_member(
         &self,
+        actor_account_id: &str,
         conversation_id: &str,
-        account_id: &str,
-    ) -> Result<(), ConversationError>;
+        member_account_id: &str,
+    ) -> Result<(social::MembershipChangeResult, Vec<social::PendingDurablePublish>), ConversationError>;
 
+    /// Remove member or self-leave. Moderator remove requires owner/admin.
+    /// Returns whether membership row changed plus durable publishes.
     async fn remove_member(
         &self,
+        actor_account_id: &str,
         conversation_id: &str,
-        account_id: &str,
-    ) -> Result<bool, ConversationError>;
+        member_account_id: &str,
+    ) -> Result<(social::MembershipChangeResult, Vec<social::PendingDurablePublish>), ConversationError>;
 
     async fn delete_conversation(
         &self,
@@ -347,14 +367,21 @@ impl ConversationService for DefaultConversationService {
         &self,
         account_id: &str,
         conversation_id: &str,
+        read_up_to_message_seq: i64,
     ) -> Result<Option<(i64, i64)>, ConversationError> {
         if !social::is_conversation_member(&self.store, conversation_id, account_id).await? {
             return Err(ConversationError::NotFound);
         }
-        let latest = social::mark_conversation_read_to_latest(
+        if read_up_to_message_seq <= 0 {
+            return Err(ConversationError::ValidationFormat(
+                "read_up_to_message_seq must be positive".into(),
+            ));
+        }
+        let latest = social::mark_conversation_read_to_seq(
             &self.store,
             conversation_id,
             account_id,
+            read_up_to_message_seq,
             chrono::Utc::now().timestamp_millis(),
         )
         .await?;
@@ -516,9 +543,21 @@ impl ConversationService for DefaultConversationService {
             reply_to_id.as_deref(),
             &mentioned_account_ids,
             client_message_id,
+            &attachment_ids,
+            message_source.as_str(),
         )
-        .await?;
+        .await
+        .map_err(map_store_write)?;
         let message = if outcome.inserted {
+            // Attachments join rows in the same transaction as message + durable/outbox.
+            if !attachment_ids.is_empty() {
+                crate::store::message_attachments::link_blobs_to_message_in_tx(
+                    &mut tx,
+                    &outcome.row.message_id,
+                    &attachment_ids,
+                )
+                .await?;
+            }
             ChatMessageSummary {
                 message_id: outcome.row.message_id.clone(),
                 conversation_id: outcome.row.conversation_id.clone(),
@@ -545,14 +584,6 @@ impl ConversationService for DefaultConversationService {
         };
         social::ensure_social_message_delivery_in_tx(&mut tx, &message, &member_ids).await?;
         tx.commit().await?;
-        if outcome.inserted && !attachment_ids.is_empty() {
-            crate::store::message_attachments::link_blobs_to_message(
-                &self.store,
-                &message.message_id,
-                &attachment_ids,
-            )
-            .await?;
-        }
         Ok((message, members))
     }
 
@@ -792,25 +823,114 @@ impl ConversationService for DefaultConversationService {
 
     async fn add_member(
         &self,
+        actor_account_id: &str,
         conversation_id: &str,
-        account_id: &str,
-    ) -> Result<(), ConversationError> {
-        social::add_member_to_group(
+        member_account_id: &str,
+    ) -> Result<(social::MembershipChangeResult, Vec<social::PendingDurablePublish>), ConversationError>
+    {
+        let actor_role =
+            social::get_member_role(&self.store, conversation_id, actor_account_id).await?;
+        match actor_role.as_deref() {
+            Some("owner") | Some("admin") => {}
+            Some(_) => return Err(ConversationError::Forbidden),
+            None => return Err(ConversationError::NotFound),
+        }
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let change = social::add_member_to_group(
             &self.store,
             conversation_id,
-            account_id,
-            chrono::Utc::now().timestamp_millis(),
+            member_account_id,
+            now_ms,
         )
         .await?;
-        Ok(())
+        if !change.changed {
+            return Ok((change, Vec::new()));
+        }
+        let remaining = social::list_conversation_members(&self.store, conversation_id).await?;
+        let mut tx = self.store.begin().await?;
+        let pending = social::ensure_membership_change_delivery_in_tx(
+            &mut tx,
+            conversation_id,
+            member_account_id,
+            actor_account_id,
+            &change.action,
+            change.role.as_deref(),
+            change.membership_version,
+            now_ms,
+            &remaining,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok((change, pending))
     }
 
     async fn remove_member(
         &self,
+        actor_account_id: &str,
         conversation_id: &str,
-        account_id: &str,
-    ) -> Result<bool, ConversationError> {
-        Ok(social::remove_member_from_group(&self.store, conversation_id, account_id).await?)
+        member_account_id: &str,
+    ) -> Result<(social::MembershipChangeResult, Vec<social::PendingDurablePublish>), ConversationError>
+    {
+        let self_leave = actor_account_id == member_account_id;
+        if !self_leave {
+            let actor_role =
+                social::get_member_role(&self.store, conversation_id, actor_account_id).await?;
+            match actor_role.as_deref() {
+                Some("owner") | Some("admin") => {}
+                Some(_) => return Err(ConversationError::Forbidden),
+                None => return Err(ConversationError::NotFound),
+            }
+            // Non-owners cannot remove the owner.
+            let target_role =
+                social::get_member_role(&self.store, conversation_id, member_account_id).await?;
+            if target_role.as_deref() == Some("owner") && actor_role.as_deref() != Some("owner") {
+                return Err(ConversationError::Forbidden);
+            }
+            if target_role.is_none() {
+                return Ok((
+                    social::MembershipChangeResult {
+                        membership_version: 0,
+                        action: "removed".into(),
+                        member_account_id: member_account_id.to_string(),
+                        role: None,
+                        changed: false,
+                    },
+                    Vec::new(),
+                ));
+            }
+        } else if !social::is_conversation_member(&self.store, conversation_id, actor_account_id)
+            .await?
+        {
+            return Err(ConversationError::NotFound);
+        }
+
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let change = social::remove_member_from_group(
+            &self.store,
+            conversation_id,
+            member_account_id,
+            now_ms,
+        )
+        .await?;
+        if !change.changed {
+            return Ok((change, Vec::new()));
+        }
+        let remaining = social::list_conversation_members(&self.store, conversation_id).await?;
+        let mut tx = self.store.begin().await?;
+        let pending = social::ensure_membership_change_delivery_in_tx(
+            &mut tx,
+            conversation_id,
+            member_account_id,
+            actor_account_id,
+            &change.action,
+            None,
+            change.membership_version,
+            now_ms,
+            &remaining,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok((change, pending))
     }
 
     async fn delete_conversation(

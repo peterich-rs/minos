@@ -244,6 +244,11 @@ impl TeamworkStore {
         Ok(())
     }
 
+    /// Ensure a durable source-delivery outbox row exists **before** provider send.
+    ///
+    /// Stable `delivery_id = delivery-{delegation_id}` so restarts / retries
+    /// reuse one row. If already `Delivered`, returns that row (caller skips send).
+    /// If `Pending` or `Failed`, returns the existing/re-opened pending row.
     pub async fn enqueue_source_delivery(
         &self,
         conversation_id: &str,
@@ -251,8 +256,60 @@ impl TeamworkStore {
         source_session_id: &str,
         body: &str,
     ) -> Result<TeamworkSourceDelivery> {
+        let delivery_id = format!("delivery-{delegation_id}");
         let now = chrono::Utc::now().timestamp_millis();
-        let delivery_id = format!("delivery-{}-{}", delegation_id, now);
+
+        if let Some(existing) = self.get_source_delivery(&delivery_id).await? {
+            match existing.status {
+                TeamworkSourceDeliveryStatus::Delivered => return Ok(existing),
+                TeamworkSourceDeliveryStatus::Pending => {
+                    // Refresh body if caller has the latest text; keep pending.
+                    if existing.body != body {
+                        sqlx::query(
+                            "UPDATE teamwork_source_deliveries \
+                             SET body = ?, updated_at_ms = ? WHERE delivery_id = ?",
+                        )
+                        .bind(body)
+                        .bind(now)
+                        .bind(&delivery_id)
+                        .execute(&self.pool)
+                        .await?;
+                        let mut updated = existing;
+                        updated.body = body.to_owned();
+                        updated.updated_at_ms = now;
+                        return Ok(updated);
+                    }
+                    return Ok(existing);
+                }
+                TeamworkSourceDeliveryStatus::Failed => {
+                    // Re-open for retry with latest body.
+                    sqlx::query(
+                        "UPDATE teamwork_source_deliveries \
+                         SET status = ?, body = ?, last_error = NULL, updated_at_ms = ? \
+                         WHERE delivery_id = ?",
+                    )
+                    .bind(TeamworkSourceDeliveryStatus::Pending.as_db())
+                    .bind(body)
+                    .bind(now)
+                    .bind(&delivery_id)
+                    .execute(&self.pool)
+                    .await?;
+                    return Ok(TeamworkSourceDelivery {
+                        delivery_id,
+                        conversation_id: conversation_id.to_owned(),
+                        delegation_id: delegation_id.to_owned(),
+                        source_session_id: source_session_id.to_owned(),
+                        body: body.to_owned(),
+                        status: TeamworkSourceDeliveryStatus::Pending,
+                        attempts: existing.attempts,
+                        last_error: None,
+                        created_at_ms: existing.created_at_ms,
+                        updated_at_ms: now,
+                    });
+                }
+            }
+        }
+
         let status = TeamworkSourceDeliveryStatus::Pending;
         sqlx::query(
             "INSERT INTO teamwork_source_deliveries( \
@@ -282,6 +339,19 @@ impl TeamworkStore {
             created_at_ms: now,
             updated_at_ms: now,
         })
+    }
+
+    pub async fn get_source_delivery(
+        &self,
+        delivery_id: &str,
+    ) -> Result<Option<TeamworkSourceDelivery>> {
+        let row = sqlx::query(
+            "SELECT * FROM teamwork_source_deliveries WHERE delivery_id = ?",
+        )
+        .bind(delivery_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(source_delivery_from_row).transpose()
     }
 
     pub async fn list_pending_source_deliveries_for_thread(

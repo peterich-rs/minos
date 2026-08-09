@@ -1,21 +1,14 @@
-//! In-memory registry for agent turn completion projection.
+//! In-memory cache for agent turn completion projection.
 //!
 //! Armed when Mobile/`client_live` dispatches an agent; drained on host ingest
 //! (event-driven). Keyed by **watch_key** = `{origin_message_id}:{session_id}`
 //! so multi-@ fan-out (same origin, distinct sessions/agents) never overwrites.
 //! Session has a secondary index for multi-watch drain on ingest.
 //!
-//! # Multi-instance (P6)
-//!
-//! This registry is **process-local**. Correct multi-replica operation requires
-//! co-locating host WebSocket + `agent_dispatch_worker` on the same process so
-//! `arm` and host-ingest `try_project_completion_for_session` share memory.
-//!
-//! Recovery path (already production): host online →
-//! [`crate::http::v1::social::on_host_online_force_agent_dispatch`] force-dues
-//! pending dispatches → worker re-arms watches on the instance that processes
-//! the batch. A shared Redis-backed watch store is deferred until multi-replica
-//! host affinity is required at scale.
+//! Durability: rows live in `completion_watches` (see store module). Callers
+//! must persist via `store::completion_watches` before/alongside `arm`, and
+//! mark projected/expired on remove. On startup
+//! [`CompletionWatchRegistry::hydrate_from_store`] reloads armed rows.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -165,6 +158,14 @@ impl CompletionWatchRegistry {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Load all armed watches from durable store into this empty registry.
+    /// Call once at process startup after store is ready.
+    pub fn hydrate(&self, watches: impl IntoIterator<Item = CompletionWatch>) {
+        for watch in watches {
+            self.arm(watch);
+        }
     }
 }
 

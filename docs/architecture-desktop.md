@@ -204,7 +204,7 @@ apps/desktop/
         account-session.ts       # MinosSession + HostLinkState localStorage
         minos-cloud.ts           # /v1/auth/* + /v1/hosts/* + Hub IM HTTP
         im-cloud-sync.ts         # Hub shell upsert + user/agent_result Outbox (host_projection uplink)
-        im-outbox.ts             # durable localStorage Outbox (user_message | agent_result | reaction_toggle | approval_resolve)
+        im-outbox.ts             # durable Tauri SQLite Outbox (user_message | agent_result | reaction_toggle | approval_resolve); intent lanes
         im-cloud-inbound.ts      # Hub cold pull → TimelineMessage[] (no daemon append)
         hub-timeline.ts          # mergeHubAndLocalTimeline (Hub chat + local tool/git; same-id only)
         hub-cursors.ts           # per-topic topic_seq resume_after (localStorage)
@@ -430,7 +430,7 @@ minos_local_read_session_raw_history / subscribe_ingest
 
 | 项 | 行为 |
 |----|------|
-| 排序键 | 服务端 `message_seq` ASC（bridge reverse + 前端 `sortTimelineMessages` 防御）；**不用** `createdAtMs` 排序 |
+| 排序键 | Linked：Hub `message_seq` 为聊天气泡唯一社会序；Host tool/git/system 卡用 `anchorHubMessageSeq` + `suborder`（挂在对应 Hub 气泡之后）。禁止 durable 社会序退回墙钟。Local-only：host daemon seq。Optimistic no-seq 始终置于 durable 尾部。分页：`hubMinLoadedSeq` / `hostMinLoadedSeq` 分命名空间，禁止共用 `before_seq` |
 | 字段 | `messageSeq` / `messageId` / `replyToMessageId` / `mentions` / `delegationId` 经 Tauri DTO 贯通 |
 | 时钟 | **epoch ms SSOT**（`createdAtMs` / 列表 `updatedAtMs`）。气泡用 `formatLocalClock`（本地 `HH:mm`）；列表/Board 用 `formatListActivityTime`（今天时钟 / Yesterday / 周几 / 日期）在 **render 时**格式化，**禁止**把相对时间串写进 store |
 | 列表 last activity | Hub IM：`max(hub.lastMessageAtMs, daemon.updatedAtMs)`；preview 跟随较新一侧（防 host_projection 滞后钉死旧 digest）。本机发送乐观更新 rail。**Recall**：从已打开时间线剩余气泡重算 last activity，禁止用被撤回消息的 `createdAtMs` 覆盖（会倒退列表时钟）；无窗口时保留 prev digest。Account digest 缺 `at_ms` 时 **不** 用 `Date.now()` 伪造。Daemon 物理 `conversations.updated_at_ms` **仅** message upsert 写入；title/git/session count 不 bump；list SELECT 用 top-level `MAX(created_at_ms)` 作 last-activity SSOT |

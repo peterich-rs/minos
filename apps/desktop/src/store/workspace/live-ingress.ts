@@ -30,8 +30,8 @@ import { useReactionStore } from "@/features/chat/reaction-store";
  *
  * Shared by conversation message push and session turn-end (idle/done):
  * daemon `conversation_completion` writes local `agent-result:…` (workbench);
- * Linked Hub-first also refreshes so TurnCompletionProjector agent bubbles
- * appear via Hub merge. Either path can lag; one quiet load covers both.
+ * Linked Hub also needs outbox uplink even when the timeline is not open —
+ * otherwise agent bubbles only appear after leave/return hydrate.
  */
 function scheduleConversationTimelineRefresh(
   get: WorkspaceGet,
@@ -44,34 +44,84 @@ function scheduleConversationTimelineRefresh(
     conversationId,
     setTimeout(() => {
       conversationRefreshTimers.delete(conversationId);
-      const st = get();
-      const projectId = st.conversations.find(
-        (c) => c.id === conversationId,
-      )?.projectId;
-      if (projectId) {
-        void get().loadConversations(projectId, { quiet: true });
-      }
-      const focused = st.focusedConversationId === conversationId;
-      const hasWorkingSet = hasTimelineWorkingSet(
-        st.messagesByConversation,
-        conversationId,
-        {
-          messageHistoryByConversation: st.messageHistoryByConversation,
-          timelineStatusByConversation: st.timelineStatusByConversation,
-        },
-      );
-      // Always refresh when this conversation is open or already has a window.
-      // Turn-end must not depend on conversation push alone.
-      if (!focused && !hasWorkingSet) {
-        // Background: mark dirty only (no invent Timeline for unopened convos).
-        // loadConversations above still updates rail preview/count.
-        return;
-      }
-      // Single quiet re-list. Agent-result uses canonical Hub id + WS fanout /
-      // outbox uplink — no 0/400/1200 burst poll (C2).
-      void get().loadTimeline(conversationId, { quiet: true });
+      void runConversationTurnEndRefresh(get, conversationId);
     }, 200),
   );
+}
+
+async function runConversationTurnEndRefresh(
+  get: WorkspaceGet,
+  conversationId: string,
+): Promise<void> {
+  const st = get();
+  const projectId = st.conversations.find(
+    (c) => c.id === conversationId,
+  )?.projectId;
+  const focused = st.focusedConversationId === conversationId;
+  const hasWorkingSet = hasTimelineWorkingSet(
+    st.messagesByConversation,
+    conversationId,
+    {
+      messageHistoryByConversation: st.messageHistoryByConversation,
+      timelineStatusByConversation: st.timelineStatusByConversation,
+    },
+  );
+
+  // 1) Open timeline first — never gate UI on Hub uplink/network.
+  //    conversation_completion already wrote local agent-result; quiet re-list
+  //    must surface it immediately while the conversation is open.
+  if (focused || hasWorkingSet) {
+    void get().loadTimeline(conversationId, { quiet: true });
+  }
+
+  // 2) Rail preview/count (single quiet re-list; digest live-patch covers most).
+  if (projectId) {
+    void get().loadConversations(projectId, { quiet: true });
+  }
+
+  // 3) Background Hub uplink of local agent-result rows (even when unopened).
+  //    Must not block step 1 — slow/failed outbox used to leave the open chat
+  //    empty until leave/return hard hydrate.
+  try {
+    const { useAccountStore } = await import("@/store/account-store");
+    const { isHubImMode } = await import("@/shared/lib/hub-timeline");
+    const { projectMissingLocalAgentResultsToHub, flushImOutbox } =
+      await import("@/shared/lib/im-cloud-sync");
+    const { toUiMessage } = await import("./helpers");
+    const { daemonApi } = await import("@/shared/lib/daemon");
+    const { session, authPhase } = useAccountStore.getState();
+    if (
+      !isHubImMode({
+        authPhase,
+        accessToken: session?.accessToken,
+      })
+    ) {
+      return;
+    }
+    const page = await daemonApi.listMessages(conversationId, {
+      limit: 50,
+    });
+    const localUi = (page.messages ?? []).map((m) => toUiMessage(m));
+    await projectMissingLocalAgentResultsToHub(conversationId, localUi, []);
+    void flushImOutbox();
+    // Open window may still be on local-only agent-result; quiet re-merge after
+    // uplink so Hub body/reactions can replace same-id rows without a leave.
+    const stAfter = get();
+    const stillOpen =
+      stAfter.focusedConversationId === conversationId ||
+      hasTimelineWorkingSet(stAfter.messagesByConversation, conversationId, {
+        messageHistoryByConversation: stAfter.messageHistoryByConversation,
+        timelineStatusByConversation: stAfter.timelineStatusByConversation,
+      });
+    if (stillOpen) {
+      void get().loadTimeline(conversationId, { quiet: true });
+    }
+  } catch (err) {
+    console.warn(
+      "[live-ingress] turn-end agent-result hub uplink failed",
+      err,
+    );
+  }
 }
 
 export function createLiveIngressActions(
@@ -95,12 +145,16 @@ export function createLiveIngressActions(
         ev.sessionId,
       );
       let items: TranscriptItem[] | null = null;
+      // Track hard-max trim separately — length can also drop from subagent
+      // collapse / demote, which is not "older history exists".
+      let hardMaxTrimmed = false;
       if (hasTranscriptEntry) {
         const merged = mergeTranscriptItems(
           s.transcriptsBySession[ev.sessionId] ?? [],
           ev.items ?? [],
         );
         const trimmed = trimTranscriptHardMax(merged);
+        hardMaxTrimmed = trimmed.trimmed;
         // Never trust a single-frame hasPendingApproval when the window already
         // contains later progress past an answered plan/permission card.
         items = demoteResolvedApprovalItems(trimmed.items);
@@ -145,9 +199,7 @@ export function createLiveIngressActions(
       if (items != null) {
         const prevH =
           s.transcriptHistoryBySession[ev.sessionId] ?? EMPTY_TRANSCRIPT_HISTORY;
-        const wasTrimmed =
-          (s.transcriptsBySession[ev.sessionId]?.length ?? 0) > items.length;
-        if (wasTrimmed && !prevH.hasOlder) {
+        if (hardMaxTrimmed && !prevH.hasOlder) {
           transcriptHistoryBySession = {
             ...s.transcriptHistoryBySession,
             [ev.sessionId]: { ...prevH, hasOlder: true },

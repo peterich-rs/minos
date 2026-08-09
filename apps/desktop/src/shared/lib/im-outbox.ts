@@ -1,5 +1,9 @@
 /**
- * Durable Desktop → Hub/daemon Outbox (localStorage).
+ * Durable Desktop → Hub/daemon Outbox.
+ *
+ * Persistence: Tauri SQLite (`im_outbox.sqlite3` under app data dir).
+ * In-memory mirror is the working set; every mutation fail-closed persists
+ * before returning. Tests inject a memory backend via `useMemoryOutboxForTests`.
  *
  * Status machine:
  *   pending ──flush──► inflight ──2xx──► acked
@@ -7,16 +11,29 @@
  *   startup / stale_inflight_ttl ──► pending
  *
  * kinds: user_message | agent_result | reaction_toggle | approval_resolve
- * (same status machine)
  *
  * Identity:
- * - Logical op id = `clientMessageId` (B6 reaction `client_op_id`, C5.3
- *   approval `client_request_id`, user message `client_message_id`).
- * - Storage row `id` is `outbox:${clientMessageId}` (local only; never on wire).
+ * - Logical op id = `clientMessageId`
+ * - Storage row `id` is `outbox:${clientMessageId}` (local only)
  */
 
-const STORAGE_KEY = "minos.im.outbox.v1";
-const MAX_ENTRIES = 500;
+/** Inline to keep this module free of path-alias imports (node:test friendly). */
+function isTauriRuntime(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    ("__TAURI_INTERNALS__" in window || "__TAURI__" in window)
+  );
+}
+
+async function tauriInvoke<T>(
+  cmd: string,
+  args?: Record<string, unknown>,
+): Promise<T> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<T>(cmd, args);
+}
+
+const LEGACY_STORAGE_KEY = "minos.im.outbox.v1";
 /** Permanent (business/client) errors may terminal after this many attempts. */
 const MAX_PERMANENT_ATTEMPTS = 8;
 const BASE_BACKOFF_MS = 1_500;
@@ -51,11 +68,9 @@ export type ImOutboxEntry = {
   title?: string | null;
   replyToMessageId?: string | null;
   agentRuntimes?: string[];
-  /** Cloud agent_id for agent_result posts (resolved at enqueue time when known). */
   agentId?: string | null;
   agentSessionId?: string | null;
   clientSentAtMs?: number | null;
-  /** Hub write provenance; Linked Hub-first defaults to client_live. */
   messageSource?: ImOutboxMessageSource;
   status: OutboxStatus;
   attempts: number;
@@ -65,50 +80,253 @@ export type ImOutboxEntry = {
   updatedAtMs: number;
 };
 
-type OutboxStore = {
-  entries: ImOutboxEntry[];
+/** Wire DTO for Tauri (camelCase matches serde rename_all). */
+type ImOutboxWire = {
+  id: string;
+  kind: string;
+  conversationId: string;
+  clientMessageId: string;
+  text: string;
+  title?: string | null;
+  replyToMessageId?: string | null;
+  agentRuntimes?: string[] | null;
+  agentId?: string | null;
+  agentSessionId?: string | null;
+  clientSentAtMs?: number | null;
+  messageSource?: string | null;
+  status: string;
+  attempts: number;
+  nextAttemptAt: number;
+  lastError?: string | null;
+  createdAtMs: number;
+  updatedAtMs: number;
 };
+
+type OutboxBackend = {
+  load(): Promise<ImOutboxEntry[]>;
+  /** Full snapshot replace (boot migrate / memory tests). */
+  save(entries: ImOutboxEntry[]): Promise<void>;
+  /** Row-level upsert when available (Tauri SQLite). */
+  upsert?(entry: ImOutboxEntry): Promise<void>;
+};
+
+/**
+ * Intent send lane key: same conversation + same intent class = strict FIFO.
+ * Different classes (message / reaction / approval) never block each other.
+ */
+export function outboxLaneKey(
+  entry: Pick<ImOutboxEntry, "kind" | "conversationId">,
+): string {
+  switch (entry.kind) {
+    case "user_message":
+    case "agent_result":
+      return `message:${entry.conversationId}`;
+    case "reaction_toggle":
+      return `reaction:${entry.conversationId}`;
+    case "approval_resolve":
+      return `approval:${entry.conversationId}`;
+    default: {
+      const _exhaustive: never = entry.kind;
+      return `unknown:${_exhaustive}`;
+    }
+  }
+}
 
 function nowMs(): number {
   return Date.now();
 }
 
-function loadStore(): OutboxStore {
-  if (typeof localStorage === "undefined") {
-    return { entries: [] };
-  }
+function entryToWire(e: ImOutboxEntry): ImOutboxWire {
+  return {
+    id: e.id,
+    kind: e.kind,
+    conversationId: e.conversationId,
+    clientMessageId: e.clientMessageId,
+    text: e.text,
+    title: e.title ?? null,
+    replyToMessageId: e.replyToMessageId ?? null,
+    agentRuntimes: e.agentRuntimes ?? null,
+    agentId: e.agentId ?? null,
+    agentSessionId: e.agentSessionId ?? null,
+    clientSentAtMs: e.clientSentAtMs ?? null,
+    messageSource: e.messageSource ?? null,
+    status: e.status,
+    attempts: e.attempts,
+    nextAttemptAt: e.nextAttemptAt,
+    lastError: e.lastError ?? null,
+    createdAtMs: e.createdAtMs,
+    updatedAtMs: e.updatedAtMs,
+  };
+}
+
+function wireToEntry(w: ImOutboxWire): ImOutboxEntry {
+  return {
+    id: w.id,
+    kind: w.kind as OutboxKind,
+    conversationId: w.conversationId,
+    clientMessageId: w.clientMessageId,
+    text: w.text,
+    title: w.title,
+    replyToMessageId: w.replyToMessageId,
+    agentRuntimes: w.agentRuntimes ?? undefined,
+    agentId: w.agentId,
+    agentSessionId: w.agentSessionId,
+    clientSentAtMs: w.clientSentAtMs,
+    messageSource: (w.messageSource as ImOutboxMessageSource | null) ?? undefined,
+    status: w.status as OutboxStatus,
+    attempts: w.attempts,
+    nextAttemptAt: w.nextAttemptAt,
+    lastError: w.lastError,
+    createdAtMs: w.createdAtMs,
+    updatedAtMs: w.updatedAtMs,
+  };
+}
+
+function memoryBackend(seed: ImOutboxEntry[] = []): OutboxBackend {
+  let rows = seed.slice();
+  return {
+    async load() {
+      return rows.slice();
+    },
+    async save(entries) {
+      rows = entries.slice();
+    },
+    async upsert(entry) {
+      const idx = rows.findIndex((e) => e.clientMessageId === entry.clientMessageId);
+      if (idx >= 0) rows[idx] = entry;
+      else rows.push(entry);
+    },
+  };
+}
+
+function tauriSqliteBackend(): OutboxBackend {
+  return {
+    async load() {
+      const rows = await tauriInvoke<ImOutboxWire[]>("im_outbox_list_all");
+      return (rows ?? []).map(wireToEntry);
+    },
+    async save(entries) {
+      await tauriInvoke("im_outbox_replace_all", {
+        entries: entries.map(entryToWire),
+      });
+    },
+    async upsert(entry) {
+      await tauriInvoke("im_outbox_upsert", { entry: entryToWire(entry) });
+    },
+  };
+}
+
+/** One-time import of legacy localStorage v1 into SQLite. */
+function readLegacyLocalStorage(): ImOutboxEntry[] {
+  if (typeof localStorage === "undefined") return [];
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { entries: [] };
-    const parsed = JSON.parse(raw) as OutboxStore;
-    if (!parsed || !Array.isArray(parsed.entries)) return { entries: [] };
-    return { entries: parsed.entries };
+    const raw = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as { entries?: ImOutboxEntry[] };
+    if (!parsed || !Array.isArray(parsed.entries)) return [];
+    return parsed.entries;
   } catch {
-    return { entries: [] };
+    return [];
   }
 }
 
-function saveStore(store: OutboxStore): void {
+function clearLegacyLocalStorage(): void {
   if (typeof localStorage === "undefined") return;
-  // Cap size: drop oldest acked first, then oldest overall.
-  let entries = store.entries.slice();
-  if (entries.length > MAX_ENTRIES) {
-    const acked = entries.filter((e) => e.status === "acked");
-    const rest = entries.filter((e) => e.status !== "acked");
-    acked.sort((a, b) => a.updatedAtMs - b.updatedAtMs);
-    while (acked.length + rest.length > MAX_ENTRIES && acked.length > 0) {
-      acked.shift();
-    }
-    entries = [...rest, ...acked].sort((a, b) => a.createdAtMs - b.createdAtMs);
-    if (entries.length > MAX_ENTRIES) {
-      entries = entries.slice(entries.length - MAX_ENTRIES);
-    }
-  }
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ entries }));
-  } catch (error) {
-    console.warn("[im-outbox] failed to persist", error);
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+  } catch {
+    /* ignore */
   }
+}
+
+// ── Module state ──────────────────────────────────────────────────────────
+
+let backend: OutboxBackend = memoryBackend();
+let entries: ImOutboxEntry[] = [];
+let ready: Promise<void> | null = null;
+let useMemoryOnly = false;
+/** Serialize mutate + persist so concurrent enqueue/mark cannot lose rows. */
+let mutationChain: Promise<void> = Promise.resolve();
+
+async function ensureReady(): Promise<void> {
+  if (!ready) {
+    ready = (async () => {
+      if (!useMemoryOnly && isTauriRuntime()) {
+        backend = tauriSqliteBackend();
+      } else {
+        backend = memoryBackend();
+      }
+      entries = await backend.load();
+      // Migrate legacy localStorage once when SQLite is empty.
+      if (
+        !useMemoryOnly &&
+        isTauriRuntime() &&
+        entries.length === 0
+      ) {
+        const legacy = readLegacyLocalStorage();
+        if (legacy.length > 0) {
+          entries = legacy;
+          await backend.save(entries);
+          clearLegacyLocalStorage();
+        }
+      }
+    })();
+  }
+  await ready;
+}
+
+async function withMutation<T>(fn: () => Promise<T>): Promise<T> {
+  await ensureReady();
+  let result!: T;
+  const run = mutationChain.then(async () => {
+    result = await fn();
+  });
+  mutationChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  await run;
+  return result;
+}
+
+async function persistEntry(entry: ImOutboxEntry): Promise<void> {
+  try {
+    if (backend.upsert) {
+      await backend.upsert(entry);
+    } else {
+      await backend.save(entries);
+    }
+  } catch (error) {
+    console.error("[im-outbox] durable persist failed", error);
+    throw error instanceof Error
+      ? error
+      : new Error(`im-outbox persist failed: ${String(error)}`);
+  }
+}
+
+async function persistAll(): Promise<void> {
+  try {
+    await backend.save(entries);
+  } catch (error) {
+    console.error("[im-outbox] durable persist failed", error);
+    throw error instanceof Error
+      ? error
+      : new Error(`im-outbox persist failed: ${String(error)}`);
+  }
+}
+
+/** App bootstrap: load SQLite + migrate localStorage. Safe to call multiple times. */
+export async function initImOutbox(): Promise<void> {
+  await ensureReady();
+}
+
+/** Test helper: pure memory backend (no Tauri). */
+export function useMemoryOutboxForTests(): void {
+  useMemoryOnly = true;
+  ready = null;
+  backend = memoryBackend();
+  entries = [];
+  mutationChain = Promise.resolve();
 }
 
 function backoffMs(attempts: number): number {
@@ -146,87 +364,85 @@ export function classifyOutboxFailure(error: string): OutboxFailureClass {
   return "transient";
 }
 
-function upsertPendingEntry(
-  input: {
-    kind: OutboxKind;
-    conversationId: string;
-    clientMessageId: string;
-    text: string;
-    title?: string | null;
-    replyToMessageId?: string | null;
-    agentRuntimes?: Array<string | null | undefined>;
-    agentId?: string | null;
-    agentSessionId?: string | null;
-    clientSentAtMs?: number | null;
-    messageSource?: ImOutboxMessageSource;
-  },
-): ImOutboxEntry {
-  const store = loadStore();
-  const clientMessageId = input.clientMessageId.trim();
-  const conversationId = input.conversationId.trim();
-  const text = input.text.trim();
-  const t = nowMs();
-  const existingIdx = store.entries.findIndex(
-    (e) => e.clientMessageId === clientMessageId,
-  );
-  if (existingIdx >= 0) {
-    const prev = store.entries[existingIdx]!;
-    if (prev.status === "acked") {
-      return prev;
+async function upsertPendingEntry(input: {
+  kind: OutboxKind;
+  conversationId: string;
+  clientMessageId: string;
+  text: string;
+  title?: string | null;
+  replyToMessageId?: string | null;
+  agentRuntimes?: Array<string | null | undefined>;
+  agentId?: string | null;
+  agentSessionId?: string | null;
+  clientSentAtMs?: number | null;
+  messageSource?: ImOutboxMessageSource;
+}): Promise<ImOutboxEntry> {
+  return withMutation(async () => {
+    const clientMessageId = input.clientMessageId.trim();
+    const conversationId = input.conversationId.trim();
+    const text = input.text.trim();
+    const t = nowMs();
+    const existingIdx = entries.findIndex(
+      (e) => e.clientMessageId === clientMessageId,
+    );
+    if (existingIdx >= 0) {
+      const prev = entries[existingIdx]!;
+      if (prev.status === "acked") {
+        return prev;
+      }
+      const next: ImOutboxEntry = {
+        ...prev,
+        kind: input.kind,
+        text,
+        title: input.title ?? prev.title,
+        replyToMessageId: input.replyToMessageId ?? prev.replyToMessageId,
+        agentRuntimes:
+          input.agentRuntimes
+            ?.map((r) => r?.trim())
+            .filter((r): r is string => !!r) ?? prev.agentRuntimes,
+        agentId: input.agentId ?? prev.agentId,
+        agentSessionId: input.agentSessionId ?? prev.agentSessionId,
+        clientSentAtMs: input.clientSentAtMs ?? prev.clientSentAtMs,
+        messageSource: input.messageSource ?? prev.messageSource,
+        status: "pending",
+        nextAttemptAt: t,
+        updatedAtMs: t,
+        lastError: null,
+      };
+      entries[existingIdx] = next;
+      await persistEntry(next);
+      return next;
     }
-    const next: ImOutboxEntry = {
-      ...prev,
-      kind: input.kind,
-      text,
-      title: input.title ?? prev.title,
-      replyToMessageId: input.replyToMessageId ?? prev.replyToMessageId,
-      agentRuntimes:
-        input.agentRuntimes
-          ?.map((r) => r?.trim())
-          .filter((r): r is string => !!r) ?? prev.agentRuntimes,
-      agentId: input.agentId ?? prev.agentId,
-      agentSessionId: input.agentSessionId ?? prev.agentSessionId,
-      clientSentAtMs: input.clientSentAtMs ?? prev.clientSentAtMs,
-      messageSource: input.messageSource ?? prev.messageSource,
-      status: "pending",
-      nextAttemptAt: t,
-      updatedAtMs: t,
-      lastError: null,
-    };
-    store.entries[existingIdx] = next;
-    saveStore(store);
-    return next;
-  }
 
-  const entry: ImOutboxEntry = {
-    id: `outbox:${clientMessageId}`,
-    kind: input.kind,
-    conversationId,
-    clientMessageId,
-    text,
-    title: input.title,
-    replyToMessageId: input.replyToMessageId,
-    agentRuntimes: input.agentRuntimes
-      ?.map((r) => r?.trim())
-      .filter((r): r is string => !!r),
-    agentId: input.agentId,
-    agentSessionId: input.agentSessionId,
-    clientSentAtMs: input.clientSentAtMs,
-    messageSource: input.messageSource ?? "client_live",
-    status: "pending",
-    attempts: 0,
-    nextAttemptAt: t,
-    lastError: null,
-    createdAtMs: t,
-    updatedAtMs: t,
-  };
-  store.entries.push(entry);
-  saveStore(store);
-  return entry;
+    const entry: ImOutboxEntry = {
+      id: `outbox:${clientMessageId}`,
+      kind: input.kind,
+      conversationId,
+      clientMessageId,
+      text,
+      title: input.title,
+      replyToMessageId: input.replyToMessageId,
+      agentRuntimes: input.agentRuntimes
+        ?.map((r) => r?.trim())
+        .filter((r): r is string => !!r),
+      agentId: input.agentId,
+      agentSessionId: input.agentSessionId,
+      clientSentAtMs: input.clientSentAtMs,
+      messageSource: input.messageSource ?? "client_live",
+      status: "pending",
+      attempts: 0,
+      nextAttemptAt: t,
+      lastError: null,
+      createdAtMs: t,
+      updatedAtMs: t,
+    };
+    entries.push(entry);
+    await persistEntry(entry);
+    return entry;
+  });
 }
 
-/** Enqueue (or refresh) a user message for Hub projection. */
-export function enqueueUserMessage(input: {
+export async function enqueueUserMessage(input: {
   conversationId: string;
   clientMessageId: string;
   text: string;
@@ -235,15 +451,14 @@ export function enqueueUserMessage(input: {
   agentRuntimes?: Array<string | null | undefined>;
   clientSentAtMs?: number | null;
   messageSource?: ImOutboxMessageSource;
-}): ImOutboxEntry {
+}): Promise<ImOutboxEntry> {
   return upsertPendingEntry({
     kind: "user_message",
     ...input,
   });
 }
 
-/** Enqueue (or refresh) an agent final-bubble host projection. */
-export function enqueueAgentResult(input: {
+export async function enqueueAgentResult(input: {
   conversationId: string;
   clientMessageId: string;
   text: string;
@@ -251,7 +466,7 @@ export function enqueueAgentResult(input: {
   agentSessionId?: string | null;
   agentRuntimes?: Array<string | null | undefined>;
   replyToMessageId?: string | null;
-}): ImOutboxEntry {
+}): Promise<ImOutboxEntry> {
   return upsertPendingEntry({
     kind: "agent_result",
     conversationId: input.conversationId,
@@ -265,16 +480,11 @@ export function enqueueAgentResult(input: {
   });
 }
 
-/**
- * Enqueue reaction toggle. `clientMessageId` is the B6 `client_op_id`
- * (event_id suffix) and must stay stable across retries.
- */
-export function enqueueReactionToggle(input: {
+export async function enqueueReactionToggle(input: {
   conversationId: string;
   clientMessageId: string;
-  /** JSON: `{ messageId, emoji }`. */
   text: string;
-}): ImOutboxEntry {
+}): Promise<ImOutboxEntry> {
   return upsertPendingEntry({
     kind: "reaction_toggle",
     conversationId: input.conversationId,
@@ -284,15 +494,11 @@ export function enqueueReactionToggle(input: {
   });
 }
 
-/**
- * Enqueue approval resolve for durable retry when daemon is briefly
- * unreachable (C5.3). Payload JSON: `{ requestId, sessionId, decision }`.
- */
-export function enqueueApprovalResolve(input: {
+export async function enqueueApprovalResolve(input: {
   conversationId: string;
   clientMessageId: string;
   text: string;
-}): ImOutboxEntry {
+}): Promise<ImOutboxEntry> {
   return upsertPendingEntry({
     kind: "approval_resolve",
     conversationId: input.conversationId,
@@ -302,134 +508,176 @@ export function enqueueApprovalResolve(input: {
   });
 }
 
-export function isAcked(clientMessageId: string): boolean {
+export async function isAcked(clientMessageId: string): Promise<boolean> {
+  await ensureReady();
   const id = clientMessageId.trim();
   if (!id) return false;
-  return loadStore().entries.some(
-    (e) => e.clientMessageId === id && e.status === "acked",
-  );
+  return entries.some((e) => e.clientMessageId === id && e.status === "acked");
 }
 
-export function markAcked(clientMessageId: string): void {
+export async function getOutboxEntry(
+  clientMessageId: string,
+): Promise<ImOutboxEntry | null> {
+  await ensureReady();
   const id = clientMessageId.trim();
-  if (!id) return;
-  const store = loadStore();
-  const t = nowMs();
-  let changed = false;
-  for (const e of store.entries) {
-    if (e.clientMessageId === id && e.status !== "acked") {
-      e.status = "acked";
-      e.updatedAtMs = t;
-      e.lastError = null;
-      changed = true;
-    }
-  }
-  if (changed) saveStore(store);
+  if (!id) return null;
+  return entries.find((e) => e.clientMessageId === id) ?? null;
 }
 
-export function markInflight(clientMessageId: string): void {
-  const id = clientMessageId.trim();
-  if (!id) return;
-  const store = loadStore();
-  const t = nowMs();
-  let changed = false;
-  for (const e of store.entries) {
-    if (e.clientMessageId === id && e.status !== "acked") {
-      e.status = "inflight";
-      e.attempts += 1;
-      e.updatedAtMs = t;
-      changed = true;
+export async function markAcked(clientMessageId: string): Promise<void> {
+  await withMutation(async () => {
+    const id = clientMessageId.trim();
+    if (!id) return;
+    const t = nowMs();
+    for (const e of entries) {
+      if (e.clientMessageId === id && e.status !== "acked") {
+        e.status = "acked";
+        e.updatedAtMs = t;
+        e.lastError = null;
+        await persistEntry(e);
+        return;
+      }
     }
-  }
-  if (changed) saveStore(store);
+  });
 }
 
-export function markFailed(
+export async function markInflight(clientMessageId: string): Promise<void> {
+  await withMutation(async () => {
+    const id = clientMessageId.trim();
+    if (!id) return;
+    const t = nowMs();
+    for (const e of entries) {
+      if (e.clientMessageId === id && e.status !== "acked") {
+        e.status = "inflight";
+        e.attempts += 1;
+        e.updatedAtMs = t;
+        await persistEntry(e);
+        return;
+      }
+    }
+  });
+}
+
+export async function markFailed(
   clientMessageId: string,
   error: string,
-): OutboxStatus {
-  const id = clientMessageId.trim();
-  const store = loadStore();
-  const t = nowMs();
-  const failureClass = classifyOutboxFailure(error);
-  let status: OutboxStatus = "pending";
-  for (const e of store.entries) {
-    if (e.clientMessageId !== id) continue;
-    if (e.status === "acked") {
-      status = "acked";
-      continue;
+): Promise<OutboxStatus> {
+  return withMutation(async () => {
+    const id = clientMessageId.trim();
+    const t = nowMs();
+    const failureClass = classifyOutboxFailure(error);
+    let status: OutboxStatus = "pending";
+    for (const e of entries) {
+      if (e.clientMessageId !== id) continue;
+      if (e.status === "acked") {
+        status = "acked";
+        continue;
+      }
+      e.lastError = error;
+      e.updatedAtMs = t;
+      if (
+        failureClass === "permanent" &&
+        e.attempts >= MAX_PERMANENT_ATTEMPTS
+      ) {
+        e.status = "failed_terminal";
+        status = "failed_terminal";
+      } else {
+        e.status = "pending";
+        e.nextAttemptAt = t + backoffMs(e.attempts);
+        status = "pending";
+      }
+      await persistEntry(e);
+      return status;
     }
-    e.lastError = error;
-    e.updatedAtMs = t;
-    // Transient network: never burn to failed_terminal — long offline must
-    // still deliver once after reconnect (capped backoff only).
-    if (
-      failureClass === "permanent" &&
-      e.attempts >= MAX_PERMANENT_ATTEMPTS
-    ) {
-      e.status = "failed_terminal";
-      status = "failed_terminal";
-    } else {
+    return status;
+  });
+}
+
+export async function reclaimStaleInflight(now = nowMs()): Promise<number> {
+  return withMutation(async () => {
+    const cutoff = now - STALE_INFLIGHT_MS;
+    let n = 0;
+    const changed: ImOutboxEntry[] = [];
+    for (const e of entries) {
+      if (e.status !== "inflight") continue;
+      if (e.updatedAtMs >= cutoff) continue;
       e.status = "pending";
-      e.nextAttemptAt = t + backoffMs(e.attempts);
-      status = "pending";
+      e.nextAttemptAt = now;
+      e.updatedAtMs = now;
+      e.lastError = e.lastError ?? "stale_inflight_reclaimed";
+      changed.push(e);
+      n += 1;
     }
-  }
-  saveStore(store);
-  return status;
+    for (const e of changed) {
+      await persistEntry(e);
+    }
+    return n;
+  });
 }
 
-/**
- * Reclaim inflight rows whose updatedAt is older than STALE_INFLIGHT_MS.
- * Returns the number of rows reclaimed to pending.
- */
-export function reclaimStaleInflight(now = nowMs()): number {
-  const store = loadStore();
-  const cutoff = now - STALE_INFLIGHT_MS;
-  let n = 0;
-  for (const e of store.entries) {
-    if (e.status !== "inflight") continue;
-    if (e.updatedAtMs >= cutoff) continue;
-    e.status = "pending";
-    e.nextAttemptAt = now;
-    e.updatedAtMs = now;
-    e.lastError = e.lastError ?? "stale_inflight_reclaimed";
-    n += 1;
-  }
-  if (n > 0) saveStore(store);
-  return n;
-}
-
-/**
- * Pending due now, plus stale inflight (reclaimed inline so kill mid-flight
- * does not leave a permanent black hole).
- *
- * All kinds (including reaction_toggle / approval_resolve) are drainable.
- */
-export function listDuePending(now = nowMs()): ImOutboxEntry[] {
-  reclaimStaleInflight(now);
-  return loadStore().entries.filter(
+export async function listDuePending(now = nowMs()): Promise<ImOutboxEntry[]> {
+  await reclaimStaleInflight(now);
+  return entries.filter(
     (e) => e.status === "pending" && e.nextAttemptAt <= now,
   );
 }
 
+export function compareOutboxFifo(a: ImOutboxEntry, b: ImOutboxEntry): number {
+  if (a.createdAtMs !== b.createdAtMs) return a.createdAtMs - b.createdAtMs;
+  return a.clientMessageId.localeCompare(b.clientMessageId);
+}
+
 /**
- * Earliest `nextAttemptAt` among pending (or reclaimed stale inflight) rows.
- * Used by the outbox worker to sleep until something is actually due —
- * never stop the chain when backoff exceeds an arbitrary window.
+ * Per-intent-lane rows whose head is currently due.
+ * Lane key = message|reaction|approval × conversation (see `outboxLaneKey`).
+ * Head failure / inflight blocks only that lane's tail.
  */
-export function earliestPendingAttemptAt(now = nowMs()): number | null {
-  reclaimStaleInflight(now);
+export async function listDuePendingLanes(
+  now = nowMs(),
+): Promise<ImOutboxEntry[][]> {
+  await reclaimStaleInflight(now);
+  const byLane = new Map<string, ImOutboxEntry[]>();
+  for (const e of entries) {
+    if (e.status !== "pending" && e.status !== "inflight") continue;
+    const key = outboxLaneKey(e);
+    const list = byLane.get(key);
+    if (list) list.push(e);
+    else byLane.set(key, [e]);
+  }
+
+  const lanes: ImOutboxEntry[][] = [];
+  const keys = [...byLane.keys()].sort((a, b) => a.localeCompare(b));
+  for (const key of keys) {
+    const laneEntries = byLane.get(key)!;
+    laneEntries.sort(compareOutboxFifo);
+    const head = laneEntries[0];
+    if (!head) continue;
+    if (head.status !== "pending" || head.nextAttemptAt > now) continue;
+    const lane: ImOutboxEntry[] = [];
+    for (const e of laneEntries) {
+      if (e.status !== "pending" || e.nextAttemptAt > now) break;
+      lane.push(e);
+    }
+    if (lane.length > 0) lanes.push(lane);
+  }
+  return lanes;
+}
+
+export async function earliestPendingAttemptAt(
+  now = nowMs(),
+): Promise<number | null> {
+  await reclaimStaleInflight(now);
   let min: number | null = null;
-  for (const e of loadStore().entries) {
+  for (const e of entries) {
     if (e.status !== "pending") continue;
     if (min == null || e.nextAttemptAt < min) min = e.nextAttemptAt;
   }
   return min;
 }
 
-export function listUnsynced(): ImOutboxEntry[] {
-  return loadStore().entries.filter(
+export async function listUnsynced(): Promise<ImOutboxEntry[]> {
+  await ensureReady();
+  return entries.filter(
     (e) =>
       e.status === "pending" ||
       e.status === "inflight" ||
@@ -437,38 +685,43 @@ export function listUnsynced(): ImOutboxEntry[] {
   );
 }
 
-export function listPendingForConversation(
+export async function listPendingForConversation(
   conversationId: string,
-): ImOutboxEntry[] {
+): Promise<ImOutboxEntry[]> {
+  await ensureReady();
   const cid = conversationId.trim();
-  return loadStore().entries.filter(
+  return entries.filter(
     (e) =>
       e.conversationId === cid &&
       (e.status === "pending" || e.status === "inflight"),
   );
 }
 
-/** Test / account-switch helper. */
-export function resetImOutboxForTests(): void {
-  if (typeof localStorage === "undefined") return;
-  localStorage.removeItem(STORAGE_KEY);
+export async function resetImOutboxForTests(): Promise<void> {
+  useMemoryOutboxForTests();
+  await withMutation(async () => {
+    entries = [];
+    await persistAll();
+  });
 }
 
-export function getOutboxSnapshotForTests(): ImOutboxEntry[] {
-  return loadStore().entries.slice();
+export async function getOutboxSnapshotForTests(): Promise<ImOutboxEntry[]> {
+  await ensureReady();
+  return entries.slice();
 }
 
-/** Test helper: force updatedAtMs on an entry (simulate kill mid-inflight). */
-export function forceUpdatedAtForTests(
+export async function forceUpdatedAtForTests(
   clientMessageId: string,
   updatedAtMs: number,
-): void {
-  const store = loadStore();
-  const id = clientMessageId.trim();
-  for (const e of store.entries) {
-    if (e.clientMessageId === id) {
-      e.updatedAtMs = updatedAtMs;
+): Promise<void> {
+  await withMutation(async () => {
+    const id = clientMessageId.trim();
+    for (const e of entries) {
+      if (e.clientMessageId === id) {
+        e.updatedAtMs = updatedAtMs;
+        await persistEntry(e);
+        return;
+      }
     }
-  }
-  saveStore(store);
+  });
 }

@@ -86,6 +86,10 @@ pub struct SocialEventFrame {
     pub conversation_id: String,
     pub kind: String,
     pub message: ChatMessageSummary,
+    /// Durable topic that produced this frame (for apply-ack).
+    pub topic: String,
+    /// Durable topic_seq; Dart must ack after cache commit so resume can advance.
+    pub topic_seq: i64,
 }
 
 /// Topic-based realtime mobile client. One instance per iPhone process.
@@ -412,26 +416,11 @@ impl MobileClient {
 
     pub async fn subscribe_agent_session(&self, session_id: String) -> Result<(), MinosError> {
         let topic = format!("agent_session:{session_id}");
-        let added = self.subscription_mgr.add_topic(&topic, 0).await;
-        if !added || !matches!(*self.state_rx.borrow(), ConnectionState::Connected) {
+        let needs = self.subscription_mgr.desire_topic(&topic, 0).await;
+        if !needs || !matches!(*self.state_rx.borrow(), ConnectionState::Connected) {
             return Ok(());
         }
-
-        let frame = ClientFrame::Subscribe {
-            topics: vec![topic],
-            resume_after: Some(self.subscription_mgr.resume_after_map().await),
-            client_request_id: None,
-        };
-        let sender = self.outbound_tx.lock().await.clone();
-        if let Some(sender) = sender {
-            if let Err(error) = sender.send(frame).await {
-                tracing::warn!(
-                    target: "minos_mobile::client",
-                    error = %error,
-                    "failed to send realtime subscribe frame",
-                );
-            }
-        }
+        self.send_subscribe_topics(vec![topic]).await;
         Ok(())
     }
 
@@ -443,26 +432,12 @@ impl MobileClient {
             return Ok(());
         }
         let topic = format!("conversation:{id}");
-        let added = self.subscription_mgr.add_topic(&topic, 0).await;
-        if !added || !matches!(*self.state_rx.borrow(), ConnectionState::Connected) {
+        // desire even when offline; re-send if not confirmed (failed prior Subscribe).
+        let needs = self.subscription_mgr.desire_topic(&topic, 0).await;
+        if !needs || !matches!(*self.state_rx.borrow(), ConnectionState::Connected) {
             return Ok(());
         }
-
-        let frame = ClientFrame::Subscribe {
-            topics: vec![topic],
-            resume_after: Some(self.subscription_mgr.resume_after_map().await),
-            client_request_id: None,
-        };
-        let sender = self.outbound_tx.lock().await.clone();
-        if let Some(sender) = sender {
-            if let Err(error) = sender.send(frame).await {
-                tracing::warn!(
-                    target: "minos_mobile::client",
-                    error = %error,
-                    "failed to send conversation subscribe frame",
-                );
-            }
-        }
+        self.send_subscribe_topics(vec![topic]).await;
         Ok(())
     }
 
@@ -494,6 +469,51 @@ impl MobileClient {
             }
         }
         Ok(())
+    }
+
+    /// Advance topic cursor after Dart SQLite/reducer commit (or intentional no-op).
+    pub async fn ack_durable_applied(&self, topic: String, topic_seq: i64) {
+        let topic = topic.trim();
+        if topic.is_empty() || topic_seq <= 0 {
+            return;
+        }
+        self.subscription_mgr.update_seq(topic, topic_seq).await;
+    }
+
+    async fn send_subscribe_topics(&self, topics: Vec<String>) {
+        if topics.is_empty() {
+            return;
+        }
+        let resume_after = self.subscription_mgr.resume_after_map().await;
+        let resume_after: std::collections::HashMap<String, i64> = resume_after
+            .into_iter()
+            .filter(|(_, seq)| *seq > 0)
+            .collect();
+        let frame = ClientFrame::Subscribe {
+            topics: topics.clone(),
+            resume_after: if resume_after.is_empty() {
+                None
+            } else {
+                Some(resume_after)
+            },
+            client_request_id: None,
+        };
+        let sender = self.outbound_tx.lock().await.clone();
+        if let Some(sender) = sender {
+            match sender.send(frame).await {
+                Ok(()) => {
+                    self.subscription_mgr.mark_subscribe_sent(&topics).await;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        target: "minos_mobile::client",
+                        error = %error,
+                        "failed to send realtime subscribe frame",
+                    );
+                    // Topic stays desired + not confirmed → next desire/reconnect re-sends.
+                }
+            }
+        }
     }
 
     /// Read a window of translated UI events from one session.
@@ -737,9 +757,10 @@ impl MobileClient {
     pub async fn mark_conversation_read(
         &self,
         conversation_id: String,
+        read_up_to_message_seq: i64,
     ) -> Result<ConversationReadResponse, MinosError> {
         auth_http_call!(self, |http, access| {
-            http.mark_conversation_read(&access, &conversation_id)
+            http.mark_conversation_read(&access, &conversation_id, read_up_to_message_seq)
         })
     }
 

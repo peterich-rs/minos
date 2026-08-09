@@ -266,7 +266,11 @@ class MinosCore implements MinosCoreProtocol {
   @override
   Future<ConversationReadResponse> markConversationRead({
     required String conversationId,
-  }) => _client.markConversationRead(conversationId: conversationId);
+    required int readUpToMessageSeq,
+  }) => _client.markConversationRead(
+    conversationId: conversationId,
+    readUpToMessageSeq: platformInt64FromInt(readUpToMessageSeq),
+  );
 
   @override
   Future<ListChatMessagesResponse> listChatMessages({
@@ -396,6 +400,15 @@ class MinosCore implements MinosCoreProtocol {
 
   @override
   ConnectionState get currentConnectionState => _client.currentState();
+
+  @override
+  Future<void> ackDurableApplied({
+    required String topic,
+    required int topicSeq,
+  }) => _client.ackDurableApplied(
+    topic: topic,
+    topicSeq: platformInt64FromInt(topicSeq),
+  );
 
   // ---- Auth forwarders ----
 

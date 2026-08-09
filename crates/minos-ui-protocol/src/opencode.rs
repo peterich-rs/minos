@@ -786,17 +786,15 @@ fn inject_display_title(args_json: &str, title: &str) -> String {
     args_json.to_string()
 }
 
-/// Bind text/reasoning UI events to an OpenCode part so multi-part messages
-/// become separate timeline segments (`message_id` + RS + `part_id`).
-/// Desktop assembler freezes non-tail segments; part keys avoid mid-timeline rewrites.
-const MESSAGE_PART_SEP: char = '\u{1e}';
-
-fn stream_message_id(message_id: &str, part_id: &str) -> String {
-    if part_id.is_empty() {
-        message_id.to_string()
-    } else {
-        format!("{message_id}{MESSAGE_PART_SEP}{part_id}")
-    }
+/// Content events (`TextDelta` / `TextReplace` / reasoning) share the base
+/// OpenCode `message_id` with `MessageStarted` / `MessageCompleted`.
+///
+/// Earlier builds appended `message_id + RS + part_id`, which broke downstream
+/// exact-id matching for completion. Multi-part timeline segmentation is left
+/// to consumers (desktop/TUI non-tail append policy), not compound message ids.
+/// `part_id` is still tracked in translator state for stream/replace bookkeeping.
+fn stream_message_id(message_id: &str, _part_id: &str) -> String {
+    message_id.to_string()
 }
 
 fn tracked_part_kind(part: &Value) -> Option<TrackedPartKind> {
@@ -1034,11 +1032,10 @@ mod tests {
             }"#),
         )
         .expect("translation should succeed");
-        let stream_id = format!("msg_a1{MESSAGE_PART_SEP}part_1");
         assert!(matches!(
             &delta[0],
             UiEventMessage::TextDelta { message_id, text }
-                if message_id == &stream_id && text == "Hello"
+                if message_id == "msg_a1" && text == "Hello"
         ));
 
         let final_part = translate(
@@ -1054,7 +1051,7 @@ mod tests {
         assert!(matches!(
             &final_part[0],
             UiEventMessage::TextReplace { message_id, text }
-                if message_id == &stream_id && text == "Hello"
+                if message_id == "msg_a1" && text == "Hello"
         ));
     }
 
@@ -1147,11 +1144,10 @@ mod tests {
             }"#),
         )
         .expect("translation should succeed");
-        let stream_id = format!("msg_replace{MESSAGE_PART_SEP}part_replace");
         assert!(matches!(
             &delta[0],
             UiEventMessage::TextDelta { message_id, text }
-                if message_id == &stream_id && text == "）.rs了鼠标CP去路 call。"
+                if message_id == "msg_replace" && text == "）.rs了鼠标CP去路 call。"
         ));
 
         let final_part = translate(
@@ -1167,7 +1163,7 @@ mod tests {
         assert!(matches!(
             &final_part[0],
             UiEventMessage::TextReplace { message_id, text }
-                if message_id == &stream_id && text == "我检查了 Minos TUI 的 opencode 翻译路径。"
+                if message_id == "msg_replace" && text == "我检查了 Minos TUI 的 opencode 翻译路径。"
         ));
     }
 
@@ -1206,11 +1202,10 @@ mod tests {
             }"#),
         )
         .expect("translation should succeed");
-        let stream_id = format!("msg_reasoning{MESSAGE_PART_SEP}part_reasoning");
         assert!(matches!(
             &delta[0],
             UiEventMessage::ReasoningDelta { message_id, text }
-                if message_id == &stream_id && text == "scratch"
+                if message_id == "msg_reasoning" && text == "scratch"
         ));
 
         let final_part = translate(
@@ -1226,7 +1221,7 @@ mod tests {
         assert!(matches!(
             &final_part[0],
             UiEventMessage::ReasoningReplace { message_id, text }
-                if message_id == &stream_id && text == "final reasoning"
+                if message_id == "msg_reasoning" && text == "final reasoning"
         ));
     }
 

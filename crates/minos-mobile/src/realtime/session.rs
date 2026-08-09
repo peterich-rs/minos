@@ -38,9 +38,9 @@ impl RealtimeSession {
         // catch-up uses resume_after from persisted-in-process cursors (never
         // force account resume to 0 on reconnect).
         let account_topic = format!("account:{account_id}");
-        // Only seed the topic if absent; keep existing seq for reconnect catch-up.
-        subscription_mgr.add_topic(&account_topic, 0).await;
-        let mut topics = subscription_mgr.subscribed_topics().await;
+        // Desire account + any topics the app requested before this socket.
+        let _ = subscription_mgr.desire_topic(&account_topic, 0).await;
+        let mut topics = subscription_mgr.desired_topics().await;
         topics.sort();
         topics.dedup();
         let resume_after = subscription_mgr.resume_after_map().await;
@@ -51,7 +51,7 @@ impl RealtimeSession {
             .filter(|(_, seq)| *seq > 0)
             .collect();
         let subscribe = ClientFrame::Subscribe {
-            topics,
+            topics: topics.clone(),
             resume_after: if resume_after.is_empty() {
                 None
             } else {
@@ -70,6 +70,7 @@ impl RealtimeSession {
             let _ = state_tx.send(ConnectionState::Disconnected);
             return;
         }
+        subscription_mgr.mark_subscribe_sent(&topics).await;
 
         // Main loop. The optional app-to-WS command channel may be absent for
         // read-only clients; closing it must not tear down the socket.
@@ -86,7 +87,8 @@ impl RealtimeSession {
                                         &subscription_mgr,
                                         &ui_events_tx,
                                         &social_events_tx,
-                                    );
+                                    )
+                                    .await;
                                 }
                             }
                         }
@@ -111,6 +113,7 @@ impl RealtimeSession {
             }
         }
 
+        subscription_mgr.on_disconnect().await;
         let _ = state_tx.send(ConnectionState::Disconnected);
     }
 }
@@ -142,13 +145,142 @@ where
     None
 }
 
-fn dispatch_event(
+/// Outcome of applying a durable event into the client pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApplyOutcome {
+    /// Parse failed or delivery failed — do not advance cursor.
+    Hold,
+    /// Intentional no-op / UI-only fanout complete — advance now.
+    AdvanceNow,
+    /// Social frame delivered to Dart; advance only after `ack_durable_applied`.
+    AwaitDartAck,
+}
+
+fn send_social(
+    social_events_tx: &broadcast::Sender<SocialEventFrame>,
+    mut frame: SocialEventFrame,
+    topic: &str,
+    topic_seq: i64,
+) -> ApplyOutcome {
+    frame.topic = topic.to_string();
+    frame.topic_seq = topic_seq;
+    match social_events_tx.send(frame) {
+        Ok(n) if n > 0 => ApplyOutcome::AwaitDartAck,
+        Ok(_) => {
+            tracing::warn!(
+                topic,
+                topic_seq,
+                "social durable event has no subscriber; hold cursor"
+            );
+            ApplyOutcome::Hold
+        }
+        Err(_) => {
+            // broadcast::error::SendError when no receivers (channel closed).
+            tracing::warn!(topic, topic_seq, "social broadcast closed; hold cursor");
+            ApplyOutcome::Hold
+        }
+    }
+}
+
+/// Apply a durable event.
+///
+/// Social kinds: fan out with topic/topic_seq; cursor advances only when Dart
+/// calls `ack_durable_applied` after cache commit.
+/// UI-only / unknown: advance after successful local fanout (or intentional no-op).
+fn apply_durable_event(
+    topic: &str,
+    topic_seq: i64,
+    kind: &str,
+    payload: &serde_json::Value,
+    ui_events_tx: &broadcast::Sender<UiEventFrame>,
+    social_events_tx: &broadcast::Sender<SocialEventFrame>,
+) -> ApplyOutcome {
+    match kind {
+        "conversation_message_appended" | "conversation_message_recalled" => {
+            let Some(message) = parse_chat_message(payload) else {
+                tracing::warn!(kind, topic, "parse_chat_message failed; hold cursor");
+                return ApplyOutcome::Hold;
+            };
+            let conv_id = message.conversation_id.clone();
+            send_social(
+                social_events_tx,
+                SocialEventFrame {
+                    conversation_id: conv_id,
+                    kind: "message".into(),
+                    message,
+                    topic: String::new(),
+                    topic_seq: 0,
+                },
+                topic,
+                topic_seq,
+            )
+        }
+        "account_conversation_message_appended" => {
+            let Some(frame) = parse_account_inbox_digest(payload, false) else {
+                tracing::warn!(kind, topic, "parse inbox digest failed; hold cursor");
+                return ApplyOutcome::Hold;
+            };
+            send_social(social_events_tx, frame, topic, topic_seq)
+        }
+        "account_conversation_message_recalled" => {
+            let Some(frame) = parse_account_inbox_digest(payload, true) else {
+                tracing::warn!(kind, topic, "parse inbox recall failed; hold cursor");
+                return ApplyOutcome::Hold;
+            };
+            send_social(social_events_tx, frame, topic, topic_seq)
+        }
+        "conversation_message_reaction_updated" => {
+            let Some(frame) = parse_reaction_updated(payload) else {
+                tracing::warn!(kind, topic, "parse reaction_updated failed; hold cursor");
+                return ApplyOutcome::Hold;
+            };
+            send_social(social_events_tx, frame, topic, topic_seq)
+        }
+        "approval_requested" | "approval_resolved" => {
+            let _ = ui_events_tx.send(UiEventFrame {
+                session_id: payload
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                seq: 0,
+                ui: UiEventMessage::Raw {
+                    kind: kind.to_string(),
+                    payload_json: payload.to_string(),
+                },
+                ts_ms: chrono::Utc::now().timestamp_millis(),
+            });
+            ApplyOutcome::AdvanceNow
+        }
+        "host_linked" | "host_unlinked" | "friend_request_updated" => {
+            let _ = ui_events_tx.send(UiEventFrame {
+                session_id: String::new(),
+                seq: 0,
+                ui: UiEventMessage::Raw {
+                    kind: kind.to_string(),
+                    payload_json: payload.to_string(),
+                },
+                ts_ms: chrono::Utc::now().timestamp_millis(),
+            });
+            ApplyOutcome::AdvanceNow
+        }
+        _ => {
+            tracing::debug!(kind, topic, "unhandled durable event (consumed)");
+            ApplyOutcome::AdvanceNow
+        }
+    }
+}
+
+async fn dispatch_event(
     event: &RealtimeEvent,
     subscription_mgr: &Arc<SubscriptionManager>,
     ui_events_tx: &broadcast::Sender<UiEventFrame>,
     social_events_tx: &broadcast::Sender<SocialEventFrame>,
 ) {
     match event {
+        RealtimeEvent::SubscribeAck { topics } => {
+            subscription_mgr.mark_subscribe_acked(topics).await;
+        }
         RealtimeEvent::DurableEvent {
             topic,
             topic_seq,
@@ -156,76 +288,22 @@ fn dispatch_event(
             payload,
             ..
         } => {
-            let subscription_mgr = Arc::clone(subscription_mgr);
-            let topic = topic.clone();
-            let topic_for_update = topic.clone();
-            let topic_seq = *topic_seq;
-            tokio::spawn(async move {
-                subscription_mgr
-                    .update_seq(&topic_for_update, topic_seq)
-                    .await;
-            });
-            match kind.as_str() {
-                // T1 open conversation: full ChatMessageSummary for timeline.
-                "conversation_message_appended" | "conversation_message_recalled" => {
-                    if let Some(conv_id) = payload.get("conversation_id").and_then(|v| v.as_str()) {
-                        // Fail closed: never fan out empty-shell ChatMessageSummary.
-                        if let Some(message) = parse_chat_message(payload) {
-                            let _ = social_events_tx.send(SocialEventFrame {
-                                conversation_id: conv_id.to_string(),
-                                kind: "message".into(),
-                                message,
-                            });
-                        }
-                    }
+            let outcome = apply_durable_event(
+                topic,
+                *topic_seq,
+                kind,
+                payload,
+                ui_events_tx,
+                social_events_tx,
+            );
+            match outcome {
+                ApplyOutcome::AdvanceNow => {
+                    subscription_mgr.update_seq(topic, *topic_seq).await;
                 }
-                // T2 account digest: inbox/rail only (preview stub, not timeline SSOT).
-                "account_conversation_message_appended" => {
-                    if let Some(frame) = parse_account_inbox_digest(payload, false) {
-                        let _ = social_events_tx.send(frame);
-                    }
+                ApplyOutcome::AwaitDartAck => {
+                    // Cursor stays until MobileClient::ack_durable_applied.
                 }
-                "account_conversation_message_recalled" => {
-                    if let Some(frame) = parse_account_inbox_digest(payload, true) {
-                        let _ = social_events_tx.send(frame);
-                    }
-                }
-                "conversation_message_reaction_updated" => {
-                    if let Some(frame) = parse_reaction_updated(payload) {
-                        let _ = social_events_tx.send(frame);
-                    }
-                }
-                "approval_requested" | "approval_resolved" => {
-                    let _ = ui_events_tx.send(UiEventFrame {
-                        session_id: payload
-                            .get("session_id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        seq: 0,
-                        ui: UiEventMessage::Raw {
-                            kind: kind.clone(),
-                            payload_json: payload.to_string(),
-                        },
-                        ts_ms: chrono::Utc::now().timestamp_millis(),
-                    });
-                }
-                // Roster / social graph (Realtime Surface R1/R2): surface as Raw
-                // UiEvent so Flutter can upsert/remove hosts or invalidate friends.
-                "host_linked" | "host_unlinked" | "friend_request_updated" => {
-                    let _ = ui_events_tx.send(UiEventFrame {
-                        session_id: String::new(),
-                        seq: 0,
-                        ui: UiEventMessage::Raw {
-                            kind: kind.clone(),
-                            payload_json: payload.to_string(),
-                        },
-                        ts_ms: chrono::Utc::now().timestamp_millis(),
-                    });
-                }
-                _ => {
-                    tracing::debug!(kind, topic, "unhandled durable event");
-                }
+                ApplyOutcome::Hold => {}
             }
         }
         RealtimeEvent::StreamEvent {
@@ -306,6 +384,7 @@ fn dispatch_event(
         }
         RealtimeEvent::SubscriptionDenied { topic, reason } => {
             tracing::warn!(topic, reason, "subscription denied");
+            subscription_mgr.mark_subscription_denied(topic).await;
             let _ = ui_events_tx.send(UiEventFrame {
                 session_id: String::new(),
                 seq: 0,
@@ -477,6 +556,8 @@ fn parse_account_inbox_digest(
             reactions: vec![],
             attachments: vec![],
         },
+        topic: String::new(),
+        topic_seq: 0,
     })
 }
 
@@ -527,6 +608,8 @@ fn parse_reaction_updated(payload: &serde_json::Value) -> Option<SocialEventFram
             reactions,
             attachments: vec![],
         },
+        topic: String::new(),
+        topic_seq: 0,
     })
 }
 
@@ -664,6 +747,76 @@ fn event_text(payload: &serde_json::Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn apply_durable_holds_cursor_on_parse_failure() {
+        let (ui_tx, _) = broadcast::channel(8);
+        let (social_tx, _) = broadcast::channel(8);
+        assert_eq!(
+            apply_durable_event(
+                "conversation:c1",
+                1,
+                "conversation_message_appended",
+                &serde_json::json!({}),
+                &ui_tx,
+                &social_tx,
+            ),
+            ApplyOutcome::Hold
+        );
+    }
+
+    #[test]
+    fn apply_durable_advances_on_unknown_kind() {
+        let (ui_tx, _) = broadcast::channel(8);
+        let (social_tx, _) = broadcast::channel(8);
+        assert_eq!(
+            apply_durable_event(
+                "account:a1",
+                1,
+                "future_kind_xyz",
+                &serde_json::json!({}),
+                &ui_tx,
+                &social_tx,
+            ),
+            ApplyOutcome::AdvanceNow
+        );
+    }
+
+    #[test]
+    fn apply_social_awaits_dart_ack_when_subscriber_present() {
+        let (ui_tx, _) = broadcast::channel(8);
+        let (social_tx, mut social_rx) = broadcast::channel(8);
+        let msg = serde_json::json!({
+            "message": {
+                "message_id": "m1",
+                "conversation_id": "c1",
+                "text": "hello",
+                "created_at_ms": 10,
+                "message_seq": 3,
+                "sender": {
+                    "account_id": "a",
+                    "minos_id": "m",
+                    "display_name": "n"
+                },
+                "sender_type": "user",
+                "mentioned_account_ids": []
+            }
+        });
+        assert_eq!(
+            apply_durable_event(
+                "conversation:c1",
+                7,
+                "conversation_message_appended",
+                &msg,
+                &ui_tx,
+                &social_tx,
+            ),
+            ApplyOutcome::AwaitDartAck
+        );
+        let frame = social_rx.try_recv().unwrap();
+        assert_eq!(frame.topic, "conversation:c1");
+        assert_eq!(frame.topic_seq, 7);
+    }
 
     #[test]
     fn parse_chat_message_rejects_empty_shell() {

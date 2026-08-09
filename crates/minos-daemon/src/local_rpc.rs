@@ -15,10 +15,9 @@ use minos_protocol::{
     HostSignLinkProofResponse, InterruptSessionRequest, ListClisResponse,
     ListConversationAgentSessionsParams, ListConversationAgentSessionsResponse,
     ListConversationMessagesParams, ListConversationMessagesResponse, ListConversationsParams,
-    ListConversationsResponse, ListProjectsResponse, LocalConversationEvent, LocalDaemonRpcServer,
-    LocalIngestFrame, LocalManagerEvent, LocalSessionSnapshot, ReadArtifactRangeRequest,
-    ReadArtifactRangeResponse, ReadSessionParams, ReadSessionRawHistoryResponse,
-    RemoveConversationAgentParams, RemoveConversationAgentResponse,
+    ListConversationsResponse, ListProjectsResponse, LocalDaemonRpcServer, LocalSessionSnapshot,
+    ReadArtifactRangeRequest, ReadArtifactRangeResponse, ReadSessionParams,
+    ReadSessionRawHistoryResponse, RemoveConversationAgentParams, RemoveConversationAgentResponse,
     RespondOpencodePermissionRequest, RespondOpencodeQuestionRequest, SendUserMessageRequest,
     StartAgentInConversationRequest, StartAgentRequest, StartAgentResponse,
     ToggleConversationMessageReactionParams, ToggleConversationMessageReactionResponse,
@@ -51,9 +50,6 @@ pub struct LocalRpcImpl {
     pub agent: Arc<AgentGlue>,
     /// Present when the local RPC server is owned by a full daemon with relay.
     pub relay: Option<Arc<RelayClient>>,
-    pub ingest_broadcaster: broadcast::Sender<LocalIngestFrame>,
-    pub manager_event_broadcaster: broadcast::Sender<LocalManagerEvent>,
-    pub conversation_event_broadcaster: broadcast::Sender<LocalConversationEvent>,
 }
 
 fn host_link_unavailable() -> jsonrpsee::types::ErrorObjectOwned {
@@ -478,8 +474,10 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
         &self,
         pending: jsonrpsee::PendingSubscriptionSink,
     ) -> jsonrpsee::core::SubscriptionResult {
+        // Subscribe directly to AgentGlue — no intermediate bridge that could
+        // swallow Lagged and leave clients inconsistent without a resync signal.
         let sink = pending.accept().await?;
-        let mut rx = self.ingest_broadcaster.subscribe();
+        let mut rx = self.agent.persisted_ingest_stream();
         tokio::spawn(async move {
             loop {
                 match rx.recv().await {
@@ -514,7 +512,7 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
         pending: jsonrpsee::PendingSubscriptionSink,
     ) -> jsonrpsee::core::SubscriptionResult {
         let sink = pending.accept().await?;
-        let mut rx = self.manager_event_broadcaster.subscribe();
+        let mut rx = self.agent.local_manager_event_stream();
         tokio::spawn(async move {
             loop {
                 match rx.recv().await {
@@ -547,7 +545,7 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
         pending: jsonrpsee::PendingSubscriptionSink,
     ) -> jsonrpsee::core::SubscriptionResult {
         let sink = pending.accept().await?;
-        let mut rx = self.conversation_event_broadcaster.subscribe();
+        let mut rx = self.agent.local_conversation_event_stream();
         tokio::spawn(async move {
             loop {
                 match rx.recv().await {
@@ -591,18 +589,11 @@ pub async fn start_local_rpc_server_with_relay(
     agent: Arc<AgentGlue>,
     relay: Option<Arc<RelayClient>>,
 ) -> Result<LocalRpcServer, MinosError> {
-    let (ingest_tx, _) = broadcast::channel(256);
-    let (mgr_evt_tx, _) = broadcast::channel(256);
-    let (conversation_evt_tx, _) = broadcast::channel(256);
-
     let impl_ = LocalRpcImpl {
         started_at: Instant::now(),
         runner,
-        agent: agent.clone(),
+        agent,
         relay,
-        ingest_broadcaster: ingest_tx.clone(),
-        manager_event_broadcaster: mgr_evt_tx.clone(),
-        conversation_event_broadcaster: conversation_evt_tx.clone(),
     };
 
     // Local desktop/TUI only — keep connection/subscription caps so a misbehaving
@@ -628,11 +619,6 @@ pub async fn start_local_rpc_server_with_relay(
     let handle = server.start(impl_.into_rpc());
 
     write_discovery_file(&config.discovery_path, &url);
-
-    spawn_ingest_bridge(agent.clone(), ingest_tx);
-
-    spawn_manager_event_bridge(agent.clone(), mgr_evt_tx);
-    spawn_conversation_event_bridge(agent.clone(), conversation_evt_tx);
 
     tracing::info!(
         target: "minos_daemon::local_rpc",
@@ -687,70 +673,4 @@ fn write_discovery_file(path: &PathBuf, url: &str) {
             );
         }
     }
-}
-
-fn spawn_ingest_bridge(agent: Arc<AgentGlue>, tx: broadcast::Sender<LocalIngestFrame>) {
-    let mut rx = agent.persisted_ingest_stream();
-    tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(frame) => {
-                    let _ = tx.send(frame);
-                }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(
-                        target: "minos_daemon::local_rpc",
-                        n,
-                        "ingest bridge lagged, dropping frames",
-                    );
-                }
-                Err(broadcast::error::RecvError::Closed) => break,
-            }
-        }
-    });
-}
-
-fn spawn_manager_event_bridge(agent: Arc<AgentGlue>, tx: broadcast::Sender<LocalManagerEvent>) {
-    let mut rx = agent.local_manager_event_stream();
-    tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    let _ = tx.send(event);
-                }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(
-                        target: "minos_daemon::local_rpc",
-                        n,
-                        "manager event bridge lagged, dropping events",
-                    );
-                }
-                Err(broadcast::error::RecvError::Closed) => break,
-            }
-        }
-    });
-}
-
-fn spawn_conversation_event_bridge(
-    agent: Arc<AgentGlue>,
-    tx: broadcast::Sender<LocalConversationEvent>,
-) {
-    let mut rx = agent.local_conversation_event_stream();
-    tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    let _ = tx.send(event);
-                }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(
-                        target: "minos_daemon::local_rpc",
-                        n,
-                        "conversation event bridge lagged, dropping events",
-                    );
-                }
-                Err(broadcast::error::RecvError::Closed) => break,
-            }
-        }
-    });
 }

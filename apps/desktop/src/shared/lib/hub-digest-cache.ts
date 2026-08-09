@@ -57,9 +57,10 @@ export const hubDigestCache = {
     const prev = digestsById.get(id);
     if (!prev) {
       // Unknown conversation: insert minimal row so rail can show Hub-only.
+      // Empty title (not "Conversation") so list merge can keep a real daemon title.
       digestsById.set(id, {
         conversationId: id,
-        title: delta.title ?? "Conversation",
+        title: (delta.title ?? "").trim(),
         preview: delta.preview ?? null,
         lastMessageAtMs: delta.lastMessageAtMs ?? 0,
         unreadCount: delta.unreadCount ?? 0,
@@ -69,10 +70,20 @@ export const hubDigestCache = {
       });
       return;
     }
+    // Do not let empty / placeholder titles wipe a real name already cached.
+    const nextTitleRaw = delta.title;
+    const nextTitle =
+      typeof nextTitleRaw === "string" ? nextTitleRaw.trim() : undefined;
+    const placeholder =
+      !nextTitle ||
+      nextTitle.toLowerCase() === "conversation" ||
+      nextTitle.toLowerCase() === "group chat" ||
+      nextTitle.toLowerCase() === "direct agent sessions";
     digestsById.set(id, {
       ...prev,
       ...delta,
       conversationId: id,
+      title: placeholder ? prev.title : (nextTitle as string),
     });
   },
 

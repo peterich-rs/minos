@@ -38,6 +38,7 @@ pub mod manager;
 pub mod manager_event;
 pub mod opencode_driver;
 pub(crate) mod process;
+pub(crate) mod prompt;
 pub mod pty_agent;
 pub mod session_handle;
 pub mod state_machine;

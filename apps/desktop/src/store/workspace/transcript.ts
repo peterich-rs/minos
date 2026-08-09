@@ -3,9 +3,9 @@
  */
 import type { WorkspaceGet, WorkspaceSet, WorkspaceState } from "./types";
 import {
-  bumpStatus,
   dedupeTranscriptItemsById,
   mergeTranscriptItems,
+  statusForLoad,
 } from "./helpers";
 import { commitSessionEntity, findSessionRow } from "./projection";
 import {
@@ -160,22 +160,7 @@ export function createTranscriptActions(
       // the full page, leaving an empty working-set window forever under
       // livePush (no append poll to recover).
       const prev = get().transcriptStatusBySession[sessionId];
-      let generation: number;
-      let next: { phase: "loading" | "ready"; generation: number };
-      if (quiet) {
-        generation = prev?.generation ?? 0;
-        next =
-          prev?.phase === "ready"
-            ? { phase: "ready", generation }
-            : { phase: "loading", generation: Math.max(generation, 1) };
-        if (next.generation !== generation) {
-          generation = next.generation;
-        }
-      } else {
-        const bumped = bumpStatus(prev, false);
-        generation = bumped.generation;
-        next = { phase: "loading", generation };
-      }
+      const { next, generation } = statusForLoad(prev, quiet);
       // Quiet is stale when a hard open bumped generation past what we saw.
       // Hard open is stale when a newer hard open superseded us.
       const isStale = () =>

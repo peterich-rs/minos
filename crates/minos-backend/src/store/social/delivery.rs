@@ -142,6 +142,50 @@ async fn durable_exists_in_tx(
     Ok(exists)
 }
 
+/// Publish membership change to conversation topic + affected account inbox.
+pub async fn ensure_membership_change_delivery_in_tx(
+    tx: &mut DbTx<'_>,
+    conversation_id: &str,
+    member_account_id: &str,
+    actor_account_id: &str,
+    action: &str,
+    role: Option<&str>,
+    membership_version: i64,
+    at_ms: i64,
+    // Remaining members after the change (conversation topic authorized at subscribe).
+    remaining_member_ids: &[String],
+) -> Result<Vec<PendingDurablePublish>, BackendError> {
+    let _ = remaining_member_ids;
+    let mut pending = Vec::with_capacity(2);
+    let conv_event = DurableEvent::ConversationMemberChanged {
+        conversation_id: conversation_id.to_string(),
+        member_account_id: member_account_id.to_string(),
+        action: action.to_string(),
+        role: role.map(str::to_string),
+        actor_account_id: actor_account_id.to_string(),
+        membership_version,
+        at_ms,
+    };
+    let conv_event_id = format!(
+        "membership-conv-{conversation_id}-{member_account_id}-{action}-v{membership_version}"
+    );
+    pending.push(ensure_one_in_tx(tx, &conv_event_id, &conv_event, at_ms).await?);
+
+    let account_event = DurableEvent::AccountConversationMembershipChanged {
+        account_id: member_account_id.to_string(),
+        conversation_id: conversation_id.to_string(),
+        action: action.to_string(),
+        membership_version,
+        at_ms,
+    };
+    let account_event_id = format!(
+        "membership-acct-{member_account_id}-{conversation_id}-{action}-v{membership_version}"
+    );
+    pending.push(ensure_one_in_tx(tx, &account_event_id, &account_event, at_ms).await?);
+
+    Ok(pending)
+}
+
 async fn ensure_one_in_tx(
     tx: &mut DbTx<'_>,
     event_id: &str,
@@ -530,8 +574,9 @@ mod tests {
             None,
             &[],
             Some("client-msg-1"),
-        )
-        .await
+        &[],
+        "client_live",
+        ).await
         .unwrap();
         assert!(outcome.inserted);
 
@@ -592,25 +637,27 @@ mod tests {
             None,
             &[],
             Some("repair-id"),
-        )
-        .await
+        &[],
+        "client_live",
+        ).await
         .unwrap();
         tx.commit().await.unwrap();
         assert!(outcome.inserted);
 
-        // Idempotent hit + ensure delivery repairs the hole.
+        // Idempotent hit (same body fingerprint) + ensure delivery repairs the hole.
         let mut tx = pool.begin().await.map(DbTx::Sqlite).unwrap();
         let again = insert_message_with_id_in_tx(
             &mut tx,
             &conversation.conversation_id,
             &alice,
-            "ignored",
+            "orphaned",
             T0 + 2,
             None,
             &[],
             Some("repair-id"),
-        )
-        .await
+        &[],
+        "client_live",
+        ).await
         .unwrap();
         assert!(!again.inserted);
         let message = ChatMessageSummary {
@@ -669,8 +716,9 @@ mod tests {
             None,
             std::slice::from_ref(&bob),
             Some("digest-client-1"),
-        )
-        .await
+        &[],
+        "client_live",
+        ).await
         .unwrap();
         assert!(outcome.inserted);
 
@@ -778,8 +826,9 @@ mod tests {
                 None,
                 &[],
                 None,
-            )
-            .await
+            &[],
+            "client_live",
+            ).await
             .unwrap();
             tx.commit().await.unwrap();
             seqs.push(outcome.row.message_seq);

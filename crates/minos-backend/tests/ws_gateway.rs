@@ -613,10 +613,10 @@ async fn subscribe_below_retention_floor_emits_snapshot_required() -> anyhow::Re
     let relay = spawn_relay().await?;
     let (account_id, phone_id) =
         seed_client_account(&relay, "ws-snapshot-floor@example.com").await?;
-    // Floor: first retained seq is 4 → retention_floor_seq = 3.
+    // Authority: allocate 1..=8, purge payloads 1..=3 so retention_floor=3.
     // Client resume_after=1 is below floor → SnapshotRequired (not silent empty).
     let topic = format!("account:{account_id}");
-    for seq in 4..=8 {
+    for seq in 1..=8 {
         let event_id = format!("seed-floor-{account_id}-{seq}");
         let payload = serde_json::json!({
             "kind": "account_registered",
@@ -633,6 +633,31 @@ async fn subscribe_below_retention_floor_emits_snapshot_required() -> anyhow::Re
             &payload,
             seq * 1000,
         )
+        .await?;
+    }
+    // Delete early payloads; sequence authority floor advances, watermark stays.
+    for seq in 1..=3 {
+        let event_id = format!("seed-floor-{account_id}-{seq}");
+        sqlx::query("DELETE FROM durable_event_log WHERE topic_kind = ? AND event_id = ?")
+            .bind("account")
+            .bind(&event_id)
+            .execute(&relay.pool)
+            .await?;
+        sqlx::query(
+            "INSERT INTO topic_metadata
+                (topic_kind, topic, high_watermark, retention_floor, updated_at_ms)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(topic_kind, topic) DO UPDATE SET
+                retention_floor = MAX(topic_metadata.retention_floor, excluded.retention_floor),
+                high_watermark = MAX(topic_metadata.high_watermark, excluded.high_watermark),
+                updated_at_ms = excluded.updated_at_ms",
+        )
+        .bind("account")
+        .bind(&topic)
+        .bind(seq)
+        .bind(seq)
+        .bind(seq * 1000)
+        .execute(&relay.pool)
         .await?;
     }
 
@@ -675,6 +700,71 @@ async fn subscribe_below_retention_floor_emits_snapshot_required() -> anyhow::Re
         other => panic!("expected SnapshotRequired, got {other:?}"),
     }
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn subscribe_after_full_retention_empty_log_emits_snapshot_required() -> anyhow::Result<()> {
+    let relay = spawn_relay().await?;
+    let (account_id, phone_id) =
+        seed_client_account(&relay, "ws-empty-floor@example.com").await?;
+    let topic = format!("account:{account_id}");
+    for seq in 1..=5 {
+        let event_id = format!("seed-empty-{account_id}-{seq}");
+        store::durable_event_log::append(
+            &relay.pool,
+            &event_id,
+            &topic,
+            "account",
+            seq,
+            &account_id,
+            &serde_json::json!({ "kind": "account_registered", "account_id": account_id }),
+            seq * 1000,
+        )
+        .await?;
+    }
+    // Full payload purge via retention helper — floor becomes 5, log empty.
+    let deleted =
+        store::durable_event_log::delete_ready_for_retention(&relay.pool, 10_000, 100).await?;
+    assert_eq!(deleted, 5);
+    let meta = store::durable_event_log::topic_sequence_meta(&relay.pool, "account", &topic).await?;
+    assert_eq!(meta.high_watermark, 5);
+    assert_eq!(meta.retention_floor, 5);
+
+    let ticket =
+        issue_client_ws_ticket(&relay, &account_id, phone_id, DeviceRole::MobileClient).await?;
+    let mut ws = connect_client(&relay, "/ws/client", &ticket).await?;
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::Hello { .. } => {}
+        other => panic!("expected Hello, got {other:?}"),
+    }
+    let _ = assert_post_hello_register_only(&mut ws).await;
+
+    // Client still thinks it is at seq 3 — must SnapshotRequired, not silent empty.
+    send_client_frame(
+        &mut ws,
+        &ClientFrame::Subscribe {
+            topics: vec![topic.clone()],
+            resume_after: Some(std::collections::HashMap::from([(topic.clone(), 3)])),
+            client_request_id: Some("empty-floor".into()),
+        },
+    )
+    .await?;
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::SubscribeAck { .. } => {}
+        other => panic!("expected SubscribeAck, got {other:?}"),
+    }
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::SnapshotRequired {
+            last_known_seq,
+            retention_floor_seq,
+            ..
+        } => {
+            assert_eq!(last_known_seq, 3);
+            assert_eq!(retention_floor_seq, 5);
+        }
+        other => panic!("expected SnapshotRequired on empty retained log, got {other:?}"),
+    }
     Ok(())
 }
 

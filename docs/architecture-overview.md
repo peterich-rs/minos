@@ -42,6 +42,7 @@ Minos/
 │   ├── minos-protocol/              # 线协议（JSON-RPC、Envelope、Realtime）
 │   ├── minos-transport/             # 传输层（WS client、backoff）
 │   ├── minos-cli-detect/            # CLI agent 检测
+│   ├── minos-prompt-runtime/        # Session 提示词编译（bundle + digest）
 │   ├── minos-agent-runtime/         # Agent 运行时（多进程管理）
 │   ├── minos-chat-store/            # 聊天持久化（SQLite）
 │   ├── minos-acp-protocol/          # ACP 协议类型（Gemini）
@@ -75,10 +76,11 @@ Minos/
             |              |                   |
             |              |                   |
       minos-agent-runtime <--------------------+
-      /      |       \
-minos-codex-protocol --+
+      /      |       \         \
+minos-codex-protocol --+        \
 minos-acp-protocol  --+--> minos-agent-runtime
-                           |
+minos-prompt-runtime -+         |
+                                |
 minos-protocol ----> minos-transport
       |
       +--> minos-ffi-frb --> minos-mobile
@@ -90,7 +92,8 @@ minos-protocol ----> minos-transport
 关键约束:
 - `minos-domain` 无 workspace 内部依赖（纯值类型叶节点）
 - `minos-acp-protocol` 和 `minos-codex-protocol` 是独立协议镜像，无内部依赖
-- `minos-agent-runtime` 不依赖 `minos-protocol` 或 `minos-ui-protocol`（薄管道设计）
+- `minos-prompt-runtime` 无 workspace 内部依赖（纯 compiler；sha2/serde）
+- `minos-agent-runtime` 依赖 `minos-prompt-runtime` 做 system prompt 编译；不依赖 `minos-protocol` 做协议扇出（薄管道设计；UI 投影类型可经 ui-protocol）
 - `minos-ffi-frb` 是移动端 FRB 聚合 shim；Host GUI 通过 Desktop/TUI 直连 `minos-daemon`（无 Swift UniFFI）
 
 ## 详细文档入口

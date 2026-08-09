@@ -38,12 +38,16 @@ import {
   enqueueApprovalResolve,
   enqueueReactionToggle,
   enqueueUserMessage,
-  isAcked,
   earliestPendingAttemptAt,
+  getOutboxEntry,
+  initImOutbox,
+  isAcked,
   listDuePending,
+  listDuePendingLanes,
   markAcked,
   markFailed,
   markInflight,
+  outboxLaneKey,
   reclaimStaleInflight,
   type ImOutboxEntry,
 } from "@/shared/lib/im-outbox";
@@ -64,8 +68,29 @@ const runtimeAgentIdCache = new Map<string, string>();
 const projectedMessageIds = new Set<string>();
 const MAX_PROJECTED_CACHE = 4000;
 
-let outboxWorkerRunning = false;
+/** Per-lane drain chains — different conversations / intent classes parallelize. */
+const laneChains = new Map<string, Promise<void>>();
 let outboxWorkerTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Last successful reaction toggle payload by client op id (for waiters). */
+const reactionResults = new Map<
+  string,
+  {
+    messageId: string;
+    conversationId: string;
+    action: string;
+    reactions: Array<{
+      emoji: string;
+      count: number;
+      reactedByMe: boolean;
+      actors: Array<{
+        actorId: string;
+        actorKind: string;
+        displayName: string;
+      }>;
+    }>;
+  }
+>();
 
 function cloudAuth(): { deviceId: string; accessToken: string } | null {
   const { deviceId, session } = useAccountStore.getState();
@@ -95,7 +120,7 @@ export function markMessageProjected(messageId: string): void {
   const id = messageId.trim();
   if (!id) return;
   rememberProjected(id);
-  markAcked(id);
+  void markAcked(id);
 }
 
 /**
@@ -218,11 +243,22 @@ async function postUserMessageFromOutbox(entry: ImOutboxEntry): Promise<void> {
     throw new Error("Not signed in — message not synced to cloud");
   }
 
-  if (entry.title?.trim() || (entry.agentRuntimes?.length ?? 0) > 0) {
+  // Never upsert Hub with the "Conversation" placeholder — that clobbers real
+  // titles on every host_projection message. Only push a real title; agents-only
+  // attach uses attachAgentsToConversationCloud when title is missing.
+  const realTitle = entry.title?.trim() ?? "";
+  const isPlaceholder =
+    !realTitle || realTitle.toLowerCase() === "conversation";
+  if (!isPlaceholder) {
     await syncConversationToCloud({
       conversationId: entry.conversationId,
-      title: entry.title?.trim() || "Conversation",
+      title: realTitle,
       agentRuntimes: entry.agentRuntimes,
+    });
+  } else if ((entry.agentRuntimes?.length ?? 0) > 0) {
+    await attachAgentsToConversationCloud({
+      conversationId: entry.conversationId,
+      agentRuntimes: entry.agentRuntimes ?? [],
     });
   }
 
@@ -444,8 +480,8 @@ async function postOutboxEntry(
 }
 
 /**
- * C5.1 single path: enqueue reaction_toggle then flush via the shared outbox
- * machine. Returns Hub aggregate for generation-gated apply.
+ * C5.1 single path: enqueue reaction_toggle then drain via lane worker.
+ * Returns Hub aggregate for generation-gated apply (from worker side map).
  * Logical op id = clientOpId (= B6 client_op_id); row id = outbox:${clientOpId}.
  */
 export async function syncReactionToggleToCloud(input: {
@@ -461,28 +497,27 @@ export async function syncReactionToggleToCloud(input: {
   if (!conversationId || !messageId || !emoji || !clientOpId) {
     throw new Error("invalid_payload: reaction_toggle missing fields");
   }
-  if (isAcked(clientOpId)) {
-    return null;
+  if (await isAcked(clientOpId)) {
+    return reactionResults.get(clientOpId) ?? null;
   }
   if (!cloudAuth()) {
     throw new Error("not authenticated");
   }
 
-  const entry = enqueueReactionToggle({
+  const entry = await enqueueReactionToggle({
     conversationId,
     clientMessageId: clientOpId,
     text: JSON.stringify({ messageId, emoji }),
   });
-  if (entry.status === "acked" || isAcked(clientOpId)) {
-    return null;
+  if (entry.status === "acked" || (await isAcked(clientOpId))) {
+    return reactionResults.get(clientOpId) ?? null;
   }
 
-  const result = await flushOutboxEntry(entry, {
+  await waitForOutboxSettlement(clientOpId, {
     throwOnTerminal: true,
     silentToast: true,
   });
-  scheduleOutboxWorker();
-  return (result as HubReactionToggleResult | undefined) ?? null;
+  return reactionResults.get(clientOpId) ?? null;
 }
 
 /**
@@ -507,7 +542,7 @@ export async function syncApprovalResolve(input: {
   if (!sessionId || !requestId || !clientOpId) {
     throw new Error("invalid_payload: approval_resolve missing fields");
   }
-  if (isAcked(clientOpId)) return;
+  if (await isAcked(clientOpId)) return;
 
   const decision = { ...input.decision };
   delete decision.client_request_id;
@@ -526,7 +561,7 @@ export async function syncApprovalResolve(input: {
     throw new Error("not authenticated");
   }
 
-  const entry = enqueueApprovalResolve({
+  const entry = await enqueueApprovalResolve({
     // Scope key for local storage only (not a Hub conversation id).
     conversationId: `approval-session:${sessionId}`,
     clientMessageId: clientOpId,
@@ -537,17 +572,17 @@ export async function syncApprovalResolve(input: {
       route,
     }),
   });
-  if (entry.status === "acked" || isAcked(clientOpId)) return;
+  if (entry.status === "acked" || (await isAcked(clientOpId))) return;
 
-  await flushOutboxEntry(entry, {
+  // Never flush outside the lane worker — preserves FIFO and intent lanes.
+  await waitForOutboxSettlement(clientOpId, {
     throwOnTerminal: true,
     silentToast: true,
   });
-  scheduleOutboxWorker();
 }
 
 /**
- * Enqueue + flush a user timeline message to hub.
+ * Enqueue a user timeline message then drain via per-conversation message lane.
  * Surfaces toast on terminal failure (multi-end intent must not silent-succeed).
  */
 export async function syncUserMessageToCloud(input: {
@@ -570,9 +605,9 @@ export async function syncUserMessageToCloud(input: {
   const text = input.text.trim();
   const messageId = input.messageId.trim();
   if (!text || !input.conversationId.trim() || !messageId) return;
-  if (isAcked(messageId)) return;
+  if (await isAcked(messageId)) return;
 
-  const entry = enqueueUserMessage({
+  await enqueueUserMessage({
     conversationId: input.conversationId,
     clientMessageId: messageId,
     text,
@@ -583,28 +618,33 @@ export async function syncUserMessageToCloud(input: {
     messageSource: input.messageSource ?? "client_live",
   });
 
-  await flushOutboxEntry(entry, { throwOnTerminal: true });
-  scheduleOutboxWorker();
+  await waitForOutboxSettlement(messageId, { throwOnTerminal: true });
 }
 
+/**
+ * Worker-only flush for one outbox row. Must not be called from hot-path
+ * public APIs — always go through `flushImOutbox` / lane chains.
+ */
 async function flushOutboxEntry(
   entry: ImOutboxEntry,
-  opts?: { throwOnTerminal?: boolean; silentToast?: boolean },
-): Promise<HubReactionToggleResult | void> {
+  opts?: { silentToast?: boolean },
+): Promise<void> {
   if (entry.status === "acked") return;
-  if (isAcked(entry.clientMessageId)) return;
+  if (await isAcked(entry.clientMessageId)) return;
 
-  markInflight(entry.clientMessageId);
+  await markInflight(entry.clientMessageId);
   try {
     const result = await postOutboxEntry(entry);
-    markAcked(entry.clientMessageId);
+    await markAcked(entry.clientMessageId);
     if (entry.kind === "user_message" || entry.kind === "agent_result") {
       rememberProjected(entry.clientMessageId);
     }
-    return result;
+    if (entry.kind === "reaction_toggle" && result) {
+      reactionResults.set(entry.clientMessageId, result);
+    }
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    const status = markFailed(entry.clientMessageId, msg);
+    const status = await markFailed(entry.clientMessageId, msg);
     console.warn("[im-cloud-sync] outbox flush failed", entry.kind, error);
     const isMessageKind =
       entry.kind === "user_message" || entry.kind === "agent_result";
@@ -621,24 +661,95 @@ async function flushOutboxEntry(
         );
       }
     }
-    if (opts?.throwOnTerminal) {
-      throw error instanceof Error ? error : new Error(msg);
-    }
   }
 }
 
-/** Drain due pending outbox rows (bounded concurrency 1). */
-export async function flushImOutbox(): Promise<void> {
-  if (outboxWorkerRunning) return;
-  outboxWorkerRunning = true;
+async function drainLaneKey(laneKey: string): Promise<void> {
+  const prev = laneChains.get(laneKey) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  laneChains.set(
+    laneKey,
+    prev.then(() => gate).catch(() => gate),
+  );
+  await prev.catch(() => undefined);
   try {
-    const due = listDuePending();
-    for (const entry of due) {
+    // Re-list so we only take this lane's current due head-run.
+    const lanes = await listDuePendingLanes();
+    const lane = lanes.find(
+      (l) => l[0] != null && outboxLaneKey(l[0]) === laneKey,
+    );
+    if (!lane) return;
+    for (const entry of lane) {
       await flushOutboxEntry(entry);
+      if (!(await isAcked(entry.clientMessageId))) break;
     }
   } finally {
-    outboxWorkerRunning = false;
+    release();
   }
+}
+
+/**
+ * Drain due pending outbox rows with per-lane FIFO.
+ *
+ * Lanes: `message:{conv}` | `reaction:{conv}` | `approval:{scope}`.
+ * Same lane is strict FIFO; different lanes run in parallel.
+ * Public sync APIs must only enqueue + wait — never call flushOutboxEntry.
+ */
+export async function flushImOutbox(): Promise<void> {
+  const lanes = await listDuePendingLanes();
+  if (lanes.length === 0) return;
+  await Promise.all(
+    lanes.map(async (lane) => {
+      const head = lane[0];
+      if (!head) return;
+      await drainLaneKey(outboxLaneKey(head));
+    }),
+  );
+}
+
+/**
+ * Kick lane workers until this op is acked, terminal, or deadline.
+ * Used by public sync APIs instead of direct flush (preserves FIFO).
+ */
+async function waitForOutboxSettlement(
+  clientMessageId: string,
+  opts?: {
+    throwOnTerminal?: boolean;
+    silentToast?: boolean;
+    timeoutMs?: number;
+  },
+): Promise<"acked" | "failed_terminal" | "timeout"> {
+  const id = clientMessageId.trim();
+  const deadline = Date.now() + (opts?.timeoutMs ?? 120_000);
+  scheduleOutboxWorker();
+  while (Date.now() < deadline) {
+    if (await isAcked(id)) return "acked";
+    const row = await getOutboxEntry(id);
+    if (!row) {
+      // Not in store — treat as nothing to wait for.
+      return "acked";
+    }
+    if (row.status === "failed_terminal") {
+      const msg = row.lastError ?? "outbox failed_terminal";
+      if (!opts?.silentToast) {
+        toast.error("Cloud sync failed", msg);
+      }
+      if (opts?.throwOnTerminal) {
+        throw new Error(msg);
+      }
+      return "failed_terminal";
+    }
+    await flushImOutbox();
+    if (await isAcked(id)) return "acked";
+    // Backoff head may not be due yet — yield briefly.
+    await new Promise((r) => setTimeout(r, 40));
+    scheduleOutboxWorker();
+  }
+  if (await isAcked(id)) return "acked";
+  return "timeout";
 }
 
 /**
@@ -668,7 +779,7 @@ export async function syncAgentResultToCloud(input: {
   if (!isProjectableAgentMessage({ id: messageId, role: "agent", body: text })) {
     return;
   }
-  if (isAcked(messageId) || projectedMessageIds.has(messageId)) return;
+  if ((await isAcked(messageId)) || projectedMessageIds.has(messageId)) return;
 
   const runtime =
     normalizeRuntime(input.agentRuntime) ??
@@ -687,7 +798,7 @@ export async function syncAgentResultToCloud(input: {
     sessionIdFromAgentResultId(messageId) ||
     null;
 
-  const entry = enqueueAgentResult({
+  await enqueueAgentResult({
     conversationId,
     clientMessageId: messageId,
     text,
@@ -697,8 +808,8 @@ export async function syncAgentResultToCloud(input: {
     replyToMessageId: input.replyToMessageId ?? null,
   });
 
-  await flushOutboxEntry(entry);
-  scheduleOutboxWorker();
+  // Lane worker only — never bypass FIFO with a hot-path flush.
+  await waitForOutboxSettlement(messageId, { silentToast: false });
 }
 
 /**
@@ -719,7 +830,7 @@ export async function projectMissingLocalAgentResultsToHub(
     if (!isProjectableAgentMessage(m)) continue;
     // Only uplink frozen formula ids.
     if (!isCanonicalAgentResultId(m.id, conversationId)) continue;
-    if (isAcked(m.id) || projectedMessageIds.has(m.id)) continue;
+    if ((await isAcked(m.id)) || projectedMessageIds.has(m.id)) continue;
     // Same canonical id already on Hub — no soft session/body dedupe (C2).
     if (hubIds.has(m.id)) {
       rememberProjected(m.id);
@@ -741,33 +852,43 @@ export async function projectMissingLocalAgentResultsToHub(
 /** Schedule a background outbox drain until no pending rows remain. */
 export function scheduleOutboxWorker(): void {
   if (outboxWorkerTimer != null) return;
-  const now = Date.now();
-  const dueNow = listDuePending(now);
-  const nextAt = earliestPendingAttemptAt(now);
-  if (dueNow.length === 0 && nextAt == null) return;
-  // Sleep until due (min 50ms, default 2s when already due).
-  const delay =
-    dueNow.length > 0
-      ? 50
-      : Math.max(50, Math.min((nextAt as number) - now, 5 * 60_000));
   outboxWorkerTimer = setTimeout(() => {
     outboxWorkerTimer = null;
-    void flushImOutbox().then(() => {
-      if (earliestPendingAttemptAt() != null) {
+    void (async () => {
+      const now = Date.now();
+      const dueNow = await listDuePending(now);
+      const nextAt = await earliestPendingAttemptAt(now);
+      if (dueNow.length === 0 && nextAt == null) return;
+      if (dueNow.length === 0 && nextAt != null) {
+        const delay = Math.max(50, Math.min(nextAt - Date.now(), 5 * 60_000));
+        outboxWorkerTimer = setTimeout(() => {
+          outboxWorkerTimer = null;
+          void flushImOutbox().then(async () => {
+            if ((await earliestPendingAttemptAt()) != null) {
+              scheduleOutboxWorker();
+            }
+          });
+        }, delay);
+        return;
+      }
+      await flushImOutbox();
+      if ((await earliestPendingAttemptAt()) != null) {
         scheduleOutboxWorker();
       }
-    });
-  }, delay);
+    })();
+  }, 50);
 }
 
 /** Start background outbox drain (call once when account session is ready). */
 export function startImOutboxWorker(): void {
-  reclaimStaleInflight();
-  void flushImOutbox().then(() => {
-    if (earliestPendingAttemptAt() != null) {
+  void (async () => {
+    await initImOutbox();
+    await reclaimStaleInflight();
+    await flushImOutbox();
+    if ((await earliestPendingAttemptAt()) != null) {
       scheduleOutboxWorker();
     }
-  });
+  })();
 }
 
 /** Clear process caches (tests / account switch). */

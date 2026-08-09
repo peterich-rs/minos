@@ -1,8 +1,7 @@
 use anyhow::Result;
 use minos_chat_store::teamwork_mcp::SkillRef;
+use minos_prompt_runtime::{TEAMWORK_SKILL_ID, TEAMWORK_SKILL_MD};
 use std::path::{Path, PathBuf};
-
-const MINOS_TEAMWORK_SKILL_MD: &str = include_str!("../skills/minos-teamwork/SKILL.md");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillInstallReport {
@@ -30,10 +29,11 @@ fn install_global_agent_skills_for_home(
 }
 
 fn embedded_skill_content(skill_id: &str) -> Result<&'static str> {
-    match skill_id {
-        "minos-teamwork" => Ok(MINOS_TEAMWORK_SKILL_MD),
-        _ => anyhow::bail!("unknown embedded skill ref: {skill_id}"),
+    // Canonical skill body: minos-prompt-runtime package (Task B SSOT).
+    if skill_id == TEAMWORK_SKILL_ID {
+        return Ok(TEAMWORK_SKILL_MD);
     }
+    anyhow::bail!("unknown embedded skill ref: {skill_id}")
 }
 
 fn global_skill_paths(home: &Path, skill_name: &str) -> Vec<PathBuf> {
@@ -78,6 +78,7 @@ fn resolve_home_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use minos_prompt_runtime::TEAMWORK_SKILL_MD;
 
     #[test]
     fn global_skill_paths_include_supported_cli_locations() {
@@ -114,6 +115,8 @@ mod tests {
             let content = std::fs::read_to_string(path).unwrap();
             assert!(content.contains("name: minos-teamwork"));
             assert!(content.contains("minos_teamwork"));
+            assert!(content.contains("Use when "));
+            assert_eq!(content, TEAMWORK_SKILL_MD);
         }
     }
 }

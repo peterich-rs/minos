@@ -75,33 +75,40 @@ class ImOutboxWorker {
     _flushing = true;
     try {
       final repository = _ref.read(socialRepositoryProvider);
-      final due = await repository.listDueOutbox();
-      for (final entry in due) {
-        await _flushOne(repository, entry);
+      // Per-conversation FIFO: on head failure, skip that lane's tail this
+      // cycle; other conversations may still progress.
+      final lanes = await repository.listDueOutboxLanes();
+      for (final lane in lanes) {
+        for (final entry in lane) {
+          final ok = await _flushOne(repository, entry);
+          if (!ok) break;
+        }
       }
     } finally {
       _flushing = false;
     }
   }
 
-  Future<void> _flushOne(
+  /// Returns true when the entry was acked (lane may continue).
+  Future<bool> _flushOne(
     SocialRepository repository,
     ImOutboxEntry entry,
   ) async {
     switch (entry.kind) {
       case ImOutboxKind.userMessage:
-        await _flushUserMessage(repository, entry);
+        return _flushUserMessage(repository, entry);
       case ImOutboxKind.reactionToggle:
-        await _flushReactionToggle(repository, entry);
+        return _flushReactionToggle(repository, entry);
       case ImOutboxKind.unsupported:
         await repository.markOutboxFailed(
           clientOpId: entry.clientOpId,
           error: 'unknown_kind',
         );
+        return false;
     }
   }
 
-  Future<void> _flushUserMessage(
+  Future<bool> _flushUserMessage(
     SocialRepository repository,
     ImOutboxEntry entry,
   ) async {
@@ -113,7 +120,7 @@ class ImOutboxWorker {
         clientOpId: entry.clientOpId,
         error: 'invalid_payload_json',
       );
-      return;
+      return false;
     }
 
     final text = (payload['text'] as String?)?.trim() ?? '';
@@ -122,7 +129,7 @@ class ImOutboxWorker {
         clientOpId: entry.clientOpId,
         error: 'empty_text',
       );
-      return;
+      return false;
     }
     final replyTo = payload['reply_to_message_id'] as String?;
 
@@ -148,16 +155,18 @@ class ImOutboxWorker {
       );
       onConversationDirty?.call(entry.conversationId);
       onInboxDirty?.call();
+      return true;
     } catch (error) {
       await repository.markOutboxFailed(
         clientOpId: entry.clientOpId,
         error: error.toString(),
       );
       onConversationDirty?.call(entry.conversationId);
+      return false;
     }
   }
 
-  Future<void> _flushReactionToggle(
+  Future<bool> _flushReactionToggle(
     SocialRepository repository,
     ImOutboxEntry entry,
   ) async {
@@ -169,7 +178,7 @@ class ImOutboxWorker {
         clientOpId: entry.clientOpId,
         error: 'invalid_payload_json',
       );
-      return;
+      return false;
     }
     final messageId = (payload['message_id'] as String?)?.trim() ?? '';
     final emoji = (payload['emoji'] as String?)?.trim() ?? '';
@@ -178,7 +187,7 @@ class ImOutboxWorker {
         clientOpId: entry.clientOpId,
         error: 'invalid_payload: reaction requires message_id+emoji',
       );
-      return;
+      return false;
     }
 
     await repository.markOutboxInflight(entry.clientOpId);
@@ -196,6 +205,7 @@ class ImOutboxWorker {
       );
       await repository.markOutboxAcked(entry.clientOpId);
       onConversationDirty?.call(entry.conversationId);
+      return true;
     } catch (error) {
       await repository.markOutboxFailed(
         clientOpId: entry.clientOpId,
@@ -203,6 +213,7 @@ class ImOutboxWorker {
       );
       // Open chat (if any) reloads cache to drop optimistic toggle.
       onConversationDirty?.call(entry.conversationId);
+      return false;
     }
   }
 }

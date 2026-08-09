@@ -33,12 +33,16 @@ pub enum RealtimeEvent {
         reason: String,
         close_code: u16,
     },
+    /// Gateway confirmed Subscribe for these topics.
+    SubscribeAck {
+        topics: Vec<String>,
+    },
 }
 
 pub fn handle_server_frame(frame: ServerFrame) -> Option<RealtimeEvent> {
     match frame {
         ServerFrame::Hello { .. } => None,
-        ServerFrame::SubscribeAck { .. } => None,
+        ServerFrame::SubscribeAck { topics, .. } => Some(RealtimeEvent::SubscribeAck { topics }),
         ServerFrame::SubscriptionDenied { topic, reason } => {
             tracing::warn!(topic, reason, "subscription denied");
             Some(RealtimeEvent::SubscriptionDenied { topic, reason })

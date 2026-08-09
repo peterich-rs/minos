@@ -32,6 +32,112 @@ export function reuseStableById<T extends { id: string }>(
   return changed ? out : (prev as T[]);
 }
 
+/** Conversation rail fields that affect ConversationRow render / sort. */
+export function conversationEqual(
+  a: {
+    id: string;
+    projectId?: string;
+    title?: string;
+    preview?: string;
+    updatedAtMs?: number;
+    messageCount?: number;
+    unread?: number;
+    agentSessionCount?: number;
+    participatingAgents?: readonly string[];
+    runningCount?: number;
+    approvalCount?: number;
+    priority?: string;
+    progress?: string;
+    boardColumn?: string;
+    branch?: string;
+    worktree?: string;
+    gitMode?: string;
+    gitDirty?: boolean;
+    gitHead?: string;
+  },
+  b: {
+    id: string;
+    projectId?: string;
+    title?: string;
+    preview?: string;
+    updatedAtMs?: number;
+    messageCount?: number;
+    unread?: number;
+    agentSessionCount?: number;
+    participatingAgents?: readonly string[];
+    runningCount?: number;
+    approvalCount?: number;
+    priority?: string;
+    progress?: string;
+    boardColumn?: string;
+    branch?: string;
+    worktree?: string;
+    gitMode?: string;
+    gitDirty?: boolean;
+    gitHead?: string;
+  },
+): boolean {
+  if (
+    a.id !== b.id ||
+    a.projectId !== b.projectId ||
+    a.title !== b.title ||
+    a.preview !== b.preview ||
+    a.updatedAtMs !== b.updatedAtMs ||
+    a.messageCount !== b.messageCount ||
+    a.unread !== b.unread ||
+    a.agentSessionCount !== b.agentSessionCount ||
+    a.runningCount !== b.runningCount ||
+    a.approvalCount !== b.approvalCount ||
+    a.priority !== b.priority ||
+    a.progress !== b.progress ||
+    a.boardColumn !== b.boardColumn ||
+    a.branch !== b.branch ||
+    a.worktree !== b.worktree ||
+    a.gitMode !== b.gitMode ||
+    a.gitDirty !== b.gitDirty ||
+    a.gitHead !== b.gitHead
+  ) {
+    return false;
+  }
+  const aa = a.participatingAgents ?? [];
+  const bb = b.participatingAgents ?? [];
+  if (aa.length !== bb.length) return false;
+  for (let i = 0; i < aa.length; i++) {
+    if (aa[i] !== bb[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Quiet conversation re-list: reuse previous Conversation object identity when
+ * content is unchanged so VirtualizedList / memo rows do not remount.
+ */
+export function reuseStableConversations<
+  T extends {
+    id: string;
+    projectId?: string;
+    title?: string;
+    preview?: string;
+    updatedAtMs?: number;
+    messageCount?: number;
+    unread?: number;
+    agentSessionCount?: number;
+    participatingAgents?: readonly string[];
+    runningCount?: number;
+    approvalCount?: number;
+    priority?: string;
+    progress?: string;
+    boardColumn?: string;
+    branch?: string;
+    worktree?: string;
+    gitMode?: string;
+    gitDirty?: boolean;
+    gitHead?: string;
+  },
+>(prev: readonly T[] | undefined, next: readonly T[]): T[] {
+  return reuseStableById(prev, next as T[], conversationEqual);
+}
+
 /** Timeline message fields that affect row render / order. */
 export function timelineMessageEqual(
   a: {

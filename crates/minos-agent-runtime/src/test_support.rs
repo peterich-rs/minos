@@ -53,9 +53,14 @@ pub enum Step {
     },
     /// Read one client request, assert its method and selected params, then
     /// reply like `ExpectRequest`.
+    ///
+    /// `params_absent_keys` lists JSON keys that must **not** appear under
+    /// `params` (used to prove optional fields like `developerInstructions`
+    /// were omitted).
     ExpectRequestMatching {
         method: String,
         params_subset: serde_json::Value,
+        params_absent_keys: Vec<String>,
         reply: serde_json::Value,
     },
     /// Read one client notification frame and assert its method/params.
@@ -244,6 +249,7 @@ async fn run_script(
             Step::ExpectRequestMatching {
                 method,
                 params_subset,
+                params_absent_keys,
                 reply,
             } => {
                 let frame = match rx.next().await {
@@ -269,11 +275,20 @@ async fn run_script(
                     got_method, method,
                     "FakeCodexServer: method mismatch on ExpectRequestMatching"
                 );
-                assert_json_subset(
-                    parsed.get("params").unwrap_or(&serde_json::Value::Null),
-                    &params_subset,
-                    "params",
-                );
+                let params = parsed.get("params").unwrap_or(&serde_json::Value::Null);
+                assert_json_subset(params, &params_subset, "params");
+                if let Some(map) = params.as_object() {
+                    for key in &params_absent_keys {
+                        assert!(
+                            !map.contains_key(key),
+                            "FakeCodexServer: params must not contain key {key}; got {params}"
+                        );
+                    }
+                } else if !params_absent_keys.is_empty() {
+                    panic!(
+                        "FakeCodexServer: params not an object but absent keys were required: {params_absent_keys:?}"
+                    );
+                }
                 let id = parsed.get("id").cloned().unwrap_or(serde_json::Value::Null);
                 let response = serde_json::json!({
                     "jsonrpc": "2.0",
