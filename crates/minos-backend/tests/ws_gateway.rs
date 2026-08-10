@@ -845,7 +845,7 @@ async fn account_topic_delivers_social_message_payloads() -> anyhow::Result<()> 
     }
 
     let service = DefaultConversationService::new(relay.state.store.clone());
-    let (message, _) = service
+    let (message, _, bot_enqueued) = service
         .send_message(
             &account_id,
             &conversation.conversation_id,
@@ -859,6 +859,9 @@ async fn account_topic_delivers_social_message_payloads() -> anyhow::Result<()> 
         )
         .await?;
     minos_backend::http::v1::social::fan_out_social_message(&relay.state, &message).await;
+    if bot_enqueued {
+        relay.state.wake_agent_dispatch();
+    }
 
     match recv_server_frame(&mut ws).await? {
         ServerFrame::DurableEvent {

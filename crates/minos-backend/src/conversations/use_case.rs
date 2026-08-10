@@ -105,6 +105,8 @@ pub trait ConversationService: Send + Sync {
         limit: u32,
     ) -> Result<ListMessagesResult, ConversationError>;
 
+    /// Returns `(message, members, bot_deliveries_enqueued)`.
+    /// Bot deliveries are co-committed with the message when planned.
     async fn send_message(
         &self,
         account_id: &str,
@@ -116,9 +118,9 @@ pub trait ConversationService: Send + Sync {
         client_sent_at_ms: Option<i64>,
         attachment_blob_ids: &[String],
         // Optional structured mentions from Account WS AppendMessage.
-        // Validated against conversation participants and merged with body parse.
+        // Validated against conversation participants; body never invents targets.
         structured_mentions: &[minos_protocol::MentionTarget],
-    ) -> Result<(ChatMessageSummary, Vec<social::ProfileRow>), ConversationError>;
+    ) -> Result<(ChatMessageSummary, Vec<social::ProfileRow>, bool), ConversationError>;
 
     async fn recall_message(
         &self,
@@ -129,8 +131,8 @@ pub trait ConversationService: Send + Sync {
 
     /// Toggle cloud reaction; returns action, aggregates, and outbox publish handle.
     ///
-    /// `client_op_id` is required (B6): becomes the durable event_id suffix and
-    /// must match the client Intent Outbox entry id (C5).
+    /// `client_op_id` is required: becomes the durable event_id suffix and
+    /// must match the client Intent Outbox entry id.
     async fn toggle_reaction(
         &self,
         account_id: &str,
@@ -449,7 +451,7 @@ impl ConversationService for DefaultConversationService {
         client_sent_at_ms: Option<i64>,
         attachment_blob_ids: &[String],
         structured_mentions: &[minos_protocol::MentionTarget],
-    ) -> Result<(ChatMessageSummary, Vec<social::ProfileRow>), ConversationError> {
+    ) -> Result<(ChatMessageSummary, Vec<social::ProfileRow>, bool), ConversationError> {
         if !social::is_conversation_member(&self.store, conversation_id, account_id).await? {
             return Err(ConversationError::NotFound);
         }
@@ -505,16 +507,18 @@ impl ConversationService for DefaultConversationService {
             .iter()
             .map(|m| m.account_id.clone())
             .collect::<Vec<_>>();
-        // Only active bots resolve as @ targets / structured mentions for delivery.
+        // Active bots are delivery targets; full roster detects disabled structured mentions.
+        // Body text never invents delivery targets — clients send structured mentions.
         let agents = social::list_conversation_agents_active(&self.store, conversation_id).await?;
-        let mut mentions = extract_participant_mentions(text, account_id, &members, &agents);
-        merge_structured_mentions(
-            &mut mentions,
+        let all_agents = social::list_conversation_agents(&self.store, conversation_id).await?;
+        let mentions = validate_structured_mentions(
             structured_mentions,
             account_id,
             &members,
             &agents,
-        );
+            &all_agents,
+        )
+        .map_err(ConversationError::ValidationFormat)?;
         // Hub server clock is the sole ordering authority for created_at_ms.
         // client_sent_at_ms is accepted for future display/debug only.
         let _ = client_sent_at_ms;
@@ -555,8 +559,44 @@ impl ConversationService for DefaultConversationService {
             .find(|m| m.account_id == account_id)
             .ok_or_else(|| ConversationError::MissingProfile(account_id.to_string()))?;
         let sender = MessageSender::from_user_summary(to_user_summary(sender_profile));
+        let sender_minos_id = Some(sender_profile.minos_id.clone());
 
-        // Transactional Outbox: chat_messages + durable + outbox in one commit.
+        // Plan bot deliveries before the write TX (no store reads while holding SQLite tx).
+        // message_id is filled after insert via build_dispatch_rows.
+        let dispatch_plans = if message_source.allows_agent_dispatch() {
+            let reply_target = match reply_to_id.as_deref() {
+                Some(id) => social::get_message(&self.store, id).await?,
+                None => None,
+            };
+            let plan_message = ChatMessageSummary {
+                message_id: String::new(),
+                conversation_id: conversation_id.to_string(),
+                sender: sender.clone(),
+                text: text.to_string(),
+                created_at_ms: now_ms,
+                message_seq: 0,
+                reply_to: reply_to.clone(),
+                recalled_at_ms: None,
+                mentioned_account_ids: mentions.account_ids.clone(),
+                mentioned_agent_ids: mentions.agent_ids.clone(),
+                sender_type: ChatMessageSummary::sender_type_from(&sender),
+                reactions: vec![],
+                attachments: attachments_wire.clone(),
+            };
+            crate::agent_inbox::plan_agent_deliveries(
+                &self.store,
+                conversation_id,
+                &plan_message,
+                text,
+                reply_target.as_ref(),
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
+
+        // Transactional Outbox: chat_messages + durable + social outbox + bot
+        // deliveries in one commit when agent dispatch is allowed.
         let mut tx = self.store.begin().await?;
         let outcome = social::insert_message_with_id_in_tx(
             &mut tx,
@@ -604,12 +644,33 @@ impl ConversationService for DefaultConversationService {
             let message = hydrated.remove(0);
             let mut tx = self.store.begin().await?;
             social::ensure_social_message_delivery_in_tx(&mut tx, &message, &member_ids).await?;
+            // Re-drive bot deliveries if a prior crash left message without inbox rows.
+            let rows = crate::agent_inbox::build_dispatch_rows(
+                dispatch_plans,
+                &message,
+                conversation_id,
+                account_id,
+                sender_minos_id,
+                0,
+                now_ms,
+            );
+            let bot_enqueued = crate::agent_inbox::enqueue_plans_in_tx(&mut tx, &rows).await?;
             tx.commit().await?;
-            return Ok((message, members));
+            return Ok((message, members, bot_enqueued));
         };
         social::ensure_social_message_delivery_in_tx(&mut tx, &message, &member_ids).await?;
+        let rows = crate::agent_inbox::build_dispatch_rows(
+            dispatch_plans,
+            &message,
+            conversation_id,
+            account_id,
+            sender_minos_id,
+            0,
+            now_ms,
+        );
+        let bot_enqueued = crate::agent_inbox::enqueue_plans_in_tx(&mut tx, &rows).await?;
         tx.commit().await?;
-        Ok((message, members))
+        Ok((message, members, bot_enqueued))
     }
 
     async fn recall_message(
@@ -1270,33 +1331,37 @@ fn bot_sender_summary(agent: Option<&social::AgentRow>, agent_id: &str) -> Messa
     }
 }
 
-/// Merge client-provided structured mentions into body-parsed mentions.
+/// Validate client-provided structured mentions for persistence and delivery.
 ///
-/// Only membership-valid targets are accepted (active bots + human members).
-/// Self-mentions for accounts are dropped. Structured targets append in order
-/// after body order (deduped).
-pub(crate) fn merge_structured_mentions(
-    mentions: &mut social::MessageMentions,
+/// Body text never invents targets. Self-account mentions are dropped. Unknown
+/// human account mentions are dropped. Structured **bot** mentions that are not
+/// active conversation members fail the send (so sole-agent cannot soft-route
+/// after a dropped @bot intent). Client order is ordinal authority.
+pub(crate) fn validate_structured_mentions(
     structured: &[minos_protocol::MentionTarget],
     sender_account_id: &str,
     members: &[social::ProfileRow],
-    agents: &[social::AgentRow],
-) {
+    active_agents: &[social::AgentRow],
+    all_agents: &[social::AgentRow],
+) -> Result<social::MessageMentions, String> {
     if structured.is_empty() {
-        return;
+        return Ok(social::MessageMentions {
+            account_ids: Vec::new(),
+            agent_ids: Vec::new(),
+        });
     }
     let member_ids: std::collections::HashSet<&str> =
         members.iter().map(|m| m.account_id.as_str()).collect();
-    let agent_ids: std::collections::HashSet<&str> =
-        agents.iter().map(|a| a.agent_id.as_str()).collect();
-    let mut seen_accounts: std::collections::HashSet<String> =
-        mentions.account_ids.iter().cloned().collect();
-    let mut seen_agents: std::collections::HashSet<String> =
-        mentions.agent_ids.iter().cloned().collect();
+    let active_agent_ids: std::collections::HashSet<&str> =
+        active_agents.iter().map(|a| a.agent_id.as_str()).collect();
+    let mut account_ids = Vec::<String>::new();
+    let mut agent_id_list = Vec::<String>::new();
+    let mut seen_accounts = std::collections::HashSet::<String>::new();
+    let mut seen_agents = std::collections::HashSet::<String>::new();
 
     for target in structured {
         match target {
-            minos_protocol::MentionTarget::Account { account_id } => {
+            minos_protocol::MentionTarget::Account { account_id, .. } => {
                 if account_id == sender_account_id {
                     continue;
                 }
@@ -1304,29 +1369,45 @@ pub(crate) fn merge_structured_mentions(
                     continue;
                 }
                 if seen_accounts.insert(account_id.clone()) {
-                    mentions.account_ids.push(account_id.clone());
+                    account_ids.push(account_id.clone());
                 }
             }
-            minos_protocol::MentionTarget::Bot { bot_id } => {
-                if !agent_ids.contains(bot_id.as_str()) {
+            minos_protocol::MentionTarget::Bot { bot_id, .. } => {
+                if active_agent_ids.contains(bot_id.as_str()) {
+                    if seen_agents.insert(bot_id.clone()) {
+                        agent_id_list.push(bot_id.clone());
+                    }
                     continue;
                 }
-                if seen_agents.insert(bot_id.clone()) {
-                    mentions.agent_ids.push(bot_id.clone());
+                if let Some(disabled) = all_agents
+                    .iter()
+                    .find(|a| !a.is_active() && a.agent_id == *bot_id)
+                {
+                    let label = if disabled.display_name.trim().is_empty() {
+                        disabled.name.as_str()
+                    } else {
+                        disabled.display_name.as_str()
+                    };
+                    return Err(format!(
+                        "Agent「{label}」已停用，无法投递。请在 Agents 中重新启用后再试。"
+                    ));
                 }
+                return Err(format!(
+                    "未匹配到会话成员里的 Agent（{bot_id}）。请确认 Agent 已加入本会话。"
+                ));
             }
         }
     }
+
+    Ok(social::MessageMentions {
+        account_ids,
+        agent_ids: agent_id_list,
+    })
 }
 
-/// Unified participant mention extraction (human accounts + bot agents).
-///
-/// Only conversation participants match. Human tokens resolve by `minos_id`;
-/// agent tokens resolve by agent_id / runtime_agent / display name (and optional
-/// `#session_short` suffix is stripped for matching).
-///
-/// Order is **body appearance order** (first unique hit wins) — not lex by id.
-/// Delivery planning and multi-@ fan-out rely on this order as SSOT.
+/// Deprecated body-token helper retained only for non-delivery tooling/tests.
+/// Delivery paths must use [`validate_structured_mentions`].
+#[cfg(test)]
 pub(crate) fn extract_participant_mentions(
     text: &str,
     sender_account_id: &str,
@@ -1361,17 +1442,6 @@ pub(crate) fn extract_participant_mentions(
         account_ids,
         agent_ids,
     }
-}
-
-/// Account-only mention extract (no agent roster). Kept for callers that only
-/// need human targets; prefer [`extract_participant_mentions`] for bots.
-#[allow(dead_code)]
-pub(crate) fn extract_mentioned_account_ids(
-    text: &str,
-    sender_account_id: &str,
-    members: &[social::ProfileRow],
-) -> Vec<String> {
-    extract_participant_mentions(text, sender_account_id, members, &[]).account_ids
 }
 
 pub(crate) fn collect_mention_tokens(text: &str) -> Vec<&str> {
@@ -1470,6 +1540,51 @@ mod tests {
 
     fn agent(agent_id: &str, name: &str, runtime: &str) -> AgentRow {
         AgentRow::test_stub(agent_id, "owner", name, "host_runtime", runtime)
+    }
+
+    #[test]
+    fn validate_structured_mentions_accepts_membership_order() {
+        let members = vec![profile("acct-alice", "alice"), profile("acct-bob", "bob")];
+        let agents = vec![
+            agent("bot-1", "Codex", "codex"),
+            agent("bot-2", "Claude", "claude"),
+        ];
+        let structured = vec![
+            minos_protocol::MentionTarget::bot("bot-2"),
+            minos_protocol::MentionTarget::account("acct-bob"),
+            minos_protocol::MentionTarget::bot("bot-1"),
+            minos_protocol::MentionTarget::account("acct-alice"), // self dropped
+            minos_protocol::MentionTarget::bot("bot-2"), // dedupe
+        ];
+        let mentions = validate_structured_mentions(
+            &structured,
+            "acct-alice",
+            &members,
+            &agents,
+            &agents,
+        )
+        .expect("valid structured mentions");
+        assert_eq!(mentions.account_ids, vec!["acct-bob".to_string()]);
+        assert_eq!(
+            mentions.agent_ids,
+            vec!["bot-2".to_string(), "bot-1".to_string()]
+        );
+    }
+
+    #[test]
+    fn validate_structured_mentions_rejects_unknown_bot() {
+        let members = vec![profile("acct-alice", "alice")];
+        let agents = vec![agent("bot-1", "Codex", "codex")];
+        let structured = vec![minos_protocol::MentionTarget::bot("bot-missing")];
+        let err = validate_structured_mentions(
+            &structured,
+            "acct-alice",
+            &members,
+            &agents,
+            &agents,
+        )
+        .expect_err("unknown bot must fail");
+        assert!(err.contains("bot-missing") || err.contains("未匹配"));
     }
 
     #[test]

@@ -1,14 +1,16 @@
 //! Persistent AgentDispatchQueue — bot **mailbox** physical table.
 //!
-//! Domain name: `bot_message_deliveries` ([bot-mailbox-ws-im-bus-design]).
-//! Rows are enqueued after the origin conversation message is durable; a worker
-//! leases them to a Host for execution, with backoff and terminal failure.
+//! Domain name: `bot_message_deliveries`.
+//! Live collab writes enqueue rows in the same transaction as the origin
+//! conversation message + social durable/outbox. A worker then leases them to a
+//! Host for execution, with backoff and terminal failure.
 //!
 //! `dispatch_id` == delivery_id. UNIQUE(origin_message_id, agent_id) is the
 //! logical mailbox key (one delivery per message×bot).
 
 use sqlx::{PgPool, SqlitePool};
 
+use crate::app::tx::DbTx;
 use crate::error::BackendError;
 use crate::store::{AsStorePool, StorePoolRef};
 
@@ -67,6 +69,82 @@ where
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => enqueue_sqlite(pool, row).await,
         StorePoolRef::Postgres(pool) => enqueue_postgres(pool, row).await,
+    }
+}
+
+/// Same as [`enqueue`] on an open write transaction (message + bot deliveries co-commit).
+pub async fn enqueue_in_tx(
+    tx: &mut DbTx<'_>,
+    row: &AgentDispatchRow,
+) -> Result<bool, BackendError> {
+    match tx {
+        DbTx::Sqlite(tx) => {
+            let mention = i64::from(row.mention_sender);
+            let result = sqlx::query(
+                "INSERT INTO bot_message_deliveries (
+                    dispatch_id, origin_message_id, conversation_id, account_id, agent_id,
+                    session_id, forwarded_text, mention_sender, sender_minos_id, status,
+                    attempts, next_attempt_at_ms, last_error, created_at_ms, updated_at_ms,
+                    lease_owner_host_id, lease_expires_at_ms, automation_hop
+                 ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
+                 ON CONFLICT(origin_message_id, agent_id) DO NOTHING",
+            )
+            .bind(&row.dispatch_id)
+            .bind(&row.origin_message_id)
+            .bind(&row.conversation_id)
+            .bind(&row.account_id)
+            .bind(&row.agent_id)
+            .bind(&row.session_id)
+            .bind(&row.forwarded_text)
+            .bind(mention)
+            .bind(&row.sender_minos_id)
+            .bind(&row.status)
+            .bind(row.attempts)
+            .bind(row.next_attempt_at_ms)
+            .bind(&row.last_error)
+            .bind(row.created_at_ms)
+            .bind(row.updated_at_ms)
+            .bind(&row.lease_owner_host_id)
+            .bind(row.lease_expires_at_ms)
+            .bind(row.automation_hop)
+            .execute(&mut **tx)
+            .await
+            .map_err(store_err("agent_dispatch_queue::enqueue_in_tx"))?;
+            Ok(result.rows_affected() > 0)
+        }
+        DbTx::Postgres(tx) => {
+            let result = sqlx::query(
+                "INSERT INTO bot_message_deliveries (
+                    dispatch_id, origin_message_id, conversation_id, account_id, agent_id,
+                    session_id, forwarded_text, mention_sender, sender_minos_id, status,
+                    attempts, next_attempt_at_ms, last_error, created_at_ms, updated_at_ms,
+                    lease_owner_host_id, lease_expires_at_ms, automation_hop
+                 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+                 ON CONFLICT(origin_message_id, agent_id) DO NOTHING",
+            )
+            .bind(&row.dispatch_id)
+            .bind(&row.origin_message_id)
+            .bind(&row.conversation_id)
+            .bind(&row.account_id)
+            .bind(&row.agent_id)
+            .bind(&row.session_id)
+            .bind(&row.forwarded_text)
+            .bind(row.mention_sender)
+            .bind(&row.sender_minos_id)
+            .bind(&row.status)
+            .bind(row.attempts)
+            .bind(row.next_attempt_at_ms)
+            .bind(&row.last_error)
+            .bind(row.created_at_ms)
+            .bind(row.updated_at_ms)
+            .bind(&row.lease_owner_host_id)
+            .bind(row.lease_expires_at_ms)
+            .bind(row.automation_hop)
+            .execute(&mut **tx)
+            .await
+            .map_err(store_err("agent_dispatch_queue::enqueue_in_tx"))?;
+            Ok(result.rows_affected() > 0)
+        }
     }
 }
 

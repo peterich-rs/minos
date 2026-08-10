@@ -147,16 +147,46 @@ impl ConnectionPrincipal {
 // `AppendBotMessage` / `DeliveryAccepted`.
 
 /// Structured mention target on AppendMessage / AppendBotMessage.
+///
+/// Clients resolve roster and send these; Hub validates membership only.
+/// Optional `start`/`length` are UTF-16-ish display spans for UI; delivery
+/// uses identity fields only.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MentionTarget {
     Account {
         account_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        length: Option<u32>,
     },
     /// Global bot identity (`agents.agent_id` / bot_id).
     Bot {
         bot_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        length: Option<u32>,
     },
+}
+
+impl MentionTarget {
+    pub fn account(account_id: impl Into<String>) -> Self {
+        Self::Account {
+            account_id: account_id.into(),
+            start: None,
+            length: None,
+        }
+    }
+
+    pub fn bot(bot_id: impl Into<String>) -> Self {
+        Self::Bot {
+            bot_id: bot_id.into(),
+            start: None,
+            length: None,
+        }
+    }
 }
 
 /// Launch snapshot embedded in BotInboxDelivery (body frozen at schedule time).
@@ -800,6 +830,50 @@ mod tests {
             topics: vec!["account:abc".into(), "conversation:def".into()],
             resume_after: Some(HashMap::from([("account:abc".into(), 42i64)])),
             client_request_id: Some("req-1".into()),
+        };
+        let json = serde_json::to_string(&frame).unwrap();
+        let back: ClientFrame = serde_json::from_str(&json).unwrap();
+        assert_eq!(frame, back);
+    }
+
+    #[test]
+    fn mention_target_round_trip_with_and_without_spans() {
+        let with_spans = MentionTarget::Bot {
+            bot_id: "bot-1".into(),
+            start: Some(0),
+            length: Some(6),
+        };
+        let bare = MentionTarget::account("acct-1");
+        let json = serde_json::to_value(&with_spans).unwrap();
+        assert_eq!(json["kind"], "bot");
+        assert_eq!(json["bot_id"], "bot-1");
+        assert_eq!(json["start"], 0);
+        assert_eq!(json["length"], 6);
+        let back: MentionTarget = serde_json::from_value(json).unwrap();
+        assert_eq!(back, with_spans);
+
+        let bare_json = serde_json::to_value(&bare).unwrap();
+        assert!(bare_json.get("start").is_none());
+        assert!(bare_json.get("length").is_none());
+        // Old clients without start/length still decode.
+        let legacy: MentionTarget =
+            serde_json::from_str(r#"{"kind":"bot","bot_id":"bot-x"}"#).unwrap();
+        assert_eq!(legacy, MentionTarget::bot("bot-x"));
+    }
+
+    #[test]
+    fn append_message_frame_carries_structured_mentions() {
+        let frame = ClientFrame::AppendMessage {
+            client_operation_id: "op-1".into(),
+            conversation_id: "conv-1".into(),
+            text: "@bot-1 hello".into(),
+            mentions: vec![MentionTarget::Bot {
+                bot_id: "bot-1".into(),
+                start: Some(0),
+                length: Some(6),
+            }],
+            reply_to_message_id: None,
+            attachment_ids: vec![],
         };
         let json = serde_json::to_string(&frame).unwrap();
         let back: ClientFrame = serde_json::from_str(&json).unwrap();

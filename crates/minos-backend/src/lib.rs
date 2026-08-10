@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(test, allow(deprecated))]
 
+pub mod agent_inbox;
 pub mod agent_sessions;
 pub mod app;
 pub mod approvals;

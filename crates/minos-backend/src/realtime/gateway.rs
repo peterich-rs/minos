@@ -92,7 +92,7 @@ pub async fn upgrade_host(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<Response, (StatusCode, String)> {
-    // Host auth is Authorization: Bearer hit_* only (bot-mailbox Phase 2.5).
+    // Host auth is Authorization: Bearer hit_* only (no host ws-ticket).
     let result = if bearer_token_from_headers(&headers).is_some() {
         upgrade_host_with_bearer(state, headers, ws).await
     } else {
@@ -976,7 +976,7 @@ async fn handle_formal_frame(
             handle_host_ingest_pull_response(ws, state, upgrade, response).await?;
             Ok(None)
         }
-        // Bot mailbox / WS-native IM bus (bot-mailbox-ws-im-bus-design Phase 2).
+        // Bot mailbox / WS-native IM bus write.
         // Same commit path as HTTP POST …/messages (not a second SSOT).
         ClientFrame::AppendMessage {
             client_operation_id,
@@ -1048,7 +1048,7 @@ async fn handle_formal_frame(
             conversation_id,
             bot_id,
             text,
-            mentions: _mentions,
+            mentions,
             reply_to_message_id,
         } => {
             if upgrade.role != DeviceRole::AgentHost {
@@ -1070,6 +1070,7 @@ async fn handle_formal_frame(
                 &bot_id,
                 &text,
                 reply_to_message_id.as_deref(),
+                &mentions,
             )
             .await?;
             Ok(None)
@@ -1197,6 +1198,7 @@ async fn handle_append_bot_message(
     bot_id: &str,
     text: &str,
     reply_to_message_id: Option<&str>,
+    structured_mentions: &[minos_protocol::MentionTarget],
 ) -> Result<(), BackendError> {
     let host_id = upgrade.device_id.to_string();
     let now_ms = chrono::Utc::now().timestamp_millis();
@@ -1243,6 +1245,7 @@ async fn handle_append_bot_message(
         reply_to_message_id,
         row.session_id.as_deref(),
         operation_id,
+        structured_mentions,
     )
     .await
     {
@@ -1304,7 +1307,7 @@ async fn handle_append_bot_message(
     Ok(())
 }
 
-/// Account WS-native collaboration write (bot-mailbox-ws-im-bus Phase 2).
+/// Account WS-native collaboration write.
 ///
 /// Shares the same domain commit as HTTP `POST …/messages`:
 /// `DefaultConversationService::send_message` + social fanout + agent inbox.
@@ -1379,8 +1382,8 @@ async fn handle_append_message(
         )
         .await;
 
-    let (message, _members) = match send_result {
-        Ok(pair) => pair,
+    let (message, _members, bot_enqueued) = match send_result {
+        Ok(triple) => triple,
         Err(error) => {
             let (code, msg) = conversation_error_to_chat_nack(&error);
             tracing::warn!(
@@ -1404,36 +1407,10 @@ async fn handle_append_message(
         }
     };
 
-    // Same post-commit path as HTTP send_message_inner.
+    // Fanout + worker wake after commit (bot deliveries already co-committed).
     crate::http::v1::social::fan_out_social_message(state, &message).await;
-
-    if message_source.allows_agent_dispatch() {
-        if let Err(e) = crate::http::v1::social::try_agent_dispatch(
-            state,
-            account_id,
-            &conversation_id,
-            &message,
-            reply_to_message_id.as_deref(),
-            &trimmed,
-        )
-        .await
-        {
-            tracing::warn!(
-                target: "minos_backend::realtime",
-                error = %e,
-                conversation_id = %conversation_id,
-                message_id = %message.message_id,
-                "agent inbox pipeline error after AppendMessage"
-            );
-            crate::http::v1::social::notify_agent_dispatch_pipeline_error(
-                state,
-                account_id,
-                &conversation_id,
-                &message.message_id,
-                &e,
-            )
-            .await;
-        }
+    if bot_enqueued {
+        state.wake_agent_dispatch();
     }
 
     let _ = send_server_frame(

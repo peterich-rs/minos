@@ -510,6 +510,9 @@ pub struct SendChatMessageRequest {
     /// Ready media blob ids owned by the sender (upload via the media API first).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachment_blob_ids: Vec<String>,
+    /// Structured mention targets. Body text never invents delivery targets.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentions: Vec<crate::realtime::MentionTarget>,
 }
 
 // ─── Agent in Group Chat ───────────────────────────────────────────────
@@ -685,6 +688,9 @@ pub struct SendAgentMessageRequest {
     /// Client clock for display/debug only. Hub assigns authoritative `created_at_ms`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_sent_at_ms: Option<i64>,
+    /// Structured hop targets (other bots / humans). Body never invents delivery.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentions: Vec<crate::realtime::MentionTarget>,
 }
 
 /// Ensure a Host/Desktop runtime agent exists for the caller's account.
