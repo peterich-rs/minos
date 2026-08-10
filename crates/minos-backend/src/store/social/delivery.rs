@@ -271,7 +271,7 @@ pub async fn ensure_social_message_delivery_in_tx(
     Ok(pending)
 }
 
-/// Deterministic reaction durable event_id (B6).
+/// Deterministic reaction durable event_id.
 ///
 /// Formula:
 /// `social-reaction-{conversation_id}-{message_id}-{emoji}-{actor_key}-{action}-{client_op_id}`
@@ -305,7 +305,7 @@ fn reaction_actor_key(actor: &SenderRef) -> String {
 /// `reactions` must be **viewer-neutral** (`reacted_by_me = false`); clients
 /// recompute `reacted_by_me` from `actors` + local account id.
 ///
-/// `client_op_id` is required and must equal the client outbox entry id (C5).
+/// `client_op_id` is required and must equal the client outbox entry id.
 pub async fn ensure_reaction_delivery_in_tx(
     tx: &mut DbTx<'_>,
     conversation_id: &str,

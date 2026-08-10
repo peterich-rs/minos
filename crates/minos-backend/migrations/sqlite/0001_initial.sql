@@ -1,6 +1,6 @@
 -- Canonical SQLite schema (latest-only).
 -- Logical SSOT shared with postgres/0001_initial.sql (dialect types only differ).
--- Wipe local DBs on upgrade. See docs/superpowers/specs/backend-storage-parity-design.md.
+-- Wipe local DBs on upgrade. Storage parity: docs/architecture-backend.md.
 
 -- Human accounts are IdP-bound via supabase_sub (no local password).
 CREATE TABLE accounts (

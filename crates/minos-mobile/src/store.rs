@@ -31,9 +31,9 @@ use tokio::sync::RwLock;
 pub struct PersistedPairingState {
     pub device_id: Option<String>,
 
-    // Phase 4 (auth): account-bound bearer/refresh tokens. All five fields
-    // are persisted together — the store's `save_auth` writes the whole
-    // tuple atomically, and `clear_auth` wipes all five at once.
+    // Account-bound bearer/refresh tokens. All five fields are persisted
+    // together — the store's `save_auth` writes the whole tuple atomically,
+    // and `clear_auth` wipes all five at once.
     pub access_token: Option<String>,
     pub access_expires_at_ms: Option<i64>,
     pub refresh_token: Option<String>,

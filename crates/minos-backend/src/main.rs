@@ -19,8 +19,8 @@
 //!
 //! ## Graceful shutdown
 //!
-//! Two-phase teardown (see commit history for the shutdown-ordering fix).
-//! Phase 1 is the `with_graceful_shutdown` future:
+//! Two-stage teardown (see commit history for the shutdown-ordering fix).
+//! First stage is the `with_graceful_shutdown` future:
 //! [`wait_for_signal`] awaits either `SIGINT` (Ctrl-C) or `SIGTERM`, then
 //! we broadcast `Event::ServerShutdown` to every live session and sleep
 //! 500ms so clients can drain. Only after `axum::serve` returns — which
@@ -159,7 +159,7 @@ async fn main() -> Result<()> {
 
         let router = http::router(shell.backend_state());
 
-        // Phase 1 of teardown runs inside `with_graceful_shutdown`: await a
+        // First stage of teardown runs inside `with_graceful_shutdown`: await a
         // signal, broadcast `ServerShutdown`, and sleep the drain window.
         // Axum only stops the listener + waits for in-flight handlers AFTER
         // this future resolves, so everything that must happen while handlers
@@ -200,7 +200,7 @@ async fn main() -> Result<()> {
         wait_for_signal().await;
     }
 
-    // Phase 2: listener has stopped and handlers have drained, so DB
+    // Second stage: listener has stopped and handlers have drained, so DB
     // resources can go away without racing a query.
     tracing::info!("listener stopped; tearing down runtime store");
     shell.shutdown().await;

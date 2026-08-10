@@ -1,6 +1,6 @@
 -- Canonical Postgres schema (latest-only).
 -- Logical SSOT shared with sqlite/0001_initial.sql (dialect types / partitions only differ).
--- Wipe DB volumes on upgrade. See docs/superpowers/specs/backend-storage-parity-design.md.
+-- Wipe DB volumes on upgrade. Storage parity: docs/architecture-backend.md.
 
 CREATE EXTENSION IF NOT EXISTS citext;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;

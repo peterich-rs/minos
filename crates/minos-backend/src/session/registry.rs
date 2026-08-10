@@ -549,14 +549,13 @@ impl SessionRegistry {
         to: DeviceId,
         payload: serde_json::Value,
     ) -> Result<(), BackendError> {
-        // Phase 2 Task 2.4: account-scoped Mac→iOS forwarding. When the
-        // sender is an `AgentHost`, the destination must belong to the
-        // same account. A device-secret pair across two accounts (which
-        // can occur if a Mac was paired before login or with another
-        // account previously) must NOT route — surface it as
-        // `PeerOffline` so the existing `handle_forward` mapping returns
-        // a synthesised peer-offline JSON-RPC reply (spec §7.3 `(*)`)
-        // rather than a hard error to the sender.
+        // Account-scoped Mac→iOS forwarding. When the sender is an
+        // `AgentHost`, the destination must belong to the same account. A
+        // device-secret pair across two accounts (which can occur if a Mac
+        // was paired before login or with another account previously) must
+        // NOT route — surface it as `PeerOffline` so the existing
+        // `handle_forward` mapping returns a synthesised peer-offline
+        // JSON-RPC reply rather than a hard error to the sender.
         if let Some(from_handle) = self.get(from) {
             if from_handle.role == DeviceRole::AgentHost {
                 if let Some(to_handle) = self.get(to) {
@@ -633,9 +632,9 @@ mod tests {
 
     fn make_handle(id: DeviceId) -> (SessionHandle, mpsc::Receiver<ServerFrame>) {
         // Tests default to `MobileClient` so the Mac→iOS account-scope gate
-        // added in Phase 2 Task 2.4 does not fire. The dedicated
-        // `routing_mac_to_ios_*` tests construct `AgentHost` senders
-        // explicitly and seed `account_id` to exercise that gate.
+        // does not fire. The dedicated `routing_mac_to_ios_*` tests construct
+        // `AgentHost` senders explicitly and seed `account_id` to exercise
+        // that gate.
         SessionHandle::new(id, DeviceRole::MobileClient)
     }
 
@@ -795,7 +794,7 @@ mod tests {
         }
     }
 
-    // ── routing: account-aware Mac→iOS scoping (Task 2.4) ─────────────
+    // ── routing: account-aware Mac→iOS scoping ────────────────────────
 
     #[tokio::test]
     async fn routing_mac_to_ios_filters_by_account_id() {
@@ -1011,7 +1010,7 @@ mod tests {
         assert!(live.same_session(&current));
     }
 
-    // ── close_account_sessions (Task 2.5) ─────────────────────────────
+    // ── close_account_sessions ────────────────────────────────────────
 
     #[tokio::test]
     async fn close_account_sessions_drops_other_devices_and_fires_revoke() {

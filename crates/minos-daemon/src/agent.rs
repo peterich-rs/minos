@@ -2470,7 +2470,7 @@ impl AgentGlue {
         Ok(minos_protocol::AppendConversationMessageResponse { message_seq })
     }
 
-    // ── Git work-unit service (Phase 1–3) ─────────────────────────────────
+    // ── Git work-unit service ─────────────────────────────────────────────
 
     async fn resolve_git_checkout_path(
         &self,

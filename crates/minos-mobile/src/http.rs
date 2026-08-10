@@ -642,7 +642,7 @@ impl MobileHttpClient {
         }
     }
 
-    /// `client_request_id` is the Hub Intent Outbox id (C5.3); sent when non-empty.
+    /// `client_request_id` is the Hub Intent Outbox id; sent when non-empty.
     pub async fn submit_approval_decision(
         &self,
         access_token: &str,
@@ -1690,7 +1690,7 @@ impl MobileHttpClient {
         }
     }
 
-    /// `POST …/reactions/toggle` — Hub reaction SSOT (B6 requires client_op_id).
+    /// `POST …/reactions/toggle` — Hub reaction SSOT (`client_op_id` required).
     pub async fn toggle_reaction(
         &self,
         access_token: &str,

@@ -8,7 +8,7 @@
 |----|-----|
 | 源码路径 | `apps/desktop/` |
 | 产品定位 | **Conversation 协作工作台**（Timeline 主舞台；Agent 为对话内 **bot 成员**；Session/Approval 为 Attention）。**account-first** 登录即绑定本机 Host 控制权。手机远程驱动 bot 依赖 **Host online**（`/ws/host`）；人类多端聊天依赖 **Account IM**（`/ws/client` + Hub）。见 [ADR 0021](adr/0021-agent-as-conversation-bot-participant.md) |
-| 当前阶段 | **Daemon-backed**：Tauri 嵌 daemon。**根门禁 account-first**：`hydrateAuth` → 无 session 则 `LoginPage`。登录后 `ensureCloudConnection`（host link + dial `/ws/host`）。**双角色**：Account UI → `/ws/client` 发/收 Hub 消息；daemon → `/ws/host` 作 bot runtime。**Online 组合**：主状态 = Account IM sync（`accountSyncStatus` / `/ws/client`）；次状态 = Host readiness（`cloudStatus` / `hubOnline`）。禁止仅 Host live 显示可发送 Online。无 Link/Unlink 主路径。Hub `conversation_id` 透传 Host（禁止假 Direct session） |
+| 当前阶段 | **Daemon-backed**：Tauri 嵌 daemon。**根门禁 account-first**：`hydrateAuth` → 无 session 则 `LoginPage`。登录后 `ensureCloudConnection`（host link + dial `/ws/host`）。**双角色**：Account UI → `/ws/client` 发/收 Hub 消息；daemon → `/ws/host` 作 bot runtime。**Online 组合**：主状态 = Account IM sync（`accountSyncStatus` / `/ws/client`）；次状态 = Host readiness（`cloudStatus` / `cloudOnline`）。禁止仅 Host live 显示可发送 Online。无 Link/Unlink 主路径。Hub `conversation_id` 透传 Host（禁止假 Direct session） |
 | 视觉 | 暖色多栏（参考 `res/desktop.jpeg` 气质，非客服 Inbox 语义） |
 | 产品 spec | [2026-07-18-desktop-product-experience.md](superpowers/specs/2026-07-18-desktop-product-experience.md) |
 | 状态拆分 spec | [2026-07-21-desktop-state-by-consumption.md](superpowers/specs/2026-07-21-desktop-state-by-consumption.md)（**P0–P4 done**；P5 cleanup reviewed；编码入口 §18） |
@@ -206,12 +206,12 @@ apps/desktop/
         im-cloud-sync.ts         # Hub shell upsert + user/agent_result Outbox (host_projection uplink)
         im-outbox.ts             # durable Tauri SQLite Outbox (user_message | agent_result | reaction_toggle | approval_resolve); intent lanes
         im-cloud-inbound.ts      # Hub cold pull → TimelineMessage[] (no daemon append)
-        hub-timeline.ts          # mergeHubAndLocalTimeline (Hub chat + local tool/git; same-id only)
-        hub-cursors.ts           # per-topic topic_seq resume_after (localStorage)
-        hub-realtime.ts          # Sync SM + account/conversation Subscribe + SnapshotRequired
-        hub-digest-cache.ts      # Hub list digests: hydrate once, live patchOne
-        conversation-list-merge.ts # daemon rows ∥ Hub digests (isHubImMode ≠ host-linked)
-        im-hub-bridge.ts         # auth → realtime → timeline + rail digest patch
+        cloud-timeline.ts          # mergeCloudAndLocalTimeline (Hub chat + local tool/git; same-id only)
+        cloud-cursors.ts           # per-topic topic_seq resume_after (localStorage)
+        cloud-realtime.ts          # Sync SM + account/conversation Subscribe + SnapshotRequired
+        cloud-digest-cache.ts      # Hub list digests: hydrate once, live patchOne
+        conversation-list-merge.ts # daemon rows ∥ Hub digests (isCloudImMode ≠ host-linked)
+        im-cloud-bridge.ts         # auth → realtime → timeline + rail digest patch
         # 协作气泡：docs/superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md
         supabase.ts              # optional Supabase email/password IdP
         mock-data.ts
@@ -423,7 +423,7 @@ minos_local_read_session_raw_history / subscribe_ingest
 | Raw(approval/*) | `approval` | 审批卡 |
 | Raw(其它) | 丢弃 | 不进 timeline |
 
-**Conversation 主时间线**：Linked 会话以 **Hub 协作气泡** 为 SSOT；本地 daemon `chat_messages` 提供 tool/git 与未上行 agent-result 缺口填充（**同 id 相等**，禁止 body 软去重）。Desktop-native 回合：daemon 本地 `agent-result:…` + Outbox **`host_projection`** 上行（规范 id）；Mobile `client_live` 回合由 Hub projector 写气泡。见 [Hub 协作消息 SSOT](superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md) 与 [IM Reliability](superpowers/specs/2026-08-03-im-reliability-program/README.md)。  
+**Conversation 主时间线**：Linked 会话以 **Hub 协作气泡** 为 SSOT；本地 daemon `chat_messages` 是工作台投影（tool/git 等），**不是**协作用户消息的第二写权威。`sendMessage`：optimistic `sending` → Account Outbox `AppendMessage` → **仅 ChatSendAck / durable echo 后** `sent`（`message_seq` 来自 Hub）；可选再投影到本地 daemon。禁止本地 append 成功即标 `sent`。Mobile `client_live` 同理。见 [Hub 协作消息 SSOT](superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md) 与 [IM Reliability](superpowers/specs/2026-08-03-im-reliability-program/README.md)。  
 **Session transcript** 仍只认 Host（user / assistant / tool / reasoning），**不含**把全过程 tool 流水写进协作气泡——与 TUI 分层一致。
 
 ### Conversation timeline（messenger 气泡）

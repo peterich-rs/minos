@@ -72,6 +72,19 @@ DaemonInner {
 
 ## Relay 连接 (`src/relay_client.rs`)
 
+### BotInboxDelivery 账本（`bot_delivery_ledger`）
+
+Hub→Host 的 bot 投递是 at-least-once。Host 用本地 SQLite 表 `bot_delivery_ledger` 做有效 exactly-once 注入：
+
+| status | 含义 |
+|--------|------|
+| `received` | 已见 delivery_id，inject 进行中 |
+| `injected` | 已注入本地 session/turn（可重放 DeliveryAccepted） |
+| `rejected` | 终态拒绝（可重放 DeliveryRejected） |
+| `completed` | 可选终态（turn 完成） |
+
+重启或缓存淘汰后，同一 `delivery_id` 不会二次 inject agent 副作用。实现：`store/bot_delivery_ledger.rs` + `relay_client` 消费路径。
+
 ### 连接生命周期
 
 1. 等待 host 安装令牌（poll + Notify）

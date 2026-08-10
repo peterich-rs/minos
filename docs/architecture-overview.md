@@ -8,6 +8,21 @@ Minos 是一个 **以 Conversation 协作为核心** 的远程 AI 编码协作�
 
 **产品主轴是消息驱动的聊天协作**；HostCommand / `/ws/host` 是 bot runtime 传输，不是协作主协议。决策见 [ADR 0021](adr/0021-agent-as-conversation-bot-participant.md)；投递模型见 [agent-participant-delivery](superpowers/specs/2026-08-09-agent-participant-delivery.md)；**全局 bot 身份 / 数字肉身**见 [global-bot-identity-design](superpowers/specs/global-bot-identity-design.md)；消息体系 SSOT 见 [architecture-messaging.md](architecture-messaging.md)。
 
+## Glossary
+
+文档、代码与运维讨论统一使用下列术语。`minos-backend` 是服务名，客户端可以把远程边界称为 **Cloud**；**Hub** 只描述该服务承担的产品角色，不是第二个服务。
+
+| 术语 | 定义 |
+|------|------|
+| **Backend / Cloud（后端 / 云端）** | `minos-backend`：账户、会话、协作消息、实时投递与 Agent 编排的中央服务和权威持久化边界。客户端可将这一远程边界称为 Cloud。 |
+| **Hub** | Backend 作为中央协作权威时的产品角色。它不是独立可部署服务，也不是新的源代码命名空间。 |
+| **Host / Daemon（主机 / 守护进程）** | 用户机器上的 `minos-daemon`。它拥有本地 runtime 执行与原始 runtime 数据，但不是跨端协作消息的权威。 |
+| **Canonical source of truth（权威事实源）** | 唯一有权决定并持久化某项事实的所有者；缓存、本地镜像和 projection 都从属于它。SSOT 只是这一术语的缩写。 |
+| **Durable event（可重放持久事件）** | 写入 `durable_event_log`、按 topic sequence 排序并可重放的事件。它不同于任意持久化数据库行，也不同于 ephemeral stream event。 |
+| **Ingest（原始事件接入）** | 经校验后把 Host 或外部的原始 runtime 事件写入 raw-event 路径；不是泛指任意消息接收。 |
+| **Projection（投影）** | 由明确的权威来源派生、可替换的视图，例如 UI timeline 或 agent-result 气泡。投影不能形成第二权威。 |
+| **Fan-out（多端扇出）** | 将一个已提交的领域事件一对多投递。local delivery、bus publication 与 push dispatch 是不同扇出通道，语义不同时必须明确命名。 |
+
 ## 顶层架构
 
 ```

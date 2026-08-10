@@ -345,7 +345,7 @@ impl ApprovalService for DefaultApprovalService {
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
 
-        // C5.3: same client_request_id retry → return prior success (no re-dispatch).
+        // Same client_request_id retry → return prior success (no re-dispatch).
         if let Some(ref cid) = client_request_id {
             if let Some(existing) =
                 store::approval_requests::get_by_client_request_id(&self.store, cid).await?

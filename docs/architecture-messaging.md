@@ -87,7 +87,7 @@ Desktop：主舞台是 **Timeline + Composer**；Session / Approval 是侧栏或
 | **Bot membership** | 某 conversation 的 bot 成员 | `conversation_agent_members` | 同左 |
 | **Session** | bot 在 conversation 内执行上下文 | `agent_sessions` / daemon `sessions` | 同左 |
 | **Participant** | human ∪ bot 统一读模型 | `…/participants` API | members + agent_members 聚合 |
-| **Agent inbox / Bot mailbox** | bot 侧投递队列（幂等 intent） | `store/agent_dispatch_queue.rs`、`plan_agent_deliveries`、`try_agent_dispatch` | **`bot_message_deliveries`**（历史名 `agent_dispatch_queue` 已退役） |
+| **Agent inbox / Bot mailbox** | bot 侧投递队列（幂等 intent） | `agent_inbox` 规划 + `store/agent_dispatch_queue.rs`（`enqueue_in_tx` 与消息同事务）；`try_agent_dispatch` 仅作已提交消息 re-drive | **`bot_message_deliveries`**（历史名 `agent_dispatch_queue` 已退役） |
 | **delivery_id** | inbox 行主键 | `dispatch_id` 列可别名 | `bot_message_deliveries.dispatch_id` |
 | **BotInboxDelivery** | Hub→Host 邮箱投递帧 | `ServerFrame::BotInboxDelivery` | `/ws/host` |
 | **AppendMessage** | Account 协作消息主写 | `ClientFrame::AppendMessage` → `send_message` use case | `/ws/client` |
@@ -288,28 +288,37 @@ created_at_ms, read_at_ms?, resolved_at_ms?
 **目标写路径（participant delivery；[规范](superpowers/specs/2026-08-09-agent-participant-delivery.md)）**：
 
 ```
-POST send-message (Account)
-  → parse @tokens against conversation participants only  // human ∪ agent
+AppendMessage / POST send-message (Account)
+  → client sends structured mentions (human ∪ bot membership ids; optional start/length)
+  → Hub validates membership only (body never decides delivery targets)
   → TX: chat_messages
        + mention targets (account* and/or agent*)
        + social durable + outbox
-       + Agent inbox rows when bot delivery rules match
+       + bot_message_deliveries when bot delivery rules match
   → Durable ConversationMessageAppended (conversation:*)
   → Account digests (account:*) for human members
   → Human: unread / Push
   → Bot: Agent inbox worker → runtime port (Host) → agent reply message
 ```
 
-**现状**：`chat_message_mentions` 为多态 SSOT（`target_kind ∈ {account,agent}` + `ordinal` 保序）；发送路径 `extract_participant_mentions` 写 mention 行，`plan_agent_deliveries` 只读结构化 `mentioned_agent_ids` / reply / sole-agent bare（**文本不是投递目标**）。HostCommand 仅是 Host runtime port 实现细节，不是产品协作原语。
+**投递选择（正文永不参与）**：
+
+1. `reply_to` 指向 agent 气泡（仅 human 发送者）→ 该 bot  
+2. 结构化 `mentioned_agent_ids`（membership 校验后）→ 每个唯一 bot  
+3. sole-agent：membership 恰 1 human + 1 active bot，且**无**结构化 agent mentions → 该 bot  
+4. 否则不 enqueue bot inbox  
+
+`chat_message_mentions` 为多态权威表（`target_kind ∈ {account,agent}` + `ordinal` 保序）。HostCommand 仅是 Host runtime port 实现细节，不是产品协作原语。
 
 不变量：
 
 - **只能 @ 当前 conversation participants**（人 ∈ `conversation_members`，bot ∈ `conversation_agent_members`）。  
+- **正文不决定投递对象**；客户端负责解析并发送结构化 mentions；服务端只做 membership 校验与房规。  
 - 发送者对自己的 @ 不计入自己的 mention 未读。  
 - 撤回后 mention 随消息处理；规划上 **recall 修正未读/mention 计数**。  
 - `message_source=host_projection|system`：**永不**再投递 agent inbox（防环）。  
-- 未匹配的 agentish `@` **不得** sole-route 到错误 bot。  
-- 后续：`@everyone` / 角色 @；wire 上 `mentions: [{kind,id}]`。
+- 客户端校验未匹配的 agentish `@`；服务端不得用正文 soft-route 到错误 bot。  
+- wire：`mentions: [{kind, id, start?, length?}]`。
 
 #### 3.4.3 Approval ≈ 特殊 @
 
@@ -536,18 +545,19 @@ Push **只负责唤醒**；正文一致性仍靠 Durable + HTTP 同步。
 ```
 BEGIN
   校验权限 / 幂等键
-  写业务表 (conversation_messages | agent_sessions | host_commands | …)
+  写业务表 (chat_messages | agent_sessions | host_commands | …)
   APPEND durable_event_log (topic, topic_seq++)
   ENQUEUE outbox_events
+  [client_live] ENQUEUE bot_message_deliveries  -- 与用户气泡同事务
 COMMIT
-→ OutboxDispatcher 认领 → RealtimeFanout → 本地会话 / Redis bus
+→ OutboxDispatcher / agent_dispatch worker → RealtimeFanout / BotInboxDelivery
 ```
 
 这就是业界 **Transactional Outbox** 标准解：业务与投递原子一致，避免「库已写但推丢」或「推了库没写」。
 
-**社交消息路径（已对齐）**：`DefaultConversationService::send_message` / `recall_message` 与 agent 气泡写入在同一事务内完成 `chat_messages` + `durable_event_log` + `outbox_events`（`store/social/delivery::ensure_social_message_delivery_in_tx`）。commit 后才 `publish_durable_event_by_id`；publish 失败由 OutboxDispatcher 重试。确定性 durable `event_id` 使 `client_message_id` 幂等重试可修复「仅插入业务表、未写 durable」的历史空洞。
+**社交消息路径（已对齐）**：`DefaultConversationService::send_message` 在同一事务内完成 `chat_messages` + mentions + `durable_event_log` + social `outbox_events` + **`bot_message_deliveries`（当房规命中）**。commit 后：social fanout + wake agent-dispatch worker + `ChatSendAck`。`try_agent_dispatch` 仅用于**已提交**消息的 re-drive（host online force 等）。规划在 `agent_inbox`；`enqueue_in_tx` 保证与气泡原子。Bot 气泡路径同理可 co-commit bot→bot hops。
 
-参考实现：`agent_sessions` / `host_commands` 同模板；社交写入口见 `conversations/use_case.rs`、`http/v1/social.rs`。
+参考实现：`conversations/use_case.rs`、`agent_inbox.rs`、`store/agent_dispatch_queue.rs`、`http/v1/social.rs`。
 
 ### 5.2 Fanout 引擎
 
@@ -783,17 +793,17 @@ Hub SSOT 收敛：
 | Agent 表情互动 | teamwork MCP `react_to_message` → daemon 本地 reaction | Host workbench | ✅ **硬门禁**：仅允许对 **@ 了该 agent** 的消息；actor_kind=`agent` |
 | Session 生命周期 | `session_lifecycle` job：失联 host → session `failed` + durable end；watch TTL → 失败气泡 + remove | Backend **B5** | ✅ 非 COUNT-only |
 
-**Desktop Sync 状态机**（`hub-realtime.ts`）：`Disconnected → Connecting → Syncing → Live`；per-topic `topic_seq` 持久化 `localStorage`（`minos.hub.topic_cursors.v1`）；重连 `Subscribe { resume_after }`；`SnapshotRequired` → **range reconcile**（`after_seq=maxLoaded` forward fill + latest page merge，保留已加载窗口；禁止 clear-only）。`focusedConversationId` ≠ timeline `hasWindow`：`loadTimeline` hydrate-only（不写 focus、不 mark-read）；focus/mark-read 在 Timeline 打开路径 + focused 入站 400ms debounce。
+**Desktop Sync 状态机**（`cloud-realtime.ts`）：`Disconnected → Connecting → Syncing → Live`；per-topic `topic_seq` 持久化 `localStorage`（`minos.cloud.topic_cursors.v1`）；重连 `Subscribe { resume_after }`；`SnapshotRequired` → **range reconcile**（`after_seq=maxLoaded` forward fill + latest page merge，保留已加载窗口；禁止 clear-only）。`focusedConversationId` ≠ timeline `hasWindow`：`loadTimeline` hydrate-only（不写 focus、不 mark-read）；focus/mark-read 在 Timeline 打开路径 + focused 入站 400ms debounce。
 
 **Phase 6.0（已落地）**：
 
 - Postgres 社交 schema 对齐 SQLite：`agents`（`source` / `host_runtime` 唯一索引）、`chat_messages`、`chat_message_mentions`、`conversation_agent_members`、friends、`raw_events` / `sessions`（latest-only wipe 升级）  
-- Desktop Hub 重建 / 打开 / loadTimeline **统一** `mergeHubAndLocalTimeline`（禁止 quiet-tail 把本地 chat 气泡合回）  
+- Desktop Hub 重建 / 打开 / loadTimeline **统一** `mergeCloudAndLocalTimeline`（禁止 quiet-tail 把本地 chat 气泡合回）  
 - 删除残留 dual-write API：`daemon_append_conversation_message`、timeline 全量 project、agent dual-write no-op、hub→daemon append 路径  
 
 **已收敛（正确性地基）**：
 
-- 社交写路径 Transactional Outbox（`chat_messages` + attachments + durable + outbox 同事务）  
+- 社交写路径 Transactional Outbox（`chat_messages` + attachments + durable + social outbox + `bot_message_deliveries` 同事务；commit 后 fanout/wake/Ack）  
 - Hub `chat_messages.message_seq` + `messages/query` `before_seq` / `after_seq`  
 - `conversation_reads.last_read_seq` 作为未读边界；mark-read 提交 **observed** `read_up_to_message_seq`  
 - `topic_metadata` 序号权威 + retention floor + Subscribe replay/live barrier  

@@ -7,7 +7,6 @@ import 'package:minos/infrastructure/app_paths.dart';
 /// Local cache for agent launch preferences on this device.
 ///
 /// **Product bot identity SSOT is Hub `agents`** (global bot user + digital body).
-/// See `docs/superpowers/specs/global-bot-identity-design.md`.
 /// This file may still hold device-local drafts/cache, but must not mint a
 /// second multi-end bot identity. Prefer Hub register/update + membership.
 

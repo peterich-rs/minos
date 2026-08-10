@@ -95,14 +95,14 @@ send_message (Account, message_source=client_live)
 
 | Priority | Condition | Deliver to |
 |----------|-----------|------------|
-| 1 | `reply_to` 指向 agent 消息且可解析 agent | 该 agent（复用 session 若有） |
-| 2 | 正文结构化/解析出的 agent mentions | 每个唯一 agent（multi-@ fan-out） |
-| 3 | group、恰 1 human + 1 agent、无显式 @ | 该 sole agent（auto-route） |
+| 1 | `reply_to` 指向 agent 消息且可解析 agent（仅 human 发送者） | 该 agent（复用 session 若有） |
+| 2 | 客户端结构化 `mentioned_agent_ids`（Hub membership 校验后） | 每个唯一 agent（multi-@ fan-out） |
+| 3 | group、恰 1 human + 1 active agent、**无**结构化 agent mentions | 该 sole agent（membership 房规） |
 | else | — | 不 enqueue agent inbox |
 
-未匹配的「像 agent 的 @」且无成员：用户可见失败（不静默）。
+**正文永不决定投递对象。** 客户端解析 roster 并发送结构化 mentions；Hub 只校验 membership 与上表房规。未匹配的 agentish `@` 由客户端拒绝或提示；Hub 不得从正文 soft-route 到错误 bot。
 
-**Membership-first（已落地）**：无 silent auto-attach。`@codex` 等 host_runtime token 若会话 roster 无对应 bot 成员 → 用户可见失败（`no_agents_in_conversation` / `agent_not_in_conversation`），不暗挂。显式成员变更走 participants / agents/add；`POST /agents/ensure-host-runtime` 只 ensure agent registry 行，不自动 join 会话。
+**Membership-first（已落地）**：无 silent auto-attach。结构化 bot mention 若会话 roster 无对应 bot 成员 → 用户可见失败（`no_agents_in_conversation` / `agent_not_in_conversation`），不暗挂。显式成员变更走 participants / agents/add；`POST /agents/ensure-host-runtime` 只 ensure agent registry 行，不自动 join 会话。
 
 ### 3.4 Desktop-native vs client_live
 
