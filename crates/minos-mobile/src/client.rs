@@ -1170,7 +1170,7 @@ impl MobileClient {
 
     /// Submit a user approval decision back to the backend relay.
     ///
-    /// `client_request_id` is the Hub Intent Outbox id (C5.3). When `None`, a
+    /// `client_request_id` is the Hub Intent Outbox id. When `None`, a
     /// fresh id is generated so the wire body never hardcodes null (retries
     /// from callers that stable-id should pass the same value).
     pub async fn send_approval_decision(
