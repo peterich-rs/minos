@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use minos_protocol::{
     ChatMessageReplySummary, ChatMessageSummary, ConversationKind, ConversationSummary,
-    FriendRequestStatus, MessageSender, SenderType, UserSummary,
+    FriendRequestStatus, MessageSender, UserSummary,
 };
 
 use crate::{
@@ -196,11 +196,7 @@ impl SocialService {
                 })
                 .transpose()?;
             let sender = sender_summary(&row, &profiles, &agents)?;
-            let sender_type = if row.sender_type == "agent" {
-                SenderType::Agent
-            } else {
-                SenderType::User
-            };
+            let sender_type = ChatMessageSummary::sender_type_from(&sender);
             output.push(ChatMessageSummary {
                 message_id: row.message_id,
                 conversation_id: row.conversation_id,
@@ -300,10 +296,10 @@ fn bot_sender_summary(agent: Option<&AgentRow>, agent_id: &str) -> MessageSender
         Some(agent) => {
             let label = {
                 let d = agent.display_name.trim();
-                if !d.is_empty() {
-                    d
-                } else {
+                if d.is_empty() {
                     agent.name.trim()
+                } else {
+                    d
                 }
             };
             let display_name = if label.is_empty() {

@@ -928,7 +928,6 @@ impl From<AgentDispatchSqlRowPg> for AgentDispatchRow {
     }
 }
 
-
 /// Default lease TTL for a host mailbox claim (ms).
 pub const DEFAULT_LEASE_TTL_MS: i64 = 120_000;
 

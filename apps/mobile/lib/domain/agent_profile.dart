@@ -206,9 +206,17 @@ class AgentProfile {
 
   factory AgentProfile.fromJson(Map<String, Object?> json) {
     final id = json['id'] as String;
+    // agentId is required on the wire/cache shape (Hub bot id or local draft id).
+    // Older device-local cache rows written before agentId may omit it; mint a
+    // stable local placeholder so offline drafts still load (not multi-end SSOT).
+    final rawAgentId = (json['agentId'] as String?)?.trim();
+    final agentId =
+        (rawAgentId != null && rawAgentId.isNotEmpty)
+            ? rawAgentId
+            : _localDraftAgentId(id);
     return AgentProfile(
       id: id,
-      agentId: json['agentId'] as String? ?? _generateAgentId(id),
+      agentId: agentId,
       name: json['name'] as String? ?? 'Agent',
       description: json['description'] as String? ?? '',
       runtimeAgent: _agentNameFromJson(json['runtimeAgent'] as String?),
@@ -383,8 +391,10 @@ AgentReasoningEffort _reasoningEffortFromJson(String? value) {
   };
 }
 
-/// Generate a stable agentId from the profile id for backward compatibility
-/// with profiles created before agentId was introduced.
-String _generateAgentId(String profileId) {
+/// Stable local placeholder when device cache lacks `agentId`.
+///
+/// Used only for offline draft rows that never registered with Hub.
+/// Not a multi-end identity; Hub `agents.agent_id` is bot identity SSOT.
+String _localDraftAgentId(String profileId) {
   return 'bot-$profileId';
 }

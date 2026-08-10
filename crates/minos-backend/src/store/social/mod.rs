@@ -383,18 +383,9 @@ mod tests {
     async fn insert_message_persists_agent_mentions() {
         let pool = memory_pool().await;
         let (conversation_id, alice, bob, _carol) = seed_group(&pool).await;
-        let agent = register_agent(
-            &pool,
-            &alice,
-            "Codex",
-            "",
-            "codex",
-            "",
-            None,
-            T0,
-        )
-        .await
-        .unwrap();
+        let agent = register_agent(&pool, &alice, "Codex", "", "codex", "", None, T0)
+            .await
+            .unwrap();
         add_agent_to_conversation(&pool, &conversation_id, &agent.agent_id, &alice, T0)
             .await
             .unwrap();

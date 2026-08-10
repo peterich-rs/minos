@@ -3,22 +3,21 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use minos_agent_runtime::{
-    AgentLaunchMode, AgentManager, AgentRuntimeConfig, InstanceCaps, ManagerEvent, RawIngest,
-    SessionPolicies, SessionState,
+    AgentManager, AgentRuntimeConfig, InstanceCaps, ManagerEvent, RawIngest, SessionPolicies,
+    SessionState,
 };
 use minos_chat_store::mcp_socket::{SocketRequest, SocketResponse};
 use minos_codex_protocol::SkillsListResponse as CodexSkillsListResponse;
 use minos_domain::{AgentName, MinosError};
 use minos_protocol::{
-    AgentDispatchRequest, AgentDispatchResponse, AgentLaunchMode as ProtoAgentLaunchMode,
-    ApprovalDecisionRequest, CloseReason as ProtoCloseReason, CloseSessionRequest,
-    GetSessionParams, GetSessionResponse, HostSkillError, HostSkillSummary, HostSkillsEntry,
-    InterruptSessionRequest, ListHostSkillsRequest, ListHostSkillsResponse,
-    ListHostWorkspacesRequest, ListHostWorkspacesResponse, ListSessionsParams,
-    ListSessionsResponse, LocalConversationEvent, LocalIngestFrame, LocalManagerEvent,
-    PauseReason as ProtoPauseReason, SendUserMessageRequest, SessionState as ProtoSessionState,
-    SessionSummary, StartAgentRequest, StartAgentResponse, WriteHostSkillConfigRequest,
-    WriteHostSkillConfigResponse,
+    AgentDispatchRequest, AgentDispatchResponse, ApprovalDecisionRequest,
+    CloseReason as ProtoCloseReason, CloseSessionRequest, GetSessionParams, GetSessionResponse,
+    HostSkillError, HostSkillSummary, HostSkillsEntry, InterruptSessionRequest,
+    ListHostSkillsRequest, ListHostSkillsResponse, ListHostWorkspacesRequest,
+    ListHostWorkspacesResponse, ListSessionsParams, ListSessionsResponse, LocalConversationEvent,
+    LocalIngestFrame, LocalManagerEvent, PauseReason as ProtoPauseReason, SendUserMessageRequest,
+    SessionState as ProtoSessionState, SessionSummary, StartAgentRequest, StartAgentResponse,
+    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::SessionEndReason;
 use tokio::sync::{broadcast, watch};
@@ -450,10 +449,6 @@ impl AgentGlue {
         &self,
         req: StartAgentRequest,
     ) -> Result<StartAgentResponse, MinosError> {
-        // Plan note (C16): `Jsonl` is treated identically to `Server` because
-        // the JSONL exec path was retired in C18. The mode field stays in the
-        // wire shape for forward-compatibility but is effectively ignored.
-        let _mode = req.mode.map_or(AgentLaunchMode::Server, runtime_mode);
         // An empty `workspace` falls back to the daemon's default workspace
         // dir for clients (mobile pre-Phase-D) that have not been updated to
         // pick a directory yet.
@@ -543,7 +538,6 @@ impl AgentGlue {
         delivery_id: Option<String>,
         bot_id: Option<String>,
     ) -> Result<StartAgentResponse, MinosError> {
-        let _mode = req.mode.map_or(AgentLaunchMode::Server, runtime_mode);
         let workspace = resolve_workspace(&self.default_workspace, &req.workspace);
         let launch = self
             .resolve_launch_options(
@@ -722,7 +716,10 @@ impl AgentGlue {
                 .as_deref()
                 .map(str::trim)
                 .filter(|s| !s.is_empty()),
-            req.bot_id.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+            req.bot_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty()),
         ) {
             self.completion
                 .note_mailbox_delivery(&req.session_id, delivery, bot)
@@ -3261,8 +3258,7 @@ impl AgentGlue {
                 .map(|b| b.display_name)
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| agent_name.to_owned());
-            let briefing =
-                crate::roster::format_roster_briefing(&bot_id, &self_label, &rows);
+            let briefing = crate::roster::format_roster_briefing(&bot_id, &self_label, &rows);
             if let Some(merged) = crate::roster::merge_launch_instructions(
                 launch.as_ref().and_then(|l| l.instructions.clone()),
                 &briefing,
@@ -3473,13 +3469,6 @@ fn apply_test_ws_override(cfg: &mut AgentRuntimeConfig) {
         url::Url::parse(&raw)
             .unwrap_or_else(|error| panic!("invalid MINOS_TEST_CODEX_WS_URL `{raw}`: {error}")),
     );
-}
-
-fn runtime_mode(mode: ProtoAgentLaunchMode) -> AgentLaunchMode {
-    match mode {
-        ProtoAgentLaunchMode::Jsonl => AgentLaunchMode::Jsonl,
-        ProtoAgentLaunchMode::Server => AgentLaunchMode::Server,
-    }
 }
 
 fn resolve_workspace(default_workspace: &std::path::Path, workspace: &str) -> PathBuf {
@@ -4443,11 +4432,7 @@ async fn handle_daemon_mcp_request(
                     let runtime = r
                         .runtime_agent
                         .clone()
-                        .or_else(|| {
-                            r.bot_id
-                                .strip_prefix("local-rt-")
-                                .map(str::to_owned)
-                        })
+                        .or_else(|| r.bot_id.strip_prefix("local-rt-").map(str::to_owned))
                         .unwrap_or_else(|| r.bot_id.clone());
                     Ok(serde_json::json!({
                         "bot_id": r.bot_id,
@@ -4910,12 +4895,13 @@ async fn handle_daemon_mcp_request(
             } else {
                 ("user", None)
             };
-            let (sender_role, session_id, bot_id_opt) =
-                if sender_role == "agent" && (source_session_id.is_none() || bot_id_opt.is_none()) {
-                    ("user", None, None)
-                } else {
-                    (sender_role, source_session_id.as_deref(), bot_id_opt)
-                };
+            let (sender_role, session_id, bot_id_opt) = if sender_role == "agent"
+                && (source_session_id.is_none() || bot_id_opt.is_none())
+            {
+                ("user", None, None)
+            } else {
+                (sender_role, source_session_id.as_deref(), bot_id_opt)
+            };
             let message_seq = store
                 .upsert_conversation_message(
                     &conversation_id,
@@ -5669,7 +5655,11 @@ async fn persist_thread_parent_rows_inner(
             }
         },
     };
-    let bot_id_opt = if bot_id.is_empty() { None } else { Some(bot_id) };
+    let bot_id_opt = if bot_id.is_empty() {
+        None
+    } else {
+        Some(bot_id)
+    };
     if let Err(e) = store
         .insert_session_in_conversation(
             session_id,
@@ -6125,11 +6115,7 @@ mod tests {
         seed_conversation(glue, conversation_id).await;
         let mut members = Vec::new();
         for a in agents {
-            let bot_id = glue
-                .store
-                .ensure_local_runtime_bot(a, 1)
-                .await
-                .unwrap();
+            let bot_id = glue.store.ensure_local_runtime_bot(a, 1).await.unwrap();
             members.push(crate::store::ConversationAgentMemberInput {
                 bot_id,
                 brief: None,

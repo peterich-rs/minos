@@ -47,7 +47,7 @@ pub fn router() -> Router<BackendState> {
     Router::new()
         .route("/host/bootstrap/nonce", post(post_bootstrap_nonce))
         .route("/host/installations/self", post(post_installations_self))
-        // Host realtime: Authorization: Bearer hit_* on /ws/host only (no ticket).
+    // Host realtime: Authorization: Bearer hit_* on /ws/host only (no ticket).
 }
 
 async fn post_bootstrap_nonce(

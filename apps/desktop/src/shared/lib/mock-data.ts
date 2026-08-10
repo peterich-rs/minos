@@ -331,8 +331,9 @@ export const conversations: Conversation[] = [
     messageCount: 14,
     boardColumn: "running",
     agentSessionCount: 2,
+    // participatingBots = roster SSOT; participatingAgents derived for host tokens.
     participatingBots: [{ botId: "local-rt-codex", name: "codex", runtime: "codex" }, { botId: "local-rt-claude", name: "claude", runtime: "claude" }],
-    participatingAgents: ["codex", "claude"],
+    participatingAgents: ["codex", "claude"], // derived from participatingBots.runtime
     runningCount: 1,
     approvalCount: 1,
     branch: "feature/jwt-auth",

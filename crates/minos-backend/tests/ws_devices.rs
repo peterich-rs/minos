@@ -245,7 +245,9 @@ async fn connect_formal_gateway_ws(
     if role.is_account_client() {
         let acct = account_id.expect("account client connect requires an account_id");
         let ticket = issue_client_ws_ticket(relay, acct, device_id, role).await?;
-        return Ok(connect_gateway_ws_with_ticket(relay, gateway_path_for_role(role), &ticket).await?);
+        return Ok(
+            connect_gateway_ws_with_ticket(relay, gateway_path_for_role(role), &ticket).await?,
+        );
     }
     let hit = store::test_support::issue_test_host_token(&relay.pool, device_id, 0).await;
     connect_host_bearer(relay, &hit).await

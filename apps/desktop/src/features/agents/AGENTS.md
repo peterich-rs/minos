@@ -35,13 +35,15 @@ Presentation-only maps (colors, avatar tone) are fine and may fall back by agent
 
 ## `@agent` / `@profile` routing
 
-- **Membership first**: conversation roster (`participatingAgents` / Hub `…/participants` agents) is the SSOT for who may be @mentioned or started. Picker uses `buildAgentMentionOptions({ …, memberAgents })` with **roster-scoped** profiles only. Empty roster ⇒ no options. Non-member start is rejected by daemon / `resolveDispatchTargets`.
+- **Membership first**: conversation roster SSOT is **`participatingBots`** (botId + name + runtime) and Hub `…/participants` agents — not the deprecated `participatingAgents` runtime-label array. That array is derived for host-runtime ensure / badges only.
+- Picker uses `buildAgentMentionOptions({ …, memberAgents })` with **roster-scoped** profiles only. Empty roster ⇒ no options. Non-member start is rejected by `resolveDispatchTargets` (and Hub plan delivery).
+- **Composer / send path**: prefer Hub participants when Account is online (agent_id ∪ display name ∪ runtime as membership tokens). Offline: gate Host profiles by local roster tokens from `membershipTokensOfBots(participatingBots)` (fallback: deprecated `participatingAgents`). Never load the full unjoined profile directory as @ targets.
 - Within the roster, prefer CLI inventory for bare runtime mention rows. `KNOWN_AGENTS` in `shared/lib/agent-route.ts` is an **offline parse fallback only** when clis are empty — not the capability catalog, and not a bypass of membership.
-- **Bare `@agent`**: only if that runtime is a member; **reuse** the most recent top-level non-closed session for that runtime when present (desktop). Only when none exists, start a new session and convenience-bind the newest host profile for that runtime (`profile_id` when one exists).
-- **`@ProfileName` / `@p/<id>` / Hub bot display name**: bot must be a roster member; always start a **new** session with explicit `profile_id` / agent id when available. Insert `@Name` when the name is unique among roster bots + runtimes; otherwise `@p/<id>`. Runtime names win over same-named profiles at parse time.
-- Do **not** offer unjoined Host profiles or bare non-member runtimes as collab @ targets.
+- **Bare `@agent`**: only if that runtime token is a **roster member**. Desktop collab send validates via `resolveDispatchTargets` then uplinks to Hub (`client_live`); bot activation is Hub plan_agent_deliveries on the bound Host — not local silent auto-attach of non-members. Session reuse (`@agent#short`) is explicit when the user picks an existing session from the picker.
+- **`@ProfileName` / `@p/<id>` / Hub bot display name**: bot must be a roster member; named routes carry `profileId` / agent id. Insert `@Name` when the name is unique among roster bots + runtimes; otherwise `@p/<id>`. Runtime names win over same-named profiles at parse time.
+- Do **not** offer unjoined Host profiles or bare non-member runtimes as collab @ targets. Do **not** invent dual-write membership into `participatingAgents` — write bots, derive runtime labels.
 - Launch fields are **server-owned**: daemon `resolve_launch_options` loads the profile and applies model / reasoning_effort / instructions. Explicit request fields override profile fields (`explicit > profile > None`). `request.agent` must match `profile.runtime_agent`.
-- **MCP** bind the same way and honor membership: clients pass `profile_id` (or MCP `target_profile` name → id); daemon resolves launch options. Bare runtime / `target_agent` convenience-binds the newest host profile when **starting new**. Clients must not merge model/effort/instructions locally.
+- **MCP** honors membership the same way: clients pass `profile_id` (or MCP `target_profile` name → id); daemon resolves launch options. Clients must not merge model/effort/instructions locally.
 
 ## How to add a new runtime
 

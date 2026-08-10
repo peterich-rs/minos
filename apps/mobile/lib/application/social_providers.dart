@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart' show StateProvider;
 import 'package:minos/application/agent_activity_provider.dart';
 import 'package:minos/application/conversations_sort.dart';
+import 'package:minos/application/flutter_log.dart';
 import 'package:minos/application/group_agent_provider.dart';
 import 'package:minos/application/im_outbox_worker.dart';
 import 'package:minos/data/repositories/social_repository.dart';
@@ -610,8 +611,12 @@ class SocialConversation extends _$SocialConversation {
           .ackDurableApplied(topic: topic, topicSeq: seq);
     } catch (e, st) {
       // Hold cursor on failure — do not swallow without log.
-      // ignore: avoid_print
-      print('ackDurableApplied failed: $e\n$st');
+      logFlutterWarn(
+        'social_providers',
+        'ackDurableApplied failed',
+        error: e,
+        stackTrace: st,
+      );
     }
   }
 
@@ -1228,8 +1233,12 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
       }
     } catch (e, st) {
       // Do not ack on failure — resume will redeliver.
-      // ignore: avoid_print
-      print('inbox social apply failed (cursor held): $e\n$st');
+      logFlutterWarn(
+        'social_providers',
+        'inbox social apply failed (cursor held)',
+        error: e,
+        stackTrace: st,
+      );
     }
   }
 

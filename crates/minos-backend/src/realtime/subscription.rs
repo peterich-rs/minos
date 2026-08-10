@@ -156,15 +156,18 @@ impl ConnectionState {
             .any(|existing| existing == event_id)
     }
 
-    pub fn send(&self, frame: ServerFrame) -> Result<(), mpsc::error::TrySendError<ServerFrame>> {
-        self.push.try_send(frame)
+    pub fn send(
+        &self,
+        frame: ServerFrame,
+    ) -> Result<(), Box<mpsc::error::TrySendError<ServerFrame>>> {
+        self.push.try_send(frame).map_err(Box::new)
     }
 
     pub fn send_durable_event(
         &self,
         event_id: &str,
         frame: ServerFrame,
-    ) -> Result<DurableSendResult, mpsc::error::TrySendError<ServerFrame>> {
+    ) -> Result<DurableSendResult, Box<mpsc::error::TrySendError<ServerFrame>>> {
         // Already delivered to the wire (or committed to drain path).
         if self.has_seen_durable_event(event_id) {
             return Ok(DurableSendResult::AlreadySeen);
@@ -207,7 +210,7 @@ impl ConnectionState {
         if seen.iter().any(|existing| existing == event_id) {
             return Ok(DurableSendResult::AlreadySeen);
         }
-        self.push.try_send(frame)?;
+        self.push.try_send(frame).map_err(Box::new)?;
         seen.push_back(event_id.to_string());
         if seen.len() > SEEN_DURABLE_EVENT_IDS_CAPACITY {
             let _ = seen.pop_front();
@@ -342,7 +345,10 @@ impl SubscriptionManager {
 
     /// Live host connections for a specific installation id (mailbox delivery).
     #[must_use]
-    pub fn host_connections_for_device(&self, host_device_id: DeviceId) -> Vec<Arc<ConnectionState>> {
+    pub fn host_connections_for_device(
+        &self,
+        host_device_id: DeviceId,
+    ) -> Vec<Arc<ConnectionState>> {
         self.by_conn
             .iter()
             .filter_map(|entry| {

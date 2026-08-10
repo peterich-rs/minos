@@ -25,15 +25,14 @@ use minos_protocol::{
     realtime::ClientFrame, AddAgentToGroupRequest, AddGroupMemberRequest, AgentSummary,
     ApprovalDecisionRequest, AuthSummary, ChatMessageSummary, ConversationAgentMembersResponse,
     ConversationMembersResponse, ConversationParticipantsResponse, ConversationReadResponse,
-    ConversationResponse,
-    ConversationsResponse, CreateFriendRequestRequest, CreateGroupConversationRequest,
-    EnsureDirectConversationRequest, FriendRequestSummary, FriendRequestsResponse, FriendsResponse,
-    GetSessionLastSeqParams, GetSessionLastSeqResponse, HostSummary, ListAgentsResponse,
-    ListChatMessagesResponse, ListClisResponse, ListHostSkillsResponse, ListSessionsParams,
-    ListSessionsResponse, MyProfileResponse, ReadSessionParams, ReadSessionResponse,
-    RefreshResponse, RegisterAgentRequest, RemoveAgentFromGroupRequest, RemoveGroupMemberRequest,
-    SetMinosIdRequest, UpdateAgentRequest, UserSummary,
-    WriteHostSkillConfigResponse,
+    ConversationResponse, ConversationsResponse, CreateFriendRequestRequest,
+    CreateGroupConversationRequest, EnsureDirectConversationRequest, FriendRequestSummary,
+    FriendRequestsResponse, FriendsResponse, GetSessionLastSeqParams, GetSessionLastSeqResponse,
+    HostSummary, ListAgentsResponse, ListChatMessagesResponse, ListClisResponse,
+    ListHostSkillsResponse, ListSessionsParams, ListSessionsResponse, MyProfileResponse,
+    ReadSessionParams, ReadSessionResponse, RefreshResponse, RegisterAgentRequest,
+    RemoveAgentFromGroupRequest, RemoveGroupMemberRequest, SetMinosIdRequest, UpdateAgentRequest,
+    UserSummary, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::UiEventMessage;
 use openwire::websocket::WebSocket;
@@ -630,7 +629,7 @@ impl MobileClient {
         let default_reasoning_effort = default_reasoning_effort
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
-        let system_prompt = system_prompt.map(|s| s.to_string());
+        // Keep Option as-is: None → server retains current digital-body field.
         let status = status
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
@@ -867,7 +866,7 @@ impl MobileClient {
                 message_seq,
             } => {
                 if let Some(summary) = message {
-                    return Ok(summary);
+                    return Ok(*summary);
                 }
                 // Ack without full summary: synthesize a minimal committed row.
                 // Timeline hydrate will fill author/mentions from Hub Durable.
@@ -878,25 +877,28 @@ impl MobileClient {
                     message_seq,
                     "ChatSendAck without message summary; synthesizing local commit"
                 );
-                Ok(minos_protocol::ChatMessageSummary {
-                    message_id,
-                    conversation_id: ack_conversation_id,
-                    sender: minos_protocol::MessageSender::Account {
+                {
+                    let sender = minos_protocol::MessageSender::Account {
                         account_id: String::new(),
                         minos_id: String::new(),
                         display_name: String::new(),
-                    },
-                    text,
-                    created_at_ms: chrono::Utc::now().timestamp_millis(),
-                    message_seq,
-                    reply_to: None,
-                    recalled_at_ms: None,
-                    mentioned_account_ids: Vec::new(),
-                    mentioned_agent_ids: Vec::new(),
-                    sender_type: minos_protocol::SenderType::User,
-                    reactions: Vec::new(),
-                    attachments: Vec::new(),
-                })
+                    };
+                    Ok(minos_protocol::ChatMessageSummary {
+                        message_id,
+                        conversation_id: ack_conversation_id,
+                        sender: sender.clone(),
+                        text,
+                        created_at_ms: chrono::Utc::now().timestamp_millis(),
+                        message_seq,
+                        reply_to: None,
+                        recalled_at_ms: None,
+                        mentioned_account_ids: Vec::new(),
+                        mentioned_agent_ids: Vec::new(),
+                        sender_type: minos_protocol::ChatMessageSummary::sender_type_from(&sender),
+                        reactions: Vec::new(),
+                        attachments: Vec::new(),
+                    })
+                }
             }
             ChatSendWaitResult::Nack {
                 code,

@@ -63,9 +63,7 @@ impl IngestChunk {
                 .clone()
                 .unwrap_or_else(|| "agent_event".to_string()),
             payload: payload_from_raw_body(&self.ingest.body),
-            // Hub re-translates from payload; keep empty to save bandwidth.
             conversation_id: self.conversation_id.clone(),
-            projection: Vec::new(),
             first_ts_ms: self.ingest.ts_ms,
             last_ts_ms: self.ingest.ts_ms,
             byte_len: self.byte_len,
@@ -95,8 +93,6 @@ pub fn wire_chunk_from_event_row(
         kind: "agent_event".to_string(),
         payload,
         conversation_id: Some(thread.conversation_id.clone()).filter(|s| !s.is_empty()),
-        // Hub re-translates; empty projection on pull path too.
-        projection: Vec::new(),
         first_ts_ms: row.ts_ms,
         last_ts_ms: row.ts_ms,
         byte_len: event_row_body_len(row),

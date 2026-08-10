@@ -98,60 +98,56 @@ pub async fn register_agent_full(
     };
     let agent_id = format!("bot-{}", Uuid::new_v4());
     match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => {
-            sqlx::query(
-                "INSERT INTO agents (
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "INSERT INTO agents (
                     agent_id, owner_account_id, name, display_name, description, avatar_url,
                     source, status, runtime_agent, model, default_reasoning_effort, system_prompt,
                     workspace_path, created_at_ms, updated_at_ms
                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            )
-            .bind(&agent_id)
-            .bind(params.owner_account_id)
-            .bind(params.name)
-            .bind(display_name)
-            .bind(params.description)
-            .bind(params.avatar_url)
-            .bind(params.source)
-            .bind(AGENT_STATUS_ACTIVE)
-            .bind(params.runtime_agent)
-            .bind(params.model)
-            .bind(params.default_reasoning_effort)
-            .bind(params.system_prompt)
-            .bind(params.workspace_path)
-            .bind(params.now_ms)
-            .bind(params.now_ms)
-            .execute(pool)
-            .await
-            .map(|_| ())
-        }
-        StorePoolRef::Postgres(pool) => {
-            sqlx::query(
-                "INSERT INTO agents (
+        )
+        .bind(&agent_id)
+        .bind(params.owner_account_id)
+        .bind(params.name)
+        .bind(display_name)
+        .bind(params.description)
+        .bind(params.avatar_url)
+        .bind(params.source)
+        .bind(AGENT_STATUS_ACTIVE)
+        .bind(params.runtime_agent)
+        .bind(params.model)
+        .bind(params.default_reasoning_effort)
+        .bind(params.system_prompt)
+        .bind(params.workspace_path)
+        .bind(params.now_ms)
+        .bind(params.now_ms)
+        .execute(pool)
+        .await
+        .map(|_| ()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "INSERT INTO agents (
                     agent_id, owner_account_id, name, display_name, description, avatar_url,
                     source, status, runtime_agent, model, default_reasoning_effort, system_prompt,
                     workspace_path, created_at_ms, updated_at_ms
                  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
-            )
-            .bind(&agent_id)
-            .bind(params.owner_account_id)
-            .bind(params.name)
-            .bind(display_name)
-            .bind(params.description)
-            .bind(params.avatar_url)
-            .bind(params.source)
-            .bind(AGENT_STATUS_ACTIVE)
-            .bind(params.runtime_agent)
-            .bind(params.model)
-            .bind(params.default_reasoning_effort)
-            .bind(params.system_prompt)
-            .bind(params.workspace_path)
-            .bind(params.now_ms)
-            .bind(params.now_ms)
-            .execute(pool)
-            .await
-            .map(|_| ())
-        }
+        )
+        .bind(&agent_id)
+        .bind(params.owner_account_id)
+        .bind(params.name)
+        .bind(display_name)
+        .bind(params.description)
+        .bind(params.avatar_url)
+        .bind(params.source)
+        .bind(AGENT_STATUS_ACTIVE)
+        .bind(params.runtime_agent)
+        .bind(params.model)
+        .bind(params.default_reasoning_effort)
+        .bind(params.system_prompt)
+        .bind(params.workspace_path)
+        .bind(params.now_ms)
+        .bind(params.now_ms)
+        .execute(pool)
+        .await
+        .map(|_| ()),
     }
     .map_err(store_err("social::register_agent"))?;
 

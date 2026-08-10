@@ -17,7 +17,8 @@ pub enum ChatSendWaitResult {
         conversation_id: String,
         message_id: String,
         message_seq: i64,
-        message: Option<ChatMessageSummary>,
+        /// Boxed to keep the enum small (ChatMessageSummary is large on the wire).
+        message: Option<Box<ChatMessageSummary>>,
     },
     Nack {
         conversation_id: String,
@@ -48,7 +49,10 @@ impl ChatSendWaiterRegistry {
 
     /// Register a waiter. Returns `None` if this op id is already waiting
     /// (caller should treat as socket miss and use REST confirm).
-    pub fn register(&self, client_operation_id: &str) -> Option<oneshot::Receiver<ChatSendWaitResult>> {
+    pub fn register(
+        &self,
+        client_operation_id: &str,
+    ) -> Option<oneshot::Receiver<ChatSendWaitResult>> {
         let key = client_operation_id.trim();
         if key.is_empty() {
             return None;
@@ -75,7 +79,7 @@ impl ChatSendWaiterRegistry {
         conversation_id: String,
         message_id: String,
         message_seq: i64,
-        message: Option<ChatMessageSummary>,
+        message: Option<Box<ChatMessageSummary>>,
     ) {
         self.resolve(
             client_operation_id,
@@ -150,13 +154,7 @@ mod tests {
     async fn resolve_ack_delivers_to_waiter() {
         let registry = ChatSendWaiterRegistry::new();
         let rx = registry.register("op-1").expect("register");
-        registry.resolve_ack(
-            "op-1",
-            "c1".into(),
-            "m1".into(),
-            3,
-            None,
-        );
+        registry.resolve_ack("op-1", "c1".into(), "m1".into(), 3, None);
         match wait_for_result(&registry, "op-1", rx, Duration::from_secs(1)).await {
             ChatSendWaitResult::Ack {
                 message_id,
@@ -174,8 +172,7 @@ mod tests {
     async fn timeout_cancels_waiter() {
         let registry = ChatSendWaiterRegistry::new();
         let rx = registry.register("op-timeout").expect("register");
-        let result =
-            wait_for_result(&registry, "op-timeout", rx, Duration::from_millis(20)).await;
+        let result = wait_for_result(&registry, "op-timeout", rx, Duration::from_millis(20)).await;
         assert!(matches!(result, ChatSendWaitResult::Timeout));
         // Late resolve must not panic after cancel.
         registry.resolve_ack("op-timeout", "c1".into(), "m1".into(), 1, None);

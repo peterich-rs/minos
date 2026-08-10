@@ -20,6 +20,7 @@ import {
   progressForBoardColumn,
 } from "@/shared/lib/conversation-meta";
 import type { Conversation, Project } from "@/shared/lib/mock-data";
+import { runtimesOfBots } from "@/shared/lib/mock-data";
 import { syncConversationToCloud } from "@/shared/lib/im-cloud-sync";
 
 export function createConversationMutationActions(
@@ -61,6 +62,12 @@ export function createConversationMutationActions(
       if (get().source !== "daemon") {
         // Mock: append a local conversation for browser-only preview.
         const id = `mock-conv-${Date.now()}`;
+        // participatingBots is roster SSOT; participatingAgents is derived only.
+        const participatingBots = agents.map((a) => ({
+          botId: `local-rt-${a.agent}`,
+          name: a.agent,
+          runtime: a.agent,
+        }));
         const conv: Conversation = {
           id,
           projectId,
@@ -70,12 +77,8 @@ export function createConversationMutationActions(
           messageCount: 0,
           boardColumn: "backlog",
           agentSessionCount: 0,
-          participatingBots: agents.map((a) => ({
-            botId: `local-rt-${a.agent}`,
-            name: a.agent,
-            runtime: a.agent,
-          })),
-          participatingAgents: agents.map((a) => a.agent),
+          participatingBots,
+          participatingAgents: runtimesOfBots(participatingBots),
           runningCount: 0,
           approvalCount: 0,
           progress: "todo",
@@ -166,12 +169,17 @@ export function createConversationMutationActions(
       const updated = await daemonApi.updateConversation(conversationId, {
         title: trimmed,
       });
-      void syncConversationToCloud({
-        conversationId,
-        title: trimmed,
-        agentRuntimes: get().conversations.find((c) => c.id === conversationId)
-          ?.participatingAgents,
-      });
+      {
+        const c = get().conversations.find((x) => x.id === conversationId);
+        const fromBots = runtimesOfBots(c?.participatingBots);
+        void syncConversationToCloud({
+          conversationId,
+          title: trimmed,
+          // Prefer bot roster SSOT; fall back to deprecated runtime labels.
+          agentRuntimes:
+            fromBots.length > 0 ? fromBots : c?.participatingAgents,
+        });
+      }
       set((s) => ({
         conversations: patchLocalConversation(s.conversations, conversationId, {
           ...toUiConversation(

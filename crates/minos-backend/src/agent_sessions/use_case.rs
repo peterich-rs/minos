@@ -133,10 +133,10 @@ impl DefaultAgentSessionService {
             let system_prompt = nonempty_opt(&agent.system_prompt);
             let display_name = {
                 let d = agent.display_name.trim();
-                if !d.is_empty() {
-                    Some(d.to_string())
-                } else {
+                if d.is_empty() {
                     nonempty_opt(&agent.name)
+                } else {
+                    Some(d.to_string())
                 }
             };
             let id = agent.agent_id.clone();
@@ -194,10 +194,10 @@ impl DefaultAgentSessionService {
         let system_prompt = nonempty_opt(&ensured.system_prompt);
         let display_name = {
             let d = ensured.display_name.trim();
-            if !d.is_empty() {
-                Some(d.to_string())
-            } else {
+            if d.is_empty() {
                 nonempty_opt(&ensured.name)
+            } else {
+                Some(d.to_string())
             }
         };
         Ok((

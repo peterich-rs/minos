@@ -2,9 +2,14 @@
  * Pure participant-delivery target resolution (no daemon / store deps).
  * Room rules: ADR 0021 / agent-participant-delivery / global-bot-identity.
  *
- * Delivery targets are **roster-only**. Callers must pass:
- * - `participatingAgents`: conversation member tokens (runtime and/or bot name /
- *   agent_id lowercased) — never the full Host profile directory.
+ * Delivery targets are **roster-only**. Membership SSOT on Conversation is
+ * `participatingBots` (botId + name + runtime). Callers should pass
+ * `membershipTokensOfBots(conv.participatingBots)` (or Hub participant tokens)
+ * into `participatingAgents` — that field is a **flattened membership token
+ * list for resolve**, not the Conversation dual-write field.
+ *
+ * - `participatingAgents` (input): member tokens (botId / bot name / runtime,
+ *   lowercased) — never the full Host profile directory.
  * - `mentionProfiles`: only bots already on the roster (Hub participants or
  *   equivalent). Unjoined global profiles must not be included.
  *
@@ -33,9 +38,10 @@ export type DispatchTarget = {
 export type ResolveDispatchTargetsInput = {
   messageBody: string;
   /**
-   * Conversation roster membership tokens (lowercased by resolver).
-   * Prefer agent_id / bot name from Hub participants; runtime bins only when
-   * that is what the local conversation roster still stores.
+   * Flattened membership tokens for this resolve call (lowercased by resolver).
+   * SSOT on Conversation is `participatingBots`; build via
+   * `membershipTokensOfBots(participatingBots)` or Hub participant agent_id /
+   * name / runtime. Not a license to invent dual-write `participatingAgents`.
    */
   participatingAgents: string[] | undefined;
   installedAgents: ReadonlySet<string>;

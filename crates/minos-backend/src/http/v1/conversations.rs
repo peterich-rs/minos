@@ -291,7 +291,7 @@ async fn send_message(
         req.reply_to_message_id,
         req.client_message_id,
         req.message_source.unwrap_or_default(),
-        req.client_sent_at_ms.or(req.created_at_ms),
+        req.client_sent_at_ms,
         req.attachment_blob_ids,
     )
     .await
@@ -310,7 +310,7 @@ async fn send_message_command(
         req.reply_to_message_id,
         req.client_message_id,
         req.message_source.unwrap_or_default(),
-        req.client_sent_at_ms.or(req.created_at_ms),
+        req.client_sent_at_ms,
         req.attachment_blob_ids,
     )
     .await

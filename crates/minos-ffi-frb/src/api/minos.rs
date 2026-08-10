@@ -42,17 +42,17 @@ pub use minos_domain::{
 pub use minos_protocol::{
     AgentSummary, AuthSummary, ChatMessageAttachment, ChatMessageReplySummary, ChatMessageSummary,
     CloseReason, ConversationAgentMembersResponse, ConversationKind, ConversationMembersResponse,
-    ConversationParticipantsResponse,
-    ConversationReadResponse, ConversationResponse, ConversationSummary, ConversationsResponse,
-    CreateProjectRequest, CreateProjectResponse, DeleteProjectRequest, FriendRequestStatus,
-    FriendRequestSummary, FriendRequestsResponse, FriendSummary, FriendsResponse, HostSkillError,
-    HostSkillSummary, HostSkillsEntry, HostSummary, HostWorkspaceSummary, ListAgentsResponse,
-    ListChatMessagesResponse, ListHostSkillsResponse, ListHostWorkspacesResponse,
-    ListProjectSessionsParams, ListProjectSessionsResponse, ListProjectsResponse,
-    ListSessionsParams, ListSessionsResponse, MessageSender, MyProfileResponse, PauseReason,
-    ProjectSummary, ReactionActor, ReactionGroup, ReadSessionParams, ReadSessionResponse,
-    SearchUsersResponse, SenderType, SessionState, SessionSummary, StartAgentResponse,
-    ToggleReactionResponse, UpdateProjectRequest, UserSummary, WriteHostSkillConfigResponse,
+    ConversationParticipantsResponse, ConversationReadResponse, ConversationResponse,
+    ConversationSummary, ConversationsResponse, CreateProjectRequest, CreateProjectResponse,
+    DeleteProjectRequest, FriendRequestStatus, FriendRequestSummary, FriendRequestsResponse,
+    FriendSummary, FriendsResponse, HostSkillError, HostSkillSummary, HostSkillsEntry, HostSummary,
+    HostWorkspaceSummary, ListAgentsResponse, ListChatMessagesResponse, ListHostSkillsResponse,
+    ListHostWorkspacesResponse, ListProjectSessionsParams, ListProjectSessionsResponse,
+    ListProjectsResponse, ListSessionsParams, ListSessionsResponse, MessageSender,
+    MyProfileResponse, PauseReason, ProjectSummary, ReactionActor, ReactionGroup,
+    ReadSessionParams, ReadSessionResponse, SearchUsersResponse, SenderType, SessionState,
+    SessionSummary, StartAgentResponse, ToggleReactionResponse, UpdateProjectRequest, UserSummary,
+    WriteHostSkillConfigResponse,
 };
 pub use minos_ui_protocol::{
     ArtifactRef, DisplayPayload, MessageRole, SessionEndReason, SubagentStatus, UiEventMessage,
@@ -445,9 +445,7 @@ impl MobileClient {
         &self,
         conversation_id: String,
     ) -> Result<ConversationParticipantsResponse, MinosError> {
-        self.0
-            .list_conversation_participants(conversation_id)
-            .await
+        self.0.list_conversation_participants(conversation_id).await
     }
 
     pub async fn add_agent_to_conversation(

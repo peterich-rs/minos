@@ -22,6 +22,11 @@ import { useAccountStore } from "@/store/account-store";
 import type { Conversation } from "@/shared/lib/mock-data";
 import { membershipTokensOfBots } from "@/shared/lib/mock-data";
 
+/**
+ * Flattened membership tokens for resolveDispatchTargets.
+ * Prefer `participatingBots` (roster SSOT); fall back to deprecated
+ * `participatingAgents` only when bots array is empty (legacy daemon rows).
+ */
 function membershipTokensFromConv(conv: Conversation): string[] {
   const fromBots = membershipTokensOfBots(conv.participatingBots);
   if (fromBots.length > 0) return fromBots;
@@ -109,6 +114,9 @@ function commitResolvedApprovalState(
  * Load mention profiles for dispatch parse.
  * Prefer Hub conversation participants (roster SSOT). Fall back to Host profiles
  * **filtered by conversation roster** — never the full unjoined profile directory.
+ *
+ * Membership tokens prefer `participatingBots` (botId ∪ name ∪ runtime);
+ * `participatingAgents` is the deprecated runtime-label fallback only.
  */
 async function loadMentionProfiles(
   conversationId: string,
@@ -122,9 +130,12 @@ async function loadMentionProfiles(
       if (t) memberSet.add(t);
     }
   }
-  for (const a of participatingAgents ?? []) {
-    const t = a.trim().toLowerCase();
-    if (t) memberSet.add(t);
+  // Deprecated runtime labels only when bots did not contribute tokens.
+  if (memberSet.size === 0) {
+    for (const a of participatingAgents ?? []) {
+      const t = a.trim().toLowerCase();
+      if (t) memberSet.add(t);
+    }
   }
 
   // Hub participants when account is online.
@@ -514,9 +525,14 @@ export function createUseCasesActions(
       });
 
       const convTitle = conv.title;
-      const agentRuntimes =
-        conv.participatingBots?.map((b) => b.runtime) ??
-        conv.participatingAgents;
+      // Host runtime bins for cloud upsert — derived from bot roster SSOT.
+      const agentRuntimes = (() => {
+        const fromBots = conv.participatingBots
+          ?.map((b) => b.runtime.trim().toLowerCase())
+          .filter(Boolean);
+        if (fromBots && fromBots.length > 0) return fromBots;
+        return conv.participatingAgents;
+      })();
       const accountOn = hubAuthenticated();
       if (!accountOn) {
         throw new Error(
@@ -676,9 +692,13 @@ export function createUseCasesActions(
         title: conv.title,
         replyToMessageId,
         createdAtMs: retryAt,
-        agentRuntimes:
-          conv.participatingBots?.map((b) => b.runtime) ??
-          conv.participatingAgents,
+        agentRuntimes: (() => {
+          const fromBots = conv.participatingBots
+            ?.map((b) => b.runtime.trim().toLowerCase())
+            .filter(Boolean);
+          if (fromBots && fromBots.length > 0) return fromBots;
+          return conv.participatingAgents;
+        })(),
         messageSource: "client_live",
       });
       set({ actionError: null });

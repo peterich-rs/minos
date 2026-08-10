@@ -150,9 +150,13 @@ impl ConnectionPrincipal {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MentionTarget {
-    Account { account_id: String },
+    Account {
+        account_id: String,
+    },
     /// Global bot identity (`agents.agent_id` / bot_id).
-    Bot { bot_id: String },
+    Bot {
+        bot_id: String,
+    },
 }
 
 /// Launch snapshot embedded in BotInboxDelivery (body frozen at schedule time).
@@ -435,10 +439,6 @@ pub struct HostIngestChunk {
     /// formal `agent_sessions` row when the session is first projected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<String>,
-    /// Deprecated for cloud SSOT: hub re-translates from `payload`. Kept for
-    /// wire compatibility; receivers should ignore.
-    #[serde(default)]
-    pub projection: Vec<minos_ui_protocol::UiEventMessage>,
     pub first_ts_ms: i64,
     pub last_ts_ms: i64,
     pub byte_len: u64,
@@ -962,10 +962,6 @@ mod tests {
                 "params": {"delta": "hello"}
             }),
             conversation_id: Some("conv-local-1".into()),
-            projection: vec![minos_ui_protocol::UiEventMessage::Raw {
-                kind: "agent_event".into(),
-                payload_json: "{}".into(),
-            }],
             first_ts_ms: 1_760_000_000_000,
             last_ts_ms: 1_760_000_000_010,
             byte_len: 42,

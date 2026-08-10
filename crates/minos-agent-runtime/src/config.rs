@@ -251,31 +251,6 @@ fn is_executable_file(path: &Path) -> bool {
     true
 }
 
-/// Which codex driver `start_agent` should bring up. The JSONL path is
-/// retired post-Phase-C; the `Jsonl` variant is retained only for wire-shape
-/// compatibility with pre-Phase-C clients and is silently mapped to `Server`
-/// by the daemon.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum AgentLaunchMode {
-    /// Retained for backwards-compatible wire shape only. See [`AgentLaunchMode`]
-    /// docs.
-    Jsonl,
-    /// `codex app-server --listen ws://…` long-running, WebSocket-driven.
-    #[default]
-    Server,
-}
-
-impl AgentLaunchMode {
-    /// Stable string label suitable for tracing fields and log search.
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            AgentLaunchMode::Jsonl => "jsonl",
-            AgentLaunchMode::Server => "server",
-        }
-    }
-}
-
 pub const INLINE_RAW_BODY_THRESHOLD: usize = 16 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

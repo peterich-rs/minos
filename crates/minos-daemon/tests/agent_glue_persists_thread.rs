@@ -19,7 +19,7 @@ use minos_daemon::agent::AgentGlue;
 use minos_daemon::store::event_writer::EventWriter;
 use minos_daemon::store::LocalStore;
 use minos_domain::AgentName;
-use minos_protocol::{AgentLaunchMode, StartAgentRequest};
+use minos_protocol::StartAgentRequest;
 use std::sync::Arc;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -49,7 +49,6 @@ async fn start_agent_persists_thread_so_event_writer_does_not_fk_fail() {
         .start_agent(StartAgentRequest {
             agent: AgentName::Codex,
             workspace: String::new(),
-            mode: Some(AgentLaunchMode::Server),
             profile_id: None,
             model: None,
             reasoning_effort: None,

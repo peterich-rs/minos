@@ -244,7 +244,6 @@ pub async fn invoke_host_command(
             let start_req = StartAgentRequest {
                 agent,
                 workspace,
-                mode: None,
                 profile_id: None,
                 model: req.model,
                 reasoning_effort: req.reasoning_effort,
@@ -255,17 +254,14 @@ pub async fn invoke_host_command(
                 .or(req.title)
                 .filter(|s| !s.trim().is_empty());
             // Prefer explicit bot_id; mailbox injects agent_id == bot_id.
-            let bot_id = req
-                .bot_id
-                .filter(|s| !s.trim().is_empty())
-                .or_else(|| {
-                    let id = req.agent_id.trim();
-                    if id.is_empty() {
-                        None
-                    } else {
-                        Some(id.to_owned())
-                    }
-                });
+            let bot_id = req.bot_id.filter(|s| !s.trim().is_empty()).or_else(|| {
+                let id = req.agent_id.trim();
+                if id.is_empty() {
+                    None
+                } else {
+                    Some(id.to_owned())
+                }
+            });
             server
                 .agent
                 .start_agent_with_session_id_in_conversation(

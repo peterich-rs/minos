@@ -8,6 +8,7 @@ import type {
   AgentRuntime,
   SessionStatus,
 } from "@/shared/lib/mock-data";
+import { runtimesOfBots } from "@/shared/lib/mock-data";
 import {
   type DaemonConversation,
   type DaemonMessage,
@@ -187,14 +188,19 @@ export function toUiConversation(
       approvalCount,
     }),
     agentSessionCount: row.agentSessionCount,
+    // participatingBots = roster SSOT (botId membership). participatingAgents
+    // is a derived host-runtime token list for badges / ensure — not dual-write SSOT.
     participatingBots: (row.participatingBots ?? []).map((b) => ({
       botId: b.botId,
       name: b.name || b.runtime,
       runtime: b.runtime,
     })),
-    participatingAgents:
-      row.participatingAgents ??
-      (row.participatingBots ?? []).map((b) => b.runtime.toLowerCase()),
+    participatingAgents: (() => {
+      const fromBots = runtimesOfBots(row.participatingBots);
+      if (fromBots.length > 0) return fromBots;
+      // Daemon may still emit runtime-only labels when bots array is empty.
+      return (row.participatingAgents ?? []).map((a) => a.trim().toLowerCase()).filter(Boolean);
+    })(),
     runningCount,
     approvalCount,
     priority,

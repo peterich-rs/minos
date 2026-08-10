@@ -1899,8 +1899,9 @@ impl LocalStore {
                 if let Some(desc) = self.bot_description(&m.bot_id).await? {
                     m.brief = Some(desc);
                 } else if let Some(runtime) = m.runtime_agent.clone() {
-                    if let Some(desc) =
-                        self.latest_profile_description_for_runtime(&runtime).await?
+                    if let Some(desc) = self
+                        .latest_profile_description_for_runtime(&runtime)
+                        .await?
                     {
                         m.brief = Some(desc);
                     }
@@ -2169,10 +2170,8 @@ mod tests {
 
         let raw = store.list_conversation_roster("c1").await.unwrap();
         let enriched = store.enrich_roster_with_profile_briefs(raw).await.unwrap();
-        let by_bot: std::collections::HashMap<_, _> = enriched
-            .into_iter()
-            .map(|m| (m.bot_id, m.brief))
-            .collect();
+        let by_bot: std::collections::HashMap<_, _> =
+            enriched.into_iter().map(|m| (m.bot_id, m.brief)).collect();
         assert_eq!(
             by_bot.get("bot-codex").and_then(|b| b.as_deref()),
             Some("implements features in the worktree")

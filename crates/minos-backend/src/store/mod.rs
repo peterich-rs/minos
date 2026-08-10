@@ -628,5 +628,4 @@ mod tests {
         assert!(handle.sqlite_pool().is_none());
         assert!(handle.postgres_pool().is_some());
     }
-
 }

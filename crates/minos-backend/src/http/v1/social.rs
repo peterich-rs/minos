@@ -82,8 +82,6 @@ pub struct SendConversationMessageRequest {
     #[serde(default)]
     pub client_sent_at_ms: Option<i64>,
     #[serde(default)]
-    pub created_at_ms: Option<i64>,
-    #[serde(default)]
     pub attachment_blob_ids: Vec<String>,
 }
 
@@ -220,7 +218,7 @@ struct ForwardedAgentDispatch {
 ///    — for bot authors: other-bot mentions only (self-mention forbidden)
 /// 3. group with exactly 1 human + 1 agent + **bare** text (no unresolved agentish @)
 ///    → sole agent — **human senders only**
-/// else empty
+/// 4. otherwise empty
 ///
 /// Text is never a delivery target. Optional `#session_short` in the body is only a
 /// session-resolution hint for agents already present in structured mentions.
@@ -268,10 +266,7 @@ async fn plan_agent_deliveries(
                 {
                     // Prefer current conversation roster (membership-first); fall back to
                     // agent registry so a removed-but-still-visible bubble can continue.
-                    let agent = agents
-                        .iter()
-                        .find(|a| a.agent_id == agent_id)
-                        .cloned();
+                    let agent = agents.iter().find(|a| a.agent_id == agent_id).cloned();
                     let agent = match agent {
                         Some(a) => Some(a),
                         None => crate::store::social::get_agent(&state.store, agent_id)
@@ -319,14 +314,10 @@ async fn plan_agent_deliveries(
             };
             let session_short =
                 crate::conversations::use_case::session_short_hint_for_agent(text, &agent);
-            let session_id = resolve_dispatch_session_id(
-                state,
-                conversation_id,
-                &agent,
-                session_short,
-            )
-            .await
-            .map_err(|e| err("internal", e.to_string()))?;
+            let session_id =
+                resolve_dispatch_session_id(state, conversation_id, &agent, session_short)
+                    .await
+                    .map_err(|e| err("internal", e.to_string()))?;
             plans.push(AgentDispatchPlan {
                 agent,
                 session_id,
@@ -1053,9 +1044,7 @@ pub async fn persist_agent_message_from_host(
     let mentions = crate::conversations::use_case::extract_participant_mentions(
         text,
         // Agent is not an account; pass agent_id so self-account skip is a no-op.
-        agent_id,
-        &members,
-        &agents,
+        agent_id, &members, &agents,
     );
     // Never persist self-mention as a structured agent target.
     let mentioned_agent_ids: Vec<String> = mentions
@@ -1075,15 +1064,17 @@ pub async fn persist_agent_message_from_host(
         Some(client_message_id),
     )
     .await
-    .map_err(|(status, envelope)| crate::error::BackendError::StoreQuery {
-        operation: "persist_agent_message_from_host".into(),
-        message: format!(
-            "status={} code={} message={}",
-            status.as_u16(),
-            envelope.0.error.code,
-            envelope.0.error.message
-        ),
-    })?;
+    .map_err(
+        |(status, envelope)| crate::error::BackendError::StoreQuery {
+            operation: "persist_agent_message_from_host".into(),
+            message: format!(
+                "status={} code={} message={}",
+                status.as_u16(),
+                envelope.0.error.code,
+                envelope.0.error.message
+            ),
+        },
+    )?;
     let owner = crate::store::social::get_agent(&state.store, agent_id)
         .await?
         .map(|a| a.owner_account_id)
@@ -1173,10 +1164,10 @@ async fn persist_agent_message_with_delivery(
     let message = if outcome.inserted {
         let label = {
             let d = agent.display_name.trim();
-            if !d.is_empty() {
-                d
-            } else {
+            if d.is_empty() {
                 agent.name.trim()
+            } else {
+                d
             }
         };
         let display_name = if label.is_empty() {
@@ -1203,7 +1194,7 @@ async fn persist_agent_message_with_delivery(
         let message = ChatMessageSummary {
             message_id: outcome.row.message_id.clone(),
             conversation_id: outcome.row.conversation_id.clone(),
-            sender,
+            sender: sender.clone(),
             text: outcome.row.text.clone(),
             created_at_ms: outcome.row.created_at_ms,
             message_seq: outcome.row.message_seq,
@@ -1211,7 +1202,7 @@ async fn persist_agent_message_with_delivery(
             recalled_at_ms: None,
             mentioned_account_ids: mentioned_account_ids.to_vec(),
             mentioned_agent_ids: mentioned_agent_ids.to_vec(),
-            sender_type: SenderType::Agent,
+            sender_type: ChatMessageSummary::sender_type_from(&sender),
             reactions: vec![],
             attachments: vec![],
         };
@@ -1320,10 +1311,9 @@ async fn maybe_enqueue_agent_hops(
     if message.mentioned_agent_ids.is_empty() {
         return;
     }
-    let parent_hop =
-        automation_hop_for_agent_message(&state.store, reply_to_message_id, agent_id)
-            .await
-            .unwrap_or(0);
+    let parent_hop = automation_hop_for_agent_message(&state.store, reply_to_message_id, agent_id)
+        .await
+        .unwrap_or(0);
     if let Err(e) = try_agent_dispatch_with_hop(
         state,
         owner_account_id,
@@ -1385,15 +1375,10 @@ async fn register_agent(
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
-    if crate::store::social::find_active_agent_name_conflict(
-        &state.store,
-        &account_id,
-        name,
-        None,
-    )
-    .await
-    .map_err(|e| err("internal", e.to_string()))?
-    .is_some()
+    if crate::store::social::find_active_agent_name_conflict(&state.store, &account_id, name, None)
+        .await
+        .map_err(|e| err("internal", e.to_string()))?
+        .is_some()
     {
         return Err(err(
             "conflict",
@@ -1506,7 +1491,12 @@ async fn update_agent_handler(
         return Err(err("not_found", "agent not found or not owned by you"));
     }
 
-    let status = match req.status.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let status = match req
+        .status
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(s) if s == crate::store::social::AGENT_STATUS_ACTIVE => {
             crate::store::social::AGENT_STATUS_ACTIVE
         }
@@ -1663,10 +1653,9 @@ async fn list_conversation_participants_handler(
         crate::store::social::list_conversation_member_profiles(&state.store, &conversation_id)
             .await
             .map_err(|e| err("internal", e.to_string()))?;
-    let agent_rows =
-        crate::store::social::list_conversation_agents(&state.store, &conversation_id)
-            .await
-            .map_err(|e| err("internal", e.to_string()))?;
+    let agent_rows = crate::store::social::list_conversation_agents(&state.store, &conversation_id)
+        .await
+        .map_err(|e| err("internal", e.to_string()))?;
     let humans = human_rows
         .iter()
         .map(crate::profiles::use_case::to_user_summary)
@@ -1843,8 +1832,8 @@ async fn send_agent_message(
         },
         None => None,
     };
-    // Server clock is authoritative; ignore client_sent_at_ms / created_at_ms for ordering.
-    let _ = req.client_sent_at_ms.or(req.created_at_ms);
+    // Server clock is authoritative; client_sent_at_ms is display-only and unused for ordering.
+    let _ = req.client_sent_at_ms;
     let _ = now_ms;
     let (message, _) = persist_agent_message_with_delivery(
         &state,
@@ -2318,12 +2307,10 @@ async fn maybe_bind_origin_session(
     agent: &crate::store::social::AgentRow,
     session_id: &str,
 ) -> Result<(), crate::error::BackendError> {
-    let multi_for_origin = crate::store::agent_dispatch_queue::count_by_origin(
-        &state.store,
-        &row.origin_message_id,
-    )
-    .await
-    .unwrap_or(1);
+    let multi_for_origin =
+        crate::store::agent_dispatch_queue::count_by_origin(&state.store, &row.origin_message_id)
+            .await
+            .unwrap_or(1);
     if multi_for_origin <= 1 {
         crate::store::social::bind_session_to_message_for_agent(
             &state.store,
@@ -2375,18 +2362,11 @@ async fn deliver_bot_inbox(
     agent: &crate::store::social::AgentRow,
     now_ms: i64,
 ) -> Result<Option<String>, crate::error::BackendError> {
-    let existing_session = resolve_dispatch_session_id(
-        state,
-        &row.conversation_id,
-        agent,
-        None,
-    )
-    .await?;
+    let existing_session =
+        resolve_dispatch_session_id(state, &row.conversation_id, agent, None).await?;
 
     let host_device_id = if let Some(ref session_id) = existing_session {
-        if let Some(session) =
-            crate::store::agent_sessions::get(&state.store, session_id).await?
-        {
+        if let Some(session) = crate::store::agent_sessions::get(&state.store, session_id).await? {
             if let Some(host) = session.host_device_id.as_deref() {
                 match uuid::Uuid::parse_str(host) {
                     Ok(id) => minos_domain::DeviceId(id),
@@ -2464,9 +2444,9 @@ async fn deliver_bot_inbox(
 
     // Assign a stable formal session id for cold starts so Hub completion
     // watches and Host inject share the same key (daemon must honor it).
-    let session_id = existing_session.clone().unwrap_or_else(|| {
-        format!("mailbox-{}", row.dispatch_id)
-    });
+    let session_id = existing_session
+        .clone()
+        .unwrap_or_else(|| format!("mailbox-{}", row.dispatch_id));
     let frame = minos_protocol::realtime::ServerFrame::BotInboxDelivery {
         delivery_id: row.dispatch_id.clone(),
         conversation_id: row.conversation_id.clone(),

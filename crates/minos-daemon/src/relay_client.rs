@@ -33,8 +33,8 @@ use std::time::{Duration, Instant};
 
 use chrono::{TimeZone, Utc};
 use futures_util::{SinkExt, StreamExt};
-use minos_domain::{DeviceId, DeviceSecret, MinosError, PeerState, RelayLinkState};
 use http::{header::AUTHORIZATION, HeaderValue, Request as HttpRequest};
+use minos_domain::{DeviceId, DeviceSecret, MinosError, PeerState, RelayLinkState};
 use minos_protocol::realtime::{
     BotLaunchSnapshot, ClientFrame, ServerFrame, SessionBinding, PRESENCE_STREAM_KIND,
 };
@@ -689,7 +689,7 @@ async fn dispatch_loop(
             frame = stream.next() => {
                 match frame {
                     Some(Ok(Message::Text(text))) => {
-                        if let Err(e) = handle_inbound_text(&text, ctx).await {
+                        if let Err(e) = Box::pin(handle_inbound_text(&text, ctx)).await {
                             tracing::warn!(
                                 target: "minos_daemon::relay_client",
                                 error = %e,
@@ -789,7 +789,7 @@ where
 /// Parse an inbound text frame as a `ServerFrame` and route it.
 async fn handle_inbound_text(text: &str, ctx: &DispatchCtx) -> Result<(), serde_json::Error> {
     let frame: ServerFrame = serde_json::from_str(text)?;
-    route_server_frame(frame, ctx).await;
+    Box::pin(route_server_frame(frame, ctx)).await;
     Ok(())
 }
 
@@ -926,7 +926,7 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
             session,
             lease_expires_at_ms,
         } => {
-            handle_bot_inbox_delivery(
+            Box::pin(handle_bot_inbox_delivery(
                 ctx,
                 delivery_id,
                 conversation_id,
@@ -934,7 +934,7 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
                 bot,
                 session,
                 lease_expires_at_ms,
-            )
+            ))
             .await;
         }
         ServerFrame::CancelDelivery { delivery_id } => {
@@ -1536,11 +1536,7 @@ async fn remember_delivery_start(
     }
 }
 
-async fn remember_delivery_result(
-    cache: &DeliveryDedupeCache,
-    delivery_id: &str,
-    accepted: bool,
-) {
+async fn remember_delivery_result(cache: &DeliveryDedupeCache, delivery_id: &str, accepted: bool) {
     if delivery_id.is_empty() {
         return;
     }
@@ -1574,11 +1570,12 @@ fn build_host_ws_request(
     ws_url: &str,
     secret: &DeviceSecret,
 ) -> Result<HttpRequest<()>, MinosError> {
-    let mut request = ws_url.into_client_request().map_err(|error| {
-        MinosError::BackendInternal {
-            message: format!("invalid host websocket url: {error}"),
-        }
-    })?;
+    let mut request =
+        ws_url
+            .into_client_request()
+            .map_err(|error| MinosError::BackendInternal {
+                message: format!("invalid host websocket url: {error}"),
+            })?;
     let auth = format!("Bearer {}", secret.as_str());
     let value = HeaderValue::from_str(&auth).map_err(|error| MinosError::BackendInternal {
         message: format!("invalid host bearer header: {error}"),

@@ -113,9 +113,9 @@ async fn connect_host_bearer(relay: &Relay, hit_token: &str) -> anyhow::Result<W
     let mut request = url.into_client_request()?;
     request.headers_mut().insert(
         "authorization",
-        format!("Bearer {hit_token}").parse().map_err(|e| {
-            anyhow::anyhow!("invalid authorization header value: {e}")
-        })?,
+        format!("Bearer {hit_token}")
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid authorization header value: {e}"))?,
     );
     let (ws, _resp) = tokio_tungstenite::connect_async(request).await?;
     Ok(ws)
@@ -1650,7 +1650,6 @@ async fn host_ingest_live_batch_fans_out_projection_to_subscribed_client() -> an
                             }
                         }),
                         conversation_id: Some(conversation.conversation_id.clone()),
-                        projection: vec![],
                         first_ts_ms: 2_000,
                         last_ts_ms: 2_000,
                         byte_len: 64,
@@ -1670,7 +1669,6 @@ async fn host_ingest_live_batch_fans_out_projection_to_subscribed_client() -> an
                             }
                         }),
                         conversation_id: Some(conversation.conversation_id.clone()),
-                        projection: vec![],
                         first_ts_ms: 2_001,
                         last_ts_ms: 2_001,
                         byte_len: 48,
@@ -1798,7 +1796,6 @@ async fn host_ingest_live_batch_records_approval_request() -> anyhow::Result<()>
                     }),
                     conversation_id: Some(conversation.conversation_id.clone()),
                     // Host projection ignored; approvals come from raw payload.
-                    projection: vec![],
                     first_ts_ms: now_ms,
                     last_ts_ms: now_ms,
                     byte_len: 64,
@@ -1869,7 +1866,6 @@ async fn host_ingest_auto_registers_unknown_session_when_linked() -> anyhow::Res
                         }
                     }),
                     conversation_id: Some(local_conversation_id.into()),
-                    projection: vec![],
                     first_ts_ms: 3_000,
                     last_ts_ms: 3_000,
                     byte_len: 80,

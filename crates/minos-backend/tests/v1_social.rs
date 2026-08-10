@@ -414,7 +414,10 @@ async fn disabled_bot_is_listed_as_participant_but_not_delivered() {
         minos_backend::store::agent_dispatch_queue::count_by_origin(&state.store, &message_id)
             .await
             .unwrap();
-    assert_eq!(queued, 0, "disabled bot must not receive mailbox deliveries");
+    assert_eq!(
+        queued, 0,
+        "disabled bot must not receive mailbox deliveries"
+    );
 }
 
 fn deterministic_uuid(namespace: &str, parts: &[&str]) -> String {
@@ -2006,7 +2009,10 @@ async fn agent_dispatch_drains_when_host_comes_online() {
         done.status,
         minos_backend::store::agent_dispatch_queue::STATUS_SUCCEEDED,
         "status={} last_error={:?} attempts={} next={}",
-        done.status, done.last_error, done.attempts, done.next_attempt_at_ms
+        done.status,
+        done.last_error,
+        done.attempts,
+        done.next_attempt_at_ms
     );
     let session_id = expected_social_start_session_id(&alice.account_id, &origin, &agent.agent_id);
     assert_agent_start_host_command(
@@ -2412,11 +2418,14 @@ async fn multi_agent_mentions_fan_out_inbox_rows() {
         "wire mentioned_agent_ids must follow body appearance order"
     );
 
-    let rows =
-        minos_backend::store::agent_dispatch_queue::list_by_origin(&state.store, &origin)
-            .await
-            .unwrap();
-    assert_eq!(rows.len(), 2, "multi-@ must enqueue one inbox row per agent");
+    let rows = minos_backend::store::agent_dispatch_queue::list_by_origin(&state.store, &origin)
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.len(),
+        2,
+        "multi-@ must enqueue one inbox row per agent"
+    );
     assert_eq!(rows[0].agent_id, claude.agent_id);
     assert_eq!(rows[1].agent_id, codex.agent_id);
     // 1-human room: structured path uses room rule, not hardcoded true.
@@ -2815,10 +2824,15 @@ async fn multi_agent_mention_order_survives_message_list_hydrate() {
         .await
         .unwrap();
     let alice_device = DeviceId::new();
-    let conversation =
-        social::create_group_conversation(&state.store, &alice.account_id, "Order hydrate", &[], 100)
-            .await
-            .unwrap();
+    let conversation = social::create_group_conversation(
+        &state.store,
+        &alice.account_id,
+        "Order hydrate",
+        &[],
+        100,
+    )
+    .await
+    .unwrap();
     let codex = social::register_agent(
         &state.store,
         &alice.account_id,
@@ -2890,9 +2904,7 @@ async fn multi_agent_mention_order_survives_message_list_hydrate() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let messages = list_body["messages"]
-        .as_array()
-        .expect("messages array");
+    let messages = list_body["messages"].as_array().expect("messages array");
     let found = messages
         .iter()
         .find(|m| m["message_id"].as_str() == Some(origin.as_str()))

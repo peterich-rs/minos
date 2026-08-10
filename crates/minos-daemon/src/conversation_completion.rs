@@ -854,12 +854,7 @@ impl ConversationCompletion {
         text: &str,
         mailbox: &MailboxDeliveryContext,
     ) {
-        let Some(tx) = self
-            .host_out_tx
-            .lock()
-            .ok()
-            .and_then(|guard| guard.clone())
-        else {
+        let Some(tx) = self.host_out_tx.lock().ok().and_then(|guard| guard.clone()) else {
             warn!(
                 target: "minos_daemon::conversation_completion",
                 delivery_id = %mailbox.delivery_id,

@@ -237,13 +237,6 @@
     },
     {
       "method": "POST",
-      "path": "/v1/host/realtime/ws-ticket",
-      "probe_path": "/v1/host/realtime/ws-ticket",
-      "surface": "host_api",
-      "auth": "host_installation"
-    },
-    {
-      "method": "POST",
       "path": "/v1/projects",
       "probe_path": "/v1/projects",
       "surface": "account_api",

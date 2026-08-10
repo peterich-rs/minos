@@ -20,9 +20,15 @@ const HARD_LINES = 800;
 
 /** @type {Record<string, number>} path relative to src/ → temporary hard cap */
 const ALLOWLIST = {
-  // SessionsView split into ui/lib (PR A); shell is well under HARD_LINES.
-  // Hub IM + auth share request helpers; split to minos-cloud-hub.ts next wave.
-  "shared/lib/minos-cloud.ts": 900,
+  // Agents page create/list/edit + Hub registry; split to AgentsView sections next wave.
+  "features/agents/AgentsView.tsx": 1250,
+  // WS connect / inbox digest / subscription fanout; split hub-realtime lanes next wave.
+  "shared/lib/hub-realtime.ts": 1000,
+  // Hub REST helpers (auth + conversations + agents). sendConversationMessage removed;
+  // further split to minos-cloud-hub.ts / agents helpers planned (freeze above current LOC).
+  "shared/lib/minos-cloud.ts": 1100,
+  // Mock fixtures + Conversation types; extract mock-conversations.ts planned.
+  "shared/lib/mock-data.ts": 850,
   // Outbox posts + per-lane worker share one module; split to im-outbox-worker.ts next.
   "shared/lib/im-cloud-sync.ts": 950,
 };

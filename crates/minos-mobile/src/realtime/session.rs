@@ -483,7 +483,7 @@ fn parse_account_inbox_digest(
     payload: &serde_json::Value,
     is_recall: bool,
 ) -> Option<SocialEventFrame> {
-    use minos_protocol::{MessageSender, SenderType};
+    use minos_protocol::MessageSender;
 
     let conversation_id = payload
         .get("conversation_id")
@@ -534,7 +534,7 @@ fn parse_account_inbox_digest(
         .unwrap_or(0);
 
     // SenderRef on durable: `{ kind: user|agent, account_id|agent_id }`.
-    let (sender, sender_type) = match payload.get("sender") {
+    let sender = match payload.get("sender") {
         Some(s)
             if s.get("agent_id").is_some()
                 || s.get("kind").and_then(|k| k.as_str()) == Some("agent") =>
@@ -544,38 +544,30 @@ fn parse_account_inbox_digest(
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            (
-                MessageSender::Bot {
-                    bot_id,
-                    display_name: sender_display_name,
-                    runtime_agent: String::new(),
-                    name: None,
-                    avatar_url: None,
-                },
-                SenderType::Agent,
-            )
+            MessageSender::Bot {
+                bot_id,
+                display_name: sender_display_name,
+                runtime_agent: String::new(),
+                name: None,
+                avatar_url: None,
+            }
         }
-        Some(s) => (
-            MessageSender::Account {
-                account_id: s
-                    .get("account_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                minos_id: String::new(),
-                display_name: sender_display_name,
-            },
-            SenderType::User,
-        ),
-        None => (
-            MessageSender::Account {
-                account_id: String::new(),
-                minos_id: String::new(),
-                display_name: sender_display_name,
-            },
-            SenderType::User,
-        ),
+        Some(s) => MessageSender::Account {
+            account_id: s
+                .get("account_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            minos_id: String::new(),
+            display_name: sender_display_name,
+        },
+        None => MessageSender::Account {
+            account_id: String::new(),
+            minos_id: String::new(),
+            display_name: sender_display_name,
+        },
     };
+    let sender_type = ChatMessageSummary::sender_type_from(&sender);
 
     // When mentioned=true for this account, seed mentioned_account_ids so
     // inbox mention badge can flip without full message body.
@@ -614,7 +606,7 @@ fn parse_account_inbox_digest(
 
 /// Parse reaction durable into a reaction_updated social frame.
 fn parse_reaction_updated(payload: &serde_json::Value) -> Option<SocialEventFrame> {
-    use minos_protocol::{MessageSender, ReactionGroup, SenderType};
+    use minos_protocol::{MessageSender, ReactionGroup};
 
     let conversation_id = payload
         .get("conversation_id")
@@ -641,24 +633,27 @@ fn parse_reaction_updated(payload: &serde_json::Value) -> Option<SocialEventFram
     Some(SocialEventFrame {
         conversation_id: conversation_id.clone(),
         kind: "reaction_updated".into(),
-        message: ChatMessageSummary {
-            message_id,
-            conversation_id,
-            sender: MessageSender::Account {
+        message: {
+            let sender = MessageSender::Account {
                 account_id: String::new(),
                 minos_id: String::new(),
                 display_name: String::new(),
-            },
-            text: String::new(),
-            created_at_ms: at_ms,
-            message_seq: 0,
-            reply_to: None,
-            recalled_at_ms: None,
-            mentioned_account_ids: vec![],
-            mentioned_agent_ids: vec![],
-            sender_type: SenderType::User,
-            reactions,
-            attachments: vec![],
+            };
+            ChatMessageSummary {
+                message_id,
+                conversation_id,
+                sender: sender.clone(),
+                text: String::new(),
+                created_at_ms: at_ms,
+                message_seq: 0,
+                reply_to: None,
+                recalled_at_ms: None,
+                mentioned_account_ids: vec![],
+                mentioned_agent_ids: vec![],
+                sender_type: ChatMessageSummary::sender_type_from(&sender),
+                reactions,
+                attachments: vec![],
+            }
         },
         topic: String::new(),
         topic_seq: 0,
@@ -846,6 +841,7 @@ mod tests {
                 "created_at_ms": 10,
                 "message_seq": 3,
                 "sender": {
+                    "kind": "account",
                     "account_id": "a",
                     "minos_id": "m",
                     "display_name": "n"
@@ -880,6 +876,7 @@ mod tests {
             "created_at_ms": 1,
             "message_seq": 1,
             "sender": {
+                "kind": "account",
                 "account_id": "a",
                 "minos_id": "m",
                 "display_name": "n"
@@ -900,6 +897,7 @@ mod tests {
                 "created_at_ms": 10,
                 "message_seq": 3,
                 "sender": {
+                    "kind": "account",
                     "account_id": "a",
                     "minos_id": "m",
                     "display_name": "n"

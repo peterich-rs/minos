@@ -44,7 +44,8 @@ pub enum RealtimeEvent {
         conversation_id: String,
         message_id: String,
         message_seq: i64,
-        message: Option<ChatMessageSummary>,
+        /// Boxed to keep the enum small (ChatMessageSummary is large on the wire).
+        message: Option<Box<ChatMessageSummary>>,
     },
     /// Account AppendMessage rejected.
     ChatSendNack {
@@ -119,7 +120,7 @@ pub fn handle_server_frame(frame: ServerFrame) -> Option<RealtimeEvent> {
             conversation_id,
             message_id,
             message_seq,
-            message,
+            message: message.map(Box::new),
         }),
         ServerFrame::ChatSendNack {
             client_operation_id,

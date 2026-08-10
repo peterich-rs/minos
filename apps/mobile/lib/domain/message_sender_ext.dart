@@ -70,24 +70,31 @@ Map<String, Object?> messageSenderToMap(MessageSender sender) {
 
 /// Deserialize cache / wire map into [MessageSender].
 ///
-/// Accepts the new tagged shape and the legacy flat UserSummary map.
+/// Accepts only the tagged shape written by [messageSenderToMap]
+/// (`kind`: `account` | `bot`). Flat legacy UserSummary maps are not supported.
 MessageSender messageSenderFromMap(Map<String, Object?> map) {
-  final kind = (map['kind'] as String?)?.trim();
-  if (kind == 'bot' || map.containsKey('bot_id')) {
+  final kind = (map['kind'] as String?)?.trim().toLowerCase();
+  if (kind == 'bot') {
     return MessageSender.bot(
       botId: (map['bot_id'] as String?)?.trim().isNotEmpty == true
           ? map['bot_id']! as String
-          : (map['account_id'] as String? ?? ''),
+          : '',
       displayName: map['display_name'] as String? ?? '',
       runtimeAgent: map['runtime_agent'] as String? ?? '',
       name: map['name'] as String?,
       avatarUrl: map['avatar_url'] as String?,
     );
   }
-  // kind == account | legacy UserSummary
-  return MessageSender.account(
-    accountId: map['account_id'] as String? ?? '',
-    minosId: map['minos_id'] as String? ?? '',
-    displayName: map['display_name'] as String? ?? '',
+  if (kind == 'account') {
+    return MessageSender.account(
+      accountId: map['account_id'] as String? ?? '',
+      minosId: map['minos_id'] as String? ?? '',
+      displayName: map['display_name'] as String? ?? '',
+    );
+  }
+  throw ArgumentError.value(
+    map,
+    'map',
+    'MessageSender map requires kind "account" or "bot"',
   );
 }

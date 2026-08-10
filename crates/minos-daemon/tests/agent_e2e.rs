@@ -33,7 +33,7 @@ use minos_backend::{
 };
 use minos_daemon::{DaemonHandle, RelayConfig};
 use minos_domain::{AgentName, DeviceId, DeviceRole, DeviceSecret, RelayLinkState};
-use minos_protocol::{AgentLaunchMode, SendUserMessageRequest, StartAgentRequest};
+use minos_protocol::{SendUserMessageRequest, StartAgentRequest};
 use serde_json::json;
 use sqlx::SqlitePool;
 use tempfile::{NamedTempFile, TempDir};
@@ -527,7 +527,6 @@ async fn start_send_stream_stop_against_fake_codex_server() -> anyhow::Result<()
         .start_agent(StartAgentRequest {
             agent: AgentName::Codex,
             workspace: "/w-agent-e2e".into(),
-            mode: Some(AgentLaunchMode::Server),
             profile_id: None,
             model: None,
             reasoning_effort: None,

@@ -335,8 +335,9 @@ pub struct ChatMessageSummary {
     /// Structured SSOT alongside account mentions; agent inbox delivery keys off this.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mentioned_agent_ids: Vec<String>,
-    /// Distinguishes user-sent messages from agent-sent messages.
-    /// Defaults to "user" for backward compatibility.
+    /// Derived mirror of [`MessageSender`] for legacy clients/FRB.
+    /// **SSOT is `sender`** — always set via [`Self::sender_type_from`] /
+    /// `sender.sender_type()`. Do not invent a second identity from this field.
     #[serde(default = "default_sender_type")]
     pub sender_type: SenderType,
     /// Cloud reaction aggregates (viewer-resolved `reacted_by_me`). Empty when none.
@@ -345,6 +346,19 @@ pub struct ChatMessageSummary {
     /// Uploaded media blobs linked to this message (Hub SSOT).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<ChatMessageAttachment>,
+}
+
+impl ChatMessageSummary {
+    /// `sender_type` mirror of [`MessageSender`] (wire SSOT is `sender`).
+    #[must_use]
+    pub fn sender_type_from(sender: &MessageSender) -> SenderType {
+        sender.sender_type()
+    }
+
+    /// Recompute `sender_type` from `sender` after mutating the principal.
+    pub fn sync_sender_type(&mut self) {
+        self.sender_type = self.sender.sender_type();
+    }
 }
 
 /// Media blob linked to a chat message (metadata; bytes live in object storage).
@@ -493,9 +507,6 @@ pub struct SendChatMessageRequest {
     /// Client clock for display/debug only. Hub assigns authoritative `created_at_ms`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_sent_at_ms: Option<i64>,
-    /// @deprecated Prefer `client_sent_at_ms`. Accepted but not used as ordering authority.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_at_ms: Option<i64>,
     /// Ready media blob ids owned by the sender (upload via the media API first).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachment_blob_ids: Vec<String>,
@@ -674,9 +685,6 @@ pub struct SendAgentMessageRequest {
     /// Client clock for display/debug only. Hub assigns authoritative `created_at_ms`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_sent_at_ms: Option<i64>,
-    /// @deprecated Prefer `client_sent_at_ms`. Not used as ordering authority.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_at_ms: Option<i64>,
 }
 
 /// Ensure a Host/Desktop runtime agent exists for the caller's account.
@@ -846,20 +854,10 @@ pub struct WriteHostSkillConfigResponse {
     pub effective_enabled: bool,
 }
 
-/// Which codex driver to spawn — selectable at start time so dev/test
-/// surfaces can compare the two paths side-by-side without rebuilding.
-/// `Jsonl` is the production default (`codex exec --json` per turn); `Server`
-/// spawns `codex app-server --listen ws://…` and connects via WebSocket.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
-pub enum AgentLaunchMode {
-    #[default]
-    #[serde(rename = "jsonl")]
-    Jsonl,
-    #[serde(rename = "server")]
-    Server,
-}
-
 /// Parameters for the `start_agent` RPC. See spec §5.2.
+///
+/// Launches always use the app-server / long-running runtime path (JSONL
+/// `codex exec` was retired). There is no launch-mode selector on the wire.
 ///
 /// # Profile resolution (latest-only)
 ///
@@ -880,12 +878,6 @@ pub struct StartAgentRequest {
     /// distinct calls for different workspaces spawn distinct codex children.
     /// Carried as a string for FFI/portability (no `PathBuf` on wire).
     pub workspace: String,
-    /// Optional driver selector. Absent ⇒ `Server` post-Phase-C, preserving
-    /// the wire shape for clients that pre-date the field. The `Jsonl` variant
-    /// is retained for compatibility but no longer drives a JSONL exec path —
-    /// it is silently treated as `Server`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mode: Option<AgentLaunchMode>,
     /// Host agent profile to bind at create time. See struct-level resolution order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile_id: Option<String>,
@@ -1846,9 +1838,15 @@ mod tests {
         assert!(MessageSource::ClientLive.allows_agent_dispatch());
         assert!(!MessageSource::HostProjection.allows_agent_dispatch());
         assert!(!MessageSource::System.allows_agent_dispatch());
-        assert_eq!(MessageSource::parse("host_projection"), MessageSource::HostProjection);
+        assert_eq!(
+            MessageSource::parse("host_projection"),
+            MessageSource::HostProjection
+        );
         assert_eq!(MessageSource::parse("system"), MessageSource::System);
-        assert_eq!(MessageSource::parse("client_live"), MessageSource::ClientLive);
+        assert_eq!(
+            MessageSource::parse("client_live"),
+            MessageSource::ClientLive
+        );
         assert_eq!(MessageSource::parse("unknown"), MessageSource::ClientLive);
     }
 
@@ -2003,34 +2001,16 @@ mod tests {
         let req = StartAgentRequest {
             agent: AgentName::Codex,
             workspace: "/Users/fan/dev".into(),
-            mode: None,
             profile_id: None,
             model: None,
             reasoning_effort: None,
             instructions: None,
         };
         let json = serde_json::to_string(&req).unwrap();
-        // Default-mode payload omits the optional `mode` field.
-        assert!(!json.contains("mode"));
         // Workspace is mandatory post-Phase-C and must serialize.
         assert!(json.contains("workspace"));
-        let back: StartAgentRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(req, back);
-    }
-
-    #[test]
-    fn start_agent_request_with_mode_round_trip() {
-        let req = StartAgentRequest {
-            agent: AgentName::Codex,
-            workspace: "/Users/fan/dev".into(),
-            mode: Some(AgentLaunchMode::Server),
-            profile_id: None,
-            model: None,
-            reasoning_effort: None,
-            instructions: None,
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains("\"mode\":\"server\""));
+        // Retired launch-mode selector must not reappear on the wire.
+        assert!(!json.contains("mode"));
         let back: StartAgentRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(req, back);
     }
@@ -2040,7 +2020,6 @@ mod tests {
         let req = StartAgentRequest {
             agent: AgentName::Grok,
             workspace: "/w".into(),
-            mode: None,
             profile_id: Some("profile-abc".into()),
             model: Some("override-model".into()),
             reasoning_effort: None,
@@ -2053,13 +2032,22 @@ mod tests {
     }
 
     #[test]
-    fn start_agent_request_pre_mode_payload_decodes() {
+    fn start_agent_request_minimal_payload_decodes() {
         let json = r#"{"agent":"codex","workspace":"/w"}"#;
         let req: StartAgentRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.agent, AgentName::Codex);
         assert_eq!(req.workspace, "/w");
-        assert_eq!(req.mode, None);
         assert_eq!(req.profile_id, None);
+    }
+
+    #[test]
+    fn start_agent_request_ignores_unknown_legacy_mode_field() {
+        // Pre-cleanup clients may still send `mode`; serde denies unknown fields
+        // only when configured — default is to ignore extra fields.
+        let json = r#"{"agent":"codex","workspace":"/w","mode":"jsonl"}"#;
+        let req: StartAgentRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.agent, AgentName::Codex);
+        assert_eq!(req.workspace, "/w");
     }
 
     #[test]

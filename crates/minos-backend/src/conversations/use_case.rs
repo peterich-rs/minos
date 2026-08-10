@@ -4,7 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use minos_protocol::{
     ChatMessageReplySummary, ChatMessageSummary, ConversationKind, ConversationResponse,
-    ConversationSummary, MessageSender, SenderType, UserSummary,
+    ConversationSummary, MessageSender, UserSummary,
 };
 
 use crate::app::tx::Storage;
@@ -506,8 +506,7 @@ impl ConversationService for DefaultConversationService {
             .map(|m| m.account_id.clone())
             .collect::<Vec<_>>();
         // Only active bots resolve as @ targets / structured mentions for delivery.
-        let agents =
-            social::list_conversation_agents_active(&self.store, conversation_id).await?;
+        let agents = social::list_conversation_agents_active(&self.store, conversation_id).await?;
         let mut mentions = extract_participant_mentions(text, account_id, &members, &agents);
         merge_structured_mentions(
             &mut mentions,
@@ -586,7 +585,7 @@ impl ConversationService for DefaultConversationService {
             ChatMessageSummary {
                 message_id: outcome.row.message_id.clone(),
                 conversation_id: outcome.row.conversation_id.clone(),
-                sender,
+                sender: sender.clone(),
                 text: outcome.row.text.clone(),
                 created_at_ms: outcome.row.created_at_ms,
                 message_seq: outcome.row.message_seq,
@@ -594,7 +593,7 @@ impl ConversationService for DefaultConversationService {
                 recalled_at_ms: None,
                 mentioned_account_ids: mentions.account_ids.clone(),
                 mentioned_agent_ids: mentions.agent_ids.clone(),
-                sender_type: SenderType::User,
+                sender_type: ChatMessageSummary::sender_type_from(&sender),
                 reactions: vec![],
                 attachments: attachments_wire.clone(),
             }
@@ -1144,11 +1143,7 @@ pub async fn hydrate_messages_for_viewer(
             )
             .transpose()?;
         let sender = sender_summary(&row, &profiles, &agents)?;
-        let sender_type = if row.sender_type == "agent" {
-            SenderType::Agent
-        } else {
-            SenderType::User
-        };
+        let sender_type = ChatMessageSummary::sender_type_from(&sender);
         let reactions = reactions_by_message
             .remove(&row.message_id)
             .map(|rows| social::aggregate_groups(&rows, viewer_account_id))
@@ -1236,10 +1231,10 @@ fn bot_sender_summary(agent: Option<&social::AgentRow>, agent_id: &str) -> Messa
             // Prefer digital-body display_name; fall back to registry name.
             let label = {
                 let d = agent.display_name.trim();
-                if !d.is_empty() {
-                    d
-                } else {
+                if d.is_empty() {
                     agent.name.trim()
+                } else {
+                    d
                 }
             };
             let display_name = if label.is_empty() {
@@ -1479,10 +1474,7 @@ mod tests {
 
     #[test]
     fn extract_participant_mentions_splits_humans_and_agents() {
-        let members = vec![
-            profile("acct-alice", "alice"),
-            profile("acct-bob", "bob"),
-        ];
+        let members = vec![profile("acct-alice", "alice"), profile("acct-bob", "bob")];
         let agents = vec![
             agent("bot-1", "Codex", "codex"),
             agent("bot-2", "Claude", "claude"),
@@ -1524,12 +1516,8 @@ mod tests {
     fn extract_participant_mentions_skips_self_and_unknown_tokens() {
         let members = vec![profile("acct-alice", "alice")];
         let agents = vec![agent("bot-1", "Codex", "codex")];
-        let mentions = extract_participant_mentions(
-            "@alice @nobody @codex",
-            "acct-alice",
-            &members,
-            &agents,
-        );
+        let mentions =
+            extract_participant_mentions("@alice @nobody @codex", "acct-alice", &members, &agents);
         assert!(mentions.account_ids.is_empty());
         assert_eq!(mentions.agent_ids, vec!["bot-1".to_string()]);
     }

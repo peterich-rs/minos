@@ -61,10 +61,11 @@ impl GatewayWsQuery {
     }
 }
 
+/// Client WS rail only. Host upgrades use bearer `hit_*` via
+/// [`upgrade_host_with_bearer`] and never share the ticket path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GatewayRail {
     Client,
-    Host,
 }
 
 #[derive(Debug)]
@@ -130,7 +131,7 @@ async fn upgrade_host_with_bearer(
         async move {
             match revalidate_host_installation_auth(&state.store, device_id).await {
                 Ok(()) => {
-                    run_session(
+                    Box::pin(run_session(
                         socket,
                         state,
                         GatewayUpgrade {
@@ -140,7 +141,7 @@ async fn upgrade_host_with_bearer(
                                 host_installation_id,
                             },
                         },
-                    )
+                    ))
                     .await;
                 }
                 Err(ActivationAuthError::Unauthorized(message)) => {
@@ -209,10 +210,7 @@ async fn upgrade_with_ticket(
         GatewayRail::Client if !claims.role.is_account_client() => {
             return Err((StatusCode::UNAUTHORIZED, "invalid ws_ticket".to_string()));
         }
-        GatewayRail::Host if claims.role != DeviceRole::AgentHost => {
-            return Err((StatusCode::UNAUTHORIZED, "invalid ws_ticket".to_string()));
-        }
-        _ => {}
+        GatewayRail::Client => {}
     }
 
     state
@@ -260,7 +258,7 @@ async fn upgrade_with_ticket(
         async move {
             match revalidate_ws_ticket_auth(&state.store, &claims).await {
                 Ok(()) => {
-                    run_session(
+                    Box::pin(run_session(
                         socket,
                         state,
                         GatewayUpgrade {
@@ -268,7 +266,7 @@ async fn upgrade_with_ticket(
                             role: claims.role,
                             principal,
                         },
-                    )
+                    ))
                     .await;
                 }
                 Err(ActivationAuthError::Unauthorized(message)) => {
@@ -1183,7 +1181,8 @@ async fn handle_delivery_rejected(
         )
         .await?;
     }
-    let _ = crate::store::agent_dispatch_queue::clear_lease(&state.store, delivery_id, now_ms).await;
+    let _ =
+        crate::store::agent_dispatch_queue::clear_lease(&state.store, delivery_id, now_ms).await;
     state.wake_agent_dispatch();
     Ok(())
 }
@@ -1248,14 +1247,12 @@ async fn handle_append_bot_message(
     .await
     {
         Ok(message) => {
+            // Fallback to delivery_id keeps completion keyed when session bind raced.
             let session_id = row
                 .session_id
                 .as_deref()
                 .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| {
-                    // Fallback: keep delivery keyed even if session bind raced.
-                    delivery_id
-                });
+                .unwrap_or(delivery_id);
             // Mailbox AppendBotMessage is a terminal bot reply path. Disarm any
             // TurnCompletionProjector watches so expire_completion_watches cannot
             // post a false completion_timeout after a successful reply (e.g.
@@ -1460,9 +1457,7 @@ fn conversation_error_to_chat_nack(error: &ConversationError) -> (&'static str, 
         ConversationError::NotFriends => ("conflict", "users are not friends".into()),
         ConversationError::TitleRequired => ("bad_request", "group title is required".into()),
         ConversationError::InvalidKind(msg) => ("internal", msg.clone()),
-        ConversationError::MissingProfile(id) => {
-            ("internal", format!("profile not found: {id}"))
-        }
+        ConversationError::MissingProfile(id) => ("internal", format!("profile not found: {id}")),
         ConversationError::ValidationFormat(msg) => ("bad_request", msg.clone()),
         ConversationError::IdempotencyConflict(msg) => ("conflict", msg.clone()),
         ConversationError::Internal(e) => ("internal", e.to_string()),
@@ -2505,8 +2500,8 @@ async fn close_with_directive(ws: &mut WebSocket, role: DeviceRole, directive: C
 #[cfg(test)]
 mod tests {
     use super::{
-        bearer_token_from_headers, pull_requests_for_manifest, websocket_read_error_is_client_reset,
-        PULL_INGEST_MAX_BYTES,
+        bearer_token_from_headers, pull_requests_for_manifest,
+        websocket_read_error_is_client_reset, PULL_INGEST_MAX_BYTES,
     };
     use axum::http::{HeaderMap, HeaderValue};
     use minos_domain::DeviceId;
@@ -2521,16 +2516,10 @@ mod tests {
             "authorization",
             HeaderValue::from_static("Bearer hit_abc123"),
         );
-        assert_eq!(
-            bearer_token_from_headers(&headers),
-            Some("hit_abc123")
-        );
+        assert_eq!(bearer_token_from_headers(&headers), Some("hit_abc123"));
 
         let mut lower = HeaderMap::new();
-        lower.insert(
-            "authorization",
-            HeaderValue::from_static("bearer hit_xyz"),
-        );
+        lower.insert("authorization", HeaderValue::from_static("bearer hit_xyz"));
         assert_eq!(bearer_token_from_headers(&lower), Some("hit_xyz"));
 
         assert!(bearer_token_from_headers(&HeaderMap::new()).is_none());

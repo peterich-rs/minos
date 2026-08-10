@@ -8,6 +8,7 @@ import {
   type MentionProfile,
 } from "@/shared/lib/agent-route";
 import type { TimelineMessage } from "@/shared/lib/mock-data";
+import { membershipTokensOfBots } from "@/shared/lib/mock-data";
 import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
 import { cn } from "@/shared/lib/utils";
 import { toast } from "@/shared/lib/toast";
@@ -56,11 +57,17 @@ export function Composer({ conversationId }: { conversationId: string }) {
   const loadInspector = useWorkspaceStore((s) => s.loadInspector);
   const source = useWorkspaceStore((s) => s.source);
   const clis = useWorkspaceStore((s) => s.clis);
-  const participatingAgents = useWorkspaceStore(
-    (s) =>
-      s.conversations.find((c) => c.id === conversationId)
-        ?.participatingAgents ?? [],
-  );
+  // Roster membership tokens: prefer participatingBots SSOT; fall back to
+  // deprecated participatingAgents runtime labels when bots array is empty.
+  const rosterMemberTokens = useWorkspaceStore((s) => {
+    const conv = s.conversations.find((c) => c.id === conversationId);
+    if (!conv) return [] as string[];
+    const fromBots = membershipTokensOfBots(conv.participatingBots);
+    if (fromBots.length > 0) return fromBots;
+    return (conv.participatingAgents ?? [])
+      .map((a) => a.trim().toLowerCase())
+      .filter(Boolean);
+  });
   const sessions = useWorkspaceStore(
     (s) => s.sessionsByConversation[conversationId] ?? EMPTY_SESSIONS,
   );
@@ -96,7 +103,7 @@ export function Composer({ conversationId }: { conversationId: string }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const mention = mentionQueryAtCursor(draft, cursor);
-  const memberAgents = participantAgents ?? participatingAgents;
+  const memberAgents = participantAgents ?? rosterMemberTokens;
   const mentionOptions = useMemo(() => {
     if (!mention) return [];
     const humans = buildHumanMentionOptions(mention.query, mentionHumans, {
@@ -189,17 +196,22 @@ export function Composer({ conversationId }: { conversationId: string }) {
           const res = await daemonApi.listAgentProfiles();
           if (cancelled) return;
           const memberSet = new Set(
-            participatingAgents.map((a) => a.trim().toLowerCase()).filter(Boolean),
+            rosterMemberTokens.map((a) => a.trim().toLowerCase()).filter(Boolean),
           );
           const rosterOnly = (res.profiles ?? [])
-            .filter((p) => memberSet.has(p.runtime_agent.trim().toLowerCase()))
+            .filter(
+              (p) =>
+                memberSet.has(p.runtime_agent.trim().toLowerCase()) ||
+                memberSet.has(p.id.toLowerCase()) ||
+                memberSet.has(p.name.trim().toLowerCase()),
+            )
             .map((p) => ({
               id: p.id,
               name: p.name,
               runtimeAgent: p.runtime_agent,
             }));
           setMentionProfiles(rosterOnly);
-          setParticipantAgents(participatingAgents.map((a) => a.toLowerCase()));
+          setParticipantAgents(rosterMemberTokens.map((a) => a.toLowerCase()));
           setMentionHumans(EMPTY_HUMANS);
           return;
         } catch {
@@ -221,7 +233,7 @@ export function Composer({ conversationId }: { conversationId: string }) {
     deviceId,
     session?.accessToken,
     source,
-    participatingAgents,
+    rosterMemberTokens,
   ]);
 
   useEffect(() => {

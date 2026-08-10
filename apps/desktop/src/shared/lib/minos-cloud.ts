@@ -277,44 +277,6 @@ export async function upsertConversation(
   }).then((r) => ({ conversationId: r.conversation_id }));
 }
 
-export async function sendConversationMessage(
-  deviceId: string,
-  accessToken: string,
-  conversationId: string,
-  input: {
-    text: string;
-    clientMessageId?: string;
-    replyToMessageId?: string;
-    /** Client clock for display/debug only (not ordering authority). */
-    clientSentAtMs?: number;
-    /** @deprecated Prefer clientSentAtMs. */
-    createdAtMs?: number;
-    /**
-     * host_projection = dual-write of already-run Host messages (no agent dispatch).
-     * Defaults server-side to client_live.
-     */
-    messageSource?: "client_live" | "host_projection" | "system";
-  },
-): Promise<{ messageId: string }> {
-  const body: Record<string, unknown> = { text: input.text };
-  if (input.clientMessageId) body.client_message_id = input.clientMessageId;
-  if (input.replyToMessageId) body.reply_to_message_id = input.replyToMessageId;
-  if (input.messageSource) body.message_source = input.messageSource;
-  const clientTs = input.clientSentAtMs ?? input.createdAtMs;
-  if (clientTs != null && clientTs > 0) {
-    body.client_sent_at_ms = clientTs;
-  }
-  const resp = await requestJson<{ message_id: string }>(
-    `/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
-    {
-      method: "POST",
-      headers: deviceHeaders(deviceId, accessToken),
-      body: JSON.stringify(body),
-    },
-  );
-  return { messageId: resp.message_id };
-}
-
 export type CloudAgentSummary = {
   agentId: string;
   ownerAccountId: string;
@@ -1046,8 +1008,6 @@ export async function sendAgentConversationMessage(
     replyToMessageId?: string | null;
     agentSessionId?: string | null;
     clientSentAtMs?: number;
-    /** @deprecated Prefer clientSentAtMs. */
-    createdAtMs?: number;
     messageSource?: "client_live" | "host_projection" | "system";
   },
 ): Promise<{ messageId: string }> {
@@ -1059,9 +1019,8 @@ export async function sendAgentConversationMessage(
   if (input.replyToMessageId) body.reply_to_message_id = input.replyToMessageId;
   if (input.agentSessionId) body.agent_session_id = input.agentSessionId;
   if (input.messageSource) body.message_source = input.messageSource;
-  const clientTs = input.clientSentAtMs ?? input.createdAtMs;
-  if (clientTs != null && clientTs > 0) {
-    body.client_sent_at_ms = clientTs;
+  if (input.clientSentAtMs != null && input.clientSentAtMs > 0) {
+    body.client_sent_at_ms = input.clientSentAtMs;
   }
   const resp = await requestJson<{ message_id: string }>(
     `/v1/conversations/${encodeURIComponent(conversationId)}/agents/message`,

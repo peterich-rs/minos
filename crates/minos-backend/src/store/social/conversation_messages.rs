@@ -327,9 +327,7 @@ pub async fn list_message_mentions_full(
 
     let mut mentions_by_message = HashMap::<String, super::MessageMentions>::new();
     for row in rows {
-        let entry = mentions_by_message
-            .entry(row.message_id)
-            .or_default();
+        let entry = mentions_by_message.entry(row.message_id).or_default();
         match row.target_kind.as_str() {
             "agent" => entry.agent_ids.push(row.target_id),
             _ => entry.account_ids.push(row.target_id),
