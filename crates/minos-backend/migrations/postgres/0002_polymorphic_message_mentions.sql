@@ -24,11 +24,12 @@ BEGIN
             message_id   TEXT NOT NULL REFERENCES chat_messages(message_id) ON DELETE CASCADE,
             target_kind  TEXT NOT NULL CHECK (target_kind IN ('account', 'agent')),
             target_id    TEXT NOT NULL,
+            ordinal      INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (message_id, target_kind, target_id)
         );
 
-        INSERT INTO chat_message_mentions__polymorphic (message_id, target_kind, target_id)
-        SELECT message_id, 'account', mentioned_account_id
+        INSERT INTO chat_message_mentions__polymorphic (message_id, target_kind, target_id, ordinal)
+        SELECT message_id, 'account', mentioned_account_id, 0
           FROM chat_message_mentions;
 
         DROP TABLE chat_message_mentions;
@@ -36,6 +37,8 @@ BEGIN
 
         CREATE INDEX IF NOT EXISTS idx_chat_message_mentions_target
             ON chat_message_mentions(target_kind, target_id, message_id);
+        CREATE INDEX IF NOT EXISTS idx_chat_message_mentions_message_ordinal
+            ON chat_message_mentions(message_id, target_kind, ordinal);
 
         DROP INDEX IF EXISTS idx_chat_message_mentions_account;
     END IF;

@@ -72,12 +72,16 @@ class SocialRepository {
     required UserSummary sender,
     required String text,
     ChatMessageReplySummary? replyTo,
+    List<String> mentionedAccountIds = const <String>[],
+    List<String> mentionedAgentIds = const <String>[],
   }) {
     return _cacheStore.insertPendingMessage(
       conversationId: conversationId,
       sender: sender,
       text: text,
       replyTo: replyTo,
+      mentionedAccountIds: mentionedAccountIds,
+      mentionedAgentIds: mentionedAgentIds,
     );
   }
 

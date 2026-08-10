@@ -235,11 +235,15 @@ CREATE TABLE chat_message_mentions (
     message_id   TEXT NOT NULL REFERENCES chat_messages(message_id) ON DELETE CASCADE,
     target_kind  TEXT NOT NULL CHECK (target_kind IN ('account', 'agent')),
     target_id    TEXT NOT NULL,
+    -- Body appearance order within (message_id, target_kind); hydrate SSOT.
+    ordinal      INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (message_id, target_kind, target_id)
 );
 
 CREATE INDEX idx_chat_message_mentions_target
     ON chat_message_mentions(target_kind, target_id, message_id);
+CREATE INDEX idx_chat_message_mentions_message_ordinal
+    ON chat_message_mentions(message_id, target_kind, ordinal);
 
 CREATE TABLE message_reactions (
     reaction_id      TEXT PRIMARY KEY,

@@ -10,6 +10,7 @@ import 'package:minos/application/im_outbox_worker.dart';
 import 'package:minos/data/repositories/social_repository.dart';
 import 'package:minos/data/repositories/thread_repository.dart';
 import 'package:minos/data/services/minos_core_service.dart';
+import 'package:minos/domain/mention_extract.dart';
 import 'package:minos/domain/social_message.dart';
 import 'package:minos/domain/social_message_order.dart';
 import 'package:minos/src/rust/api/minos.dart';
@@ -356,11 +357,41 @@ class SocialConversation extends _$SocialConversation {
 
     final repository = ref.read(socialRepositoryProvider);
     final replyPreview = _replyPreviewForMessage(replyToMessage);
+    final sender = await _localSender();
+    // Optimistic structured mentions from current roster so local cache/reload
+    // before Hub ack still carries bot targets (Hub remains SSOT after upsert).
+    final participants = ref
+        .read(conversationParticipantsProvider(_conversationId))
+        .asData
+        ?.value;
+    final optimistic = extractOptimisticMentions(
+      text: trimmed,
+      selfAccountId: sender.accountId,
+      humans: (participants?.humans ?? const [])
+          .map(
+            (h) => MentionHumanRef(
+              accountId: h.accountId,
+              minosId: h.minosId,
+            ),
+          )
+          .toList(growable: false),
+      agents: (participants?.agents ?? const [])
+          .map(
+            (a) => MentionAgentRef(
+              agentId: a.agentId,
+              runtimeAgent: a.runtimeAgent,
+              name: a.name,
+            ),
+          )
+          .toList(growable: false),
+    );
     final pending = await repository.insertPendingMessage(
       conversationId: _conversationId,
-      sender: await _localSender(),
+      sender: sender,
       text: trimmed,
       replyTo: replyPreview,
+      mentionedAccountIds: optimistic.accountIds,
+      mentionedAgentIds: optimistic.agentIds,
     );
     final clientMessageId = pending.wireClientMessageId;
     await repository.enqueueUserMessageOutbox(

@@ -210,13 +210,15 @@ struct ForwardedAgentDispatch {
 /// Plan agent inbox deliveries for a committed user message (participant delivery).
 ///
 /// Selection order (ADR 0021 / agent-participant-delivery):
-/// 1. reply-to agent message → that agent (reuse session when bound)
+/// 1. reply-to agent message → that agent (reuse session when bound, else start path)
 /// 2. structured `mentioned_agent_ids` on the message (SSOT; appearance order)
-/// 3. group with exactly 1 human + 1 agent + no explicit agent mention → sole agent
+/// 3. group with exactly 1 human + 1 agent + **bare** text (no unresolved agentish @)
+///    → sole agent
 /// else empty
 ///
 /// Text is never a delivery target. Optional `#session_short` in the body is only a
 /// session-resolution hint for agents already present in structured mentions.
+/// Unmatched agentish `@` never sole-routes (wrong-bot activation is forbidden).
 /// Implementation table remains `agent_dispatch_queue`; domain name is Agent inbox.
 async fn plan_agent_deliveries(
     state: &BackendState,
@@ -242,36 +244,47 @@ async fn plan_agent_deliveries(
     // Room rule: only @-mention the human sender back when other humans are present.
     let mention_sender = human_members.len() > 1;
 
+    // Priority 1: reply-to an agent bubble → always that agent when still resolvable.
+    // Session bind is optional (older / projected rows may lack agent_session_id).
     if let Some(reply_target) = reply_target {
         if reply_target.sender_type == "agent" {
-            if let Some(session_id) = crate::store::social::lookup_session_id_for_message(
-                &state.store,
-                &reply_target.message_id,
-            )
-            .await
-            .map_err(|e| err("internal", e.to_string()))?
-            {
-                let agent_id = reply_target
-                    .sender_agent_id
-                    .as_deref()
-                    .unwrap_or(&reply_target.sender_account_id);
-                if let Some(agent) = crate::store::social::get_agent(&state.store, agent_id)
+            let agent_id = reply_target
+                .sender_agent_id
+                .as_deref()
+                .unwrap_or(&reply_target.sender_account_id);
+            // Prefer current conversation roster (membership-first); fall back to
+            // agent registry so a removed-but-still-visible bubble can continue.
+            let agent = agents
+                .iter()
+                .find(|a| a.agent_id == agent_id)
+                .cloned();
+            let agent = match agent {
+                Some(a) => Some(a),
+                None => crate::store::social::get_agent(&state.store, agent_id)
                     .await
-                    .map_err(|e| err("internal", e.to_string()))?
-                {
-                    return Ok(vec![AgentDispatchPlan {
-                        agent,
-                        session_id: Some(session_id),
-                        forwarded_text: text.to_string(),
-                        mention_sender,
-                    }]);
-                }
+                    .map_err(|e| err("internal", e.to_string()))?,
+            };
+            if let Some(agent) = agent {
+                let session_id = crate::store::social::lookup_session_id_for_message(
+                    &state.store,
+                    &reply_target.message_id,
+                )
+                .await
+                .map_err(|e| err("internal", e.to_string()))?;
+                return Ok(vec![AgentDispatchPlan {
+                    agent,
+                    session_id,
+                    forwarded_text: text.to_string(),
+                    mention_sender,
+                }]);
             }
         }
     }
 
-    // Structured agent mentions written with the user bubble (SSOT).
+    // Priority 2: structured agent mentions written with the user bubble (SSOT).
     // Preserve appearance order from extract; do not re-sort by agent_id.
+    // Non-empty structured list that all fail roster lookup must NOT fall through
+    // to sole-agent (stale/removed mention is skip/error, not wrong-bot route).
     if !message.mentioned_agent_ids.is_empty() {
         let mut plans = Vec::with_capacity(message.mentioned_agent_ids.len());
         let mut seen = std::collections::HashSet::new();
@@ -301,12 +314,18 @@ async fn plan_agent_deliveries(
                 mention_sender,
             });
         }
-        if !plans.is_empty() {
-            return Ok(plans);
-        }
+        // Structured mention intent was present: never sole-route as a fallback.
+        return Ok(plans);
     }
 
-    // Bare text: single-agent rooms auto-route; multi-agent rooms need explicit @.
+    // Unresolved agentish @ blocks sole-agent auto-route (P0: wrong-bot activation).
+    // Example: roster = [claude], body = "@codex please help" → empty plan so
+    // try_agent_dispatch surfaces agent_not_in_conversation, not Claude dispatch.
+    if body_has_unresolved_agentish_mention(text, &agents) {
+        return Ok(Vec::new());
+    }
+
+    // Priority 3: bare text sole-agent room only.
     if conversation.kind == "group" && human_members.len() == 1 && agents.len() == 1 {
         let agent = agents[0].clone();
         let session_id = resolve_dispatch_session_id(state, conversation_id, &agent, None)
@@ -321,6 +340,32 @@ async fn plan_agent_deliveries(
     }
 
     Ok(Vec::new())
+}
+
+/// True when the body contains an agentish `@token` that does not resolve to a
+/// current conversation agent participant (membership-first unmatched intent).
+fn body_has_unresolved_agentish_mention(
+    text: &str,
+    agents: &[crate::store::social::AgentRow],
+) -> bool {
+    for token in collect_mention_tokens(text) {
+        let (name_part, _) = crate::conversations::use_case::split_agent_session_token(token);
+        let lower = name_part.to_ascii_lowercase();
+        let looks_agentish = HOST_RUNTIME_MENTIONS.contains(&lower.as_str())
+            || lower.starts_with("bot-")
+            || agents.iter().any(|a| {
+                a.agent_id.eq_ignore_ascii_case(name_part)
+                    || a.runtime_agent.eq_ignore_ascii_case(&lower)
+                    || a.name.eq_ignore_ascii_case(name_part)
+            });
+        if !looks_agentish {
+            continue;
+        }
+        if crate::conversations::use_case::match_agent_token(name_part, agents).is_none() {
+            return true;
+        }
+    }
+    false
 }
 
 /// Resolve which formal agent session should receive a Hub `@agent` dispatch.

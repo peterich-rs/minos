@@ -43,6 +43,31 @@ describe("resolveDispatchTargets", () => {
     assert.equal(r.multiRoutedCount, 0);
   });
 
+  it("sole agent + unmatched @codex does not wrong-bot activate", () => {
+    assert.throws(
+      () =>
+        resolveDispatchTargets({
+          messageBody: "@codex please help",
+          participatingAgents: ["claude"],
+          installedAgents: installed,
+          mentionProfiles: [],
+        }),
+      /not a member/,
+    );
+  });
+
+  it("sole agent requires group + 1 human (Hub parity)", () => {
+    const r = resolveDispatchTargets({
+      messageBody: "hello",
+      participatingAgents: ["codex"],
+      installedAgents: installed,
+      mentionProfiles: [],
+      humanMemberCount: 2,
+      conversationKind: "group",
+    });
+    assert.deepEqual(r.targets, []);
+  });
+
   it("multi agent bare text does not fan-out", () => {
     const r = resolveDispatchTargets({
       messageBody: "status update for everyone",

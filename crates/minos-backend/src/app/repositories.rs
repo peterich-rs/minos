@@ -1897,13 +1897,15 @@ impl ConversationMessagesRepository for StoreBackedConversationMessagesRepositor
         // For standalone mention insertion, use raw SQL.
         match self.store.as_store_pool() {
             StorePoolRef::Sqlite(pool) => {
-                for account_id in account_ids {
+                for (ordinal, account_id) in account_ids.iter().enumerate() {
                     sqlx::query(
                         "INSERT OR IGNORE INTO chat_message_mentions \
-                         (message_id, target_kind, target_id) VALUES (?, 'account', ?)",
+                         (message_id, target_kind, target_id, ordinal) \
+                         VALUES (?, 'account', ?, ?)",
                     )
                     .bind(message_id)
                     .bind(account_id)
+                    .bind(ordinal as i64)
                     .execute(pool)
                     .await
                     .map_err(|e| BackendError::StoreQuery {
@@ -1913,14 +1915,16 @@ impl ConversationMessagesRepository for StoreBackedConversationMessagesRepositor
                 }
             }
             StorePoolRef::Postgres(pool) => {
-                for account_id in account_ids {
+                for (ordinal, account_id) in account_ids.iter().enumerate() {
                     sqlx::query(
                         "INSERT INTO chat_message_mentions \
-                         (message_id, target_kind, target_id) VALUES ($1, 'account', $2) \
+                         (message_id, target_kind, target_id, ordinal) \
+                         VALUES ($1, 'account', $2, $3) \
                          ON CONFLICT DO NOTHING",
                     )
                     .bind(message_id)
                     .bind(account_id)
+                    .bind(ordinal as i64)
                     .execute(pool)
                     .await
                     .map_err(|e| BackendError::StoreQuery {

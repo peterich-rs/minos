@@ -358,6 +358,28 @@ pub async fn ensure_polymorphic_message_mentions_sqlite(
             .map_err(|e| BackendError::StoreMigrate {
                 message: format!("ensure chat_message_mentions target index: {e}"),
             })?;
+            // Existing polymorphic tables may predate the ordinal column.
+            let has_ordinal = cols.iter().any(|c| c == "ordinal");
+            if !has_ordinal {
+                sqlx::query(
+                    "ALTER TABLE chat_message_mentions
+                     ADD COLUMN ordinal INTEGER NOT NULL DEFAULT 0",
+                )
+                .execute(pool)
+                .await
+                .map_err(|e| BackendError::StoreMigrate {
+                    message: format!("add chat_message_mentions.ordinal: {e}"),
+                })?;
+            }
+            sqlx::query(
+                "CREATE INDEX IF NOT EXISTS idx_chat_message_mentions_message_ordinal
+                 ON chat_message_mentions(message_id, target_kind, ordinal)",
+            )
+            .execute(pool)
+            .await
+            .map_err(|e| BackendError::StoreMigrate {
+                message: format!("ensure chat_message_mentions ordinal index: {e}"),
+            })?;
         }
         return Ok(());
     }
@@ -371,6 +393,7 @@ pub async fn ensure_polymorphic_message_mentions_sqlite(
             message_id   TEXT NOT NULL REFERENCES chat_messages(message_id) ON DELETE CASCADE,
             target_kind  TEXT NOT NULL CHECK (target_kind IN ('account', 'agent')),
             target_id    TEXT NOT NULL,
+            ordinal      INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (message_id, target_kind, target_id)
         ) STRICT",
     )
@@ -381,8 +404,8 @@ pub async fn ensure_polymorphic_message_mentions_sqlite(
     })?;
 
     sqlx::query(
-        "INSERT INTO chat_message_mentions__new (message_id, target_kind, target_id)
-         SELECT message_id, 'account', mentioned_account_id
+        "INSERT INTO chat_message_mentions__new (message_id, target_kind, target_id, ordinal)
+         SELECT message_id, 'account', mentioned_account_id, 0
            FROM chat_message_mentions",
     )
     .execute(&mut *tx)
@@ -417,6 +440,15 @@ pub async fn ensure_polymorphic_message_mentions_sqlite(
     .await
     .map_err(|e| BackendError::StoreMigrate {
         message: format!("create polymorphic mentions index: {e}"),
+    })?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_chat_message_mentions_message_ordinal
+         ON chat_message_mentions(message_id, target_kind, ordinal)",
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| BackendError::StoreMigrate {
+        message: format!("create polymorphic mentions ordinal index: {e}"),
     })?;
 
     tx.commit().await.map_err(|e| BackendError::StoreMigrate {

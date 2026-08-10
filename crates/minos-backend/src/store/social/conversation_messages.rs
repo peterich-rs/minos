@@ -296,7 +296,8 @@ pub async fn list_message_mentions_full(
                     separated.push_bind(message_id);
                 }
             }
-            builder.push(") ORDER BY message_id ASC, target_kind ASC, target_id ASC");
+            // Appearance order SSOT: ordinal written at insert (not target_id lex).
+            builder.push(") ORDER BY message_id ASC, target_kind ASC, ordinal ASC, target_id ASC");
             builder
                 .build_query_as::<MessageMentionRow>()
                 .fetch_all(pool)
@@ -314,7 +315,8 @@ pub async fn list_message_mentions_full(
                     separated.push_bind(message_id);
                 }
             }
-            builder.push(") ORDER BY message_id ASC, target_kind ASC, target_id ASC");
+            // Appearance order SSOT: ordinal written at insert (not target_id lex).
+            builder.push(") ORDER BY message_id ASC, target_kind ASC, ordinal ASC, target_id ASC");
             builder
                 .build_query_as::<MessageMentionRow>()
                 .fetch_all(pool)
@@ -617,38 +619,44 @@ async fn insert_mention_rows_sqlite(
     message_id: &str,
     mentions: &super::MessageMentions,
 ) -> Result<(), BackendError> {
-    // Preserve caller appearance order; only de-dupe, do not sort by id.
+    // Preserve caller appearance order via ordinal; only de-dupe, do not sort by id.
     let mut seen_accounts = std::collections::HashSet::new();
     let mut seen_agents = std::collections::HashSet::new();
+    let mut account_ordinal: i64 = 0;
     for target_id in &mentions.account_ids {
         if !seen_accounts.insert(target_id.clone()) {
             continue;
         }
         sqlx::query(
             "INSERT INTO chat_message_mentions
-                (message_id, target_kind, target_id)
-             VALUES (?, 'account', ?)",
+                (message_id, target_kind, target_id, ordinal)
+             VALUES (?, 'account', ?, ?)",
         )
         .bind(message_id)
         .bind(target_id)
+        .bind(account_ordinal)
         .execute(&mut **tx)
         .await
         .map_err(store_err("social::insert_message.insert_mention"))?;
+        account_ordinal += 1;
     }
+    let mut agent_ordinal: i64 = 0;
     for target_id in &mentions.agent_ids {
         if !seen_agents.insert(target_id.clone()) {
             continue;
         }
         sqlx::query(
             "INSERT INTO chat_message_mentions
-                (message_id, target_kind, target_id)
-             VALUES (?, 'agent', ?)",
+                (message_id, target_kind, target_id, ordinal)
+             VALUES (?, 'agent', ?, ?)",
         )
         .bind(message_id)
         .bind(target_id)
+        .bind(agent_ordinal)
         .execute(&mut **tx)
         .await
         .map_err(store_err("social::insert_message.insert_mention"))?;
+        agent_ordinal += 1;
     }
     Ok(())
 }
@@ -658,38 +666,44 @@ async fn insert_mention_rows_postgres(
     message_id: &str,
     mentions: &super::MessageMentions,
 ) -> Result<(), BackendError> {
-    // Preserve caller appearance order; only de-dupe, do not sort by id.
+    // Preserve caller appearance order via ordinal; only de-dupe, do not sort by id.
     let mut seen_accounts = std::collections::HashSet::new();
     let mut seen_agents = std::collections::HashSet::new();
+    let mut account_ordinal: i64 = 0;
     for target_id in &mentions.account_ids {
         if !seen_accounts.insert(target_id.clone()) {
             continue;
         }
         sqlx::query(
             "INSERT INTO chat_message_mentions
-                (message_id, target_kind, target_id)
-             VALUES ($1, 'account', $2)",
+                (message_id, target_kind, target_id, ordinal)
+             VALUES ($1, 'account', $2, $3)",
         )
         .bind(message_id)
         .bind(target_id)
+        .bind(account_ordinal)
         .execute(&mut **tx)
         .await
         .map_err(store_err("social::insert_message.insert_mention"))?;
+        account_ordinal += 1;
     }
+    let mut agent_ordinal: i64 = 0;
     for target_id in &mentions.agent_ids {
         if !seen_agents.insert(target_id.clone()) {
             continue;
         }
         sqlx::query(
             "INSERT INTO chat_message_mentions
-                (message_id, target_kind, target_id)
-             VALUES ($1, 'agent', $2)",
+                (message_id, target_kind, target_id, ordinal)
+             VALUES ($1, 'agent', $2, $3)",
         )
         .bind(message_id)
         .bind(target_id)
+        .bind(agent_ordinal)
         .execute(&mut **tx)
         .await
         .map_err(store_err("social::insert_message.insert_mention"))?;
+        agent_ordinal += 1;
     }
     Ok(())
 }

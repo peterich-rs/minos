@@ -254,7 +254,7 @@ POST send-message (Account)
   → Bot: Agent inbox worker → runtime port (Host) → agent reply message
 ```
 
-**现状（过渡）**：人类 mention 已进 `chat_message_mentions`；agent @ 仍多在发送后 `try_agent_dispatch` / 文本路由（`http/v1/social.rs`），**尚未**与 mention 表同构——Phase 1 收敛。
+**现状**：`chat_message_mentions` 为多态 SSOT（`target_kind ∈ {account,agent}` + `ordinal` 保序）；发送路径 `extract_participant_mentions` 写 mention 行，`plan_agent_deliveries` 只读结构化 `mentioned_agent_ids` / reply / sole-agent bare（**文本不是投递目标**）。HostCommand 仅是 Host runtime port 实现细节，不是产品协作原语。
 
 不变量：
 
@@ -262,6 +262,7 @@ POST send-message (Account)
 - 发送者对自己的 @ 不计入自己的 mention 未读。  
 - 撤回后 mention 随消息处理；规划上 **recall 修正未读/mention 计数**。  
 - `message_source=host_projection|system`：**永不**再投递 agent inbox（防环）。  
+- 未匹配的 agentish `@` **不得** sole-route 到错误 bot。  
 - 后续：`@everyone` / 角色 @；wire 上 `mentions: [{kind,id}]`。
 
 #### 3.4.3 Approval ≈ 特殊 @
@@ -592,7 +593,7 @@ POST send-message ──┤  durable_event_log @ conversation:{id}       │  �
 | `installation_id` / `device_id` | 安装维度连接与踢旧 |
 | `conversation_id` | 社交会话 |
 | `message_id` | 单条聊天消息 |
-| `mentioned_account_id` | 消息 @ 目标（`message_mentions`） |
+| `chat_message_mentions.(target_kind,target_id)` | 多态 @ 目标：`account`/`agent` + `ordinal` 外观序 |
 | `request_id` | Approval 请求（Attention 子集） |
 | `session_id` | Agent 会话（云端 formal；从属 conversation） |
 | `turn_id` / `turn_seq` | Agent 轮次 |

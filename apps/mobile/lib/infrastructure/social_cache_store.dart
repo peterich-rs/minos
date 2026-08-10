@@ -373,6 +373,8 @@ class SocialCacheStore {
     required UserSummary sender,
     required String text,
     ChatMessageReplySummary? replyTo,
+    List<String> mentionedAccountIds = const <String>[],
+    List<String> mentionedAgentIds = const <String>[],
   }) async {
     // client_message_id == localId: stable wire id for Hub idempotent insert.
     final clientMessageId = _newClientMessageId();
@@ -386,8 +388,10 @@ class SocialCacheStore {
       deliveryState: SocialMessageDeliveryState.sending,
       clientMessageId: clientMessageId,
       replyTo: replyTo,
-      mentionedAccountIds: const <String>[],
-      mentionedAgentIds: const <String>[],
+      // Optimistic seed: callers pass best-effort parse so reload before ack
+      // still shows structured bot mentions (Hub upsert remains SSOT).
+      mentionedAccountIds: List<String>.unmodifiable(mentionedAccountIds),
+      mentionedAgentIds: List<String>.unmodifiable(mentionedAgentIds),
     );
 
     final db = await _database();

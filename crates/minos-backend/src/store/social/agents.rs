@@ -669,17 +669,20 @@ pub async fn insert_agent_message_with_session_in_tx(
             .await
             .map_err(store_err("social::insert_agent_message.insert"))?;
 
+            let mut account_ordinal: i64 = 0;
             for target_id in &mentions.account_ids {
                 sqlx::query(
                     "INSERT OR IGNORE INTO chat_message_mentions
-                        (message_id, target_kind, target_id)
-                     VALUES (?, 'account', ?)",
+                        (message_id, target_kind, target_id, ordinal)
+                     VALUES (?, 'account', ?, ?)",
                 )
                 .bind(&message_id)
                 .bind(target_id)
+                .bind(account_ordinal)
                 .execute(&mut **tx)
                 .await
                 .map_err(store_err("social::insert_agent_message.mention"))?;
+                account_ordinal += 1;
             }
         }
         crate::app::tx::DbTx::Postgres(tx) => {
@@ -711,18 +714,21 @@ pub async fn insert_agent_message_with_session_in_tx(
             .await
             .map_err(store_err("social::insert_agent_message.insert"))?;
 
+            let mut account_ordinal: i64 = 0;
             for target_id in &mentions.account_ids {
                 sqlx::query(
                     "INSERT INTO chat_message_mentions
-                        (message_id, target_kind, target_id)
-                     VALUES ($1, 'account', $2)
+                        (message_id, target_kind, target_id, ordinal)
+                     VALUES ($1, 'account', $2, $3)
                      ON CONFLICT DO NOTHING",
                 )
                 .bind(&message_id)
                 .bind(target_id)
+                .bind(account_ordinal)
                 .execute(&mut **tx)
                 .await
                 .map_err(store_err("social::insert_agent_message.mention"))?;
+                account_ordinal += 1;
             }
         }
     }

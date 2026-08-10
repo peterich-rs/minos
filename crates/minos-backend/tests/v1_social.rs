@@ -2468,3 +2468,178 @@ async fn sole_agent_room_bare_text_enqueues_one_inbox() {
     assert_eq!(row.agent_id, agent.agent_id);
     assert!(!row.mention_sender, "sole-agent auto-route never @s sender");
 }
+
+/// P0: sole-agent room + unmatched agentish @ must NOT wrong-bot activate.
+/// Roster = [claude], body = "@codex please help" → 0 inbox (not Claude).
+#[tokio::test]
+async fn sole_agent_room_unmatched_at_does_not_wrong_bot_activate() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let conversation =
+        social::create_group_conversation(&state.store, &alice.account_id, "Wrong bot", &[], 100)
+            .await
+            .unwrap();
+    let claude = social::register_agent(
+        &state.store,
+        &alice.account_id,
+        "Claude",
+        "Assistant",
+        "claude",
+        "opus",
+        None,
+        100,
+    )
+    .await
+    .unwrap();
+    social::add_agent_to_conversation(
+        &state.store,
+        &conversation.conversation_id,
+        &claude.agent_id,
+        &alice.account_id,
+        100,
+    )
+    .await
+    .unwrap();
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(serde_json::json!({ "text": "@codex please help" }).to_string()),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let origin = body["message_id"].as_str().unwrap().to_string();
+    let mentioned = body["mentioned_agent_ids"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        mentioned.is_empty(),
+        "codex is not a member → no structured agent mention"
+    );
+    let count = minos_backend::store::agent_dispatch_queue::count_by_origin(&state.store, &origin)
+        .await
+        .unwrap();
+    assert_eq!(
+        count, 0,
+        "unmatched @codex must not sole-route Claude (wrong-bot activation)"
+    );
+}
+
+/// Structured multi-@ appearance order survives list/history hydrate (ordinal SSOT).
+#[tokio::test]
+async fn multi_agent_mention_order_survives_message_list_hydrate() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let conversation =
+        social::create_group_conversation(&state.store, &alice.account_id, "Order hydrate", &[], 100)
+            .await
+            .unwrap();
+    let codex = social::register_agent(
+        &state.store,
+        &alice.account_id,
+        "Codex",
+        "Assistant",
+        "codex",
+        "gpt-5",
+        None,
+        100,
+    )
+    .await
+    .unwrap();
+    let claude = social::register_agent(
+        &state.store,
+        &alice.account_id,
+        "Claude",
+        "Assistant",
+        "claude",
+        "opus",
+        None,
+        101,
+    )
+    .await
+    .unwrap();
+    for agent in [&codex, &claude] {
+        social::add_agent_to_conversation(
+            &state.store,
+            &conversation.conversation_id,
+            &agent.agent_id,
+            &alice.account_id,
+            100,
+        )
+        .await
+        .unwrap();
+    }
+
+    // Appearance order deliberately reverse of typical agent_id lex order.
+    let text = format!("@{} @{} count off", claude.agent_id, codex.agent_id);
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(serde_json::json!({ "text": text }).to_string()),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let origin = body["message_id"].as_str().unwrap().to_string();
+
+    // Re-list via history path (hydrate) — not the send response alone.
+    let (status, list_body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages/query",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(serde_json::json!({ "limit": 20 }).to_string()),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let messages = list_body["messages"]
+        .as_array()
+        .expect("messages array");
+    let found = messages
+        .iter()
+        .find(|m| m["message_id"].as_str() == Some(origin.as_str()))
+        .expect("origin message in list");
+    let mentioned: Vec<String> = found["mentioned_agent_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect();
+    assert_eq!(
+        mentioned,
+        vec![claude.agent_id.clone(), codex.agent_id.clone()],
+        "hydrated mentioned_agent_ids must follow body appearance order"
+    );
+}
