@@ -156,15 +156,18 @@ impl ConnectionState {
             .any(|existing| existing == event_id)
     }
 
-    pub fn send(&self, frame: ServerFrame) -> Result<(), mpsc::error::TrySendError<ServerFrame>> {
-        self.push.try_send(frame)
+    pub fn send(
+        &self,
+        frame: ServerFrame,
+    ) -> Result<(), Box<mpsc::error::TrySendError<ServerFrame>>> {
+        self.push.try_send(frame).map_err(Box::new)
     }
 
     pub fn send_durable_event(
         &self,
         event_id: &str,
         frame: ServerFrame,
-    ) -> Result<DurableSendResult, mpsc::error::TrySendError<ServerFrame>> {
+    ) -> Result<DurableSendResult, Box<mpsc::error::TrySendError<ServerFrame>>> {
         // Already delivered to the wire (or committed to drain path).
         if self.has_seen_durable_event(event_id) {
             return Ok(DurableSendResult::AlreadySeen);
@@ -207,7 +210,7 @@ impl ConnectionState {
         if seen.iter().any(|existing| existing == event_id) {
             return Ok(DurableSendResult::AlreadySeen);
         }
-        self.push.try_send(frame)?;
+        self.push.try_send(frame).map_err(Box::new)?;
         seen.push_back(event_id.to_string());
         if seen.len() > SEEN_DURABLE_EVENT_IDS_CAPACITY {
             let _ = seen.pop_front();
@@ -302,6 +305,59 @@ impl SubscriptionManager {
                 self.by_conn
                     .get(conn_id)
                     .map(|conn| Arc::clone(conn.value()))
+            })
+            .collect()
+    }
+
+    /// Live connection(s) for a device installation (Host or Account).
+    /// Used for ephemeral Hub→Host frames such as `BotInboxDelivery`.
+    #[must_use]
+    pub fn connections_for_device(&self, device_id: DeviceId) -> Vec<Arc<ConnectionState>> {
+        self.by_conn
+            .iter()
+            .filter_map(|entry| {
+                let conn = entry.value();
+                (conn.device_id == device_id).then(|| Arc::clone(conn))
+            })
+            .collect()
+    }
+
+    /// Push an ephemeral frame to every live connection for `device_id`.
+    /// Returns how many sockets accepted the frame into their push queue.
+    pub fn push_to_device(&self, device_id: DeviceId, frame: ServerFrame) -> usize {
+        let mut sent = 0usize;
+        for conn in self.connections_for_device(device_id) {
+            match conn.send(frame.clone()) {
+                Ok(()) => sent = sent.saturating_add(1),
+                Err(error) => {
+                    tracing::warn!(
+                        target: "minos_backend::realtime::subscription",
+                        device_id = %device_id,
+                        conn_id = %conn.conn_id,
+                        error = %error,
+                        "failed to push ephemeral frame to device connection"
+                    );
+                }
+            }
+        }
+        sent
+    }
+
+    /// Live host connections for a specific installation id (mailbox delivery).
+    #[must_use]
+    pub fn host_connections_for_device(
+        &self,
+        host_device_id: DeviceId,
+    ) -> Vec<Arc<ConnectionState>> {
+        self.by_conn
+            .iter()
+            .filter_map(|entry| {
+                let conn = entry.value();
+                if conn.role == DeviceRole::AgentHost && conn.device_id == host_device_id {
+                    Some(Arc::clone(conn))
+                } else {
+                    None
+                }
             })
             .collect()
     }

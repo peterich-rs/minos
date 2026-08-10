@@ -8,10 +8,11 @@ void main() {
       const message = SocialChatMessage(
         localId: 'local-1',
         conversationId: 'conv-1',
-        sender: UserSummary(
-          accountId: 'agent-1',
-          minosId: 'grok',
+        sender: MessageSender.bot(
+          botId: 'agent-1',
           displayName: 'Grok',
+          runtimeAgent: 'grok',
+          name: 'grok',
         ),
         text: 'hi',
         createdAtMs: 1,
@@ -27,10 +28,11 @@ void main() {
       const message = SocialChatMessage(
         localId: 'local-2',
         conversationId: 'conv-1',
-        sender: UserSummary(
-          accountId: 'agent-1',
-          minosId: 'grok',
+        sender: MessageSender.bot(
+          botId: 'agent-1',
           displayName: 'Grok',
+          runtimeAgent: 'grok',
+          name: 'grok',
         ),
         text: 'hi',
         createdAtMs: 1,

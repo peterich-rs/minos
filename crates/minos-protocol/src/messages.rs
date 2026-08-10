@@ -81,6 +81,85 @@ pub struct UserSummary {
     pub display_name: String,
 }
 
+/// First-class chat author card: human Account or global bot.
+///
+/// Replaces the long-standing type lie of stuffing `agent_id` into
+/// [`UserSummary::account_id`] for agent-authored rows. Wire tag is `kind`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MessageSender {
+    Account {
+        account_id: String,
+        minos_id: String,
+        display_name: String,
+    },
+    Bot {
+        bot_id: String,
+        display_name: String,
+        /// Runtime binary family (`codex` / `claude` / …) for badges only.
+        #[serde(default)]
+        runtime_agent: String,
+        /// Internal handle (unique per owner); optional for sparse rows.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        avatar_url: Option<String>,
+    },
+}
+
+impl MessageSender {
+    pub fn display_name(&self) -> &str {
+        match self {
+            Self::Account { display_name, .. } | Self::Bot { display_name, .. } => display_name,
+        }
+    }
+
+    pub fn account_id(&self) -> Option<&str> {
+        match self {
+            Self::Account { account_id, .. } => Some(account_id.as_str()),
+            Self::Bot { .. } => None,
+        }
+    }
+
+    pub fn bot_id(&self) -> Option<&str> {
+        match self {
+            Self::Bot { bot_id, .. } => Some(bot_id.as_str()),
+            Self::Account { .. } => None,
+        }
+    }
+
+    /// Primary identity id for this sender (`account_id` or `bot_id`).
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Account { account_id, .. } => account_id.as_str(),
+            Self::Bot { bot_id, .. } => bot_id.as_str(),
+        }
+    }
+
+    pub fn is_bot(&self) -> bool {
+        matches!(self, Self::Bot { .. })
+    }
+
+    pub fn is_account(&self) -> bool {
+        matches!(self, Self::Account { .. })
+    }
+
+    pub fn sender_type(&self) -> SenderType {
+        match self {
+            Self::Account { .. } => SenderType::User,
+            Self::Bot { .. } => SenderType::Agent,
+        }
+    }
+
+    pub fn from_user_summary(user: UserSummary) -> Self {
+        Self::Account {
+            account_id: user.account_id,
+            minos_id: user.minos_id,
+            display_name: user.display_name,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SearchUsersResponse {
     pub users: Vec<UserSummary>,
@@ -230,7 +309,7 @@ pub struct ConversationReadResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ChatMessageReplySummary {
     pub message_id: String,
-    pub sender: UserSummary,
+    pub sender: MessageSender,
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recalled_at_ms: Option<i64>,
@@ -240,7 +319,7 @@ pub struct ChatMessageReplySummary {
 pub struct ChatMessageSummary {
     pub message_id: String,
     pub conversation_id: String,
-    pub sender: UserSummary,
+    pub sender: MessageSender,
     pub text: String,
     pub created_at_ms: i64,
     /// Per-conversation monotonic sort/pagination key (Hub SSOT).
@@ -249,10 +328,16 @@ pub struct ChatMessageSummary {
     pub reply_to: Option<ChatMessageReplySummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recalled_at_ms: Option<i64>,
+    /// Human participants mentioned in this message (`target_kind=account`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mentioned_account_ids: Vec<String>,
-    /// Distinguishes user-sent messages from agent-sent messages.
-    /// Defaults to "user" for backward compatibility.
+    /// Bot agent participants mentioned in this message (`target_kind=agent`).
+    /// Structured SSOT alongside account mentions; agent inbox delivery keys off this.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentioned_agent_ids: Vec<String>,
+    /// Derived mirror of [`MessageSender`] for legacy clients/FRB.
+    /// **SSOT is `sender`** — always set via [`Self::sender_type_from`] /
+    /// `sender.sender_type()`. Do not invent a second identity from this field.
     #[serde(default = "default_sender_type")]
     pub sender_type: SenderType,
     /// Cloud reaction aggregates (viewer-resolved `reacted_by_me`). Empty when none.
@@ -261,6 +346,19 @@ pub struct ChatMessageSummary {
     /// Uploaded media blobs linked to this message (Hub SSOT).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<ChatMessageAttachment>,
+}
+
+impl ChatMessageSummary {
+    /// `sender_type` mirror of [`MessageSender`] (wire SSOT is `sender`).
+    #[must_use]
+    pub fn sender_type_from(sender: &MessageSender) -> SenderType {
+        sender.sender_type()
+    }
+
+    /// Recompute `sender_type` from `sender` after mutating the principal.
+    pub fn sync_sender_type(&mut self) {
+        self.sender_type = self.sender.sender_type();
+    }
 }
 
 /// Media blob linked to a chat message (metadata; bytes live in object storage).
@@ -364,7 +462,10 @@ pub enum MessageSource {
 }
 
 impl MessageSource {
-    /// Whether Hub should run `@agent` dispatch after inserting this user message.
+    /// Whether Hub should enqueue Agent inbox delivery after inserting this user message.
+    ///
+    /// Only live client sends may deliver to agent participants. `host_projection`
+    /// and `system` never re-deliver (anti-loop; Desktop-native uplink).
     #[must_use]
     pub fn allows_agent_dispatch(self) -> bool {
         matches!(self, Self::ClientLive)
@@ -406,9 +507,6 @@ pub struct SendChatMessageRequest {
     /// Client clock for display/debug only. Hub assigns authoritative `created_at_ms`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_sent_at_ms: Option<i64>,
-    /// @deprecated Prefer `client_sent_at_ms`. Accepted but not used as ordering authority.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_at_ms: Option<i64>,
     /// Ready media blob ids owned by the sender (upload via the media API first).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachment_blob_ids: Vec<String>,
@@ -428,41 +526,94 @@ fn default_sender_type() -> SenderType {
     SenderType::User
 }
 
-/// Request to register a new agent under the caller's account.
+/// Request to register a new **global bot** under the caller's account.
+///
+/// Creates a Hub bot identity (digital body). Joining conversations is a
+/// separate membership step — see global-bot-identity-design.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct RegisterAgentRequest {
     pub name: String,
+    /// Optional public display name; defaults to `name` when omitted/empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     #[serde(default)]
     pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
     pub runtime_agent: String,
     #[serde(default)]
     pub model: String,
+    /// Default reasoning effort for new sessions (session may override).
+    #[serde(default)]
+    pub default_reasoning_effort: String,
+    /// System prompt / persona (digital body).
+    #[serde(default)]
+    pub system_prompt: String,
+    /// Optional default workspace hint only (not per-conversation identity).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_path: Option<String>,
 }
 
-/// Request to update an existing agent owned by the caller.
+/// Request to update an existing global bot owned by the caller.
+///
+/// **Partial digital-body merge**: omitted optional fields keep the current Hub
+/// values. Clients that only edit name/model must not wipe status, avatar, or
+/// system_prompt by omitting them.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct UpdateAgentRequest {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     #[serde(default)]
     pub description: String,
+    /// Omitted → keep current avatar. `Some("")` / whitespace → clear.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
     pub runtime_agent: String,
     #[serde(default)]
     pub model: String,
+    /// Omitted → keep current default reasoning effort.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_reasoning_effort: Option<String>,
+    /// Omitted → keep current system prompt. `Some("")` → clear.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_path: Option<String>,
+    /// `active` | `disabled`. Omitted → keep current status.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
 }
 
-/// Summary of a registered agent.
+fn default_agent_status() -> String {
+    "active".into()
+}
+
+/// Summary of a registered **global bot** (Hub identity + digital body card).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct AgentSummary {
     pub agent_id: String,
     pub owner_account_id: String,
     pub name: String,
+    /// Public display name; may equal `name`.
+    #[serde(default)]
+    pub display_name: String,
     pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
+    /// `user` | `host_runtime` | `system`
+    #[serde(default)]
+    pub source: String,
+    /// `active` | `disabled`
+    #[serde(default = "default_agent_status")]
+    pub status: String,
     pub runtime_agent: String,
     pub model: String,
+    #[serde(default)]
+    pub default_reasoning_effort: String,
+    #[serde(default)]
+    pub system_prompt: String,
+    /// Default workspace hint only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_path: Option<String>,
     pub created_at_ms: i64,
@@ -505,6 +656,14 @@ pub struct ConversationAgentMembersResponse {
     pub agents: Vec<AgentSummary>,
 }
 
+/// Unified conversation participants (human ∪ bot). Phase A read model over dual tables.
+/// See ADR 0021 / agent-participant-delivery.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ConversationParticipantsResponse {
+    pub humans: Vec<UserSummary>,
+    pub agents: Vec<AgentSummary>,
+}
+
 /// Request for an agent to send a message in a group conversation.
 /// The agent_id identifies which agent is "speaking".
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -526,9 +685,6 @@ pub struct SendAgentMessageRequest {
     /// Client clock for display/debug only. Hub assigns authoritative `created_at_ms`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_sent_at_ms: Option<i64>,
-    /// @deprecated Prefer `client_sent_at_ms`. Not used as ordering authority.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_at_ms: Option<i64>,
 }
 
 /// Ensure a Host/Desktop runtime agent exists for the caller's account.
@@ -698,20 +854,10 @@ pub struct WriteHostSkillConfigResponse {
     pub effective_enabled: bool,
 }
 
-/// Which codex driver to spawn — selectable at start time so dev/test
-/// surfaces can compare the two paths side-by-side without rebuilding.
-/// `Jsonl` is the production default (`codex exec --json` per turn); `Server`
-/// spawns `codex app-server --listen ws://…` and connects via WebSocket.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
-pub enum AgentLaunchMode {
-    #[default]
-    #[serde(rename = "jsonl")]
-    Jsonl,
-    #[serde(rename = "server")]
-    Server,
-}
-
 /// Parameters for the `start_agent` RPC. See spec §5.2.
+///
+/// Launches always use the app-server / long-running runtime path (JSONL
+/// `codex exec` was retired). There is no launch-mode selector on the wire.
 ///
 /// # Profile resolution (latest-only)
 ///
@@ -732,12 +878,6 @@ pub struct StartAgentRequest {
     /// distinct calls for different workspaces spawn distinct codex children.
     /// Carried as a string for FFI/portability (no `PathBuf` on wire).
     pub workspace: String,
-    /// Optional driver selector. Absent ⇒ `Server` post-Phase-C, preserving
-    /// the wire shape for clients that pre-date the field. The `Jsonl` variant
-    /// is retained for compatibility but no longer drives a JSONL exec path —
-    /// it is silently treated as `Server`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mode: Option<AgentLaunchMode>,
     /// Host agent profile to bind at create time. See struct-level resolution order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile_id: Option<String>,
@@ -772,6 +912,13 @@ pub struct SendUserMessageRequest {
     /// Host downloads these into the workspace before prompting the agent.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<DispatchAttachment>,
+    /// Bot mailbox delivery id (Host `/ws/host` BotInboxDelivery). When set,
+    /// completion emits `AppendBotMessage` as the primary Hub final-text path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_id: Option<String>,
+    /// Global bot identity for mailbox-delivered turns (`agents.agent_id`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_id: Option<String>,
 }
 
 /// Server → Host. Unified dispatch payload for agent-bound chat messages.
@@ -1114,6 +1261,10 @@ pub struct LocalConversationMessage {
     pub session_id: Option<String>,
     pub created_at_ms: i64,
     pub sender_role: String,
+    /// Bot identity for agent-authored rows (`bot_identities.bot_id`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_id: Option<String>,
+    /// Runtime family badge derived from the bot identity (or session).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<AgentName>,
     pub body: String,
@@ -1406,7 +1557,13 @@ pub struct ConversationAgentSpec {
 /// Durable roster row returned on conversation summaries / list_conversation_roster.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ConversationRosterMember {
+    /// Stable bot identity (membership key).
+    pub bot_id: String,
+    /// Runtime family for badges / CLI launch (`codex` / `claude` / …).
     pub agent: AgentName,
+    /// Display name from bot identity when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brief: Option<String>,
     pub joined_at_ms: i64,
@@ -1579,15 +1736,20 @@ pub struct ListModelsResponse {
 }
 
 /// Host-local personalized agent (fixed runtime + model + effort at create).
+///
+/// Wire name kept as AgentProfile* for Desktop/TUI; `id` is the bot identity id
+/// (`bot_identities.bot_id`). `instructions` maps to `system_prompt`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentProfileSummary {
+    /// Bot identity id (`bot_id`).
     pub id: String,
+    /// Display name.
     pub name: String,
     pub description: String,
     pub runtime_agent: AgentName,
     pub model: String,
     pub reasoning_effort: String,
-    /// Extra system prompt / developer instructions appended at session start.
+    /// System prompt / developer instructions (`bot_identities.system_prompt`).
     #[serde(default)]
     pub instructions: String,
     pub created_at_ms: i64,
@@ -1672,6 +1834,23 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
+    fn message_source_only_client_live_allows_agent_dispatch() {
+        assert!(MessageSource::ClientLive.allows_agent_dispatch());
+        assert!(!MessageSource::HostProjection.allows_agent_dispatch());
+        assert!(!MessageSource::System.allows_agent_dispatch());
+        assert_eq!(
+            MessageSource::parse("host_projection"),
+            MessageSource::HostProjection
+        );
+        assert_eq!(MessageSource::parse("system"), MessageSource::System);
+        assert_eq!(
+            MessageSource::parse("client_live"),
+            MessageSource::ClientLive
+        );
+        assert_eq!(MessageSource::parse("unknown"), MessageSource::ClientLive);
+    }
+
+    #[test]
     fn me_hosts_response_round_trips() {
         let hosts = MeHostsResponse {
             hosts: vec![HostSummary {
@@ -1721,6 +1900,7 @@ mod tests {
             session_id: None,
             created_at_ms: 10,
             sender_role: "user".into(),
+            bot_id: None,
             agent: None,
             body: "hi".into(),
             reply_to_message_id: None,
@@ -1821,34 +2001,16 @@ mod tests {
         let req = StartAgentRequest {
             agent: AgentName::Codex,
             workspace: "/Users/fan/dev".into(),
-            mode: None,
             profile_id: None,
             model: None,
             reasoning_effort: None,
             instructions: None,
         };
         let json = serde_json::to_string(&req).unwrap();
-        // Default-mode payload omits the optional `mode` field.
-        assert!(!json.contains("mode"));
         // Workspace is mandatory post-Phase-C and must serialize.
         assert!(json.contains("workspace"));
-        let back: StartAgentRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(req, back);
-    }
-
-    #[test]
-    fn start_agent_request_with_mode_round_trip() {
-        let req = StartAgentRequest {
-            agent: AgentName::Codex,
-            workspace: "/Users/fan/dev".into(),
-            mode: Some(AgentLaunchMode::Server),
-            profile_id: None,
-            model: None,
-            reasoning_effort: None,
-            instructions: None,
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains("\"mode\":\"server\""));
+        // Retired launch-mode selector must not reappear on the wire.
+        assert!(!json.contains("mode"));
         let back: StartAgentRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(req, back);
     }
@@ -1858,7 +2020,6 @@ mod tests {
         let req = StartAgentRequest {
             agent: AgentName::Grok,
             workspace: "/w".into(),
-            mode: None,
             profile_id: Some("profile-abc".into()),
             model: Some("override-model".into()),
             reasoning_effort: None,
@@ -1871,13 +2032,22 @@ mod tests {
     }
 
     #[test]
-    fn start_agent_request_pre_mode_payload_decodes() {
+    fn start_agent_request_minimal_payload_decodes() {
         let json = r#"{"agent":"codex","workspace":"/w"}"#;
         let req: StartAgentRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.agent, AgentName::Codex);
         assert_eq!(req.workspace, "/w");
-        assert_eq!(req.mode, None);
         assert_eq!(req.profile_id, None);
+    }
+
+    #[test]
+    fn start_agent_request_ignores_unknown_legacy_mode_field() {
+        // Pre-cleanup clients may still send `mode`; serde denies unknown fields
+        // only when configured — default is to ignore extra fields.
+        let json = r#"{"agent":"codex","workspace":"/w","mode":"jsonl"}"#;
+        let req: StartAgentRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.agent, AgentName::Codex);
+        assert_eq!(req.workspace, "/w");
     }
 
     #[test]
@@ -1914,6 +2084,8 @@ mod tests {
             text: "ping".into(),
             origin_message_id: None,
             attachments: vec![],
+            delivery_id: None,
+            bot_id: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: SendUserMessageRequest = serde_json::from_str(&json).unwrap();

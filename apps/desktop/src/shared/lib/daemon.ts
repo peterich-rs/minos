@@ -38,6 +38,12 @@ export type DaemonProject = {
   updatedAtMs: number;
 };
 
+export type DaemonParticipatingBot = {
+  botId: string;
+  name: string;
+  runtime: string;
+};
+
 export type DaemonConversation = {
   id: string;
   projectId: string;
@@ -48,6 +54,9 @@ export type DaemonConversation = {
   updatedAtMs: number;
   messageCount: number;
   agentSessionCount: number;
+  /** Structured roster from daemon (membership SSOT). */
+  participatingBots?: DaemonParticipatingBot[];
+  /** Derived runtime labels — not membership key. */
   participatingAgents: string[];
   priority?: string | null;
   progress?: string;
@@ -453,6 +462,29 @@ export const daemonApi = {
       runtime_agent: input.runtimeAgent,
       model: input.model,
       reasoning_effort: input.reasoningEffort,
+      instructions: input.instructions,
+    }),
+  /** Host cache update (name / description / instructions). Model/runtime fixed. */
+  updateAgentProfile: (input: {
+    id: string;
+    name: string;
+    description: string;
+    instructions: string;
+  }) =>
+    call<{
+      id: string;
+      name: string;
+      description: string;
+      runtime_agent: string;
+      model: string;
+      reasoning_effort: string;
+      instructions: string;
+      created_at_ms: number;
+      updated_at_ms: number;
+    }>("daemon_update_agent_profile", {
+      id: input.id,
+      name: input.name,
+      description: input.description,
       instructions: input.instructions,
     }),
   deleteAgentProfile: (id: string) =>

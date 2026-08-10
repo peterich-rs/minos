@@ -89,6 +89,11 @@ class AgentProfileDraft {
   }
 }
 
+/// Device-local draft / cache of a bot digital body.
+///
+/// Hub `agents` is the product bot-identity SSOT (`agent_id` + digital body).
+/// This model may hold offline drafts and host launch prefs; create/update
+/// should register or patch Hub when authenticated.
 class AgentProfile {
   const AgentProfile({
     required this.id,
@@ -108,10 +113,11 @@ class AgentProfile {
 
   final String id;
 
-  /// Unique agent identifier used in group chats, similar to a user's uid.
-  /// This allows agents to be added to group conversations and mentioned
-  /// via @agentId.
+  /// Hub bot id (`agents.agent_id`) used for membership and @ delivery.
+  /// Local-only drafts may temporarily mint a placeholder until Hub register.
   final String agentId;
+
+  /// Display label; when synced from Hub prefer `AgentSummary.display_name`.
   final String name;
   final String description;
   final AgentName runtimeAgent;
@@ -201,9 +207,16 @@ class AgentProfile {
 
   factory AgentProfile.fromJson(Map<String, Object?> json) {
     final id = json['id'] as String;
+    // agentId is required on the wire/cache shape (Hub bot id or local draft id).
+    // Older device-local cache rows written before agentId may omit it; mint a
+    // stable local placeholder so offline drafts still load (not multi-end SSOT).
+    final rawAgentId = (json['agentId'] as String?)?.trim();
+    final agentId = (rawAgentId != null && rawAgentId.isNotEmpty)
+        ? rawAgentId
+        : _localDraftAgentId(id);
     return AgentProfile(
       id: id,
-      agentId: json['agentId'] as String? ?? _generateAgentId(id),
+      agentId: agentId,
       name: json['name'] as String? ?? 'Agent',
       description: json['description'] as String? ?? '',
       runtimeAgent: _agentNameFromJson(json['runtimeAgent'] as String?),
@@ -378,8 +391,10 @@ AgentReasoningEffort _reasoningEffortFromJson(String? value) {
   };
 }
 
-/// Generate a stable agentId from the profile id for backward compatibility
-/// with profiles created before agentId was introduced.
-String _generateAgentId(String profileId) {
+/// Stable local placeholder when device cache lacks `agentId`.
+///
+/// Used only for offline draft rows that never registered with Hub.
+/// Not a multi-end identity; Hub `agents.agent_id` is bot identity SSOT.
+String _localDraftAgentId(String profileId) {
   return 'bot-$profileId';
 }

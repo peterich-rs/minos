@@ -1,13 +1,13 @@
 import type { AgentName } from './minos'
 
 /**
- * __SAFETY_ASSERT__: Agent profiles are strictly CLIENT-LOCAL.
- * They are never synced to or stored on the backend.
- * If you find yourself writing code that POSTs profile data to any backend endpoint,
- * you are violating the architecture contract (spec §5.5).
+ * Web local workspace cache for agent launch prefs (model/effort bindings).
  *
- * Profiles exist only in localStorage on the browser / SharedPreferences on mobile.
- * The backend has no knowledge of profiles and must never receive them.
+ * **Product bot identity SSOT is Hub `agents`** (global bot directory + digital
+ * body). This module is a browser-only cache for Web workbench UX until Web
+ * fully uses Hub bot CRUD + participants APIs — not a multi-end identity store.
+ *
+ * See docs/superpowers/specs/global-bot-identity-design.md.
  */
 
 export type AgentReasoningEffort = 'low' | 'medium' | 'high'

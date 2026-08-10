@@ -4,7 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use minos_protocol::{
     ChatMessageReplySummary, ChatMessageSummary, ConversationKind, ConversationResponse,
-    ConversationSummary, SenderType, UserSummary,
+    ConversationSummary, MessageSender, UserSummary,
 };
 
 use crate::app::tx::Storage;
@@ -115,6 +115,9 @@ pub trait ConversationService: Send + Sync {
         message_source: minos_protocol::MessageSource,
         client_sent_at_ms: Option<i64>,
         attachment_blob_ids: &[String],
+        // Optional structured mentions from Account WS AppendMessage.
+        // Validated against conversation participants and merged with body parse.
+        structured_mentions: &[minos_protocol::MentionTarget],
     ) -> Result<(ChatMessageSummary, Vec<social::ProfileRow>), ConversationError>;
 
     async fn recall_message(
@@ -445,6 +448,7 @@ impl ConversationService for DefaultConversationService {
         message_source: minos_protocol::MessageSource,
         client_sent_at_ms: Option<i64>,
         attachment_blob_ids: &[String],
+        structured_mentions: &[minos_protocol::MentionTarget],
     ) -> Result<(ChatMessageSummary, Vec<social::ProfileRow>), ConversationError> {
         if !social::is_conversation_member(&self.store, conversation_id, account_id).await? {
             return Err(ConversationError::NotFound);
@@ -501,7 +505,16 @@ impl ConversationService for DefaultConversationService {
             .iter()
             .map(|m| m.account_id.clone())
             .collect::<Vec<_>>();
-        let mentioned_account_ids = extract_mentioned_account_ids(text, account_id, &members);
+        // Only active bots resolve as @ targets / structured mentions for delivery.
+        let agents = social::list_conversation_agents_active(&self.store, conversation_id).await?;
+        let mut mentions = extract_participant_mentions(text, account_id, &members, &agents);
+        merge_structured_mentions(
+            &mut mentions,
+            structured_mentions,
+            account_id,
+            &members,
+            &agents,
+        );
         // Hub server clock is the sole ordering authority for created_at_ms.
         // client_sent_at_ms is accepted for future display/debug only.
         let _ = client_sent_at_ms;
@@ -516,19 +529,18 @@ impl ConversationService for DefaultConversationService {
                         .iter()
                         .map(|p| (p.account_id.clone(), p.clone()))
                         .collect::<HashMap<_, _>>();
-                    let mut agents = HashMap::new();
+                    let mut agent_map = HashMap::new();
                     if reply_row.sender_type == "agent" {
-                        let agent_id = reply_row
-                            .sender_agent_id
-                            .clone()
-                            .unwrap_or_else(|| reply_row.sender_account_id.clone());
-                        if let Some(agent) = social::get_agent(&self.store, &agent_id).await? {
-                            agents.insert(agent_id, agent);
+                        let agent_id = agent_id_for_row(&reply_row);
+                        if agent_id != "unknown-bot" {
+                            if let Some(agent) = social::get_agent(&self.store, &agent_id).await? {
+                                agent_map.insert(agent_id, agent);
+                            }
                         }
                     }
                     Some(ChatMessageReplySummary {
                         message_id: reply_row.message_id.clone(),
-                        sender: sender_summary(&reply_row, &profiles, &agents)?,
+                        sender: sender_summary(&reply_row, &profiles, &agent_map)?,
                         text: reply_row.text.clone(),
                         recalled_at_ms: reply_row.recalled_at_ms,
                     })
@@ -542,7 +554,7 @@ impl ConversationService for DefaultConversationService {
             .iter()
             .find(|m| m.account_id == account_id)
             .ok_or_else(|| ConversationError::MissingProfile(account_id.to_string()))?;
-        let sender = to_user_summary(sender_profile);
+        let sender = MessageSender::from_user_summary(to_user_summary(sender_profile));
 
         // Transactional Outbox: chat_messages + durable + outbox in one commit.
         let mut tx = self.store.begin().await?;
@@ -553,7 +565,7 @@ impl ConversationService for DefaultConversationService {
             text,
             now_ms,
             reply_to_id.as_deref(),
-            &mentioned_account_ids,
+            &mentions,
             client_message_id,
             &attachment_ids,
             message_source.as_str(),
@@ -573,14 +585,15 @@ impl ConversationService for DefaultConversationService {
             ChatMessageSummary {
                 message_id: outcome.row.message_id.clone(),
                 conversation_id: outcome.row.conversation_id.clone(),
-                sender,
+                sender: sender.clone(),
                 text: outcome.row.text.clone(),
                 created_at_ms: outcome.row.created_at_ms,
                 message_seq: outcome.row.message_seq,
                 reply_to,
                 recalled_at_ms: None,
-                mentioned_account_ids: mentioned_account_ids.clone(),
-                sender_type: SenderType::User,
+                mentioned_account_ids: mentions.account_ids.clone(),
+                mentioned_agent_ids: mentions.agent_ids.clone(),
+                sender_type: ChatMessageSummary::sender_type_from(&sender),
                 reactions: vec![],
                 attachments: attachments_wire.clone(),
             }
@@ -614,7 +627,7 @@ impl ConversationService for DefaultConversationService {
         if existing.conversation_id != conversation_id {
             return Err(ConversationError::NotFound);
         }
-        if existing.sender_account_id != account_id {
+        if existing.sender_account_id.as_deref() != Some(account_id) {
             return Err(ConversationError::ValidationFormat(
                 "only the sender can recall this message".into(),
             ));
@@ -637,6 +650,7 @@ impl ConversationService for DefaultConversationService {
         message.text = "[message recalled]".to_string();
         message.recalled_at_ms = Some(message.recalled_at_ms.unwrap_or(now_ms));
         message.mentioned_account_ids.clear();
+        message.mentioned_agent_ids.clear();
         social::ensure_social_message_delivery_in_tx(&mut tx, &message, &member_ids).await?;
         tx.commit().await?;
         Ok(message)
@@ -1050,7 +1064,7 @@ pub async fn hydrate_messages_for_viewer(
         .iter()
         .map(|row| row.message_id.clone())
         .collect::<Vec<_>>();
-    let mut mentions_by_message = social::list_message_mentions(store, &message_ids).await?;
+    let mut mentions_by_message = social::list_message_mentions_full(store, &message_ids).await?;
     let reaction_rows = social::list_for_messages(store, &message_ids).await?;
     let mut reactions_by_message: HashMap<String, Vec<social::MessageReactionRow>> = HashMap::new();
     for row in reaction_rows {
@@ -1092,7 +1106,7 @@ pub async fn hydrate_messages_for_viewer(
         .iter()
         .chain(reply_rows.values())
         .filter(|row| row.sender_type != "agent")
-        .map(|row| row.sender_account_id.clone())
+        .filter_map(|row| row.sender_account_id.clone())
         .collect::<Vec<_>>();
     profile_ids.sort();
     profile_ids.dedup();
@@ -1110,7 +1124,7 @@ pub async fn hydrate_messages_for_viewer(
 
     let mut output = Vec::with_capacity(rows.len());
     for row in rows {
-        let mentioned_account_ids = mentions_by_message
+        let mentions = mentions_by_message
             .remove(&row.message_id)
             .unwrap_or_default();
         let reply_to = row
@@ -1129,11 +1143,7 @@ pub async fn hydrate_messages_for_viewer(
             )
             .transpose()?;
         let sender = sender_summary(&row, &profiles, &agents)?;
-        let sender_type = if row.sender_type == "agent" {
-            SenderType::Agent
-        } else {
-            SenderType::User
-        };
+        let sender_type = ChatMessageSummary::sender_type_from(&sender);
         let reactions = reactions_by_message
             .remove(&row.message_id)
             .map(|rows| social::aggregate_groups(&rows, viewer_account_id))
@@ -1150,7 +1160,8 @@ pub async fn hydrate_messages_for_viewer(
             message_seq: row.message_seq,
             reply_to,
             recalled_at_ms: row.recalled_at_ms,
-            mentioned_account_ids,
+            mentioned_account_ids: mentions.account_ids,
+            mentioned_agent_ids: mentions.agent_ids,
             sender_type,
             reactions,
             attachments,
@@ -1185,64 +1196,182 @@ fn sender_summary(
     row: &social::ChatMessageRow,
     profiles: &HashMap<String, social::ProfileRow>,
     agents: &HashMap<String, social::AgentRow>,
-) -> Result<UserSummary, ConversationError> {
+) -> Result<MessageSender, ConversationError> {
     if row.sender_type == "agent" {
         let agent_id = agent_id_for_row(row);
         return Ok(match agents.get(&agent_id) {
-            Some(agent) => agent_sender_summary(Some(agent), &agent_id),
-            None => agent_sender_summary(None, &agent_id),
+            Some(agent) => bot_sender_summary(Some(agent), &agent_id),
+            None => bot_sender_summary(None, &agent_id),
         });
     }
 
+    let account_id = row.sender_account_id.as_deref().ok_or_else(|| {
+        ConversationError::MissingProfile("missing sender_account_id on user message".into())
+    })?;
     let profile = profiles
-        .get(&row.sender_account_id)
-        .ok_or_else(|| ConversationError::MissingProfile(row.sender_account_id.clone()))?;
-    Ok(to_user_summary(profile))
+        .get(account_id)
+        .ok_or_else(|| ConversationError::MissingProfile(account_id.to_string()))?;
+    Ok(MessageSender::from_user_summary(to_user_summary(profile)))
 }
 
 fn agent_id_for_row(row: &social::ChatMessageRow) -> String {
+    // Authoritative bot identity is sender_agent_id. Never fall back to
+    // sender_account_id (audit owner FK) — that would reintroduce the old
+    // UserSummary.account_id = agent_id type lie.
     row.sender_agent_id
         .clone()
-        .unwrap_or_else(|| row.sender_account_id.clone())
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or_else(|| "unknown-bot".to_string())
 }
 
-fn agent_sender_summary(agent: Option<&social::AgentRow>, agent_id: &str) -> UserSummary {
+/// Build a first-class bot author card from Hub agent digital body.
+fn bot_sender_summary(agent: Option<&social::AgentRow>, agent_id: &str) -> MessageSender {
     match agent {
-        Some(agent) => UserSummary {
-            account_id: agent.agent_id.clone(),
-            minos_id: agent.agent_id.clone(),
-            display_name: format!("🤖 {}", agent.name),
-        },
-        None => UserSummary {
-            account_id: agent_id.to_string(),
-            minos_id: agent_id.to_string(),
+        Some(agent) => {
+            // Prefer digital-body display_name; fall back to registry name.
+            let label = {
+                let d = agent.display_name.trim();
+                if d.is_empty() {
+                    agent.name.trim()
+                } else {
+                    d
+                }
+            };
+            let display_name = if label.is_empty() {
+                format!("🤖 {}", agent.agent_id)
+            } else if label.starts_with('🤖') {
+                label.to_string()
+            } else {
+                format!("🤖 {label}")
+            };
+            let name = {
+                let n = agent.name.trim();
+                if n.is_empty() {
+                    None
+                } else {
+                    Some(n.to_string())
+                }
+            };
+            MessageSender::Bot {
+                bot_id: agent.agent_id.clone(),
+                display_name,
+                runtime_agent: agent.runtime_agent.clone(),
+                name,
+                avatar_url: agent.avatar_url.clone(),
+            }
+        }
+        None => MessageSender::Bot {
+            bot_id: agent_id.to_string(),
             display_name: "🤖 Unknown Agent".to_string(),
+            runtime_agent: String::new(),
+            name: None,
+            avatar_url: None,
         },
     }
 }
 
+/// Merge client-provided structured mentions into body-parsed mentions.
+///
+/// Only membership-valid targets are accepted (active bots + human members).
+/// Self-mentions for accounts are dropped. Structured targets append in order
+/// after body order (deduped).
+pub(crate) fn merge_structured_mentions(
+    mentions: &mut social::MessageMentions,
+    structured: &[minos_protocol::MentionTarget],
+    sender_account_id: &str,
+    members: &[social::ProfileRow],
+    agents: &[social::AgentRow],
+) {
+    if structured.is_empty() {
+        return;
+    }
+    let member_ids: std::collections::HashSet<&str> =
+        members.iter().map(|m| m.account_id.as_str()).collect();
+    let agent_ids: std::collections::HashSet<&str> =
+        agents.iter().map(|a| a.agent_id.as_str()).collect();
+    let mut seen_accounts: std::collections::HashSet<String> =
+        mentions.account_ids.iter().cloned().collect();
+    let mut seen_agents: std::collections::HashSet<String> =
+        mentions.agent_ids.iter().cloned().collect();
+
+    for target in structured {
+        match target {
+            minos_protocol::MentionTarget::Account { account_id } => {
+                if account_id == sender_account_id {
+                    continue;
+                }
+                if !member_ids.contains(account_id.as_str()) {
+                    continue;
+                }
+                if seen_accounts.insert(account_id.clone()) {
+                    mentions.account_ids.push(account_id.clone());
+                }
+            }
+            minos_protocol::MentionTarget::Bot { bot_id } => {
+                if !agent_ids.contains(bot_id.as_str()) {
+                    continue;
+                }
+                if seen_agents.insert(bot_id.clone()) {
+                    mentions.agent_ids.push(bot_id.clone());
+                }
+            }
+        }
+    }
+}
+
+/// Unified participant mention extraction (human accounts + bot agents).
+///
+/// Only conversation participants match. Human tokens resolve by `minos_id`;
+/// agent tokens resolve by agent_id / runtime_agent / display name (and optional
+/// `#session_short` suffix is stripped for matching).
+///
+/// Order is **body appearance order** (first unique hit wins) — not lex by id.
+/// Delivery planning and multi-@ fan-out rely on this order as SSOT.
+pub(crate) fn extract_participant_mentions(
+    text: &str,
+    sender_account_id: &str,
+    members: &[social::ProfileRow],
+    agents: &[social::AgentRow],
+) -> social::MessageMentions {
+    let by_minos_id = members
+        .iter()
+        .map(|member| (member.minos_id.as_str(), member.account_id.as_str()))
+        .collect::<HashMap<_, _>>();
+    let mut account_ids = Vec::<String>::new();
+    let mut agent_ids = Vec::<String>::new();
+    let mut seen_accounts = std::collections::HashSet::<String>::new();
+    let mut seen_agents = std::collections::HashSet::<String>::new();
+
+    for token in collect_mention_tokens(text) {
+        let (name_part, _session_short) = split_agent_session_token(token);
+        if let Some(account_id) = by_minos_id.get(name_part) {
+            if *account_id != sender_account_id && seen_accounts.insert((*account_id).to_string()) {
+                account_ids.push((*account_id).to_string());
+            }
+            continue;
+        }
+        if let Some(agent) = match_agent_token(name_part, agents) {
+            if seen_agents.insert(agent.agent_id.clone()) {
+                agent_ids.push(agent.agent_id.clone());
+            }
+        }
+    }
+
+    social::MessageMentions {
+        account_ids,
+        agent_ids,
+    }
+}
+
+/// Account-only mention extract (no agent roster). Kept for callers that only
+/// need human targets; prefer [`extract_participant_mentions`] for bots.
+#[allow(dead_code)]
 pub(crate) fn extract_mentioned_account_ids(
     text: &str,
     sender_account_id: &str,
     members: &[social::ProfileRow],
 ) -> Vec<String> {
-    let by_minos_id = members
-        .iter()
-        .map(|member| (member.minos_id.as_str(), member.account_id.as_str()))
-        .collect::<HashMap<_, _>>();
-    let mut mentions = std::collections::BTreeSet::<String>::new();
-
-    for token in collect_mention_tokens(text) {
-        let Some(account_id) = by_minos_id.get(token) else {
-            continue;
-        };
-        if *account_id == sender_account_id {
-            continue;
-        }
-        mentions.insert((*account_id).to_string());
-    }
-
-    mentions.into_iter().collect()
+    extract_participant_mentions(text, sender_account_id, members, &[]).account_ids
 }
 
 pub(crate) fn collect_mention_tokens(text: &str) -> Vec<&str> {
@@ -1262,7 +1391,14 @@ pub(crate) fn collect_mention_tokens(text: &str) -> Vec<&str> {
 
         let start = index + 1;
         let mut end = start;
-        while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'-') {
+        // Allow `#short` so mid-body `@codex#abcd` keeps session targeting parity
+        // with agent routing / Desktop parseAllAgentRoutings.
+        while end < bytes.len()
+            && (bytes[end].is_ascii_alphanumeric()
+                || bytes[end] == b'-'
+                || bytes[end] == b'_'
+                || bytes[end] == b'#')
+        {
             end += 1;
         }
         if end > start {
@@ -1274,4 +1410,159 @@ pub(crate) fn collect_mention_tokens(text: &str) -> Vec<&str> {
     }
 
     tokens
+}
+
+pub(crate) fn split_agent_session_token(token: &str) -> (&str, Option<&str>) {
+    match token.split_once('#') {
+        Some((name, short)) if !name.is_empty() && !short.is_empty() => (name, Some(short)),
+        _ => (token, None),
+    }
+}
+
+pub(crate) fn match_agent_token<'a>(
+    token: &str,
+    agents: &'a [social::AgentRow],
+) -> Option<&'a social::AgentRow> {
+    let t = token.trim();
+    if t.is_empty() {
+        return None;
+    }
+    let lower = t.to_ascii_lowercase();
+    agents.iter().find(|agent| {
+        agent.agent_id.eq_ignore_ascii_case(t)
+            || agent.runtime_agent.eq_ignore_ascii_case(&lower)
+            || agent.name.eq_ignore_ascii_case(t)
+    })
+}
+
+/// First `@agent#short` session hint for a structured agent mention (text is not
+/// a delivery target — only a session-resolution hint for agents already in
+/// `mentioned_agent_ids`).
+pub(crate) fn session_short_hint_for_agent<'a>(
+    text: &'a str,
+    agent: &social::AgentRow,
+) -> Option<&'a str> {
+    for token in collect_mention_tokens(text) {
+        let (name_part, short) = split_agent_session_token(token);
+        if short.is_none() {
+            continue;
+        }
+        if match_agent_token(name_part, std::slice::from_ref(agent)).is_some() {
+            return short;
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::social::{AgentRow, ProfileRow};
+
+    fn profile(account_id: &str, minos_id: &str) -> ProfileRow {
+        ProfileRow {
+            account_id: account_id.into(),
+            email: format!("{minos_id}@example.com"),
+            minos_id: minos_id.into(),
+            display_name: Some(minos_id.into()),
+        }
+    }
+
+    fn agent(agent_id: &str, name: &str, runtime: &str) -> AgentRow {
+        AgentRow::test_stub(agent_id, "owner", name, "host_runtime", runtime)
+    }
+
+    #[test]
+    fn extract_participant_mentions_splits_humans_and_agents() {
+        let members = vec![profile("acct-alice", "alice"), profile("acct-bob", "bob")];
+        let agents = vec![
+            agent("bot-1", "Codex", "codex"),
+            agent("bot-2", "Claude", "claude"),
+        ];
+        let mentions = extract_participant_mentions(
+            "@bob please and @codex#abcd fix it @claude",
+            "acct-alice",
+            &members,
+            &agents,
+        );
+        assert_eq!(mentions.account_ids, vec!["acct-bob".to_string()]);
+        assert_eq!(
+            mentions.agent_ids,
+            vec!["bot-1".to_string(), "bot-2".to_string()]
+        );
+    }
+
+    #[test]
+    fn extract_participant_mentions_preserves_body_appearance_order() {
+        let members = vec![profile("acct-alice", "alice")];
+        // Lex order of agent_id would be bot-a < bot-z; body order is z then a.
+        let agents = vec![
+            agent("bot-z", "Claude", "claude"),
+            agent("bot-a", "Codex", "codex"),
+        ];
+        let mentions = extract_participant_mentions(
+            "@claude first @codex second @claude again",
+            "acct-alice",
+            &members,
+            &agents,
+        );
+        assert_eq!(
+            mentions.agent_ids,
+            vec!["bot-z".to_string(), "bot-a".to_string()]
+        );
+    }
+
+    #[test]
+    fn extract_participant_mentions_skips_self_and_unknown_tokens() {
+        let members = vec![profile("acct-alice", "alice")];
+        let agents = vec![agent("bot-1", "Codex", "codex")];
+        let mentions =
+            extract_participant_mentions("@alice @nobody @codex", "acct-alice", &members, &agents);
+        assert!(mentions.account_ids.is_empty());
+        assert_eq!(mentions.agent_ids, vec!["bot-1".to_string()]);
+    }
+
+    #[test]
+    fn bot_sender_summary_prefers_display_name() {
+        let mut row = agent("bot-1", "codex-bin", "codex");
+        row.display_name = "Code Reviewer".into();
+        let summary = bot_sender_summary(Some(&row), "bot-1");
+        match summary {
+            MessageSender::Bot {
+                bot_id,
+                display_name,
+                runtime_agent,
+                name,
+                ..
+            } => {
+                assert_eq!(bot_id, "bot-1");
+                assert_eq!(display_name, "🤖 Code Reviewer");
+                assert_eq!(runtime_agent, "codex");
+                assert_eq!(name.as_deref(), Some("codex-bin"));
+            }
+            MessageSender::Account { .. } => panic!("expected bot sender"),
+        }
+
+        row.display_name.clear();
+        let summary = bot_sender_summary(Some(&row), "bot-1");
+        assert_eq!(summary.display_name(), "🤖 codex-bin");
+
+        let unknown = bot_sender_summary(None, "missing");
+        assert_eq!(unknown.display_name(), "🤖 Unknown Agent");
+        assert_eq!(unknown.bot_id(), Some("missing"));
+    }
+
+    #[test]
+    fn session_short_hint_only_from_matching_agent_token() {
+        let agent = agent("bot-1", "Codex", "codex");
+        assert_eq!(
+            session_short_hint_for_agent("@codex#abcd please", &agent),
+            Some("abcd")
+        );
+        assert_eq!(session_short_hint_for_agent("@codex please", &agent), None);
+        assert_eq!(
+            session_short_hint_for_agent("@claude#zzzz please", &agent),
+            None
+        );
+    }
 }

@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -10,6 +11,7 @@ import {
   CheckCircle2,
   CircleDashed,
   Loader2,
+  Pencil,
   Plus,
   RefreshCw,
   Trash2,
@@ -17,11 +19,19 @@ import {
 } from "lucide-react";
 import { agentMeta, type AgentRuntime } from "@/shared/lib/mock-data";
 import { useWorkspaceStore } from "@/store/workspace-store";
-import { daemonApi } from "@/shared/lib/daemon";
+import { useAccountStore } from "@/store/account-store";
+import { daemonApi, isTauriRuntime } from "@/shared/lib/daemon";
+import {
+  createCloudAgent,
+  deleteCloudAgent,
+  updateCloudAgent,
+  type CloudAgentSummary,
+} from "@/shared/lib/minos-cloud";
 import { validateProfileName } from "@/shared/lib/agent-route";
 import { cn } from "@/shared/lib/utils";
 import {
   useAgentProfilesQuery,
+  useCloudAgentsQuery,
   useModelsQuery,
 } from "@/shared/api/hooks";
 import { queryKeys } from "@/shared/api/queryKeys";
@@ -40,7 +50,27 @@ import {
   PageHeaderPrimaryButton,
 } from "@/shared/ui/PageHeader";
 
-type AgentProfile = {
+/**
+ * Unified bot row for Agents UI.
+ * Hub is identity SSOT when online; daemon profiles are offline cache only.
+ */
+type BotRow = {
+  /** Hub agent_id when source=hub; daemon profile id when source=daemon. */
+  id: string;
+  name: string;
+  displayName: string;
+  description: string;
+  runtimeAgent: string;
+  model: string;
+  reasoningEffort: string;
+  systemPrompt: string;
+  status: string;
+  source: "hub" | "daemon";
+  hubSource?: string;
+  avatarUrl?: string | null;
+};
+
+type DaemonProfile = {
   id: string;
   name: string;
   description: string;
@@ -53,40 +83,161 @@ type AgentProfile = {
 const fieldClass =
   "w-full rounded-xl border border-ink/10 bg-surface-raised px-3.5 py-2.5 text-sm text-ink shadow-sm outline-none transition placeholder:text-ink-muted/70 focus:border-primary/30 focus:ring-2 focus:ring-primary/20";
 
+function cloudAgentToRow(a: CloudAgentSummary): BotRow {
+  return {
+    id: a.agentId,
+    name: a.name,
+    displayName: a.displayName || a.name,
+    description: a.description,
+    runtimeAgent: a.runtimeAgent,
+    model: a.model,
+    reasoningEffort: a.defaultReasoningEffort,
+    systemPrompt: a.systemPrompt,
+    status: a.status || "active",
+    source: "hub",
+    hubSource: a.source,
+    avatarUrl: a.avatarUrl,
+  };
+}
+
+function daemonProfileToRow(p: DaemonProfile): BotRow {
+  return {
+    id: p.id,
+    name: p.name,
+    displayName: p.name,
+    description: p.description,
+    runtimeAgent: p.runtime_agent,
+    model: p.model,
+    reasoningEffort: p.reasoning_effort,
+    systemPrompt: p.instructions ?? "",
+    status: "active",
+    source: "daemon",
+  };
+}
+
 export function AgentsView() {
   const clis = useWorkspaceStore((s) => s.clis);
   const clisStatus = useWorkspaceStore((s) => s.clisStatus);
   const loadClis = useWorkspaceStore((s) => s.loadClis);
   const source = useWorkspaceStore((s) => s.source);
+  const deviceId = useAccountStore((s) => s.deviceId);
+  const accessToken = useAccountStore((s) => s.session?.accessToken);
+  const hubOnline = Boolean(accessToken?.trim());
   const queryClient = useQueryClient();
 
+  // Hub bot directory is SSOT when account is online.
+  const cloudAgentsQuery = useCloudAgentsQuery();
+  // Daemon profiles: offline cache / Host launch buffer only.
   const profilesQuery = useAgentProfilesQuery();
-  const profiles = (profilesQuery.data ?? []) as AgentProfile[];
-  const profilesLoading = profilesQuery.isLoading || profilesQuery.isFetching;
+  const daemonProfiles = (profilesQuery.data ?? []) as DaemonProfile[];
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [editBot, setEditBot] = useState<BotRow | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const loadProfiles = useCallback(async () => {
+  const bots = useMemo((): BotRow[] => {
+    if (hubOnline && cloudAgentsQuery.isSuccess) {
+      // Prefer user-configured bots in the product directory; host_runtime is seed-only.
+      const hub = (cloudAgentsQuery.data ?? [])
+        .filter((a) => (a.source || "user") !== "host_runtime")
+        .map(cloudAgentToRow);
+      return hub;
+    }
+    // Offline / not signed in: fall back to daemon cache.
+    return daemonProfiles.map(daemonProfileToRow);
+  }, [
+    hubOnline,
+    cloudAgentsQuery.isSuccess,
+    cloudAgentsQuery.data,
+    daemonProfiles,
+  ]);
+
+  const botsLoading =
+    (hubOnline &&
+      (cloudAgentsQuery.isLoading || cloudAgentsQuery.isFetching)) ||
+    (!hubOnline &&
+      (profilesQuery.isLoading || profilesQuery.isFetching));
+
+  const loadBots = useCallback(async () => {
+    if (hubOnline) {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.cloudAgents });
+    }
     await queryClient.invalidateQueries({ queryKey: queryKeys.agentProfiles });
-  }, [queryClient]);
+  }, [queryClient, hubOnline]);
 
   useEffect(() => {
     if (source !== "daemon") return;
     void loadClis();
   }, [source, loadClis]);
 
+  // One-shot: import offline daemon profile cache into Hub bot directory when
+  // Account comes online (global-bot-identity Phase 5). Idempotent by name.
+  const importOnceRef = useRef(false);
   useEffect(() => {
-    if (profilesQuery.error) {
-      setError(
-        profilesQuery.error instanceof Error
-          ? profilesQuery.error.message
-          : String(profilesQuery.error),
-      );
-    } else if (profilesQuery.isSuccess) {
+    if (!hubOnline || !accessToken?.trim() || !deviceId) return;
+    if (importOnceRef.current) return;
+    if (!profilesQuery.isSuccess || !cloudAgentsQuery.isSuccess) return;
+    importOnceRef.current = true;
+    const hubNames = new Set(
+      (cloudAgentsQuery.data ?? []).map((a) =>
+        (a.name || a.displayName || "").trim().toLowerCase(),
+      ),
+    );
+    const missing = daemonProfiles.filter((p) => {
+      const n = (p.name || "").trim().toLowerCase();
+      return n.length > 0 && !hubNames.has(n);
+    });
+    if (missing.length === 0) return;
+    void (async () => {
+      let imported = 0;
+      for (const p of missing) {
+        try {
+          await createCloudAgent(deviceId, accessToken, {
+            name: p.name,
+            displayName: p.name,
+            description: p.description ?? "",
+            runtimeAgent: p.runtime_agent,
+            model: p.model ?? "",
+            defaultReasoningEffort: p.reasoning_effort ?? "",
+            systemPrompt: p.instructions ?? "",
+          });
+          imported += 1;
+        } catch (e) {
+          console.warn("[agents] bulk-import profile failed", p.name, e);
+        }
+      }
+      if (imported > 0) {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.cloudAgents });
+      }
+    })();
+  }, [
+    hubOnline,
+    accessToken,
+    deviceId,
+    profilesQuery.isSuccess,
+    cloudAgentsQuery.isSuccess,
+    cloudAgentsQuery.data,
+    daemonProfiles,
+    queryClient,
+  ]);
+
+  useEffect(() => {
+    const err = hubOnline ? cloudAgentsQuery.error : profilesQuery.error;
+    if (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } else if (
+      (hubOnline && cloudAgentsQuery.isSuccess) ||
+      (!hubOnline && profilesQuery.isSuccess)
+    ) {
       setError(null);
     }
-  }, [profilesQuery.error, profilesQuery.isSuccess]);
+  }, [
+    hubOnline,
+    cloudAgentsQuery.error,
+    cloudAgentsQuery.isSuccess,
+    profilesQuery.error,
+    profilesQuery.isSuccess,
+  ]);
 
   const phase = clisStatus.phase;
 
@@ -94,7 +245,11 @@ export function AgentsView() {
     <div className="flex min-h-0 flex-1 flex-col bg-canvas-soft/40">
       <PageHeader
         title="Agents"
-        description="Local CLI runtimes on this Host, plus personalized agents with a fixed model, peer-facing role brief, and optional system instructions. Chat always happens inside a Project conversation."
+        description={
+          hubOnline
+            ? "Global bot directory on Hub (identity SSOT). Edit digital body — model, reasoning effort, system prompt — then pull bots into conversations as participants. Local CLI inventory is Host capability only."
+            : "Sign in to manage the Hub bot directory (identity SSOT). Offline: Host CLI inventory and local profile cache only — not multi-device identity."
+        }
         action={
           <PageHeaderPrimaryButton onClick={() => setCreateOpen(true)}>
             <Plus className="h-3.5 w-3.5" />
@@ -188,8 +343,9 @@ export function AgentsView() {
                       </dl>
                     ) : (
                       <p className="mt-4 text-xs text-ink-muted">
-                        Install the CLI and re-detect to use @{rt.agent} in
-                        conversations.
+                        Install the CLI and re-detect to run @{rt.agent} on this
+                        Host. Product bot identity lives on Hub, not as a bare
+                        runtime name.
                       </p>
                     )}
                   </div>
@@ -202,36 +358,45 @@ export function AgentsView() {
         <section>
           <div className="mb-3 flex items-center justify-between px-0.5">
             <h2 className="text-2xs font-semibold uppercase tracking-[0.08em] text-ink-muted">
-              Personalized agents
+              {hubOnline ? "Bot directory (Hub)" : "Local profile cache"}
             </h2>
-            {profilesLoading ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-ink-muted" />
-            ) : null}
+            <div className="flex items-center gap-2">
+              {botsLoading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-ink-muted" />
+              ) : null}
+              <button
+                type="button"
+                onClick={() => void loadBots()}
+                className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-2xs font-medium text-ink-muted hover:bg-surface-muted hover:text-ink"
+              >
+                <RefreshCw className="h-3 w-3" />
+                Refresh
+              </button>
+            </div>
           </div>
-          {profiles.length === 0 ? (
+          {bots.length === 0 ? (
             <p className="rounded-2xl border border-dashed border-ink/10 bg-surface-raised/70 px-4 py-10 text-center text-sm leading-relaxed text-ink-muted">
-              No personalized agents yet.
-              <br />
-              Create one to pin runtime, model, role brief for teammates, and
-              system instructions.
+              {hubOnline
+                ? "No bots yet. Create one on Hub to pin runtime, model, role brief, and system prompt — then add it as a conversation participant."
+                : "No local profile cache. Sign in to create bots on Hub (identity SSOT), or create offline for this Host only."}
             </p>
           ) : (
             <div className="grid content-start gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {profiles.map((p) => {
-                const runtime = p.runtime_agent as AgentRuntime;
+              {bots.map((bot) => {
+                const runtime = bot.runtimeAgent as AgentRuntime;
                 const meta = agentMeta[runtime] ?? {
-                  label: p.runtime_agent,
+                  label: bot.runtimeAgent,
                   color: "bg-ink/10 text-ink-secondary",
                 };
                 return (
                   <div
-                    key={p.id}
+                    key={`${bot.source}:${bot.id}`}
                     className="rounded-2xl border border-ink/5 bg-surface-raised p-4 shadow-sm"
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <div className="truncate text-sm font-semibold text-ink">
-                          {p.name}
+                          {bot.displayName}
                         </div>
                         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                           <span
@@ -243,56 +408,106 @@ export function AgentsView() {
                             {meta.label}
                           </span>
                           <span className="truncate font-mono text-2xs text-ink-muted">
-                            {p.model}
+                            {bot.model}
                           </span>
+                          {bot.source === "hub" ? (
+                            <span className="rounded-md bg-emerald-50 px-1.5 py-0.5 text-3xs font-medium text-emerald-800">
+                              Hub
+                            </span>
+                          ) : (
+                            <span className="rounded-md bg-amber-50 px-1.5 py-0.5 text-3xs font-medium text-amber-800">
+                              Local cache
+                            </span>
+                          )}
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        title="Delete profile"
-                        onClick={() => {
-                          void (async () => {
-                            try {
-                              await daemonApi.deleteAgentProfile(p.id);
-                              await loadProfiles();
-                            } catch (e) {
-                              setError(
-                                e instanceof Error ? e.message : String(e),
-                              );
-                            }
-                          })();
-                        }}
-                        className="rounded-lg p-1.5 text-ink-muted hover:bg-status-failed/10 hover:text-status-failed"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      <div className="flex shrink-0 items-center gap-0.5">
+                        <button
+                          type="button"
+                          title="Edit digital body"
+                          onClick={() => setEditBot(bot)}
+                          className="rounded-lg p-1.5 text-ink-muted hover:bg-surface-muted hover:text-ink"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          title="Delete bot"
+                          onClick={() => {
+                            void (async () => {
+                              try {
+                                if (bot.source === "hub") {
+                                  const token = accessToken?.trim();
+                                  if (!token) {
+                                    throw new Error("Sign in required to delete Hub bots");
+                                  }
+                                  await deleteCloudAgent(deviceId, token, bot.id);
+                                  // Best-effort: drop matching daemon cache by name.
+                                  if (isTauriRuntime()) {
+                                    const match = daemonProfiles.find(
+                                      (p) =>
+                                        p.name.trim().toLowerCase() ===
+                                        bot.name.trim().toLowerCase(),
+                                    );
+                                    if (match) {
+                                      try {
+                                        await daemonApi.deleteAgentProfile(match.id);
+                                      } catch {
+                                        /* cache cleanup optional */
+                                      }
+                                    }
+                                  }
+                                } else {
+                                  await daemonApi.deleteAgentProfile(bot.id);
+                                }
+                                await loadBots();
+                              } catch (e) {
+                                setError(
+                                  e instanceof Error ? e.message : String(e),
+                                );
+                              }
+                            })();
+                          }}
+                          className="rounded-lg p-1.5 text-ink-muted hover:bg-status-failed/10 hover:text-status-failed"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     </div>
-                    {p.description ? (
+                    {bot.description ? (
                       <p
                         className="mt-2 line-clamp-2 text-xs text-ink-muted"
                         title="Role brief shown to teammate agents"
                       >
-                        {p.description}
+                        {bot.description}
                       </p>
                     ) : (
                       <p className="mt-2 text-xs text-amber-700/80">
-                        No role brief — teammates won&apos;t know this agent&apos;s
+                        No role brief — teammates won&apos;t know this bot&apos;s
                         boundaries until you add one.
                       </p>
                     )}
                     <dl className="mt-3 space-y-1 text-xs">
-                      {p.reasoning_effort ? (
+                      {bot.reasoningEffort ? (
                         <div className="flex justify-between gap-2">
                           <dt className="text-ink-muted">Effort</dt>
                           <dd className="font-medium capitalize text-ink">
-                            {p.reasoning_effort}
+                            {bot.reasoningEffort}
                           </dd>
                         </div>
                       ) : null}
-                      {p.instructions?.trim() ? (
+                      {bot.systemPrompt.trim() ? (
                         <div className="flex justify-between gap-2">
                           <dt className="text-ink-muted">Instructions</dt>
                           <dd className="font-medium text-ink">Custom</dd>
+                        </div>
+                      ) : null}
+                      {bot.status && bot.status !== "active" ? (
+                        <div className="flex justify-between gap-2">
+                          <dt className="text-ink-muted">Status</dt>
+                          <dd className="font-medium capitalize text-ink">
+                            {bot.status}
+                          </dd>
                         </div>
                       ) : null}
                     </dl>
@@ -307,10 +522,27 @@ export function AgentsView() {
       {createOpen ? (
         <CreateAgentDialog
           clis={clis}
+          hubOnline={hubOnline}
+          deviceId={deviceId}
+          accessToken={accessToken}
           onClose={() => setCreateOpen(false)}
           onCreated={async () => {
             setCreateOpen(false);
-            await loadProfiles();
+            await loadBots();
+          }}
+        />
+      ) : null}
+
+      {editBot ? (
+        <EditAgentDialog
+          bot={editBot}
+          hubOnline={hubOnline && editBot.source === "hub"}
+          deviceId={deviceId}
+          accessToken={accessToken}
+          onClose={() => setEditBot(null)}
+          onSaved={async () => {
+            setEditBot(null);
+            await loadBots();
           }}
         />
       ) : null}
@@ -320,10 +552,16 @@ export function AgentsView() {
 
 function CreateAgentDialog({
   clis,
+  hubOnline,
+  deviceId,
+  accessToken,
   onClose,
   onCreated,
 }: {
   clis: RuntimeCliDescriptor[];
+  hubOnline: boolean;
+  deviceId: string;
+  accessToken: string | undefined;
   onClose: () => void;
   onCreated: () => void | Promise<void>;
 }) {
@@ -405,14 +643,60 @@ function CreateAgentDialog({
     }
     setSaving(true);
     try {
-      await daemonApi.createAgentProfile({
-        name: name.trim(),
-        description: description.trim(),
-        runtimeAgent: runtime,
-        model: resolvedModel,
-        reasoningEffort: showEffort ? effort.trim() : "",
-        instructions: instructions.trim(),
-      });
+      const trimmedName = name.trim();
+      const trimmedDesc = description.trim();
+      const trimmedInstr = instructions.trim();
+      const effortVal = showEffort ? effort.trim() : "";
+
+      if (hubOnline) {
+        const token = accessToken?.trim();
+        if (!token) {
+          throw new Error("Sign in required to create Hub bots");
+        }
+        // Hub is bot identity SSOT.
+        await createCloudAgent(deviceId, token, {
+          name: trimmedName,
+          displayName: trimmedName,
+          description: trimmedDesc,
+          runtimeAgent: runtime,
+          model: resolvedModel,
+          defaultReasoningEffort: effortVal,
+          systemPrompt: trimmedInstr,
+        });
+        // Optional Host cache mirror for offline / session launch. Daemon mint
+        // its own profile id — name-matched cache, not dual identity SSOT.
+        if (isTauriRuntime()) {
+          try {
+            await daemonApi.createAgentProfile({
+              name: trimmedName,
+              description: trimmedDesc,
+              runtimeAgent: runtime,
+              model: resolvedModel,
+              reasoningEffort: effortVal,
+              instructions: trimmedInstr,
+            });
+          } catch {
+            /* cache mirror best-effort */
+          }
+        }
+        await queryClient.invalidateQueries({ queryKey: queryKeys.cloudAgents });
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.agentProfiles,
+        });
+      } else {
+        // Offline: local cache only (not multi-device identity).
+        await daemonApi.createAgentProfile({
+          name: trimmedName,
+          description: trimmedDesc,
+          runtimeAgent: runtime,
+          model: resolvedModel,
+          reasoningEffort: effortVal,
+          instructions: trimmedInstr,
+        });
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.agentProfiles,
+        });
+      }
       await onCreated();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -430,10 +714,6 @@ function CreateAgentDialog({
       role="dialog"
       aria-modal="true"
       aria-label="Create agent"
-      // Close only when the scrim itself is the event target (not children).
-      // Do not use document-level listeners or stopPropagation on content —
-      // those patterns swallow the subsequent `click` in WKWebView (feels like
-      // every control needs a double-click).
       onPointerDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -445,7 +725,9 @@ function CreateAgentDialog({
               Create agent
             </h2>
             <p className="mt-0.5 text-xs text-ink-muted">
-              Model and effort stay fixed after create.
+              {hubOnline
+                ? "Creates a global Hub bot (identity SSOT). Digital body is shared across conversations."
+                : "Offline: Host profile cache only. Sign in to create a Hub bot."}
             </p>
           </div>
           <button
@@ -615,21 +897,18 @@ function CreateAgentDialog({
             </Field>
           ) : null}
 
-          <Field
-            label="Instructions"
-            hint="system prompt / developer notes"
-          >
+          <Field label="Instructions" hint="system prompt / digital body">
             <textarea
               value={instructions}
               onChange={(e) => setInstructions(e.target.value)}
               rows={4}
               maxLength={12000}
-              placeholder="Optional extra system prompt appended when this agent starts (role, constraints, style)…"
+              placeholder="Optional system prompt for this bot (role, constraints, style)…"
               className={cn(fieldClass, "resize-y min-h-[96px]")}
             />
             <p className="mt-1.5 text-2xs leading-snug text-ink-muted">
-              Combined with Minos teamwork guidance at session start. Fixed for
-              the life of this profile.
+              Stored on the Hub bot identity (system_prompt). Session start may
+              still append Minos teamwork guidance.
             </p>
           </Field>
 
@@ -651,6 +930,228 @@ function CreateAgentDialog({
             className="rounded-xl bg-ink px-4 py-2 text-xs font-semibold text-surface shadow-sm hover:bg-ink/90 disabled:opacity-50"
           >
             {saving ? "Creating…" : "Create agent"}
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Edit digital body: name, description, instructions/system_prompt, effort (Hub).
+ * Runtime/model stay fixed after create on Host cache; Hub update may rewrite them.
+ */
+function EditAgentDialog({
+  bot,
+  hubOnline,
+  deviceId,
+  accessToken,
+  onClose,
+  onSaved,
+}: {
+  bot: BotRow;
+  hubOnline: boolean;
+  deviceId: string;
+  accessToken: string | undefined;
+  onClose: () => void;
+  onSaved: () => void | Promise<void>;
+}) {
+  const [name, setName] = useState(bot.displayName || bot.name);
+  const [description, setDescription] = useState(bot.description);
+  const [instructions, setInstructions] = useState(bot.systemPrompt);
+  const [effort, setEffort] = useState(bot.reasoningEffort);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const queryClient = useQueryClient();
+  const modelsQuery = useModelsQuery(bot.runtimeAgent);
+  const models = (modelsQuery.data?.models ?? []) as ModelCatalogEntry[];
+  const selectedModelMeta =
+    models.find((m) => m.id === bot.model) ?? models[0] ?? null;
+  const effortOptions = effortOptionsForModel(selectedModelMeta);
+  const showEffort = shouldShowEffortPicker(selectedModelMeta) || effortOptions.length > 0;
+
+  const onSubmit = async () => {
+    const nameErr = validateProfileName(name);
+    if (nameErr) {
+      setErr(nameErr);
+      return;
+    }
+    setSaving(true);
+    try {
+      const trimmedName = name.trim();
+      const trimmedDesc = description.trim();
+      const trimmedInstr = instructions.trim();
+      const effortVal = showEffort ? effort.trim() : bot.reasoningEffort;
+
+      if (hubOnline && bot.source === "hub") {
+        const token = accessToken?.trim();
+        if (!token) {
+          throw new Error("Sign in required to update Hub bots");
+        }
+        await updateCloudAgent(deviceId, token, bot.id, {
+          name: trimmedName,
+          displayName: trimmedName,
+          description: trimmedDesc,
+          avatarUrl: bot.avatarUrl ?? undefined,
+          runtimeAgent: bot.runtimeAgent,
+          model: bot.model,
+          defaultReasoningEffort: effortVal,
+          systemPrompt: trimmedInstr,
+          status: bot.status || "active",
+        });
+        // Best-effort Host cache: update name-matched profile if present.
+        if (isTauriRuntime()) {
+          try {
+            const { profiles } = await daemonApi.listAgentProfiles();
+            const match = (profiles ?? []).find(
+              (p) =>
+                p.name.trim().toLowerCase() === bot.name.trim().toLowerCase() ||
+                p.name.trim().toLowerCase() === trimmedName.toLowerCase(),
+            );
+            if (match) {
+              await daemonApi.updateAgentProfile({
+                id: match.id,
+                name: trimmedName,
+                description: trimmedDesc,
+                instructions: trimmedInstr,
+              });
+            }
+          } catch {
+            /* cache optional */
+          }
+        }
+        await queryClient.invalidateQueries({ queryKey: queryKeys.cloudAgents });
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.agentProfiles,
+        });
+      } else {
+        await daemonApi.updateAgentProfile({
+          id: bot.id,
+          name: trimmedName,
+          description: trimmedDesc,
+          instructions: trimmedInstr,
+        });
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.agentProfiles,
+        });
+      }
+      await onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className={cn(
+        "fixed inset-0 z-50 flex items-center justify-center p-4",
+        MODAL_BACKDROP_CLASS,
+      )}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Edit agent"
+      onPointerDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="flex max-h-[min(92vh,640px)] w-full max-w-[440px] flex-col overflow-hidden rounded-2xl border border-ink/8 bg-surface shadow-2xl">
+        <header className="flex shrink-0 items-center justify-between px-5 pb-3 pt-5">
+          <div>
+            <h2 className="text-base font-semibold tracking-tight text-ink">
+              Edit digital body
+            </h2>
+            <p className="mt-0.5 text-xs text-ink-muted">
+              {bot.source === "hub"
+                ? "Updates Hub bot identity (system_prompt / default_reasoning_effort)."
+                : "Updates local Host cache only."}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl p-2 text-ink-muted hover:bg-surface-raised/80 hover:text-ink"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <div className="scrollbar-thin min-h-0 flex-1 space-y-5 overflow-y-auto px-5 pb-2">
+          <Field label="Name" required>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className={fieldClass}
+              autoFocus
+            />
+          </Field>
+
+          <Field label="Role brief" hint="peer-facing · ≤500 chars">
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={2}
+              maxLength={500}
+              className={cn(fieldClass, "resize-none")}
+            />
+          </Field>
+
+          <div className="rounded-xl border border-ink/8 bg-surface-muted/50 px-3 py-2 text-xs text-ink-muted">
+            Runtime <span className="font-mono text-ink">@{bot.runtimeAgent}</span>
+            {" · "}
+            Model <span className="font-mono text-ink">{bot.model || "—"}</span>
+          </div>
+
+          {showEffort && bot.source === "hub" ? (
+            <Field label="Reasoning effort">
+              <div className="flex flex-wrap gap-1.5">
+                <EffortChip
+                  active={!effort}
+                  label="Default"
+                  onClick={() => setEffort("")}
+                />
+                {effortOptions.map((e) => (
+                  <EffortChip
+                    key={e}
+                    active={effort === e}
+                    label={e}
+                    onClick={() => setEffort(e)}
+                  />
+                ))}
+              </div>
+            </Field>
+          ) : null}
+
+          <Field label="Instructions" hint="system prompt">
+            <textarea
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              rows={5}
+              maxLength={12000}
+              className={cn(fieldClass, "resize-y min-h-[120px]")}
+            />
+          </Field>
+
+          {err ? <p className="text-xs text-rose-600">{err}</p> : null}
+        </div>
+
+        <footer className="flex shrink-0 justify-end gap-2 border-t border-ink/5 bg-surface-muted/60 px-5 py-3.5">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border border-ink/10 bg-surface-raised px-3.5 py-2 text-xs font-medium text-ink-muted hover:bg-surface"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void onSubmit()}
+            className="rounded-xl bg-ink px-4 py-2 text-xs font-semibold text-surface shadow-sm hover:bg-ink/90 disabled:opacity-50"
+          >
+            {saving ? "Saving…" : "Save"}
           </button>
         </footer>
       </div>

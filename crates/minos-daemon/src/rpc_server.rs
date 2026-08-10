@@ -192,6 +192,14 @@ pub async fn invoke_host_command(
                 model: Option<String>,
                 #[serde(default)]
                 reasoning_effort: Option<String>,
+                /// Bot digital body system prompt from Hub (preferred over local profile).
+                #[serde(default)]
+                instructions: Option<String>,
+                /// Alias of `instructions` when Hub sends `system_prompt`.
+                #[serde(default)]
+                system_prompt: Option<String>,
+                #[serde(default)]
+                display_name: Option<String>,
                 /// Hub collaboration conversation id (must be preserved).
                 #[serde(default)]
                 conversation_id: Option<String>,
@@ -204,6 +212,12 @@ pub async fn invoke_host_command(
                 title: Option<String>,
                 #[serde(default)]
                 attachments: Vec<minos_protocol::DispatchAttachment>,
+                /// Bot mailbox delivery id (BotInboxDelivery → AppendBotMessage).
+                #[serde(default)]
+                delivery_id: Option<String>,
+                /// Global bot identity (`agents.agent_id`) for mailbox turns.
+                #[serde(default)]
+                bot_id: Option<String>,
             }
             let req: StartAgentSessionParams = parse_params(&params)?;
             let agent_label = req.runtime_agent.as_deref().unwrap_or(&req.agent_id);
@@ -213,19 +227,41 @@ pub async fn invoke_host_command(
             } else {
                 req.workspace
             };
+            let instructions = req
+                .instructions
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    req.system_prompt
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                });
+            let _ = req.display_name; // reserved for host-side UI labels
             let start_req = StartAgentRequest {
                 agent,
                 workspace,
-                mode: None,
                 profile_id: None,
                 model: req.model,
                 reasoning_effort: req.reasoning_effort,
-                instructions: None,
+                instructions,
             };
             let conversation_title = req
                 .conversation_title
                 .or(req.title)
                 .filter(|s| !s.trim().is_empty());
+            // Prefer explicit bot_id; mailbox injects agent_id == bot_id.
+            let bot_id = req.bot_id.filter(|s| !s.trim().is_empty()).or_else(|| {
+                let id = req.agent_id.trim();
+                if id.is_empty() {
+                    None
+                } else {
+                    Some(id.to_owned())
+                }
+            });
             server
                 .agent
                 .start_agent_with_session_id_in_conversation(
@@ -237,6 +273,8 @@ pub async fn invoke_host_command(
                     conversation_title,
                     req.origin_message_id,
                     req.attachments,
+                    req.delivery_id,
+                    bot_id,
                 )
                 .await
                 .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
@@ -255,6 +293,10 @@ pub async fn invoke_host_command(
                 origin_message_id: Option<String>,
                 #[serde(default)]
                 attachments: Vec<minos_protocol::DispatchAttachment>,
+                #[serde(default)]
+                delivery_id: Option<String>,
+                #[serde(default)]
+                bot_id: Option<String>,
             }
             let req: SendAgentSessionInputParams = parse_params(&params)?;
             into_result(
@@ -264,6 +306,8 @@ pub async fn invoke_host_command(
                         text: req.text,
                         origin_message_id: req.origin_message_id,
                         attachments: req.attachments,
+                        delivery_id: req.delivery_id,
+                        bot_id: req.bot_id,
                     })
                     .await,
             )

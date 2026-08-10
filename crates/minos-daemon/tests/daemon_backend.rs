@@ -14,7 +14,7 @@ use minos_daemon::local_rpc::{start_local_rpc_server, LocalRpcConfig};
 use minos_daemon::store::event_writer::EventWriter;
 use minos_daemon::store::LocalStore;
 use minos_domain::AgentName;
-use minos_protocol::{AgentLaunchMode, ReadSessionParams, StartAgentRequest, StartAgentResponse};
+use minos_protocol::{ReadSessionParams, StartAgentRequest, StartAgentResponse};
 
 use async_trait::async_trait;
 use minos_cli_detect::CommandOutcome;
@@ -110,7 +110,6 @@ async fn start_agent_and_send_message_round_trip() {
             [StartAgentRequest {
                 agent: AgentName::Codex,
                 workspace: String::new(),
-                mode: Some(AgentLaunchMode::Server),
                 profile_id: None,
                 model: None,
                 reasoning_effort: None,
@@ -130,6 +129,8 @@ async fn start_agent_and_send_message_round_trip() {
                 text: "integration test message".into(),
                 origin_message_id: None,
                 attachments: vec![],
+                delivery_id: None,
+                bot_id: None,
             }],
         )
         .await
@@ -154,7 +155,6 @@ async fn list_sessions_returns_data_after_agent_starts() {
             [StartAgentRequest {
                 agent: AgentName::Codex,
                 workspace: String::new(),
-                mode: Some(AgentLaunchMode::Server),
                 profile_id: None,
                 model: None,
                 reasoning_effort: None,
@@ -187,7 +187,6 @@ async fn resume_session_and_read_history() {
             [StartAgentRequest {
                 agent: AgentName::Codex,
                 workspace: String::new(),
-                mode: Some(AgentLaunchMode::Server),
                 profile_id: None,
                 model: None,
                 reasoning_effort: None,

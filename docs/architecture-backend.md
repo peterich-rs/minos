@@ -69,22 +69,24 @@
 /health/jobs          GET    后台任务健康
 /metrics              GET    Prometheus 指标
 /openapi.json         GET    OpenAPI 规范
-/ws/client            GET    WebSocket 升级（移动端/Web）
-/ws/host              GET    WebSocket 升级（Host 守护进程）
+/ws/client            GET    WebSocket 升级（人类 Account 客户端：Mobile/Web/Desktop UI）
+/ws/host              GET    WebSocket 升级（Host 守护进程 / bot runtime 身体；非 IM 主轴）
 /v1/auth/*            POST   认证（注册/登录/刷新/登出/改密/Supabase exchange）
 /v1/pairing/*         POST   配对确认/撤销/列表
 /v1/host/*            POST   Host 引导/配对码/安装令牌
-/v1/agent-sessions/*  POST   Agent 会话管理
+/v1/agent-sessions/*  POST   Agent 会话 runtime 控制（非协作主轴；日常 @bot 走消息+inbox）
 /v1/approvals/*       POST   审批请求
-/v1/conversations/*   POST   对话/消息
+/v1/conversations/*   POST   对话/消息（人类发送；commit 后可 enqueue Agent inbox）
 /v1/friends/*         POST   好友/好友请求
 /v1/profiles/*        POST   个人资料
 /v1/projects/*        POST   项目 CRUD
-/v1/realtime/*        POST   WS 票据签发
+/v1/realtime/*        POST   Account WS 票据
 /v1/notifications/*   POST   推送令牌/偏好
 /v1/media/*           GET/POST/PUT  附件 blob（R2 / 本地对象存储）
-/v1/social/*          POST   Agent 注册/对话成员
+/v1/social/* · /v1/agents/*  POST   Agent 注册 / conversation bot roster / agent 气泡上行
 ```
+
+协作模型 SSOT：[architecture-messaging.md](architecture-messaging.md)；bot 投递：[agent-participant-delivery](superpowers/specs/2026-08-09-agent-participant-delivery.md)；人机分权：[ADR 0020](adr/0020-server-centric-auth-and-account-pairs.md) + [ADR 0021](adr/0021-agent-as-conversation-bot-participant.md)。
 
 ### 中间件栈（自底向上）
 
@@ -221,13 +223,18 @@ Postgres 集成 smoke（默认 skip）：`MINOS_PG_TESTS=1 MINOS_DATABASE_URL=po
 | `friendships` | 好友关系 |
 | `conversations` | 对话（直接/群组） |
 | `chat_messages` | 聊天消息 |
-| `agents` | Agent 定义 |
+| `chat_message_mentions` | 多态 mention SSOT（`target_kind` ∈ account/agent + `ordinal`） |
+| `agents` | 全局 bot 身份 + 数字肉身（display_name / status / system_prompt / effort …） |
+| `conversation_agent_members` | bot membership（进群不 clone bot） |
+| `bot_message_deliveries` | Agent inbox / Bot mailbox（lease + automation_hop；模块名可仍为 `agent_dispatch_queue`） |
+| `bot_revisions` | mailbox 调度时的不可变数字肉身快照 |
+| `bot_deployments` | bot × host 执行能力 |
 | `projects` | 项目 |
 | `agent_sessions` | Agent 会话 |
 | `agent_turns` | Agent 轮次 |
 | `agent_turn_events` | 轮次流事件 |
 | `approval_requests` | 审批请求 |
-| `host_commands` | 持久化命令队列 |
+| `host_commands` | 持久化命令队列（runtime port adapter） |
 | `durable_event_log` | 按 topic 排序的事件日志（payload；可被 retention 删除） |
 | `topic_metadata` | **序号权威**：`high_watermark`（永不回退）+ `retention_floor`（payload 删除上界） |
 | `outbox_events` | 分发工作队列（`lane`: `social_durable` \| `host_command`） |
@@ -306,7 +313,7 @@ RuntimeShell           -- 拥有 AppContext、后台任务、集群监听
 | `AuditIndexerJob` | 审计数据索引 |
 | `OutboxDispatcherJob` | 分发 `social_durable` 车道 outbox |
 | `HostCommandOutboxJob` | 分发 `host_command` 车道（与 social 隔离 claim/lease） |
-| `AgentDispatchWorkerJob` | 异步 drain `agent_dispatch_queue`；arm CompletionWatch |
+| `AgentDispatchWorkerJob` | 异步 drain `bot_message_deliveries`（模块名 `agent_dispatch_queue`）；arm CompletionWatch |
 
 所有任务实现 `Job` trait（`tick()`, `idle_interval()`, `applies_to(runtime_mode)`）。`SessionLifecycleJob` / `AgentDispatchWorkerJob` 需要 `AppContext`（registry + completion_watches）。
 

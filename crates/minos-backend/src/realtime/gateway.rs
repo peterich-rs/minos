@@ -5,7 +5,7 @@ use axum::{
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
         Query, State,
     },
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::Response,
 };
 use futures::StreamExt;
@@ -19,6 +19,7 @@ use uuid::Uuid;
 use std::time::Instant;
 
 use crate::auth::realtime_ticket::RealtimeTicketConsumeError;
+use crate::conversations::{ConversationError, ConversationService, DefaultConversationService};
 use crate::error::BackendError;
 use crate::http::BackendState;
 use crate::ingest::use_case::IngestCommand;
@@ -60,10 +61,11 @@ impl GatewayWsQuery {
     }
 }
 
+/// Client WS rail only. Host upgrades use bearer `hit_*` via
+/// [`upgrade_host_with_bearer`] and never share the ticket path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GatewayRail {
     Client,
-    Host,
 }
 
 #[derive(Debug)]
@@ -86,14 +88,100 @@ pub async fn upgrade_client(
 
 pub async fn upgrade_host(
     State(state): State<BackendState>,
-    Query(query): Query<GatewayWsQuery>,
+    Query(_query): Query<GatewayWsQuery>,
+    headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<Response, (StatusCode, String)> {
-    let result = upgrade_with_ticket(state, query, ws, GatewayRail::Host).await;
+    // Host auth is Authorization: Bearer hit_* only (bot-mailbox Phase 2.5).
+    let result = if bearer_token_from_headers(&headers).is_some() {
+        upgrade_host_with_bearer(state, headers, ws).await
+    } else {
+        Err((
+            StatusCode::UNAUTHORIZED,
+            "host Authorization: Bearer hit_* required".to_string(),
+        ))
+    };
     if result.is_err() {
         crate::telemetry::record_ws_connect("preauth", crate::telemetry::OUTCOME_UNAUTHORIZED);
     }
     result
+}
+
+fn bearer_token_from_headers(headers: &HeaderMap) -> Option<&str> {
+    let raw = headers.get("authorization")?.to_str().ok()?;
+    raw.strip_prefix("Bearer ")
+        .or_else(|| raw.strip_prefix("bearer "))
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+}
+
+async fn upgrade_host_with_bearer(
+    state: BackendState,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Result<Response, (StatusCode, String)> {
+    let principal = crate::auth::host_installation::require(&state, &headers)
+        .await
+        .map_err(|error| error.into_response_tuple())?;
+    let device_id = principal.host_installation_id;
+    let host_installation_id = device_id.to_string();
+    let request_span = tracing::Span::current();
+    Ok(ws.on_upgrade(move |mut socket| {
+        let state = state.clone();
+        async move {
+            match revalidate_host_installation_auth(&state.store, device_id).await {
+                Ok(()) => {
+                    Box::pin(run_session(
+                        socket,
+                        state,
+                        GatewayUpgrade {
+                            device_id,
+                            role: DeviceRole::AgentHost,
+                            principal: ConnectionPrincipal::Host {
+                                host_installation_id,
+                            },
+                        },
+                    ))
+                    .await;
+                }
+                Err(ActivationAuthError::Unauthorized(message)) => {
+                    tracing::info!(
+                        target: "minos_backend::realtime",
+                        device_id = %device_id,
+                        reason = %message,
+                        "host bearer auth changed before activation; closing 4401"
+                    );
+                    close_with_directive(
+                        &mut socket,
+                        DeviceRole::AgentHost,
+                        CloseDirective {
+                            code: CLOSE_CODE_AUTH_REVOKED,
+                            reason: "auth_revoked",
+                        },
+                    )
+                    .await;
+                }
+                Err(ActivationAuthError::Internal(message)) => {
+                    tracing::warn!(
+                        target: "minos_backend::realtime",
+                        device_id = %device_id,
+                        error = %message,
+                        "host bearer activation revalidation failed"
+                    );
+                    close_with_directive(
+                        &mut socket,
+                        DeviceRole::AgentHost,
+                        CloseDirective {
+                            code: CLOSE_CODE_INTERNAL_ERROR,
+                            reason: "activation_revalidate_failed",
+                        },
+                    )
+                    .await;
+                }
+            }
+        }
+        .instrument(request_span)
+    }))
 }
 
 async fn upgrade_with_ticket(
@@ -122,10 +210,7 @@ async fn upgrade_with_ticket(
         GatewayRail::Client if !claims.role.is_account_client() => {
             return Err((StatusCode::UNAUTHORIZED, "invalid ws_ticket".to_string()));
         }
-        GatewayRail::Host if claims.role != DeviceRole::AgentHost => {
-            return Err((StatusCode::UNAUTHORIZED, "invalid ws_ticket".to_string()));
-        }
-        _ => {}
+        GatewayRail::Client => {}
     }
 
     state
@@ -173,7 +258,7 @@ async fn upgrade_with_ticket(
         async move {
             match revalidate_ws_ticket_auth(&state.store, &claims).await {
                 Ok(()) => {
-                    run_session(
+                    Box::pin(run_session(
                         socket,
                         state,
                         GatewayUpgrade {
@@ -181,7 +266,7 @@ async fn upgrade_with_ticket(
                             role: claims.role,
                             principal,
                         },
-                    )
+                    ))
                     .await;
                 }
                 Err(ActivationAuthError::Unauthorized(message)) => {
@@ -222,6 +307,27 @@ async fn upgrade_with_ticket(
         }
         .instrument(request_span)
     }))
+}
+
+async fn revalidate_host_installation_auth(
+    store: &crate::store::StoreHandle,
+    device_id: DeviceId,
+) -> Result<(), ActivationAuthError> {
+    let row = crate::store::device_installations::get_device(store, device_id)
+        .await
+        .map_err(|error| ActivationAuthError::Internal(error.to_string()))?
+        .ok_or_else(|| {
+            ActivationAuthError::Unauthorized(
+                "host installation missing during websocket activation".to_string(),
+            )
+        })?;
+    if row.role != DeviceRole::AgentHost {
+        return Err(ActivationAuthError::Unauthorized(format!(
+            "host installation role changed during websocket activation: got {}",
+            row.role
+        )));
+    }
+    Ok(())
 }
 
 async fn revalidate_ws_ticket_auth(
@@ -870,6 +976,491 @@ async fn handle_formal_frame(
             handle_host_ingest_pull_response(ws, state, upgrade, response).await?;
             Ok(None)
         }
+        // Bot mailbox / WS-native IM bus (bot-mailbox-ws-im-bus-design Phase 2).
+        // Same commit path as HTTP POST …/messages (not a second SSOT).
+        ClientFrame::AppendMessage {
+            client_operation_id,
+            conversation_id,
+            text,
+            mentions,
+            reply_to_message_id,
+            attachment_ids,
+        } => {
+            if upgrade.role == DeviceRole::AgentHost {
+                let _ = send_error_frame(
+                    ws,
+                    conn,
+                    "realtime_subscription_denied",
+                    "account-only frame on host gateway",
+                )
+                .await;
+                return Ok(None);
+            }
+            handle_append_message(
+                ws,
+                state,
+                upgrade,
+                client_operation_id,
+                conversation_id,
+                text,
+                reply_to_message_id,
+                attachment_ids,
+                mentions,
+            )
+            .await?;
+            Ok(None)
+        }
+        ClientFrame::DeliveryAccepted { delivery_id } => {
+            if upgrade.role != DeviceRole::AgentHost {
+                let _ = send_error_frame(
+                    ws,
+                    conn,
+                    "realtime_subscription_denied",
+                    "host-only frame on client gateway",
+                )
+                .await;
+                return Ok(None);
+            }
+            handle_delivery_accepted(state, upgrade, &delivery_id).await?;
+            Ok(None)
+        }
+        ClientFrame::DeliveryRejected {
+            delivery_id,
+            code,
+            detail,
+        } => {
+            if upgrade.role != DeviceRole::AgentHost {
+                let _ = send_error_frame(
+                    ws,
+                    conn,
+                    "realtime_subscription_denied",
+                    "host-only frame on client gateway",
+                )
+                .await;
+                return Ok(None);
+            }
+            handle_delivery_rejected(state, upgrade, &delivery_id, &code, &detail).await?;
+            Ok(None)
+        }
+        ClientFrame::AppendBotMessage {
+            delivery_id,
+            operation_id,
+            conversation_id,
+            bot_id,
+            text,
+            mentions: _mentions,
+            reply_to_message_id,
+        } => {
+            if upgrade.role != DeviceRole::AgentHost {
+                let _ = send_error_frame(
+                    ws,
+                    conn,
+                    "realtime_subscription_denied",
+                    "host-only frame on client gateway",
+                )
+                .await;
+                return Ok(None);
+            }
+            handle_append_bot_message(
+                state,
+                upgrade,
+                &delivery_id,
+                &operation_id,
+                &conversation_id,
+                &bot_id,
+                &text,
+                reply_to_message_id.as_deref(),
+            )
+            .await?;
+            Ok(None)
+        }
+    }
+}
+
+fn host_owns_active_lease(
+    row: &crate::store::agent_dispatch_queue::AgentDispatchRow,
+    host_id: &str,
+    now_ms: i64,
+) -> bool {
+    if row.status != crate::store::agent_dispatch_queue::STATUS_INFLIGHT {
+        return false;
+    }
+    match row.lease_owner_host_id.as_deref() {
+        Some(owner) if owner == host_id => {}
+        _ => return false,
+    }
+    match row.lease_expires_at_ms {
+        Some(expires) if expires >= now_ms => true,
+        // Missing expiry: still honor owner while inflight (legacy rows).
+        None => true,
+        Some(_) => false,
+    }
+}
+
+async fn handle_delivery_accepted(
+    state: &BackendState,
+    upgrade: &GatewayUpgrade,
+    delivery_id: &str,
+) -> Result<(), BackendError> {
+    let host_id = upgrade.device_id.to_string();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let Some(row) =
+        crate::store::agent_dispatch_queue::get_by_id(&state.store, delivery_id).await?
+    else {
+        tracing::debug!(
+            target: "minos_backend::realtime",
+            delivery_id,
+            "DeliveryAccepted for unknown delivery_id"
+        );
+        return Ok(());
+    };
+    if !host_owns_active_lease(&row, &host_id, now_ms) {
+        tracing::warn!(
+            target: "minos_backend::realtime",
+            delivery_id,
+            host_id = %host_id,
+            status = %row.status,
+            lease_owner = ?row.lease_owner_host_id,
+            lease_expires_at_ms = ?row.lease_expires_at_ms,
+            "DeliveryAccepted ignored (not inflight lease owner or lease expired)"
+        );
+        return Ok(());
+    }
+    tracing::info!(
+        target: "minos_backend::realtime",
+        delivery_id,
+        host_id = %host_id,
+        "host accepted BotInboxDelivery"
+    );
+    Ok(())
+}
+
+async fn handle_delivery_rejected(
+    state: &BackendState,
+    upgrade: &GatewayUpgrade,
+    delivery_id: &str,
+    code: &str,
+    detail: &str,
+) -> Result<(), BackendError> {
+    let host_id = upgrade.device_id.to_string();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let Some(row) =
+        crate::store::agent_dispatch_queue::get_by_id(&state.store, delivery_id).await?
+    else {
+        return Ok(());
+    };
+    if !host_owns_active_lease(&row, &host_id, now_ms) {
+        tracing::warn!(
+            target: "minos_backend::realtime",
+            delivery_id,
+            host_id = %host_id,
+            status = %row.status,
+            "DeliveryRejected ignored (not inflight lease owner or lease expired)"
+        );
+        return Ok(());
+    }
+    let err = format!("{code}: {detail}");
+    let attempts = row.attempts.max(1);
+    if attempts >= crate::store::agent_dispatch_queue::MAX_ATTEMPTS {
+        crate::store::agent_dispatch_queue::mark_failed_terminal(
+            &state.store,
+            delivery_id,
+            &err,
+            now_ms,
+        )
+        .await?;
+    } else {
+        let delay = crate::store::agent_dispatch_queue::backoff_delay_ms(attempts);
+        crate::store::agent_dispatch_queue::requeue_pending(
+            &state.store,
+            delivery_id,
+            attempts,
+            now_ms.saturating_add(delay),
+            &err,
+            now_ms,
+        )
+        .await?;
+    }
+    let _ =
+        crate::store::agent_dispatch_queue::clear_lease(&state.store, delivery_id, now_ms).await;
+    state.wake_agent_dispatch();
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_append_bot_message(
+    state: &BackendState,
+    upgrade: &GatewayUpgrade,
+    delivery_id: &str,
+    operation_id: &str,
+    conversation_id: &str,
+    bot_id: &str,
+    text: &str,
+    reply_to_message_id: Option<&str>,
+) -> Result<(), BackendError> {
+    let host_id = upgrade.device_id.to_string();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let Some(row) =
+        crate::store::agent_dispatch_queue::get_by_id(&state.store, delivery_id).await?
+    else {
+        tracing::warn!(
+            target: "minos_backend::realtime",
+            delivery_id,
+            "AppendBotMessage for unknown delivery_id"
+        );
+        return Ok(());
+    };
+    if row.conversation_id != conversation_id || row.agent_id != bot_id {
+        tracing::warn!(
+            target: "minos_backend::realtime",
+            delivery_id,
+            "AppendBotMessage conversation/bot mismatch"
+        );
+        return Ok(());
+    }
+    if !host_owns_active_lease(&row, &host_id, now_ms) {
+        tracing::warn!(
+            target: "minos_backend::realtime",
+            delivery_id,
+            host_id = %host_id,
+            status = %row.status,
+            lease_owner = ?row.lease_owner_host_id,
+            lease_expires_at_ms = ?row.lease_expires_at_ms,
+            "AppendBotMessage ignored (not inflight lease owner or lease expired)"
+        );
+        return Ok(());
+    }
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    // Reuse existing agent message commit path (host_projection, idempotent on operation_id).
+    match crate::http::v1::social::persist_agent_message_from_host(
+        state,
+        conversation_id,
+        bot_id,
+        trimmed,
+        reply_to_message_id,
+        row.session_id.as_deref(),
+        operation_id,
+    )
+    .await
+    {
+        Ok(message) => {
+            // Fallback to delivery_id keeps completion keyed when session bind raced.
+            let session_id = row
+                .session_id
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or(delivery_id);
+            // Mailbox AppendBotMessage is a terminal bot reply path. Disarm any
+            // TurnCompletionProjector watches so expire_completion_watches cannot
+            // post a false completion_timeout after a successful reply (e.g.
+            // ingest gap after uplink already committed the bubble).
+            let projected_id = Some(message.message_id.as_str());
+            let removed = state.completion_watches.remove_by_dispatch_id(delivery_id);
+            if removed.is_empty() {
+                // Fallback: origin+session key when dispatch_id was not bound.
+                let key = crate::completion_watch::watch_key(&row.origin_message_id, session_id);
+                if let Some(_watch) = state.completion_watches.remove(&key) {
+                    let _ = crate::store::completion_watches::mark_projected(
+                        &state.store,
+                        &key,
+                        projected_id,
+                    )
+                    .await;
+                }
+            } else {
+                for watch in removed {
+                    let key = watch.watch_key();
+                    let _ = crate::store::completion_watches::mark_projected(
+                        &state.store,
+                        &key,
+                        projected_id,
+                    )
+                    .await;
+                }
+            }
+            let _ = crate::store::agent_dispatch_queue::mark_succeeded(
+                &state.store,
+                delivery_id,
+                session_id,
+                now_ms,
+            )
+            .await;
+            let _ =
+                crate::store::agent_dispatch_queue::clear_lease(&state.store, delivery_id, now_ms)
+                    .await;
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "minos_backend::realtime",
+                delivery_id,
+                error = %error,
+                "AppendBotMessage commit failed"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Account WS-native collaboration write (bot-mailbox-ws-im-bus Phase 2).
+///
+/// Shares the same domain commit as HTTP `POST …/messages`:
+/// `DefaultConversationService::send_message` + social fanout + agent inbox.
+async fn handle_append_message(
+    ws: &mut WebSocket,
+    state: &BackendState,
+    upgrade: &GatewayUpgrade,
+    client_operation_id: String,
+    conversation_id: String,
+    text: String,
+    reply_to_message_id: Option<String>,
+    attachment_ids: Vec<String>,
+    structured_mentions: Vec<minos_protocol::MentionTarget>,
+) -> Result<(), BackendError> {
+    let Some(account_id) = upgrade.account_id() else {
+        let _ = send_server_frame(
+            ws,
+            &ServerFrame::ChatSendNack {
+                client_operation_id,
+                conversation_id,
+                code: "unauthorized".into(),
+                message: "append_message requires account principal".into(),
+            },
+        )
+        .await;
+        return Ok(());
+    };
+
+    let trimmed = text.trim().to_string();
+    if trimmed.is_empty() && attachment_ids.is_empty() {
+        let _ = send_server_frame(
+            ws,
+            &ServerFrame::ChatSendNack {
+                client_operation_id,
+                conversation_id,
+                code: "bad_request".into(),
+                message: "message text or attachment_ids is required".into(),
+            },
+        )
+        .await;
+        return Ok(());
+    }
+
+    if client_operation_id.trim().is_empty() {
+        let _ = send_server_frame(
+            ws,
+            &ServerFrame::ChatSendNack {
+                client_operation_id,
+                conversation_id,
+                code: "bad_request".into(),
+                message: "client_operation_id is required".into(),
+            },
+        )
+        .await;
+        return Ok(());
+    }
+
+    let conversations_svc = DefaultConversationService::new(state.store.clone());
+    let message_source = minos_protocol::MessageSource::ClientLive;
+
+    let send_result = conversations_svc
+        .send_message(
+            account_id,
+            &conversation_id,
+            &trimmed,
+            reply_to_message_id.as_deref(),
+            Some(client_operation_id.as_str()),
+            message_source,
+            None,
+            &attachment_ids,
+            &structured_mentions,
+        )
+        .await;
+
+    let (message, _members) = match send_result {
+        Ok(pair) => pair,
+        Err(error) => {
+            let (code, msg) = conversation_error_to_chat_nack(&error);
+            tracing::warn!(
+                target: "minos_backend::realtime",
+                error = %error,
+                conversation_id = %conversation_id,
+                client_operation_id = %client_operation_id,
+                "AppendMessage commit failed"
+            );
+            let _ = send_server_frame(
+                ws,
+                &ServerFrame::ChatSendNack {
+                    client_operation_id,
+                    conversation_id,
+                    code: code.into(),
+                    message: msg,
+                },
+            )
+            .await;
+            return Ok(());
+        }
+    };
+
+    // Same post-commit path as HTTP send_message_inner.
+    crate::http::v1::social::fan_out_social_message(state, &message).await;
+
+    if message_source.allows_agent_dispatch() {
+        if let Err(e) = crate::http::v1::social::try_agent_dispatch(
+            state,
+            account_id,
+            &conversation_id,
+            &message,
+            reply_to_message_id.as_deref(),
+            &trimmed,
+        )
+        .await
+        {
+            tracing::warn!(
+                target: "minos_backend::realtime",
+                error = %e,
+                conversation_id = %conversation_id,
+                message_id = %message.message_id,
+                "agent inbox pipeline error after AppendMessage"
+            );
+            crate::http::v1::social::notify_agent_dispatch_pipeline_error(
+                state,
+                account_id,
+                &conversation_id,
+                &message.message_id,
+                &e,
+            )
+            .await;
+        }
+    }
+
+    let _ = send_server_frame(
+        ws,
+        &ServerFrame::ChatSendAck {
+            client_operation_id,
+            conversation_id: message.conversation_id.clone(),
+            message_id: message.message_id.clone(),
+            message_seq: message.message_seq,
+            message: Some(message),
+        },
+    )
+    .await;
+    Ok(())
+}
+
+fn conversation_error_to_chat_nack(error: &ConversationError) -> (&'static str, String) {
+    match error {
+        ConversationError::NotFound => ("not_found", "conversation not found".into()),
+        ConversationError::Forbidden => ("forbidden", "insufficient membership privilege".into()),
+        ConversationError::NotFriends => ("conflict", "users are not friends".into()),
+        ConversationError::TitleRequired => ("bad_request", "group title is required".into()),
+        ConversationError::InvalidKind(msg) => ("internal", msg.clone()),
+        ConversationError::MissingProfile(id) => ("internal", format!("profile not found: {id}")),
+        ConversationError::ValidationFormat(msg) => ("bad_request", msg.clone()),
+        ConversationError::IdempotencyConflict(msg) => ("conflict", msg.clone()),
+        ConversationError::Internal(e) => ("internal", e.to_string()),
     }
 }
 
@@ -1909,12 +2500,33 @@ async fn close_with_directive(ws: &mut WebSocket, role: DeviceRole, directive: C
 #[cfg(test)]
 mod tests {
     use super::{
-        pull_requests_for_manifest, websocket_read_error_is_client_reset, PULL_INGEST_MAX_BYTES,
+        bearer_token_from_headers, pull_requests_for_manifest,
+        websocket_read_error_is_client_reset, PULL_INGEST_MAX_BYTES,
     };
+    use axum::http::{HeaderMap, HeaderValue};
     use minos_domain::DeviceId;
     use minos_protocol::realtime::{
         HostGapManifest, PullPriority, PullReason, SeqRange, ServerFrame, SessionGapManifest,
     };
+
+    #[test]
+    fn bearer_token_from_headers_parses_hit_prefix() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer hit_abc123"),
+        );
+        assert_eq!(bearer_token_from_headers(&headers), Some("hit_abc123"));
+
+        let mut lower = HeaderMap::new();
+        lower.insert("authorization", HeaderValue::from_static("bearer hit_xyz"));
+        assert_eq!(bearer_token_from_headers(&lower), Some("hit_xyz"));
+
+        assert!(bearer_token_from_headers(&HeaderMap::new()).is_none());
+        let mut empty = HeaderMap::new();
+        empty.insert("authorization", HeaderValue::from_static("Basic x"));
+        assert!(bearer_token_from_headers(&empty).is_none());
+    }
 
     #[test]
     fn websocket_read_error_classifies_client_reset() {

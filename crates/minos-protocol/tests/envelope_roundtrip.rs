@@ -5,7 +5,7 @@
 //! variants) that encodes each variant and decodes back.
 
 use minos_domain::{AgentName, DeviceId, DeviceSecret};
-use minos_protocol::{ChatMessageSummary, Envelope, EventKind, SenderType, UserSummary};
+use minos_protocol::{ChatMessageSummary, Envelope, EventKind, MessageSender, SenderType};
 use minos_ui_protocol::UiEventMessage;
 use pretty_assertions::assert_eq;
 
@@ -150,7 +150,7 @@ fn all_event_kind_variants_round_trip() {
             message: ChatMessageSummary {
                 message_id: "msg-social-1".into(),
                 conversation_id: "conv-1".into(),
-                sender: UserSummary {
+                sender: MessageSender::Account {
                     account_id: "acct-1".into(),
                     minos_id: "alice".into(),
                     display_name: "Alice".into(),
@@ -161,6 +161,7 @@ fn all_event_kind_variants_round_trip() {
                 reply_to: None,
                 recalled_at_ms: None,
                 mentioned_account_ids: vec!["acct-2".into()],
+                mentioned_agent_ids: vec![],
                 sender_type: SenderType::User,
                 reactions: vec![],
                 attachments: vec![],

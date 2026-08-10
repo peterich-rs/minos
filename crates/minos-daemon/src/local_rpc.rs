@@ -270,8 +270,7 @@ impl LocalDaemonRpcServer for LocalRpcImpl {
             agent = %req.agent,
             "local RPC remove_conversation_agent",
         );
-        self.agent
-            .remove_conversation_agent(req)
+        Box::pin(self.agent.remove_conversation_agent(req))
             .await
             .map_err(rpc_err)
     }

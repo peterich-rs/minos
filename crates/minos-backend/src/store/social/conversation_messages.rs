@@ -258,10 +258,27 @@ pub async fn list_messages_by_ids(
     .map_err(store_err("social::list_messages_by_ids"))
 }
 
+/// List polymorphic mentions for the given message ids.
+///
+/// Returns account-only ids for backward-compatible call sites that only need
+/// human unread/push targeting. Prefer [`list_message_mentions_full`] when
+/// agent targets are required.
 pub async fn list_message_mentions(
     store: &impl AsStorePool,
     message_ids: &[String],
 ) -> Result<HashMap<String, Vec<String>>, BackendError> {
+    let full = list_message_mentions_full(store, message_ids).await?;
+    Ok(full
+        .into_iter()
+        .map(|(message_id, mentions)| (message_id, mentions.account_ids))
+        .collect())
+}
+
+/// List polymorphic mentions (account + agent) for the given message ids.
+pub async fn list_message_mentions_full(
+    store: &impl AsStorePool,
+    message_ids: &[String],
+) -> Result<HashMap<String, super::MessageMentions>, BackendError> {
     if message_ids.is_empty() {
         return Ok(HashMap::new());
     }
@@ -269,7 +286,7 @@ pub async fn list_message_mentions(
     let rows = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             let mut builder = QueryBuilder::<Sqlite>::new(
-                "SELECT message_id, mentioned_account_id
+                "SELECT message_id, target_kind, target_id
                    FROM chat_message_mentions
                   WHERE message_id IN (",
             );
@@ -279,7 +296,8 @@ pub async fn list_message_mentions(
                     separated.push_bind(message_id);
                 }
             }
-            builder.push(") ORDER BY message_id ASC, mentioned_account_id ASC");
+            // Appearance order SSOT: ordinal written at insert (not target_id lex).
+            builder.push(") ORDER BY message_id ASC, target_kind ASC, ordinal ASC, target_id ASC");
             builder
                 .build_query_as::<MessageMentionRow>()
                 .fetch_all(pool)
@@ -287,7 +305,7 @@ pub async fn list_message_mentions(
         }
         StorePoolRef::Postgres(pool) => {
             let mut builder = QueryBuilder::<Postgres>::new(
-                "SELECT message_id, mentioned_account_id
+                "SELECT message_id, target_kind, target_id
                    FROM chat_message_mentions
                   WHERE message_id IN (",
             );
@@ -297,7 +315,8 @@ pub async fn list_message_mentions(
                     separated.push_bind(message_id);
                 }
             }
-            builder.push(") ORDER BY message_id ASC, mentioned_account_id ASC");
+            // Appearance order SSOT: ordinal written at insert (not target_id lex).
+            builder.push(") ORDER BY message_id ASC, target_kind ASC, ordinal ASC, target_id ASC");
             builder
                 .build_query_as::<MessageMentionRow>()
                 .fetch_all(pool)
@@ -306,12 +325,13 @@ pub async fn list_message_mentions(
     }
     .map_err(store_err("social::list_message_mentions"))?;
 
-    let mut mentions_by_message = HashMap::<String, Vec<String>>::new();
+    let mut mentions_by_message = HashMap::<String, super::MessageMentions>::new();
     for row in rows {
-        mentions_by_message
-            .entry(row.message_id)
-            .or_default()
-            .push(row.mentioned_account_id);
+        let entry = mentions_by_message.entry(row.message_id).or_default();
+        match row.target_kind.as_str() {
+            "agent" => entry.agent_ids.push(row.target_id),
+            _ => entry.account_ids.push(row.target_id),
+        }
     }
     Ok(mentions_by_message)
 }
@@ -325,17 +345,41 @@ pub async fn insert_message(
     reply_to_message_id: Option<&str>,
     mentioned_account_ids: &[String],
 ) -> Result<ChatMessageRow, BackendError> {
-    insert_message_with_id(
+    insert_message_with_mentions(
         store,
         conversation_id,
         sender_account_id,
         text,
         created_at_ms,
         reply_to_message_id,
-        mentioned_account_ids,
-        None,
+        &super::MessageMentions::accounts(mentioned_account_ids.iter().cloned()),
     )
     .await
+}
+
+pub async fn insert_message_with_mentions(
+    store: &impl AsStorePool,
+    conversation_id: &str,
+    sender_account_id: &str,
+    text: &str,
+    created_at_ms: i64,
+    reply_to_message_id: Option<&str>,
+    mentions: &super::MessageMentions,
+) -> Result<ChatMessageRow, BackendError> {
+    insert_message_with_id_full(
+        store,
+        conversation_id,
+        sender_account_id,
+        text,
+        created_at_ms,
+        reply_to_message_id,
+        mentions,
+        None,
+        &[],
+        minos_protocol::MessageSource::ClientLive.as_str(),
+    )
+    .await
+    .map(|outcome| outcome.row)
 }
 
 /// Insert a user chat message, optionally with a client-owned id for multi-end
@@ -358,12 +402,13 @@ pub async fn insert_message_with_id(
         text,
         created_at_ms,
         reply_to_message_id,
-        mentioned_account_ids,
+        &super::MessageMentions::accounts(mentioned_account_ids.iter().cloned()),
         client_message_id,
         &[],
         "client_live",
     )
     .await
+    .map(|outcome| outcome.row)
 }
 
 /// Full fingerprint insert (tests + callers that already open a pool).
@@ -375,11 +420,11 @@ pub async fn insert_message_with_id_full(
     text: &str,
     created_at_ms: i64,
     reply_to_message_id: Option<&str>,
-    mentioned_account_ids: &[String],
+    mentions: &super::MessageMentions,
     client_message_id: Option<&str>,
     attachment_blob_ids: &[String],
     message_source: &str,
-) -> Result<ChatMessageRow, BackendError> {
+) -> Result<InsertMessageOutcome, BackendError> {
     let mut tx = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => pool
             .begin()
@@ -399,7 +444,7 @@ pub async fn insert_message_with_id_full(
         text,
         created_at_ms,
         reply_to_message_id,
-        mentioned_account_ids,
+        mentions,
         client_message_id,
         attachment_blob_ids,
         message_source,
@@ -414,7 +459,7 @@ pub async fn insert_message_with_id_full(
         .await?;
     }
     tx.commit().await?;
-    Ok(outcome.row)
+    Ok(outcome)
 }
 
 /// Insert a user message on an open transaction (for Transactional Outbox).
@@ -433,7 +478,7 @@ pub async fn insert_message_with_id_in_tx(
     text: &str,
     created_at_ms: i64,
     reply_to_message_id: Option<&str>,
-    mentioned_account_ids: &[String],
+    mentions: &super::MessageMentions,
     client_message_id: Option<&str>,
     attachment_blob_ids: &[String],
     message_source: &str,
@@ -455,7 +500,7 @@ pub async fn insert_message_with_id_in_tx(
                         ),
                     });
                 }
-                if existing.sender_account_id != sender_account_id {
+                if existing.sender_account_id.as_deref() != Some(sender_account_id) {
                     return Err(idempotency_conflict(
                         id,
                         "already used by a different sender",
@@ -504,10 +549,6 @@ pub async fn insert_message_with_id_in_tx(
         None => Uuid::new_v4().to_string(),
     };
 
-    let mut unique_mentions = mentioned_account_ids.to_vec();
-    unique_mentions.sort();
-    unique_mentions.dedup();
-
     let message_seq = allocate_message_seq_in_tx(tx, conversation_id, created_at_ms).await?;
 
     match tx {
@@ -529,18 +570,7 @@ pub async fn insert_message_with_id_in_tx(
             .execute(&mut **tx)
             .await
             .map_err(store_err("social::insert_message.insert"))?;
-            for mentioned_account_id in &unique_mentions {
-                sqlx::query(
-                    "INSERT INTO chat_message_mentions
-                        (message_id, mentioned_account_id)
-                     VALUES (?, ?)",
-                )
-                .bind(&message_id)
-                .bind(mentioned_account_id)
-                .execute(&mut **tx)
-                .await
-                .map_err(store_err("social::insert_message.insert_mention"))?;
-            }
+            insert_mention_rows_sqlite(tx, &message_id, mentions).await?;
         }
         DbTx::Postgres(tx) => {
             sqlx::query(
@@ -560,18 +590,7 @@ pub async fn insert_message_with_id_in_tx(
             .execute(&mut **tx)
             .await
             .map_err(store_err("social::insert_message.insert"))?;
-            for mentioned_account_id in &unique_mentions {
-                sqlx::query(
-                    "INSERT INTO chat_message_mentions
-                        (message_id, mentioned_account_id)
-                     VALUES ($1, $2)",
-                )
-                .bind(&message_id)
-                .bind(mentioned_account_id)
-                .execute(&mut **tx)
-                .await
-                .map_err(store_err("social::insert_message.insert_mention"))?;
-            }
+            insert_mention_rows_postgres(tx, &message_id, mentions).await?;
         }
     }
 
@@ -579,7 +598,7 @@ pub async fn insert_message_with_id_in_tx(
         row: ChatMessageRow {
             message_id,
             conversation_id: conversation_id.to_string(),
-            sender_account_id: sender_account_id.to_string(),
+            sender_account_id: Some(sender_account_id.to_string()),
             sender_agent_id: None,
             text: text.to_string(),
             created_at_ms,
@@ -591,6 +610,100 @@ pub async fn insert_message_with_id_in_tx(
         },
         inserted: true,
     })
+}
+
+async fn insert_mention_rows_sqlite(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+    message_id: &str,
+    mentions: &super::MessageMentions,
+) -> Result<(), BackendError> {
+    // Preserve caller appearance order via ordinal; only de-dupe, do not sort by id.
+    let mut seen_accounts = std::collections::HashSet::new();
+    let mut seen_agents = std::collections::HashSet::new();
+    let mut account_ordinal: i64 = 0;
+    for target_id in &mentions.account_ids {
+        if !seen_accounts.insert(target_id.clone()) {
+            continue;
+        }
+        sqlx::query(
+            "INSERT INTO chat_message_mentions
+                (message_id, target_kind, target_id, ordinal)
+             VALUES (?, 'account', ?, ?)",
+        )
+        .bind(message_id)
+        .bind(target_id)
+        .bind(account_ordinal)
+        .execute(&mut **tx)
+        .await
+        .map_err(store_err("social::insert_message.insert_mention"))?;
+        account_ordinal += 1;
+    }
+    let mut agent_ordinal: i64 = 0;
+    for target_id in &mentions.agent_ids {
+        if !seen_agents.insert(target_id.clone()) {
+            continue;
+        }
+        sqlx::query(
+            "INSERT INTO chat_message_mentions
+                (message_id, target_kind, target_id, ordinal)
+             VALUES (?, 'agent', ?, ?)",
+        )
+        .bind(message_id)
+        .bind(target_id)
+        .bind(agent_ordinal)
+        .execute(&mut **tx)
+        .await
+        .map_err(store_err("social::insert_message.insert_mention"))?;
+        agent_ordinal += 1;
+    }
+    Ok(())
+}
+
+async fn insert_mention_rows_postgres(
+    tx: &mut sqlx::Transaction<'_, Postgres>,
+    message_id: &str,
+    mentions: &super::MessageMentions,
+) -> Result<(), BackendError> {
+    // Preserve caller appearance order via ordinal; only de-dupe, do not sort by id.
+    let mut seen_accounts = std::collections::HashSet::new();
+    let mut seen_agents = std::collections::HashSet::new();
+    let mut account_ordinal: i64 = 0;
+    for target_id in &mentions.account_ids {
+        if !seen_accounts.insert(target_id.clone()) {
+            continue;
+        }
+        sqlx::query(
+            "INSERT INTO chat_message_mentions
+                (message_id, target_kind, target_id, ordinal)
+             VALUES ($1, 'account', $2, $3)",
+        )
+        .bind(message_id)
+        .bind(target_id)
+        .bind(account_ordinal)
+        .execute(&mut **tx)
+        .await
+        .map_err(store_err("social::insert_message.insert_mention"))?;
+        account_ordinal += 1;
+    }
+    let mut agent_ordinal: i64 = 0;
+    for target_id in &mentions.agent_ids {
+        if !seen_agents.insert(target_id.clone()) {
+            continue;
+        }
+        sqlx::query(
+            "INSERT INTO chat_message_mentions
+                (message_id, target_kind, target_id, ordinal)
+             VALUES ($1, 'agent', $2, $3)",
+        )
+        .bind(message_id)
+        .bind(target_id)
+        .bind(agent_ordinal)
+        .execute(&mut **tx)
+        .await
+        .map_err(store_err("social::insert_message.insert_mention"))?;
+        agent_ordinal += 1;
+    }
+    Ok(())
 }
 
 fn normalize_message_source(source: &str) -> &'static str {
@@ -639,30 +752,28 @@ pub async fn bind_session_to_message(
 pub async fn bind_session_to_message_for_agent(
     store: &impl AsStorePool,
     message_id: &str,
-    agent_id: &str,
+    _agent_id: &str,
     session_id: &str,
 ) -> Result<(), BackendError> {
+    // Session binding only. Never set sender_agent_id on the origin row —
+    // user messages must keep sender_agent_id NULL (bot identity is not the author).
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query(
             "UPDATE chat_messages
-                    SET agent_session_id = ?,
-                        sender_agent_id = COALESCE(sender_agent_id, ?)
+                    SET agent_session_id = ?
                   WHERE message_id = ?",
         )
         .bind(session_id)
-        .bind(agent_id)
         .bind(message_id)
         .execute(pool)
         .await
         .map(|_| ()),
         StorePoolRef::Postgres(pool) => sqlx::query(
             "UPDATE chat_messages
-                    SET agent_session_id = $1,
-                        sender_agent_id = COALESCE(sender_agent_id, $2)
-                  WHERE message_id = $3",
+                    SET agent_session_id = $1
+                  WHERE message_id = $2",
         )
         .bind(session_id)
-        .bind(agent_id)
         .bind(message_id)
         .execute(pool)
         .await
@@ -746,15 +857,17 @@ pub async fn lookup_latest_session_id_for_conversation_agent(
     conversation_id: &str,
     agent_id: &str,
 ) -> Result<Option<String>, BackendError> {
+    // Session SSOT is agent_sessions (per conversation × bot). Do not infer from
+    // chat_messages.sender_agent_id — user origin rows bind agent_session_id only.
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_scalar::<_, Option<String>>(
-                "SELECT agent_session_id
-                   FROM chat_messages
+                "SELECT session_id
+                   FROM agent_sessions
                   WHERE conversation_id = ?
-                    AND sender_agent_id = ?
-                    AND agent_session_id IS NOT NULL
-                  ORDER BY created_at_ms DESC
+                    AND agent_id = ?
+                    AND status NOT IN ('ended', 'failed', 'stopped')
+                  ORDER BY started_at_ms DESC
                   LIMIT 1",
             )
             .bind(conversation_id)
@@ -764,12 +877,12 @@ pub async fn lookup_latest_session_id_for_conversation_agent(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_scalar::<_, Option<String>>(
-                "SELECT agent_session_id
-                   FROM chat_messages
+                "SELECT session_id
+                   FROM agent_sessions
                   WHERE conversation_id = $1
-                    AND sender_agent_id = $2
-                    AND agent_session_id IS NOT NULL
-                  ORDER BY created_at_ms DESC
+                    AND agent_id = $2
+                    AND status NOT IN ('ended', 'failed', 'stopped')
+                  ORDER BY started_at_ms DESC
                   LIMIT 1",
             )
             .bind(conversation_id)

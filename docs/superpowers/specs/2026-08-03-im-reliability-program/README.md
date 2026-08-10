@@ -5,17 +5,18 @@
 | Status | **Normative program**（2026-08-03） |
 | Date | 2026-08-03 |
 | Rule | [AGENTS.md Final-Architecture Planning Rule](../../../../Agents.md) — **只按终态结构规划与实现** |
-| Specs | [Client Sync Engine](../2026-08-03-client-im-sync-engine.md) · [Backend Delivery & Orchestration](../2026-08-03-backend-im-delivery-orchestration.md) |
+| Specs | [Client Sync Engine](../2026-08-03-client-im-sync-engine.md) · [Backend Delivery & Orchestration](../2026-08-03-backend-im-delivery-orchestration.md) · **[Agent participant delivery](../2026-08-09-agent-participant-delivery.md)** |
 | Tasks | [TASKS.md](TASKS.md) |
 | Next track | [B6 / C5 / C6 终态细则](next-track-b6-c5-c6.md)（功能已 APPROVE） |
 | Closeout | [收口验收 + 三层 backlog](closeout-and-backlog.md)（**V** 验收 · **P** 产品债 · **R** 实时面） |
 | Supersedes (tracking) | [2026-08-02 Hub SSOT](../2026-08-02-hub-collaboration-message-ssot.md) 中客户端半成品与 reaction 文档漂移 |
+| Product model | [ADR 0021](../../../adr/0021-agent-as-conversation-bot-participant.md) — Agent = bot participant；协作消息驱动 |
 
 ---
 
 ## 1. 一句话
 
-让 Minos 协作消息在 **Hub 持久化正确** 之后，**扇出、Push、Agent 派发/完成投影、以及 Desktop/Mobile 同步引擎** 都达到可推理的终态，而不是靠轮询、软去重、死代码分支和「先短期再还债」。
+让 Minos 协作消息在 **Hub 持久化正确** 之后，**扇出、Push、Agent inbox（bot participant delivery）/完成投影、以及 Desktop/Mobile 同步引擎** 都达到可推理的终态，而不是靠轮询、软去重、死代码分支和「先短期再还债」。
 
 ---
 
@@ -24,21 +25,22 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  Client Sync Engine（Desktop + Mobile）                           │
-│  Outbox · TimelineSync · InboxSync · Connection lifecycle         │
+│  Outbox · TimelineSync · InboxSync · Account connection lifecycle │
 │  Spec: 2026-08-03-client-im-sync-engine.md                        │
 └────────────────────────────┬────────────────────────────────────┘
                              │ HTTPS + WSS contracts
 ┌────────────────────────────▼────────────────────────────────────┐
-│  Backend Delivery & Agent Orchestration                           │
-│  Outbox lanes · Push · AgentDispatchQueue · CompletionWatch       │
-│  SessionLifecycle                                                 │
+│  Backend Delivery & bot participant orchestration                 │
+│  Outbox lanes · Push · Agent inbox · CompletionWatch              │
+│  SessionLifecycle · runtime port (HostCommand)                    │
 │  Spec: 2026-08-03-backend-im-delivery-orchestration.md            │
+│  Product: 2026-08-09-agent-participant-delivery.md                │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 | 只做一半的后果 |
 |----------------|
-| 只做客户端 | 连发 @agent 仍丢气泡；在线仍推；dispatch 仍同步阻塞 |
+| 只做客户端 | 连发 @bot 仍丢气泡；在线仍推；inbox 仍同步阻塞 |
 | 只做后端 | Mobile 仍无幂等发送；每消息全量 invalidate；Desktop inflight 黑洞 |
 
 **共享硬契约（跨半边冻结）：**

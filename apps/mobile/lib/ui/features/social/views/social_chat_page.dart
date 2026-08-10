@@ -11,6 +11,8 @@ import 'package:minos/application/minos_providers.dart';
 import 'package:minos/application/social_providers.dart';
 import 'package:minos/data/repositories/social_repository.dart';
 import 'package:minos/domain/agent_profile.dart';
+import 'package:minos/domain/group_member.dart';
+import 'package:minos/domain/message_sender_ext.dart';
 import 'package:minos/domain/social_message.dart';
 import 'package:minos/infrastructure/platform_int64.dart';
 import 'package:minos/src/rust/api/minos.dart';
@@ -136,7 +138,7 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     }
   }
 
-  void _insertMention(UserSummary member) {
+  void _insertParticipantMention(GroupMember member) {
     final mention = '@${member.minosId} ';
     final value = _controller.value;
     final selection = value.selection;
@@ -150,25 +152,26 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     );
   }
 
-  void _insertAgentMention(AgentProfile agent) {
-    final mention = '@${agent.agentId} ';
-    final value = _controller.value;
-    final selection = value.selection;
-    final start = selection.isValid ? selection.start : value.text.length;
-    final end = selection.isValid ? selection.end : value.text.length;
-    final nextText = value.text.replaceRange(start, end, mention);
-    final nextOffset = start + mention.length;
-    _controller.value = TextEditingValue(
-      text: nextText,
-      selection: TextSelection.collapsed(offset: nextOffset),
-    );
-  }
+  /// Membership-first @ picker: only current conversation participants.
+  Future<void> _showMentionPicker() async {
+    final myAccountId = ref
+        .read(socialConversationProvider(widget.conversationId))
+        .myAccountId;
+    final participants = ref
+        .read(groupMentionableMembersProvider(widget.conversationId))
+        .where((member) => !member.isAgent || member.id.isNotEmpty)
+        .where((member) => member.isAgent || member.id != myAccountId)
+        .toList(growable: false);
+    if (participants.isEmpty) return;
 
-  Future<void> _showMentionPicker(List<UserSummary> members) async {
-    final groupAgents = ref.read(groupAgentsProvider(widget.conversationId));
-    if (members.isEmpty && groupAgents.isEmpty) return;
+    final agents = participants
+        .where((member) => member.isAgent)
+        .toList(growable: false);
+    final humans = participants
+        .where((member) => !member.isAgent)
+        .toList(growable: false);
 
-    final selected = await showModalBottomSheet<_MentionSelection>(
+    final selected = await showModalBottomSheet<GroupMember>(
       context: context,
       useSafeArea: true,
       builder: (context) {
@@ -182,7 +185,7 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                 child: Text('选择要艾特的成员', style: theme.textTheme.titleLarge),
               ),
-              if (groupAgents.isNotEmpty) ...<Widget>[
+              if (agents.isNotEmpty) ...<Widget>[
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
                   child: Text(
@@ -192,18 +195,16 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
                     ),
                   ),
                 ),
-                for (final agent in groupAgents)
+                for (final agent in agents)
                   ListTile(
                     leading: const Icon(CupertinoIcons.gear_alt_fill, size: 20),
-                    title: Text('🤖 ${agent.name}'),
-                    subtitle: Text('@${agent.agentId}'),
-                    onTap: () => Navigator.of(
-                      context,
-                    ).pop(_MentionSelection.agent(agent)),
+                    title: Text(agent.displayName),
+                    subtitle: Text('@${agent.minosId}'),
+                    onTap: () => Navigator.of(context).pop(agent),
                   ),
                 const Divider(),
               ],
-              if (members.isNotEmpty) ...<Widget>[
+              if (humans.isNotEmpty) ...<Widget>[
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
                   child: Text(
@@ -213,13 +214,11 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
                     ),
                   ),
                 ),
-                for (final member in members)
+                for (final member in humans)
                   ListTile(
                     title: Text(member.displayName),
                     subtitle: Text('@${member.minosId}'),
-                    onTap: () => Navigator.of(
-                      context,
-                    ).pop(_MentionSelection.user(member)),
+                    onTap: () => Navigator.of(context).pop(member),
                   ),
               ],
             ],
@@ -228,12 +227,7 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
       },
     );
     if (selected != null) {
-      switch (selected) {
-        case _MentionSelectionUser(:final user):
-          _insertMention(user);
-        case _MentionSelectionAgent(:final agent):
-          _insertAgentMention(agent);
-      }
+      _insertParticipantMention(selected);
     }
   }
 
@@ -569,17 +563,26 @@ String _resolveConversationTitle({
 String? _counterpartTitleFromMessages(SocialConversationState conversation) {
   for (final message in conversation.messages.reversed) {
     if (conversation.myAccountId != null &&
-        message.sender.accountId == conversation.myAccountId) {
+        message.sender.accountIdOrNull == conversation.myAccountId) {
       continue;
     }
     if (conversation.myAccountId == null &&
-        (message.sender.minosId == 'me' ||
+        (message.sender.minosIdOrEmpty == 'me' ||
             message.sender.displayName.trim() == '我')) {
       continue;
     }
-    return _userTitle(message.sender);
+    return _senderTitle(message.sender);
   }
   return null;
+}
+
+String? _senderTitle(MessageSender? sender) {
+  if (sender == null) return null;
+  return _firstNonEmpty(<String?>[
+    sender.displayName.trim(),
+    sender.minosIdOrEmpty.trim(),
+    sender.identityId.trim(),
+  ]);
 }
 
 String? _userTitle(UserSummary? user) {
@@ -623,7 +626,7 @@ class _ConversationMessagePane extends ConsumerWidget {
         final sessions = await ref
             .read(socialRepositoryProvider)
             .listAgentSessions(conversationId: conversationId, limit: 20);
-        final agentKey = message.sender.accountId.trim();
+        final agentKey = message.sender.identityId.trim();
         final matched = sessions.where((s) {
           final id = s.agentId?.trim();
           return id != null &&
@@ -765,7 +768,8 @@ class _ConversationMessagePane extends ConsumerWidget {
                     previous,
                     message,
                   );
-                  final isMine = message.sender.accountId == state.myAccountId;
+                  final isMine =
+                      message.sender.accountIdOrNull == state.myAccountId;
                   final isAgent = message.senderType == SenderType.agent;
                   final mentionsMe =
                       !isMine &&
@@ -880,7 +884,7 @@ class _ConversationComposer extends ConsumerWidget {
   final TextEditingController controller;
   final FocusNode focusNode;
   final VoidCallback onSend;
-  final Future<void> Function(List<UserSummary> members) onShowMentionPicker;
+  final Future<void> Function() onShowMentionPicker;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -891,20 +895,13 @@ class _ConversationComposer extends ConsumerWidget {
         conversationId,
       ).select((SocialConversationState state) => state.myAccountId),
     );
-    final groupMembers = kind == ConversationKind.group
+    final mentionable = kind == ConversationKind.group
         ? ref
-                  .watch(conversationMembersProvider(conversationId))
-                  .asData
-                  ?.value ??
-              const <UserSummary>[]
-        : const <UserSummary>[];
-    final mentionable = groupMembers
-        .where((member) => member.accountId != myAccountId)
-        .toList(growable: false);
-    final groupAgents = kind == ConversationKind.group
-        ? ref.watch(groupAgentsProvider(conversationId))
-        : const <AgentProfile>[];
-    final hasMentionable = mentionable.isNotEmpty || groupAgents.isNotEmpty;
+              .watch(groupMentionableMembersProvider(conversationId))
+              .where((member) => member.isAgent || member.id != myAccountId)
+              .toList(growable: false)
+        : const <GroupMember>[];
+    final hasMentionable = mentionable.isNotEmpty;
     final activity = ref
         .watch(conversationAgentActivityProvider(conversationId))
         .asData
@@ -938,9 +935,7 @@ class _ConversationComposer extends ConsumerWidget {
             children: <Widget>[
               if (kind == ConversationKind.group) ...<Widget>[
                 MinosButton.outline(
-                  onPressed: !hasMentionable
-                      ? null
-                      : () => onShowMentionPicker(mentionable),
+                  onPressed: !hasMentionable ? null : onShowMentionPicker,
                   child: const Text('@'),
                 ),
                 const SizedBox(width: 8),
@@ -1247,23 +1242,6 @@ class _ChatInlineError extends StatelessWidget {
   }
 }
 
-/// Sealed class for mention picker selection result.
-sealed class _MentionSelection {
-  const _MentionSelection();
-  factory _MentionSelection.user(UserSummary user) = _MentionSelectionUser;
-  factory _MentionSelection.agent(AgentProfile agent) = _MentionSelectionAgent;
-}
-
-class _MentionSelectionUser extends _MentionSelection {
-  const _MentionSelectionUser(this.user);
-  final UserSummary user;
-}
-
-class _MentionSelectionAgent extends _MentionSelection {
-  const _MentionSelectionAgent(this.agent);
-  final AgentProfile agent;
-}
-
 enum _ConversationStatus { online, offline, busy, executing }
 
 extension _ConversationStatusLabel on _ConversationStatus {
@@ -1359,7 +1337,7 @@ bool _isWaitingForAgentReply(
     if (message.senderType == SenderType.agent) {
       return false;
     }
-    if (message.sender.accountId == myAccountId) {
+    if (message.sender.accountIdOrNull == myAccountId) {
       return message.deliveryState == SocialMessageDeliveryState.sent;
     }
     return false;

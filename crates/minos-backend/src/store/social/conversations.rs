@@ -562,7 +562,7 @@ pub async fn list_conversations_for(
                         SELECT COUNT(*)
                           FROM chat_messages m
                          WHERE m.conversation_id = c.conversation_id
-                           AND m.sender_account_id <> ?
+                           AND (m.sender_account_id IS NULL OR m.sender_account_id <> ?)
                            AND m.recalled_at_ms IS NULL
                            AND m.message_seq > COALESCE(cr.last_read_seq, 0)
                            AND m.created_at_ms > COALESCE(cd.deleted_at_ms, 0)
@@ -572,11 +572,12 @@ pub async fn list_conversations_for(
                           FROM chat_messages m
                           JOIN chat_message_mentions mm ON mm.message_id = m.message_id
                          WHERE m.conversation_id = c.conversation_id
-                           AND m.sender_account_id <> ?
+                           AND (m.sender_account_id IS NULL OR m.sender_account_id <> ?)
                            AND m.recalled_at_ms IS NULL
                            AND m.message_seq > COALESCE(cr.last_read_seq, 0)
                            AND m.created_at_ms > COALESCE(cd.deleted_at_ms, 0)
-                           AND mm.mentioned_account_id = ?
+                           AND mm.target_kind = 'account'
+                           AND mm.target_id = ?
                     ), 0) AS unread_mention_count
                   FROM conversations c
                   JOIN conversation_members cm ON cm.conversation_id = c.conversation_id
@@ -617,7 +618,7 @@ pub async fn list_conversations_for(
                         SELECT COUNT(*)
                           FROM chat_messages m
                          WHERE m.conversation_id = c.conversation_id
-                           AND m.sender_account_id <> $1
+                           AND (m.sender_account_id IS NULL OR m.sender_account_id <> $1)
                            AND m.recalled_at_ms IS NULL
                            AND m.message_seq > COALESCE(cr.last_read_seq, 0)
                            AND m.created_at_ms > COALESCE(cd.deleted_at_ms, 0)
@@ -627,11 +628,12 @@ pub async fn list_conversations_for(
                           FROM chat_messages m
                           JOIN chat_message_mentions mm ON mm.message_id = m.message_id
                          WHERE m.conversation_id = c.conversation_id
-                           AND m.sender_account_id <> $2
+                           AND (m.sender_account_id IS NULL OR m.sender_account_id <> $2)
                            AND m.recalled_at_ms IS NULL
                            AND m.message_seq > COALESCE(cr.last_read_seq, 0)
                            AND m.created_at_ms > COALESCE(cd.deleted_at_ms, 0)
-                           AND mm.mentioned_account_id = $3
+                           AND mm.target_kind = 'account'
+                           AND mm.target_id = $3
                     ), 0) AS unread_mention_count
                   FROM conversations c
                   JOIN conversation_members cm ON cm.conversation_id = c.conversation_id

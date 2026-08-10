@@ -227,7 +227,7 @@ void main() {
 
   group('buildDueOutboxLanes', () {
     test('skips lane when head is fresh inflight', () {
-      final head = ImOutboxEntry(
+      const head = ImOutboxEntry(
         clientOpId: 'head',
         kind: ImOutboxKind.userMessage,
         conversationId: 'c1',
@@ -238,7 +238,7 @@ void main() {
         createdAtMs: 1,
         updatedAtMs: 100,
       );
-      final tail = ImOutboxEntry(
+      const tail = ImOutboxEntry(
         clientOpId: 'tail',
         kind: ImOutboxKind.userMessage,
         conversationId: 'c1',

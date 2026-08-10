@@ -43,6 +43,41 @@ describe("messageAuthorKey", () => {
     );
   });
 
+  it("prefers global bot_id over runtime family", () => {
+    assert.equal(
+      messageAuthorKey(
+        msg({
+          id: "a",
+          role: "agent",
+          agent: "codex",
+          botId: "bot-a",
+          sessionId: "s1",
+        }),
+      ),
+      "agent:bot-a:s1",
+    );
+    assert.notEqual(
+      messageAuthorKey(
+        msg({
+          id: "a",
+          role: "agent",
+          agent: "codex",
+          botId: "bot-a",
+          sessionId: "s1",
+        }),
+      ),
+      messageAuthorKey(
+        msg({
+          id: "b",
+          role: "agent",
+          agent: "codex",
+          botId: "bot-b",
+          sessionId: "s1",
+        }),
+      ),
+    );
+  });
+
   it("returns null for system and tool_summary", () => {
     assert.equal(
       messageAuthorKey(msg({ id: "s", role: "system" })),

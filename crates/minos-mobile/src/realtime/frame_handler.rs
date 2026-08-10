@@ -1,4 +1,5 @@
 use minos_protocol::realtime::ServerFrame;
+use minos_protocol::ChatMessageSummary;
 
 #[derive(Debug, Clone)]
 pub enum RealtimeEvent {
@@ -36,6 +37,22 @@ pub enum RealtimeEvent {
     /// Gateway confirmed Subscribe for these topics.
     SubscribeAck {
         topics: Vec<String>,
+    },
+    /// Account AppendMessage committed (after TX success).
+    ChatSendAck {
+        client_operation_id: String,
+        conversation_id: String,
+        message_id: String,
+        message_seq: i64,
+        /// Boxed to keep the enum small (ChatMessageSummary is large on the wire).
+        message: Option<Box<ChatMessageSummary>>,
+    },
+    /// Account AppendMessage rejected.
+    ChatSendNack {
+        client_operation_id: String,
+        conversation_id: String,
+        code: String,
+        message: String,
     },
 }
 
@@ -91,6 +108,33 @@ pub fn handle_server_frame(frame: ServerFrame) -> Option<RealtimeEvent> {
         ServerFrame::HostIngestAck { .. }
         | ServerFrame::PullIngestRange { .. }
         | ServerFrame::PullAck { .. } => None,
+        // Account collaboration ack/nack — resolved by send waiters in MobileClient.
+        ServerFrame::ChatSendAck {
+            client_operation_id,
+            conversation_id,
+            message_id,
+            message_seq,
+            message,
+        } => Some(RealtimeEvent::ChatSendAck {
+            client_operation_id,
+            conversation_id,
+            message_id,
+            message_seq,
+            message: message.map(Box::new),
+        }),
+        ServerFrame::ChatSendNack {
+            client_operation_id,
+            conversation_id,
+            code,
+            message,
+        } => Some(RealtimeEvent::ChatSendNack {
+            client_operation_id,
+            conversation_id,
+            code,
+            message,
+        }),
+        // Host-only mailbox frames must never arrive on /ws/client.
+        ServerFrame::BotInboxDelivery { .. } | ServerFrame::CancelDelivery { .. } => None,
         ServerFrame::Error { code, message, .. } => {
             tracing::warn!(code, message, "server error frame");
             None

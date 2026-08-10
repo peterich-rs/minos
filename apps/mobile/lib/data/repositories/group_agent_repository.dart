@@ -13,12 +13,10 @@ class GroupAgentRepository {
 
   final MinosCoreProtocol _core;
 
-  Future<List<AgentSummary>> listConversationAgents(
+  /// Unified participants (humans ∪ bot agents). Membership-first roster SSOT.
+  Future<ConversationParticipantsResponse> listConversationParticipants(
     String conversationId,
-  ) async {
-    final response = await _core.listConversationAgents(
-      conversationId: conversationId,
-    );
-    return response.agents;
+  ) {
+    return _core.listConversationParticipants(conversationId: conversationId);
   }
 }

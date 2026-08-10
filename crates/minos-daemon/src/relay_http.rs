@@ -13,7 +13,7 @@ use http::{
     Method, Request, Response, StatusCode,
 };
 use minos_domain::{DeviceId, DeviceSecret, MinosError};
-use minos_protocol::{HostPeerSummary, HostWsTicketResponse, MePeerResponse, MePeersResponse};
+use minos_protocol::{HostPeerSummary, MePeerResponse, MePeersResponse};
 use openwire::{Client, RequestBody, ResponseBody, WireError};
 use serde::Deserialize;
 
@@ -24,7 +24,6 @@ static INSTALL_RUSTLS_PROVIDER: Once = Once::new();
 const BOOTSTRAP_NONCE_PATH: &str = "/v1/host/bootstrap/nonce";
 /// Signed path segment for same-account Host Link (D02); no leading slash.
 pub const HOST_LINK_PROOF_PATH: &str = "v1/hosts/link";
-const HOST_WS_TICKET_PATH: &str = "/v1/host/realtime/ws-ticket";
 const HOST_SELF_PATH: &str = "/v1/host/installations/self";
 
 #[derive(Debug, serde::Serialize)]
@@ -209,29 +208,6 @@ impl RelayHttpClient {
             let envelope: ResponseEnvelope<HostSelfData> =
                 decode_success_json(resp, "HostSelfData").await?;
             return host_self_links_to_peer_summaries(envelope.data.links);
-        }
-        Err(decode_error(resp).await)
-    }
-
-    /// Fetch a short-lived ws-ticket for the host realtime gateway.
-    ///
-    /// Calls `POST /v1/host/realtime/ws-ticket` with the host installation
-    /// bearer token. The backend returns a `ResponseEnvelope { data, meta }`
-    /// where `data` matches [`HostWsTicketResponse`].
-    pub async fn fetch_host_ws_ticket(
-        &self,
-        secret: &DeviceSecret,
-    ) -> Result<HostWsTicketResponse, MinosError> {
-        let url = format!("{}{}", self.base, HOST_WS_TICKET_PATH);
-        let request = self.request_host_bearer_without_body(Method::POST, &url, secret, true)?;
-        let resp = self.execute(&url, request).await?;
-        let status = resp.status();
-        if status.is_success() {
-            // The backend wraps the ticket in ResponseEnvelope { data, meta }.
-            // Deserialize the outer envelope and extract `data`.
-            let envelope: ResponseEnvelope<HostWsTicketResponse> =
-                decode_success_json(resp, "HostWsTicketResponse").await?;
-            return Ok(envelope.data);
         }
         Err(decode_error(resp).await)
     }

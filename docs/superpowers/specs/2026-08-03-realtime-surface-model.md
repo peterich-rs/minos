@@ -4,10 +4,11 @@
 |-------|--------|
 | Status | **Normative target**（2026-08-03） |
 | Scope | 全产品：哪些状态走 Durable / Stream / 信令+HTTP / 纯 HTTP；带宽优先级；新增功能设计 checklist |
-| Related | [architecture-messaging.md](../../architecture-messaging.md)；[IM Reliability Program](2026-08-03-im-reliability-program/README.md) |
+| Related | [architecture-messaging.md](../../architecture-messaging.md)；[IM Reliability Program](2026-08-03-im-reliability-program/README.md)；[agent-participant-delivery](2026-08-09-agent-participant-delivery.md)；[ADR 0021](../../adr/0021-agent-as-conversation-bot-participant.md) |
 | Rule | [AGENTS.md Final-Architecture Planning Rule](../../../Agents.md) — 禁止 case-by-case 补丁式「这个列表也加个 WS」 |
 
-> **一句话**：实时不是「所有 HTTP 写都推完整 payload」。按 **变更类** 选通道与 payload 厚度；**常驻只订 account + 当前打开的少量 topic**；低优先级用 **信令（hint）+ HTTP 冷读**。
+> **一句话**：实时不是「所有 HTTP 写都推完整 payload」。按 **变更类** 选通道与 payload 厚度；**常驻只订 account + 当前打开的少量 topic**；低优先级用 **信令（hint）+ HTTP 冷读**。  
+> **双轨**：`/ws/client` = 人类 IM；`/ws/host` = bot runtime。Mention 目标含 human + agent participant；bot 可用性 ≠ Account Online。
 
 Host 设备列表「只能手动刷新」只是 **类 R（名册成员变更）缺 Durable 发射** 的一个实例，不是单独 case。
 

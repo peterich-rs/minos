@@ -6,8 +6,12 @@ import 'package:minos/ui/features/social/widgets/conversation_message_row.dart';
 import 'package:minos/ui/features/social/widgets/conversation_system_message.dart';
 import 'package:minos/ui/theme/theme.dart';
 
-UserSummary _user(String id, {String name = 'Alice'}) {
-  return UserSummary(accountId: id, minosId: id, displayName: name);
+MessageSender _account(String id, {String name = 'Alice'}) {
+  return MessageSender.account(accountId: id, minosId: id, displayName: name);
+}
+
+MessageSender _bot(String id, {String name = 'Bot'}) {
+  return MessageSender.bot(botId: id, displayName: name, runtimeAgent: 'codex');
 }
 
 SocialChatMessage _msg({
@@ -22,10 +26,13 @@ SocialChatMessage _msg({
   ChatMessageReplySummary? replyTo,
   List<String> mentioned = const <String>[],
 }) {
+  final sender = senderType == SenderType.agent
+      ? _bot(accountId, name: name)
+      : _account(accountId, name: name);
   return SocialChatMessage(
     localId: id,
     conversationId: 'c1',
-    sender: _user(accountId, name: name),
+    sender: sender,
     text: text,
     createdAtMs: createdAtMs,
     clientSeq: 1,
@@ -142,7 +149,7 @@ void main() {
             replyTo: ChatMessageReplySummary(
               messageId: 'parent',
               text: 'original',
-              sender: _user('u2', name: 'Bob'),
+              sender: _account('u2', name: 'Bob'),
             ),
           ),
           isMine: true,

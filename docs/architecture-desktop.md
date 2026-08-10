@@ -1,14 +1,14 @@
 # Desktop 应用 (apps/desktop) 架构文档
 
-> Host 端桌面控制台：Tauri + React，短期目标是 **TUI 能力的可视化**（Project → Conversation → Agent session），可选 Project Board 俯视图。
+> Host 端桌面控制台：Tauri + React，**唯一 Host GUI**（Project → Conversation → Agent session），可选 Project Board 俯视图。历史 `minos-tui` 已移除。
 
 ## 概述
 
 | 项 | 值 |
 |----|-----|
 | 源码路径 | `apps/desktop/` |
-| 产品定位 | **Conversation 协作工作台**（Project → Timeline 为主舞台；Session/Approval 为对话内能力与 Attention）。本机对标 TUI 能力；**account-first**：在本机登录 Desktop 即拥有 host 控制权；手机/Web 远程依赖 cloud **Online**（live `/ws/host`） |
-| 当前阶段 | **Daemon-backed**：Tauri 宿主嵌 daemon；bootstrap 经 `daemonApi` 拉 projects / CLIs / live push。浏览器 `vite` 直开时 fallback mock 数据。**根门禁 account-first**：冷启动 `hydrateAuth` → 无 session 则 `LoginPage`；有 session 进 `AppShell`。**登录后自动** `ensureCloudConnection`（内部 prepare/sign/`POST /v1/hosts/link`/apply + 等待 hub online）。用户只见 **Online / Connecting / Offline**（顶栏 banner + 品牌副标题），无 Link/Unlink 主路径。**Hub conversation_id** 经 `agent_session.start` 透传到 Host 落库（禁止再造 Direct agent sessions 假会话） |
+| 产品定位 | **Conversation 协作工作台**（Timeline 主舞台；Agent 为对话内 **bot 成员**；Session/Approval 为 Attention）。**account-first** 登录即绑定本机 Host 控制权。手机远程驱动 bot 依赖 **Host online**（`/ws/host`）；人类多端聊天依赖 **Account IM**（`/ws/client` + Hub）。见 [ADR 0021](adr/0021-agent-as-conversation-bot-participant.md) |
+| 当前阶段 | **Daemon-backed**：Tauri 嵌 daemon。**根门禁 account-first**：`hydrateAuth` → 无 session 则 `LoginPage`。登录后 `ensureCloudConnection`（host link + dial `/ws/host`）。**双角色**：Account UI → `/ws/client` 发/收 Hub 消息；daemon → `/ws/host` 作 bot runtime。**Online 组合**：主状态 = Account IM sync（`accountSyncStatus` / `/ws/client`）；次状态 = Host readiness（`cloudStatus` / `hubOnline`）。禁止仅 Host live 显示可发送 Online。无 Link/Unlink 主路径。Hub `conversation_id` 透传 Host（禁止假 Direct session） |
 | 视觉 | 暖色多栏（参考 `res/desktop.jpeg` 气质，非客服 Inbox 语义） |
 | 产品 spec | [2026-07-18-desktop-product-experience.md](superpowers/specs/2026-07-18-desktop-product-experience.md) |
 | 状态拆分 spec | [2026-07-21-desktop-state-by-consumption.md](superpowers/specs/2026-07-21-desktop-state-by-consumption.md)（**P0–P4 done**；P5 cleanup reviewed；编码入口 §18） |
@@ -43,7 +43,7 @@
 | 动效 | `motion`（layout 导航指示）+ CSS `duration-150/200`（`--duration-fast/normal`） | 克制动效；全局尊重 `prefers-reduced-motion`（`animate-spin` 除外） |
 | Markdown | `react-markdown` + `remark-gfm` + Shiki `CodeBlock` | 完成态 GFM；streaming 纯文本；fenced code 懒加载 Shiki 高亮 |
 | 主题 | Shiki theme JSON → CSS vars（`ThemeProvider`） | Host → Appearance 选主题/强调色；FOUC 用 localStorage 缓存 vars；默认 `minos`（warm） |
-| 长列表 | `@tanstack/react-virtual`（侧栏）+ `virtua`（conversation timeline） | ConversationList + **Sessions 左栏**（`SessionListPane` + flatten 树）用 `VirtualizedList`；主时间线 `VList` + stick-to-bottom/`shift` prepend；session **transcript** 仍分页 DOM（硬上限 2000），避免与审批/流式测高互殴 |
+| 长列表 | `@tanstack/react-virtual`（侧栏）+ `virtua`（conversation timeline） | ConversationList + **Sessions 左栏**（`SessionListPane` + flatten 树）用 `VirtualizedList`；主时间线 `VList` + stick-to-bottom/`shift` prepend；session **transcript** 仍分页 DOM（硬上限 2000），避免与审批/流式测高互殴。**Keep-alive 注意**：Work 三页用 CSS `hidden` 挂载；虚拟列表在 `display:none` 下 scrollport 高度为 0，切回 tab 时必须 remount 或 `measure()`（`VirtualizedList` 在 0→有高度时重测 + 仅在 tab active 时挂载侧栏 virtualizer），否则会出现空白/条目挤在底部、要点一下才出来 |
 | 状态 | Zustand 5 + TanStack Query 5 | **混合**：RQ 可缓存 catalog 网络；**会 merge 进 SessionEntity 的 list**（inspector / project sessions）一律 `staleTime: 0`，禁止 30s 陈旧 lifecycle。Zustand 管 timeline/transcript/SessionEntity/乐观发送/UI 指针（L0–L6）。**SessionEntity 唯一写漏斗**：`mergeSessionEntity` / `patchSessionEntity` → `commitSessionEntity`（membership 投影 + `conversation.runningCount/approvalCount` 由 Entity Σ 重算）。list hydrate 是 sample（防 stale demote）；manager / resume / resolve 为 authoritative。Inspector 列表只读投影行，禁止组件层再 overlay 全表 Entity。 |)
 | 图标 | Lucide React | 导航与工具栏 |
 | 本机 API | `@tauri-apps/api` | `invoke` → Rust |
@@ -313,7 +313,7 @@ Daemon RPC 前端入口：`shared/api/invoke.ts` 的 `invokeDaemon(command, args
 
 ### 启动策略（对齐 TUI）
 
-1. 读 `~/.minos/run/tui-daemon-rpc.json`（若存在）并 `minos_local_health`
+1. 读 `~/.minos/run/daemon-rpc.json`（若存在）并 `minos_local_health`
 2. 失败 / 无 discovery / stale port → **进程内托管** `DaemonHandle::start_with_local_rpc`（`127.0.0.1:0` + 写 discovery）
 3. 连接使用 **binder 返回的 `local_rpc_url()`**（不依赖再读 discovery，避免竞态/陈旧端口）
 
@@ -519,7 +519,7 @@ Sessions 主区是 **Grok-style 日志 transcript** + 右侧 **session summary**
 | `branch` / `worktree_path` | **创建时** git 快照 | 只读 chip；不跟随后续 checkout |
 | Board 列 | 派生，非独立任务系统 | `done` 优先；`needs_you` 来自 suspended/approval 运行态（progress 仍为 `in_progress`） |
 
-新建会话：`ProjectHeader` → **Create conversation** 弹窗（对标 Buzz create-channel）配置 title / optional priority / **required agent roster**，再 `create_conversation`（protocol：`priority?` + `agents[]`）写入 `conversation_agent_members`；progress 默认 `todo`。**成员资格是 @mention / start 的 SSOT**：空 roster 时 picker 为空且 send 拒绝；仅 roster 内 runtime（及其 profile / open session）可被 @；`start_agent_in_conversation` 对非成员返回错误。创建时**不**预启动 session（懒启动：首次 @ 或 bare send 再 start）。首次 `start_agent_in_conversation` 时若仍为 `todo` 则自动升为 `in_progress`。从 roster 移除：`daemon_remove_conversation_agent` → `minos_local_remove_conversation_agent`，关闭该 agent 悬挂 sessions（`roster_removed`）并取消相关 running delegations；被移除 agent 的 MCP 调用被拒绝。
+新建会话：`ProjectHeader` → **Create conversation** 弹窗（对标 Buzz create-channel）配置 title / optional priority / **bot roster**。终态 roster 引用 **Hub 全局 bot `agent_id`**（数字肉身在 Hub；进群 = membership only，不 per-conversation 新建 bot）。本地 daemon 路径仍可写 `conversation_agent_members` 作 Host workbench，但多端协作身份以 Hub 为准（[global-bot-identity-design](superpowers/specs/global-bot-identity-design.md)）。**成员资格是 @mention / start 的 SSOT**：空 roster 时 picker 为空且 send 拒绝；仅 roster 内 bot（及其 open session）可被 @；非成员返回错误。创建时**不**预启动 session（懒启动：首次 @ 或 bare send 再 start / inbox 投递）。从 roster 移除只删 membership 并关闭该 bot 在本 conversation 的悬挂 sessions（`roster_removed`）；**不**删除全局 bot 身份。
 
 ### Agent 运行态与审批（Desktop 缺口修复）
 
@@ -552,7 +552,6 @@ just check-desktop     # full gates: tsc + tests + biome lint + file-sizes (= pn
 
 ## 非目标（当前）
 
-- 真实 auth / relay / daemon
 - 客服 Inbox 语义、Jira 式任务系统
 - 与 `apps/web` 共享组件
-- 删除 TUI
+- 恢复 `minos-tui`（已彻底移除；Host UI 仅 Desktop）

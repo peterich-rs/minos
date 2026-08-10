@@ -208,7 +208,11 @@ export function createConversationListActions(
                 void syncConversationToCloud({
                   conversationId: row.id,
                   title: row.title,
-                  agentRuntimes: row.participatingAgents,
+                  // Prefer bot roster SSOT over deprecated participatingAgents.
+                  agentRuntimes:
+                    row.participatingBots?.length
+                      ? row.participatingBots.map((b) => b.runtime)
+                      : row.participatingAgents,
                 });
               }
             }

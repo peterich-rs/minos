@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:minos/domain/message_sender_ext.dart';
 import 'package:minos/domain/social_message.dart';
 import 'package:minos/domain/social_message_order.dart';
 import 'package:minos/infrastructure/app_paths.dart';
@@ -13,7 +14,7 @@ class SocialCacheStore {
   SocialCacheStore();
 
   static const _dbName = 'social_cache.db';
-  static const _dbVersion = 6;
+  static const _dbVersion = 7;
 
   Future<Database?>? _databaseFuture;
 
@@ -57,6 +58,7 @@ class SocialCacheStore {
               reply_to_preview_json TEXT,
               recalled_at_ms INTEGER,
               mentioned_account_ids_json TEXT NOT NULL,
+              mentioned_agent_ids_json TEXT NOT NULL DEFAULT '[]',
               delivery_state TEXT NOT NULL,
               reactions_json TEXT NOT NULL DEFAULT '[]'
             )
@@ -117,6 +119,11 @@ class SocialCacheStore {
           if (oldVersion < 6) {
             await db.execute(
               "ALTER TABLE cached_social_messages ADD COLUMN reactions_json TEXT NOT NULL DEFAULT '[]'",
+            );
+          }
+          if (oldVersion < 7) {
+            await db.execute(
+              "ALTER TABLE cached_social_messages ADD COLUMN mentioned_agent_ids_json TEXT NOT NULL DEFAULT '[]'",
             );
           }
         },
@@ -364,9 +371,11 @@ class SocialCacheStore {
 
   Future<SocialChatMessage> insertPendingMessage({
     required String conversationId,
-    required UserSummary sender,
+    required MessageSender sender,
     required String text,
     ChatMessageReplySummary? replyTo,
+    List<String> mentionedAccountIds = const <String>[],
+    List<String> mentionedAgentIds = const <String>[],
   }) async {
     // client_message_id == localId: stable wire id for Hub idempotent insert.
     final clientMessageId = _newClientMessageId();
@@ -380,7 +389,10 @@ class SocialCacheStore {
       deliveryState: SocialMessageDeliveryState.sending,
       clientMessageId: clientMessageId,
       replyTo: replyTo,
-      mentionedAccountIds: const <String>[],
+      // Optimistic seed: callers pass best-effort parse so reload before ack
+      // still shows structured bot mentions (Hub upsert remains SSOT).
+      mentionedAccountIds: List<String>.unmodifiable(mentionedAccountIds),
+      mentionedAgentIds: List<String>.unmodifiable(mentionedAgentIds),
     );
 
     final db = await _database();
@@ -771,7 +783,7 @@ class SocialCacheStore {
           'conversation_id': message.conversationId,
           'server_message_id': message.messageId,
           'client_message_id': existing.clientMessageId ?? existing.localId,
-          'sender_json': jsonEncode(_userSummaryToMap(message.sender)),
+          'sender_json': jsonEncode(messageSenderToMap(message.sender)),
           'text': message.text,
           'created_at_ms': platformInt64ToInt(message.createdAtMs),
           'server_order_key': platformInt64ToInt(message.messageSeq),
@@ -782,6 +794,7 @@ class SocialCacheStore {
               : jsonEncode(_replyPreviewToMap(message.replyTo!)),
           'recalled_at_ms': platformInt64ToNullableInt(message.recalledAtMs),
           'mentioned_account_ids_json': jsonEncode(message.mentionedAccountIds),
+          'mentioned_agent_ids_json': jsonEncode(message.mentionedAgentIds),
           'delivery_state': SocialMessageDeliveryState.sent.name,
           'client_seq': existing.clientSeq,
           'reactions_json': _reactionsToJson(message.reactions),
@@ -896,7 +909,7 @@ class SocialCacheStore {
           'conversation_id': message.conversationId,
           'server_message_id': message.messageId,
           'client_message_id': existing.clientMessageId ?? message.messageId,
-          'sender_json': jsonEncode(_userSummaryToMap(message.sender)),
+          'sender_json': jsonEncode(messageSenderToMap(message.sender)),
           'text': message.text,
           'created_at_ms': platformInt64ToInt(message.createdAtMs),
           'server_order_key': platformInt64ToInt(message.messageSeq),
@@ -907,6 +920,7 @@ class SocialCacheStore {
               : jsonEncode(_replyPreviewToMap(message.replyTo!)),
           'recalled_at_ms': platformInt64ToNullableInt(message.recalledAtMs),
           'mentioned_account_ids_json': jsonEncode(message.mentionedAccountIds),
+          'mentioned_agent_ids_json': jsonEncode(message.mentionedAgentIds),
           'delivery_state': SocialMessageDeliveryState.sent.name,
           'client_seq': existing.clientSeq,
           'reactions_json': _reactionsToJson(message.reactions),
@@ -923,7 +937,7 @@ class SocialCacheStore {
       'conversation_id': message.conversationId,
       'server_message_id': message.messageId,
       'client_message_id': message.messageId,
-      'sender_json': jsonEncode(_userSummaryToMap(message.sender)),
+      'sender_json': jsonEncode(messageSenderToMap(message.sender)),
       'text': message.text,
       'created_at_ms': platformInt64ToInt(message.createdAtMs),
       'client_seq': nextClientSeq,
@@ -935,6 +949,7 @@ class SocialCacheStore {
           : jsonEncode(_replyPreviewToMap(message.replyTo!)),
       'recalled_at_ms': platformInt64ToNullableInt(message.recalledAtMs),
       'mentioned_account_ids_json': jsonEncode(message.mentionedAccountIds),
+      'mentioned_agent_ids_json': jsonEncode(message.mentionedAgentIds),
       'delivery_state': SocialMessageDeliveryState.sent.name,
       'reactions_json': _reactionsToJson(message.reactions),
     }, conflictAlgorithm: ConflictAlgorithm.replace);
@@ -991,9 +1006,7 @@ class SocialCacheStore {
     return SocialChatMessage(
       localId: localId,
       conversationId: row['conversation_id']! as String,
-      sender: _userSummaryFromMap(
-        jsonDecode(row['sender_json']! as String) as Map<String, Object?>,
-      ),
+      sender: _messageSenderFromJson(row['sender_json'] as String?),
       text: row['text']! as String,
       createdAtMs: row['created_at_ms']! as int,
       clientSeq: row['client_seq']! as int,
@@ -1008,11 +1021,12 @@ class SocialCacheStore {
       serverOrderKey: row['server_order_key'] as int?,
       replyTo: _replyPreviewFromJson(row['reply_to_preview_json'] as String?),
       recalledAtMs: row['recalled_at_ms'] as int?,
-      mentionedAccountIds:
-          (jsonDecode(row['mentioned_account_ids_json']! as String)
-                  as List<dynamic>)
-              .map((value) => value as String)
-              .toList(growable: false),
+      mentionedAccountIds: _stringListFromJson(
+        row['mentioned_account_ids_json'] as String?,
+      ),
+      mentionedAgentIds: _stringListFromJson(
+        row['mentioned_agent_ids_json'] as String?,
+      ),
       reactions: _reactionsFromJson(row['reactions_json'] as String?),
     );
   }
@@ -1023,7 +1037,7 @@ class SocialCacheStore {
       'conversation_id': message.conversationId,
       'server_message_id': message.serverMessageId,
       'client_message_id': message.clientMessageId ?? message.localId,
-      'sender_json': jsonEncode(_userSummaryToMap(message.sender)),
+      'sender_json': jsonEncode(messageSenderToMap(message.sender)),
       'text': message.text,
       'created_at_ms': message.createdAtMs,
       'client_seq': message.clientSeq,
@@ -1035,9 +1049,25 @@ class SocialCacheStore {
           : jsonEncode(_replyPreviewToMap(message.replyTo!)),
       'recalled_at_ms': message.recalledAtMs,
       'mentioned_account_ids_json': jsonEncode(message.mentionedAccountIds),
+      'mentioned_agent_ids_json': jsonEncode(message.mentionedAgentIds),
       'delivery_state': message.deliveryState.name,
       'reactions_json': _reactionsToJson(message.reactions),
     };
+  }
+
+  List<String> _stringListFromJson(String? raw) {
+    if (raw == null || raw.isEmpty) {
+      return const <String>[];
+    }
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) {
+        return const <String>[];
+      }
+      return decoded.map((value) => value as String).toList(growable: false);
+    } catch (_) {
+      return const <String>[];
+    }
   }
 
   List<ReactionGroup> _reactionsFromJson(String? raw) {
@@ -1127,7 +1157,7 @@ class SocialCacheStore {
   Map<String, Object?> _replyPreviewToMap(ChatMessageReplySummary reply) {
     return <String, Object?>{
       'message_id': reply.messageId,
-      'sender': _userSummaryToMap(reply.sender),
+      'sender': messageSenderToMap(reply.sender),
       'text': reply.text,
       'recalled_at_ms': platformInt64ToNullableInt(reply.recalledAtMs),
     };
@@ -1140,7 +1170,7 @@ class SocialCacheStore {
     final map = jsonDecode(raw) as Map<String, Object?>;
     return ChatMessageReplySummary(
       messageId: map['message_id']! as String,
-      sender: _userSummaryFromMap(map['sender']! as Map<String, Object?>),
+      sender: messageSenderFromMap(map['sender']! as Map<String, Object?>),
       text: map['text']! as String,
       recalledAtMs: map['recalled_at_ms'] == null
           ? null
@@ -1169,6 +1199,17 @@ class SocialCacheStore {
       return null;
     }
     return _userSummaryFromMap(jsonDecode(raw) as Map<String, Object?>);
+  }
+
+  MessageSender _messageSenderFromJson(String? raw) {
+    if (raw == null || raw.isEmpty) {
+      return const MessageSender.account(
+        accountId: '',
+        minosId: '',
+        displayName: '',
+      );
+    }
+    return messageSenderFromMap(jsonDecode(raw) as Map<String, Object?>);
   }
 
   /// UUIDv4 used as wire `client_message_id` / local pending primary key.

@@ -1,4 +1,4 @@
-//! Background drain of [`crate::store::agent_dispatch_queue`].
+//! Background drain of [`crate::store::bot_message_deliveries`].
 //!
 //! HTTP send only enqueues; this worker performs host RPC when a live host
 //! is available and arms CompletionWatch on success.

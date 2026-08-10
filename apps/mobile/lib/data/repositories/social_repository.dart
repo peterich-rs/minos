@@ -39,13 +39,12 @@ class SocialRepository {
     return _core.setMinosId(minosId: minosId);
   }
 
-  Future<List<UserSummary>> conversationMembers({
+  /// Unified participants (humans ∪ bot agents). Preferred for @ picker and
+  /// membership-first roster reads (ADR 0021).
+  Future<ConversationParticipantsResponse> listConversationParticipants({
     required String conversationId,
-  }) async {
-    final response = await _core.conversationMembers(
-      conversationId: conversationId,
-    );
-    return response.members;
+  }) {
+    return _core.listConversationParticipants(conversationId: conversationId);
   }
 
   Future<List<SocialChatMessage>> loadMessages(String conversationId) {
@@ -70,15 +69,19 @@ class SocialRepository {
 
   Future<SocialChatMessage> insertPendingMessage({
     required String conversationId,
-    required UserSummary sender,
+    required MessageSender sender,
     required String text,
     ChatMessageReplySummary? replyTo,
+    List<String> mentionedAccountIds = const <String>[],
+    List<String> mentionedAgentIds = const <String>[],
   }) {
     return _cacheStore.insertPendingMessage(
       conversationId: conversationId,
       sender: sender,
       text: text,
       replyTo: replyTo,
+      mentionedAccountIds: mentionedAccountIds,
+      mentionedAgentIds: mentionedAgentIds,
     );
   }
 
@@ -329,6 +332,9 @@ class SocialRepository {
     required String runtimeAgent,
     required String model,
     String? workspacePath,
+    String? displayName,
+    String? defaultReasoningEffort,
+    String? systemPrompt,
   }) {
     return _core.registerAgent(
       name: name,
@@ -336,6 +342,9 @@ class SocialRepository {
       runtimeAgent: runtimeAgent,
       model: model,
       workspacePath: workspacePath,
+      displayName: displayName,
+      defaultReasoningEffort: defaultReasoningEffort,
+      systemPrompt: systemPrompt,
     );
   }
 
@@ -346,6 +355,10 @@ class SocialRepository {
     required String runtimeAgent,
     required String model,
     String? workspacePath,
+    String? displayName,
+    String? defaultReasoningEffort,
+    String? systemPrompt,
+    String? status,
   }) {
     return _core.updateAgent(
       agentId: agentId,
@@ -354,6 +367,10 @@ class SocialRepository {
       runtimeAgent: runtimeAgent,
       model: model,
       workspacePath: workspacePath,
+      displayName: displayName,
+      defaultReasoningEffort: defaultReasoningEffort,
+      systemPrompt: systemPrompt,
+      status: status,
     );
   }
 

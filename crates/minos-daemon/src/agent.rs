@@ -3,22 +3,21 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use minos_agent_runtime::{
-    AgentLaunchMode, AgentManager, AgentRuntimeConfig, InstanceCaps, ManagerEvent, RawIngest,
-    SessionPolicies, SessionState,
+    AgentManager, AgentRuntimeConfig, InstanceCaps, ManagerEvent, RawIngest, SessionPolicies,
+    SessionState,
 };
 use minos_chat_store::mcp_socket::{SocketRequest, SocketResponse};
 use minos_codex_protocol::SkillsListResponse as CodexSkillsListResponse;
 use minos_domain::{AgentName, MinosError};
 use minos_protocol::{
-    AgentDispatchRequest, AgentDispatchResponse, AgentLaunchMode as ProtoAgentLaunchMode,
-    ApprovalDecisionRequest, CloseReason as ProtoCloseReason, CloseSessionRequest,
-    GetSessionParams, GetSessionResponse, HostSkillError, HostSkillSummary, HostSkillsEntry,
-    InterruptSessionRequest, ListHostSkillsRequest, ListHostSkillsResponse,
-    ListHostWorkspacesRequest, ListHostWorkspacesResponse, ListSessionsParams,
-    ListSessionsResponse, LocalConversationEvent, LocalIngestFrame, LocalManagerEvent,
-    PauseReason as ProtoPauseReason, SendUserMessageRequest, SessionState as ProtoSessionState,
-    SessionSummary, StartAgentRequest, StartAgentResponse, WriteHostSkillConfigRequest,
-    WriteHostSkillConfigResponse,
+    AgentDispatchRequest, AgentDispatchResponse, ApprovalDecisionRequest,
+    CloseReason as ProtoCloseReason, CloseSessionRequest, GetSessionParams, GetSessionResponse,
+    HostSkillError, HostSkillSummary, HostSkillsEntry, InterruptSessionRequest,
+    ListHostSkillsRequest, ListHostSkillsResponse, ListHostWorkspacesRequest,
+    ListHostWorkspacesResponse, ListSessionsParams, ListSessionsResponse, LocalConversationEvent,
+    LocalIngestFrame, LocalManagerEvent, PauseReason as ProtoPauseReason, SendUserMessageRequest,
+    SessionState as ProtoSessionState, SessionSummary, StartAgentRequest, StartAgentResponse,
+    WriteHostSkillConfigRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::SessionEndReason;
 use tokio::sync::{broadcast, watch};
@@ -383,6 +382,15 @@ impl AgentGlue {
         }
     }
 
+    /// Wire Host `/ws/host` outbound so mailbox turn completion can emit
+    /// `AppendBotMessage`. Call after `RelayClient` is constructed.
+    pub fn set_host_outbound(
+        &self,
+        tx: tokio::sync::mpsc::Sender<minos_protocol::realtime::ClientFrame>,
+    ) {
+        self.completion.set_host_outbound(tx);
+    }
+
     pub fn store(&self) -> &Arc<LocalStore> {
         &self.store
     }
@@ -441,10 +449,6 @@ impl AgentGlue {
         &self,
         req: StartAgentRequest,
     ) -> Result<StartAgentResponse, MinosError> {
-        // Plan note (C16): `Jsonl` is treated identically to `Server` because
-        // the JSONL exec path was retired in C18. The mode field stays in the
-        // wire shape for forward-compatibility but is effectively ignored.
-        let _mode = req.mode.map_or(AgentLaunchMode::Server, runtime_mode);
         // An empty `workspace` falls back to the daemon's default workspace
         // dir for clients (mobile pre-Phase-D) that have not been updated to
         // pick a directory yet.
@@ -468,6 +472,7 @@ impl AgentGlue {
             &outcome.session_id,
             &cwd,
             req.agent,
+            req.profile_id.as_deref(),
             outcome.provider_session_id.as_deref(),
         )
         .await;
@@ -505,6 +510,8 @@ impl AgentGlue {
             None,
             None,
             Vec::new(),
+            None,
+            None,
         )
         .await
     }
@@ -516,6 +523,8 @@ impl AgentGlue {
     /// `ensure_workspace_conversation` / "Direct agent sessions".
     ///
     /// `origin_message_id` pins frozen agent-result id suffix for collab turns.
+    /// `delivery_id` + `bot_id` pin mailbox context so completion emits AppendBotMessage.
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_agent_with_session_id_in_conversation(
         &self,
         session_id: String,
@@ -526,8 +535,9 @@ impl AgentGlue {
         conversation_title: Option<String>,
         origin_message_id: Option<String>,
         attachments: Vec<minos_protocol::DispatchAttachment>,
+        delivery_id: Option<String>,
+        bot_id: Option<String>,
     ) -> Result<StartAgentResponse, MinosError> {
-        let _mode = req.mode.map_or(AgentLaunchMode::Server, runtime_mode);
         let workspace = resolve_workspace(&self.default_workspace, &req.workspace);
         let launch = self
             .resolve_launch_options(
@@ -577,6 +587,7 @@ impl AgentGlue {
                 conv_id,
                 &cwd,
                 req.agent,
+                bot_id.as_deref().or(req.profile_id.as_deref()),
                 outcome.provider_session_id.as_deref(),
             )
             .await;
@@ -586,6 +597,7 @@ impl AgentGlue {
                 &session_id,
                 &cwd,
                 req.agent,
+                bot_id.as_deref().or(req.profile_id.as_deref()),
                 outcome.provider_session_id.as_deref(),
             )
             .await;
@@ -605,6 +617,18 @@ impl AgentGlue {
             .filter(|s| !s.is_empty())
         {
             self.completion.note_turn_origin(&session_id, origin).await;
+        }
+        // Mailbox delivery context → completion emits AppendBotMessage on final text.
+        if let (Some(delivery), Some(bot)) = (
+            delivery_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty()),
+            bot_id.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        ) {
+            self.completion
+                .note_mailbox_delivery(&session_id, delivery, bot)
+                .await;
         }
 
         let paths = crate::media_materialize::materialize_attachments(
@@ -632,6 +656,8 @@ impl AgentGlue {
             session_id = %session_id,
             conversation_id = hub_conversation_id.unwrap_or(""),
             origin_message_id = origin_message_id.as_deref().unwrap_or(""),
+            delivery_id = delivery_id.as_deref().unwrap_or(""),
+            bot_id = bot_id.as_deref().unwrap_or(""),
             "agent session started with fixed session_id"
         );
         Ok(StartAgentResponse { session_id, cwd })
@@ -683,6 +709,20 @@ impl AgentGlue {
         {
             self.completion
                 .note_turn_origin(&req.session_id, origin)
+                .await;
+        }
+        if let (Some(delivery), Some(bot)) = (
+            req.delivery_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty()),
+            req.bot_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty()),
+        ) {
+            self.completion
+                .note_mailbox_delivery(&req.session_id, delivery, bot)
                 .await;
         }
         let cwd = self
@@ -875,6 +915,7 @@ impl AgentGlue {
                     conv_id,
                     &cwd,
                     agent,
+                    None,
                     started.provider_session_id.as_deref(),
                 )
                 .await;
@@ -886,6 +927,7 @@ impl AgentGlue {
                     &started.session_id,
                     &cwd,
                     agent,
+                    None,
                     started.provider_session_id.as_deref(),
                 )
                 .await;
@@ -924,6 +966,7 @@ impl AgentGlue {
                     conv_id,
                     &cwd,
                     agent,
+                    None,
                     outcome.provider_session_id.as_deref(),
                 )
                 .await;
@@ -933,6 +976,7 @@ impl AgentGlue {
                     conv_id,
                     &cwd,
                     agent,
+                    None,
                     outcome.provider_session_id.as_deref(),
                 )
                 .await;
@@ -941,6 +985,7 @@ impl AgentGlue {
                     &outcome.session_id,
                     &cwd,
                     agent,
+                    None,
                     outcome.provider_session_id.as_deref(),
                 )
                 .await;
@@ -958,6 +1003,7 @@ impl AgentGlue {
         session_id: &str,
         cwd: &str,
         agent: minos_domain::AgentName,
+        bot_id: Option<&str>,
         provider_session_id: Option<&str>,
     ) {
         persist_thread_parent_rows_inner(
@@ -965,6 +1011,7 @@ impl AgentGlue {
             session_id,
             cwd,
             agent,
+            bot_id,
             provider_session_id,
             None,
         )
@@ -977,6 +1024,7 @@ impl AgentGlue {
         conversation_id: &str,
         cwd: &str,
         agent: minos_domain::AgentName,
+        bot_id: Option<&str>,
         provider_session_id: Option<&str>,
     ) {
         persist_thread_parent_rows_inner(
@@ -984,6 +1032,7 @@ impl AgentGlue {
             session_id,
             cwd,
             agent,
+            bot_id,
             provider_session_id,
             Some(conversation_id),
         )
@@ -1722,6 +1771,7 @@ impl AgentGlue {
         };
 
         // Normalize + validate roster up front (membership gates @mention / start).
+        // Wire still passes runtime labels; convert to stable local-rt bot_ids.
         let mut member_inputs: Vec<crate::store::ConversationAgentMemberInput> = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for spec in &req.agents {
@@ -1733,8 +1783,13 @@ impl AgentGlue {
                 method: "create_conversation".into(),
                 message: format!("invalid agent member '{label}': {e}"),
             })?;
+            let bot_id = self
+                .store
+                .ensure_local_runtime_bot(agent_label(agent), now_ms)
+                .await
+                .map_err(|e| map_store_error("create_conversation.ensure_bot", e))?;
             member_inputs.push(crate::store::ConversationAgentMemberInput {
-                agent: agent_label(agent).to_owned(),
+                bot_id,
                 brief: spec.brief.clone(),
             });
         }
@@ -1769,19 +1824,15 @@ impl AgentGlue {
         }
 
         if !member_inputs.is_empty() {
+            let roster_rows = self
+                .store
+                .list_conversation_roster(&conversation_id)
+                .await
+                .unwrap_or_default();
             if let Err(e) = self
                 .post_roster_system_message(
                     &conversation_id,
-                    &crate::roster::format_roster_established_system_message(
-                        &member_inputs
-                            .iter()
-                            .map(|m| crate::store::ConversationAgentMemberRow {
-                                agent: m.agent.clone(),
-                                brief: m.brief.clone(),
-                                joined_at_ms: now_ms,
-                            })
-                            .collect::<Vec<_>>(),
-                    ),
+                    &crate::roster::format_roster_established_system_message(&roster_rows),
                     now_ms,
                 )
                 .await
@@ -1948,11 +1999,16 @@ impl AgentGlue {
             })?;
         let agent_label = agent_label(agent).to_owned();
         let now_ms = current_unix_ms();
+        let bot_id = self
+            .store
+            .ensure_local_runtime_bot(&agent_label, now_ms)
+            .await
+            .map_err(|e| map_store_error("add_conversation_agent.ensure_bot", e))?;
 
         self.store
             .add_conversation_agent_member(
                 &req.conversation_id,
-                &agent_label,
+                &bot_id,
                 now_ms,
                 req.brief.as_deref(),
             )
@@ -1966,7 +2022,9 @@ impl AgentGlue {
             .filter(|s| !s.is_empty())
             .map(str::to_owned);
         if brief_for_msg.is_none() {
-            if let Ok(Some(desc)) = self
+            if let Ok(Some(desc)) = self.store.bot_description(&bot_id).await {
+                brief_for_msg = Some(desc);
+            } else if let Ok(Some(desc)) = self
                 .store
                 .latest_profile_description_for_runtime(&agent_label)
                 .await
@@ -1994,6 +2052,7 @@ impl AgentGlue {
             target: "minos_daemon::agent",
             conversation_id = %req.conversation_id,
             agent = %agent_label,
+            bot_id = %bot_id,
             "added conversation agent to roster",
         );
 
@@ -2032,12 +2091,28 @@ impl AgentGlue {
             })?;
         let agent_label = agent_label(agent).to_owned();
 
-        let removed = self
+        let removed_bot_ids = self
             .store
-            .remove_conversation_agent_member(&req.conversation_id, &agent_label)
+            .remove_conversation_members_by_runtime(&req.conversation_id, &agent_label)
             .await
             .map_err(|e| map_store_error("remove_conversation_agent.remove", e))?;
-        if !removed {
+        // Also try stable local-rt seed if runtime join found nothing (identity missing).
+        let removed_bot_ids = if removed_bot_ids.is_empty() {
+            let local_id = crate::store::local_runtime_bot_id(&agent_label);
+            if self
+                .store
+                .remove_conversation_agent_member(&req.conversation_id, &local_id)
+                .await
+                .map_err(|e| map_store_error("remove_conversation_agent.remove_local", e))?
+            {
+                vec![local_id]
+            } else {
+                Vec::new()
+            }
+        } else {
+            removed_bot_ids
+        };
+        if removed_bot_ids.is_empty() {
             return Err(MinosError::CodexProtocolError {
                 method: "remove_conversation_agent".into(),
                 message: format!(
@@ -2055,7 +2130,13 @@ impl AgentGlue {
             .map_err(|e| map_store_error("remove_conversation_agent.list_sessions", e))?;
         let mut closed_session_ids = Vec::new();
         for row in session_rows {
-            if row.agent != agent_label || row.status == "closed" {
+            let matches_bot = row
+                .bot_id
+                .as_deref()
+                .map(|b| removed_bot_ids.iter().any(|id| id == b))
+                .unwrap_or(false);
+            let matches_runtime = row.agent == agent_label;
+            if (!matches_bot && !matches_runtime) || row.status == "closed" {
                 continue;
             }
             let session_id = row.session_id.clone();
@@ -2337,7 +2418,37 @@ impl AgentGlue {
         req: minos_protocol::AppendConversationMessageParams,
     ) -> Result<minos_protocol::AppendConversationMessageResponse, MinosError> {
         let now_ms = current_unix_ms();
-        let agent = req.agent.map(agent_label);
+        // Agent rows store bot_id (identity), not runtime string.
+        let bot_id = if req.sender_role == "agent" {
+            if let Some(sid) = req.session_id.as_deref() {
+                if let Ok(Some(session)) = self.store.get_session(sid).await {
+                    if let Some(bid) = session.bot_id.filter(|s| !s.is_empty()) {
+                        Some(bid)
+                    } else {
+                        self.store
+                            .ensure_local_runtime_bot(&session.agent, now_ms)
+                            .await
+                            .ok()
+                    }
+                } else if let Some(agent) = req.agent {
+                    self.store
+                        .ensure_local_runtime_bot(agent_label(agent), now_ms)
+                        .await
+                        .ok()
+                } else {
+                    None
+                }
+            } else if let Some(agent) = req.agent {
+                self.store
+                    .ensure_local_runtime_bot(agent_label(agent), now_ms)
+                    .await
+                    .ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         let mentions_json = serde_json::to_string(&req.mentions).unwrap_or_else(|_| "[]".into());
         let message_seq = self
             .store
@@ -2346,7 +2457,7 @@ impl AgentGlue {
                 &req.message_id,
                 req.session_id.as_deref(),
                 &req.sender_role,
-                agent,
+                bot_id.as_deref(),
                 &req.body,
                 now_ms,
                 req.reply_to_message_id.as_deref(),
@@ -2485,17 +2596,22 @@ impl AgentGlue {
             }
         })?;
         let message_id = format!("git:{}:{}", conversation_id, uuid::Uuid::new_v4());
-        let (sender_role, agent_label_opt) = if let Some(a) = agent {
-            ("agent", Some(agent_label(a)))
+        let (sender_role, bot_id_opt) = if let Some(a) = agent {
+            let bot_id = self
+                .store
+                .ensure_local_runtime_bot(agent_label(a), now_ms)
+                .await
+                .ok();
+            ("agent", bot_id)
         } else {
             ("user", None)
         };
-        // Agent rows require session_id; fall back to user when session missing.
-        let (sender_role, session_id, agent_label_opt) =
-            if sender_role == "agent" && session_id.is_none() {
+        // Agent rows require session_id + bot_id; fall back to user when session missing.
+        let (sender_role, session_id, bot_id_opt) =
+            if sender_role == "agent" && (session_id.is_none() || bot_id_opt.is_none()) {
                 ("user", None, None)
             } else {
-                (sender_role, session_id, agent_label_opt)
+                (sender_role, session_id, bot_id_opt)
             };
         let message_seq = self
             .store
@@ -2504,7 +2620,7 @@ impl AgentGlue {
                 &message_id,
                 session_id,
                 sender_role,
-                agent_label_opt,
+                bot_id_opt.as_deref(),
                 &body,
                 now_ms,
                 None,
@@ -3002,16 +3118,54 @@ impl AgentGlue {
                 message: format!("project not found: {}", conversation.project_id),
             })?;
         let agent_name = agent_label(req.agent);
+        let now_ms = current_unix_ms();
+        // Resolve bot identity: profile_id is bot_id when set; else local-rt seed.
+        let bot_id = if let Some(pid) = req
+            .profile_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            // Ensure identity exists for launch resolution.
+            if self
+                .store
+                .get_bot_identity(pid)
+                .await
+                .map_err(|e| map_store_error("start_agent_in_conversation.get_bot", e))?
+                .is_none()
+            {
+                return Err(MinosError::CodexProtocolError {
+                    method: "start_agent_in_conversation".into(),
+                    message: format!("bot identity not found: {pid}"),
+                });
+            }
+            pid.to_owned()
+        } else {
+            self.store
+                .ensure_local_runtime_bot(agent_name, now_ms)
+                .await
+                .map_err(|e| map_store_error("start_agent_in_conversation.ensure_bot", e))?
+        };
         let is_member = self
             .store
-            .is_conversation_agent_member(&req.conversation_id, agent_name)
+            .is_conversation_agent_member(&req.conversation_id, &bot_id)
             .await
             .map_err(|e| map_store_error("start_agent_in_conversation.is_member", e))?;
+        let is_member = if is_member {
+            true
+        } else {
+            // Offline convenience: membership may be the runtime seed while start
+            // carries a named profile of the same runtime.
+            self.store
+                .is_member_by_runtime(&req.conversation_id, agent_name)
+                .await
+                .map_err(|e| map_store_error("start_agent_in_conversation.is_member_runtime", e))?
+        };
         if !is_member {
             return Err(MinosError::CodexProtocolError {
                 method: "start_agent_in_conversation".into(),
                 message: format!(
-                    "agent '{agent_name}' is not a member of this conversation; \
+                    "agent '{agent_name}' (bot_id={bot_id}) is not a member of this conversation; \
                      add it when creating the conversation"
                 ),
             });
@@ -3095,7 +3249,16 @@ impl AgentGlue {
                         .unwrap_or_default()
                 }
             };
-            let briefing = crate::roster::format_roster_briefing(agent_name, &rows);
+            let self_label = self
+                .store
+                .get_bot_identity(&bot_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|b| b.display_name)
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| agent_name.to_owned());
+            let briefing = crate::roster::format_roster_briefing(&bot_id, &self_label, &rows);
             if let Some(merged) = crate::roster::merge_launch_instructions(
                 launch.as_ref().and_then(|l| l.instructions.clone()),
                 &briefing,
@@ -3121,6 +3284,7 @@ impl AgentGlue {
             &req.conversation_id,
             &cwd,
             req.agent,
+            Some(bot_id.as_str()),
             outcome.provider_session_id.as_deref(),
         )
         .await;
@@ -3305,13 +3469,6 @@ fn apply_test_ws_override(cfg: &mut AgentRuntimeConfig) {
         url::Url::parse(&raw)
             .unwrap_or_else(|error| panic!("invalid MINOS_TEST_CODEX_WS_URL `{raw}`: {error}")),
     );
-}
-
-fn runtime_mode(mode: ProtoAgentLaunchMode) -> AgentLaunchMode {
-    match mode {
-        ProtoAgentLaunchMode::Jsonl => AgentLaunchMode::Jsonl,
-        ProtoAgentLaunchMode::Server => AgentLaunchMode::Server,
-    }
 }
 
 fn resolve_workspace(default_workspace: &std::path::Path, workspace: &str) -> PathBuf {
@@ -3621,8 +3778,18 @@ impl AgentGlue {
                 );
                 continue;
             }
+            let self_label = row
+                .bot_id
+                .as_deref()
+                .and_then(|bid| {
+                    members
+                        .iter()
+                        .find(|m| m.bot_id == bid)
+                        .map(crate::roster::member_label)
+                })
+                .unwrap_or(row.agent.as_str());
             let body = crate::roster::format_roster_host_session_inject(
-                &row.agent,
+                self_label,
                 &members,
                 change_summary,
             );
@@ -3685,8 +3852,20 @@ fn roster_members_from_rows(
 ) -> Result<Vec<minos_protocol::ConversationRosterMember>, MinosError> {
     rows.iter()
         .map(|r| {
+            let runtime = r
+                .runtime_agent
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| {
+                    // local-rt-{runtime} seed convention
+                    r.bot_id
+                        .strip_prefix("local-rt-")
+                        .unwrap_or(r.bot_id.as_str())
+                });
             Ok(minos_protocol::ConversationRosterMember {
-                agent: parse_agent_label(&r.agent)?,
+                bot_id: r.bot_id.clone(),
+                agent: parse_agent_label(runtime)?,
+                display_name: r.display_name.clone(),
                 brief: r.brief.clone(),
                 joined_at_ms: r.joined_at_ms,
             })
@@ -3709,6 +3888,11 @@ fn local_conversation_message_from_row(
             }
         })?
     };
+    // Derive runtime badge from bot_id seed convention when possible.
+    let agent = row.bot_id.as_deref().and_then(|bid| {
+        let runtime = bid.strip_prefix("local-rt-").unwrap_or(bid);
+        parse_agent_label(runtime).ok()
+    });
     Ok(minos_protocol::LocalConversationMessage {
         message_seq: row.message_seq,
         message_id: row.message_id,
@@ -3716,7 +3900,8 @@ fn local_conversation_message_from_row(
         session_id: row.session_id,
         created_at_ms: row.created_at_ms,
         sender_role: row.sender_role,
-        agent: row.agent.as_deref().map(parse_agent_label).transpose()?,
+        bot_id: row.bot_id,
+        agent,
         body: row.body,
         reply_to_message_id: row.reply_to_message_id,
         delegation_id: row.delegation_id,
@@ -4244,8 +4429,15 @@ async fn handle_daemon_mcp_request(
             let members = rows
                 .into_iter()
                 .map(|r| {
+                    let runtime = r
+                        .runtime_agent
+                        .clone()
+                        .or_else(|| r.bot_id.strip_prefix("local-rt-").map(str::to_owned))
+                        .unwrap_or_else(|| r.bot_id.clone());
                     Ok(serde_json::json!({
-                        "agent": r.agent,
+                        "bot_id": r.bot_id,
+                        "agent": runtime,
+                        "display_name": r.display_name,
                         "brief": r.brief,
                         "joined_at_ms": r.joined_at_ms,
                     }))
@@ -4304,10 +4496,20 @@ async fn handle_daemon_mcp_request(
                 workspace_for_mcp_conversation(&store, &conversation_id, &default_workspace)
                     .await?;
             let target_label = agent_label(target_agent);
+            let target_bot_id = if let Some(pid) = resolved_profile_id.as_deref() {
+                pid.to_owned()
+            } else {
+                store
+                    .ensure_local_runtime_bot(target_label, current_unix_ms())
+                    .await?
+            };
             anyhow::ensure!(
                 store
-                    .is_conversation_agent_member(&conversation_id, target_label)
-                    .await?,
+                    .is_conversation_agent_member(&conversation_id, &target_bot_id)
+                    .await?
+                    || store
+                        .is_member_by_runtime(&conversation_id, target_label)
+                        .await?,
                 "agent '{target_label}' is not a member of conversation {conversation_id}"
             );
             // Same launch path as start_agent_in_conversation RPC: profile fields via
@@ -4325,6 +4527,7 @@ async fn handle_daemon_mcp_request(
                 &outcome.session_id,
                 &outcome.cwd.display().to_string(),
                 target_agent,
+                Some(target_bot_id.as_str()),
                 outcome.provider_session_id.as_deref(),
                 Some(&conversation_id),
             )
@@ -4373,15 +4576,27 @@ async fn handle_daemon_mcp_request(
                     &visible_message_id,
                 )
                 .await;
+            let now_ms = current_unix_ms();
+            let bot_id = if sender_role == "agent" {
+                resolve_message_bot_id(
+                    &store,
+                    source_session_id.as_deref(),
+                    source_agent.map(agent_label),
+                    now_ms,
+                )
+                .await?
+            } else {
+                None
+            };
             let message_seq = store
                 .upsert_conversation_message(
                     &conversation_id,
                     &visible_message_id,
                     source_session_id.as_deref(),
                     sender_role,
-                    source_agent.map(agent_label),
+                    bot_id.as_deref(),
                     &visible_prompt,
-                    current_unix_ms(),
+                    now_ms,
                     None,
                     Some(delegation.delegation_id.as_str()),
                     &mentions_json,
@@ -4524,15 +4739,27 @@ async fn handle_daemon_mcp_request(
             };
             let mentions = parse_conversation_mentions_from_body(&text);
             let mentions_json = serde_json::to_string(&mentions).unwrap_or_else(|_| "[]".into());
+            let now_ms = current_unix_ms();
+            let bot_id = if sender_role == "agent" {
+                resolve_message_bot_id(
+                    &store,
+                    source_session_id.as_deref(),
+                    source_agent.map(agent_label),
+                    now_ms,
+                )
+                .await?
+            } else {
+                None
+            };
             let message_seq = store
                 .upsert_conversation_message(
                     &conversation_id,
                     &message_id,
                     source_session_id.as_deref(),
                     sender_role,
-                    source_agent.map(agent_label),
+                    bot_id.as_deref(),
                     &text,
-                    current_unix_ms(),
+                    now_ms,
                     None,
                     None,
                     &mentions_json,
@@ -4658,26 +4885,32 @@ async fn handle_daemon_mcp_request(
             let body =
                 crate::git::format_activity_body(&activity).map_err(|e| anyhow::anyhow!(e))?;
             let message_id = format!("git:{}:{}", conversation_id, uuid::Uuid::new_v4());
-            let (sender_role, agent_label_opt) = if let Some(a) = source_agent {
-                ("agent", Some(agent_label(a)))
+            let now_ms = current_unix_ms();
+            let (sender_role, bot_id_opt) = if let Some(a) = source_agent {
+                let bot_id = store
+                    .ensure_local_runtime_bot(agent_label(a), now_ms)
+                    .await
+                    .ok();
+                ("agent", bot_id)
             } else {
                 ("user", None)
             };
-            let (sender_role, session_id, agent_label_opt) =
-                if sender_role == "agent" && source_session_id.is_none() {
-                    ("user", None, None)
-                } else {
-                    (sender_role, source_session_id.as_deref(), agent_label_opt)
-                };
+            let (sender_role, session_id, bot_id_opt) = if sender_role == "agent"
+                && (source_session_id.is_none() || bot_id_opt.is_none())
+            {
+                ("user", None, None)
+            } else {
+                (sender_role, source_session_id.as_deref(), bot_id_opt)
+            };
             let message_seq = store
                 .upsert_conversation_message(
                     &conversation_id,
                     &message_id,
                     session_id,
                     sender_role,
-                    agent_label_opt,
+                    bot_id_opt.as_deref(),
                     &body,
-                    current_unix_ms(),
+                    now_ms,
                     None,
                     None,
                     "[]",
@@ -4800,12 +5033,25 @@ async fn validate_mcp_source_session(
             source_agent.bin_name()
         );
     }
-    // Roster is membership SSOT: a removed agent must not keep using MCP.
+    // Roster is membership SSOT: a removed bot must not keep using MCP.
     let member_label = agent_label(session_agent);
-    anyhow::ensure!(
+    let is_member = if let Some(bot_id) = row.bot_id.as_deref().filter(|s| !s.is_empty()) {
         store
-            .is_conversation_agent_member(conversation_id, member_label)
-            .await?,
+            .is_conversation_agent_member(conversation_id, bot_id)
+            .await?
+    } else {
+        false
+    };
+    let is_member = if is_member {
+        true
+    } else {
+        // Fallback: session may predate bot_id column population — match by runtime.
+        store
+            .is_member_by_runtime(conversation_id, member_label)
+            .await?
+    };
+    anyhow::ensure!(
+        is_member,
         "MCP source agent '{member_label}' is no longer a member of conversation {conversation_id}; \
          session work was invalidated when the agent left the roster"
     );
@@ -4842,10 +5088,16 @@ async fn deliver_daemon_post_update_target(
     let workspace =
         workspace_for_mcp_conversation(&store, conversation_id, default_workspace).await?;
     let target_label = agent_label(target_agent);
+    let target_bot_id = store
+        .ensure_local_runtime_bot(target_label, current_unix_ms())
+        .await?;
     anyhow::ensure!(
         store
-            .is_conversation_agent_member(conversation_id, target_label)
-            .await?,
+            .is_conversation_agent_member(conversation_id, &target_bot_id)
+            .await?
+            || store
+                .is_member_by_runtime(conversation_id, target_label)
+                .await?,
         "agent '{target_label}' is not a member of conversation {conversation_id}"
     );
     let outcome = manager
@@ -4856,6 +5108,7 @@ async fn deliver_daemon_post_update_target(
         &outcome.session_id,
         &outcome.cwd.display().to_string(),
         target_agent,
+        Some(target_bot_id.as_str()),
         outcome.provider_session_id.as_deref(),
         Some(conversation_id),
     )
@@ -5315,11 +5568,37 @@ async fn commit_prepared_ingest(
     false
 }
 
+/// Resolve bot_id for an agent-authored conversation message write.
+async fn resolve_message_bot_id(
+    store: &LocalStore,
+    session_id: Option<&str>,
+    runtime_label: Option<&str>,
+    now_ms: i64,
+) -> anyhow::Result<Option<String>> {
+    if let Some(sid) = session_id.map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(session) = store.get_session(sid).await? {
+            if let Some(bid) = session.bot_id.filter(|s| !s.is_empty()) {
+                return Ok(Some(bid));
+            }
+            return Ok(Some(
+                store
+                    .ensure_local_runtime_bot(&session.agent, now_ms)
+                    .await?,
+            ));
+        }
+    }
+    if let Some(runtime) = runtime_label.map(str::trim).filter(|s| !s.is_empty()) {
+        return Ok(Some(store.ensure_local_runtime_bot(runtime, now_ms).await?));
+    }
+    Ok(None)
+}
+
 async fn persist_thread_parent_rows_inner(
     store: &LocalStore,
     session_id: &str,
     cwd: &str,
     agent: minos_domain::AgentName,
+    bot_id: Option<&str>,
     provider_session_id: Option<&str>,
     conversation_id: Option<&str>,
 ) {
@@ -5352,12 +5631,42 @@ async fn persist_thread_parent_rows_inner(
             }
         },
     };
+    // Prefer explicit bot_id; otherwise seed a stable local runtime bot.
+    let owned_bot_id;
+    let bot_id = match bot_id.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(id) => id,
+        None => match store
+            .ensure_local_runtime_bot(agent_label(agent), now_ms)
+            .await
+        {
+            Ok(id) => {
+                owned_bot_id = id;
+                owned_bot_id.as_str()
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "minos_daemon::agent",
+                    error = %e,
+                    session_id = %session_id,
+                    agent = %agent_label(agent),
+                    "ensure_local_runtime_bot failed; session will lack bot_id",
+                );
+                ""
+            }
+        },
+    };
+    let bot_id_opt = if bot_id.is_empty() {
+        None
+    } else {
+        Some(bot_id)
+    };
     if let Err(e) = store
         .insert_session_in_conversation(
             session_id,
             conversation_id,
             cwd,
             agent_label(agent),
+            bot_id_opt,
             provider_session_id,
             None,
             "idle",
@@ -5425,12 +5734,28 @@ async fn persist_subagent_thread_parent_row(
     } else {
         parent.workspace_root.as_str()
     };
+    let bot_id = match store
+        .ensure_local_runtime_bot(agent_label(agent), now_ms)
+        .await
+    {
+        Ok(id) => Some(id),
+        Err(error) => {
+            tracing::warn!(
+                target: "minos_daemon::agent",
+                error = %error,
+                session_id,
+                "ensure_local_runtime_bot failed for subagent",
+            );
+            None
+        }
+    };
     if let Err(error) = store
         .insert_session_in_conversation(
             session_id,
             &parent.conversation_id,
             workspace_root,
             agent_label(agent),
+            bot_id.as_deref(),
             None,
             Some(parent_session_id),
             "idle",
@@ -5788,13 +6113,14 @@ mod tests {
         agents: &[&str],
     ) {
         seed_conversation(glue, conversation_id).await;
-        let members = agents
-            .iter()
-            .map(|a| crate::store::ConversationAgentMemberInput {
-                agent: (*a).to_owned(),
+        let mut members = Vec::new();
+        for a in agents {
+            let bot_id = glue.store.ensure_local_runtime_bot(a, 1).await.unwrap();
+            members.push(crate::store::ConversationAgentMemberInput {
+                bot_id,
                 brief: None,
-            })
-            .collect::<Vec<_>>();
+            });
+        }
         glue.store
             .set_conversation_agent_members(conversation_id, &members, 1)
             .await
@@ -6188,6 +6514,7 @@ mod tests {
                 "conversation-mcp",
                 "/w",
                 "codex",
+                Some("local-rt-codex"),
                 Some("thread-codex-1234"),
                 None,
                 "idle",
@@ -6223,7 +6550,7 @@ mod tests {
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].sender_role, "agent");
-        assert_eq!(rows[0].agent.as_deref(), Some("codex"));
+        assert_eq!(rows[0].bot_id.as_deref(), Some("local-rt-codex"));
         assert_eq!(rows[0].session_id.as_deref(), Some("thread-codex-1234"));
         assert_eq!(rows[0].body, "review posted");
 
@@ -6257,6 +6584,7 @@ mod tests {
                 "conversation-mcp",
                 "/w",
                 "opencode",
+                Some("local-rt-opencode"),
                 Some("thread-opencode-1234"),
                 None,
                 "idle",
@@ -6330,6 +6658,7 @@ mod tests {
                 "conversation-roster",
                 "/w",
                 "claude",
+                Some("local-rt-claude"),
                 Some("thread-claude-1"),
                 None,
                 "running",
@@ -6345,6 +6674,7 @@ mod tests {
                 "conversation-roster",
                 "/w",
                 "codex",
+                Some("local-rt-codex"),
                 Some("thread-codex-1"),
                 None,
                 "idle",
@@ -6373,14 +6703,14 @@ mod tests {
             .await
             .unwrap();
 
-        let response = test
-            .glue
-            .remove_conversation_agent(minos_protocol::RemoveConversationAgentParams {
+        let response = Box::pin(test.glue.remove_conversation_agent(
+            minos_protocol::RemoveConversationAgentParams {
                 conversation_id: "conversation-roster".into(),
                 agent: "claude".into(),
-            })
-            .await
-            .unwrap();
+            },
+        ))
+        .await
+        .unwrap();
 
         assert!(!response
             .conversation

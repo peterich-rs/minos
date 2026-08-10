@@ -496,7 +496,7 @@ mod tests {
         let server = McpServer {
             name: "minos_chat".into(),
             transport: McpTransport::Stdio {
-                command: "/tmp/minos-tui".into(),
+                command: "/tmp/minos-daemon".into(),
                 args: vec!["minos-mcp".into()],
                 env: vec![McpEnvVariable {
                     name: "A".into(),
@@ -510,7 +510,7 @@ mod tests {
         assert!(json.get("transportType").is_none());
         assert!(json.get("type").is_none());
         assert_eq!(json["name"], "minos_chat");
-        assert_eq!(json["command"], "/tmp/minos-tui");
+        assert_eq!(json["command"], "/tmp/minos-daemon");
         assert_eq!(json["args"], serde_json::json!(["minos-mcp"]));
         assert_eq!(
             json["env"],

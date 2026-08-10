@@ -340,6 +340,7 @@ function patchRailFromDigest(input: {
             messageCount: 0,
             boardColumn: "backlog" as const,
             agentSessionCount: 0,
+            participatingBots: [],
             participatingAgents: [],
             runningCount: 0,
             approvalCount: 0,
@@ -637,6 +638,8 @@ export function ensureImHubBridge(): void {
     },
     onConnectionChange: (state) => {
       lastSyncState = state;
+      // Primary product Online = Account IM (`/ws/client`), not Host alone.
+      useAccountStore.getState().syncAccountFromHub(state);
       if (state === "live" || state === "syncing") {
         const focused = useWorkspaceStore.getState().focusedConversationId;
         if (focused) {
@@ -646,6 +649,8 @@ export function ensureImHubBridge(): void {
     },
   });
   startedForToken = token;
+  // Connecting until first onConnectionChange.
+  useAccountStore.getState().syncAccountFromHub("connecting");
   session.start(deviceId, token, accountId);
   ensureLifecycleHandlers();
   // Drain durable Desktop → Hub user-message Outbox after auth is ready.
@@ -657,11 +662,65 @@ export function stopImHubBridge(): void {
   session = null;
   startedForToken = null;
   lastSyncState = "disconnected";
+  useAccountStore.getState().syncAccountFromHub("disconnected");
   cancelPendingFocusedMarkRead();
 }
 
 export function getHubRealtimeState(): HubRealtimeSyncState {
   return session?.state ?? lastSyncState;
+}
+
+/**
+ * Prefer Account WS AppendMessage when hub realtime is live.
+ * Waits for ChatSendAck/Nack. Returns a result so callers can REST-fallback
+ * only on socket/timeout (not on definitive nack, which would double-send).
+ */
+export async function appendMessageOnHub(input: {
+  clientOperationId: string;
+  conversationId: string;
+  text: string;
+  replyToMessageId?: string | null;
+}): Promise<
+  | { ok: true }
+  | { ok: false; reason: "socket" | "timeout" | "nack"; code?: string; message?: string }
+> {
+  ensureImHubBridge();
+  if (!session) {
+    return { ok: false, reason: "socket" };
+  }
+  const result = await session.sendAppendMessage({
+    clientOperationId: input.clientOperationId,
+    conversationId: input.conversationId,
+    text: input.text,
+    replyToMessageId: input.replyToMessageId,
+  });
+  if (result.ok) return { ok: true };
+  return {
+    ok: false,
+    reason: result.reason,
+    code: result.code,
+    message: result.message,
+  };
+}
+
+/**
+ * @deprecated Fire-and-forget; prefer appendMessageOnHub for outbox.
+ */
+export function tryAppendMessageOnHub(input: {
+  clientOperationId: string;
+  conversationId: string;
+  text: string;
+  replyToMessageId?: string | null;
+}): boolean {
+  ensureImHubBridge();
+  return (
+    session?.trySendAppendMessage({
+      clientOperationId: input.clientOperationId,
+      conversationId: input.conversationId,
+      text: input.text,
+      replyToMessageId: input.replyToMessageId,
+    }) ?? false
+  );
 }
 
 /**

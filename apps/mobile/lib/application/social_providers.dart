@@ -5,10 +5,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart' show StateProvider;
 import 'package:minos/application/agent_activity_provider.dart';
 import 'package:minos/application/conversations_sort.dart';
+import 'package:minos/application/flutter_log.dart';
+import 'package:minos/application/group_agent_provider.dart';
 import 'package:minos/application/im_outbox_worker.dart';
 import 'package:minos/data/repositories/social_repository.dart';
 import 'package:minos/data/repositories/thread_repository.dart';
 import 'package:minos/data/services/minos_core_service.dart';
+import 'package:minos/domain/mention_extract.dart';
+import 'package:minos/domain/message_sender_ext.dart';
 import 'package:minos/domain/social_message.dart';
 import 'package:minos/domain/social_message_order.dart';
 import 'package:minos/src/rust/api/minos.dart';
@@ -98,11 +102,13 @@ final socialSearchProvider = FutureProvider.family
       return ref.watch(socialRepositoryProvider).searchUsers(minosId: trimmed);
     });
 
+/// Human members derived from unified participants (ADR 0021).
 final conversationMembersProvider = FutureProvider.family
     .autoDispose<List<UserSummary>, String>((ref, conversationId) async {
-      return ref
-          .watch(socialRepositoryProvider)
-          .conversationMembers(conversationId: conversationId);
+      final participants = await ref.watch(
+        conversationParticipantsProvider(conversationId).future,
+      );
+      return participants.humans;
     });
 
 @riverpod
@@ -353,11 +359,42 @@ class SocialConversation extends _$SocialConversation {
 
     final repository = ref.read(socialRepositoryProvider);
     final replyPreview = _replyPreviewForMessage(replyToMessage);
+    final sender = await _localSender();
+    // Optimistic structured mentions from current roster so local cache/reload
+    // before Hub ack still carries bot targets (Hub remains SSOT after upsert).
+    final participants = ref
+        .read(conversationParticipantsProvider(_conversationId))
+        .asData
+        ?.value;
+    final optimistic = extractOptimisticMentions(
+      text: trimmed,
+      selfAccountId: sender.identityId,
+      humans: (participants?.humans ?? const [])
+          .map(
+            (h) => MentionHumanRef(accountId: h.accountId, minosId: h.minosId),
+          )
+          .toList(growable: false),
+      agents: (participants?.agents ?? const [])
+          .where(
+            (a) =>
+                a.status.trim().isEmpty || a.status.toLowerCase() == 'active',
+          )
+          .map(
+            (a) => MentionAgentRef(
+              agentId: a.agentId,
+              runtimeAgent: a.runtimeAgent,
+              name: a.name,
+            ),
+          )
+          .toList(growable: false),
+    );
     final pending = await repository.insertPendingMessage(
       conversationId: _conversationId,
-      sender: await _localSender(),
+      sender: sender,
       text: trimmed,
       replyTo: replyPreview,
+      mentionedAccountIds: optimistic.accountIds,
+      mentionedAgentIds: optimistic.agentIds,
     );
     final clientMessageId = pending.wireClientMessageId;
     await repository.enqueueUserMessageOutbox(
@@ -572,8 +609,12 @@ class SocialConversation extends _$SocialConversation {
           .ackDurableApplied(topic: topic, topicSeq: seq);
     } catch (e, st) {
       // Hold cursor on failure — do not swallow without log.
-      // ignore: avoid_print
-      print('ackDurableApplied failed: $e\n$st');
+      logFlutterWarn(
+        'social_providers',
+        'ackDurableApplied failed',
+        error: e,
+        stackTrace: st,
+      );
     }
   }
 
@@ -728,12 +769,16 @@ class SocialConversation extends _$SocialConversation {
     } catch (_) {}
   }
 
-  Future<UserSummary> _localSender() async {
+  Future<MessageSender> _localSender() async {
     final accountId =
         state.myAccountId ??
         await ref.read(socialRepositoryProvider).loadCurrentAccountId() ??
         'local-self';
-    return UserSummary(accountId: accountId, minosId: 'me', displayName: '我');
+    return MessageSender.account(
+      accountId: accountId,
+      minosId: 'me',
+      displayName: '我',
+    );
   }
 
   ChatMessageReplySummary? _replyPreviewForMessage(SocialChatMessage? message) {
@@ -915,7 +960,7 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
           .read(socialRepositoryProvider)
           .deleteConversation(conversationId: conversationId);
       ref.invalidate(socialConversationProvider(conversationId));
-      ref.invalidate(conversationMembersProvider(conversationId));
+      ref.invalidate(conversationParticipantsProvider(conversationId));
     } catch (error, stackTrace) {
       state = previous;
       Error.throwWithStackTrace(error, stackTrace);
@@ -1031,7 +1076,7 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
     final isOwn =
         myAccountId != null &&
         myAccountId.isNotEmpty &&
-        message.sender.accountId == myAccountId;
+        message.sender.accountIdOrNull == myAccountId;
     final mention =
         myAccountId != null &&
         message.mentionedAccountIds.contains(myAccountId);
@@ -1186,8 +1231,12 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
       }
     } catch (e, st) {
       // Do not ack on failure — resume will redeliver.
-      // ignore: avoid_print
-      print('inbox social apply failed (cursor held): $e\n$st');
+      logFlutterWarn(
+        'social_providers',
+        'inbox social apply failed (cursor held)',
+        error: e,
+        stackTrace: st,
+      );
     }
   }
 

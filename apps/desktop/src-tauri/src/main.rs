@@ -4,7 +4,7 @@
 //! Desktop entrypoint.
 //!
 //! When the embedded daemon injects teamwork MCP, OpenCode/Grok spawn
-//! `current_exe __minos-teamwork-mcp ...` (same pattern as minos-tui / minos-daemon).
+//! `current_exe __minos-teamwork-mcp ...` (same pattern as minos-daemon).
 //! Handle that hidden mode **before** starting Tauri so agents get `minos_teamwork`.
 
 use std::path::PathBuf;
@@ -42,7 +42,9 @@ struct McpSidecarArgs {
     #[arg(long)]
     source_agent: Option<String>,
 
-    #[arg(long)]
+    /// Minos session id of the invoking agent (manager injects this for bound MCP).
+    /// Accepts the historical alias used in older docs/configs.
+    #[arg(long = "source-session-id", alias = "source-thread-id")]
     source_session_id: Option<String>,
 
     #[arg(long)]

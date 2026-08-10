@@ -291,7 +291,7 @@ async fn send_message(
         req.reply_to_message_id,
         req.client_message_id,
         req.message_source.unwrap_or_default(),
-        req.client_sent_at_ms.or(req.created_at_ms),
+        req.client_sent_at_ms,
         req.attachment_blob_ids,
     )
     .await
@@ -310,7 +310,7 @@ async fn send_message_command(
         req.reply_to_message_id,
         req.client_message_id,
         req.message_source.unwrap_or_default(),
-        req.client_sent_at_ms.or(req.created_at_ms),
+        req.client_sent_at_ms,
         req.attachment_blob_ids,
     )
     .await
@@ -347,15 +347,16 @@ async fn send_message_inner(
             message_source,
             client_sent_at_ms,
             &attachment_blob_ids,
+            &[],
         )
         .await
         .map_err(map_conversation_error)?;
 
     super::social::fan_out_social_message(&state, &message).await;
 
-    // Dispatch only for live client sends (Mobile / multi-end). Desktop uses
-    // host_projection after native local execution so Hub never double-starts.
-    // Failures are user-visible (timeline bubble + StreamEvent agent_error).
+    // Participant delivery (Agent inbox) only for live client sends.
+    // host_projection / system never re-deliver (anti-loop; Desktop native path).
+    // Failures must not be silent: surface via the existing agent_error path.
     if message_source.allows_agent_dispatch() {
         if let Err(e) = super::social::try_agent_dispatch(
             &state,
@@ -372,8 +373,16 @@ async fn send_message_inner(
                 error = %e,
                 conversation_id = %conversation_id,
                 message_id = %message.message_id,
-                "agent dispatch pipeline error after message send"
+                "agent inbox pipeline error after message send"
             );
+            super::social::notify_agent_dispatch_pipeline_error(
+                &state,
+                &account_id,
+                &conversation_id,
+                &message.message_id,
+                &e,
+            )
+            .await;
         }
     }
 

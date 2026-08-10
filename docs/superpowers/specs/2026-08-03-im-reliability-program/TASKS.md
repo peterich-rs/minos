@@ -18,6 +18,12 @@ Backend spec: [../2026-08-03-backend-im-delivery-orchestration.md](../2026-08-03
   - agent-result id = `agent-result:{conv}:{session}:{origin_message_id}`
   - outbox lanes = `social_durable` | `host_command`
   - push 幂等键 = `(event_id, account_id)`
+- [x] **C0/B0.6**（2026-08-09）Agent = bot participant 文档北极星：
+  - ADR [0021](../../../adr/0021-agent-as-conversation-bot-participant.md)
+  - Spec [agent-participant-delivery](../2026-08-09-agent-participant-delivery.md)
+  - architecture-messaging / overview / business-flow / desktop / backend / mobile 对齐
+  - Hub SSOT / backend delivery / client sync / realtime surface / program README 触发语义改为 participant delivery（实现表名 dispatch 可暂留）
+  - **后续代码 Phase**（非本勾选）：polymorphic mentions、统一 extract、inbox 入口收敛、Desktop Online 组合状态
 
 ---
 

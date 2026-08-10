@@ -43,12 +43,28 @@ class GroupMember {
 
   /// Create a [GroupMember] from an [AgentProfile].
   factory GroupMember.fromAgent(AgentProfile profile) {
+    final label = profile.name.trim().isEmpty
+        ? profile.agentId
+        : profile.name.trim();
     return GroupMember(
       id: profile.agentId,
-      displayName: '🤖 ${profile.name}',
+      displayName: '🤖 $label',
       minosId: profile.agentId,
       kind: GroupMemberKind.agent,
       agentProfile: profile,
+    );
+  }
+
+  /// Create a [GroupMember] from Hub [AgentSummary] (prefer display_name).
+  factory GroupMember.fromAgentSummary(AgentSummary agent) {
+    final display = agent.displayName.trim().isNotEmpty
+        ? agent.displayName.trim()
+        : (agent.name.trim().isNotEmpty ? agent.name.trim() : agent.agentId);
+    return GroupMember(
+      id: agent.agentId,
+      displayName: '🤖 $display',
+      minosId: agent.agentId,
+      kind: GroupMemberKind.agent,
     );
   }
 }

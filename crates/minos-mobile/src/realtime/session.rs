@@ -10,6 +10,7 @@ use tokio::sync::{broadcast, mpsc, watch};
 
 use crate::client::{SocialEventFrame, UiEventFrame};
 
+use super::chat_send_waiters::SharedChatSendWaiters;
 use super::frame_handler::{handle_server_frame, RealtimeEvent};
 use super::subscription::SubscriptionManager;
 
@@ -24,6 +25,7 @@ impl RealtimeSession {
         social_events_tx: broadcast::Sender<SocialEventFrame>,
         state_tx: watch::Sender<ConnectionState>,
         mut inbound_client_frames: mpsc::Receiver<ClientFrame>,
+        chat_send_waiters: SharedChatSendWaiters,
     ) {
         let (write, mut read) = ws.split();
 
@@ -87,6 +89,7 @@ impl RealtimeSession {
                                         &subscription_mgr,
                                         &ui_events_tx,
                                         &social_events_tx,
+                                        &chat_send_waiters,
                                     )
                                     .await;
                                 }
@@ -113,6 +116,8 @@ impl RealtimeSession {
             }
         }
 
+        // Drop pending AppendMessage waiters so outbox can retry WS later.
+        chat_send_waiters.fail_all_socket();
         subscription_mgr.on_disconnect().await;
         let _ = state_tx.send(ConnectionState::Disconnected);
     }
@@ -276,10 +281,39 @@ async fn dispatch_event(
     subscription_mgr: &Arc<SubscriptionManager>,
     ui_events_tx: &broadcast::Sender<UiEventFrame>,
     social_events_tx: &broadcast::Sender<SocialEventFrame>,
+    chat_send_waiters: &SharedChatSendWaiters,
 ) {
     match event {
         RealtimeEvent::SubscribeAck { topics } => {
             subscription_mgr.mark_subscribe_acked(topics).await;
+        }
+        RealtimeEvent::ChatSendAck {
+            client_operation_id,
+            conversation_id,
+            message_id,
+            message_seq,
+            message,
+        } => {
+            chat_send_waiters.resolve_ack(
+                client_operation_id,
+                conversation_id.clone(),
+                message_id.clone(),
+                *message_seq,
+                message.clone(),
+            );
+        }
+        RealtimeEvent::ChatSendNack {
+            client_operation_id,
+            conversation_id,
+            code,
+            message,
+        } => {
+            chat_send_waiters.resolve_nack(
+                client_operation_id,
+                conversation_id.clone(),
+                code.clone(),
+                message.clone(),
+            );
         }
         RealtimeEvent::DurableEvent {
             topic,
@@ -449,7 +483,7 @@ fn parse_account_inbox_digest(
     payload: &serde_json::Value,
     is_recall: bool,
 ) -> Option<SocialEventFrame> {
-    use minos_protocol::{SenderType, UserSummary};
+    use minos_protocol::MessageSender;
 
     let conversation_id = payload
         .get("conversation_id")
@@ -499,29 +533,41 @@ fn parse_account_inbox_digest(
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
 
-    // SenderRef on wire: { "kind": "user", "account_id": "..." } or agent.
-    let (sender_account_id, sender_type) = match payload.get("sender") {
+    // SenderRef on durable: `{ kind: user|agent, account_id|agent_id }`.
+    let sender = match payload.get("sender") {
         Some(s)
             if s.get("agent_id").is_some()
                 || s.get("kind").and_then(|k| k.as_str()) == Some("agent") =>
         {
-            (
-                s.get("agent_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                SenderType::Agent,
-            )
+            let bot_id = s
+                .get("agent_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            MessageSender::Bot {
+                bot_id,
+                display_name: sender_display_name,
+                runtime_agent: String::new(),
+                name: None,
+                avatar_url: None,
+            }
         }
-        Some(s) => (
-            s.get("account_id")
+        Some(s) => MessageSender::Account {
+            account_id: s
+                .get("account_id")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),
-            SenderType::User,
-        ),
-        None => (String::new(), SenderType::User),
+            minos_id: String::new(),
+            display_name: sender_display_name,
+        },
+        None => MessageSender::Account {
+            account_id: String::new(),
+            minos_id: String::new(),
+            display_name: sender_display_name,
+        },
     };
+    let sender_type = ChatMessageSummary::sender_type_from(&sender);
 
     // When mentioned=true for this account, seed mentioned_account_ids so
     // inbox mention badge can flip without full message body.
@@ -541,17 +587,14 @@ fn parse_account_inbox_digest(
         message: ChatMessageSummary {
             message_id,
             conversation_id,
-            sender: UserSummary {
-                account_id: sender_account_id,
-                minos_id: String::new(),
-                display_name: sender_display_name,
-            },
+            sender,
             text: preview,
             created_at_ms: at_ms,
             message_seq,
             reply_to: None,
             recalled_at_ms: if is_recall { Some(at_ms) } else { None },
             mentioned_account_ids,
+            mentioned_agent_ids: vec![],
             sender_type,
             reactions: vec![],
             attachments: vec![],
@@ -563,7 +606,7 @@ fn parse_account_inbox_digest(
 
 /// Parse reaction durable into a reaction_updated social frame.
 fn parse_reaction_updated(payload: &serde_json::Value) -> Option<SocialEventFrame> {
-    use minos_protocol::{ReactionGroup, SenderType, UserSummary};
+    use minos_protocol::{MessageSender, ReactionGroup};
 
     let conversation_id = payload
         .get("conversation_id")
@@ -590,23 +633,27 @@ fn parse_reaction_updated(payload: &serde_json::Value) -> Option<SocialEventFram
     Some(SocialEventFrame {
         conversation_id: conversation_id.clone(),
         kind: "reaction_updated".into(),
-        message: ChatMessageSummary {
-            message_id,
-            conversation_id,
-            sender: UserSummary {
+        message: {
+            let sender = MessageSender::Account {
                 account_id: String::new(),
                 minos_id: String::new(),
                 display_name: String::new(),
-            },
-            text: String::new(),
-            created_at_ms: at_ms,
-            message_seq: 0,
-            reply_to: None,
-            recalled_at_ms: None,
-            mentioned_account_ids: vec![],
-            sender_type: SenderType::User,
-            reactions,
-            attachments: vec![],
+            };
+            ChatMessageSummary {
+                message_id,
+                conversation_id,
+                sender: sender.clone(),
+                text: String::new(),
+                created_at_ms: at_ms,
+                message_seq: 0,
+                reply_to: None,
+                recalled_at_ms: None,
+                mentioned_account_ids: vec![],
+                mentioned_agent_ids: vec![],
+                sender_type: ChatMessageSummary::sender_type_from(&sender),
+                reactions,
+                attachments: vec![],
+            }
         },
         topic: String::new(),
         topic_seq: 0,
@@ -794,6 +841,7 @@ mod tests {
                 "created_at_ms": 10,
                 "message_seq": 3,
                 "sender": {
+                    "kind": "account",
                     "account_id": "a",
                     "minos_id": "m",
                     "display_name": "n"
@@ -828,6 +876,7 @@ mod tests {
             "created_at_ms": 1,
             "message_seq": 1,
             "sender": {
+                "kind": "account",
                 "account_id": "a",
                 "minos_id": "m",
                 "display_name": "n"
@@ -848,6 +897,7 @@ mod tests {
                 "created_at_ms": 10,
                 "message_seq": 3,
                 "sender": {
+                    "kind": "account",
                     "account_id": "a",
                     "minos_id": "m",
                     "display_name": "n"
@@ -882,8 +932,8 @@ mod tests {
         assert_eq!(frame.kind, "inbox_digest");
         assert_eq!(frame.conversation_id, "c1");
         assert_eq!(frame.message.text, "hi digest");
-        assert_eq!(frame.message.sender.display_name, "Other");
-        assert_eq!(frame.message.sender.account_id, "other");
+        assert_eq!(frame.message.sender.display_name(), "Other");
+        assert_eq!(frame.message.sender.account_id(), Some("other"));
         assert_eq!(frame.message.message_seq, 7);
         assert_eq!(
             frame.message.mentioned_account_ids,

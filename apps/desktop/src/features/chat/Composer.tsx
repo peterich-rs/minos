@@ -2,18 +2,23 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AtSign, Bold, Paperclip, X } from "lucide-react";
 import {
   buildAgentMentionOptions,
+  buildHumanMentionOptions,
   mentionQueryAtCursor,
+  type MentionHuman,
   type MentionProfile,
 } from "@/shared/lib/agent-route";
 import type { TimelineMessage } from "@/shared/lib/mock-data";
+import { membershipTokensOfBots } from "@/shared/lib/mock-data";
 import { hasPrimaryShortcutModifier } from "@/shared/lib/platform";
 import { cn } from "@/shared/lib/utils";
 import { toast } from "@/shared/lib/toast";
 import { daemonApi, isTauriRuntime } from "@/shared/lib/daemon";
+import { listConversationParticipants } from "@/shared/lib/minos-cloud";
 import {
   ComposerChrome,
   ComposerToolBtn,
 } from "@/shared/ui/ComposerChrome";
+import { useAccountStore } from "@/store/account-store";
 import { useUiStore } from "@/store/ui-store";
 import {
   useWorkspaceStore,
@@ -25,6 +30,7 @@ import { replyAuthorLabel, replyPreviewBody } from "./lib/format";
 const EMPTY_SESSIONS: ProjectSession[] = [];
 const EMPTY_MESSAGES: TimelineMessage[] = [];
 const EMPTY_PROFILES: MentionProfile[] = [];
+const EMPTY_HUMANS: MentionHuman[] = [];
 
 export function Composer({ conversationId }: { conversationId: string }) {
   const draft = useUiStore(
@@ -51,11 +57,17 @@ export function Composer({ conversationId }: { conversationId: string }) {
   const loadInspector = useWorkspaceStore((s) => s.loadInspector);
   const source = useWorkspaceStore((s) => s.source);
   const clis = useWorkspaceStore((s) => s.clis);
-  const participatingAgents = useWorkspaceStore(
-    (s) =>
-      s.conversations.find((c) => c.id === conversationId)
-        ?.participatingAgents ?? [],
-  );
+  // Roster membership tokens: prefer participatingBots SSOT; fall back to
+  // deprecated participatingAgents runtime labels when bots array is empty.
+  const rosterMemberTokens = useWorkspaceStore((s) => {
+    const conv = s.conversations.find((c) => c.id === conversationId);
+    if (!conv) return [] as string[];
+    const fromBots = membershipTokensOfBots(conv.participatingBots);
+    if (fromBots.length > 0) return fromBots;
+    return (conv.participatingAgents ?? [])
+      .map((a) => a.trim().toLowerCase())
+      .filter(Boolean);
+  });
   const sessions = useWorkspaceStore(
     (s) => s.sessionsByConversation[conversationId] ?? EMPTY_SESSIONS,
   );
@@ -65,9 +77,17 @@ export function Composer({ conversationId }: { conversationId: string }) {
   const hasCachedMessages = useWorkspaceStore(
     (s) => conversationId in s.messagesByConversation,
   );
+  const accountSyncStatus = useAccountStore((s) => s.accountSyncStatus);
+  const session = useAccountStore((s) => s.session);
+  const deviceId = useAccountStore((s) => s.deviceId);
 
   const phase = timelineStatus?.phase ?? "idle";
   const detailError = timelineStatus?.error;
+  // Account-primary send gate: when signed in, only fully online can send.
+  // connecting/unknown/offline must not present send-ready chat (ADR 0021 §6).
+  const accountLinked = Boolean(session?.accessToken?.trim());
+  const accountSendReady = !accountLinked || accountSyncStatus === "online";
+  const accountBlocked = accountLinked && accountSyncStatus !== "online";
 
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -75,20 +95,39 @@ export function Composer({ conversationId }: { conversationId: string }) {
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionProfiles, setMentionProfiles] =
     useState<MentionProfile[]>(EMPTY_PROFILES);
+  const [mentionHumans, setMentionHumans] =
+    useState<MentionHuman[]>(EMPTY_HUMANS);
+  const [participantAgents, setParticipantAgents] = useState<string[] | null>(
+    null,
+  );
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const mention = mentionQueryAtCursor(draft, cursor);
+  const memberAgents = participantAgents ?? rosterMemberTokens;
   const mentionOptions = useMemo(() => {
     if (!mention) return [];
-    // Membership-gated: only conversation roster agents + their profiles/sessions.
-    return buildAgentMentionOptions({
+    const humans = buildHumanMentionOptions(mention.query, mentionHumans, {
+      selfAccountId: session?.accountId,
+      limit: 8,
+    });
+    // Membership-gated bots: participants API agents preferred, else roster.
+    const agents = buildAgentMentionOptions({
       query: mention.query,
       clis,
       sessions,
       profiles: mentionProfiles,
-      memberAgents: participatingAgents,
+      memberAgents,
     });
-  }, [mention, clis, sessions, mentionProfiles, participatingAgents]);
+    return [...humans, ...agents];
+  }, [
+    mention,
+    mentionHumans,
+    clis,
+    sessions,
+    mentionProfiles,
+    memberAgents,
+    session?.accountId,
+  ]);
 
   // When @-mention UI opens and sessions are empty, ensure Inspector working set
   // so @agent#short options can list existing sessions without opening the rail.
@@ -101,29 +140,101 @@ export function Composer({ conversationId }: { conversationId: string }) {
     void loadInspector(conversationId, { quiet: hasKey });
   }, [mentionActive, sessions.length, conversationId, source, loadInspector]);
 
-  // Load host agent profiles for @ProfileName options while the picker is open.
+  // Unified participants (humans ∪ agents) for @ picker — ADR 0021 / global-bot-identity.
+  // @ targets = conversation roster only (Hub participants preferred). Never mix
+  // unjoined Host profiles into collab send targets.
   useEffect(() => {
-    if (source !== "daemon" || !mentionActive || !isTauriRuntime()) return;
+    if (!mentionActive) return;
+    const token = session?.accessToken?.trim();
     let cancelled = false;
     void (async () => {
-      try {
-        const res = await daemonApi.listAgentProfiles();
-        if (cancelled) return;
-        setMentionProfiles(
-          (res.profiles ?? []).map((p) => ({
-            id: p.id,
-            name: p.name,
-            runtimeAgent: p.runtime_agent,
-          })),
-        );
-      } catch {
-        if (!cancelled) setMentionProfiles(EMPTY_PROFILES);
+      // Prefer Hub participants when account is online.
+      if (token && conversationId) {
+        try {
+          const parts = await listConversationParticipants(
+            deviceId,
+            token,
+            conversationId,
+          );
+          if (cancelled) return;
+          setMentionHumans(
+            parts.humans.map((h) => ({
+              accountId: h.accountId,
+              minosId: h.minosId,
+              displayName: h.displayName,
+            })),
+          );
+          // Membership tokens: runtime + bot name + agent_id (all roster-scoped).
+          // Disabled bots stay on participants for UI, but are not @-targets.
+          const memberTokens = new Set<string>();
+          const rosterProfiles: MentionProfile[] = [];
+          for (const a of parts.agents) {
+            if ((a.status || "active").toLowerCase() === "disabled") continue;
+            const runtime = a.runtimeAgent.trim().toLowerCase();
+            if (runtime) memberTokens.add(runtime);
+            const name = (a.displayName || a.name).trim();
+            if (name) memberTokens.add(name.toLowerCase());
+            if (a.agentId) memberTokens.add(a.agentId.toLowerCase());
+            rosterProfiles.push({
+              id: a.agentId,
+              name: name || a.agentId,
+              runtimeAgent: a.runtimeAgent,
+            });
+          }
+          setParticipantAgents([...memberTokens]);
+          setMentionProfiles(rosterProfiles);
+          return;
+        } catch {
+          if (cancelled) return;
+          // Fall through to offline roster.
+        }
+      }
+
+      // Offline / no Hub: gate by local conversation roster only (no full profile dir).
+      if (source === "daemon" && isTauriRuntime()) {
+        try {
+          const res = await daemonApi.listAgentProfiles();
+          if (cancelled) return;
+          const memberSet = new Set(
+            rosterMemberTokens.map((a) => a.trim().toLowerCase()).filter(Boolean),
+          );
+          const rosterOnly = (res.profiles ?? [])
+            .filter(
+              (p) =>
+                memberSet.has(p.runtime_agent.trim().toLowerCase()) ||
+                memberSet.has(p.id.toLowerCase()) ||
+                memberSet.has(p.name.trim().toLowerCase()),
+            )
+            .map((p) => ({
+              id: p.id,
+              name: p.name,
+              runtimeAgent: p.runtime_agent,
+            }));
+          setMentionProfiles(rosterOnly);
+          setParticipantAgents(rosterMemberTokens.map((a) => a.toLowerCase()));
+          setMentionHumans(EMPTY_HUMANS);
+          return;
+        } catch {
+          /* fall through */
+        }
+      }
+      if (!cancelled) {
+        setMentionHumans(EMPTY_HUMANS);
+        setMentionProfiles(EMPTY_PROFILES);
+        setParticipantAgents(null);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [mentionActive, source]);
+  }, [
+    mentionActive,
+    conversationId,
+    deviceId,
+    session?.accessToken,
+    source,
+    rosterMemberTokens,
+  ]);
 
   useEffect(() => {
     setMentionIndex(0);
@@ -168,6 +279,17 @@ export function Composer({ conversationId }: { conversationId: string }) {
   const onSend = async () => {
     const text = draft.trim();
     if (!text || !conversationId) return;
+    if (accountBlocked) {
+      const detail =
+        accountSyncStatus === "connecting"
+          ? "Account is still connecting — wait until Online to send."
+          : accountSyncStatus === "unknown"
+            ? "Account sync not ready — wait until Online to send."
+            : "Account sync is disconnected — reconnect to send chat.";
+      toast.error("Cannot send", detail);
+      setSendError(detail);
+      return;
+    }
     // WeChat-style: empty the composer immediately. The message body is
     // already captured in `text`; the optimistic `sending` row (inserted by
     // sendMessage before any throwing step) carries it. On failure the row
@@ -191,11 +313,24 @@ export function Composer({ conversationId }: { conversationId: string }) {
     }
   };
 
+  const accountHint =
+    !accountLinked
+      ? null
+      : accountSyncStatus === "online"
+        ? null
+        : accountSyncStatus === "connecting"
+          ? "Connecting… · cannot send until Account is Online"
+          : accountSyncStatus === "unknown"
+            ? "Account sync starting… · cannot send yet"
+            : "Messages offline · cannot send until Account reconnects";
+
   const hint = (
     <>
-      {source === "daemon"
-        ? "Connected · @member agent · @agent#id continue · ⌘/Ctrl+Enter send"
-        : "Mock mode"}
+      {accountHint
+        ? accountHint
+        : source === "daemon"
+          ? "Connected · @member or @bot · ⌘/Ctrl+Enter send"
+          : "Mock mode"}
       {phase === "loading" && hasCachedMessages ? " · refreshing…" : ""}
       {sendError || (phase === "error" && detailError) ? (
         <span className="mt-1 block text-xs text-status-failed">
@@ -211,7 +346,7 @@ export function Composer({ conversationId }: { conversationId: string }) {
       {mention && mentionOptions.length > 0 ? (
         <div className="absolute bottom-full left-5 right-5 z-20 mb-2 max-h-52 overflow-y-auto rounded-xl border border-ink/10 bg-surface py-1 shadow-lg">
           <div className="px-3 py-1.5 text-2xs font-semibold uppercase tracking-wide text-ink-muted">
-            Agents & profiles
+            Participants
           </div>
           {mentionOptions.map((opt, i) => (
             <button
@@ -312,8 +447,13 @@ export function Composer({ conversationId }: { conversationId: string }) {
             }
           },
           rows: 3,
-          placeholder:
-            "Message… type @ to mention an agent (e.g. @grok hello)",
+          placeholder: accountBlocked
+            ? accountSyncStatus === "connecting" ||
+              accountSyncStatus === "unknown"
+              ? "Connecting… wait until Account is Online to send"
+              : "Messages offline — reconnect Account to send"
+            : "Message… type @ to mention a member or bot",
+          disabled: accountBlocked,
         }}
         toolbarStart={
           <>
@@ -341,7 +481,7 @@ export function Composer({ conversationId }: { conversationId: string }) {
           </>
         }
         sendLabel={sending ? "Sending…" : "Send"}
-        sendDisabled={sending || !draft.trim()}
+        sendDisabled={sending || !draft.trim() || !accountSendReady}
         onSend={() => void onSend()}
         hint={hint}
       />

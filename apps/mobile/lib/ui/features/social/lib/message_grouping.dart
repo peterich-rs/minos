@@ -1,3 +1,4 @@
+import 'package:minos/domain/message_sender_ext.dart';
 import 'package:minos/domain/social_message.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
@@ -7,19 +8,19 @@ const int messageGroupWindowMs = 10 * 60 * 1000;
 /// Author key for grouping consecutive collaboration rows.
 ///
 /// - Users group by account id (multi-member groups must not collapse across people).
-/// - Agents group by sender id + optional session id.
+/// - Agents group by bot_id + optional session id.
 /// - Recalled rows still keep their author key so neighboring non-recalled
 ///   messages from the same author can continue grouping around them only when
 ///   callers decide; [isMessageGroupContinuation] treats recalled as a break
 ///   so system-style recall chrome does not steal avatar slots awkwardly.
 String? messageAuthorKey(SocialChatMessage message) {
   if (message.isRecalled) return null;
-  if (message.senderType == SenderType.agent) {
+  if (message.senderType == SenderType.agent || message.sender.isBot) {
     final session = message.agentSessionIdFromMessageId ?? '';
-    final agentId = message.sender.accountId;
+    final agentId = message.sender.identityId;
     return 'agent:$agentId:$session';
   }
-  return 'user:${message.sender.accountId}';
+  return message.sender.groupingKey;
 }
 
 /// True when [curr] should hide avatar/header as a continuation of [prev].

@@ -217,7 +217,7 @@ fn truncate_body(text: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
     use crate::realtime::event::SenderRef;
-    use minos_protocol::{ChatMessageSummary, SenderType, UserSummary};
+    use minos_protocol::{ChatMessageSummary, MessageSender};
 
     fn default_prefs() -> NotificationPreferences {
         NotificationPreferences {
@@ -240,21 +240,23 @@ mod tests {
     }
 
     fn sample_message() -> ChatMessageSummary {
+        let sender = MessageSender::Account {
+            account_id: "other".into(),
+            minos_id: "minos-other".into(),
+            display_name: "Other".into(),
+        };
         ChatMessageSummary {
             message_id: "msg1".into(),
             conversation_id: "conv1".into(),
-            sender: UserSummary {
-                account_id: "other".into(),
-                minos_id: "minos-other".into(),
-                display_name: "Other".into(),
-            },
+            sender: sender.clone(),
             text: "hello".into(),
             created_at_ms: 1000,
             message_seq: 1,
             reply_to: None,
             recalled_at_ms: None,
             mentioned_account_ids: Vec::new(),
-            sender_type: SenderType::User,
+            mentioned_agent_ids: vec![],
+            sender_type: ChatMessageSummary::sender_type_from(&sender),
             reactions: vec![],
             attachments: vec![],
         }
@@ -271,7 +273,7 @@ mod tests {
             },
             at_ms: 1000,
             preview: msg.text.clone(),
-            sender_display_name: msg.sender.display_name,
+            sender_display_name: msg.sender.display_name().to_string(),
             mentioned: false,
             message_seq: Some(msg.message_seq),
         }

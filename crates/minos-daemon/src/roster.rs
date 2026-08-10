@@ -5,17 +5,38 @@ use crate::store::ConversationAgentMemberRow;
 /// Max brief length enforced when building protocol / briefing text.
 pub const MAX_ROSTER_BRIEF_CHARS: usize = 500;
 
+/// Display label for a roster member: prefer display_name, then runtime, then bot_id.
+pub fn member_label(m: &ConversationAgentMemberRow) -> &str {
+    m.display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            m.runtime_agent
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or(m.bot_id.as_str())
+}
+
 /// Build developer/system briefing text injected at agent session start.
 ///
-/// `self_agent` is the runtime label of the session being started (`codex`, …).
-pub fn format_roster_briefing(self_agent: &str, members: &[ConversationAgentMemberRow]) -> String {
-    let self_agent = self_agent.trim();
+/// `self_bot_id` is the bot identity of the session being started.
+/// `self_label` is the human-facing name shown in the briefing (display/runtime).
+pub fn format_roster_briefing(
+    self_bot_id: &str,
+    self_label: &str,
+    members: &[ConversationAgentMemberRow],
+) -> String {
+    let self_bot_id = self_bot_id.trim();
+    let self_label = self_label.trim();
     let mut lines = Vec::new();
     lines.push("## Conversation roster".to_string());
     lines.push(format!(
-        "You are **{self_agent}** in this Minos conversation with other CLI agents."
+        "You are **{self_label}** (bot_id=`{self_bot_id}`) in this Minos conversation with other CLI agents."
     ));
-    if let Some(self_row) = members.iter().find(|m| m.agent == self_agent) {
+    if let Some(self_row) = members.iter().find(|m| m.bot_id == self_bot_id) {
         if let Some(brief) = self_row
             .brief
             .as_deref()
@@ -32,15 +53,16 @@ pub fn format_roster_briefing(self_agent: &str, members: &[ConversationAgentMemb
     );
     let mut any = false;
     for m in members {
-        if m.agent == self_agent {
+        if m.bot_id == self_bot_id {
             continue;
         }
         any = true;
+        let label = member_label(m);
         match m.brief.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-            Some(brief) => lines.push(format!("- **{}**: {brief}", m.agent)),
+            Some(brief) => lines.push(format!("- **{label}** (`{}`): {brief}", m.bot_id)),
             None => lines.push(format!(
-                "- **{}**: (no brief; check conversation messages / ask the user)",
-                m.agent
+                "- **{label}** (`{}`): (no brief; check conversation messages / ask the user)",
+                m.bot_id
             )),
         }
     }
@@ -56,11 +78,11 @@ pub fn format_roster_briefing(self_agent: &str, members: &[ConversationAgentMemb
 }
 
 /// Conversation-timeline system message body when a member is removed.
-pub fn format_roster_removed_system_message(agent: &str) -> String {
+pub fn format_roster_removed_system_message(label: &str) -> String {
     format!(
         "[minos:system] Roster updated: **{}** left this conversation. \
          Remaining agents should use `list_conversation_roster` before further delegation.",
-        agent.trim()
+        label.trim()
     )
 }
 
@@ -70,26 +92,27 @@ pub fn format_roster_removed_system_message(agent: &str) -> String {
 /// **not** a conversation user message and must not be written to `chat_messages`
 /// as `sender_role=user`. Prefix identifies host coordination.
 pub fn format_roster_host_session_inject(
-    self_agent: &str,
+    self_label: &str,
     members: &[ConversationAgentMemberRow],
     change_summary: &str,
 ) -> String {
-    let self_agent = self_agent.trim();
+    let self_label = self_label.trim();
     let mut lines = vec![
         "[minos:host] kind=roster_changed".to_string(),
         String::new(),
         "Host coordination notice (not a user chat message).".to_string(),
         change_summary.trim().to_owned(),
-        format!("You remain **{self_agent}** in this conversation."),
+        format!("You remain **{self_label}** in this conversation."),
         "Current roster:".to_string(),
     ];
     if members.is_empty() {
         lines.push("- (empty roster)".to_string());
     } else {
         for m in members {
+            let label = member_label(m);
             match m.brief.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                Some(brief) => lines.push(format!("- **{}**: {brief}", m.agent)),
-                None => lines.push(format!("- **{}**", m.agent)),
+                Some(brief) => lines.push(format!("- **{label}**: {brief}")),
+                None => lines.push(format!("- **{label}**")),
             }
         }
     }
@@ -103,15 +126,15 @@ pub fn format_roster_host_session_inject(
 }
 
 /// Conversation-timeline system message when a member joins.
-pub fn format_roster_joined_system_message(agent: &str, brief: Option<&str>) -> String {
-    let agent = agent.trim();
+pub fn format_roster_joined_system_message(label: &str, brief: Option<&str>) -> String {
+    let label = label.trim();
     match brief.map(str::trim).filter(|s| !s.is_empty()) {
         Some(brief) => format!(
-            "[minos:system] Roster updated: **{agent}** joined ({brief}). \
+            "[minos:system] Roster updated: **{label}** joined ({brief}). \
              Call `list_conversation_roster` for structured membership."
         ),
         None => format!(
-            "[minos:system] Roster updated: **{agent}** joined this conversation. \
+            "[minos:system] Roster updated: **{label}** joined this conversation. \
              Call `list_conversation_roster` for structured membership."
         ),
     }
@@ -124,9 +147,10 @@ pub fn format_roster_established_system_message(members: &[ConversationAgentMemb
     }
     let mut parts = Vec::new();
     for m in members {
+        let label = member_label(m);
         match m.brief.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-            Some(brief) => parts.push(format!("**{}** ({brief})", m.agent)),
-            None => parts.push(format!("**{}**", m.agent)),
+            Some(brief) => parts.push(format!("**{label}** ({brief})")),
+            None => parts.push(format!("**{label}**")),
         }
     }
     format!(
@@ -173,20 +197,25 @@ mod tests {
     fn briefing_lists_teammates_and_self() {
         let members = vec![
             ConversationAgentMemberRow {
-                agent: "codex".into(),
+                bot_id: "local-rt-codex".into(),
                 brief: Some("implements features in the worktree".into()),
                 joined_at_ms: 1,
+                runtime_agent: Some("codex".into()),
+                display_name: Some("codex".into()),
             },
             ConversationAgentMemberRow {
-                agent: "claude".into(),
+                bot_id: "local-rt-claude".into(),
                 brief: Some("reviews pull requests".into()),
                 joined_at_ms: 2,
+                runtime_agent: Some("claude".into()),
+                display_name: Some("claude".into()),
             },
         ];
-        let text = format_roster_briefing("codex", &members);
+        let text = format_roster_briefing("local-rt-codex", "codex", &members);
         assert!(text.contains("You are **codex**"));
         assert!(text.contains("implements features"));
-        assert!(text.contains("**claude**: reviews pull requests"));
+        assert!(text.contains("**claude**"));
+        assert!(text.contains("reviews pull requests"));
         assert!(text.contains("list_conversation_roster"));
     }
 
@@ -202,9 +231,11 @@ mod tests {
     #[test]
     fn host_session_inject_is_marked_and_lists_roster() {
         let members = vec![ConversationAgentMemberRow {
-            agent: "claude".into(),
+            bot_id: "local-rt-claude".into(),
             brief: Some("reviews PRs".into()),
             joined_at_ms: 1,
+            runtime_agent: Some("claude".into()),
+            display_name: Some("claude".into()),
         }];
         let text = format_roster_host_session_inject(
             "codex",

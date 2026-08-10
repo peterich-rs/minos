@@ -39,26 +39,28 @@
 /// │  │   ├── project_repository  Project + session list      │
 /// │  │   ├── thread_repository   Thread event / send IO     │
 /// │  │   ├── social_repository   Social remote + cache      │
-/// │  │   ├── agent_profile_repository  Local profile store  │
+/// │  │   ├── agent_profile_repository  Device cache of bots │
 /// │  │   └── group_agent_repository  Conversation agents    │
 /// │  ├── services/           Service providers / wrappers   │
 /// │  │   ├── minos_core_service     Core service override   │
 /// │  │   ├── social_cache_store_service  SQLite provider    │
-/// │  │   └── agent_profile_store_service  JSON store        │
+/// │  │   └── agent_profile_store_service  JSON cache        │
 /// │  └── infrastructure/     Raw implementations           │
-/// │       ├── minos_core       Rust FFI bridge              │
+/// │       ├── minos_core       Rust FFI bridge (Hub CRUD)   │
 /// │       ├── secure_pairing_store  Keychain persistence    │
 /// │       ├── social_cache_store    SQLite message cache    │
-/// │       └── agent_profile_store   JSON file persistence   │
+/// │       └── agent_profile_store   Local bot draft cache   │
 /// ├─────────────────────────────────────────────────────────┤
 /// │  Domain Layer (lib/domain/)                             │
 /// │  ├── minos_core_protocol   Abstract service contract    │
 /// │  ├── active_session        Session state machine        │
 /// │  ├── auth_state            Auth lifecycle states        │
-/// │  ├── agent_profile         Agent configuration model    │
+/// │  ├── agent_profile         Bot body draft / cache model │
 /// │  ├── social_message        Chat message model           │
 /// │  ├── group_member          Group membership model       │
 /// │  └── minos_error_display   Error presentation helpers   │
+/// │  Note: Hub `agents` is bot identity SSOT; local JSON is │
+/// │  cache/draft only (global-bot-identity-design Phase 4). │
 /// └─────────────────────────────────────────────────────────┘
 /// ```
 ///

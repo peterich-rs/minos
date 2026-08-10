@@ -148,9 +148,42 @@ export interface ConversationReadResponse {
   last_read_at_ms?: number | null
 }
 
+/** Wire message author: human Account or global bot (tagged union). */
+export type MessageSender =
+  | {
+      kind: 'account'
+      account_id: string
+      minos_id: string
+      display_name: string
+    }
+  | {
+      kind: 'bot'
+      bot_id: string
+      display_name: string
+      runtime_agent?: string
+      name?: string | null
+      avatar_url?: string | null
+    }
+
+/** Human account_id when sender is Account; null for bots. */
+export function senderAccountId(sender: MessageSender): string | null {
+  return sender.kind === 'account' ? sender.account_id : null
+}
+
+/** @handle for humans (`minos_id`) or bots (`name` / `bot_id`). */
+export function senderHandle(sender: MessageSender): string {
+  if (sender.kind === 'account') return sender.minos_id
+  const name = sender.name?.trim()
+  return name && name.length > 0 ? name : sender.bot_id
+}
+
+export function senderIsMine(sender: MessageSender, accountId: string): boolean {
+  return sender.kind === 'account' && sender.account_id === accountId
+}
+
 export interface ChatMessageReplySummary {
   message_id: string
-  sender: UserSummary
+  sender: MessageSender
   text: string
   recalled_at_ms?: number | null
 }
@@ -158,13 +191,15 @@ export interface ChatMessageReplySummary {
 export interface ChatMessageSummary {
   message_id: string
   conversation_id: string
-  sender: UserSummary
+  sender: MessageSender
   text: string
   created_at_ms: number
   message_seq: number
   reply_to?: ChatMessageReplySummary | null
   recalled_at_ms?: number | null
   mentioned_account_ids?: string[]
+  mentioned_agent_ids?: string[]
+  sender_type?: 'user' | 'agent'
 }
 
 export interface ListChatMessagesResponse {

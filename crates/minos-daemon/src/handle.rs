@@ -250,6 +250,8 @@ impl DaemonHandle {
             *guard = Some(ingest_sync.clone());
         }
         agent.set_ingest_sync(ingest_sync);
+        // Mailbox completion uplink: AppendBotMessage on Host outbound channel.
+        agent.set_host_outbound(relay.outbound_sender());
 
         let local_rpc_discovery_path = local_rpc_config
             .as_ref()

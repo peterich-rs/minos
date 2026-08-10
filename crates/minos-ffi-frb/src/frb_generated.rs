@@ -39,7 +39,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1346271918;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -520281445;
 
 // Section: executor
 
@@ -1472,6 +1472,67 @@ fn wire__crate__api__minos__MobileClient_list_conversation_agents_impl(
         },
     )
 }
+fn wire__crate__api__minos__MobileClient_list_conversation_participants_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "MobileClient_list_conversation_participants",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_that = <RustOpaqueMoi<
+                flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MobileClient>,
+            >>::sse_decode(&mut deserializer);
+            let api_conversation_id = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, crate::api::minos::MinosError>(
+                    (move || async move {
+                        let mut api_that_guard = None;
+                        let decode_indices_ =
+                            flutter_rust_bridge::for_generated::lockable_compute_decode_order(
+                                vec![flutter_rust_bridge::for_generated::LockableOrderInfo::new(
+                                    &api_that, 0, false,
+                                )],
+                            );
+                        for i in decode_indices_ {
+                            match i {
+                                0 => {
+                                    api_that_guard =
+                                        Some(api_that.lockable_decode_async_ref().await)
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        let api_that_guard = api_that_guard.unwrap();
+                        let output_ok =
+                            crate::api::minos::MobileClient::list_conversation_participants(
+                                &*api_that_guard,
+                                api_conversation_id,
+                            )
+                            .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__minos__MobileClient_list_host_skills_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -2498,6 +2559,9 @@ fn wire__crate__api__minos__MobileClient_register_agent_impl(
             let api_runtime_agent = <String>::sse_decode(&mut deserializer);
             let api_model = <String>::sse_decode(&mut deserializer);
             let api_workspace_path = <Option<String>>::sse_decode(&mut deserializer);
+            let api_display_name = <Option<String>>::sse_decode(&mut deserializer);
+            let api_default_reasoning_effort = <Option<String>>::sse_decode(&mut deserializer);
+            let api_system_prompt = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::minos::MinosError>(
@@ -2526,6 +2590,9 @@ fn wire__crate__api__minos__MobileClient_register_agent_impl(
                             api_runtime_agent,
                             api_model,
                             api_workspace_path,
+                            api_display_name,
+                            api_default_reasoning_effort,
+                            api_system_prompt,
                         )
                         .await?;
                         Ok(output_ok)
@@ -3726,6 +3793,10 @@ fn wire__crate__api__minos__MobileClient_update_agent_impl(
             let api_runtime_agent = <String>::sse_decode(&mut deserializer);
             let api_model = <String>::sse_decode(&mut deserializer);
             let api_workspace_path = <Option<String>>::sse_decode(&mut deserializer);
+            let api_display_name = <Option<String>>::sse_decode(&mut deserializer);
+            let api_default_reasoning_effort = <Option<String>>::sse_decode(&mut deserializer);
+            let api_system_prompt = <Option<String>>::sse_decode(&mut deserializer);
+            let api_status = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::minos::MinosError>(
@@ -3755,6 +3826,10 @@ fn wire__crate__api__minos__MobileClient_update_agent_impl(
                             api_runtime_agent,
                             api_model,
                             api_workspace_path,
+                            api_display_name,
+                            api_default_reasoning_effort,
+                            api_system_prompt,
+                            api_status,
                         )
                         .await?;
                         Ok(output_ok)
@@ -5248,9 +5323,15 @@ const _: fn() = || {
         let _: String = AgentSummary.agent_id;
         let _: String = AgentSummary.owner_account_id;
         let _: String = AgentSummary.name;
+        let _: String = AgentSummary.display_name;
         let _: String = AgentSummary.description;
+        let _: Option<String> = AgentSummary.avatar_url;
+        let _: String = AgentSummary.source;
+        let _: String = AgentSummary.status;
         let _: String = AgentSummary.runtime_agent;
         let _: String = AgentSummary.model;
+        let _: String = AgentSummary.default_reasoning_effort;
+        let _: String = AgentSummary.system_prompt;
         let _: Option<String> = AgentSummary.workspace_path;
         let _: i64 = AgentSummary.created_at_ms;
         let _: i64 = AgentSummary.updated_at_ms;
@@ -5279,7 +5360,7 @@ const _: fn() = || {
     {
         let ChatMessageReplySummary = None::<crate::api::minos::ChatMessageReplySummary>.unwrap();
         let _: String = ChatMessageReplySummary.message_id;
-        let _: crate::api::minos::UserSummary = ChatMessageReplySummary.sender;
+        let _: crate::api::minos::MessageSender = ChatMessageReplySummary.sender;
         let _: String = ChatMessageReplySummary.text;
         let _: Option<i64> = ChatMessageReplySummary.recalled_at_ms;
     }
@@ -5287,13 +5368,14 @@ const _: fn() = || {
         let ChatMessageSummary = None::<crate::api::minos::ChatMessageSummary>.unwrap();
         let _: String = ChatMessageSummary.message_id;
         let _: String = ChatMessageSummary.conversation_id;
-        let _: crate::api::minos::UserSummary = ChatMessageSummary.sender;
+        let _: crate::api::minos::MessageSender = ChatMessageSummary.sender;
         let _: String = ChatMessageSummary.text;
         let _: i64 = ChatMessageSummary.created_at_ms;
         let _: i64 = ChatMessageSummary.message_seq;
         let _: Option<crate::api::minos::ChatMessageReplySummary> = ChatMessageSummary.reply_to;
         let _: Option<i64> = ChatMessageSummary.recalled_at_ms;
         let _: Vec<String> = ChatMessageSummary.mentioned_account_ids;
+        let _: Vec<String> = ChatMessageSummary.mentioned_agent_ids;
         let _: crate::api::minos::SenderType = ChatMessageSummary.sender_type;
         let _: Vec<crate::api::minos::ReactionGroup> = ChatMessageSummary.reactions;
         let _: Vec<crate::api::minos::ChatMessageAttachment> = ChatMessageSummary.attachments;
@@ -5315,6 +5397,12 @@ const _: fn() = || {
         let ConversationMembersResponse =
             None::<crate::api::minos::ConversationMembersResponse>.unwrap();
         let _: Vec<crate::api::minos::UserSummary> = ConversationMembersResponse.members;
+    }
+    {
+        let ConversationParticipantsResponse =
+            None::<crate::api::minos::ConversationParticipantsResponse>.unwrap();
+        let _: Vec<crate::api::minos::UserSummary> = ConversationParticipantsResponse.humans;
+        let _: Vec<crate::api::minos::AgentSummary> = ConversationParticipantsResponse.agents;
     }
     {
         let ConversationReadResponse = None::<crate::api::minos::ConversationReadResponse>.unwrap();
@@ -5477,6 +5565,30 @@ const _: fn() = || {
         let ListSessionsResponse = None::<crate::api::minos::ListSessionsResponse>.unwrap();
         let _: Vec<SessionSummary> = ListSessionsResponse.sessions;
         let _: Option<i64> = ListSessionsResponse.next_before_ts_ms;
+    }
+    match None::<crate::api::minos::MessageSender>.unwrap() {
+        crate::api::minos::MessageSender::Account {
+            account_id,
+            minos_id,
+            display_name,
+        } => {
+            let _: String = account_id;
+            let _: String = minos_id;
+            let _: String = display_name;
+        }
+        crate::api::minos::MessageSender::Bot {
+            bot_id,
+            display_name,
+            runtime_agent,
+            name,
+            avatar_url,
+        } => {
+            let _: String = bot_id;
+            let _: String = display_name;
+            let _: String = runtime_agent;
+            let _: Option<String> = name;
+            let _: Option<String> = avatar_url;
+        }
     }
     match None::<crate::api::minos::MinosError>.unwrap() {
         crate::api::minos::MinosError::BindFailed { addr, message } => {
@@ -6034,9 +6146,15 @@ impl SseDecode for crate::api::minos::AgentSummary {
         let mut var_agentId = <String>::sse_decode(deserializer);
         let mut var_ownerAccountId = <String>::sse_decode(deserializer);
         let mut var_name = <String>::sse_decode(deserializer);
+        let mut var_displayName = <String>::sse_decode(deserializer);
         let mut var_description = <String>::sse_decode(deserializer);
+        let mut var_avatarUrl = <Option<String>>::sse_decode(deserializer);
+        let mut var_source = <String>::sse_decode(deserializer);
+        let mut var_status = <String>::sse_decode(deserializer);
         let mut var_runtimeAgent = <String>::sse_decode(deserializer);
         let mut var_model = <String>::sse_decode(deserializer);
+        let mut var_defaultReasoningEffort = <String>::sse_decode(deserializer);
+        let mut var_systemPrompt = <String>::sse_decode(deserializer);
         let mut var_workspacePath = <Option<String>>::sse_decode(deserializer);
         let mut var_createdAtMs = <i64>::sse_decode(deserializer);
         let mut var_updatedAtMs = <i64>::sse_decode(deserializer);
@@ -6044,9 +6162,15 @@ impl SseDecode for crate::api::minos::AgentSummary {
             agent_id: var_agentId,
             owner_account_id: var_ownerAccountId,
             name: var_name,
+            display_name: var_displayName,
             description: var_description,
+            avatar_url: var_avatarUrl,
+            source: var_source,
+            status: var_status,
             runtime_agent: var_runtimeAgent,
             model: var_model,
+            default_reasoning_effort: var_defaultReasoningEffort,
+            system_prompt: var_systemPrompt,
             workspace_path: var_workspacePath,
             created_at_ms: var_createdAtMs,
             updated_at_ms: var_updatedAtMs,
@@ -6141,7 +6265,7 @@ impl SseDecode for crate::api::minos::ChatMessageReplySummary {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_messageId = <String>::sse_decode(deserializer);
-        let mut var_sender = <crate::api::minos::UserSummary>::sse_decode(deserializer);
+        let mut var_sender = <crate::api::minos::MessageSender>::sse_decode(deserializer);
         let mut var_text = <String>::sse_decode(deserializer);
         let mut var_recalledAtMs = <Option<i64>>::sse_decode(deserializer);
         return crate::api::minos::ChatMessageReplySummary {
@@ -6158,7 +6282,7 @@ impl SseDecode for crate::api::minos::ChatMessageSummary {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_messageId = <String>::sse_decode(deserializer);
         let mut var_conversationId = <String>::sse_decode(deserializer);
-        let mut var_sender = <crate::api::minos::UserSummary>::sse_decode(deserializer);
+        let mut var_sender = <crate::api::minos::MessageSender>::sse_decode(deserializer);
         let mut var_text = <String>::sse_decode(deserializer);
         let mut var_createdAtMs = <i64>::sse_decode(deserializer);
         let mut var_messageSeq = <i64>::sse_decode(deserializer);
@@ -6166,6 +6290,7 @@ impl SseDecode for crate::api::minos::ChatMessageSummary {
             <Option<crate::api::minos::ChatMessageReplySummary>>::sse_decode(deserializer);
         let mut var_recalledAtMs = <Option<i64>>::sse_decode(deserializer);
         let mut var_mentionedAccountIds = <Vec<String>>::sse_decode(deserializer);
+        let mut var_mentionedAgentIds = <Vec<String>>::sse_decode(deserializer);
         let mut var_senderType = <crate::api::minos::SenderType>::sse_decode(deserializer);
         let mut var_reactions = <Vec<crate::api::minos::ReactionGroup>>::sse_decode(deserializer);
         let mut var_attachments =
@@ -6180,6 +6305,7 @@ impl SseDecode for crate::api::minos::ChatMessageSummary {
             reply_to: var_replyTo,
             recalled_at_ms: var_recalledAtMs,
             mentioned_account_ids: var_mentionedAccountIds,
+            mentioned_agent_ids: var_mentionedAgentIds,
             sender_type: var_senderType,
             reactions: var_reactions,
             attachments: var_attachments,
@@ -6240,6 +6366,18 @@ impl SseDecode for crate::api::minos::ConversationMembersResponse {
         let mut var_members = <Vec<crate::api::minos::UserSummary>>::sse_decode(deserializer);
         return crate::api::minos::ConversationMembersResponse {
             members: var_members,
+        };
+    }
+}
+
+impl SseDecode for crate::api::minos::ConversationParticipantsResponse {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_humans = <Vec<crate::api::minos::UserSummary>>::sse_decode(deserializer);
+        let mut var_agents = <Vec<crate::api::minos::AgentSummary>>::sse_decode(deserializer);
+        return crate::api::minos::ConversationParticipantsResponse {
+            humans: var_humans,
+            agents: var_agents,
         };
     }
 }
@@ -7054,6 +7192,42 @@ impl SseDecode for crate::api::minos::MessageRole {
             2 => crate::api::minos::MessageRole::System,
             _ => unreachable!("Invalid variant for MessageRole: {}", inner),
         };
+    }
+}
+
+impl SseDecode for crate::api::minos::MessageSender {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut tag_ = <i32>::sse_decode(deserializer);
+        match tag_ {
+            0 => {
+                let mut var_accountId = <String>::sse_decode(deserializer);
+                let mut var_minosId = <String>::sse_decode(deserializer);
+                let mut var_displayName = <String>::sse_decode(deserializer);
+                return crate::api::minos::MessageSender::Account {
+                    account_id: var_accountId,
+                    minos_id: var_minosId,
+                    display_name: var_displayName,
+                };
+            }
+            1 => {
+                let mut var_botId = <String>::sse_decode(deserializer);
+                let mut var_displayName = <String>::sse_decode(deserializer);
+                let mut var_runtimeAgent = <String>::sse_decode(deserializer);
+                let mut var_name = <Option<String>>::sse_decode(deserializer);
+                let mut var_avatarUrl = <Option<String>>::sse_decode(deserializer);
+                return crate::api::minos::MessageSender::Bot {
+                    bot_id: var_botId,
+                    display_name: var_displayName,
+                    runtime_agent: var_runtimeAgent,
+                    name: var_name,
+                    avatar_url: var_avatarUrl,
+                };
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
     }
 }
 
@@ -8077,225 +8251,231 @@ fn pde_ffi_dispatcher_primary_impl(
             rust_vec_len,
             data_len,
         ),
-        25 => wire__crate__api__minos__MobileClient_list_host_skills_impl(
+        25 => wire__crate__api__minos__MobileClient_list_conversation_participants_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        26 => wire__crate__api__minos__MobileClient_list_host_workspaces_impl(
+        26 => wire__crate__api__minos__MobileClient_list_host_skills_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        27 => wire__crate__api__minos__MobileClient_list_paired_hosts_impl(
+        27 => wire__crate__api__minos__MobileClient_list_host_workspaces_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        28 => wire__crate__api__minos__MobileClient_list_project_sessions_impl(
+        28 => wire__crate__api__minos__MobileClient_list_paired_hosts_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        29 => wire__crate__api__minos__MobileClient_list_projects_impl(
+        29 => wire__crate__api__minos__MobileClient_list_project_sessions_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        30 => wire__crate__api__minos__MobileClient_list_sessions_impl(
+        30 => wire__crate__api__minos__MobileClient_list_projects_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        31 => wire__crate__api__minos__MobileClient_login_with_supabase_impl(
+        31 => wire__crate__api__minos__MobileClient_list_sessions_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        32 => wire__crate__api__minos__MobileClient_logout_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__minos__MobileClient_mark_conversation_read_impl(
+        32 => wire__crate__api__minos__MobileClient_login_with_supabase_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        34 => {
+        33 => wire__crate__api__minos__MobileClient_logout_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__minos__MobileClient_mark_conversation_read_impl(
+            port,
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
+        35 => {
             wire__crate__api__minos__MobileClient_my_profile_impl(port, ptr, rust_vec_len, data_len)
         }
-        39 => wire__crate__api__minos__MobileClient_persisted_pairing_state_impl(
+        40 => wire__crate__api__minos__MobileClient_persisted_pairing_state_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        40 => wire__crate__api__minos__MobileClient_read_session_impl(
+        41 => wire__crate__api__minos__MobileClient_read_session_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        41 => wire__crate__api__minos__MobileClient_recall_chat_message_impl(
+        42 => wire__crate__api__minos__MobileClient_recall_chat_message_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        42 => wire__crate__api__minos__MobileClient_refresh_session_impl(
+        43 => wire__crate__api__minos__MobileClient_refresh_session_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        43 => wire__crate__api__minos__MobileClient_register_agent_impl(
+        44 => wire__crate__api__minos__MobileClient_register_agent_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        44 => wire__crate__api__minos__MobileClient_reject_friend_request_impl(
+        45 => wire__crate__api__minos__MobileClient_reject_friend_request_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        45 => wire__crate__api__minos__MobileClient_remove_agent_from_conversation_impl(
+        46 => wire__crate__api__minos__MobileClient_remove_agent_from_conversation_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        46 => wire__crate__api__minos__MobileClient_remove_group_member_impl(
+        47 => wire__crate__api__minos__MobileClient_remove_group_member_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        47 => wire__crate__api__minos__MobileClient_respond_opencode_question_impl(
+        48 => wire__crate__api__minos__MobileClient_respond_opencode_question_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        48 => wire__crate__api__minos__MobileClient_resume_persisted_session_impl(
+        49 => wire__crate__api__minos__MobileClient_resume_persisted_session_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        49 => wire__crate__api__minos__MobileClient_search_users_impl(
+        50 => wire__crate__api__minos__MobileClient_search_users_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        50 => wire__crate__api__minos__MobileClient_send_approval_decision_impl(
+        51 => wire__crate__api__minos__MobileClient_send_approval_decision_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        51 => wire__crate__api__minos__MobileClient_send_chat_message_impl(
+        52 => wire__crate__api__minos__MobileClient_send_chat_message_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        52 => wire__crate__api__minos__MobileClient_send_user_message_impl(
+        53 => wire__crate__api__minos__MobileClient_send_user_message_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        53 => wire__crate__api__minos__MobileClient_set_active_host_impl(
+        54 => wire__crate__api__minos__MobileClient_set_active_host_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        54 => wire__crate__api__minos__MobileClient_set_minos_id_impl(
+        55 => wire__crate__api__minos__MobileClient_set_minos_id_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        55 => wire__crate__api__minos__MobileClient_subscribe_agent_session_impl(
+        56 => wire__crate__api__minos__MobileClient_subscribe_agent_session_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        56 => wire__crate__api__minos__MobileClient_subscribe_auth_state_impl(
+        57 => wire__crate__api__minos__MobileClient_subscribe_auth_state_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        57 => wire__crate__api__minos__MobileClient_subscribe_conversation_impl(
+        58 => wire__crate__api__minos__MobileClient_subscribe_conversation_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        58 => wire__crate__api__minos__MobileClient_subscribe_social_events_impl(
+        59 => wire__crate__api__minos__MobileClient_subscribe_social_events_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        59 => wire__crate__api__minos__MobileClient_subscribe_state_impl(
+        60 => wire__crate__api__minos__MobileClient_subscribe_state_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        60 => wire__crate__api__minos__MobileClient_subscribe_ui_events_impl(
+        61 => wire__crate__api__minos__MobileClient_subscribe_ui_events_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        61 => wire__crate__api__minos__MobileClient_toggle_reaction_impl(
+        62 => wire__crate__api__minos__MobileClient_toggle_reaction_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        62 => wire__crate__api__minos__MobileClient_unsubscribe_conversation_impl(
+        63 => wire__crate__api__minos__MobileClient_unsubscribe_conversation_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        63 => wire__crate__api__minos__MobileClient_update_agent_impl(
+        64 => wire__crate__api__minos__MobileClient_update_agent_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        64 => wire__crate__api__minos__MobileClient_update_project_impl(
+        65 => wire__crate__api__minos__MobileClient_update_project_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        65 => wire__crate__api__minos__MobileClient_write_host_skill_config_impl(
+        66 => wire__crate__api__minos__MobileClient_write_host_skill_config_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        90 => wire__crate__api__minos__init_logging_impl(port, ptr, rust_vec_len, data_len),
-        94 => {
+        91 => wire__crate__api__minos__init_logging_impl(port, ptr, rust_vec_len, data_len),
+        95 => {
             wire__crate__api__minos__subscribe_log_records_impl(port, ptr, rust_vec_len, data_len)
         }
-        95 => wire__crate__api__minos__subscribe_request_traces_impl(
+        96 => wire__crate__api__minos__subscribe_request_traces_impl(
             port,
             ptr,
             rust_vec_len,
@@ -8314,137 +8494,137 @@ fn pde_ffi_dispatcher_sync_impl(
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
         12 => wire__crate__api__minos__MobileClient_current_state_impl(ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__minos__MobileClient_new_impl(ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__minos__MobileClient_new_with_persisted_state_impl(
+        36 => wire__crate__api__minos__MobileClient_new_impl(ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__minos__MobileClient_new_with_persisted_state_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        37 => wire__crate__api__minos__MobileClient_notify_backgrounded_impl(
+        38 => wire__crate__api__minos__MobileClient_notify_backgrounded_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        38 => wire__crate__api__minos__MobileClient_notify_foregrounded_impl(
+        39 => wire__crate__api__minos__MobileClient_notify_foregrounded_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        66 => wire__crate__api__minos__SessionSummary_auto_accessor_get_agent_impl(
+        67 => wire__crate__api__minos__SessionSummary_auto_accessor_get_agent_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        67 => wire__crate__api__minos__SessionSummary_auto_accessor_get_end_reason_impl(
+        68 => wire__crate__api__minos__SessionSummary_auto_accessor_get_end_reason_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        68 => wire__crate__api__minos__SessionSummary_auto_accessor_get_ended_at_ms_impl(
+        69 => wire__crate__api__minos__SessionSummary_auto_accessor_get_ended_at_ms_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        69 => wire__crate__api__minos__SessionSummary_auto_accessor_get_first_ts_ms_impl(
+        70 => wire__crate__api__minos__SessionSummary_auto_accessor_get_first_ts_ms_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        70 => wire__crate__api__minos__SessionSummary_auto_accessor_get_last_ts_ms_impl(
+        71 => wire__crate__api__minos__SessionSummary_auto_accessor_get_last_ts_ms_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        71 => wire__crate__api__minos__SessionSummary_auto_accessor_get_message_count_impl(
+        72 => wire__crate__api__minos__SessionSummary_auto_accessor_get_message_count_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        72 => wire__crate__api__minos__SessionSummary_auto_accessor_get_needs_continue_impl(
+        73 => wire__crate__api__minos__SessionSummary_auto_accessor_get_needs_continue_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        73 => wire__crate__api__minos__SessionSummary_auto_accessor_get_parent_session_id_impl(
+        74 => wire__crate__api__minos__SessionSummary_auto_accessor_get_parent_session_id_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        74 => wire__crate__api__minos__SessionSummary_auto_accessor_get_session_id_impl(
+        75 => wire__crate__api__minos__SessionSummary_auto_accessor_get_session_id_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        75 => wire__crate__api__minos__SessionSummary_auto_accessor_get_state_impl(
+        76 => wire__crate__api__minos__SessionSummary_auto_accessor_get_state_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        76 => wire__crate__api__minos__SessionSummary_auto_accessor_get_title_impl(
+        77 => wire__crate__api__minos__SessionSummary_auto_accessor_get_title_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        77 => wire__crate__api__minos__SessionSummary_auto_accessor_set_agent_impl(
+        78 => wire__crate__api__minos__SessionSummary_auto_accessor_set_agent_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        78 => wire__crate__api__minos__SessionSummary_auto_accessor_set_end_reason_impl(
+        79 => wire__crate__api__minos__SessionSummary_auto_accessor_set_end_reason_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        79 => wire__crate__api__minos__SessionSummary_auto_accessor_set_ended_at_ms_impl(
+        80 => wire__crate__api__minos__SessionSummary_auto_accessor_set_ended_at_ms_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        80 => wire__crate__api__minos__SessionSummary_auto_accessor_set_first_ts_ms_impl(
+        81 => wire__crate__api__minos__SessionSummary_auto_accessor_set_first_ts_ms_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        81 => wire__crate__api__minos__SessionSummary_auto_accessor_set_last_ts_ms_impl(
+        82 => wire__crate__api__minos__SessionSummary_auto_accessor_set_last_ts_ms_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        82 => wire__crate__api__minos__SessionSummary_auto_accessor_set_message_count_impl(
+        83 => wire__crate__api__minos__SessionSummary_auto_accessor_set_message_count_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        83 => wire__crate__api__minos__SessionSummary_auto_accessor_set_needs_continue_impl(
+        84 => wire__crate__api__minos__SessionSummary_auto_accessor_set_needs_continue_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        84 => wire__crate__api__minos__SessionSummary_auto_accessor_set_parent_session_id_impl(
+        85 => wire__crate__api__minos__SessionSummary_auto_accessor_set_parent_session_id_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        85 => wire__crate__api__minos__SessionSummary_auto_accessor_set_session_id_impl(
+        86 => wire__crate__api__minos__SessionSummary_auto_accessor_set_session_id_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        86 => wire__crate__api__minos__SessionSummary_auto_accessor_set_state_impl(
+        87 => wire__crate__api__minos__SessionSummary_auto_accessor_set_state_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        87 => wire__crate__api__minos__SessionSummary_auto_accessor_set_title_impl(
+        88 => wire__crate__api__minos__SessionSummary_auto_accessor_set_title_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        88 => wire__crate__api__minos__clear_request_traces_impl(ptr, rust_vec_len, data_len),
-        89 => wire__crate__api__minos__emit_log_impl(ptr, rust_vec_len, data_len),
-        91 => wire__crate__api__minos__kind_message_impl(ptr, rust_vec_len, data_len),
-        92 => wire__crate__api__minos__recent_log_records_impl(ptr, rust_vec_len, data_len),
-        93 => wire__crate__api__minos__recent_request_traces_impl(ptr, rust_vec_len, data_len),
+        89 => wire__crate__api__minos__clear_request_traces_impl(ptr, rust_vec_len, data_len),
+        90 => wire__crate__api__minos__emit_log_impl(ptr, rust_vec_len, data_len),
+        92 => wire__crate__api__minos__kind_message_impl(ptr, rust_vec_len, data_len),
+        93 => wire__crate__api__minos__recent_log_records_impl(ptr, rust_vec_len, data_len),
+        94 => wire__crate__api__minos__recent_request_traces_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -8612,9 +8792,15 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::AgentSummar
             self.0.agent_id.into_into_dart().into_dart(),
             self.0.owner_account_id.into_into_dart().into_dart(),
             self.0.name.into_into_dart().into_dart(),
+            self.0.display_name.into_into_dart().into_dart(),
             self.0.description.into_into_dart().into_dart(),
+            self.0.avatar_url.into_into_dart().into_dart(),
+            self.0.source.into_into_dart().into_dart(),
+            self.0.status.into_into_dart().into_dart(),
             self.0.runtime_agent.into_into_dart().into_dart(),
             self.0.model.into_into_dart().into_dart(),
+            self.0.default_reasoning_effort.into_into_dart().into_dart(),
+            self.0.system_prompt.into_into_dart().into_dart(),
             self.0.workspace_path.into_into_dart().into_dart(),
             self.0.created_at_ms.into_into_dart().into_dart(),
             self.0.updated_at_ms.into_into_dart().into_dart(),
@@ -8767,6 +8953,7 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::ChatMessage
             self.0.reply_to.into_into_dart().into_dart(),
             self.0.recalled_at_ms.into_into_dart().into_dart(),
             self.0.mentioned_account_ids.into_into_dart().into_dart(),
+            self.0.mentioned_agent_ids.into_into_dart().into_dart(),
             self.0.sender_type.into_into_dart().into_dart(),
             self.0.reactions.into_into_dart().into_dart(),
             self.0.attachments.into_into_dart().into_dart(),
@@ -8868,6 +9055,31 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::Conversatio
     for crate::api::minos::ConversationMembersResponse
 {
     fn into_into_dart(self) -> FrbWrapper<crate::api::minos::ConversationMembersResponse> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart
+    for FrbWrapper<crate::api::minos::ConversationParticipantsResponse>
+{
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.0.humans.into_into_dart().into_dart(),
+            self.0.agents.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::ConversationParticipantsResponse>
+{
+}
+impl
+    flutter_rust_bridge::IntoIntoDart<
+        FrbWrapper<crate::api::minos::ConversationParticipantsResponse>,
+    > for crate::api::minos::ConversationParticipantsResponse
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::ConversationParticipantsResponse> {
         self.into()
     }
 }
@@ -9597,6 +9809,53 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::MessageRole
     for crate::api::minos::MessageRole
 {
     fn into_into_dart(self) -> FrbWrapper<crate::api::minos::MessageRole> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::MessageSender> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self.0 {
+            crate::api::minos::MessageSender::Account {
+                account_id,
+                minos_id,
+                display_name,
+            } => [
+                0.into_dart(),
+                account_id.into_into_dart().into_dart(),
+                minos_id.into_into_dart().into_dart(),
+                display_name.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::minos::MessageSender::Bot {
+                bot_id,
+                display_name,
+                runtime_agent,
+                name,
+                avatar_url,
+            } => [
+                1.into_dart(),
+                bot_id.into_into_dart().into_dart(),
+                display_name.into_into_dart().into_dart(),
+                runtime_agent.into_into_dart().into_dart(),
+                name.into_into_dart().into_dart(),
+                avatar_url.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            _ => {
+                unimplemented!("");
+            }
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::MessageSender>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::MessageSender>>
+    for crate::api::minos::MessageSender
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::MessageSender> {
         self.into()
     }
 }
@@ -10589,9 +10848,15 @@ impl SseEncode for crate::api::minos::AgentSummary {
         <String>::sse_encode(self.agent_id, serializer);
         <String>::sse_encode(self.owner_account_id, serializer);
         <String>::sse_encode(self.name, serializer);
+        <String>::sse_encode(self.display_name, serializer);
         <String>::sse_encode(self.description, serializer);
+        <Option<String>>::sse_encode(self.avatar_url, serializer);
+        <String>::sse_encode(self.source, serializer);
+        <String>::sse_encode(self.status, serializer);
         <String>::sse_encode(self.runtime_agent, serializer);
         <String>::sse_encode(self.model, serializer);
+        <String>::sse_encode(self.default_reasoning_effort, serializer);
+        <String>::sse_encode(self.system_prompt, serializer);
         <Option<String>>::sse_encode(self.workspace_path, serializer);
         <i64>::sse_encode(self.created_at_ms, serializer);
         <i64>::sse_encode(self.updated_at_ms, serializer);
@@ -10664,7 +10929,7 @@ impl SseEncode for crate::api::minos::ChatMessageReplySummary {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.message_id, serializer);
-        <crate::api::minos::UserSummary>::sse_encode(self.sender, serializer);
+        <crate::api::minos::MessageSender>::sse_encode(self.sender, serializer);
         <String>::sse_encode(self.text, serializer);
         <Option<i64>>::sse_encode(self.recalled_at_ms, serializer);
     }
@@ -10675,13 +10940,14 @@ impl SseEncode for crate::api::minos::ChatMessageSummary {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.message_id, serializer);
         <String>::sse_encode(self.conversation_id, serializer);
-        <crate::api::minos::UserSummary>::sse_encode(self.sender, serializer);
+        <crate::api::minos::MessageSender>::sse_encode(self.sender, serializer);
         <String>::sse_encode(self.text, serializer);
         <i64>::sse_encode(self.created_at_ms, serializer);
         <i64>::sse_encode(self.message_seq, serializer);
         <Option<crate::api::minos::ChatMessageReplySummary>>::sse_encode(self.reply_to, serializer);
         <Option<i64>>::sse_encode(self.recalled_at_ms, serializer);
         <Vec<String>>::sse_encode(self.mentioned_account_ids, serializer);
+        <Vec<String>>::sse_encode(self.mentioned_agent_ids, serializer);
         <crate::api::minos::SenderType>::sse_encode(self.sender_type, serializer);
         <Vec<crate::api::minos::ReactionGroup>>::sse_encode(self.reactions, serializer);
         <Vec<crate::api::minos::ChatMessageAttachment>>::sse_encode(self.attachments, serializer);
@@ -10739,6 +11005,14 @@ impl SseEncode for crate::api::minos::ConversationMembersResponse {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <Vec<crate::api::minos::UserSummary>>::sse_encode(self.members, serializer);
+    }
+}
+
+impl SseEncode for crate::api::minos::ConversationParticipantsResponse {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <Vec<crate::api::minos::UserSummary>>::sse_encode(self.humans, serializer);
+        <Vec<crate::api::minos::AgentSummary>>::sse_encode(self.agents, serializer);
     }
 }
 
@@ -11371,6 +11645,41 @@ impl SseEncode for crate::api::minos::MessageRole {
             },
             serializer,
         );
+    }
+}
+
+impl SseEncode for crate::api::minos::MessageSender {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        match self {
+            crate::api::minos::MessageSender::Account {
+                account_id,
+                minos_id,
+                display_name,
+            } => {
+                <i32>::sse_encode(0, serializer);
+                <String>::sse_encode(account_id, serializer);
+                <String>::sse_encode(minos_id, serializer);
+                <String>::sse_encode(display_name, serializer);
+            }
+            crate::api::minos::MessageSender::Bot {
+                bot_id,
+                display_name,
+                runtime_agent,
+                name,
+                avatar_url,
+            } => {
+                <i32>::sse_encode(1, serializer);
+                <String>::sse_encode(bot_id, serializer);
+                <String>::sse_encode(display_name, serializer);
+                <String>::sse_encode(runtime_agent, serializer);
+                <Option<String>>::sse_encode(name, serializer);
+                <Option<String>>::sse_encode(avatar_url, serializer);
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
     }
 }
 

@@ -38,9 +38,16 @@ export function isHubImMode(input: {
   );
 }
 
-/** Infer runtime bin from hub agent display / id map. */
+/** Infer runtime bin from hub agent display / id map (fallback only). */
 export function runtimeFromHubAgent(message: HubChatMessage): AgentRuntime | undefined {
   if (message.senderType !== "agent") return undefined;
+  // Prefer wire MessageSender.runtime_agent (badge field, not identity).
+  if (message.runtimeAgent) {
+    const fromWire = normalizeHostRuntime(message.runtimeAgent);
+    if (fromWire && (RUNTIMES as string[]).includes(fromWire)) {
+      return fromWire as AgentRuntime;
+    }
+  }
   const name = `${message.senderDisplayName} ${message.senderMinosId}`.toLowerCase();
   for (const r of RUNTIMES) {
     if (name.includes(r)) return r;
@@ -60,8 +67,9 @@ export function hubChatMessageToTimeline(
   const text = message.text?.trim();
   if (!text) return null;
 
+  const isAgent = message.senderType === "agent";
   let agent: AgentRuntime | undefined;
-  if (message.senderType === "agent") {
+  if (isAgent) {
     const mapped = opts?.agentRuntimeMap?.get(message.senderAccountId);
     const fromMap = mapped ? normalizeHostRuntime(mapped) : null;
     agent = (fromMap as AgentRuntime | null) ?? runtimeFromHubAgent(message);
@@ -82,10 +90,30 @@ export function hubChatMessageToTimeline(
           })),
         }));
 
+  const mentions = [
+    ...(message.mentionedAccountIds ?? []).map((id) => ({
+      kind: "account" as const,
+      targetId: id,
+    })),
+    ...(message.mentionedAgentIds ?? []).map((id) => {
+      const runtime = opts?.agentRuntimeMap?.get(id);
+      return {
+        kind: "agent" as const,
+        targetId: id,
+        agent: runtime,
+      };
+    }),
+  ];
+
+  const displayName = message.senderDisplayName?.trim() || undefined;
+
   return {
     id: message.messageId,
-    role: message.senderType === "agent" ? "agent" : "user",
+    role: isAgent ? "agent" : "user",
     agent,
+    // Bot identity presentation: display name + global bot id from MessageSender.
+    senderDisplayName: displayName,
+    botId: isAgent ? message.senderAccountId : undefined,
     body: text,
     time: formatLocalClock(message.createdAtMs),
     createdAtMs: message.createdAtMs,
@@ -98,6 +126,7 @@ export function hubChatMessageToTimeline(
     replyToMessageId: message.replyToMessageId ?? undefined,
     deliveryStatus: "sent",
     reactions,
+    mentions: mentions.length > 0 ? mentions : undefined,
   };
 }
 

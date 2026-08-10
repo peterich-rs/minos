@@ -149,6 +149,10 @@ abstract class MobileClient implements RustOpaqueInterface {
     required String conversationId,
   });
 
+  Future<ConversationParticipantsResponse> listConversationParticipants({
+    required String conversationId,
+  });
+
   /// Scan host-side skills for the selected runtime host.
   Future<ListHostSkillsResponse> listHostSkills({
     String? hostDeviceId,
@@ -236,6 +240,9 @@ abstract class MobileClient implements RustOpaqueInterface {
     required String runtimeAgent,
     required String model,
     String? workspacePath,
+    String? displayName,
+    String? defaultReasoningEffort,
+    String? systemPrompt,
   });
 
   Future<FriendRequestSummary> rejectFriendRequest({required String requestId});
@@ -333,6 +340,10 @@ abstract class MobileClient implements RustOpaqueInterface {
     required String runtimeAgent,
     required String model,
     String? workspacePath,
+    String? displayName,
+    String? defaultReasoningEffort,
+    String? systemPrompt,
+    String? status,
   });
 
   /// Update a project's name.
@@ -513,9 +524,15 @@ class AgentSummary {
   final String agentId;
   final String ownerAccountId;
   final String name;
+  final String displayName;
   final String description;
+  final String? avatarUrl;
+  final String source;
+  final String status;
   final String runtimeAgent;
   final String model;
+  final String defaultReasoningEffort;
+  final String systemPrompt;
   final String? workspacePath;
   final PlatformInt64 createdAtMs;
   final PlatformInt64 updatedAtMs;
@@ -524,9 +541,15 @@ class AgentSummary {
     required this.agentId,
     required this.ownerAccountId,
     required this.name,
+    required this.displayName,
     required this.description,
+    this.avatarUrl,
+    required this.source,
+    required this.status,
     required this.runtimeAgent,
     required this.model,
+    required this.defaultReasoningEffort,
+    required this.systemPrompt,
     this.workspacePath,
     required this.createdAtMs,
     required this.updatedAtMs,
@@ -537,9 +560,15 @@ class AgentSummary {
       agentId.hashCode ^
       ownerAccountId.hashCode ^
       name.hashCode ^
+      displayName.hashCode ^
       description.hashCode ^
+      avatarUrl.hashCode ^
+      source.hashCode ^
+      status.hashCode ^
       runtimeAgent.hashCode ^
       model.hashCode ^
+      defaultReasoningEffort.hashCode ^
+      systemPrompt.hashCode ^
       workspacePath.hashCode ^
       createdAtMs.hashCode ^
       updatedAtMs.hashCode;
@@ -552,9 +581,15 @@ class AgentSummary {
           agentId == other.agentId &&
           ownerAccountId == other.ownerAccountId &&
           name == other.name &&
+          displayName == other.displayName &&
           description == other.description &&
+          avatarUrl == other.avatarUrl &&
+          source == other.source &&
+          status == other.status &&
           runtimeAgent == other.runtimeAgent &&
           model == other.model &&
+          defaultReasoningEffort == other.defaultReasoningEffort &&
+          systemPrompt == other.systemPrompt &&
           workspacePath == other.workspacePath &&
           createdAtMs == other.createdAtMs &&
           updatedAtMs == other.updatedAtMs;
@@ -663,7 +698,7 @@ class ChatMessageAttachment {
 
 class ChatMessageReplySummary {
   final String messageId;
-  final UserSummary sender;
+  final MessageSender sender;
   final String text;
   final PlatformInt64? recalledAtMs;
 
@@ -695,13 +730,14 @@ class ChatMessageReplySummary {
 class ChatMessageSummary {
   final String messageId;
   final String conversationId;
-  final UserSummary sender;
+  final MessageSender sender;
   final String text;
   final PlatformInt64 createdAtMs;
   final PlatformInt64 messageSeq;
   final ChatMessageReplySummary? replyTo;
   final PlatformInt64? recalledAtMs;
   final List<String> mentionedAccountIds;
+  final List<String> mentionedAgentIds;
   final SenderType senderType;
   final List<ReactionGroup> reactions;
   final List<ChatMessageAttachment> attachments;
@@ -716,6 +752,7 @@ class ChatMessageSummary {
     this.replyTo,
     this.recalledAtMs,
     required this.mentionedAccountIds,
+    required this.mentionedAgentIds,
     required this.senderType,
     required this.reactions,
     required this.attachments,
@@ -732,6 +769,7 @@ class ChatMessageSummary {
       replyTo.hashCode ^
       recalledAtMs.hashCode ^
       mentionedAccountIds.hashCode ^
+      mentionedAgentIds.hashCode ^
       senderType.hashCode ^
       reactions.hashCode ^
       attachments.hashCode;
@@ -750,6 +788,7 @@ class ChatMessageSummary {
           replyTo == other.replyTo &&
           recalledAtMs == other.recalledAtMs &&
           mentionedAccountIds == other.mentionedAccountIds &&
+          mentionedAgentIds == other.mentionedAgentIds &&
           senderType == other.senderType &&
           reactions == other.reactions &&
           attachments == other.attachments;
@@ -798,6 +837,27 @@ class ConversationMembersResponse {
       other is ConversationMembersResponse &&
           runtimeType == other.runtimeType &&
           members == other.members;
+}
+
+class ConversationParticipantsResponse {
+  final List<UserSummary> humans;
+  final List<AgentSummary> agents;
+
+  const ConversationParticipantsResponse({
+    required this.humans,
+    required this.agents,
+  });
+
+  @override
+  int get hashCode => humans.hashCode ^ agents.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConversationParticipantsResponse &&
+          runtimeType == other.runtimeType &&
+          humans == other.humans &&
+          agents == other.agents;
 }
 
 class ConversationReadResponse {
@@ -1475,6 +1535,24 @@ class LogRecord {
 }
 
 enum MessageRole { user, assistant, system }
+
+@freezed
+sealed class MessageSender with _$MessageSender {
+  const MessageSender._();
+
+  const factory MessageSender.account({
+    required String accountId,
+    required String minosId,
+    required String displayName,
+  }) = MessageSender_Account;
+  const factory MessageSender.bot({
+    required String botId,
+    required String displayName,
+    required String runtimeAgent,
+    String? name,
+    String? avatarUrl,
+  }) = MessageSender_Bot;
+}
 
 @freezed
 sealed class MinosError with _$MinosError implements FrbException {

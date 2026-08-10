@@ -5,13 +5,12 @@
 //!
 //!   1. stays `Unpaired` without dialing realtime until a host installation
 //!      token exists;
-//!   2. validates that token via `POST /v1/host/installations/self`;
-//!   3. fetches a short-lived ws-ticket via `POST /v1/host/realtime/ws-ticket`;
-//!   4. opens a WSS handshake to `/ws/host?ticket=…` (no custom headers);
-//!   5. receives `ServerFrame` messages from the topic-based realtime gateway;
-//!   6. dispatches `DurableEvent::HostCommandIssued` to the local
-//!      [`RpcServerImpl`] and pushes `ClientFrame::HostCommandResult` back;
-//!   7. routes host ingest ack/pull frames for the daemon sync worker.
+//!   2. opens a WSS handshake to `/ws/host` with `Authorization: Bearer hit_*`
+//!      (Phase 2.5 Host Bearer; no host ws-ticket);
+//!   3. receives `ServerFrame` messages from the topic-based realtime gateway;
+//!   4. consumes `BotInboxDelivery` / still handles `HostCommandIssued` for
+//!      CLI start adapters;
+//!   5. routes host ingest ack/pull frames for the daemon sync worker.
 //!
 //! Pairing QR issuance, redeem polling, and `forget_peer` go through the
 //! backend's HTTP `/v1/*` control plane on a separate [`RelayHttpClient`]
@@ -19,10 +18,10 @@
 //!
 //! # Error handling
 //!
-//! - A missing host installation token is the normal unpaired state. No
-//!   ws-ticket call is attempted until pairing redeem persists a token.
-//! - HTTP 401 / WS close code `4401` clears the stale token and returns the
-//!   relay to the unpaired wait state.
+//! - A missing host installation token is the normal unpaired state.
+//! - Explicit token invalid/revoked (HTTP 401 with clear invalid token body,
+//!   or WS close `4401` auth_revoked) clears the local `hit_` and returns to
+//!   unpaired wait. Transient upgrade failures reconnect without clearing.
 //! - WS close code `4400` (malformed frame) records
 //!   `MinosError::EnvelopeVersionUnsupported` but reconnects.
 //! - All other errors fall back to exponential-backoff reconnect
@@ -34,13 +33,17 @@ use std::time::{Duration, Instant};
 
 use chrono::{TimeZone, Utc};
 use futures_util::{SinkExt, StreamExt};
+use http::{header::AUTHORIZATION, HeaderValue, Request as HttpRequest};
 use minos_domain::{DeviceId, DeviceSecret, MinosError, PeerState, RelayLinkState};
-use minos_protocol::realtime::{ClientFrame, ServerFrame, PRESENCE_STREAM_KIND};
+use minos_protocol::realtime::{
+    BotLaunchSnapshot, ClientFrame, ServerFrame, SessionBinding, PRESENCE_STREAM_KIND,
+};
 use minos_protocol::HostPeerSummary;
 use minos_transport::backoff::delay_for_attempt;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, watch, Mutex, Notify};
 use tokio::task::JoinHandle;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message};
 use tokio_tungstenite::tungstenite::Error as WsError;
 
@@ -59,9 +62,17 @@ const BACKFILL_OUTBOUND_QUEUE_DEPTH: usize = 16;
 const RELAY_PING_INTERVAL: Duration = Duration::from_secs(30);
 const RELAY_PONG_TIMEOUT: Duration = Duration::from_secs(45);
 const HOST_COMMAND_RESULT_CACHE_CAPACITY: usize = 512;
+const DELIVERY_DEDUPE_CAPACITY: usize = 1024;
 const TOKEN_WAIT_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 type HostCommandCache = Arc<Mutex<HashMap<String, HostCommandCacheEntry>>>;
+type DeliveryDedupeCache = Arc<Mutex<HashMap<String, DeliveryDedupeEntry>>>;
+
+#[derive(Clone)]
+enum DeliveryDedupeEntry {
+    InFlight,
+    Completed { accepted: bool },
+}
 
 #[derive(Clone)]
 enum HostCommandCacheEntry {
@@ -157,6 +168,7 @@ impl RelayClient {
             mpsc::channel::<ClientFrame>(BACKFILL_OUTBOUND_QUEUE_DEPTH);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let host_command_cache = Arc::new(Mutex::new(HashMap::new()));
+        let delivery_dedupe = Arc::new(Mutex::new(HashMap::new()));
 
         let secret_store = Arc::new(StdMutex::new(secret));
         let secret_notify = Arc::new(Notify::new());
@@ -194,6 +206,7 @@ impl RelayClient {
             live_rx,
             backfill_rx,
             host_command_cache,
+            delivery_dedupe,
             http: http.clone(),
             rpc_server,
             peer_store: peer_store.clone(),
@@ -374,6 +387,8 @@ struct DispatchCtx {
     live_rx: mpsc::Receiver<ClientFrame>,
     backfill_rx: mpsc::Receiver<ClientFrame>,
     host_command_cache: HostCommandCache,
+    /// Dedupe BotInboxDelivery by delivery_id (at-least-once fanout).
+    delivery_dedupe: DeliveryDedupeCache,
     http: Arc<RelayHttpClient>,
     rpc_server: Option<Arc<RpcServerImpl>>,
     peer_store: Arc<StdMutex<Option<PeerRecord>>>,
@@ -430,7 +445,7 @@ async fn run_dispatch(mut ctx: DispatchCtx, mut shutdown_rx: oneshot::Receiver<(
                 tracing::info!(
                     target: "minos_daemon::relay_client",
                     backend_url = %ctx.backend_url,
-                    "no host installation token available; realtime ws-ticket fetch is disabled until pairing redeem completes"
+                    "no host installation token available; /ws/host Bearer dial is disabled until pairing redeem completes"
                 );
                 logged_missing_token = true;
             }
@@ -490,57 +505,25 @@ async fn run_once(
     shutdown_rx: &mut oneshot::Receiver<()>,
     secret: &DeviceSecret,
 ) -> CycleOutcome {
-    match ctx.http.get_host_peers(secret).await {
-        Ok(peers) => apply_peers_snapshot(ctx, peers),
-        Err(e) if is_auth_error(&e) => {
-            tracing::warn!(
-                target: "minos_daemon::relay_client",
-                error = %e,
-                "host installation token rejected by self endpoint; re-pairing required"
-            );
-            store_last_error(&ctx.last_error, e);
-            return CycleOutcome::TokenRejected;
-        }
-        Err(e) => {
-            tracing::warn!(
-                target: "minos_daemon::relay_client",
-                error = %e,
-                "failed to validate host installation before realtime connect"
-            );
-            store_last_error(&ctx.last_error, e);
-            return CycleOutcome::Reconnect;
-        }
-    }
-
-    // Fetch a short-lived ws-ticket from the backend.
-    let ticket = match ctx.http.fetch_host_ws_ticket(secret).await {
-        Ok(resp) => resp.ticket,
-        Err(e) if is_auth_error(&e) => {
-            tracing::warn!(
-                target: "minos_daemon::relay_client",
-                error = %e,
-                "host installation token rejected while fetching ws-ticket; re-pairing required"
-            );
-            store_last_error(&ctx.last_error, e);
-            return CycleOutcome::TokenRejected;
-        }
+    // Phase 2.5: dial /ws/host with Authorization: Bearer hit_* (no ticket dance).
+    let ws_url = build_host_ws_url(&ctx.backend_url);
+    let request = match build_host_ws_request(&ws_url, secret) {
+        Ok(req) => req,
         Err(e) => {
             tracing::error!(
                 target: "minos_daemon::relay_client",
                 error = %e,
-                "failed to fetch host ws-ticket; will reconnect with backoff"
+                "failed to build host websocket request"
             );
             store_last_error(&ctx.last_error, e);
             return CycleOutcome::Reconnect;
         }
     };
 
-    let ws_url = build_ws_url(&ctx.backend_url, &ticket);
-
     let ws = tokio::select! {
         biased;
         _ = &mut *shutdown_rx => return CycleOutcome::Shutdown,
-        res = tokio_tungstenite::connect_async(&ws_url) => match res {
+        res = tokio_tungstenite::connect_async(request) => match res {
             Ok((stream, _resp)) => stream,
             Err(WsError::Http(resp)) if resp.status().as_u16() == 401 => {
                 let body = resp
@@ -553,13 +536,30 @@ async fn run_once(
                 let message = body.unwrap_or_else(|| {
                     "relay handshake returned HTTP 401".into()
                 });
+                // Only clear hit_ when the backend explicitly says the token is
+                // invalid/revoked/missing — not on every transient 401 race.
+                if is_explicit_token_invalid_message(&message) {
+                    tracing::warn!(
+                        target: "minos_daemon::relay_client",
+                        %message,
+                        "host installation token rejected on /ws/host; re-pairing required"
+                    );
+                    store_last_error(
+                        &ctx.last_error,
+                        MinosError::Unauthorized { reason: message },
+                    );
+                    return CycleOutcome::TokenRejected;
+                }
                 tracing::warn!(
                     target: "minos_daemon::relay_client",
                     %message,
-                    "relay handshake returned HTTP 401; clearing host installation token"
+                    "relay handshake returned HTTP 401 without explicit token-invalid; reconnecting without clearing hit_"
                 );
-                store_last_error(&ctx.last_error, MinosError::Unauthorized { reason: message });
-                return CycleOutcome::TokenRejected;
+                store_last_error(
+                    &ctx.last_error,
+                    MinosError::Unauthorized { reason: message },
+                );
+                return CycleOutcome::Reconnect;
             }
             Err(e) => {
                 tracing::warn!(
@@ -572,7 +572,7 @@ async fn run_once(
         }
     };
 
-    tracing::info!(target: "minos_daemon::relay_client", "relay websocket upgraded");
+    tracing::info!(target: "minos_daemon::relay_client", "relay websocket upgraded via host bearer");
     refresh_peers_from_backend(ctx, Some(secret)).await;
 
     Box::pin(dispatch_loop(ws, ctx, shutdown_rx)).await
@@ -689,7 +689,7 @@ async fn dispatch_loop(
             frame = stream.next() => {
                 match frame {
                     Some(Ok(Message::Text(text))) => {
-                        if let Err(e) = handle_inbound_text(&text, ctx).await {
+                        if let Err(e) = Box::pin(handle_inbound_text(&text, ctx)).await {
                             tracing::warn!(
                                 target: "minos_daemon::relay_client",
                                 error = %e,
@@ -789,7 +789,7 @@ where
 /// Parse an inbound text frame as a `ServerFrame` and route it.
 async fn handle_inbound_text(text: &str, ctx: &DispatchCtx) -> Result<(), serde_json::Error> {
     let frame: ServerFrame = serde_json::from_str(text)?;
-    route_server_frame(frame, ctx).await;
+    Box::pin(route_server_frame(frame, ctx)).await;
     Ok(())
 }
 
@@ -917,6 +917,41 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
                 close_code,
                 "server force-closed the connection"
             );
+        }
+        ServerFrame::BotInboxDelivery {
+            delivery_id,
+            conversation_id,
+            message,
+            bot,
+            session,
+            lease_expires_at_ms,
+        } => {
+            Box::pin(handle_bot_inbox_delivery(
+                ctx,
+                delivery_id,
+                conversation_id,
+                message,
+                bot,
+                session,
+                lease_expires_at_ms,
+            ))
+            .await;
+        }
+        ServerFrame::CancelDelivery { delivery_id } => {
+            tracing::info!(
+                target: "minos_daemon::relay_client",
+                delivery_id,
+                "received CancelDelivery; marking delivery cancelled if known"
+            );
+            let mut entries = ctx.delivery_dedupe.lock().await;
+            entries.insert(
+                delivery_id,
+                DeliveryDedupeEntry::Completed { accepted: false },
+            );
+            prune_delivery_dedupe(&mut entries);
+        }
+        ServerFrame::ChatSendAck { .. } | ServerFrame::ChatSendNack { .. } => {
+            // Account-only frames; ignore on host rail.
         }
         ServerFrame::StreamEvent {
             kind,
@@ -1155,11 +1190,12 @@ fn classify_close(frame: Option<CloseFrame>, ctx: &DispatchCtx) -> CycleOutcome 
         .filter(|s| !s.is_empty());
     match code {
         Some(4401) => {
+            // Explicit auth revocation from gateway (token invalid / role changed).
             tracing::warn!(
                 target: "minos_daemon::relay_client",
                 code = 4401,
                 ?reason,
-                "relay closed socket with 4401; clearing host installation token"
+                "relay closed socket with 4401 auth_revoked; clearing host installation token"
             );
             store_last_error(
                 &ctx.last_error,
@@ -1198,13 +1234,6 @@ fn store_last_error(slot: &Arc<StdMutex<Option<MinosError>>>, err: MinosError) {
     if let Ok(mut guard) = slot.lock() {
         *guard = Some(err);
     }
-}
-
-fn is_auth_error(error: &MinosError) -> bool {
-    matches!(
-        error,
-        MinosError::Unauthorized { .. } | MinosError::DeviceNotTrusted { .. }
-    )
 }
 
 fn secret_snapshot(slot: &Arc<StdMutex<Option<DeviceSecret>>>) -> Option<DeviceSecret> {
@@ -1272,11 +1301,296 @@ fn build_host_command_result(
     }
 }
 
+// ─── Bot mailbox consumer ──────────────────────────────────────────────
+
+async fn handle_bot_inbox_delivery(
+    ctx: &DispatchCtx,
+    delivery_id: String,
+    conversation_id: String,
+    message: minos_protocol::ChatMessageSummary,
+    bot: BotLaunchSnapshot,
+    session: SessionBinding,
+    lease_expires_at_ms: i64,
+) {
+    tracing::info!(
+        target: "minos_daemon::relay_client",
+        delivery_id = %delivery_id,
+        conversation_id = %conversation_id,
+        bot_id = %bot.bot_id,
+        lease_expires_at_ms,
+        "received BotInboxDelivery"
+    );
+
+    match remember_delivery_start(&ctx.delivery_dedupe, &delivery_id).await {
+        DeliveryRouteAction::Start => {}
+        DeliveryRouteAction::InFlight => {
+            tracing::debug!(
+                target: "minos_daemon::relay_client",
+                delivery_id = %delivery_id,
+                "BotInboxDelivery already in-flight; ignoring duplicate"
+            );
+            return;
+        }
+        DeliveryRouteAction::ReplayAccepted => {
+            let _ = ctx
+                .out_tx
+                .send(ClientFrame::DeliveryAccepted {
+                    delivery_id: delivery_id.clone(),
+                })
+                .await;
+            return;
+        }
+        DeliveryRouteAction::ReplayRejected => {
+            let _ = ctx
+                .out_tx
+                .send(ClientFrame::DeliveryRejected {
+                    delivery_id: delivery_id.clone(),
+                    code: "already_rejected".into(),
+                    detail: "delivery previously rejected".into(),
+                })
+                .await;
+            return;
+        }
+    }
+
+    let Some(rpc_server) = ctx.rpc_server.clone() else {
+        tracing::warn!(
+            target: "minos_daemon::relay_client",
+            delivery_id = %delivery_id,
+            "no rpc_server wired — rejecting BotInboxDelivery"
+        );
+        remember_delivery_result(&ctx.delivery_dedupe, &delivery_id, false).await;
+        let _ = ctx
+            .out_tx
+            .send(ClientFrame::DeliveryRejected {
+                delivery_id,
+                code: "host_not_ready".into(),
+                detail: "rpc_server not wired".into(),
+            })
+            .await;
+        return;
+    };
+
+    // P0: inject first; only then DeliveryAccepted. Accept-before-inject races
+    // with Hub state and poisons dedupe on transient failure.
+    let origin_message_id = message.message_id.clone();
+    let text = message.text.clone();
+    let inject = inject_mailbox_delivery(
+        &rpc_server,
+        &delivery_id,
+        &conversation_id,
+        &bot,
+        &session,
+        &text,
+        &origin_message_id,
+    )
+    .await;
+    match inject {
+        Ok(()) => {
+            remember_delivery_result(&ctx.delivery_dedupe, &delivery_id, true).await;
+            tracing::info!(
+                target: "minos_daemon::relay_client",
+                delivery_id = %delivery_id,
+                "BotInboxDelivery injected into local session"
+            );
+            let _ = ctx
+                .out_tx
+                .send(ClientFrame::DeliveryAccepted {
+                    delivery_id: delivery_id.clone(),
+                })
+                .await;
+        }
+        Err((code, detail)) => {
+            // Retryable inject failure: do not cache as final Completed{false}
+            // so Hub requeue can redeliver. Drop InFlight marker only.
+            {
+                let mut entries = ctx.delivery_dedupe.lock().await;
+                entries.remove(&delivery_id);
+            }
+            tracing::warn!(
+                target: "minos_daemon::relay_client",
+                delivery_id = %delivery_id,
+                code = %code,
+                detail = %detail,
+                "BotInboxDelivery inject failed"
+            );
+            let _ = ctx
+                .out_tx
+                .send(ClientFrame::DeliveryRejected {
+                    delivery_id,
+                    code,
+                    detail,
+                })
+                .await;
+        }
+    }
+}
+
+async fn inject_mailbox_delivery(
+    rpc_server: &Arc<RpcServerImpl>,
+    delivery_id: &str,
+    conversation_id: &str,
+    bot: &BotLaunchSnapshot,
+    session: &SessionBinding,
+    text: &str,
+    origin_message_id: &str,
+) -> Result<(), (String, String)> {
+    // P0: Hub is SSOT for session_id — must honor SessionBinding.session_id.
+    // Never invent a second mailbox-* formula on the host.
+    let session_id = session
+        .session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            (
+                "missing_session".into(),
+                "Hub SessionBinding.session_id is required".into(),
+            )
+        })?;
+
+    if session.create_if_missing {
+        // Cold start with Hub-assigned canonical session id.
+        let workspace = bot
+            .workspace_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("");
+        let system_prompt = bot.system_prompt.trim();
+        let mut params = serde_json::json!({
+            "session_id": session_id,
+            "agent_id": bot.bot_id,
+            "bot_id": bot.bot_id,
+            "runtime_agent": bot.runtime_agent,
+            "workspace": workspace,
+            "initial_user_message": text,
+            "origin_message_id": origin_message_id,
+            "conversation_id": conversation_id,
+            "model": bot.model,
+            "reasoning_effort": bot.default_reasoning_effort,
+            "delivery_id": delivery_id,
+        });
+        if !system_prompt.is_empty() {
+            params["system_prompt"] = serde_json::json!(system_prompt);
+            params["instructions"] = serde_json::json!(system_prompt);
+        }
+        invoke_host_command("agent_session.start", params, rpc_server)
+            .await
+            .map(|_| ())
+            .map_err(|err| {
+                (
+                    "start_failed".into(),
+                    err.to_string().chars().take(500).collect(),
+                )
+            })
+    } else {
+        let params = serde_json::json!({
+            "session_id": session_id,
+            "text": text,
+            "origin_message_id": origin_message_id,
+            "delivery_id": delivery_id,
+            "bot_id": bot.bot_id,
+        });
+        invoke_host_command("agent_session.send_input", params, rpc_server)
+            .await
+            .map(|_| ())
+            .map_err(|err| {
+                (
+                    "send_input_failed".into(),
+                    err.to_string().chars().take(500).collect(),
+                )
+            })
+    }
+}
+
+enum DeliveryRouteAction {
+    Start,
+    InFlight,
+    ReplayAccepted,
+    ReplayRejected,
+}
+
+async fn remember_delivery_start(
+    cache: &DeliveryDedupeCache,
+    delivery_id: &str,
+) -> DeliveryRouteAction {
+    if delivery_id.is_empty() {
+        return DeliveryRouteAction::Start;
+    }
+    let mut entries = cache.lock().await;
+    match entries.get(delivery_id).cloned() {
+        Some(DeliveryDedupeEntry::InFlight) => DeliveryRouteAction::InFlight,
+        Some(DeliveryDedupeEntry::Completed { accepted: true }) => {
+            DeliveryRouteAction::ReplayAccepted
+        }
+        Some(DeliveryDedupeEntry::Completed { accepted: false }) => {
+            DeliveryRouteAction::ReplayRejected
+        }
+        None => {
+            entries.insert(delivery_id.to_string(), DeliveryDedupeEntry::InFlight);
+            prune_delivery_dedupe(&mut entries);
+            DeliveryRouteAction::Start
+        }
+    }
+}
+
+async fn remember_delivery_result(cache: &DeliveryDedupeCache, delivery_id: &str, accepted: bool) {
+    if delivery_id.is_empty() {
+        return;
+    }
+    let mut entries = cache.lock().await;
+    entries.insert(
+        delivery_id.to_string(),
+        DeliveryDedupeEntry::Completed { accepted },
+    );
+    prune_delivery_dedupe(&mut entries);
+}
+
+fn prune_delivery_dedupe(entries: &mut HashMap<String, DeliveryDedupeEntry>) {
+    while entries.len() > DELIVERY_DEDUPE_CAPACITY {
+        let Some(key) = entries.iter().find_map(|(id, entry)| {
+            matches!(entry, DeliveryDedupeEntry::Completed { .. }).then(|| id.clone())
+        }) else {
+            break;
+        };
+        entries.remove(&key);
+    }
+}
+
 // ─── URL helpers ───────────────────────────────────────────────────────
 
-fn build_ws_url(base_url: &str, ticket: &str) -> String {
+fn build_host_ws_url(base_url: &str) -> String {
     let ws_url = websocket_base(base_url);
-    format!("{ws_url}/ws/host?ticket={ticket}")
+    format!("{ws_url}/ws/host")
+}
+
+fn build_host_ws_request(
+    ws_url: &str,
+    secret: &DeviceSecret,
+) -> Result<HttpRequest<()>, MinosError> {
+    let mut request =
+        ws_url
+            .into_client_request()
+            .map_err(|error| MinosError::BackendInternal {
+                message: format!("invalid host websocket url: {error}"),
+            })?;
+    let auth = format!("Bearer {}", secret.as_str());
+    let value = HeaderValue::from_str(&auth).map_err(|error| MinosError::BackendInternal {
+        message: format!("invalid host bearer header: {error}"),
+    })?;
+    request.headers_mut().insert(AUTHORIZATION, value);
+    Ok(request)
+}
+
+fn is_explicit_token_invalid_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("invalid host installation token")
+        || lower.contains("missing host installation token")
+        || lower.contains("token revoked")
+        || lower.contains("revoked")
+        || lower == "invalid"
 }
 
 fn websocket_base(base_url: &str) -> String {
@@ -1301,26 +1615,51 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn build_ws_url_ws() {
+    fn build_host_ws_url_ws() {
         assert_eq!(
-            build_ws_url("ws://127.0.0.1:8787", "ticket-abc"),
-            "ws://127.0.0.1:8787/ws/host?ticket=ticket-abc"
+            build_host_ws_url("ws://127.0.0.1:8787"),
+            "ws://127.0.0.1:8787/ws/host"
         );
     }
 
     #[test]
-    fn build_ws_url_wss() {
+    fn build_host_ws_url_wss() {
         assert_eq!(
-            build_ws_url("wss://example.com", "ticket-xyz"),
-            "wss://example.com/ws/host?ticket=ticket-xyz"
+            build_host_ws_url("wss://example.com"),
+            "wss://example.com/ws/host"
         );
     }
 
     #[test]
-    fn build_ws_url_strips_legacy_devices_path() {
+    fn build_host_ws_url_strips_legacy_devices_path() {
         assert_eq!(
-            build_ws_url("ws://127.0.0.1:8787/devices", "ticket-abc"),
-            "ws://127.0.0.1:8787/ws/host?ticket=ticket-abc"
+            build_host_ws_url("ws://127.0.0.1:8787/devices"),
+            "ws://127.0.0.1:8787/ws/host"
         );
+    }
+
+    #[test]
+    fn explicit_token_invalid_detects_host_auth_messages() {
+        assert!(is_explicit_token_invalid_message(
+            "invalid host installation token"
+        ));
+        assert!(is_explicit_token_invalid_message(
+            "missing host installation token"
+        ));
+        assert!(!is_explicit_token_invalid_message(
+            "relay handshake returned HTTP 401"
+        ));
+    }
+
+    #[test]
+    fn build_host_ws_request_sets_authorization_bearer() {
+        let secret = DeviceSecret("hit_testtoken123".into());
+        let req = build_host_ws_request("ws://127.0.0.1:8787/ws/host", &secret).unwrap();
+        let auth = req
+            .headers()
+            .get(AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .expect("Authorization header");
+        assert_eq!(auth, "Bearer hit_testtoken123");
     }
 }

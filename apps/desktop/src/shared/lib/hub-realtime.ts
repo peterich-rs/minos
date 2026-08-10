@@ -36,6 +36,21 @@ export type HubRealtimeSyncState =
   | "live"
   | "error";
 
+/** Result of waiting for ChatSendAck/Nack after AppendMessage. */
+export type AppendMessageWsResult =
+  | {
+      ok: true;
+      messageId: string;
+      messageSeq: number;
+      conversationId: string;
+    }
+  | {
+      ok: false;
+      reason: "socket" | "timeout" | "nack";
+      code?: string;
+      message?: string;
+    };
+
 type DurableMessagePayload = {
   kind?: string;
   account_id?: string;
@@ -60,12 +75,18 @@ type DurableMessagePayload = {
     message_seq?: number;
     sender_type?: string;
     sender: {
-      account_id: string;
-      minos_id: string;
-      display_name: string;
+      kind?: string;
+      account_id?: string;
+      minos_id?: string;
+      display_name?: string;
+      bot_id?: string;
+      runtime_agent?: string;
+      name?: string | null;
     };
     reply_to?: { message_id: string } | null;
     recalled_at_ms?: number | null;
+    mentioned_account_ids?: string[] | null;
+    mentioned_agent_ids?: string[] | null;
   };
 };
 
@@ -108,6 +129,20 @@ export type HubRealtimeHandlers = {
       }>;
     }>;
   }) => void;
+  /** Hub committed AppendMessage (WS write path). */
+  onChatSendAck?: (input: {
+    clientOperationId: string;
+    conversationId: string;
+    messageId: string;
+    messageSeq: number;
+  }) => void;
+  /** Hub rejected AppendMessage (validation / membership / …). */
+  onChatSendNack?: (input: {
+    clientOperationId: string;
+    conversationId: string;
+    code: string;
+    message: string;
+  }) => void;
   onConnectionChange?: (state: HubRealtimeSyncState) => void;
   /**
    * Cursor too old for topic — clear projection for conversation topics and
@@ -133,18 +168,41 @@ export type HubRealtimeHandlers = {
 function mapMessage(
   raw: NonNullable<DurableMessagePayload["message"]>,
 ): HubChatMessage {
+  const s = raw.sender;
+  const isBot =
+    s.kind === "bot" ||
+    raw.sender_type === "agent" ||
+    Boolean(s.bot_id && !s.account_id);
+  const botId = (s.bot_id ?? s.account_id ?? "").trim();
+  const accountId = (s.account_id ?? "").trim();
   return {
     messageId: raw.message_id,
     conversationId: raw.conversation_id,
     text: raw.text,
     createdAtMs: raw.created_at_ms,
     messageSeq: raw.message_seq,
-    senderType: raw.sender_type === "agent" ? "agent" : "user",
-    senderAccountId: raw.sender.account_id,
-    senderMinosId: raw.sender.minos_id,
-    senderDisplayName: raw.sender.display_name,
+    senderType: isBot ? "agent" : "user",
+    // For bots, identity is bot_id (stored in senderAccountId field for less UI churn).
+    senderAccountId: isBot ? botId : accountId,
+    senderMinosId: isBot
+      ? (s.name?.trim() || botId)
+      : (s.minos_id ?? "").trim(),
+    senderDisplayName: (s.display_name ?? "").trim(),
+    runtimeAgent: isBot
+      ? (s.runtime_agent?.trim() || undefined)
+      : undefined,
     replyToMessageId: raw.reply_to?.message_id ?? null,
     recalledAtMs: raw.recalled_at_ms ?? null,
+    mentionedAccountIds: Array.isArray(raw.mentioned_account_ids)
+      ? raw.mentioned_account_ids.filter(
+          (id): id is string => typeof id === "string" && id.length > 0,
+        )
+      : undefined,
+    mentionedAgentIds: Array.isArray(raw.mentioned_agent_ids)
+      ? raw.mentioned_agent_ids.filter(
+          (id): id is string => typeof id === "string" && id.length > 0,
+        )
+      : undefined,
   };
 }
 
@@ -232,6 +290,17 @@ export class HubRealtimeSession {
   private cursors: TopicCursorMap = loadTopicCursors();
   /** Topics we still expect SubscribeAck for after a Subscribe batch. */
   private pendingSubscribeTopics = new Set<string>();
+  /**
+   * Waiters for ChatSendAck/Nack keyed by client_operation_id.
+   * Outbox must not mark success on mere WS send.
+   */
+  private appendWaiters = new Map<
+    string,
+    {
+      resolve: (result: AppendMessageWsResult) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
 
   constructor(handlers: HubRealtimeHandlers) {
     this.handlers = handlers;
@@ -239,6 +308,104 @@ export class HubRealtimeSession {
 
   get state(): HubRealtimeSyncState {
     return this.syncState;
+  }
+
+  /**
+   * Account → Hub collaboration write when `/ws/client` is live.
+   * Resolves only after ChatSendAck/Nack (or timeout). Caller should REST
+   * fallback on `{ok:false, reason:"socket"|"timeout"}` — not on nack alone
+   * when the op was definitively rejected (avoids double-send).
+   */
+  sendAppendMessage(
+    input: {
+      clientOperationId: string;
+      conversationId: string;
+      text: string;
+      replyToMessageId?: string | null;
+    },
+    opts?: { timeoutMs?: number },
+  ): Promise<AppendMessageWsResult> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return Promise.resolve({ ok: false, reason: "socket" });
+    }
+    if (this.syncState !== "live" && this.syncState !== "syncing") {
+      return Promise.resolve({ ok: false, reason: "socket" });
+    }
+    const client_operation_id = input.clientOperationId?.trim();
+    const conversation_id = input.conversationId?.trim();
+    if (!client_operation_id || !conversation_id) {
+      return Promise.resolve({ ok: false, reason: "socket" });
+    }
+    // Already waiting on this op — share the same promise outcome via a new waiter
+    // only if none exists; otherwise treat as socket miss so REST can confirm.
+    if (this.appendWaiters.has(client_operation_id)) {
+      return Promise.resolve({ ok: false, reason: "socket" });
+    }
+    const frame: Record<string, unknown> = {
+      type: "append_message",
+      client_operation_id,
+      conversation_id,
+      text: input.text ?? "",
+    };
+    const reply = input.replyToMessageId?.trim();
+    if (reply) {
+      frame.reply_to_message_id = reply;
+    }
+    const timeoutMs = opts?.timeoutMs ?? 8_000;
+    return new Promise<AppendMessageWsResult>((resolve) => {
+      const timer = setTimeout(() => {
+        this.appendWaiters.delete(client_operation_id);
+        resolve({ ok: false, reason: "timeout" });
+      }, timeoutMs);
+      this.appendWaiters.set(client_operation_id, { resolve, timer });
+      try {
+        this.ws!.send(JSON.stringify(frame));
+      } catch {
+        clearTimeout(timer);
+        this.appendWaiters.delete(client_operation_id);
+        resolve({ ok: false, reason: "socket" });
+      }
+    });
+  }
+
+  /**
+   * Fire-and-forget helper kept for non-outbox callers. Prefer sendAppendMessage
+   * when success must wait for ChatSendAck.
+   */
+  trySendAppendMessage(input: {
+    clientOperationId: string;
+    conversationId: string;
+    text: string;
+    replyToMessageId?: string | null;
+  }): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+    if (this.syncState !== "live" && this.syncState !== "syncing") return false;
+    const client_operation_id = input.clientOperationId?.trim();
+    const conversation_id = input.conversationId?.trim();
+    if (!client_operation_id || !conversation_id) return false;
+    const frame: Record<string, unknown> = {
+      type: "append_message",
+      client_operation_id,
+      conversation_id,
+      text: input.text ?? "",
+    };
+    const reply = input.replyToMessageId?.trim();
+    if (reply) {
+      frame.reply_to_message_id = reply;
+    }
+    this.ws.send(JSON.stringify(frame));
+    return true;
+  }
+
+  private settleAppendWaiter(
+    clientOperationId: string,
+    result: AppendMessageWsResult,
+  ): void {
+    const waiter = this.appendWaiters.get(clientOperationId);
+    if (!waiter) return;
+    clearTimeout(waiter.timer);
+    this.appendWaiters.delete(clientOperationId);
+    waiter.resolve(result);
   }
 
   start(deviceId: string, accessToken: string, accountId?: string): void {
@@ -574,6 +741,62 @@ export class HubRealtimeSession {
     }
 
     if (type === "pong") {
+      return;
+    }
+
+    if (type === "chat_send_ack" || type === "ChatSendAck") {
+      const clientOperationId = String(
+        (frame as { client_operation_id?: string }).client_operation_id ?? "",
+      ).trim();
+      const conversationId = String(
+        (frame as { conversation_id?: string }).conversation_id ?? "",
+      ).trim();
+      const messageId = String(
+        (frame as { message_id?: string }).message_id ?? "",
+      ).trim();
+      const messageSeq = Number(
+        (frame as { message_seq?: number }).message_seq ?? 0,
+      );
+      if (clientOperationId) {
+        this.settleAppendWaiter(clientOperationId, {
+          ok: true,
+          messageId,
+          messageSeq,
+          conversationId,
+        });
+        this.handlers.onChatSendAck?.({
+          clientOperationId,
+          conversationId,
+          messageId,
+          messageSeq,
+        });
+      }
+      return;
+    }
+
+    if (type === "chat_send_nack" || type === "ChatSendNack") {
+      const clientOperationId = String(
+        (frame as { client_operation_id?: string }).client_operation_id ?? "",
+      ).trim();
+      const conversationId = String(
+        (frame as { conversation_id?: string }).conversation_id ?? "",
+      ).trim();
+      const code = String((frame as { code?: string }).code ?? "nack");
+      const message = String((frame as { message?: string }).message ?? "");
+      if (clientOperationId) {
+        this.settleAppendWaiter(clientOperationId, {
+          ok: false,
+          reason: "nack",
+          code,
+          message,
+        });
+        this.handlers.onChatSendNack?.({
+          clientOperationId,
+          conversationId,
+          code,
+          message,
+        });
+      }
       return;
     }
 

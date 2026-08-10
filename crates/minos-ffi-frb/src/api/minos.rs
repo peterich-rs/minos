@@ -42,16 +42,17 @@ pub use minos_domain::{
 pub use minos_protocol::{
     AgentSummary, AuthSummary, ChatMessageAttachment, ChatMessageReplySummary, ChatMessageSummary,
     CloseReason, ConversationAgentMembersResponse, ConversationKind, ConversationMembersResponse,
-    ConversationReadResponse, ConversationResponse, ConversationSummary, ConversationsResponse,
-    CreateProjectRequest, CreateProjectResponse, DeleteProjectRequest, FriendRequestStatus,
-    FriendRequestSummary, FriendRequestsResponse, FriendSummary, FriendsResponse, HostSkillError,
-    HostSkillSummary, HostSkillsEntry, HostSummary, HostWorkspaceSummary, ListAgentsResponse,
-    ListChatMessagesResponse, ListHostSkillsResponse, ListHostWorkspacesResponse,
-    ListProjectSessionsParams, ListProjectSessionsResponse, ListProjectsResponse,
-    ListSessionsParams, ListSessionsResponse, MyProfileResponse, PauseReason, ProjectSummary,
-    ReactionActor, ReactionGroup, ReadSessionParams, ReadSessionResponse, SearchUsersResponse,
-    SenderType, SessionState, SessionSummary, StartAgentResponse, ToggleReactionResponse,
-    UpdateProjectRequest, UserSummary, WriteHostSkillConfigResponse,
+    ConversationParticipantsResponse, ConversationReadResponse, ConversationResponse,
+    ConversationSummary, ConversationsResponse, CreateProjectRequest, CreateProjectResponse,
+    DeleteProjectRequest, FriendRequestStatus, FriendRequestSummary, FriendRequestsResponse,
+    FriendSummary, FriendsResponse, HostSkillError, HostSkillSummary, HostSkillsEntry, HostSummary,
+    HostWorkspaceSummary, ListAgentsResponse, ListChatMessagesResponse, ListHostSkillsResponse,
+    ListHostWorkspacesResponse, ListProjectSessionsParams, ListProjectSessionsResponse,
+    ListProjectsResponse, ListSessionsParams, ListSessionsResponse, MessageSender,
+    MyProfileResponse, PauseReason, ProjectSummary, ReactionActor, ReactionGroup,
+    ReadSessionParams, ReadSessionResponse, SearchUsersResponse, SenderType, SessionState,
+    SessionSummary, StartAgentResponse, ToggleReactionResponse, UpdateProjectRequest, UserSummary,
+    WriteHostSkillConfigResponse,
 };
 pub use minos_ui_protocol::{
     ArtifactRef, DisplayPayload, MessageRole, SessionEndReason, SubagentStatus, UiEventMessage,
@@ -305,9 +306,21 @@ impl MobileClient {
         runtime_agent: String,
         model: String,
         workspace_path: Option<String>,
+        display_name: Option<String>,
+        default_reasoning_effort: Option<String>,
+        system_prompt: Option<String>,
     ) -> Result<AgentSummary, MinosError> {
         self.0
-            .register_agent(name, description, runtime_agent, model, workspace_path)
+            .register_agent(
+                name,
+                description,
+                runtime_agent,
+                model,
+                workspace_path,
+                display_name,
+                default_reasoning_effort,
+                system_prompt,
+            )
             .await
     }
 
@@ -319,6 +332,10 @@ impl MobileClient {
         runtime_agent: String,
         model: String,
         workspace_path: Option<String>,
+        display_name: Option<String>,
+        default_reasoning_effort: Option<String>,
+        system_prompt: Option<String>,
+        status: Option<String>,
     ) -> Result<AgentSummary, MinosError> {
         self.0
             .update_agent(
@@ -328,6 +345,10 @@ impl MobileClient {
                 runtime_agent,
                 model,
                 workspace_path,
+                display_name,
+                default_reasoning_effort,
+                system_prompt,
+                status,
             )
             .await
     }
@@ -418,6 +439,13 @@ impl MobileClient {
         conversation_id: String,
     ) -> Result<ConversationAgentMembersResponse, MinosError> {
         self.0.list_conversation_agents(conversation_id).await
+    }
+
+    pub async fn list_conversation_participants(
+        &self,
+        conversation_id: String,
+    ) -> Result<ConversationParticipantsResponse, MinosError> {
+        self.0.list_conversation_participants(conversation_id).await
     }
 
     pub async fn add_agent_to_conversation(
@@ -1537,9 +1565,15 @@ pub struct _AgentSummary {
     pub agent_id: String,
     pub owner_account_id: String,
     pub name: String,
+    pub display_name: String,
     pub description: String,
+    pub avatar_url: Option<String>,
+    pub source: String,
+    pub status: String,
     pub runtime_agent: String,
     pub model: String,
+    pub default_reasoning_effort: String,
+    pub system_prompt: String,
     pub workspace_path: Option<String>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
@@ -1558,6 +1592,13 @@ pub struct _ConversationAgentMembersResponse {
 }
 
 #[allow(dead_code)]
+#[frb(mirror(ConversationParticipantsResponse))]
+pub struct _ConversationParticipantsResponse {
+    pub humans: Vec<UserSummary>,
+    pub agents: Vec<AgentSummary>,
+}
+
+#[allow(dead_code)]
 #[frb(mirror(ConversationReadResponse))]
 pub struct _ConversationReadResponse {
     pub last_read_seq: Option<i64>,
@@ -1565,10 +1606,27 @@ pub struct _ConversationReadResponse {
 }
 
 #[allow(dead_code)]
+#[frb(mirror(MessageSender))]
+pub enum _MessageSender {
+    Account {
+        account_id: String,
+        minos_id: String,
+        display_name: String,
+    },
+    Bot {
+        bot_id: String,
+        display_name: String,
+        runtime_agent: String,
+        name: Option<String>,
+        avatar_url: Option<String>,
+    },
+}
+
+#[allow(dead_code)]
 #[frb(mirror(ChatMessageReplySummary))]
 pub struct _ChatMessageReplySummary {
     pub message_id: String,
-    pub sender: UserSummary,
+    pub sender: MessageSender,
     pub text: String,
     pub recalled_at_ms: Option<i64>,
 }
@@ -1614,13 +1672,14 @@ pub struct _ChatMessageAttachment {
 pub struct _ChatMessageSummary {
     pub message_id: String,
     pub conversation_id: String,
-    pub sender: UserSummary,
+    pub sender: MessageSender,
     pub text: String,
     pub created_at_ms: i64,
     pub message_seq: i64,
     pub reply_to: Option<ChatMessageReplySummary>,
     pub recalled_at_ms: Option<i64>,
     pub mentioned_account_ids: Vec<String>,
+    pub mentioned_agent_ids: Vec<String>,
     pub sender_type: SenderType,
     pub reactions: Vec<ReactionGroup>,
     pub attachments: Vec<ChatMessageAttachment>,

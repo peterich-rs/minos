@@ -133,35 +133,34 @@ async fn issue_client_ws_ticket(
         .ticket)
 }
 
-async fn issue_host_ws_ticket(relay: &Relay, host_id: DeviceId) -> anyhow::Result<String> {
-    Ok(relay
-        .auth
-        .issue_host_ws_ticket(host_id)
-        .await
-        .map_err(|error| anyhow::anyhow!("issue_host_ws_ticket failed: {error:?}"))?
-        .ticket)
-}
-
 async fn connect_client(
     relay: &Relay,
     device_id: DeviceId,
     role: DeviceRole,
     account_id: Option<&str>,
 ) -> anyhow::Result<WsClient> {
-    let ticket = if role.is_account_client() {
+    if role.is_account_client() {
         let acct = account_id.expect("account client connect requires an account_id");
-        issue_client_ws_ticket(relay, acct, device_id, role).await?
-    } else {
-        issue_host_ws_ticket(relay, device_id).await?
-    };
-    let url: Uri = format!(
-        "ws://{}{}?ticket={ticket}",
-        relay.addr,
-        gateway_path_for_role(role)
-    )
-    .parse()
-    .unwrap();
-    let (ws, _resp) = tokio_tungstenite::connect_async(url.to_string()).await?;
+        let ticket = issue_client_ws_ticket(relay, acct, device_id, role).await?;
+        let url: Uri = format!(
+            "ws://{}{}?ticket={ticket}",
+            relay.addr,
+            gateway_path_for_role(role)
+        )
+        .parse()
+        .unwrap();
+        let (ws, _resp) = tokio_tungstenite::connect_async(url.to_string()).await?;
+        return Ok(ws);
+    }
+    // Host: Bearer hit_* only.
+    let hit = store::test_support::issue_test_host_token(&relay.pool, device_id, 0).await;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let url = format!("ws://{}/ws/host", relay.addr);
+    let mut request = url.into_client_request()?;
+    request
+        .headers_mut()
+        .insert("authorization", format!("Bearer {hit}").parse()?);
+    let (ws, _resp) = tokio_tungstenite::connect_async(request).await?;
     Ok(ws)
 }
 

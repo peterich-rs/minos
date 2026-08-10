@@ -504,6 +504,48 @@ pub mod test_support {
         .unwrap();
     }
 
+    /// Issue a plaintext `hit_*` host installation token for tests and store its hash.
+    /// Returns the bearer token string (including `hit_` prefix).
+    pub async fn issue_test_host_token(
+        pool: &impl crate::store::AsStorePool,
+        host_id: DeviceId,
+        now: i64,
+    ) -> String {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine;
+        let mut bytes = [0_u8; 24];
+        getrandom::fill(&mut bytes).expect("OS CSPRNG");
+        let token = format!("hit_{}", URL_SAFE_NO_PAD.encode(bytes));
+        let token_hash = crate::host_link::sha256_hex(&token);
+        match pool.as_store_pool() {
+            crate::store::StorePoolRef::Sqlite(p) => {
+                let mut tx = p.begin().await.unwrap();
+                crate::store::host_installation_tokens::insert_token_with_executor(
+                    &mut *tx,
+                    &token_hash,
+                    host_id,
+                    now,
+                )
+                .await
+                .unwrap();
+                tx.commit().await.unwrap();
+            }
+            crate::store::StorePoolRef::Postgres(p) => {
+                let mut tx = p.begin().await.unwrap();
+                crate::store::host_installation_tokens::insert_token_with_postgres_executor(
+                    &mut *tx,
+                    &token_hash,
+                    host_id,
+                    now,
+                )
+                .await
+                .unwrap();
+                tx.commit().await.unwrap();
+            }
+        }
+        token
+    }
+
     /// Strict host fixture with a generated id.
     pub async fn insert_test_host_new(
         pool: &impl crate::store::AsStorePool,

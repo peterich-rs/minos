@@ -94,13 +94,8 @@ async fn issue_client_ws_ticket(
         .ticket)
 }
 
-async fn issue_host_ws_ticket(relay: &Relay, host_id: DeviceId) -> anyhow::Result<String> {
-    Ok(relay
-        .auth
-        .issue_host_ws_ticket(host_id)
-        .await
-        .map_err(|error| anyhow::anyhow!("issue_host_ws_ticket failed: {error:?}"))?
-        .ticket)
+async fn issue_host_bearer(relay: &Relay, host_id: DeviceId) -> anyhow::Result<String> {
+    Ok(store::test_support::issue_test_host_token(&relay.pool, host_id, 0).await)
 }
 
 async fn connect_client(relay: &Relay, path: &str, ticket: &str) -> anyhow::Result<WsClient> {
@@ -108,6 +103,21 @@ async fn connect_client(relay: &Relay, path: &str, ticket: &str) -> anyhow::Resu
         .parse()
         .unwrap();
     let (ws, _resp) = tokio_tungstenite::connect_async(url.to_string()).await?;
+    Ok(ws)
+}
+
+/// Host `/ws/host` uses Authorization: Bearer hit_* (no ticket query).
+async fn connect_host_bearer(relay: &Relay, hit_token: &str) -> anyhow::Result<WsClient> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let url = format!("ws://{}/ws/host", relay.addr);
+    let mut request = url.into_client_request()?;
+    request.headers_mut().insert(
+        "authorization",
+        format!("Bearer {hit_token}")
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid authorization header value: {e}"))?,
+    );
+    let (ws, _resp) = tokio_tungstenite::connect_async(request).await?;
     Ok(ws)
 }
 
@@ -165,6 +175,24 @@ async fn seed_host(relay: &Relay) -> anyhow::Result<DeviceId> {
     Ok(host_id)
 }
 
+/// Register a real Hub bot (global identity) for session starts.
+/// Product paths reject virtual aliases (`agent_codex`); integration tests must
+/// use a real `agents.agent_id` (see global-bot-identity-design).
+async fn seed_hub_bot(relay: &Relay, owner_account_id: &str) -> anyhow::Result<String> {
+    let agent = store::social::register_agent(
+        &relay.pool,
+        owner_account_id,
+        "ws-gateway-codex",
+        "ws gateway test bot",
+        "codex",
+        "gpt-5",
+        None,
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await?;
+    Ok(agent.agent_id)
+}
+
 async fn seed_session(
     relay: &Relay,
     account_id: &str,
@@ -173,13 +201,23 @@ async fn seed_session(
     client_request_id: &str,
     initial_user_message: Option<&str>,
 ) -> anyhow::Result<minos_backend::agent_sessions::StartAgentSessionOutput> {
+    let agent_id = seed_hub_bot(relay, account_id).await?;
+    // Membership-first: session start for a conversation-scoped bot requires roster.
+    let _ = store::social::add_agent_to_conversation(
+        &relay.pool,
+        conversation_id,
+        &agent_id,
+        account_id,
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await;
     relay
         .state
         .agent_sessions
         .start(StartAgentSessionInput {
             conversation_id: conversation_id.to_string(),
             project_id: None,
-            agent_id: "agent_codex".into(),
+            agent_id,
             host_installation_id: Some(host_id.to_string()),
             workspace_path: None,
             initial_user_message: initial_user_message.map(str::to_string),
@@ -536,8 +574,8 @@ async fn host_handshake_stays_quiet_after_hello_without_legacy_checkpoint_frames
     let relay = spawn_relay().await?;
     let host_id = seed_host(&relay).await?;
     seed_host_durable_events(&relay, host_id, 5).await?;
-    let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
-    let mut ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
+    let host_token = issue_host_bearer(&relay, host_id).await?;
+    let mut ws = connect_host_bearer(&relay, &host_token).await?;
 
     match recv_server_frame(&mut ws).await? {
         ServerFrame::Hello { .. } => {}
@@ -817,6 +855,7 @@ async fn account_topic_delivers_social_message_payloads() -> anyhow::Result<()> 
             minos_protocol::MessageSource::ClientLive,
             None,
             &[],
+            &[],
         )
         .await?;
     minos_backend::http::v1::social::fan_out_social_message(&relay.state, &message).await;
@@ -868,8 +907,8 @@ async fn host_replays_durable_command_and_accepts_ack_result() -> anyhow::Result
     )
     .await?;
 
-    let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
-    let mut ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
+    let host_token = issue_host_bearer(&relay, host_id).await?;
+    let mut ws = connect_host_bearer(&relay, &host_token).await?;
 
     match recv_server_frame(&mut ws).await? {
         ServerFrame::Hello { .. } => {}
@@ -996,8 +1035,8 @@ async fn dispatch_json_issues_durable_host_command_and_returns_result() -> anyho
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
-    let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
-    let mut ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
+    let host_token = issue_host_bearer(&relay, host_id).await?;
+    let mut ws = connect_host_bearer(&relay, &host_token).await?;
 
     match recv_server_frame(&mut ws).await? {
         ServerFrame::Hello { .. } => {}
@@ -1121,8 +1160,8 @@ async fn host_stream_event_persists_slice_and_fanouts_to_subscribed_client() -> 
         other => panic!("expected DurableEvent replay, got {other:?}"),
     }
 
-    let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
-    let mut host_ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
+    let host_token = issue_host_bearer(&relay, host_id).await?;
+    let mut host_ws = connect_host_bearer(&relay, &host_token).await?;
     match recv_server_frame(&mut host_ws).await? {
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
@@ -1176,8 +1215,8 @@ async fn orphan_raw_host_stream_event_does_not_create_legacy_conversation() -> a
     let host_id = seed_host(&relay).await?;
     store::host_links::insert_pair(&relay.pool, host_id, &account_id, phone_id, 0).await?;
 
-    let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
-    let mut host_ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
+    let host_token = issue_host_bearer(&relay, host_id).await?;
+    let mut host_ws = connect_host_bearer(&relay, &host_token).await?;
     match recv_server_frame(&mut host_ws).await? {
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
@@ -1278,8 +1317,8 @@ async fn raw_host_stream_event_updates_formal_turn_cold_replay() -> anyhow::Resu
         other => panic!("expected SubscribeAck, got {other:?}"),
     }
 
-    let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
-    let mut host_ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
+    let host_token = issue_host_bearer(&relay, host_id).await?;
+    let mut host_ws = connect_host_bearer(&relay, &host_token).await?;
     match recv_server_frame(&mut host_ws).await? {
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
@@ -1432,8 +1471,8 @@ async fn live_durable_events_flow_from_outbox_to_subscribed_host_and_client() ->
         other => panic!("expected replay DurableEvent, got {other:?}"),
     }
 
-    let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
-    let mut host_ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
+    let host_token = issue_host_bearer(&relay, host_id).await?;
+    let mut host_ws = connect_host_bearer(&relay, &host_token).await?;
     match recv_server_frame(&mut host_ws).await? {
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
@@ -1573,8 +1612,8 @@ async fn host_ingest_live_batch_fans_out_projection_to_subscribed_client() -> an
         other => panic!("expected DurableEvent replay, got {other:?}"),
     }
 
-    let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
-    let mut host_ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
+    let host_token = issue_host_bearer(&relay, host_id).await?;
+    let mut host_ws = connect_host_bearer(&relay, &host_token).await?;
     match recv_server_frame(&mut host_ws).await? {
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
@@ -1611,7 +1650,6 @@ async fn host_ingest_live_batch_fans_out_projection_to_subscribed_client() -> an
                             }
                         }),
                         conversation_id: Some(conversation.conversation_id.clone()),
-                        projection: vec![],
                         first_ts_ms: 2_000,
                         last_ts_ms: 2_000,
                         byte_len: 64,
@@ -1631,7 +1669,6 @@ async fn host_ingest_live_batch_fans_out_projection_to_subscribed_client() -> an
                             }
                         }),
                         conversation_id: Some(conversation.conversation_id.clone()),
-                        projection: vec![],
                         first_ts_ms: 2_001,
                         last_ts_ms: 2_001,
                         byte_len: 48,
@@ -1718,8 +1755,8 @@ async fn host_ingest_live_batch_records_approval_request() -> anyhow::Result<()>
     )
     .await?;
 
-    let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
-    let mut host_ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
+    let host_token = issue_host_bearer(&relay, host_id).await?;
+    let mut host_ws = connect_host_bearer(&relay, &host_token).await?;
     match recv_server_frame(&mut host_ws).await? {
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
@@ -1759,7 +1796,6 @@ async fn host_ingest_live_batch_records_approval_request() -> anyhow::Result<()>
                     }),
                     conversation_id: Some(conversation.conversation_id.clone()),
                     // Host projection ignored; approvals come from raw payload.
-                    projection: vec![],
                     first_ts_ms: now_ms,
                     last_ts_ms: now_ms,
                     byte_len: 64,
@@ -1803,8 +1839,8 @@ async fn host_ingest_auto_registers_unknown_session_when_linked() -> anyhow::Res
     let local_session_id = "57776df1-db66-4e7d-a2db-177a11f53c20";
     let local_conversation_id = "desktop-local-conv-1";
 
-    let host_ticket = issue_host_ws_ticket(&relay, host_id).await?;
-    let mut host_ws = connect_client(&relay, "/ws/host", &host_ticket).await?;
+    let host_token = issue_host_bearer(&relay, host_id).await?;
+    let mut host_ws = connect_host_bearer(&relay, &host_token).await?;
     match recv_server_frame(&mut host_ws).await? {
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),
@@ -1830,7 +1866,6 @@ async fn host_ingest_auto_registers_unknown_session_when_linked() -> anyhow::Res
                         }
                     }),
                     conversation_id: Some(local_conversation_id.into()),
-                    projection: vec![],
                     first_ts_ms: 3_000,
                     last_ts_ms: 3_000,
                     byte_len: 80,

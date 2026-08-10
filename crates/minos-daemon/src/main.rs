@@ -78,7 +78,9 @@ struct McpSidecarArgs {
     #[arg(long)]
     source_agent: Option<String>,
 
-    #[arg(long)]
+    /// Minos session id of the invoking agent (manager injects this for bound MCP).
+    /// Accepts the historical alias used in older docs/configs.
+    #[arg(long = "source-session-id", alias = "source-thread-id")]
     source_session_id: Option<String>,
 
     #[arg(long)]
@@ -406,7 +408,7 @@ async fn start(args: StartArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn std
             .parse()
             .map_err(|e| std::io::Error::other(format!("invalid --local-rpc-addr: {e}")))?;
         let run_dir = paths::run_dir()?;
-        let discovery_path = run_dir.join("tui-daemon-rpc.json");
+        let discovery_path = run_dir.join("daemon-rpc.json");
         Some(LocalRpcConfig {
             addr,
             discovery_path: discovery_path.clone(),
@@ -426,7 +428,7 @@ async fn start(args: StartArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn std
     .await?;
 
     if args.local_rpc {
-        let discovery = paths::run_dir()?.join("tui-daemon-rpc.json");
+        let discovery = paths::run_dir()?.join("daemon-rpc.json");
         println!("local rpc:  {}", discovery.display());
     }
 

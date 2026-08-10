@@ -1,6 +1,8 @@
 # Rebuild Minos Backend for Formal Development
 
-本文件是 Minos backend 进入正式开发阶段后的唯一主动设计文档。`docs/superpowers/` 下的 MVP 规划与实施文档已整体退休；后续 backend 的架构、接口、数据模型、部署方式与实现阶段划分，以本文件和保留的 ADR 为准。
+> **Authority（2026-08-09）**：本文是 formal cutover **历史纲领**（account bearer / host installation rail / 拆分 `/ws/client`·`/ws/host`）。  
+> **协作消息与 bot participant 的现行 SSOT** 以 [architecture-messaging.md](architecture-messaging.md)、[ADR 0021](adr/0021-agent-as-conversation-bot-participant.md)、[agent-participant-delivery](superpowers/specs/2026-08-09-agent-participant-delivery.md)、[global-bot-identity-design](superpowers/specs/global-bot-identity-design.md) 及 2026-08 IM reliability / Hub SSOT specs 为准。  
+> 不再声称「唯一主动设计文档」或「superpowers 全体退休」。
 
 ## Breaking Change Notice
 
@@ -210,7 +212,7 @@ pub trait HostCommandService: Send + Sync {
 - `POST /v1/agent-sessions/read-turns` 是唯一例外：默认模式按 turn 元数据分页（`after_turn_seq` + `limit`，响应返回 `next_turn_seq`），与 `agent_session:<id>` topic 的 live cursor 共享同一序列空间；当请求带 `turn_id` 时切换为 slice 模式（`after_event_seq` + `limit`，响应返回 `next_event_seq`），用于读取 turn 内的 `agent_turn_events`。
 - 所有时间戳统一使用 `*_ms` Unix epoch milliseconds；不混用 ISO8601 作为合同字段。
 - 所有公开 ID 统一使用带前缀的 ULID 字符串，例如 `acct_01J...`, `inst_01J...`, `host_01J...`, `conv_01J...`, `sess_01J...`, `turn_01J...`, `apr_01J...`, `cmd_01J...`。
-- 系统目录类 ID 使用稳定 slug 而非 ULID；当前仅 `agent_id` 属于此类（如 `agent_codex`、`agent_claude`），slug 命名空间由 `agents` 表唯一约束保证。
+- 公开 ID 默认带前缀 ULID。**Bot 身份**使用全局 `agent_id`（实现上常为 `bot-<uuid>` 的用户配置 bot，见 [global-bot-identity-design](superpowers/specs/global-bot-identity-design.md)）。历史文档中的 `agent_codex` 等稳定 slug 仅为 runtime 种子/兼容别名，**不是**产品主路径上的 bot 用户身份。
 - 所有幂等写接口至少接受 `client_request_id`：`/v1/agent-sessions/start`, `/v1/agent-sessions/send-input`, `/v1/conversations/send-message`, `/v1/approvals/respond`, `/v1/pairing/confirm`, `/v1/host/pairing/redeem`。
 - OpenAPI 是 `/v1/*` 的合同源，由 Rust request/response types 派生；WS frame 使用 JSON schema 作为合同源。客户端 SDK 从合同生成，CI 只做 drift gate。
 
@@ -529,7 +531,7 @@ durable resume cursor 固定为按 topic 维护的 `last_durable_seq`：
 - `device_installations` 是唯一的"安装"维度，覆盖 mobile / browser / host 三类，至少包含 `installation_kind`、`platform`、`public_key`（仅 host 必填）。host 不再单独复制一份设备元数据。
 - `device_installations.account_id` 对 mobile / browser 必填；对 host 必须为空。host 的 account 归属只通过 `host_links` 表达。
 - `host_links` 的业务键是 `(account_id, host_installation_id)`，并附带 `link_display_name`, `acl_json` 等 per-link 元数据，以及 `linked_via_installation_id` 作为 confirm 时的 caller installation 审计快照（仅用于 host self view 的 per-link display 与审计可读性，不用于鉴权决策）。
-- `agents` 是系统支持的 agent 类型目录，主键是稳定 slug（如 `agent_codex`），不承载 per-account 实例配置；项目级默认策略由 `project_default_agents` 表达。
+- `agents` 是 **全局 bot 目录**（per-owner 可配置数字肉身：runtime / model / reasoning / system prompt 等），主键为全局 `agent_id`；通过 `conversation_agent_members` 拉入多个 conversation，**不**为每个会话克隆 bot。`source=host_runtime` 行仅为 Host 能力种子，不是产品主 bot 目录。权威： [global-bot-identity-design](superpowers/specs/global-bot-identity-design.md)。
 - `projects` 内嵌 `workspace_root`（host 端可解析的相对路径或 slug），1:1 表达项目的 workspace 绑定；正式开发第一阶段不引入独立 `project_workspaces` 表，避免对 1:N workspace 形成的复杂权限/选择 UI 做过度设计。
 - `agent_sessions.conversation_id` 非空；一个 conversation 可以有多个 agent sessions，但一个 agent session 只属于一个 conversation。
 - `agent_sessions.project_id` 可空；若不为空，必须与 `conversations.project_id` 一致。

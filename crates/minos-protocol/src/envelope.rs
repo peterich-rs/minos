@@ -290,7 +290,7 @@ mod tests {
                 message: ChatMessageSummary {
                     message_id: "msg-123".into(),
                     conversation_id: "conv-123".into(),
-                    sender: crate::UserSummary {
+                    sender: crate::MessageSender::Account {
                         account_id: "acct-1".into(),
                         minos_id: "alice01".into(),
                         display_name: "Alice".into(),
@@ -301,6 +301,7 @@ mod tests {
                     reply_to: None,
                     recalled_at_ms: None,
                     mentioned_account_ids: Vec::new(),
+                    mentioned_agent_ids: Vec::new(),
                     sender_type: crate::SenderType::User,
                     reactions: vec![],
                     attachments: vec![],

@@ -121,6 +121,37 @@ impl CompletionWatchRegistry {
         Some(watch)
     }
 
+    /// Remove every unfinished watch for a mailbox delivery (AppendBotMessage
+    /// success path). Prefer this over only keying by session when the host
+    /// already committed the bot reply.
+    pub fn remove_by_dispatch_id(&self, dispatch_id: &str) -> Vec<CompletionWatch> {
+        if dispatch_id.is_empty() {
+            return Vec::new();
+        }
+        let (Ok(mut by_key), Ok(mut by_session)) = (self.by_key.lock(), self.by_session.lock())
+        else {
+            return Vec::new();
+        };
+        let keys: Vec<String> = by_key
+            .iter()
+            .filter(|(_, w)| w.dispatch_id == dispatch_id)
+            .map(|(k, _)| k.clone())
+            .collect();
+        let mut out = Vec::with_capacity(keys.len());
+        for key in keys {
+            if let Some(watch) = by_key.remove(&key) {
+                if let Some(set) = by_session.get_mut(&watch.session_id) {
+                    set.remove(&key);
+                    if set.is_empty() {
+                        by_session.remove(&watch.session_id);
+                    }
+                }
+                out.push(watch);
+            }
+        }
+        out
+    }
+
     /// Drain watches whose `deadline_at_ms` is at or before `now_ms`.
     pub fn drain_expired(&self, now_ms: i64) -> Vec<CompletionWatch> {
         let Ok(mut by_key) = self.by_key.lock() else {
@@ -174,18 +205,7 @@ mod tests {
     use super::*;
 
     fn sample_agent(id: &str, runtime: &str) -> AgentRow {
-        AgentRow {
-            agent_id: id.into(),
-            owner_account_id: "acc".into(),
-            name: runtime.to_string(),
-            description: String::new(),
-            source: "host_runtime".into(),
-            runtime_agent: runtime.into(),
-            model: String::new(),
-            workspace_path: None,
-            created_at_ms: 0,
-            updated_at_ms: 0,
-        }
+        AgentRow::test_stub(id, "acc", runtime, "host_runtime", runtime)
     }
 
     fn watch(origin: &str, session: &str, floor: u64) -> CompletionWatch {
@@ -201,6 +221,22 @@ mod tests {
             mention_account_id: None,
             mention_minos_id: None,
         }
+    }
+
+    #[test]
+    fn remove_by_dispatch_id_clears_mailbox_success_watches() {
+        let reg = CompletionWatchRegistry::new();
+        let mut w = watch("o1", "sess-a", 1);
+        w.dispatch_id = "delivery-1".into();
+        reg.arm(w);
+        let mut other = watch("o2", "sess-b", 2);
+        other.dispatch_id = "delivery-2".into();
+        reg.arm(other);
+        let removed = reg.remove_by_dispatch_id("delivery-1");
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].origin_message_id, "o1");
+        assert!(reg.get(&watch_key("o1", "sess-a")).is_none());
+        assert!(reg.get(&watch_key("o2", "sess-b")).is_some());
     }
 
     #[test]

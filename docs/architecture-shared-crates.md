@@ -54,7 +54,7 @@
 | `envelope` | `Envelope` (Forward, Forwarded, Event, Ingest), `EventKind` | WebSocket relay 帧格式 |
 | `auth` | `AuthRequest/Response`, `RefreshRequest/Response` | 认证 HTTP DTO |
 | `realtime` | `ClientFrame`, `ServerFrame`, `DurableEvent` (17 变体), `RealtimeTopic` | Topic-based 实时网关线类型 |
-| `local_rpc` | `ListConversationMessagesParams/Response`, `AppendConversationMessageParams`, `StartAgentInConversationRequest`, `RemoveConversationAgentParams/Response` | TUI/Desktop 本地 RPC 类型 |
+| `local_rpc` | `ListConversationMessagesParams/Response`, `AppendConversationMessageParams`, `StartAgentInConversationRequest`, `RemoveConversationAgentParams/Response` | Desktop 本地 RPC 类型 |
 
 ---
 
@@ -94,7 +94,7 @@
 
 **路径**: `crates/minos-prompt-runtime/`  
 **特性**: 纯编译器深模块，无 I/O、无 agent 进程。  
-**Consumers**: `minos-agent-runtime`（compile + delivery）、`minos-chat-store`（MCP instructions）、`minos-tui`（skill install body）。
+**Consumers**: `minos-agent-runtime`（compile + delivery）、`minos-chat-store`（MCP instructions）。
 
 ### Canonical package
 
@@ -106,7 +106,7 @@ packages/minos.teamwork/
   fragments/skill/SKILL.md              # on-demand skill handbook
 ```
 
-Rust 只 `include_str!` 上述 artifact；**禁止**在 manager / mcp_server / TUI 再手写第二份。
+Rust 只 `include_str!` 上述 artifact；**禁止**在 manager / mcp_server 再手写第二份。
 
 ### 公开接口
 
@@ -145,7 +145,7 @@ Rust 只 `include_str!` 上述 artifact；**禁止**在 manager / mcp_server / T
 
 | 类型 | 描述 |
 |------|------|
-| `AgentRuntimeConfig` | runtime 配置。Codex initialize handshake 默认 5 秒，`thread/start` 默认 30 秒（`thread_start_timeout`），避免冷启动或 workspace 初始化偏慢时误判失败。Teamwork MCP command 优先使用 `MINOS_TEAMWORK_MCP_BIN` / 同目录 `minos-teamwork-mcp`，开发态可回落到 `minos-tui` 或 `minos-daemon` 的 `__minos-teamwork-mcp` hidden sidecar |
+| `AgentRuntimeConfig` | runtime 配置。Codex initialize handshake 默认 5 秒，`thread/start` 默认 30 秒（`thread_start_timeout`），避免冷启动或 workspace 初始化偏慢时误判失败。Teamwork MCP command 优先使用 `MINOS_TEAMWORK_MCP_BIN` / 同目录 `minos-teamwork-mcp`，开发态可回落到 `minos-daemon` 或 Desktop 的 `__minos-teamwork-mcp` hidden sidecar |
 | `prompt`（内部） | `compile_for_session` 桥接到 `minos-prompt-runtime`；Codex/Claude/Grok 启动路径只消费 `CompiledPromptBundle` |
 | `AgentManager` | 多工作区 agent 管理器。每个工作区一个 `AppServerInstance`，N 个 `SessionHandle` |
 | `SessionState` | Starting, Idle, Running, Suspended, Resuming, Closed |
@@ -257,7 +257,7 @@ Rust 只 `include_str!` 上述 artifact；**禁止**在 manager / mcp_server / T
 
 ### Grok edit / tool output
 
-Grok file edits (`SearchReplace` / write / `ApplyPatch`) arrive as ACP `ToolCallContent::Diff` plus optional structured `raw_output`. `translate_grok` converts these into unified-diff tool output (not raw `EditsApplied` JSON) so TUI/Desktop can reuse the agent-agnostic diff renderer.
+Grok file edits (`SearchReplace` / write / `ApplyPatch`) arrive as ACP `ToolCallContent::Diff` plus optional structured `raw_output`. `translate_grok` converts these into unified-diff tool output (not raw `EditsApplied` JSON) so Desktop can reuse the agent-agnostic diff renderer.
 
 ---
 

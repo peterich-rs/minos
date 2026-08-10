@@ -15,8 +15,47 @@ pub const AGENT_SOURCE_USER: &str = "user";
 pub const AGENT_SOURCE_HOST_RUNTIME: &str = "host_runtime";
 pub const AGENT_SOURCE_SYSTEM: &str = "system";
 
-const AGENT_SELECT_COLS: &str =
-    "agent_id, owner_account_id, name, description, source, runtime_agent, model, workspace_path, created_at_ms, updated_at_ms";
+const AGENT_SELECT_COLS: &str = "agent_id, owner_account_id, name, display_name, description, \
+     avatar_url, source, status, runtime_agent, model, default_reasoning_effort, system_prompt, \
+     workspace_path, created_at_ms, updated_at_ms";
+
+pub const AGENT_STATUS_ACTIVE: &str = "active";
+pub const AGENT_STATUS_DISABLED: &str = "disabled";
+
+/// Parameters for creating a global bot identity (digital body).
+#[derive(Debug, Clone)]
+pub struct RegisterAgentParams<'a> {
+    pub owner_account_id: &'a str,
+    pub name: &'a str,
+    pub display_name: &'a str,
+    pub description: &'a str,
+    pub avatar_url: Option<&'a str>,
+    pub source: &'a str,
+    pub runtime_agent: &'a str,
+    pub model: &'a str,
+    pub default_reasoning_effort: &'a str,
+    pub system_prompt: &'a str,
+    pub workspace_path: Option<&'a str>,
+    pub now_ms: i64,
+}
+
+/// Parameters for updating a global bot owned by the caller.
+#[derive(Debug, Clone)]
+pub struct UpdateAgentParams<'a> {
+    pub agent_id: &'a str,
+    pub owner_account_id: &'a str,
+    pub name: &'a str,
+    pub display_name: &'a str,
+    pub description: &'a str,
+    pub avatar_url: Option<&'a str>,
+    pub status: &'a str,
+    pub runtime_agent: &'a str,
+    pub model: &'a str,
+    pub default_reasoning_effort: &'a str,
+    pub system_prompt: &'a str,
+    pub workspace_path: Option<&'a str>,
+    pub now_ms: i64,
+}
 
 pub async fn register_agent(
     store: &impl AsStorePool,
@@ -28,72 +67,87 @@ pub async fn register_agent(
     workspace_path: Option<&str>,
     now_ms: i64,
 ) -> Result<AgentRow, BackendError> {
-    register_agent_with_source(
+    register_agent_full(
         store,
-        owner_account_id,
-        name,
-        description,
-        AGENT_SOURCE_USER,
-        runtime_agent,
-        model,
-        workspace_path,
-        now_ms,
+        RegisterAgentParams {
+            owner_account_id,
+            name,
+            display_name: name,
+            description,
+            avatar_url: None,
+            source: AGENT_SOURCE_USER,
+            runtime_agent,
+            model,
+            default_reasoning_effort: "",
+            system_prompt: "",
+            workspace_path,
+            now_ms,
+        },
     )
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn register_agent_with_source(
+pub async fn register_agent_full(
     store: &impl AsStorePool,
-    owner_account_id: &str,
-    name: &str,
-    description: &str,
-    source: &str,
-    runtime_agent: &str,
-    model: &str,
-    workspace_path: Option<&str>,
-    now_ms: i64,
+    params: RegisterAgentParams<'_>,
 ) -> Result<AgentRow, BackendError> {
+    let display_name = if params.display_name.trim().is_empty() {
+        params.name
+    } else {
+        params.display_name
+    };
     let agent_id = format!("bot-{}", Uuid::new_v4());
     match store.as_store_pool() {
-        StorePoolRef::Sqlite(pool) => {
-            sqlx::query(
-                "INSERT INTO agents (agent_id, owner_account_id, name, description, source, runtime_agent, model, workspace_path, created_at_ms, updated_at_ms)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            )
-            .bind(&agent_id)
-            .bind(owner_account_id)
-            .bind(name)
-            .bind(description)
-            .bind(source)
-            .bind(runtime_agent)
-            .bind(model)
-            .bind(workspace_path)
-            .bind(now_ms)
-            .bind(now_ms)
-            .execute(pool)
-            .await
-            .map(|_| ())
-        }
-        StorePoolRef::Postgres(pool) => {
-            sqlx::query(
-                "INSERT INTO agents (agent_id, owner_account_id, name, description, source, runtime_agent, model, workspace_path, created_at_ms, updated_at_ms)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-            )
-            .bind(&agent_id)
-            .bind(owner_account_id)
-            .bind(name)
-            .bind(description)
-            .bind(source)
-            .bind(runtime_agent)
-            .bind(model)
-            .bind(workspace_path)
-            .bind(now_ms)
-            .bind(now_ms)
-            .execute(pool)
-            .await
-            .map(|_| ())
-        }
+        StorePoolRef::Sqlite(pool) => sqlx::query(
+            "INSERT INTO agents (
+                    agent_id, owner_account_id, name, display_name, description, avatar_url,
+                    source, status, runtime_agent, model, default_reasoning_effort, system_prompt,
+                    workspace_path, created_at_ms, updated_at_ms
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&agent_id)
+        .bind(params.owner_account_id)
+        .bind(params.name)
+        .bind(display_name)
+        .bind(params.description)
+        .bind(params.avatar_url)
+        .bind(params.source)
+        .bind(AGENT_STATUS_ACTIVE)
+        .bind(params.runtime_agent)
+        .bind(params.model)
+        .bind(params.default_reasoning_effort)
+        .bind(params.system_prompt)
+        .bind(params.workspace_path)
+        .bind(params.now_ms)
+        .bind(params.now_ms)
+        .execute(pool)
+        .await
+        .map(|_| ()),
+        StorePoolRef::Postgres(pool) => sqlx::query(
+            "INSERT INTO agents (
+                    agent_id, owner_account_id, name, display_name, description, avatar_url,
+                    source, status, runtime_agent, model, default_reasoning_effort, system_prompt,
+                    workspace_path, created_at_ms, updated_at_ms
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+        )
+        .bind(&agent_id)
+        .bind(params.owner_account_id)
+        .bind(params.name)
+        .bind(display_name)
+        .bind(params.description)
+        .bind(params.avatar_url)
+        .bind(params.source)
+        .bind(AGENT_STATUS_ACTIVE)
+        .bind(params.runtime_agent)
+        .bind(params.model)
+        .bind(params.default_reasoning_effort)
+        .bind(params.system_prompt)
+        .bind(params.workspace_path)
+        .bind(params.now_ms)
+        .bind(params.now_ms)
+        .execute(pool)
+        .await
+        .map(|_| ()),
     }
     .map_err(store_err("social::register_agent"))?;
 
@@ -161,16 +215,22 @@ pub async fn ensure_host_runtime_agent(
     if let Some(existing) = find_host_runtime_agent(store, owner_account_id, runtime_agent).await? {
         return Ok(existing);
     }
-    register_agent_with_source(
+    register_agent_full(
         store,
-        owner_account_id,
-        name,
-        HOST_RUNTIME_AGENT_DESCRIPTION,
-        AGENT_SOURCE_HOST_RUNTIME,
-        runtime_agent,
-        model,
-        workspace_path,
-        now_ms,
+        RegisterAgentParams {
+            owner_account_id,
+            name,
+            display_name: name,
+            description: HOST_RUNTIME_AGENT_DESCRIPTION,
+            avatar_url: None,
+            source: AGENT_SOURCE_HOST_RUNTIME,
+            runtime_agent,
+            model,
+            default_reasoning_effort: "",
+            system_prompt: "",
+            workspace_path,
+            now_ms,
+        },
     )
     .await
 }
@@ -271,7 +331,6 @@ pub async fn list_agents_for_owner(
     .map_err(store_err("social::list_agents_for_owner"))
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn update_agent(
     store: &impl AsStorePool,
     agent_id: &str,
@@ -283,46 +342,101 @@ pub async fn update_agent(
     workspace_path: Option<&str>,
     now_ms: i64,
 ) -> Result<Option<AgentRow>, BackendError> {
+    update_agent_full(
+        store,
+        UpdateAgentParams {
+            agent_id,
+            owner_account_id,
+            name,
+            display_name: name,
+            description,
+            avatar_url: None,
+            status: AGENT_STATUS_ACTIVE,
+            runtime_agent,
+            model,
+            default_reasoning_effort: "",
+            system_prompt: "",
+            workspace_path,
+            now_ms,
+        },
+    )
+    .await
+}
+
+pub async fn update_agent_full(
+    store: &impl AsStorePool,
+    params: UpdateAgentParams<'_>,
+) -> Result<Option<AgentRow>, BackendError> {
+    let display_name = if params.display_name.trim().is_empty() {
+        params.name
+    } else {
+        params.display_name
+    };
+    let status = if params.status.trim().is_empty() {
+        AGENT_STATUS_ACTIVE
+    } else {
+        params.status
+    };
     let rows_affected = match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query(
             "UPDATE agents
                     SET name = ?,
+                        display_name = ?,
                         description = ?,
+                        avatar_url = ?,
+                        status = ?,
                         runtime_agent = ?,
                         model = ?,
+                        default_reasoning_effort = ?,
+                        system_prompt = ?,
                         workspace_path = ?,
                         updated_at_ms = ?
                   WHERE agent_id = ? AND owner_account_id = ?",
         )
-        .bind(name)
-        .bind(description)
-        .bind(runtime_agent)
-        .bind(model)
-        .bind(workspace_path)
-        .bind(now_ms)
-        .bind(agent_id)
-        .bind(owner_account_id)
+        .bind(params.name)
+        .bind(display_name)
+        .bind(params.description)
+        .bind(params.avatar_url)
+        .bind(status)
+        .bind(params.runtime_agent)
+        .bind(params.model)
+        .bind(params.default_reasoning_effort)
+        .bind(params.system_prompt)
+        .bind(params.workspace_path)
+        .bind(params.now_ms)
+        .bind(params.agent_id)
+        .bind(params.owner_account_id)
         .execute(pool)
         .await
         .map(|result| result.rows_affected()),
         StorePoolRef::Postgres(pool) => sqlx::query(
             "UPDATE agents
                     SET name = $1,
-                        description = $2,
-                        runtime_agent = $3,
-                        model = $4,
-                        workspace_path = $5,
-                        updated_at_ms = $6
-                  WHERE agent_id = $7 AND owner_account_id = $8",
+                        display_name = $2,
+                        description = $3,
+                        avatar_url = $4,
+                        status = $5,
+                        runtime_agent = $6,
+                        model = $7,
+                        default_reasoning_effort = $8,
+                        system_prompt = $9,
+                        workspace_path = $10,
+                        updated_at_ms = $11
+                  WHERE agent_id = $12 AND owner_account_id = $13",
         )
-        .bind(name)
-        .bind(description)
-        .bind(runtime_agent)
-        .bind(model)
-        .bind(workspace_path)
-        .bind(now_ms)
-        .bind(agent_id)
-        .bind(owner_account_id)
+        .bind(params.name)
+        .bind(display_name)
+        .bind(params.description)
+        .bind(params.avatar_url)
+        .bind(status)
+        .bind(params.runtime_agent)
+        .bind(params.model)
+        .bind(params.default_reasoning_effort)
+        .bind(params.system_prompt)
+        .bind(params.workspace_path)
+        .bind(params.now_ms)
+        .bind(params.agent_id)
+        .bind(params.owner_account_id)
         .execute(pool)
         .await
         .map(|result| result.rows_affected()),
@@ -332,7 +446,7 @@ pub async fn update_agent(
     if rows_affected == 0 {
         return Ok(None);
     }
-    get_agent(store, agent_id).await
+    get_agent(store, params.agent_id).await
 }
 
 pub async fn delete_agent(
@@ -439,7 +553,7 @@ pub async fn list_conversation_agents(
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_as::<_, AgentRow>(&format!(
-                "SELECT a.agent_id, a.owner_account_id, a.name, a.description, a.source, a.runtime_agent, a.model, a.workspace_path, a.created_at_ms, a.updated_at_ms
+                "SELECT a.agent_id, a.owner_account_id, a.name, a.display_name, a.description, a.avatar_url, a.source, a.status, a.runtime_agent, a.model, a.default_reasoning_effort, a.system_prompt, a.workspace_path, a.created_at_ms, a.updated_at_ms
                    FROM agents a
                    JOIN conversation_agent_members cam ON cam.agent_id = a.agent_id
                   WHERE cam.conversation_id = ?
@@ -451,7 +565,7 @@ pub async fn list_conversation_agents(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_as::<_, AgentRow>(&format!(
-                "SELECT a.agent_id, a.owner_account_id, a.name, a.description, a.source, a.runtime_agent, a.model, a.workspace_path, a.created_at_ms, a.updated_at_ms
+                "SELECT a.agent_id, a.owner_account_id, a.name, a.display_name, a.description, a.avatar_url, a.source, a.status, a.runtime_agent, a.model, a.default_reasoning_effort, a.system_prompt, a.workspace_path, a.created_at_ms, a.updated_at_ms
                    FROM agents a
                    JOIN conversation_agent_members cam ON cam.agent_id = a.agent_id
                   WHERE cam.conversation_id = $1
@@ -463,6 +577,99 @@ pub async fn list_conversation_agents(
         }
     }
     .map_err(store_err("social::list_conversation_agents"))
+}
+
+/// Conversation bot members eligible for @ resolution and mailbox delivery.
+///
+/// Membership may still list disabled bots; delivery and mention SSOT only
+/// include `status = active`.
+pub async fn list_conversation_agents_active(
+    store: &impl AsStorePool,
+    conversation_id: &str,
+) -> Result<Vec<AgentRow>, BackendError> {
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query_as::<_, AgentRow>(&format!(
+                "SELECT a.agent_id, a.owner_account_id, a.name, a.display_name, a.description, a.avatar_url, a.source, a.status, a.runtime_agent, a.model, a.default_reasoning_effort, a.system_prompt, a.workspace_path, a.created_at_ms, a.updated_at_ms
+                   FROM agents a
+                   JOIN conversation_agent_members cam ON cam.agent_id = a.agent_id
+                  WHERE cam.conversation_id = ?
+                    AND a.status = ?
+                  ORDER BY cam.joined_at_ms ASC"
+            ))
+            .bind(conversation_id)
+            .bind(AGENT_STATUS_ACTIVE)
+            .fetch_all(pool)
+            .await
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query_as::<_, AgentRow>(&format!(
+                "SELECT a.agent_id, a.owner_account_id, a.name, a.display_name, a.description, a.avatar_url, a.source, a.status, a.runtime_agent, a.model, a.default_reasoning_effort, a.system_prompt, a.workspace_path, a.created_at_ms, a.updated_at_ms
+                   FROM agents a
+                   JOIN conversation_agent_members cam ON cam.agent_id = a.agent_id
+                  WHERE cam.conversation_id = $1
+                    AND a.status = $2
+                  ORDER BY cam.joined_at_ms ASC"
+            ))
+            .bind(conversation_id)
+            .bind(AGENT_STATUS_ACTIVE)
+            .fetch_all(pool)
+            .await
+        }
+    }
+    .map_err(store_err("social::list_conversation_agents_active"))
+}
+
+/// Another active bot under the same owner with the same name (case-insensitive).
+///
+/// Used before register/update so clients get a clean conflict instead of a
+/// unique-index store error. `exclude_agent_id` skips self on rename.
+pub async fn find_active_agent_name_conflict(
+    store: &impl AsStorePool,
+    owner_account_id: &str,
+    name: &str,
+    exclude_agent_id: Option<&str>,
+) -> Result<Option<AgentRow>, BackendError> {
+    let name_lower = name.trim().to_ascii_lowercase();
+    if name_lower.is_empty() {
+        return Ok(None);
+    }
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let row = sqlx::query_as::<_, AgentRow>(&format!(
+                "SELECT {AGENT_SELECT_COLS}
+                   FROM agents
+                  WHERE owner_account_id = ?
+                    AND status = ?
+                    AND lower(name) = ?
+                  LIMIT 1"
+            ))
+            .bind(owner_account_id)
+            .bind(AGENT_STATUS_ACTIVE)
+            .bind(&name_lower)
+            .fetch_optional(pool)
+            .await
+            .map_err(store_err("social::find_active_agent_name_conflict"))?;
+            Ok(row.filter(|r| exclude_agent_id.is_none_or(|id| r.agent_id != id)))
+        }
+        StorePoolRef::Postgres(pool) => {
+            let row = sqlx::query_as::<_, AgentRow>(&format!(
+                "SELECT {AGENT_SELECT_COLS}
+                   FROM agents
+                  WHERE owner_account_id = $1
+                    AND status = $2
+                    AND lower(name) = $3
+                  LIMIT 1"
+            ))
+            .bind(owner_account_id)
+            .bind(AGENT_STATUS_ACTIVE)
+            .bind(&name_lower)
+            .fetch_optional(pool)
+            .await
+            .map_err(store_err("social::find_active_agent_name_conflict"))?;
+            Ok(row.filter(|r| exclude_agent_id.is_none_or(|id| r.agent_id != id)))
+        }
+    }
 }
 
 pub async fn is_agent_in_conversation(
@@ -516,6 +723,7 @@ pub async fn insert_agent_message(
         reply_to_message_id,
         None,
         mentioned_account_ids,
+        &[],
         None,
     )
     .await
@@ -533,6 +741,7 @@ pub async fn insert_agent_message_with_session(
     reply_to_message_id: Option<&str>,
     agent_session_id: Option<&str>,
     mentioned_account_ids: &[String],
+    mentioned_agent_ids: &[String],
     client_message_id: Option<&str>,
 ) -> Result<ChatMessageRow, BackendError> {
     let agent = get_agent(store, agent_id)
@@ -562,6 +771,7 @@ pub async fn insert_agent_message_with_session(
         reply_to_message_id,
         agent_session_id,
         mentioned_account_ids,
+        mentioned_agent_ids,
         client_message_id,
     )
     .await?;
@@ -582,6 +792,7 @@ pub async fn insert_agent_message_with_session_in_tx(
     reply_to_message_id: Option<&str>,
     agent_session_id: Option<&str>,
     mentioned_account_ids: &[String],
+    mentioned_agent_ids: &[String],
     client_message_id: Option<&str>,
 ) -> Result<super::conversation_messages::InsertMessageOutcome, BackendError> {
     let message_id = match client_message_id.map(str::trim).filter(|s| !s.is_empty()) {
@@ -632,9 +843,10 @@ pub async fn insert_agent_message_with_session_in_tx(
         None => Uuid::new_v4().to_string(),
     };
 
-    let mut unique_mentions = mentioned_account_ids.to_vec();
-    unique_mentions.sort();
-    unique_mentions.dedup();
+    let mentions = super::MessageMentions {
+        account_ids: mentioned_account_ids.to_vec(),
+        agent_ids: mentioned_agent_ids.to_vec(),
+    };
 
     let message_seq =
         super::conversation_messages::allocate_message_seq_in_tx(tx, conversation_id, now_ms)
@@ -655,11 +867,10 @@ pub async fn insert_agent_message_with_session_in_tx(
                     agent_session_id,
                     sender_type,
                     message_source
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'agent', 'host_projection')",
+                 ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, 'agent', 'host_projection')",
             )
             .bind(&message_id)
             .bind(conversation_id)
-            .bind(&agent.owner_account_id)
             .bind(&agent.agent_id)
             .bind(text)
             .bind(now_ms)
@@ -670,16 +881,35 @@ pub async fn insert_agent_message_with_session_in_tx(
             .await
             .map_err(store_err("social::insert_agent_message.insert"))?;
 
-            for mentioned_id in &unique_mentions {
+            // Preserve appearance order across account + agent mentions by ordinal.
+            let mut ordinal: i64 = 0;
+            for target_id in &mentions.account_ids {
                 sqlx::query(
-                    "INSERT OR IGNORE INTO chat_message_mentions (message_id, mentioned_account_id)
-                     VALUES (?, ?)",
+                    "INSERT OR IGNORE INTO chat_message_mentions
+                        (message_id, target_kind, target_id, ordinal)
+                     VALUES (?, 'account', ?, ?)",
                 )
                 .bind(&message_id)
-                .bind(mentioned_id)
+                .bind(target_id)
+                .bind(ordinal)
                 .execute(&mut **tx)
                 .await
                 .map_err(store_err("social::insert_agent_message.mention"))?;
+                ordinal += 1;
+            }
+            for target_id in &mentions.agent_ids {
+                sqlx::query(
+                    "INSERT OR IGNORE INTO chat_message_mentions
+                        (message_id, target_kind, target_id, ordinal)
+                     VALUES (?, 'agent', ?, ?)",
+                )
+                .bind(&message_id)
+                .bind(target_id)
+                .bind(ordinal)
+                .execute(&mut **tx)
+                .await
+                .map_err(store_err("social::insert_agent_message.mention"))?;
+                ordinal += 1;
             }
         }
         crate::app::tx::DbTx::Postgres(tx) => {
@@ -696,11 +926,10 @@ pub async fn insert_agent_message_with_session_in_tx(
                     agent_session_id,
                     sender_type,
                     message_source
-                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'agent', 'host_projection')",
+                 ) VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8, 'agent', 'host_projection')",
             )
             .bind(&message_id)
             .bind(conversation_id)
-            .bind(&agent.owner_account_id)
             .bind(&agent.agent_id)
             .bind(text)
             .bind(now_ms)
@@ -711,17 +940,36 @@ pub async fn insert_agent_message_with_session_in_tx(
             .await
             .map_err(store_err("social::insert_agent_message.insert"))?;
 
-            for mentioned_id in &unique_mentions {
+            let mut ordinal: i64 = 0;
+            for target_id in &mentions.account_ids {
                 sqlx::query(
-                    "INSERT INTO chat_message_mentions (message_id, mentioned_account_id)
-                     VALUES ($1, $2)
+                    "INSERT INTO chat_message_mentions
+                        (message_id, target_kind, target_id, ordinal)
+                     VALUES ($1, 'account', $2, $3)
                      ON CONFLICT DO NOTHING",
                 )
                 .bind(&message_id)
-                .bind(mentioned_id)
+                .bind(target_id)
+                .bind(ordinal)
                 .execute(&mut **tx)
                 .await
                 .map_err(store_err("social::insert_agent_message.mention"))?;
+                ordinal += 1;
+            }
+            for target_id in &mentions.agent_ids {
+                sqlx::query(
+                    "INSERT INTO chat_message_mentions
+                        (message_id, target_kind, target_id, ordinal)
+                     VALUES ($1, 'agent', $2, $3)
+                     ON CONFLICT DO NOTHING",
+                )
+                .bind(&message_id)
+                .bind(target_id)
+                .bind(ordinal)
+                .execute(&mut **tx)
+                .await
+                .map_err(store_err("social::insert_agent_message.mention"))?;
+                ordinal += 1;
             }
         }
     }
@@ -730,7 +978,8 @@ pub async fn insert_agent_message_with_session_in_tx(
         row: ChatMessageRow {
             message_id,
             conversation_id: conversation_id.to_string(),
-            sender_account_id: agent.owner_account_id.clone(),
+            // Bot author is sender_agent_id; owner is not the wire/sender principal.
+            sender_account_id: None,
             sender_agent_id: Some(agent.agent_id.clone()),
             text: text.to_string(),
             created_at_ms: now_ms,
@@ -742,4 +991,96 @@ pub async fn insert_agent_message_with_session_in_tx(
         },
         inserted: true,
     })
+}
+
+/// Persist an immutable digital-body snapshot used at mailbox schedule time.
+pub async fn insert_bot_revision(
+    store: &impl AsStorePool,
+    agent: &AgentRow,
+    now_ms: i64,
+) -> Result<String, BackendError> {
+    let revision_id = format!("brev-{}", Uuid::new_v4());
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query(
+                "INSERT INTO bot_revisions (
+                    revision_id, agent_id, runtime_agent, model, default_reasoning_effort,
+                    system_prompt, display_name, workspace_path, created_at_ms
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&revision_id)
+            .bind(&agent.agent_id)
+            .bind(&agent.runtime_agent)
+            .bind(&agent.model)
+            .bind(&agent.default_reasoning_effort)
+            .bind(&agent.system_prompt)
+            .bind(&agent.display_name)
+            .bind(&agent.workspace_path)
+            .bind(now_ms)
+            .execute(pool)
+            .await
+            .map_err(store_err("social::insert_bot_revision"))?;
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query(
+                "INSERT INTO bot_revisions (
+                    revision_id, agent_id, runtime_agent, model, default_reasoning_effort,
+                    system_prompt, display_name, workspace_path, created_at_ms
+                 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+            )
+            .bind(&revision_id)
+            .bind(&agent.agent_id)
+            .bind(&agent.runtime_agent)
+            .bind(&agent.model)
+            .bind(&agent.default_reasoning_effort)
+            .bind(&agent.system_prompt)
+            .bind(&agent.display_name)
+            .bind(&agent.workspace_path)
+            .bind(now_ms)
+            .execute(pool)
+            .await
+            .map_err(store_err("social::insert_bot_revision"))?;
+        }
+    }
+    Ok(revision_id)
+}
+
+/// Upsert active deployment of a bot onto a host installation.
+pub async fn upsert_bot_deployment(
+    store: &impl AsStorePool,
+    agent_id: &str,
+    host_installation_id: &str,
+    now_ms: i64,
+) -> Result<(), BackendError> {
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            sqlx::query(
+                "INSERT INTO bot_deployments (agent_id, host_installation_id, status, updated_at_ms)
+                 VALUES (?, ?, 'active', ?)
+                 ON CONFLICT(agent_id, host_installation_id) DO UPDATE SET
+                   status = 'active', updated_at_ms = excluded.updated_at_ms",
+            )
+            .bind(agent_id)
+            .bind(host_installation_id)
+            .bind(now_ms)
+            .execute(pool)
+            .await
+            .map_err(store_err("social::upsert_bot_deployment"))?;
+        }
+        StorePoolRef::Postgres(pool) => {
+            sqlx::query(
+                "INSERT INTO bot_deployments (agent_id, host_installation_id, status, updated_at_ms)
+                 VALUES ($1, $2, 'active', $3)
+                 ON CONFLICT(agent_id, host_installation_id) DO UPDATE SET
+                   status = 'active', updated_at_ms = EXCLUDED.updated_at_ms",
+            )
+            .bind(agent_id)
+            .bind(host_installation_id)
+            .bind(now_ms)
+            .execute(pool)
+            .await
+            .map_err(store_err("social::upsert_bot_deployment"))?;
+        }
+    }
+    Ok(())
 }

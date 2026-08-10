@@ -2,15 +2,16 @@
 
 | Field | Value |
 |-------|--------|
-| Status | **Normative target**（2026-08-03） |
+| Status | **Normative target**（2026-08-03；**Agent 语义** 对齐 2026-08-09 participant delivery） |
 | Date | 2026-08-03 |
-| Scope | `minos-backend` 投递层、通知、Agent dispatch、TurnCompletion、Session 生命周期；删除 stub / 死代码 / 错误所有权 |
+| Scope | `minos-backend` 投递层、通知、**Agent inbox**（表/代码可仍名 dispatch）、TurnCompletion、Session 生命周期；删除 stub / 死代码 / 错误所有权 |
 | Program | [2026-08-03-im-reliability-program](2026-08-03-im-reliability-program/README.md) |
 | Pair | [客户端 Sync Engine](2026-08-03-client-im-sync-engine.md) |
-| Related | [architecture-messaging.md](../../architecture-messaging.md)；[Hub SSOT 2026-08-02](2026-08-02-hub-collaboration-message-ssot.md) |
+| Related | [architecture-messaging.md](../../architecture-messaging.md)；[Hub SSOT 2026-08-02](2026-08-02-hub-collaboration-message-ssot.md)；[agent-participant-delivery](2026-08-09-agent-participant-delivery.md)；[ADR 0021](../../adr/0021-agent-as-conversation-bot-participant.md) |
 | Non-goals | E2EE；客户端 UI；为旧实例保留 wire 兼容；「先 stub 再补」 |
 
-> **一句话目标**：持久化正确之后，**扇出、Push、Host 命令、Agent 派发与完成投影** 也具备清晰状态机与幂等边界；删除 UserOnline 死分支、空 resolve、单 slot watch、no-op sweeper、用时间/lease 碰运气的编排。
+> **一句话目标**：持久化正确之后，**扇出、Push、Host runtime 命令、Agent inbox 投递与完成投影** 也具备清晰状态机与幂等边界；删除 UserOnline 死分支、空 resolve、单 slot watch、no-op sweeper、用时间/lease 碰运气的编排。  
+> **命名**：产品/领域称 **Agent inbox / participant delivery**；物理表 `agent_dispatch_queue` 与 `try_agent_dispatch` 可暂留。HostCommand = **runtime port**，不是 IM 主协议。
 
 **规划约束**：遵守 [AGENTS.md Final-Architecture Planning Rule](../../../Agents.md) — 只设计终态代码结构，不写短期补丁路线。
 
@@ -23,7 +24,7 @@
 3. `ApprovalRequested` / `AgentSessionEnded` 必须有可解析的 target accounts，或从 decision 表删除对应分支。
 4. `CompletionWatch` 键 = **origin user message / dispatch id**，禁止 per-session 单 slot 覆盖。
 5. Agent 最终气泡幂等键 = `agent-result:{conversation_id}:{session_id}:{origin_message_id}`（与客户端 / daemon 统一；废止裸 `raw last_seq` 作 turn_write_id）。
-6. `try_agent_dispatch` 不再阻塞 HTTP 发送成功路径；dispatch 进入 **AgentDispatch 队列**（持久化）。
+6. `try_agent_dispatch`（领域：enqueue Agent inbox）不再阻塞 HTTP 发送成功路径；投递进入 **Agent inbox 队列**（物理表可仍为 AgentDispatch）。
 7. `stale_session_sweeper` 必须真实终结超时 session 并驱动失败投影；禁止 COUNT-only stub。
 
 ---
@@ -67,16 +68,17 @@
                     ┌─────────────────────────────────────┐
                     │  HTTP / Ingest / Conversation UC      │
                     │  commit message + durable+outbox tx    │
-                    │  enqueue AgentDispatch (async)        │
+                    │  enqueue Agent inbox (async)          │
+                    │  (table may still be AgentDispatch)   │
                     └───────────────┬───────────────────────┘
                                     │
           ┌─────────────────────────┼─────────────────────────┐
           ▼                         ▼                         ▼
 ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────────┐
-│ Outbox lane:     │    │ Outbox lane:     │    │ AgentDispatchQueue   │
+│ Outbox lane:     │    │ Outbox lane:     │    │ Agent inbox          │
 │ social_durable   │    │ host_command     │    │ (pending|inflight|   │
-│ claim / publish  │    │ claim / deliver  │    │  done|failed)        │
-│ / ack            │    │ / host ack       │    │ host online drain    │
+│ claim / publish  │    │ = runtime port   │    │  done|failed)        │
+│ / ack            │    │ claim / deliver  │    │ host online drain    │
 └────────┬─────────┘    └────────┬─────────┘    └──────────┬───────────┘
          │                       │                         │
          ▼                       ▼                         ▼
@@ -86,8 +88,10 @@
          ▼                                              ▼
    event_id 幂等 push                            TurnCompletionProjector
    presence 在决策输入内                          key=origin_message_id
-                                                SessionLifecycleJob
+   (Account sync ≠ Host online)                 SessionLifecycleJob
 ```
+
+> Agent inbox 产品语义：[2026-08-09-agent-participant-delivery.md](2026-08-09-agent-participant-delivery.md)。
 
 ### 2. Key design decisions
 
@@ -169,12 +173,15 @@ CREATE TABLE push_dispatch_log (
 );
 ```
 
-#### 3.3 AgentDispatchQueue
+#### 3.3 Agent inbox（物理表 `agent_dispatch_queue`）
+
+领域名 **Agent inbox** / participant delivery；表名与 `dispatch_id` 列可暂留。  
+产品语义见 [2026-08-09-agent-participant-delivery.md](2026-08-09-agent-participant-delivery.md)。
 
 ```sql
 CREATE TABLE agent_dispatch_queue (
-  dispatch_id TEXT PRIMARY KEY,
-  origin_message_id TEXT NOT NULL UNIQUE,
+  dispatch_id TEXT PRIMARY KEY,  -- domain: delivery_id
+  origin_message_id TEXT NOT NULL,  -- multi-@ : UNIQUE(origin_message_id, agent_id) in live schema
   conversation_id TEXT NOT NULL,
   account_id TEXT NOT NULL,
   agent_id TEXT NOT NULL,

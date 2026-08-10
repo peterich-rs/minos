@@ -16,11 +16,11 @@ use minos_daemon::store::event_writer::EventWriter;
 use minos_daemon::store::LocalStore;
 use minos_domain::AgentName;
 use minos_protocol::{
-    AgentLaunchMode, AppendConversationMessageParams, AppendConversationMessageResponse,
-    ApprovalDecisionRequest, CloseSessionRequest, CreateProjectRequest, HealthResponse,
-    ListConversationMessagesParams, ListConversationMessagesResponse, ListConversationsParams,
-    ListConversationsResponse, ListProjectsResponse, LocalConversationEvent, ReadSessionParams,
-    StartAgentRequest, StartAgentResponse,
+    AppendConversationMessageParams, AppendConversationMessageResponse, ApprovalDecisionRequest,
+    CloseSessionRequest, CreateProjectRequest, HealthResponse, ListConversationMessagesParams,
+    ListConversationMessagesResponse, ListConversationsParams, ListConversationsResponse,
+    ListProjectsResponse, LocalConversationEvent, ReadSessionParams, StartAgentRequest,
+    StartAgentResponse,
 };
 
 use async_trait::async_trait;
@@ -169,7 +169,6 @@ async fn start_agent_then_list_local_sessions_returns_one() {
             [StartAgentRequest {
                 agent: AgentName::Codex,
                 workspace: String::new(),
-                mode: Some(AgentLaunchMode::Server),
                 profile_id: None,
                 model: None,
                 reasoning_effort: None,
@@ -204,7 +203,6 @@ async fn delete_session_removes_local_thread_and_history() {
             [StartAgentRequest {
                 agent: AgentName::Codex,
                 workspace: String::new(),
-                mode: Some(AgentLaunchMode::Server),
                 profile_id: None,
                 model: None,
                 reasoning_effort: None,
@@ -258,7 +256,6 @@ async fn send_user_message_round_trips() {
             [StartAgentRequest {
                 agent: AgentName::Codex,
                 workspace: String::new(),
-                mode: Some(AgentLaunchMode::Server),
                 profile_id: None,
                 model: None,
                 reasoning_effort: None,
@@ -276,6 +273,8 @@ async fn send_user_message_round_trips() {
                 text: "hello test".into(),
                 origin_message_id: None,
                 attachments: vec![],
+                delivery_id: None,
+                bot_id: None,
             }],
         )
         .await
@@ -319,7 +318,6 @@ async fn read_session_raw_history_returns_events_after_start() {
             [StartAgentRequest {
                 agent: AgentName::Codex,
                 workspace: String::new(),
-                mode: Some(AgentLaunchMode::Server),
                 profile_id: None,
                 model: None,
                 reasoning_effort: None,
@@ -380,6 +378,7 @@ async fn list_conversation_messages_returns_messages_from_local_db_newest_first(
             "conversation-main",
             "/tmp/ws",
             "codex",
+            Some("local-rt-codex"),
             Some("thread-1"),
             None,
             "idle",
@@ -409,7 +408,7 @@ async fn list_conversation_messages_returns_messages_from_local_db_newest_first(
             "msg-2",
             Some("thread-1"),
             "agent",
-            Some("codex"),
+            Some("local-rt-codex"),
             "auth summary",
             11,
             None,
@@ -618,7 +617,6 @@ async fn resume_session_returns_thread_info() {
             [StartAgentRequest {
                 agent: AgentName::Codex,
                 workspace: String::new(),
-                mode: Some(AgentLaunchMode::Server),
                 profile_id: None,
                 model: None,
                 reasoning_effort: None,
@@ -688,6 +686,7 @@ async fn list_local_sessions_includes_persisted_suspended_threads() {
             "c-persisted",
             "/tmp/persisted",
             "claude",
+            Some("local-rt-claude"),
             None,
             None,
             "idle",

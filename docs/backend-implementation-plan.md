@@ -284,7 +284,7 @@ CREATE INDEX idx_host_links_host    ON host_links(host_installation_id);
 
 -- 7. agents catalog（系统目录，slug 主键）
 CREATE TABLE agents (
-    agent_id      TEXT PRIMARY KEY,           -- 'agent_codex','agent_claude','agent_gemini'
+    agent_id      TEXT PRIMARY KEY,           -- global bot id (e.g. bot-<uuid>); legacy slug seeds optional
     runtime_kind  TEXT NOT NULL,
     display_name  TEXT NOT NULL,
     description   TEXT,

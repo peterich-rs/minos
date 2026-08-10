@@ -86,3 +86,4 @@ server-centric model. Three observable consequences:
 - Implementation plan: `docs/superpowers/plans/11-server-centric-auth-and-pair.md`
 - Spec being partially superseded: `docs/superpowers/specs/mobile-auth-and-agent-session-design.md` (§12.2, §5.4)
 - Prior pairing-related ADRs: `docs/adr/0014-backend-assembled-pairing-qr.md`, `docs/adr/0016-client-env-cloudflare-access.md`
+- **Bot participants (not human Accounts):** [0021-agent-as-conversation-bot-participant.md](0021-agent-as-conversation-bot-participant.md) — Agents are conversation bots; this ADR’s Account/Host split remains for humans vs machines.

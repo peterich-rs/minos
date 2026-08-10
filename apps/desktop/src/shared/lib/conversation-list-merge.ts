@@ -19,6 +19,7 @@
  */
 
 import type { Conversation } from "./mock-data.ts";
+import { runtimesOfBots } from "./mock-data.ts";
 import type { HubConversationDigest } from "./hub-digest-cache.ts";
 import { positiveMs } from "./rail-activity.ts";
 
@@ -33,6 +34,7 @@ export type DaemonListRow = {
   messageCount?: number;
   unread?: number;
   agentSessionCount?: number;
+  participatingBots?: Conversation["participatingBots"];
   participatingAgents?: string[];
   runningCount?: number;
   approvalCount?: number;
@@ -221,7 +223,15 @@ export function mergeConversationList(input: {
       messageCount: row.messageCount ?? 0,
       boardColumn: row.boardColumn ?? "backlog",
       agentSessionCount: row.agentSessionCount ?? 0,
-      participatingAgents: row.participatingAgents ?? [],
+      // participatingBots = roster SSOT; participatingAgents derived for host tokens.
+      participatingBots: row.participatingBots ?? [],
+      participatingAgents: (() => {
+        const fromBots = runtimesOfBots(row.participatingBots);
+        if (fromBots.length > 0) return fromBots;
+        return (row.participatingAgents ?? [])
+          .map((a) => a.trim().toLowerCase())
+          .filter(Boolean);
+      })(),
       runningCount: row.runningCount ?? 0,
       approvalCount: row.approvalCount ?? 0,
       priority: row.priority,
@@ -258,6 +268,7 @@ export function mergeConversationList(input: {
         messageCount: 0,
         boardColumn: "backlog",
         agentSessionCount: 0,
+        participatingBots: [],
         participatingAgents: [],
         runningCount: 0,
         approvalCount: 0,

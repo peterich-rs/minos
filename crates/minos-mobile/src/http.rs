@@ -16,10 +16,10 @@ use minos_domain::{AgentName, DeviceId, MinosError};
 use minos_protocol::{
     AddAgentToGroupRequest, AddGroupMemberRequest, AgentSummary, ApprovalDecisionRequest,
     AssignProjectThreadRequest, AuthResponse, ConversationAgentMembersResponse,
-    ConversationMembersResponse, ConversationReadResponse, ConversationResponse,
-    ConversationsResponse, CreateFriendRequestRequest, CreateGroupConversationRequest,
-    CreateProjectRequest, CreateProjectResponse, DeleteProjectRequest,
-    EnsureDirectConversationRequest, FriendRequestsResponse, FriendsResponse,
+    ConversationMembersResponse, ConversationParticipantsResponse, ConversationReadResponse,
+    ConversationResponse, ConversationsResponse, CreateFriendRequestRequest,
+    CreateGroupConversationRequest, CreateProjectRequest, CreateProjectResponse,
+    DeleteProjectRequest, EnsureDirectConversationRequest, FriendRequestsResponse, FriendsResponse,
     GetSessionLastSeqResponse, HostSummary, ListAgentsResponse, ListChatMessagesRequest,
     ListChatMessagesResponse, ListHostClisRequest, ListHostSkillsCommandRequest,
     ListHostSkillsResponse, ListHostWorkspacesCommandRequest, ListHostWorkspacesResponse,
@@ -1429,6 +1429,44 @@ impl MobileHttpClient {
                 trace_id,
                 Some(status.as_u16()),
                 Some(format!("agents={}", body.agents.len())),
+                Some(conversation_id.into()),
+            );
+            Ok(body)
+        } else {
+            let error = decode_error(resp).await;
+            request_trace::finish_failure(trace_id, Some(status.as_u16()), error.to_string());
+            Err(error)
+        }
+    }
+
+    /// Unified participants read model: humans ∪ bot agents (ADR 0021).
+    pub async fn list_conversation_participants(
+        &self,
+        access_token: &str,
+        conversation_id: &str,
+    ) -> Result<ConversationParticipantsResponse, MinosError> {
+        let path = format!("/v1/conversations/{conversation_id}/participants");
+        let url = format!("{}{}", self.base, path);
+        let trace_id = start_http_trace(
+            Method::POST.as_str(),
+            &path,
+            Some(conversation_id.into()),
+            None,
+        );
+        let request = self.request_without_body(Method::POST, &url, Some(access_token))?;
+        let resp = self.execute_with_trace(trace_id, &url, request).await?;
+        let status = resp.status();
+        if status.is_success() {
+            let body: ConversationParticipantsResponse =
+                decode_success_json(resp, "ConversationParticipantsResponse").await?;
+            request_trace::finish_success(
+                trace_id,
+                Some(status.as_u16()),
+                Some(format!(
+                    "humans={} agents={}",
+                    body.humans.len(),
+                    body.agents.len()
+                )),
                 Some(conversation_id.into()),
             );
             Ok(body)

@@ -277,51 +277,19 @@ export async function upsertConversation(
   }).then((r) => ({ conversationId: r.conversation_id }));
 }
 
-export async function sendConversationMessage(
-  deviceId: string,
-  accessToken: string,
-  conversationId: string,
-  input: {
-    text: string;
-    clientMessageId?: string;
-    replyToMessageId?: string;
-    /** Client clock for display/debug only (not ordering authority). */
-    clientSentAtMs?: number;
-    /** @deprecated Prefer clientSentAtMs. */
-    createdAtMs?: number;
-    /**
-     * host_projection = dual-write of already-run Host messages (no agent dispatch).
-     * Defaults server-side to client_live.
-     */
-    messageSource?: "client_live" | "host_projection" | "system";
-  },
-): Promise<{ messageId: string }> {
-  const body: Record<string, unknown> = { text: input.text };
-  if (input.clientMessageId) body.client_message_id = input.clientMessageId;
-  if (input.replyToMessageId) body.reply_to_message_id = input.replyToMessageId;
-  if (input.messageSource) body.message_source = input.messageSource;
-  const clientTs = input.clientSentAtMs ?? input.createdAtMs;
-  if (clientTs != null && clientTs > 0) {
-    body.client_sent_at_ms = clientTs;
-  }
-  const resp = await requestJson<{ message_id: string }>(
-    `/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
-    {
-      method: "POST",
-      headers: deviceHeaders(deviceId, accessToken),
-      body: JSON.stringify(body),
-    },
-  );
-  return { messageId: resp.message_id };
-}
-
 export type CloudAgentSummary = {
   agentId: string;
   ownerAccountId: string;
   name: string;
+  displayName: string;
   description: string;
+  avatarUrl?: string | null;
+  source: string;
+  status: string;
   runtimeAgent: string;
   model: string;
+  defaultReasoningEffort: string;
+  systemPrompt: string;
   workspacePath?: string | null;
   createdAtMs: number;
   updatedAtMs: number;
@@ -331,9 +299,15 @@ function mapAgentSummary(raw: {
   agent_id: string;
   owner_account_id: string;
   name: string;
+  display_name?: string;
   description: string;
+  avatar_url?: string | null;
+  source?: string;
+  status?: string;
   runtime_agent: string;
   model: string;
+  default_reasoning_effort?: string;
+  system_prompt?: string;
   workspace_path?: string | null;
   created_at_ms: number;
   updated_at_ms: number;
@@ -342,16 +316,22 @@ function mapAgentSummary(raw: {
     agentId: raw.agent_id,
     ownerAccountId: raw.owner_account_id,
     name: raw.name,
+    displayName: raw.display_name || raw.name,
     description: raw.description,
+    avatarUrl: raw.avatar_url,
+    source: raw.source ?? "user",
+    status: raw.status ?? "active",
     runtimeAgent: raw.runtime_agent,
     model: raw.model,
+    defaultReasoningEffort: raw.default_reasoning_effort ?? "",
+    systemPrompt: raw.system_prompt ?? "",
     workspacePath: raw.workspace_path,
     createdAtMs: raw.created_at_ms,
     updatedAtMs: raw.updated_at_ms,
   };
 }
 
-/** List cloud agents owned by the account. */
+/** List cloud agents owned by the account (Hub bot directory SSOT). */
 export async function listCloudAgents(
   deviceId: string,
   accessToken: string,
@@ -367,9 +347,109 @@ export async function listCloudAgents(
   return (resp.agents ?? []).map(mapAgentSummary);
 }
 
+/** Register a global user-configured bot on Hub (`POST /v1/agents`). */
+export async function createCloudAgent(
+  deviceId: string,
+  accessToken: string,
+  input: {
+    name: string;
+    displayName?: string | null;
+    description?: string;
+    avatarUrl?: string | null;
+    runtimeAgent: string;
+    model?: string;
+    defaultReasoningEffort?: string;
+    systemPrompt?: string;
+    workspacePath?: string | null;
+  },
+): Promise<CloudAgentSummary> {
+  const raw = await requestJson<Parameters<typeof mapAgentSummary>[0]>(
+    "/v1/agents",
+    {
+      method: "POST",
+      headers: deviceHeaders(deviceId, accessToken),
+      body: JSON.stringify({
+        name: input.name,
+        display_name: input.displayName ?? undefined,
+        description: input.description ?? "",
+        avatar_url: input.avatarUrl ?? undefined,
+        runtime_agent: input.runtimeAgent,
+        model: input.model ?? "",
+        default_reasoning_effort: input.defaultReasoningEffort ?? "",
+        system_prompt: input.systemPrompt ?? "",
+        workspace_path: input.workspacePath ?? undefined,
+      }),
+    },
+  );
+  return mapAgentSummary(raw);
+}
+
+/** Update a global bot digital body (`POST /v1/agents/:id/update`). */
+export async function updateCloudAgent(
+  deviceId: string,
+  accessToken: string,
+  agentId: string,
+  input: {
+    name: string;
+    displayName?: string | null;
+    description?: string;
+    avatarUrl?: string | null;
+    runtimeAgent: string;
+    model?: string;
+    defaultReasoningEffort?: string;
+    systemPrompt?: string;
+    workspacePath?: string | null;
+    status?: string | null;
+  },
+): Promise<CloudAgentSummary> {
+  const raw = await requestJson<Parameters<typeof mapAgentSummary>[0]>(
+    `/v1/agents/${encodeURIComponent(agentId)}/update`,
+    {
+      method: "POST",
+      headers: deviceHeaders(deviceId, accessToken),
+      body: JSON.stringify({
+        name: input.name,
+        display_name: input.displayName ?? undefined,
+        description: input.description ?? "",
+        // Omitted fields are merged server-side (do not wipe avatar/prompt/status).
+        avatar_url: input.avatarUrl === undefined ? undefined : input.avatarUrl,
+        runtime_agent: input.runtimeAgent,
+        model: input.model ?? "",
+        default_reasoning_effort:
+          input.defaultReasoningEffort === undefined
+            ? undefined
+            : input.defaultReasoningEffort,
+        system_prompt:
+          input.systemPrompt === undefined ? undefined : input.systemPrompt,
+        workspace_path:
+          input.workspacePath === undefined ? undefined : input.workspacePath,
+        status: input.status === undefined ? undefined : input.status,
+      }),
+    },
+  );
+  return mapAgentSummary(raw);
+}
+
+/** Delete a global bot owned by the caller (`POST /v1/agents/:id/delete`). */
+export async function deleteCloudAgent(
+  deviceId: string,
+  accessToken: string,
+  agentId: string,
+): Promise<void> {
+  await requestJson<void>(
+    `/v1/agents/${encodeURIComponent(agentId)}/delete`,
+    {
+      method: "POST",
+      headers: deviceHeaders(deviceId, accessToken),
+      body: JSON.stringify({}),
+    },
+  );
+}
+
 /**
- * Ensure a stable Host/Desktop runtime agent exists for local bin → cloud id.
- * Idempotent per (account, runtime_agent) with description `minos:host-runtime`.
+ * Seed a host_runtime registry slot for local bin → cloud id mapping.
+ * Idempotent per (account, runtime_agent). **Seed only — never joins a conversation.**
+ * Product bot directory CRUD uses createCloudAgent / updateCloudAgent instead.
  */
 export async function ensureHostRuntimeAgent(
   deviceId: string,
@@ -413,6 +493,61 @@ export async function addAgentToConversation(
   );
 }
 
+/** Human participant summary (conversation members / participants API). */
+export type CloudUserSummary = {
+  accountId: string;
+  minosId: string;
+  displayName: string;
+};
+
+/** Unified conversation participants (humans ∪ bot agents). ADR 0021 Phase A. */
+export type ConversationParticipants = {
+  humans: CloudUserSummary[];
+  agents: CloudAgentSummary[];
+};
+
+function mapUserSummary(raw: {
+  account_id: string;
+  minos_id: string;
+  display_name: string;
+}): CloudUserSummary {
+  return {
+    accountId: raw.account_id,
+    minosId: raw.minos_id,
+    displayName: raw.display_name || raw.minos_id,
+  };
+}
+
+/**
+ * List conversation participants (humans + agents) for composer @ picker.
+ * POST …/participants — Phase A dual-table aggregate.
+ */
+export async function listConversationParticipants(
+  deviceId: string,
+  accessToken: string,
+  conversationId: string,
+): Promise<ConversationParticipants> {
+  const raw = await requestJson<{
+    humans?: Array<{
+      account_id: string;
+      minos_id: string;
+      display_name: string;
+    }>;
+    agents?: Array<Parameters<typeof mapAgentSummary>[0]>;
+  }>(
+    `/v1/conversations/${encodeURIComponent(conversationId)}/participants`,
+    {
+      method: "POST",
+      headers: deviceHeaders(deviceId, accessToken),
+      body: JSON.stringify({}),
+    },
+  );
+  return {
+    humans: (raw.humans ?? []).map(mapUserSummary),
+    agents: (raw.agents ?? []).map(mapAgentSummary),
+  };
+}
+
 export type HubReactionGroup = {
   emoji: string;
   count: number;
@@ -428,14 +563,73 @@ export type HubChatMessage = {
   /** Per-conversation Hub ordering key; undefined when absent (never pseudo-0). */
   messageSeq?: number;
   senderType: "user" | "agent";
+  /** account_id for humans; bot_id for bots (global bot identity). */
   senderAccountId: string;
   senderMinosId: string;
   senderDisplayName: string;
+  /** Runtime family from MessageSender::Bot (badge only). */
+  runtimeAgent?: string;
   replyToMessageId?: string | null;
   recalledAtMs?: number | null;
+  /** Structured human mention targets (protocol ChatMessageSummary). */
+  mentionedAccountIds?: string[];
+  /** Structured bot mention targets (protocol ChatMessageSummary). */
+  mentionedAgentIds?: string[];
   /** Viewer-resolved reaction aggregates from messages/query. */
   reactions?: HubReactionGroup[];
 };
+
+/** Wire `MessageSender` tagged union (kind: account | bot). */
+type WireMessageSender =
+  | {
+      kind: "account";
+      account_id: string;
+      minos_id: string;
+      display_name: string;
+    }
+  | {
+      kind: "bot";
+      bot_id: string;
+      display_name: string;
+      runtime_agent?: string;
+      name?: string | null;
+      avatar_url?: string | null;
+    }
+  /** Legacy pre-MessageSender shape (account fields only). */
+  | {
+      kind?: undefined;
+      account_id: string;
+      minos_id: string;
+      display_name: string;
+    };
+
+function mapWireSender(sender: WireMessageSender): {
+  senderType: "user" | "agent";
+  senderAccountId: string;
+  senderMinosId: string;
+  senderDisplayName: string;
+  /** Runtime family from MessageSender::Bot — not identity. */
+  runtimeAgent?: string;
+} {
+  if (sender.kind === "bot") {
+    return {
+      senderType: "agent",
+      // bot_id is the global bot identity; keep field name for HubChatMessage
+      // consumers that still key agentRuntimeMap by id.
+      senderAccountId: sender.bot_id,
+      senderMinosId: sender.name?.trim() || sender.bot_id,
+      senderDisplayName: sender.display_name,
+      runtimeAgent: sender.runtime_agent?.trim() || undefined,
+    };
+  }
+  // account | legacy
+  return {
+    senderType: "user",
+    senderAccountId: sender.account_id,
+    senderMinosId: sender.minos_id,
+    senderDisplayName: sender.display_name,
+  };
+}
 
 function mapHubChatMessage(raw: {
   message_id: string;
@@ -444,13 +638,11 @@ function mapHubChatMessage(raw: {
   created_at_ms: number;
   message_seq?: number;
   sender_type?: string;
-  sender: {
-    account_id: string;
-    minos_id: string;
-    display_name: string;
-  };
+  sender: WireMessageSender;
   reply_to?: { message_id: string } | null;
   recalled_at_ms?: number | null;
+  mentioned_account_ids?: string[] | null;
+  mentioned_agent_ids?: string[] | null;
   reactions?: Array<{
     emoji: string;
     count: number;
@@ -462,6 +654,12 @@ function mapHubChatMessage(raw: {
     }>;
   }>;
 }): HubChatMessage {
+  const mappedSender = mapWireSender(raw.sender);
+  // Prefer tagged sender; fall back to sender_type for sparse frames.
+  const senderType =
+    mappedSender.senderType === "agent" || raw.sender_type === "agent"
+      ? "agent"
+      : "user";
   return {
     messageId: raw.message_id,
     conversationId: raw.conversation_id,
@@ -472,12 +670,23 @@ function mapHubChatMessage(raw: {
       raw.message_seq != null && Number.isFinite(raw.message_seq)
         ? raw.message_seq
         : undefined,
-    senderType: raw.sender_type === "agent" ? "agent" : "user",
-    senderAccountId: raw.sender.account_id,
-    senderMinosId: raw.sender.minos_id,
-    senderDisplayName: raw.sender.display_name,
+    senderType,
+    senderAccountId: mappedSender.senderAccountId,
+    senderMinosId: mappedSender.senderMinosId,
+    senderDisplayName: mappedSender.senderDisplayName,
+    runtimeAgent: mappedSender.runtimeAgent,
     replyToMessageId: raw.reply_to?.message_id ?? null,
     recalledAtMs: raw.recalled_at_ms ?? null,
+    mentionedAccountIds: Array.isArray(raw.mentioned_account_ids)
+      ? raw.mentioned_account_ids.filter(
+          (id): id is string => typeof id === "string" && id.length > 0,
+        )
+      : undefined,
+    mentionedAgentIds: Array.isArray(raw.mentioned_agent_ids)
+      ? raw.mentioned_agent_ids.filter(
+          (id): id is string => typeof id === "string" && id.length > 0,
+        )
+      : undefined,
     reactions: (raw.reactions ?? []).map((g) => ({
       emoji: g.emoji,
       count: g.count,
@@ -799,8 +1008,6 @@ export async function sendAgentConversationMessage(
     replyToMessageId?: string | null;
     agentSessionId?: string | null;
     clientSentAtMs?: number;
-    /** @deprecated Prefer clientSentAtMs. */
-    createdAtMs?: number;
     messageSource?: "client_live" | "host_projection" | "system";
   },
 ): Promise<{ messageId: string }> {
@@ -812,9 +1019,8 @@ export async function sendAgentConversationMessage(
   if (input.replyToMessageId) body.reply_to_message_id = input.replyToMessageId;
   if (input.agentSessionId) body.agent_session_id = input.agentSessionId;
   if (input.messageSource) body.message_source = input.messageSource;
-  const clientTs = input.clientSentAtMs ?? input.createdAtMs;
-  if (clientTs != null && clientTs > 0) {
-    body.client_sent_at_ms = clientTs;
+  if (input.clientSentAtMs != null && input.clientSentAtMs > 0) {
+    body.client_sent_at_ms = input.clientSentAtMs;
   }
   const resp = await requestJson<{ message_id: string }>(
     `/v1/conversations/${encodeURIComponent(conversationId)}/agents/message`,

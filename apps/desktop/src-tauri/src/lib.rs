@@ -134,6 +134,7 @@ pub fn run() {
             daemon_list_models,
             daemon_list_agent_profiles,
             daemon_create_agent_profile,
+            daemon_update_agent_profile,
             daemon_delete_agent_profile,
             daemon_send_user_message,
             daemon_resume_session,

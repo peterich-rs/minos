@@ -11,8 +11,10 @@ import {
   projectSessionFromEntity,
 } from "@/shared/lib/session-entity";
 import {
+  mergeRowsIntoProjectSessionList,
   projectEntityIntoLists as projectEntityIntoListsPure,
   projectSessionIdsIntoLists,
+  resolveProjectIdForConversation,
 } from "@/shared/lib/session-list-projection";
 import type {
   ProjectSession,
@@ -171,6 +173,28 @@ export function commitSessionEntity(
     entity.sessionId,
   );
 
+  // Project SessionList hydrate still owns full project history, but live /
+  // start-session commits must upsert membership immediately. Otherwise the
+  // Sessions tab only shows the current conversation's runs after a delayed
+  // list_project_sessions round-trip (or never, while keep-alive was stale).
+  let projectSessionsByProject = lists.projectSessionsByProject;
+  const conversationProjectById: Record<string, string> = {};
+  for (const c of s.conversations) {
+    if (c.projectId) conversationProjectById[c.id] = c.projectId;
+  }
+  const projectId = resolveProjectIdForConversation(
+    entity.conversationId,
+    conversationProjectById,
+    projectSessionsByProject,
+  );
+  if (projectId) {
+    projectSessionsByProject = mergeRowsIntoProjectSessionList(
+      projectSessionsByProject,
+      projectId,
+      [projectSessionFromEntity(entity) as ProjectSession],
+    ) as Record<string, ProjectSession[]>;
+  }
+
   const convIds = [
     entity.conversationId,
     prev?.conversationId ?? "",
@@ -185,7 +209,9 @@ export function commitSessionEntity(
 
   return {
     sessionsById,
-    ...lists,
+    sessionsByConversation: lists.sessionsByConversation,
+    projectSessionsByProject,
+    attentionSessions: lists.attentionSessions,
     conversations: aggregates.conversations,
     ...(aggregates.projects ? { projects: aggregates.projects } : {}),
   };

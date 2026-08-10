@@ -51,6 +51,32 @@ export function VirtualizedList<T>({
     onVirtualizer?.(virtualizer);
   }, [onVirtualizer, virtualizer]);
 
+  // Keep-alive views use CSS `hidden` (display:none). While zero-sized, the
+  // virtualizer range is empty / scroll metrics are stale; WKWebView often
+  // skips ResizeObserver when un-hiding. Force measure + scroll reset when
+  // the scrollport gains height so rows paint immediately on tab switch.
+  React.useLayoutEffect(() => {
+    const el = resolvedScrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let prevH = el.clientHeight;
+    const onGainHeight = () => {
+      el.scrollTop = 0;
+      virtualizer.measure();
+    };
+    if (prevH > 0) {
+      // First paint already has a real scrollport (e.g. remount on tab active).
+      // Still remeasure once so estimate-only ranges resolve.
+      virtualizer.measure();
+    }
+    const ro = new ResizeObserver(() => {
+      const h = el.clientHeight;
+      if (prevH === 0 && h > 0) onGainHeight();
+      prevH = h;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [virtualizer, resolvedScrollRef]);
+
   const virtualItems = virtualizer.getVirtualItems();
 
   const content = (

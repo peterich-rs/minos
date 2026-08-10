@@ -2,13 +2,14 @@
 
 | Field | Value |
 |-------|--------|
-| Status | **Normative target**（2026-08-02） |
+| Status | **Normative target**（2026-08-02；**触发语义** 2026-08-09 起以 participant delivery 为准） |
 | Date | 2026-08-02 |
-| Scope | 协作聊天气泡多端可见性；Desktop dual-write 退役；Agent 最终气泡单一写者；Sync Engine |
-| Related | [architecture-messaging.md](../../architecture-messaging.md) §1.2 #3、§7.4；[05-projection-sync.md](2026-07-30-program/05-projection-sync.md)；本分支 `im-cloud-sync*` / `hub-realtime` / Mobile Messages Tab |
+| Scope | 协作聊天气泡多端可见性；Desktop dual-write 退役；Agent 最终气泡 **Hub 权威**（路径可 client_live projector / host_projection 上行）；Sync Engine |
+| Related | [architecture-messaging.md](../../architecture-messaging.md)；[ADR 0021](../../adr/0021-agent-as-conversation-bot-participant.md)；[agent-participant-delivery](2026-08-09-agent-participant-delivery.md)；[05-projection-sync.md](2026-07-30-program/05-projection-sync.md) |
 | Non-goals | 改 Grok/Codex 协议本身；E2EE；大群百万写扩散；保留历史 dual-write 兼容层（latest-only） |
 
-> **一句话目标**：多端可见的用户/Agent **聊天气泡只认 Hub**；Host SQLite 只权威 **Agent 原始事件与本地工作台**；端上是 **带水位的 Sync + 可选 Outbox**，禁止 UI 层 best-effort 双向镜像当终态。
+> **一句话目标**：多端可见的用户/Agent **聊天气泡只认 Hub**；Host SQLite 只权威 **Agent 原始事件与本地工作台**；端上是 **带水位的 Sync + 可选 Outbox**，禁止 UI 层 best-effort 双向镜像当终态。  
+> **@bot 触发**：消息 commit → **participant delivery / Agent inbox**（非「协作=HostCommand」）；见 [2026-08-09-agent-participant-delivery](2026-08-09-agent-participant-delivery.md)。本文管 **气泡写者与幂等**，不管产品层是否把 runtime 叫 dispatch。
 
 ---
 
@@ -148,7 +149,7 @@ Host turn boundary (conversation_completion 语义)
 ### 1.3 Mobile 终态（基本已对齐，harden）
 
 - Inbox / chat：**只** Hub。  
-- @agent：`try_agent_dispatch` → Host 执行 → **Hub 必须**收到 agent 最终气泡（§2）。  
+- @bot（agent participant）：消息落库 → **Agent inbox**（实现可仍叫 `try_agent_dispatch`）→ Host runtime → **Hub 必须**收到 agent 最终气泡（§2）。  
 - 底栏：仅 live session 热投影；turn idle / MessageCompleted / host offline → 收起。  
 - 不依赖 Desktop dual-write 运气。
 

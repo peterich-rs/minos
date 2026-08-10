@@ -148,7 +148,7 @@ class GroupMembersPage extends ConsumerWidget {
                             memberAccountId: friend.accountId,
                           );
                       ref.invalidate(
-                        conversationMembersProvider(conversationId),
+                        conversationParticipantsProvider(conversationId),
                       );
                       if (context.mounted) {
                         showMinosToast(
@@ -234,7 +234,7 @@ class GroupMembersPage extends ConsumerWidget {
                             agentId: profile.agentId,
                           );
                       ref.invalidate(
-                        conversationAgentMembersProvider(conversationId),
+                        conversationParticipantsProvider(conversationId),
                       );
                       if (context.mounted) {
                         showMinosToast(
@@ -371,7 +371,7 @@ class _UserMembersList extends ConsumerWidget {
             conversationId: conversationId,
             memberAccountId: member.accountId,
           );
-      ref.invalidate(conversationMembersProvider(conversationId));
+      ref.invalidate(conversationParticipantsProvider(conversationId));
       ref.invalidate(conversationsProvider);
     } catch (error) {
       if (!context.mounted) return;
@@ -443,7 +443,7 @@ class _AgentMembersList extends ConsumerWidget {
                           agentId: agent.agentId,
                         );
                     ref.invalidate(
-                      conversationAgentMembersProvider(conversationId),
+                      conversationParticipantsProvider(conversationId),
                     );
                   } catch (error) {
                     if (context.mounted) {

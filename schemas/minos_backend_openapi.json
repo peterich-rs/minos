@@ -1791,40 +1791,6 @@
         "x-minos-surface": "host_api"
       }
     },
-    "/v1/host/realtime/ws-ticket": {
-      "post": {
-        "description": "Generated from the mounted route inventory for the `host_api` surface with `host_installation` auth semantics.",
-        "operationId": "post_v1_host_realtime_ws_ticket",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": true
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": true
-              }
-            },
-            "description": "Success"
-          },
-          "401": {
-            "description": "Authentication required or rejected"
-          }
-        },
-        "summary": "POST /v1/host/realtime/ws-ticket",
-        "tags": [
-          "host_api"
-        ],
-        "x-minos-auth": "host_installation",
-        "x-minos-probe-path": "/v1/host/realtime/ws-ticket",
-        "x-minos-surface": "host_api"
-      }
-    },
     "/v1/hosts": {
       "get": {
         "description": "Generated from the mounted route inventory for the `account_api` surface with `account_bearer` auth semantics.",

@@ -1393,6 +1393,341 @@ as ArtifactRef,
 }
 
 /// @nodoc
+mixin _$MessageSender {
+
+ String get displayName;
+/// Create a copy of MessageSender
+/// with the given fields replaced by the non-null parameter values.
+@JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$MessageSenderCopyWith<MessageSender> get copyWith => _$MessageSenderCopyWithImpl<MessageSender>(this as MessageSender, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MessageSender&&(identical(other.displayName, displayName) || other.displayName == displayName));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,displayName);
+
+@override
+String toString() {
+  return 'MessageSender(displayName: $displayName)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $MessageSenderCopyWith<$Res>  {
+  factory $MessageSenderCopyWith(MessageSender value, $Res Function(MessageSender) _then) = _$MessageSenderCopyWithImpl;
+@useResult
+$Res call({
+ String displayName
+});
+
+
+
+
+}
+/// @nodoc
+class _$MessageSenderCopyWithImpl<$Res>
+    implements $MessageSenderCopyWith<$Res> {
+  _$MessageSenderCopyWithImpl(this._self, this._then);
+
+  final MessageSender _self;
+  final $Res Function(MessageSender) _then;
+
+/// Create a copy of MessageSender
+/// with the given fields replaced by the non-null parameter values.
+@pragma('vm:prefer-inline') @override $Res call({Object? displayName = null,}) {
+  return _then(_self.copyWith(
+displayName: null == displayName ? _self.displayName : displayName // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+}
+
+
+/// Adds pattern-matching-related methods to [MessageSender].
+extension MessageSenderPatterns on MessageSender {
+/// A variant of `map` that fallback to returning `orElse`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeMap<TResult extends Object?>({TResult Function( MessageSender_Account value)?  account,TResult Function( MessageSender_Bot value)?  bot,required TResult orElse(),}){
+final _that = this;
+switch (_that) {
+case MessageSender_Account() when account != null:
+return account(_that);case MessageSender_Bot() when bot != null:
+return bot(_that);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// Callbacks receives the raw object, upcasted.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case final Subclass2 value:
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult map<TResult extends Object?>({required TResult Function( MessageSender_Account value)  account,required TResult Function( MessageSender_Bot value)  bot,}){
+final _that = this;
+switch (_that) {
+case MessageSender_Account():
+return account(_that);case MessageSender_Bot():
+return bot(_that);}
+}
+/// A variant of `map` that fallback to returning `null`.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case final Subclass value:
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? mapOrNull<TResult extends Object?>({TResult? Function( MessageSender_Account value)?  account,TResult? Function( MessageSender_Bot value)?  bot,}){
+final _that = this;
+switch (_that) {
+case MessageSender_Account() when account != null:
+return account(_that);case MessageSender_Bot() when bot != null:
+return bot(_that);case _:
+  return null;
+
+}
+}
+/// A variant of `when` that fallback to an `orElse` callback.
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return orElse();
+/// }
+/// ```
+
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>({TResult Function( String accountId,  String minosId,  String displayName)?  account,TResult Function( String botId,  String displayName,  String runtimeAgent,  String? name,  String? avatarUrl)?  bot,required TResult orElse(),}) {final _that = this;
+switch (_that) {
+case MessageSender_Account() when account != null:
+return account(_that.accountId,_that.minosId,_that.displayName);case MessageSender_Bot() when bot != null:
+return bot(_that.botId,_that.displayName,_that.runtimeAgent,_that.name,_that.avatarUrl);case _:
+  return orElse();
+
+}
+}
+/// A `switch`-like method, using callbacks.
+///
+/// As opposed to `map`, this offers destructuring.
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case Subclass2(:final field2):
+///     return ...;
+/// }
+/// ```
+
+@optionalTypeArgs TResult when<TResult extends Object?>({required TResult Function( String accountId,  String minosId,  String displayName)  account,required TResult Function( String botId,  String displayName,  String runtimeAgent,  String? name,  String? avatarUrl)  bot,}) {final _that = this;
+switch (_that) {
+case MessageSender_Account():
+return account(_that.accountId,_that.minosId,_that.displayName);case MessageSender_Bot():
+return bot(_that.botId,_that.displayName,_that.runtimeAgent,_that.name,_that.avatarUrl);}
+}
+/// A variant of `when` that fallback to returning `null`
+///
+/// It is equivalent to doing:
+/// ```dart
+/// switch (sealedClass) {
+///   case Subclass(:final field):
+///     return ...;
+///   case _:
+///     return null;
+/// }
+/// ```
+
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>({TResult? Function( String accountId,  String minosId,  String displayName)?  account,TResult? Function( String botId,  String displayName,  String runtimeAgent,  String? name,  String? avatarUrl)?  bot,}) {final _that = this;
+switch (_that) {
+case MessageSender_Account() when account != null:
+return account(_that.accountId,_that.minosId,_that.displayName);case MessageSender_Bot() when bot != null:
+return bot(_that.botId,_that.displayName,_that.runtimeAgent,_that.name,_that.avatarUrl);case _:
+  return null;
+
+}
+}
+
+}
+
+/// @nodoc
+
+
+class MessageSender_Account extends MessageSender {
+  const MessageSender_Account({required this.accountId, required this.minosId, required this.displayName}): super._();
+  
+
+ final  String accountId;
+ final  String minosId;
+@override final  String displayName;
+
+/// Create a copy of MessageSender
+/// with the given fields replaced by the non-null parameter values.
+@override @JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$MessageSender_AccountCopyWith<MessageSender_Account> get copyWith => _$MessageSender_AccountCopyWithImpl<MessageSender_Account>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MessageSender_Account&&(identical(other.accountId, accountId) || other.accountId == accountId)&&(identical(other.minosId, minosId) || other.minosId == minosId)&&(identical(other.displayName, displayName) || other.displayName == displayName));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,accountId,minosId,displayName);
+
+@override
+String toString() {
+  return 'MessageSender.account(accountId: $accountId, minosId: $minosId, displayName: $displayName)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $MessageSender_AccountCopyWith<$Res> implements $MessageSenderCopyWith<$Res> {
+  factory $MessageSender_AccountCopyWith(MessageSender_Account value, $Res Function(MessageSender_Account) _then) = _$MessageSender_AccountCopyWithImpl;
+@override @useResult
+$Res call({
+ String accountId, String minosId, String displayName
+});
+
+
+
+
+}
+/// @nodoc
+class _$MessageSender_AccountCopyWithImpl<$Res>
+    implements $MessageSender_AccountCopyWith<$Res> {
+  _$MessageSender_AccountCopyWithImpl(this._self, this._then);
+
+  final MessageSender_Account _self;
+  final $Res Function(MessageSender_Account) _then;
+
+/// Create a copy of MessageSender
+/// with the given fields replaced by the non-null parameter values.
+@override @pragma('vm:prefer-inline') $Res call({Object? accountId = null,Object? minosId = null,Object? displayName = null,}) {
+  return _then(MessageSender_Account(
+accountId: null == accountId ? _self.accountId : accountId // ignore: cast_nullable_to_non_nullable
+as String,minosId: null == minosId ? _self.minosId : minosId // ignore: cast_nullable_to_non_nullable
+as String,displayName: null == displayName ? _self.displayName : displayName // ignore: cast_nullable_to_non_nullable
+as String,
+  ));
+}
+
+
+}
+
+/// @nodoc
+
+
+class MessageSender_Bot extends MessageSender {
+  const MessageSender_Bot({required this.botId, required this.displayName, required this.runtimeAgent, this.name, this.avatarUrl}): super._();
+  
+
+ final  String botId;
+@override final  String displayName;
+ final  String runtimeAgent;
+ final  String? name;
+ final  String? avatarUrl;
+
+/// Create a copy of MessageSender
+/// with the given fields replaced by the non-null parameter values.
+@override @JsonKey(includeFromJson: false, includeToJson: false)
+@pragma('vm:prefer-inline')
+$MessageSender_BotCopyWith<MessageSender_Bot> get copyWith => _$MessageSender_BotCopyWithImpl<MessageSender_Bot>(this, _$identity);
+
+
+
+@override
+bool operator ==(Object other) {
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is MessageSender_Bot&&(identical(other.botId, botId) || other.botId == botId)&&(identical(other.displayName, displayName) || other.displayName == displayName)&&(identical(other.runtimeAgent, runtimeAgent) || other.runtimeAgent == runtimeAgent)&&(identical(other.name, name) || other.name == name)&&(identical(other.avatarUrl, avatarUrl) || other.avatarUrl == avatarUrl));
+}
+
+
+@override
+int get hashCode => Object.hash(runtimeType,botId,displayName,runtimeAgent,name,avatarUrl);
+
+@override
+String toString() {
+  return 'MessageSender.bot(botId: $botId, displayName: $displayName, runtimeAgent: $runtimeAgent, name: $name, avatarUrl: $avatarUrl)';
+}
+
+
+}
+
+/// @nodoc
+abstract mixin class $MessageSender_BotCopyWith<$Res> implements $MessageSenderCopyWith<$Res> {
+  factory $MessageSender_BotCopyWith(MessageSender_Bot value, $Res Function(MessageSender_Bot) _then) = _$MessageSender_BotCopyWithImpl;
+@override @useResult
+$Res call({
+ String botId, String displayName, String runtimeAgent, String? name, String? avatarUrl
+});
+
+
+
+
+}
+/// @nodoc
+class _$MessageSender_BotCopyWithImpl<$Res>
+    implements $MessageSender_BotCopyWith<$Res> {
+  _$MessageSender_BotCopyWithImpl(this._self, this._then);
+
+  final MessageSender_Bot _self;
+  final $Res Function(MessageSender_Bot) _then;
+
+/// Create a copy of MessageSender
+/// with the given fields replaced by the non-null parameter values.
+@override @pragma('vm:prefer-inline') $Res call({Object? botId = null,Object? displayName = null,Object? runtimeAgent = null,Object? name = freezed,Object? avatarUrl = freezed,}) {
+  return _then(MessageSender_Bot(
+botId: null == botId ? _self.botId : botId // ignore: cast_nullable_to_non_nullable
+as String,displayName: null == displayName ? _self.displayName : displayName // ignore: cast_nullable_to_non_nullable
+as String,runtimeAgent: null == runtimeAgent ? _self.runtimeAgent : runtimeAgent // ignore: cast_nullable_to_non_nullable
+as String,name: freezed == name ? _self.name : name // ignore: cast_nullable_to_non_nullable
+as String?,avatarUrl: freezed == avatarUrl ? _self.avatarUrl : avatarUrl // ignore: cast_nullable_to_non_nullable
+as String?,
+  ));
+}
+
+
+}
+
+/// @nodoc
 mixin _$MinosError {
 
 

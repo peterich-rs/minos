@@ -4,7 +4,7 @@
 //! `outbox_events`) must commit in the same transaction. Publish happens after
 //! commit via [`PendingDurablePublish`].
 
-use minos_protocol::{ChatMessageSummary, DurableEvent, SenderRef, SenderType};
+use minos_protocol::{ChatMessageSummary, DurableEvent, SenderRef};
 use uuid::Uuid;
 
 use crate::app::tx::DbTx;
@@ -26,13 +26,13 @@ pub struct PendingDurablePublish {
 const ACCOUNT_PREVIEW_MAX_CHARS: usize = 120;
 
 fn sender_ref_for_message(message: &ChatMessageSummary) -> SenderRef {
-    match message.sender_type {
-        SenderType::Agent => SenderRef::Agent {
-            agent_id: message.sender.account_id.clone(),
+    match &message.sender {
+        minos_protocol::MessageSender::Bot { bot_id, .. } => SenderRef::Agent {
+            agent_id: bot_id.clone(),
             session_id: None,
         },
-        SenderType::User => SenderRef::User {
-            account_id: message.sender.account_id.clone(),
+        minos_protocol::MessageSender::Account { account_id, .. } => SenderRef::User {
+            account_id: account_id.clone(),
         },
     }
 }
@@ -67,7 +67,7 @@ fn account_append_digest(account_id: &str, message: &ChatMessageSummary) -> Dura
         sender: sender_ref_for_message(message),
         at_ms: message.created_at_ms,
         preview: account_preview(&message.text),
-        sender_display_name: message.sender.display_name.clone(),
+        sender_display_name: message.sender.display_name().to_string(),
         mentioned,
         message_seq: Some(message.message_seq),
     }
@@ -354,7 +354,7 @@ mod tests {
         insert_message_with_id_in_tx, list_conversation_members,
     };
     use crate::store::test_support::{insert_account, memory_pool, T0};
-    use minos_protocol::{ChatMessageSummary, ReactionGroup, SenderType, UserSummary};
+    use minos_protocol::{ChatMessageSummary, MessageSender, ReactionGroup, SenderType};
 
     #[tokio::test]
     async fn reaction_delivery_is_conversation_only() {
@@ -572,7 +572,7 @@ mod tests {
             "hello durable",
             T0 + 1,
             None,
-            &[],
+            &crate::store::social::MessageMentions::empty(),
             Some("client-msg-1"),
             &[],
             "client_live",
@@ -584,7 +584,7 @@ mod tests {
         let message = ChatMessageSummary {
             message_id: outcome.row.message_id.clone(),
             conversation_id: outcome.row.conversation_id.clone(),
-            sender: UserSummary {
+            sender: MessageSender::Account {
                 account_id: alice.clone(),
                 minos_id: "alice".into(),
                 display_name: "Alice".into(),
@@ -595,6 +595,7 @@ mod tests {
             reply_to: None,
             recalled_at_ms: None,
             mentioned_account_ids: vec![],
+            mentioned_agent_ids: vec![],
             sender_type: SenderType::User,
             reactions: vec![],
             attachments: vec![],
@@ -636,7 +637,7 @@ mod tests {
             "orphaned",
             T0 + 1,
             None,
-            &[],
+            &crate::store::social::MessageMentions::empty(),
             Some("repair-id"),
             &[],
             "client_live",
@@ -655,7 +656,7 @@ mod tests {
             "orphaned",
             T0 + 2,
             None,
-            &[],
+            &crate::store::social::MessageMentions::empty(),
             Some("repair-id"),
             &[],
             "client_live",
@@ -666,7 +667,7 @@ mod tests {
         let message = ChatMessageSummary {
             message_id: again.row.message_id.clone(),
             conversation_id: again.row.conversation_id.clone(),
-            sender: UserSummary {
+            sender: MessageSender::Account {
                 account_id: alice.clone(),
                 minos_id: "alice".into(),
                 display_name: "Alice".into(),
@@ -677,6 +678,7 @@ mod tests {
             reply_to: None,
             recalled_at_ms: None,
             mentioned_account_ids: vec![],
+            mentioned_agent_ids: vec![],
             sender_type: SenderType::User,
             reactions: vec![],
             attachments: vec![],
@@ -717,7 +719,7 @@ mod tests {
             "hello thin digest body that should not appear nested under account",
             T0 + 1,
             None,
-            std::slice::from_ref(&bob),
+            &crate::store::social::MessageMentions::accounts([bob.clone()]),
             Some("digest-client-1"),
             &[],
             "client_live",
@@ -729,7 +731,7 @@ mod tests {
         let message = ChatMessageSummary {
             message_id: outcome.row.message_id.clone(),
             conversation_id: outcome.row.conversation_id.clone(),
-            sender: UserSummary {
+            sender: MessageSender::Account {
                 account_id: alice.clone(),
                 minos_id: "alice".into(),
                 display_name: "Alice".into(),
@@ -740,6 +742,7 @@ mod tests {
             reply_to: None,
             recalled_at_ms: None,
             mentioned_account_ids: vec![bob.clone()],
+            mentioned_agent_ids: vec![],
             sender_type: SenderType::User,
             reactions: vec![],
             attachments: vec![],
@@ -828,7 +831,7 @@ mod tests {
                 &format!("m{i}"),
                 T0 + i,
                 None,
-                &[],
+                &crate::store::social::MessageMentions::empty(),
                 None,
                 &[],
                 "client_live",

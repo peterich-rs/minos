@@ -5,7 +5,6 @@
 //! `POST /v1/hosts/link`.
 
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{extract::State, Json, Router};
 use serde::Deserialize;
@@ -33,13 +32,6 @@ struct HostSelfLinkSummary {
     online: bool,
 }
 
-#[derive(Debug, Serialize)]
-struct HostRealtimeTicketData {
-    ticket: String,
-    expires_at_ms: i64,
-    gateway_url: String,
-}
-
 #[derive(Debug, Deserialize)]
 struct BootstrapNonceRequest {
     installation_id: String,
@@ -55,7 +47,7 @@ pub fn router() -> Router<BackendState> {
     Router::new()
         .route("/host/bootstrap/nonce", post(post_bootstrap_nonce))
         .route("/host/installations/self", post(post_installations_self))
-        .route("/host/realtime/ws-ticket", post(post_realtime_ws_ticket))
+    // Host realtime: Authorization: Bearer hit_* on /ws/host only (no ticket).
 }
 
 async fn post_bootstrap_nonce(
@@ -196,43 +188,6 @@ async fn post_installations_self(
 /// Not browser/desktop account shells — product account presence is mobile.
 fn is_account_online(state: &BackendState, account_id: &str) -> bool {
     state.registry.mobile_client_session_count(account_id) > 0
-}
-
-async fn post_realtime_ws_ticket(
-    State(state): State<BackendState>,
-    headers: HeaderMap,
-) -> Response {
-    let outcome = match require_host(&state, &headers).await {
-        Ok(outcome) => outcome,
-        Err((status, body)) => return (status, body).into_response(),
-    };
-    let host_installation_id = outcome.host_installation_id.to_string();
-    let session = match state
-        .auth
-        .issue_host_ws_ticket(outcome.host_installation_id)
-        .await
-    {
-        Ok(session) => session,
-        Err(error) => {
-            tracing::warn!(
-                target: "minos_backend::v1::host",
-                error = ?error,
-                host_installation_id,
-                "issue host ws ticket failed",
-            );
-            return (StatusCode::INTERNAL_SERVER_ERROR, err("internal")).into_response();
-        }
-    };
-
-    Json(ResponseEnvelope::new(
-        HostRealtimeTicketData {
-            gateway_url: format!("/ws/host?ticket={}", session.ticket),
-            ticket: session.ticket,
-            expires_at_ms: chrono::Utc::now().timestamp_millis() + (session.expires_in * 1000),
-        },
-        request_id(&headers),
-    ))
-    .into_response()
 }
 
 async fn require_host(

@@ -3178,7 +3178,10 @@ fn resolve_mcp_server(
         config.socket_path.display().to_string(),
     ]);
     if let Some(source_session_id) = source_session_id {
-        args.extend(["--source-thread-id".into(), source_session_id.to_owned()]);
+        // Must match CLI long name on minos-teamwork-mcp / desktop / daemon / tui
+        // (`--source-session-id`). The historical `--source-thread-id` name is
+        // rejected by clap and makes release Desktop teamwork MCP exit immediately.
+        args.extend(["--source-session-id".into(), source_session_id.to_owned()]);
     }
     args.extend(mcp_permission_args(config.permissions));
     Some(ResolvedMcpServer {
@@ -4123,7 +4126,7 @@ mod tests {
     #[test]
     fn resolve_mcp_server_preserves_command_prefix_args() {
         let config = McpConfig {
-            server_bin: "/tmp/minos-tui".into(),
+            server_bin: "/tmp/minos-daemon".into(),
             server_args: vec!["minos-teamwork-mcp".into()],
             socket_path: "/tmp/mcp-test.sock".into(),
             db_path: "/tmp/minos.sqlite".into(),
@@ -4139,7 +4142,7 @@ mod tests {
         )
         .expect("chat MCP should resolve");
 
-        assert_eq!(server.command, "/tmp/minos-tui");
+        assert_eq!(server.command, "/tmp/minos-daemon");
         assert_eq!(
             server.args,
             vec![
@@ -4150,7 +4153,7 @@ mod tests {
                 "gemini",
                 "--socket-path",
                 "/tmp/mcp-test.sock",
-                "--source-thread-id",
+                "--source-session-id",
                 "thread-source-1234"
             ]
         );
@@ -4160,7 +4163,7 @@ mod tests {
     fn claude_mcp_config_json_includes_bound_conversation_and_source_agent() {
         let server = ResolvedMcpServer {
             name: "minos_teamwork".into(),
-            command: "/tmp/minos-tui".into(),
+            command: "/tmp/minos-daemon".into(),
             args: vec![
                 "minos-teamwork-mcp".into(),
                 "--conversation-id".into(),
@@ -4177,7 +4180,7 @@ mod tests {
 
         assert_eq!(
             config["mcpServers"]["minos_teamwork"]["command"],
-            "/tmp/minos-tui"
+            "/tmp/minos-daemon"
         );
         assert_eq!(
             config["mcpServers"]["minos_teamwork"]["args"][0],
@@ -4204,7 +4207,7 @@ mod tests {
     fn opencode_config_content_includes_local_minos_teamwork_server() {
         let server = ResolvedMcpServer {
             name: "minos_teamwork".into(),
-            command: "/tmp/minos-tui".into(),
+            command: "/tmp/minos-daemon".into(),
             args: vec![
                 "minos-teamwork-mcp".into(),
                 "--conversation-id".into(),
@@ -4223,7 +4226,7 @@ mod tests {
         assert_eq!(config["mcp"]["minos_teamwork"]["enabled"], true);
         assert_eq!(
             config["mcp"]["minos_teamwork"]["command"][0],
-            "/tmp/minos-tui"
+            "/tmp/minos-daemon"
         );
         assert_eq!(
             config["mcp"]["minos_teamwork"]["command"][1],
@@ -4240,7 +4243,7 @@ mod tests {
     fn gemini_mcp_server_includes_bound_conversation_and_source_agent() {
         let server = ResolvedMcpServer {
             name: "minos_teamwork".into(),
-            command: "/tmp/minos-tui".into(),
+            command: "/tmp/minos-daemon".into(),
             args: vec![
                 "minos-teamwork-mcp".into(),
                 "--conversation-id".into(),
@@ -4255,7 +4258,7 @@ mod tests {
         let config = serde_json::to_value(gemini_mcp_server(&server)).expect("valid JSON");
 
         assert_eq!(config["name"], "minos_teamwork");
-        assert_eq!(config["command"], "/tmp/minos-tui");
+        assert_eq!(config["command"], "/tmp/minos-daemon");
         assert_eq!(config["args"][0], "minos-teamwork-mcp");
         assert!(config["args"]
             .as_array()
@@ -4682,7 +4685,7 @@ done
         let mut cfg = AgentRuntimeConfig::new(tmp.path().to_path_buf());
         cfg.gemini_bin = Some(script_path);
         cfg.mcp = Some(McpConfig {
-            server_bin: "/tmp/minos-tui".into(),
+            server_bin: "/tmp/minos-daemon".into(),
             server_args: vec!["minos-teamwork-mcp".into()],
             socket_path: "/tmp/mcp-test.sock".into(),
             db_path: "/tmp/minos-chat.sqlite".into(),
@@ -4706,7 +4709,7 @@ done
             .expect("session/new request should be JSON");
         let mcp_server = &request["params"]["mcpServers"][0];
         assert_eq!(mcp_server["name"], "minos_teamwork");
-        assert_eq!(mcp_server["command"], "/tmp/minos-tui");
+        assert_eq!(mcp_server["command"], "/tmp/minos-daemon");
         assert_eq!(mcp_server["args"][0], "minos-teamwork-mcp");
         assert!(mcp_server["args"]
             .as_array()
@@ -4732,7 +4735,9 @@ done
             .as_array()
             .unwrap()
             .windows(2)
-            .any(|pair| pair[0] == "--source-thread-id" && pair[1] == started.session_id.as_str()));
+            .any(|pair| {
+                pair[0] == "--source-session-id" && pair[1] == started.session_id.as_str()
+            }));
         assert!(mcp_server.get("transportType").is_none());
         assert!(mcp_server.get("type").is_none());
         assert_eq!(mcp_server["env"], json!([]));
