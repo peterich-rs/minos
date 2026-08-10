@@ -217,7 +217,7 @@ fn truncate_body(text: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
     use crate::realtime::event::SenderRef;
-    use minos_protocol::{ChatMessageSummary, SenderType, UserSummary};
+    use minos_protocol::{ChatMessageSummary, MessageSender, SenderType};
 
     fn default_prefs() -> NotificationPreferences {
         NotificationPreferences {
@@ -243,7 +243,7 @@ mod tests {
         ChatMessageSummary {
             message_id: "msg1".into(),
             conversation_id: "conv1".into(),
-            sender: UserSummary {
+            sender: MessageSender::Account {
                 account_id: "other".into(),
                 minos_id: "minos-other".into(),
                 display_name: "Other".into(),
@@ -272,7 +272,7 @@ mod tests {
             },
             at_ms: 1000,
             preview: msg.text.clone(),
-            sender_display_name: msg.sender.display_name,
+            sender_display_name: msg.sender.display_name().to_string(),
             mentioned: false,
             message_seq: Some(msg.message_seq),
         }

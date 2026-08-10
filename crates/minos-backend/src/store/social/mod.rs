@@ -85,7 +85,8 @@ pub struct ConversationDigestRow {
 pub struct ChatMessageRow {
     pub message_id: String,
     pub conversation_id: String,
-    pub sender_account_id: String,
+    /// Human author; `None` for agent-authored rows (`sender_agent_id` is SSOT).
+    pub sender_account_id: Option<String>,
     pub sender_agent_id: Option<String>,
     pub text: String,
     pub created_at_ms: i64,
@@ -136,14 +137,56 @@ pub struct AgentRow {
     pub agent_id: String,
     pub owner_account_id: String,
     pub name: String,
+    pub display_name: String,
     pub description: String,
+    pub avatar_url: Option<String>,
     /// `user` | `host_runtime` | `system`
     pub source: String,
+    /// `active` | `disabled`
+    pub status: String,
     pub runtime_agent: String,
     pub model: String,
+    pub default_reasoning_effort: String,
+    pub system_prompt: String,
     pub workspace_path: Option<String>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+}
+
+impl AgentRow {
+    /// True when the bot is eligible for @ resolution and mailbox delivery.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.status == "active"
+    }
+
+    /// Test/helper constructor with digital-body defaults.
+    pub fn test_stub(
+        agent_id: impl Into<String>,
+        owner_account_id: impl Into<String>,
+        name: impl Into<String>,
+        source: impl Into<String>,
+        runtime_agent: impl Into<String>,
+    ) -> Self {
+        let name = name.into();
+        Self {
+            agent_id: agent_id.into(),
+            owner_account_id: owner_account_id.into(),
+            display_name: name.clone(),
+            name,
+            description: String::new(),
+            avatar_url: None,
+            source: source.into(),
+            status: "active".into(),
+            runtime_agent: runtime_agent.into(),
+            model: String::new(),
+            default_reasoning_effort: String::new(),
+            system_prompt: String::new(),
+            workspace_path: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
@@ -220,11 +263,13 @@ pub use conversation_messages::{
 // Agent functions
 pub use agents::{
     add_agent_to_conversation, agents_by_ids, delete_agent, ensure_host_runtime_agent,
-    find_host_runtime_agent, get_agent, insert_agent_message, insert_agent_message_with_session,
-    insert_agent_message_with_session_in_tx, is_agent_in_conversation, list_agents_for_owner,
-    list_conversation_agents, register_agent, remove_agent_from_conversation, update_agent,
-    AGENT_SOURCE_HOST_RUNTIME, AGENT_SOURCE_SYSTEM, AGENT_SOURCE_USER,
-    HOST_RUNTIME_AGENT_DESCRIPTION,
+    find_active_agent_name_conflict, find_host_runtime_agent, get_agent, insert_agent_message,
+    insert_agent_message_with_session, insert_agent_message_with_session_in_tx,
+    insert_bot_revision, is_agent_in_conversation, list_agents_for_owner, list_conversation_agents,
+    list_conversation_agents_active, register_agent, register_agent_full,
+    remove_agent_from_conversation, update_agent, update_agent_full, upsert_bot_deployment,
+    RegisterAgentParams, UpdateAgentParams, AGENT_SOURCE_HOST_RUNTIME, AGENT_SOURCE_SYSTEM,
+    AGENT_SOURCE_USER, AGENT_STATUS_ACTIVE, AGENT_STATUS_DISABLED, HOST_RUNTIME_AGENT_DESCRIPTION,
 };
 
 // Transactional outbox delivery for social messages
@@ -748,6 +793,7 @@ mod tests {
             None,
             Some("sess-1"),
             &[],
+            &[],
             Some(client_id),
         )
         .await
@@ -761,6 +807,7 @@ mod tests {
             T0 + 2,
             None,
             Some("sess-1"),
+            &[],
             &[],
             Some(client_id),
         )
@@ -785,6 +832,7 @@ mod tests {
             T0 + 3,
             None,
             Some("sess-1"),
+            &[],
             &[],
             Some(client_id),
         )

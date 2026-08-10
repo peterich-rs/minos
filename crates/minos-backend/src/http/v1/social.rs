@@ -25,6 +25,10 @@ use serde_json::json;
 /// Known Host runtime bins that Mobile/Desktop may @-mention for dispatch.
 const HOST_RUNTIME_MENTIONS: &[&str] = &["codex", "claude", "gemini", "opencode", "grok"];
 
+/// Max bot→bot automation hops from a root human (or unknown) message.
+/// Exceeding this skips enqueue (loop control; bot-mailbox design).
+const MAX_AUTOMATION_HOP: i32 = 3;
+
 pub fn router() -> Router<BackendState> {
     Router::new()
         // ─── Agent routes ───
@@ -207,19 +211,21 @@ struct ForwardedAgentDispatch {
     watcher_from_seq: u64,
 }
 
-/// Plan agent inbox deliveries for a committed user message (participant delivery).
+/// Plan agent inbox deliveries for a committed message (participant delivery).
 ///
 /// Selection order (ADR 0021 / agent-participant-delivery):
 /// 1. reply-to agent message → that agent (reuse session when bound, else start path)
+///    — **human senders only** (bot authors never auto-reply-to-self via priority 1)
 /// 2. structured `mentioned_agent_ids` on the message (SSOT; appearance order)
+///    — for bot authors: other-bot mentions only (self-mention forbidden)
 /// 3. group with exactly 1 human + 1 agent + **bare** text (no unresolved agentish @)
-///    → sole agent
+///    → sole agent — **human senders only**
 /// else empty
 ///
 /// Text is never a delivery target. Optional `#session_short` in the body is only a
 /// session-resolution hint for agents already present in structured mentions.
 /// Unmatched agentish `@` never sole-routes (wrong-bot activation is forbidden).
-/// Implementation table remains `agent_dispatch_queue`; domain name is Agent inbox.
+/// Implementation table remains `bot_message_deliveries`; domain name is Agent inbox.
 async fn plan_agent_deliveries(
     state: &BackendState,
     conversation_id: &str,
@@ -231,9 +237,12 @@ async fn plan_agent_deliveries(
         .await
         .map_err(|e| err("internal", e.to_string()))?
         .ok_or_else(|| err("not_found", "conversation not found"))?;
-    let agents = crate::store::social::list_conversation_agents(&state.store, conversation_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?;
+    // Delivery only targets active bots. Disabled members remain on the roster
+    // for participants UI but must not receive mailbox intents.
+    let agents =
+        crate::store::social::list_conversation_agents_active(&state.store, conversation_id)
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
     if agents.is_empty() {
         return Ok(Vec::new());
     }
@@ -243,53 +252,65 @@ async fn plan_agent_deliveries(
             .map_err(|e| err("internal", e.to_string()))?;
     // Room rule: only @-mention the human sender back when other humans are present.
     let mention_sender = human_members.len() > 1;
+    let origin_is_agent = message.sender.is_bot() || message.sender_type == SenderType::Agent;
+    let origin_agent_id = message.sender.bot_id();
 
     // Priority 1: reply-to an agent bubble → always that agent when still resolvable.
     // Session bind is optional (older / projected rows may lack agent_session_id).
-    if let Some(reply_target) = reply_target {
-        if reply_target.sender_type == "agent" {
-            let agent_id = reply_target
-                .sender_agent_id
-                .as_deref()
-                .unwrap_or(&reply_target.sender_account_id);
-            // Prefer current conversation roster (membership-first); fall back to
-            // agent registry so a removed-but-still-visible bubble can continue.
-            let agent = agents
-                .iter()
-                .find(|a| a.agent_id == agent_id)
-                .cloned();
-            let agent = match agent {
-                Some(a) => Some(a),
-                None => crate::store::social::get_agent(&state.store, agent_id)
-                    .await
-                    .map_err(|e| err("internal", e.to_string()))?,
-            };
-            if let Some(agent) = agent {
-                let session_id = crate::store::social::lookup_session_id_for_message(
-                    &state.store,
-                    &reply_target.message_id,
-                )
-                .await
-                .map_err(|e| err("internal", e.to_string()))?;
-                return Ok(vec![AgentDispatchPlan {
-                    agent,
-                    session_id,
-                    forwarded_text: text.to_string(),
-                    mention_sender,
-                }]);
+    // Bot-authored origins never use reply-to auto-route (would re-enter self/loop).
+    if !origin_is_agent {
+        if let Some(reply_target) = reply_target {
+            if reply_target.sender_type == "agent" {
+                if let Some(agent_id) = reply_target
+                    .sender_agent_id
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                {
+                    // Prefer current conversation roster (membership-first); fall back to
+                    // agent registry so a removed-but-still-visible bubble can continue.
+                    let agent = agents
+                        .iter()
+                        .find(|a| a.agent_id == agent_id)
+                        .cloned();
+                    let agent = match agent {
+                        Some(a) => Some(a),
+                        None => crate::store::social::get_agent(&state.store, agent_id)
+                            .await
+                            .map_err(|e| err("internal", e.to_string()))?
+                            .filter(|a| a.is_active()),
+                    };
+                    if let Some(agent) = agent {
+                        let session_id = crate::store::social::lookup_session_id_for_message(
+                            &state.store,
+                            &reply_target.message_id,
+                        )
+                        .await
+                        .map_err(|e| err("internal", e.to_string()))?;
+                        return Ok(vec![AgentDispatchPlan {
+                            agent,
+                            session_id,
+                            forwarded_text: text.to_string(),
+                            mention_sender,
+                        }]);
+                    }
+                }
             }
         }
     }
 
-    // Priority 2: structured agent mentions written with the user bubble (SSOT).
+    // Priority 2: structured agent mentions written with the bubble (SSOT).
     // Preserve appearance order from extract; do not re-sort by agent_id.
     // Non-empty structured list that all fail roster lookup must NOT fall through
     // to sole-agent (stale/removed mention is skip/error, not wrong-bot route).
+    // Bot authors: only other-bot mentions (self-mention never enqueued).
     if !message.mentioned_agent_ids.is_empty() {
         let mut plans = Vec::with_capacity(message.mentioned_agent_ids.len());
         let mut seen = std::collections::HashSet::new();
         for agent_id in &message.mentioned_agent_ids {
             if !seen.insert(agent_id.clone()) {
+                continue;
+            }
+            if origin_agent_id.is_some_and(|self_id| self_id == agent_id.as_str()) {
                 continue;
             }
             let Some(agent) = agents.iter().find(|a| a.agent_id == *agent_id).cloned() else {
@@ -311,11 +332,20 @@ async fn plan_agent_deliveries(
                 session_id,
                 // Keep full body so each agent sees co-mentions (Buzz-style).
                 forwarded_text: text.to_string(),
-                mention_sender,
+                mention_sender: if origin_is_agent {
+                    false
+                } else {
+                    mention_sender
+                },
             });
         }
         // Structured mention intent was present: never sole-route as a fallback.
         return Ok(plans);
+    }
+
+    // Bot-authored messages without structured other-bot mentions never sole-route.
+    if origin_is_agent {
+        return Ok(Vec::new());
     }
 
     // Unresolved agentish @ blocks sole-agent auto-route (P0: wrong-bot activation).
@@ -417,7 +447,11 @@ async fn resolve_dispatch_session_id(
     .await
 }
 
-async fn forward_agent_dispatch(
+/// Private runtime-port inject: `agent_session.send_input` or `start` via HostCommand.
+///
+/// **Not** the product collaboration path. Call only from
+/// [`execute_runtime_port_adapter`] when mailbox Host WS is unavailable.
+async fn runtime_port_inject(
     state: &BackendState,
     account_id: &str,
     agent: &crate::store::social::AgentRow,
@@ -847,12 +881,28 @@ async fn try_project_completion_for_watch(
                         Some(client_message_id.as_str()),
                     )
                     .await;
+                    // Mailbox delivery success is deferred until bot result is durable.
+                    let now_ms = chrono::Utc::now().timestamp_millis();
+                    let _ = crate::store::agent_dispatch_queue::mark_succeeded(
+                        &state.store,
+                        &watch.dispatch_id,
+                        &session_id,
+                        now_ms,
+                    )
+                    .await;
+                    let _ = crate::store::agent_dispatch_queue::clear_lease(
+                        &state.store,
+                        &watch.dispatch_id,
+                        now_ms,
+                    )
+                    .await;
                     tracing::info!(
                         target: "minos_backend::social",
                         conversation_id = %watch.conversation_id,
                         session_id = %session_id,
                         origin_message_id = %origin_message_id,
                         client_message_id = %client_message_id,
+                        delivery_id = %watch.dispatch_id,
                         "TurnCompletionProjector posted agent bubble (ingest-driven)"
                     );
                     ProjectOutcome::Done
@@ -874,12 +924,28 @@ async fn try_project_completion_for_watch(
             state.completion_watches.remove(watch_key);
             let _ = crate::store::completion_watches::mark_projected(&state.store, watch_key, None)
                 .await;
+            // Still terminal for the delivery (no text bubble, but run finished).
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            let _ = crate::store::agent_dispatch_queue::mark_succeeded(
+                &state.store,
+                &watch.dispatch_id,
+                &session_id,
+                now_ms,
+            )
+            .await;
+            let _ = crate::store::agent_dispatch_queue::clear_lease(
+                &state.store,
+                &watch.dispatch_id,
+                now_ms,
+            )
+            .await;
             tracing::info!(
                 target: "minos_backend::social",
                 conversation_id = %watch.conversation_id,
                 session_id = %session_id,
                 origin_message_id = %origin_message_id,
                 raw_seq_floor = watch.raw_seq_floor,
+                delivery_id = %watch.dispatch_id,
                 "TurnCompletionProjector finished without clean final text"
             );
             ProjectOutcome::Done
@@ -957,6 +1023,7 @@ async fn post_agent_social_message(
         Some(reply_to_message_id),
         session_id,
         mentioned_account_ids,
+        &[],
         client_message_id,
     )
     .await?;
@@ -964,7 +1031,80 @@ async fn post_agent_social_message(
     Ok(())
 }
 
+/// Host mailbox uplink: AppendBotMessage / host-trusted agent bubble commit.
+///
+/// Wraps the same `persist_agent_message_with_delivery` path used by
+/// `POST …/agents/message` so WS and HTTP share one SSOT.
+pub async fn persist_agent_message_from_host(
+    state: &BackendState,
+    conversation_id: &str,
+    agent_id: &str,
+    text: &str,
+    reply_to_message_id: Option<&str>,
+    agent_session_id: Option<&str>,
+    client_message_id: &str,
+) -> Result<ChatMessageSummary, crate::error::BackendError> {
+    let members =
+        crate::store::social::list_conversation_member_profiles(&state.store, conversation_id)
+            .await?;
+    let agents =
+        crate::store::social::list_conversation_agents_active(&state.store, conversation_id)
+            .await?;
+    let mentions = crate::conversations::use_case::extract_participant_mentions(
+        text,
+        // Agent is not an account; pass agent_id so self-account skip is a no-op.
+        agent_id,
+        &members,
+        &agents,
+    );
+    // Never persist self-mention as a structured agent target.
+    let mentioned_agent_ids: Vec<String> = mentions
+        .agent_ids
+        .into_iter()
+        .filter(|id| id != agent_id)
+        .collect();
+    let (message, _) = persist_agent_message_with_delivery(
+        state,
+        conversation_id,
+        agent_id,
+        text,
+        reply_to_message_id,
+        agent_session_id,
+        &mentions.account_ids,
+        &mentioned_agent_ids,
+        Some(client_message_id),
+    )
+    .await
+    .map_err(|(status, envelope)| crate::error::BackendError::StoreQuery {
+        operation: "persist_agent_message_from_host".into(),
+        message: format!(
+            "status={} code={} message={}",
+            status.as_u16(),
+            envelope.0.error.code,
+            envelope.0.error.message
+        ),
+    })?;
+    let owner = crate::store::social::get_agent(&state.store, agent_id)
+        .await?
+        .map(|a| a.owner_account_id)
+        .unwrap_or_default();
+    maybe_enqueue_agent_hops(
+        state,
+        &owner,
+        conversation_id,
+        &message,
+        reply_to_message_id,
+        text,
+        agent_id,
+    )
+    .await;
+    Ok(message)
+}
+
 /// Insert agent message + durable/outbox in one transaction, then publish.
+///
+/// When the bot body carries structured other-bot mentions, optionally enqueues
+/// agent→agent deliveries with automation hop budget.
 #[allow(clippy::too_many_arguments)]
 async fn persist_agent_message_with_delivery(
     state: &BackendState,
@@ -974,6 +1114,7 @@ async fn persist_agent_message_with_delivery(
     reply_to_message_id: Option<&str>,
     agent_session_id: Option<&str>,
     mentioned_account_ids: &[String],
+    mentioned_agent_ids: &[String],
     client_message_id: Option<&str>,
 ) -> Result<(ChatMessageSummary, Vec<String>), (StatusCode, Json<ErrorEnvelope>)> {
     let member_ids = crate::store::social::list_conversation_members(&state.store, conversation_id)
@@ -1022,16 +1163,42 @@ async fn persist_agent_message_with_delivery(
         reply_to_message_id,
         agent_session_id,
         mentioned_account_ids,
+        mentioned_agent_ids,
         client_message_id,
     )
     .await
     .map_err(|e| err("internal", e.to_string()))?;
 
+    let inserted = outcome.inserted;
     let message = if outcome.inserted {
-        let sender = minos_protocol::UserSummary {
-            account_id: agent.agent_id.clone(),
-            minos_id: agent.agent_id.clone(),
-            display_name: format!("🤖 {}", agent.name),
+        let label = {
+            let d = agent.display_name.trim();
+            if !d.is_empty() {
+                d
+            } else {
+                agent.name.trim()
+            }
+        };
+        let display_name = if label.is_empty() {
+            format!("🤖 {}", agent.agent_id)
+        } else if label.starts_with('🤖') {
+            label.to_string()
+        } else {
+            format!("🤖 {label}")
+        };
+        let sender = minos_protocol::MessageSender::Bot {
+            bot_id: agent.agent_id.clone(),
+            display_name,
+            runtime_agent: agent.runtime_agent.clone(),
+            name: {
+                let n = agent.name.trim();
+                if n.is_empty() {
+                    None
+                } else {
+                    Some(n.to_string())
+                }
+            },
+            avatar_url: agent.avatar_url.clone(),
         };
         let message = ChatMessageSummary {
             message_id: outcome.row.message_id.clone(),
@@ -1043,7 +1210,7 @@ async fn persist_agent_message_with_delivery(
             reply_to,
             recalled_at_ms: None,
             mentioned_account_ids: mentioned_account_ids.to_vec(),
-            mentioned_agent_ids: vec![],
+            mentioned_agent_ids: mentioned_agent_ids.to_vec(),
             sender_type: SenderType::Agent,
             reactions: vec![],
             attachments: vec![],
@@ -1062,6 +1229,9 @@ async fn persist_agent_message_with_delivery(
         let mut full = hydrated.remove(0);
         if full.mentioned_account_ids.is_empty() && !mentioned_account_ids.is_empty() {
             full.mentioned_account_ids = mentioned_account_ids.to_vec();
+        }
+        if full.mentioned_agent_ids.is_empty() && !mentioned_agent_ids.is_empty() {
+            full.mentioned_agent_ids = mentioned_agent_ids.to_vec();
         }
         full
     } else {
@@ -1109,21 +1279,70 @@ async fn persist_agent_message_with_delivery(
         .realtime
         .fanout_social_message(&member_ids, &frame)
         .await;
+
+    // Note: agent→agent hop enqueue is intentionally NOT here — calling
+    // try_agent_dispatch_with_hop from persist would recurse through
+    // notify_agent_dispatch_failure → post_agent_social_message → persist.
+    // Callers that want hop-gated bot→bot use maybe_enqueue_agent_hops after.
+    let _ = inserted;
+
     Ok((message, member_ids))
 }
 
-fn extract_mentioned_account_ids(
+/// Parent automation hop for a bot bubble: prefer the inbox row that delivered
+/// this bot for `reply_to` origin; else 0 (treat as root-adjacent).
+async fn automation_hop_for_agent_message(
+    store: &crate::store::StoreHandle,
+    reply_to_message_id: Option<&str>,
+    agent_id: &str,
+) -> Result<i32, crate::error::BackendError> {
+    let Some(origin_id) = reply_to_message_id.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(0);
+    };
+    let rows = crate::store::agent_dispatch_queue::list_by_origin(store, origin_id).await?;
+    if let Some(row) = rows.iter().find(|r| r.agent_id == agent_id) {
+        return Ok(row.automation_hop);
+    }
+    Ok(rows.first().map(|r| r.automation_hop).unwrap_or(0))
+}
+
+/// After a bot bubble is durable, optionally enqueue other-bot deliveries.
+/// Kept separate from persist to avoid async recursion with failure bubbles.
+async fn maybe_enqueue_agent_hops(
+    state: &BackendState,
+    owner_account_id: &str,
+    conversation_id: &str,
+    message: &ChatMessageSummary,
+    reply_to_message_id: Option<&str>,
     text: &str,
-    sender_account_id: &str,
-    members: &[crate::store::social::ProfileRow],
-) -> Vec<String> {
-    // Keep account-only helper for agent-message path; full extract lives in
-    // conversations::use_case::extract_participant_mentions.
-    crate::conversations::use_case::extract_mentioned_account_ids(
+    agent_id: &str,
+) {
+    if message.mentioned_agent_ids.is_empty() {
+        return;
+    }
+    let parent_hop =
+        automation_hop_for_agent_message(&state.store, reply_to_message_id, agent_id)
+            .await
+            .unwrap_or(0);
+    if let Err(e) = try_agent_dispatch_with_hop(
+        state,
+        owner_account_id,
+        conversation_id,
+        message,
+        reply_to_message_id,
         text,
-        sender_account_id,
-        members,
+        parent_hop,
     )
+    .await
+    {
+        tracing::warn!(
+            target: "minos_backend::social",
+            conversation_id = %conversation_id,
+            message_id = %message.message_id,
+            error = %e,
+            "agent→agent inbox pipeline error after bot message"
+        );
+    }
 }
 
 fn collect_mention_tokens(text: &str) -> Vec<&str> {
@@ -1155,15 +1374,48 @@ async fn register_agent(
             ));
         }
     }
-    let row = crate::store::social::register_agent(
+    let display_name = req
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(name);
+    let avatar_url = req
+        .avatar_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if crate::store::social::find_active_agent_name_conflict(
         &state.store,
         &account_id,
         name,
-        req.description.trim(),
-        &req.runtime_agent,
-        req.model.trim(),
-        workspace_path.as_deref(),
-        chrono::Utc::now().timestamp_millis(),
+        None,
+    )
+    .await
+    .map_err(|e| err("internal", e.to_string()))?
+    .is_some()
+    {
+        return Err(err(
+            "conflict",
+            "an active bot with this name already exists (case-insensitive)",
+        ));
+    }
+    let row = crate::store::social::register_agent_full(
+        &state.store,
+        crate::store::social::RegisterAgentParams {
+            owner_account_id: &account_id,
+            name,
+            display_name,
+            description: req.description.trim(),
+            avatar_url,
+            source: crate::store::social::AGENT_SOURCE_USER,
+            runtime_agent: &req.runtime_agent,
+            model: req.model.trim(),
+            default_reasoning_effort: req.default_reasoning_effort.trim(),
+            system_prompt: req.system_prompt.trim(),
+            workspace_path: workspace_path.as_deref(),
+            now_ms: chrono::Utc::now().timestamp_millis(),
+        },
     )
     .await
     .map_err(|e| err("internal", e.to_string()))?;
@@ -1244,25 +1496,115 @@ async fn update_agent_handler(
     if !valid_runtimes.contains(&req.runtime_agent.as_str()) {
         return Err(err("bad_request", "invalid runtime_agent"));
     }
-    let workspace_path = normalize_workspace_path(req.workspace_path.as_deref());
-    if let Some(path) = workspace_path.as_deref() {
-        if !is_valid_workspace_path(path) {
+    // Load current row for partial digital-body merge (omitted optional fields
+    // must not wipe status/avatar/system_prompt/effort).
+    let existing = crate::store::social::get_agent(&state.store, &agent_id)
+        .await
+        .map_err(|e| err("internal", e.to_string()))?
+        .ok_or_else(|| err("not_found", "agent not found"))?;
+    if existing.owner_account_id != account_id {
+        return Err(err("not_found", "agent not found or not owned by you"));
+    }
+
+    let status = match req.status.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) if s == crate::store::social::AGENT_STATUS_ACTIVE => {
+            crate::store::social::AGENT_STATUS_ACTIVE
+        }
+        Some(s) if s == crate::store::social::AGENT_STATUS_DISABLED => {
+            crate::store::social::AGENT_STATUS_DISABLED
+        }
+        Some(_) => {
+            return Err(err("bad_request", "status must be active or disabled"));
+        }
+        None => existing.status.as_str(),
+    };
+
+    // Active rename: enforce case-insensitive unique name per owner.
+    if status == crate::store::social::AGENT_STATUS_ACTIVE {
+        if crate::store::social::find_active_agent_name_conflict(
+            &state.store,
+            &account_id,
+            name,
+            Some(&agent_id),
+        )
+        .await
+        .map_err(|e| err("internal", e.to_string()))?
+        .is_some()
+        {
             return Err(err(
-                "bad_request",
-                "workspace_path must be an absolute host path or ~/ path",
+                "conflict",
+                "an active bot with this name already exists (case-insensitive)",
             ));
         }
     }
-    let row = crate::store::social::update_agent(
+
+    let workspace_path = match &req.workspace_path {
+        Some(path) => {
+            let normalized = normalize_workspace_path(Some(path.as_str()));
+            if let Some(p) = normalized.as_deref() {
+                if !is_valid_workspace_path(p) {
+                    return Err(err(
+                        "bad_request",
+                        "workspace_path must be an absolute host path or ~/ path",
+                    ));
+                }
+            }
+            normalized
+        }
+        // Field present on request as Option: when omitted entirely, serde
+        // leaves None — keep existing. Callers that want to clear should send "".
+        None => existing.workspace_path.clone(),
+    };
+    // Note: workspace_path Option with skip_serializing means omit=None=keep above.
+    // Empty string after normalize clears to None.
+
+    let display_name = req
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(name);
+
+    let avatar_url = match &req.avatar_url {
+        None => existing.avatar_url.clone(),
+        Some(raw) => {
+            let t = raw.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            }
+        }
+    };
+
+    let default_reasoning_effort = match &req.default_reasoning_effort {
+        None => existing.default_reasoning_effort.as_str(),
+        Some(s) => s.trim(),
+    };
+    let system_prompt = match &req.system_prompt {
+        None => existing.system_prompt.as_str(),
+        Some(s) => s.trim(),
+    };
+
+    let avatar_url_ref = avatar_url.as_deref();
+    let workspace_path_ref = workspace_path.as_deref();
+    let row = crate::store::social::update_agent_full(
         &state.store,
-        &agent_id,
-        &account_id,
-        name,
-        req.description.trim(),
-        &req.runtime_agent,
-        req.model.trim(),
-        workspace_path.as_deref(),
-        chrono::Utc::now().timestamp_millis(),
+        crate::store::social::UpdateAgentParams {
+            agent_id: &agent_id,
+            owner_account_id: &account_id,
+            name,
+            display_name,
+            description: req.description.trim(),
+            avatar_url: avatar_url_ref,
+            status,
+            runtime_agent: &req.runtime_agent,
+            model: req.model.trim(),
+            default_reasoning_effort,
+            system_prompt,
+            workspace_path: workspace_path_ref,
+            now_ms: chrono::Utc::now().timestamp_millis(),
+        },
     )
     .await
     .map_err(|e| err("internal", e.to_string()))?
@@ -1448,21 +1790,35 @@ async fn send_agent_message(
         .await
         .map_err(|e| err("internal", e.to_string()))?;
     }
-    // Extract mentions from the message
+    // Extract mentions (humans + other bots) for structured SSOT + hop-gated agent→agent.
     let members =
         crate::store::social::list_conversation_member_profiles(&state.store, &conversation_id)
             .await
             .map_err(|e| err("internal", e.to_string()))?;
-    let mentioned_account_ids = extract_mentioned_account_ids(&trimmed, &req.agent_id, &members);
-    // Agent bubble insert is never a live client dispatch surface. Default and
-    // force host_projection semantics: soft-drop invalid reply_to, never re-dispatch.
-    // Preferred multi-end writer is TurnCompletionProjector; this endpoint remains
-    // for Host-trusted host_projection inserts (optional Outbox uplink).
+    let agents =
+        crate::store::social::list_conversation_agents_active(&state.store, &conversation_id)
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
+    let mentions = crate::conversations::use_case::extract_participant_mentions(
+        &trimmed,
+        &req.agent_id,
+        &members,
+        &agents,
+    );
+    let mentioned_agent_ids: Vec<String> = mentions
+        .agent_ids
+        .into_iter()
+        .filter(|id| id != &req.agent_id)
+        .collect();
+    // Agent bubble insert is never a human client_live surface. Default host_projection.
+    // Structured other-bot mentions may hop-gate enqueue after persist (not via
+    // message_source=client_live). Preferred multi-end writer is TurnCompletionProjector;
+    // this endpoint remains for Host-trusted host_projection inserts.
     let message_source = req
         .message_source
         .unwrap_or(minos_protocol::MessageSource::HostProjection);
     if message_source.allows_agent_dispatch() {
-        // Explicit client_live on agents/message is rejected: agents never @-dispatch.
+        // Explicit client_live on agents/message is rejected: use host_projection.
         return Err(err(
             "bad_request",
             "agents/message does not accept message_source=client_live; use host_projection",
@@ -1497,14 +1853,25 @@ async fn send_agent_message(
         &trimmed,
         reply_to.as_deref(),
         req.agent_session_id.as_deref(),
-        &mentioned_account_ids,
+        &mentions.account_ids,
+        &mentioned_agent_ids,
         req.client_message_id.as_deref(),
     )
     .await?;
+    maybe_enqueue_agent_hops(
+        &state,
+        &agent.owner_account_id,
+        &conversation_id,
+        &message,
+        reply_to.as_deref(),
+        &trimmed,
+        &req.agent_id,
+    )
+    .await;
     Ok(Json(message))
 }
 
-/// Plan + enqueue Agent inbox items after the user bubble is durable (participant delivery).
+/// Plan + enqueue Agent inbox items after the bubble is durable (participant delivery).
 ///
 /// HTTP path returns after this; Host runtime port runs on [`process_agent_dispatch_batch`].
 /// Immediate user-visible errors for plan-time intent failures (unmatched @agent) and for
@@ -1512,7 +1879,14 @@ async fn send_agent_message(
 /// are queued with backoff, then terminal.
 ///
 /// Membership is explicit (participants/add-agent). There is no silent auto-attach.
-/// Callers must gate on `message_source.allows_agent_dispatch()` (client_live only).
+///
+/// Callers:
+/// - Human live sends: gate with `message_source.allows_agent_dispatch()` then
+///   `try_agent_dispatch(..., automation_hop = 0)`.
+/// - Bot-authored messages (optional agent→agent): pass `automation_hop` from the
+///   delivery that produced the bot bubble (or 0 if unknown). Enqueue uses hop+1
+///   when origin is agent; skips when hop would exceed [`MAX_AUTOMATION_HOP`].
+/// - `host_projection` / `system` human paths must not call this (anti-loop).
 pub async fn try_agent_dispatch(
     state: &BackendState,
     account_id: &str,
@@ -1521,6 +1895,51 @@ pub async fn try_agent_dispatch(
     reply_to_message_id: Option<&str>,
     trimmed_text: &str,
 ) -> Result<(), crate::error::BackendError> {
+    try_agent_dispatch_with_hop(
+        state,
+        account_id,
+        conversation_id,
+        message,
+        reply_to_message_id,
+        trimmed_text,
+        0,
+    )
+    .await
+}
+
+/// Same as [`try_agent_dispatch`] with an explicit automation hop for bot→bot chains.
+pub async fn try_agent_dispatch_with_hop(
+    state: &BackendState,
+    account_id: &str,
+    conversation_id: &str,
+    message: &ChatMessageSummary,
+    reply_to_message_id: Option<&str>,
+    trimmed_text: &str,
+    automation_hop: i32,
+) -> Result<(), crate::error::BackendError> {
+    let origin_is_agent = message.sender.is_bot() || message.sender_type == SenderType::Agent;
+    // Hop on the *new* inbox rows: human roots stay 0; bot-authored origins increment.
+    let enqueue_hop = if origin_is_agent {
+        automation_hop.saturating_add(1)
+    } else {
+        0
+    };
+    if origin_is_agent && enqueue_hop > MAX_AUTOMATION_HOP {
+        tracing::info!(
+            target: "minos_backend::social",
+            conversation_id = %conversation_id,
+            origin_message_id = %message.message_id,
+            automation_hop = enqueue_hop,
+            max = MAX_AUTOMATION_HOP,
+            "agent→agent inbox skipped: automation hop budget exhausted"
+        );
+        return Ok(());
+    }
+    // Bot origins without structured other-bot mentions never plan (no sole-route).
+    if origin_is_agent && message.mentioned_agent_ids.is_empty() {
+        return Ok(());
+    }
+
     let reply_target = match reply_to_message_id {
         Some(message_id) => crate::store::social::get_message(&state.store, message_id).await?,
         None => None,
@@ -1539,28 +1958,31 @@ pub async fn try_agent_dispatch(
     })?;
 
     if plans.is_empty() {
-        if let Some((code, detail)) =
-            unmatched_agent_intent_error(state, conversation_id, trimmed_text).await?
-        {
-            tracing::warn!(
-                target: "minos_backend::social",
-                conversation_id = %conversation_id,
-                account_id = %account_id,
-                code = %code,
-                detail = %detail,
-                "agent inbox skipped with user-visible intent"
-            );
-            notify_agent_dispatch_failure(
-                state,
-                account_id,
-                conversation_id,
-                &message.message_id,
-                None,
-                None,
-                code,
-                detail,
-            )
-            .await;
+        // User-visible unmatched-@ only for human live sends (not bot→bot hop chains).
+        if !origin_is_agent {
+            if let Some((code, detail)) =
+                unmatched_agent_intent_error(state, conversation_id, trimmed_text).await?
+            {
+                tracing::warn!(
+                    target: "minos_backend::social",
+                    conversation_id = %conversation_id,
+                    account_id = %account_id,
+                    code = %code,
+                    detail = %detail,
+                    "agent inbox skipped with user-visible intent"
+                );
+                notify_agent_dispatch_failure(
+                    state,
+                    account_id,
+                    conversation_id,
+                    &message.message_id,
+                    None,
+                    None,
+                    code,
+                    detail,
+                )
+                .await;
+            }
         }
         return Ok(());
     }
@@ -1595,6 +2017,9 @@ pub async fn try_agent_dispatch(
             last_error: None,
             created_at_ms: ordered_ms,
             updated_at_ms: ordered_ms,
+            lease_owner_host_id: None,
+            lease_expires_at_ms: None,
+            automation_hop: enqueue_hop,
         };
         let inserted = crate::store::agent_dispatch_queue::enqueue(&state.store, &row).await?;
         if inserted {
@@ -1604,6 +2029,7 @@ pub async fn try_agent_dispatch(
                 conversation_id = %conversation_id,
                 origin_message_id = %message.message_id,
                 agent_id = %plan.agent.agent_id,
+                automation_hop = enqueue_hop,
                 "agent inbox enqueued"
             );
         } else {
@@ -1660,9 +2086,11 @@ pub async fn on_host_online_force_agent_dispatch(
     Ok(n)
 }
 
-/// Drain due AgentDispatchQueue rows: host RPC + arm CompletionWatch.
+/// Drain due bot-mailbox rows: **primary** [`deliver_bot_inbox`], then private
+/// runtime-port adapter ([`runtime_port_inject`]) only when no live Host WS.
 ///
 /// Called by [`crate::jobs::agent_dispatch_worker`] and tests.
+/// Collaboration semantics stay message-driven; HostCommand is not a product path.
 pub async fn process_agent_dispatch_batch(
     state: &BackendState,
 ) -> Result<u32, crate::error::BackendError> {
@@ -1779,12 +2207,71 @@ async fn execute_claimed_dispatch(
         return Ok(());
     };
 
+    // ── Product path: bot mailbox (BotInboxDelivery over live /ws/host) ──
+    match deliver_bot_inbox(state, row, &agent, now_ms).await {
+        Ok(Some(session_id)) => {
+            return complete_mailbox_lease(state, row, &agent, session_id, now_ms).await;
+        }
+        Ok(None) => {
+            // No live Host WS for mailbox frame → private runtime-port adapter.
+        }
+        Err(error) => {
+            return handle_dispatch_forward_error(state, row, Some(&agent), error, now_ms).await;
+        }
+    }
+
+    // ── Private runtime-port adapter (HostCommand start/send_input) ──
+    // Not a collaboration primitive. Used only when mailbox push cannot reach
+    // a live host connection (tests / transient offline host with registry).
+    execute_runtime_port_adapter(state, row, &agent, now_ms).await
+}
+
+/// After a successful BotInboxDelivery push: stay **inflight** (lease), bind
+/// session, arm completion watch. Terminal success is AppendBotMessage / projector.
+async fn complete_mailbox_lease(
+    state: &BackendState,
+    row: &crate::store::agent_dispatch_queue::AgentDispatchRow,
+    agent: &crate::store::social::AgentRow,
+    session_id: String,
+    now_ms: i64,
+) -> Result<(), crate::error::BackendError> {
+    tracing::info!(
+        target: "minos_backend::social",
+        conversation_id = %row.conversation_id,
+        session_id = %session_id,
+        delivery_id = %row.dispatch_id,
+        origin_message_id = %row.origin_message_id,
+        agent_id = %agent.agent_id,
+        "bot mailbox delivery leased and pushed (awaiting host accept/result)"
+    );
+    maybe_bind_origin_session(state, row, agent, &session_id).await?;
+    crate::store::agent_dispatch_queue::set_session_id(
+        &state.store,
+        &row.dispatch_id,
+        &session_id,
+        now_ms,
+    )
+    .await?;
+    let watcher_from_seq = crate::store::raw_events::last_seq(&state.store, &session_id).await?;
+    arm_completion_watch_for_row(state, row, agent, session_id, watcher_from_seq).await;
+    Ok(())
+}
+
+/// Offline / no-mailbox-host adapter: inject via agent_session start|send_input
+/// (HostCommand under the hood). Marks mailbox row **succeeded** after command
+/// enqueue — host still completes via projector when no AppendBotMessage path.
+async fn execute_runtime_port_adapter(
+    state: &BackendState,
+    row: &crate::store::agent_dispatch_queue::AgentDispatchRow,
+    agent: &crate::store::social::AgentRow,
+    now_ms: i64,
+) -> Result<(), crate::error::BackendError> {
     let attachments =
         dispatch_attachments_for_origin(state, &row.account_id, &row.origin_message_id).await?;
-    match forward_agent_dispatch(
+    match runtime_port_inject(
         state,
         &row.account_id,
-        &agent,
+        agent,
         row.session_id.clone(),
         &row.forwarded_text,
         &row.conversation_id,
@@ -1801,26 +2288,9 @@ async fn execute_claimed_dispatch(
                 origin_message_id = %row.origin_message_id,
                 agent_id = %agent.agent_id,
                 runtime = %agent.runtime_agent,
-                "agent dispatch started"
+                "runtime-port adapter injected (no live mailbox host WS)"
             );
-            // Single-agent bind only. Multi-@ would last-writer-win on
-            // chat_messages.agent_session_id; completion + queue already key
-            // by origin×agent/session.
-            let multi_for_origin = crate::store::agent_dispatch_queue::count_by_origin(
-                &state.store,
-                &row.origin_message_id,
-            )
-            .await
-            .unwrap_or(1);
-            if multi_for_origin <= 1 {
-                crate::store::social::bind_session_to_message_for_agent(
-                    &state.store,
-                    &row.origin_message_id,
-                    &agent.agent_id,
-                    &dispatch.session_id,
-                )
-                .await?;
-            }
+            maybe_bind_origin_session(state, row, agent, &dispatch.session_id).await?;
             crate::store::agent_dispatch_queue::mark_succeeded(
                 &state.store,
                 &row.dispatch_id,
@@ -1828,82 +2298,281 @@ async fn execute_claimed_dispatch(
                 now_ms,
             )
             .await?;
-            arm_completion_watch(
+            arm_completion_watch_for_row(
                 state,
-                row.dispatch_id.clone(),
-                row.origin_message_id.clone(),
-                row.conversation_id.clone(),
-                dispatch.session_id,
+                row,
                 agent,
+                dispatch.session_id,
                 dispatch.watcher_from_seq,
-                if row.mention_sender {
-                    Some(row.account_id.clone())
-                } else {
-                    None
-                },
-                if row.mention_sender {
-                    row.sender_minos_id.clone()
-                } else {
-                    None
-                },
             )
             .await;
+            Ok(())
         }
-        Err(error) => {
-            let (code, detail) = agent_error_from_backend_error(&error);
-            let attempts = row.attempts;
-            if attempts >= crate::store::agent_dispatch_queue::MAX_ATTEMPTS {
+        Err(error) => handle_dispatch_forward_error(state, row, Some(agent), error, now_ms).await,
+    }
+}
+
+async fn maybe_bind_origin_session(
+    state: &BackendState,
+    row: &crate::store::agent_dispatch_queue::AgentDispatchRow,
+    agent: &crate::store::social::AgentRow,
+    session_id: &str,
+) -> Result<(), crate::error::BackendError> {
+    let multi_for_origin = crate::store::agent_dispatch_queue::count_by_origin(
+        &state.store,
+        &row.origin_message_id,
+    )
+    .await
+    .unwrap_or(1);
+    if multi_for_origin <= 1 {
+        crate::store::social::bind_session_to_message_for_agent(
+            &state.store,
+            &row.origin_message_id,
+            &agent.agent_id,
+            session_id,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn arm_completion_watch_for_row(
+    state: &BackendState,
+    row: &crate::store::agent_dispatch_queue::AgentDispatchRow,
+    agent: &crate::store::social::AgentRow,
+    session_id: String,
+    watcher_from_seq: u64,
+) {
+    arm_completion_watch(
+        state,
+        row.dispatch_id.clone(),
+        row.origin_message_id.clone(),
+        row.conversation_id.clone(),
+        session_id,
+        agent.clone(),
+        watcher_from_seq,
+        if row.mention_sender {
+            Some(row.account_id.clone())
+        } else {
+            None
+        },
+        if row.mention_sender {
+            row.sender_minos_id.clone()
+        } else {
+            None
+        },
+    )
+    .await;
+}
+
+/// Lease a live host and push `ServerFrame::BotInboxDelivery`.
+///
+/// Returns `Ok(Some(session_id))` when the frame was enqueued on a host socket,
+/// `Ok(None)` when no live host connection is available (caller may use adapter).
+async fn deliver_bot_inbox(
+    state: &BackendState,
+    row: &crate::store::agent_dispatch_queue::AgentDispatchRow,
+    agent: &crate::store::social::AgentRow,
+    now_ms: i64,
+) -> Result<Option<String>, crate::error::BackendError> {
+    let existing_session = resolve_dispatch_session_id(
+        state,
+        &row.conversation_id,
+        agent,
+        None,
+    )
+    .await?;
+
+    let host_device_id = if let Some(ref session_id) = existing_session {
+        if let Some(session) =
+            crate::store::agent_sessions::get(&state.store, session_id).await?
+        {
+            if let Some(host) = session.host_device_id.as_deref() {
+                match uuid::Uuid::parse_str(host) {
+                    Ok(id) => minos_domain::DeviceId(id),
+                    Err(_) => select_live_host_for_account(state, &agent.owner_account_id).await?,
+                }
+            } else {
+                select_live_host_for_account(state, &agent.owner_account_id).await?
+            }
+        } else {
+            select_live_host_for_account(state, &agent.owner_account_id).await?
+        }
+    } else {
+        select_live_host_for_account(state, &agent.owner_account_id).await?
+    };
+
+    let hosts = state
+        .subscription_mgr
+        .host_connections_for_device(host_device_id);
+    if hosts.is_empty() {
+        return Ok(None);
+    }
+
+    let lease_expires_at_ms =
+        now_ms.saturating_add(crate::store::agent_dispatch_queue::DEFAULT_LEASE_TTL_MS);
+    crate::store::agent_dispatch_queue::set_lease(
+        &state.store,
+        &row.dispatch_id,
+        &host_device_id.to_string(),
+        lease_expires_at_ms,
+        now_ms,
+    )
+    .await?;
+
+    // Freeze digital body at schedule time + record host deployment (capability).
+    if let Err(error) = crate::store::social::insert_bot_revision(&state.store, agent, now_ms).await
+    {
+        tracing::warn!(
+            target: "minos_backend::social",
+            error = %error,
+            agent_id = %agent.agent_id,
+            "bot revision snapshot failed (continuing delivery)"
+        );
+    }
+    if let Err(error) = crate::store::social::upsert_bot_deployment(
+        &state.store,
+        &agent.agent_id,
+        &host_device_id.to_string(),
+        now_ms,
+    )
+    .await
+    {
+        tracing::warn!(
+            target: "minos_backend::social",
+            error = %error,
+            agent_id = %agent.agent_id,
+            host = %host_device_id,
+            "bot deployment upsert failed (continuing delivery)"
+        );
+    }
+
+    let origin_row = crate::store::social::get_message(&state.store, &row.origin_message_id)
+        .await?
+        .ok_or_else(|| crate::error::BackendError::StoreQuery {
+            operation: "deliver_bot_inbox.origin_message".into(),
+            message: format!("origin message {} missing", row.origin_message_id),
+        })?;
+    let mut hydrated =
+        crate::conversations::use_case::hydrate_messages(&state.store, vec![origin_row])
+            .await
+            .map_err(|e| crate::error::BackendError::StoreQuery {
+                operation: "deliver_bot_inbox.hydrate".into(),
+                message: e.to_string(),
+            })?;
+    let message = hydrated.remove(0);
+
+    // Assign a stable formal session id for cold starts so Hub completion
+    // watches and Host inject share the same key (daemon must honor it).
+    let session_id = existing_session.clone().unwrap_or_else(|| {
+        format!("mailbox-{}", row.dispatch_id)
+    });
+    let frame = minos_protocol::realtime::ServerFrame::BotInboxDelivery {
+        delivery_id: row.dispatch_id.clone(),
+        conversation_id: row.conversation_id.clone(),
+        message,
+        bot: minos_protocol::realtime::BotLaunchSnapshot {
+            bot_id: agent.agent_id.clone(),
+            runtime_agent: agent.runtime_agent.clone(),
+            model: agent.model.clone(),
+            default_reasoning_effort: agent.default_reasoning_effort.clone(),
+            system_prompt: agent.system_prompt.clone(),
+            display_name: Some(agent.display_name.clone()),
+            workspace_path: agent.workspace_path.clone(),
+        },
+        session: minos_protocol::realtime::SessionBinding {
+            session_id: Some(session_id.clone()),
+            create_if_missing: existing_session.is_none(),
+        },
+        lease_expires_at_ms,
+    };
+
+    let mut pushed = false;
+    for conn in hosts {
+        match conn.send(frame.clone()) {
+            Ok(()) => {
+                pushed = true;
+                break;
+            }
+            Err(error) => {
                 tracing::warn!(
                     target: "minos_backend::social",
-                    conversation_id = %row.conversation_id,
-                    agent_id = %agent.agent_id,
-                    origin_message_id = %row.origin_message_id,
-                    attempts,
-                    code = %code,
-                    detail = %detail,
-                    "agent dispatch failed terminal after retries"
+                    delivery_id = %row.dispatch_id,
+                    host_installation_id = %host_device_id,
+                    error = %error,
+                    "failed to push BotInboxDelivery to host connection"
                 );
-                crate::store::agent_dispatch_queue::mark_failed_terminal(
-                    &state.store,
-                    &row.dispatch_id,
-                    &detail,
-                    now_ms,
-                )
-                .await?;
-                notify_agent_dispatch_failure(
-                    state,
-                    &row.account_id,
-                    &row.conversation_id,
-                    &row.origin_message_id,
-                    Some(&agent),
-                    row.session_id.as_deref(),
-                    code,
-                    detail,
-                )
-                .await;
-            } else {
-                let delay = crate::store::agent_dispatch_queue::backoff_delay_ms(attempts);
-                let next = now_ms + delay;
-                tracing::info!(
-                    target: "minos_backend::social",
-                    conversation_id = %row.conversation_id,
-                    origin_message_id = %row.origin_message_id,
-                    attempts,
-                    next_attempt_at_ms = next,
-                    code = %code,
-                    "agent dispatch requeued (transient)"
-                );
-                crate::store::agent_dispatch_queue::requeue_pending(
-                    &state.store,
-                    &row.dispatch_id,
-                    attempts,
-                    next,
-                    &detail,
-                    now_ms,
-                )
-                .await?;
             }
         }
+    }
+    if !pushed {
+        let _ =
+            crate::store::agent_dispatch_queue::clear_lease(&state.store, &row.dispatch_id, now_ms)
+                .await;
+        return Ok(None);
+    }
+
+    Ok(Some(session_id))
+}
+
+async fn handle_dispatch_forward_error(
+    state: &BackendState,
+    row: &crate::store::agent_dispatch_queue::AgentDispatchRow,
+    agent: Option<&crate::store::social::AgentRow>,
+    error: crate::error::BackendError,
+    now_ms: i64,
+) -> Result<(), crate::error::BackendError> {
+    let (code, detail) = agent_error_from_backend_error(&error);
+    let attempts = row.attempts;
+    if attempts >= crate::store::agent_dispatch_queue::MAX_ATTEMPTS {
+        tracing::warn!(
+            target: "minos_backend::social",
+            conversation_id = %row.conversation_id,
+            origin_message_id = %row.origin_message_id,
+            attempts,
+            code = %code,
+            detail = %detail,
+            "agent dispatch failed terminal after retries"
+        );
+        crate::store::agent_dispatch_queue::mark_failed_terminal(
+            &state.store,
+            &row.dispatch_id,
+            &detail,
+            now_ms,
+        )
+        .await?;
+        notify_agent_dispatch_failure(
+            state,
+            &row.account_id,
+            &row.conversation_id,
+            &row.origin_message_id,
+            agent,
+            row.session_id.as_deref(),
+            code,
+            detail,
+        )
+        .await;
+    } else {
+        let delay = crate::store::agent_dispatch_queue::backoff_delay_ms(attempts);
+        let next = now_ms + delay;
+        tracing::info!(
+            target: "minos_backend::social",
+            conversation_id = %row.conversation_id,
+            origin_message_id = %row.origin_message_id,
+            attempts,
+            next_attempt_at_ms = next,
+            code = %code,
+            "agent dispatch requeued (transient)"
+        );
+        crate::store::agent_dispatch_queue::requeue_pending(
+            &state.store,
+            &row.dispatch_id,
+            attempts,
+            next,
+            &detail,
+            now_ms,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -1915,15 +2584,21 @@ async fn unmatched_agent_intent_error(
     conversation_id: &str,
     text: &str,
 ) -> Result<Option<(&'static str, String)>, crate::error::BackendError> {
-    let agents =
+    // Full roster for recognition (including disabled); delivery uses active only.
+    let all_agents =
         crate::store::social::list_conversation_agents(&state.store, conversation_id).await?;
+    let active_agents: Vec<_> = all_agents
+        .iter()
+        .filter(|a| a.is_active())
+        .cloned()
+        .collect();
     let mut agentish: Vec<String> = Vec::new();
     for token in collect_mention_tokens(text) {
         let (name_part, _) = crate::conversations::use_case::split_agent_session_token(token);
         let lower = name_part.to_ascii_lowercase();
         let looks_agentish = HOST_RUNTIME_MENTIONS.contains(&lower.as_str())
             || lower.starts_with("bot-")
-            || agents.iter().any(|a| {
+            || all_agents.iter().any(|a| {
                 a.agent_id.eq_ignore_ascii_case(name_part)
                     || a.runtime_agent.eq_ignore_ascii_case(&lower)
                     || a.name.eq_ignore_ascii_case(name_part)
@@ -1935,7 +2610,30 @@ async fn unmatched_agent_intent_error(
     if agentish.is_empty() {
         return Ok(None);
     }
-    if agents.is_empty() {
+    // Prefer a specific disabled-bot diagnostic when the token matches a member.
+    for token in &agentish {
+        if let Some(disabled) = all_agents.iter().find(|a| {
+            !a.is_active()
+                && (a.agent_id.eq_ignore_ascii_case(token)
+                    || a.name.eq_ignore_ascii_case(token)
+                    || a.runtime_agent.eq_ignore_ascii_case(token))
+        }) {
+            if crate::conversations::use_case::match_agent_token(token, &active_agents).is_none() {
+                let label = if disabled.display_name.trim().is_empty() {
+                    disabled.name.as_str()
+                } else {
+                    disabled.display_name.as_str()
+                };
+                return Ok(Some((
+                    "agent_disabled",
+                    format!(
+                        "Agent「{label}」已停用，无法投递（@{token}）。请在 Agents 中重新启用后再试。"
+                    ),
+                )));
+            }
+        }
+    }
+    if active_agents.is_empty() {
         return Ok(Some((
             "no_agents_in_conversation",
             format!(
@@ -1944,8 +2642,8 @@ async fn unmatched_agent_intent_error(
             ),
         )));
     }
-    // Mentions exist but none matched roster (e.g. @codex when only claude is member).
-    if !text_mentions_any_agent(text, &agents) {
+    // Mentions exist but none matched active roster (e.g. @codex when only claude is member).
+    if !text_mentions_any_agent(text, &active_agents) {
         return Ok(Some((
             "agent_not_in_conversation",
             format!(
@@ -2179,9 +2877,19 @@ fn agent_row_to_summary(row: &crate::store::social::AgentRow) -> AgentSummary {
         agent_id: row.agent_id.clone(),
         owner_account_id: row.owner_account_id.clone(),
         name: row.name.clone(),
+        display_name: if row.display_name.is_empty() {
+            row.name.clone()
+        } else {
+            row.display_name.clone()
+        },
         description: row.description.clone(),
+        avatar_url: row.avatar_url.clone(),
+        source: row.source.clone(),
+        status: row.status.clone(),
         runtime_agent: row.runtime_agent.clone(),
         model: row.model.clone(),
+        default_reasoning_effort: row.default_reasoning_effort.clone(),
+        system_prompt: row.system_prompt.clone(),
         workspace_path: row.workspace_path.clone(),
         created_at_ms: row.created_at_ms,
         updated_at_ms: row.updated_at_ms,
@@ -2213,18 +2921,13 @@ mod tests {
     #[test]
     fn completion_watch_registry_arms_and_removes_by_watch_key() {
         let reg = crate::completion_watch::CompletionWatchRegistry::new();
-        let agent = crate::store::social::AgentRow {
-            agent_id: "a1".into(),
-            owner_account_id: "acc".into(),
-            name: "Codex".into(),
-            description: String::new(),
-            source: "host_runtime".into(),
-            runtime_agent: "codex".into(),
-            model: String::new(),
-            workspace_path: None,
-            created_at_ms: 0,
-            updated_at_ms: 0,
-        };
+        let agent = crate::store::social::AgentRow::test_stub(
+            "a1",
+            "acc",
+            "Codex",
+            "host_runtime",
+            "codex",
+        );
         reg.arm(crate::completion_watch::CompletionWatch {
             dispatch_id: "d1".into(),
             origin_message_id: "m1".into(),
@@ -2247,30 +2950,20 @@ mod tests {
     #[test]
     fn text_mentions_any_agent_matches_roster_tokens() {
         let agents = vec![
-            crate::store::social::AgentRow {
-                agent_id: "bot-codex".into(),
-                owner_account_id: "acc".into(),
-                name: "Codex".into(),
-                description: String::new(),
-                source: "host_runtime".into(),
-                runtime_agent: "codex".into(),
-                model: String::new(),
-                workspace_path: None,
-                created_at_ms: 0,
-                updated_at_ms: 0,
-            },
-            crate::store::social::AgentRow {
-                agent_id: "bot-claude".into(),
-                owner_account_id: "acc".into(),
-                name: "Claude".into(),
-                description: String::new(),
-                source: "host_runtime".into(),
-                runtime_agent: "claude".into(),
-                model: String::new(),
-                workspace_path: None,
-                created_at_ms: 0,
-                updated_at_ms: 0,
-            },
+            crate::store::social::AgentRow::test_stub(
+                "bot-codex",
+                "acc",
+                "Codex",
+                "host_runtime",
+                "codex",
+            ),
+            crate::store::social::AgentRow::test_stub(
+                "bot-claude",
+                "acc",
+                "Claude",
+                "host_runtime",
+                "claude",
+            ),
         ];
         assert!(text_mentions_any_agent(
             "@codex @claude @codex count off 1 2",
@@ -2286,5 +2979,17 @@ mod tests {
         assert!(MessageSource::ClientLive.allows_agent_dispatch());
         assert!(!MessageSource::HostProjection.allows_agent_dispatch());
         assert!(!MessageSource::System.allows_agent_dispatch());
+    }
+
+    #[test]
+    fn automation_hop_budget_is_small_positive() {
+        // bot-mailbox loop control: human root hop=0; each bot→bot increments;
+        // enqueue when hop would exceed MAX is skipped.
+        assert_eq!(MAX_AUTOMATION_HOP, 3);
+        assert!(MAX_AUTOMATION_HOP > 0);
+        // hop 0 (human) → enqueue 0; hop 2 origin agent → enqueue 3 (allowed);
+        // hop 3 origin agent → enqueue 4 (blocked).
+        assert!(3 <= MAX_AUTOMATION_HOP);
+        assert!(4 > MAX_AUTOMATION_HOP);
     }
 }

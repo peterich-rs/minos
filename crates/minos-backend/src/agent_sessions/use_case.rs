@@ -25,11 +25,17 @@ const STOP_COMMAND_METHOD: &str = "agent_session.stop";
 const RESPOND_OPENCODE_QUESTION_METHOD: &str = "minos_respond_opencode_question";
 const DEFAULT_HOST_COMMAND_DEADLINE_MS: i64 = 5_000;
 
+/// Runtime + digital body resolved from Hub `agents` (or a host_runtime seed alias).
 struct ResolvedAgent {
     runtime_agent: String,
     owner_account_id: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<String>,
+    system_prompt: Option<String>,
+    display_name: Option<String>,
+    /// True when `agent_id` was a virtual alias (`agent_codex`, …) and we seeded a
+    /// host_runtime row. Product paths should prefer real bot `agent_id`s.
+    from_virtual_alias_seed: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -110,21 +116,27 @@ impl DefaultAgentSessionService {
             .ok_or(AgentSessionError::HostUnavailable)
     }
 
-    /// Resolve wire `agent_id` to a runtime agent. Virtual aliases (`agent_codex`, …)
-    /// ensure a host_runtime row so `agent_sessions.agent_id` FK always points at
-    /// a real `agents` row (storage parity).
+    /// Resolve wire `agent_id` to a runtime agent + digital body.
+    ///
+    /// Prefer a real Hub bot row (`get_agent`). Virtual aliases (`agent_codex`, …)
+    /// remain only as **dev/test seed** paths: they `ensure_host_runtime_agent` so
+    /// `agent_sessions.agent_id` FK always points at a real `agents` row. Product
+    /// session start / delivery should pass the real `agent_id`.
     async fn resolve_agent(
         &self,
         agent_id: &str,
         caller_account_id: &str,
     ) -> Result<(String, ResolvedAgent), AgentSessionError> {
         if let Some(agent) = crate::store::social::get_agent(&self.store, agent_id).await? {
-            let model = {
-                let t = agent.model.trim();
-                if t.is_empty() {
-                    None
+            let model = nonempty_opt(&agent.model);
+            let reasoning_effort = nonempty_opt(&agent.default_reasoning_effort);
+            let system_prompt = nonempty_opt(&agent.system_prompt);
+            let display_name = {
+                let d = agent.display_name.trim();
+                if !d.is_empty() {
+                    Some(d.to_string())
                 } else {
-                    Some(t.to_string())
+                    nonempty_opt(&agent.name)
                 }
             };
             let id = agent.agent_id.clone();
@@ -134,9 +146,22 @@ impl DefaultAgentSessionService {
                     runtime_agent: agent.runtime_agent,
                     owner_account_id: Some(agent.owner_account_id),
                     model,
-                    // Host profiles store effort; social agents table has model only for now.
-                    reasoning_effort: None,
+                    reasoning_effort,
+                    system_prompt,
+                    display_name,
+                    from_virtual_alias_seed: false,
                 },
+            ));
+        }
+        // Virtual aliases (`agent_codex`, …) are test/dev-only. Product paths
+        // must pass a real Hub `agents.agent_id` (global bot identity).
+        let allow_virtual = std::env::var("MINOS_ALLOW_VIRTUAL_AGENT_ALIASES")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+            || cfg!(test);
+        if !allow_virtual {
+            return Err(AgentSessionError::ValidationFormat(
+                "unknown agent_id; use a real Hub bot agent_id (virtual aliases disabled)",
             ));
         }
         let runtime_agent = match agent_id {
@@ -147,6 +172,12 @@ impl DefaultAgentSessionService {
             "agent_grok" => "grok",
             _ => return Err(AgentSessionError::ValidationFormat("unknown agent_id")),
         };
+        tracing::debug!(
+            target: "minos_backend::agent_sessions",
+            alias = %agent_id,
+            runtime_agent,
+            "resolving virtual agent alias via host_runtime seed (tests/dev only)"
+        );
         let ensured = crate::store::social::ensure_host_runtime_agent(
             &self.store,
             caller_account_id,
@@ -157,13 +188,28 @@ impl DefaultAgentSessionService {
             chrono::Utc::now().timestamp_millis(),
         )
         .await?;
+        // Prefer digital body from the seeded row when present.
+        let model = nonempty_opt(&ensured.model);
+        let reasoning_effort = nonempty_opt(&ensured.default_reasoning_effort);
+        let system_prompt = nonempty_opt(&ensured.system_prompt);
+        let display_name = {
+            let d = ensured.display_name.trim();
+            if !d.is_empty() {
+                Some(d.to_string())
+            } else {
+                nonempty_opt(&ensured.name)
+            }
+        };
         Ok((
             ensured.agent_id,
             ResolvedAgent {
                 runtime_agent: runtime_agent.into(),
                 owner_account_id: Some(caller_account_id.to_string()),
-                model: None,
-                reasoning_effort: None,
+                model,
+                reasoning_effort,
+                system_prompt,
+                display_name,
+                from_virtual_alias_seed: true,
             },
         ))
     }
@@ -233,6 +279,15 @@ fn normalize_workspace_path(path: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+fn nonempty_opt(value: &str) -> Option<String> {
+    let t = value.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
+}
+
 fn validate_workspace_path(path: &str) -> Result<(), AgentSessionError> {
     if (path.starts_with('/') || path.starts_with("~/")) && !path.contains('\0') {
         Ok(())
@@ -273,6 +328,16 @@ impl AgentSessionService for DefaultAgentSessionService {
         let runtime_agent = resolved_agent.runtime_agent.clone();
         let agent_model = resolved_agent.model.clone();
         let agent_effort = resolved_agent.reasoning_effort.clone();
+        let agent_instructions = resolved_agent.system_prompt.clone();
+        let agent_display_name = resolved_agent.display_name.clone();
+        if resolved_agent.from_virtual_alias_seed {
+            tracing::info!(
+                target: "minos_backend::agent_sessions",
+                alias = %input.agent_id,
+                resolved_agent_id = %resolved_agent_id,
+                "agent_session.start used virtual alias seed; prefer real bot agent_id"
+            );
+        }
 
         let session_id = deterministic_uuid(
             "agent-session-start",
@@ -363,7 +428,7 @@ impl AgentSessionService for DefaultAgentSessionService {
             conversation_id: input.conversation_id.clone(),
             project_id: input.project_id.clone(),
             host_installation_id: host_device_id.to_string(),
-            agent_id: input.agent_id.clone(),
+            agent_id: resolved_agent_id.clone(),
             at_ms: started_at_ms,
         };
         let cursor = durable_event_log::record_in_tx(
@@ -393,7 +458,8 @@ impl AgentSessionService for DefaultAgentSessionService {
                     method: START_COMMAND_METHOD.into(),
                     params_json: serde_json::json!({
                         "session_id": session_id.clone(),
-                        "agent_id": input.agent_id.clone(),
+                        // Prefer resolved real agents.agent_id (not virtual alias).
+                        "agent_id": resolved_agent_id.clone(),
                         "runtime_agent": runtime_agent,
                         "project_id": input.project_id.clone(),
                         "conversation_id": input.conversation_id.clone(),
@@ -404,6 +470,10 @@ impl AgentSessionService for DefaultAgentSessionService {
                         "origin_message_id": input.origin_message_id.clone(),
                         "model": agent_model,
                         "reasoning_effort": agent_effort,
+                        // Digital body system prompt → Host CLI instructions.
+                        "instructions": agent_instructions,
+                        "system_prompt": resolved_agent.system_prompt,
+                        "display_name": agent_display_name,
                         "attachments": input.attachments,
                     }),
                     requested_by_account_id: Some(input.caller_account_id.clone()),

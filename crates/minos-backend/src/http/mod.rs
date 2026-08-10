@@ -291,13 +291,6 @@ const ROUTE_INVENTORY: &[RouteContract] = &[
     ),
     RouteContract::new(
         "POST",
-        "/v1/host/realtime/ws-ticket",
-        "/v1/host/realtime/ws-ticket",
-        "host_api",
-        "host_installation",
-    ),
-    RouteContract::new(
-        "POST",
         "/v1/projects",
         "/v1/projects",
         "account_api",
@@ -1196,7 +1189,8 @@ mod tests {
             .unwrap();
         assert_eq!(realtime_route.status(), StatusCode::UNAUTHORIZED);
 
-        let host_realtime_route = app
+        // Host ticket endpoint removed — Bearer hit_* only on /ws/host.
+        let host_ticket_gone = app
             .clone()
             .oneshot(
                 Request::builder()
@@ -1207,7 +1201,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(host_realtime_route.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(host_ticket_gone.status(), StatusCode::NOT_FOUND);
 
         let client_ws_route = app
             .clone()

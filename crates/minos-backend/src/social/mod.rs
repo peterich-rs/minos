@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use minos_protocol::{
     ChatMessageReplySummary, ChatMessageSummary, ConversationKind, ConversationSummary,
-    FriendRequestStatus, SenderType, UserSummary,
+    FriendRequestStatus, MessageSender, SenderType, UserSummary,
 };
 
 use crate::{
@@ -157,7 +157,7 @@ impl SocialService {
             .iter()
             .chain(reply_rows.values())
             .filter(|row| row.sender_type != "agent")
-            .map(|row| row.sender_account_id.clone())
+            .filter_map(|row| row.sender_account_id.clone())
             .collect::<Vec<_>>();
         profile_ids.sort();
         profile_ids.dedup();
@@ -247,25 +247,30 @@ fn sender_summary(
     row: &ChatMessageRow,
     profiles: &HashMap<String, ProfileRow>,
     agents: &HashMap<String, AgentRow>,
-) -> Result<UserSummary, SocialViewError> {
+) -> Result<MessageSender, SocialViewError> {
     if row.sender_type == "agent" {
         let agent_id = agent_id_for_row(row);
         return Ok(match agents.get(&agent_id) {
-            Some(agent) => agent_sender_summary(Some(agent), &agent_id),
-            None => agent_sender_summary(None, &agent_id),
+            Some(agent) => bot_sender_summary(Some(agent), &agent_id),
+            None => bot_sender_summary(None, &agent_id),
         });
     }
 
+    let account_id = row.sender_account_id.as_deref().ok_or_else(|| {
+        SocialViewError::MissingProfile("missing sender_account_id on user message".into())
+    })?;
     let profile = profiles
-        .get(&row.sender_account_id)
-        .ok_or_else(|| SocialViewError::MissingProfile(row.sender_account_id.clone()))?;
-    Ok(to_user_summary(profile))
+        .get(account_id)
+        .ok_or_else(|| SocialViewError::MissingProfile(account_id.to_string()))?;
+    Ok(MessageSender::from_user_summary(to_user_summary(profile)))
 }
 
 fn agent_id_for_row(row: &ChatMessageRow) -> String {
+    // Authoritative bot identity is sender_agent_id — never owner account FK.
     row.sender_agent_id
         .clone()
-        .unwrap_or_else(|| row.sender_account_id.clone())
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or_else(|| "unknown-bot".to_string())
 }
 
 fn display_name(profile: &ProfileRow) -> String {
@@ -290,17 +295,46 @@ fn to_user_summary(profile: &ProfileRow) -> UserSummary {
     }
 }
 
-fn agent_sender_summary(agent: Option<&AgentRow>, agent_id: &str) -> UserSummary {
+fn bot_sender_summary(agent: Option<&AgentRow>, agent_id: &str) -> MessageSender {
     match agent {
-        Some(agent) => UserSummary {
-            account_id: agent.agent_id.clone(),
-            minos_id: agent.agent_id.clone(),
-            display_name: format!("🤖 {}", agent.name),
-        },
-        None => UserSummary {
-            account_id: agent_id.to_string(),
-            minos_id: agent_id.to_string(),
+        Some(agent) => {
+            let label = {
+                let d = agent.display_name.trim();
+                if !d.is_empty() {
+                    d
+                } else {
+                    agent.name.trim()
+                }
+            };
+            let display_name = if label.is_empty() {
+                format!("🤖 {}", agent.agent_id)
+            } else if label.starts_with('🤖') {
+                label.to_string()
+            } else {
+                format!("🤖 {label}")
+            };
+            let name = {
+                let n = agent.name.trim();
+                if n.is_empty() {
+                    None
+                } else {
+                    Some(n.to_string())
+                }
+            };
+            MessageSender::Bot {
+                bot_id: agent.agent_id.clone(),
+                display_name,
+                runtime_agent: agent.runtime_agent.clone(),
+                name,
+                avatar_url: agent.avatar_url.clone(),
+            }
+        }
+        None => MessageSender::Bot {
+            bot_id: agent_id.to_string(),
             display_name: "🤖 Unknown Agent".to_string(),
+            runtime_agent: String::new(),
+            name: None,
+            avatar_url: None,
         },
     }
 }

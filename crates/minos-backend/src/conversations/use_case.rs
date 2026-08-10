@@ -4,7 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use minos_protocol::{
     ChatMessageReplySummary, ChatMessageSummary, ConversationKind, ConversationResponse,
-    ConversationSummary, SenderType, UserSummary,
+    ConversationSummary, MessageSender, SenderType, UserSummary,
 };
 
 use crate::app::tx::Storage;
@@ -115,6 +115,9 @@ pub trait ConversationService: Send + Sync {
         message_source: minos_protocol::MessageSource,
         client_sent_at_ms: Option<i64>,
         attachment_blob_ids: &[String],
+        // Optional structured mentions from Account WS AppendMessage.
+        // Validated against conversation participants and merged with body parse.
+        structured_mentions: &[minos_protocol::MentionTarget],
     ) -> Result<(ChatMessageSummary, Vec<social::ProfileRow>), ConversationError>;
 
     async fn recall_message(
@@ -445,6 +448,7 @@ impl ConversationService for DefaultConversationService {
         message_source: minos_protocol::MessageSource,
         client_sent_at_ms: Option<i64>,
         attachment_blob_ids: &[String],
+        structured_mentions: &[minos_protocol::MentionTarget],
     ) -> Result<(ChatMessageSummary, Vec<social::ProfileRow>), ConversationError> {
         if !social::is_conversation_member(&self.store, conversation_id, account_id).await? {
             return Err(ConversationError::NotFound);
@@ -501,8 +505,17 @@ impl ConversationService for DefaultConversationService {
             .iter()
             .map(|m| m.account_id.clone())
             .collect::<Vec<_>>();
-        let agents = social::list_conversation_agents(&self.store, conversation_id).await?;
-        let mentions = extract_participant_mentions(text, account_id, &members, &agents);
+        // Only active bots resolve as @ targets / structured mentions for delivery.
+        let agents =
+            social::list_conversation_agents_active(&self.store, conversation_id).await?;
+        let mut mentions = extract_participant_mentions(text, account_id, &members, &agents);
+        merge_structured_mentions(
+            &mut mentions,
+            structured_mentions,
+            account_id,
+            &members,
+            &agents,
+        );
         // Hub server clock is the sole ordering authority for created_at_ms.
         // client_sent_at_ms is accepted for future display/debug only.
         let _ = client_sent_at_ms;
@@ -519,12 +532,11 @@ impl ConversationService for DefaultConversationService {
                         .collect::<HashMap<_, _>>();
                     let mut agent_map = HashMap::new();
                     if reply_row.sender_type == "agent" {
-                        let agent_id = reply_row
-                            .sender_agent_id
-                            .clone()
-                            .unwrap_or_else(|| reply_row.sender_account_id.clone());
-                        if let Some(agent) = social::get_agent(&self.store, &agent_id).await? {
-                            agent_map.insert(agent_id, agent);
+                        let agent_id = agent_id_for_row(&reply_row);
+                        if agent_id != "unknown-bot" {
+                            if let Some(agent) = social::get_agent(&self.store, &agent_id).await? {
+                                agent_map.insert(agent_id, agent);
+                            }
                         }
                     }
                     Some(ChatMessageReplySummary {
@@ -543,7 +555,7 @@ impl ConversationService for DefaultConversationService {
             .iter()
             .find(|m| m.account_id == account_id)
             .ok_or_else(|| ConversationError::MissingProfile(account_id.to_string()))?;
-        let sender = to_user_summary(sender_profile);
+        let sender = MessageSender::from_user_summary(to_user_summary(sender_profile));
 
         // Transactional Outbox: chat_messages + durable + outbox in one commit.
         let mut tx = self.store.begin().await?;
@@ -616,7 +628,7 @@ impl ConversationService for DefaultConversationService {
         if existing.conversation_id != conversation_id {
             return Err(ConversationError::NotFound);
         }
-        if existing.sender_account_id != account_id {
+        if existing.sender_account_id.as_deref() != Some(account_id) {
             return Err(ConversationError::ValidationFormat(
                 "only the sender can recall this message".into(),
             ));
@@ -1095,7 +1107,7 @@ pub async fn hydrate_messages_for_viewer(
         .iter()
         .chain(reply_rows.values())
         .filter(|row| row.sender_type != "agent")
-        .map(|row| row.sender_account_id.clone())
+        .filter_map(|row| row.sender_account_id.clone())
         .collect::<Vec<_>>();
     profile_ids.sort();
     profile_ids.dedup();
@@ -1189,39 +1201,126 @@ fn sender_summary(
     row: &social::ChatMessageRow,
     profiles: &HashMap<String, social::ProfileRow>,
     agents: &HashMap<String, social::AgentRow>,
-) -> Result<UserSummary, ConversationError> {
+) -> Result<MessageSender, ConversationError> {
     if row.sender_type == "agent" {
         let agent_id = agent_id_for_row(row);
         return Ok(match agents.get(&agent_id) {
-            Some(agent) => agent_sender_summary(Some(agent), &agent_id),
-            None => agent_sender_summary(None, &agent_id),
+            Some(agent) => bot_sender_summary(Some(agent), &agent_id),
+            None => bot_sender_summary(None, &agent_id),
         });
     }
 
+    let account_id = row.sender_account_id.as_deref().ok_or_else(|| {
+        ConversationError::MissingProfile("missing sender_account_id on user message".into())
+    })?;
     let profile = profiles
-        .get(&row.sender_account_id)
-        .ok_or_else(|| ConversationError::MissingProfile(row.sender_account_id.clone()))?;
-    Ok(to_user_summary(profile))
+        .get(account_id)
+        .ok_or_else(|| ConversationError::MissingProfile(account_id.to_string()))?;
+    Ok(MessageSender::from_user_summary(to_user_summary(profile)))
 }
 
 fn agent_id_for_row(row: &social::ChatMessageRow) -> String {
+    // Authoritative bot identity is sender_agent_id. Never fall back to
+    // sender_account_id (audit owner FK) — that would reintroduce the old
+    // UserSummary.account_id = agent_id type lie.
     row.sender_agent_id
         .clone()
-        .unwrap_or_else(|| row.sender_account_id.clone())
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or_else(|| "unknown-bot".to_string())
 }
 
-fn agent_sender_summary(agent: Option<&social::AgentRow>, agent_id: &str) -> UserSummary {
+/// Build a first-class bot author card from Hub agent digital body.
+fn bot_sender_summary(agent: Option<&social::AgentRow>, agent_id: &str) -> MessageSender {
     match agent {
-        Some(agent) => UserSummary {
-            account_id: agent.agent_id.clone(),
-            minos_id: agent.agent_id.clone(),
-            display_name: format!("🤖 {}", agent.name),
-        },
-        None => UserSummary {
-            account_id: agent_id.to_string(),
-            minos_id: agent_id.to_string(),
+        Some(agent) => {
+            // Prefer digital-body display_name; fall back to registry name.
+            let label = {
+                let d = agent.display_name.trim();
+                if !d.is_empty() {
+                    d
+                } else {
+                    agent.name.trim()
+                }
+            };
+            let display_name = if label.is_empty() {
+                format!("🤖 {}", agent.agent_id)
+            } else if label.starts_with('🤖') {
+                label.to_string()
+            } else {
+                format!("🤖 {label}")
+            };
+            let name = {
+                let n = agent.name.trim();
+                if n.is_empty() {
+                    None
+                } else {
+                    Some(n.to_string())
+                }
+            };
+            MessageSender::Bot {
+                bot_id: agent.agent_id.clone(),
+                display_name,
+                runtime_agent: agent.runtime_agent.clone(),
+                name,
+                avatar_url: agent.avatar_url.clone(),
+            }
+        }
+        None => MessageSender::Bot {
+            bot_id: agent_id.to_string(),
             display_name: "🤖 Unknown Agent".to_string(),
+            runtime_agent: String::new(),
+            name: None,
+            avatar_url: None,
         },
+    }
+}
+
+/// Merge client-provided structured mentions into body-parsed mentions.
+///
+/// Only membership-valid targets are accepted (active bots + human members).
+/// Self-mentions for accounts are dropped. Structured targets append in order
+/// after body order (deduped).
+pub(crate) fn merge_structured_mentions(
+    mentions: &mut social::MessageMentions,
+    structured: &[minos_protocol::MentionTarget],
+    sender_account_id: &str,
+    members: &[social::ProfileRow],
+    agents: &[social::AgentRow],
+) {
+    if structured.is_empty() {
+        return;
+    }
+    let member_ids: std::collections::HashSet<&str> =
+        members.iter().map(|m| m.account_id.as_str()).collect();
+    let agent_ids: std::collections::HashSet<&str> =
+        agents.iter().map(|a| a.agent_id.as_str()).collect();
+    let mut seen_accounts: std::collections::HashSet<String> =
+        mentions.account_ids.iter().cloned().collect();
+    let mut seen_agents: std::collections::HashSet<String> =
+        mentions.agent_ids.iter().cloned().collect();
+
+    for target in structured {
+        match target {
+            minos_protocol::MentionTarget::Account { account_id } => {
+                if account_id == sender_account_id {
+                    continue;
+                }
+                if !member_ids.contains(account_id.as_str()) {
+                    continue;
+                }
+                if seen_accounts.insert(account_id.clone()) {
+                    mentions.account_ids.push(account_id.clone());
+                }
+            }
+            minos_protocol::MentionTarget::Bot { bot_id } => {
+                if !agent_ids.contains(bot_id.as_str()) {
+                    continue;
+                }
+                if seen_agents.insert(bot_id.clone()) {
+                    mentions.agent_ids.push(bot_id.clone());
+                }
+            }
+        }
     }
 }
 
@@ -1269,6 +1368,9 @@ pub(crate) fn extract_participant_mentions(
     }
 }
 
+/// Account-only mention extract (no agent roster). Kept for callers that only
+/// need human targets; prefer [`extract_participant_mentions`] for bots.
+#[allow(dead_code)]
 pub(crate) fn extract_mentioned_account_ids(
     text: &str,
     sender_account_id: &str,
@@ -1372,18 +1474,7 @@ mod tests {
     }
 
     fn agent(agent_id: &str, name: &str, runtime: &str) -> AgentRow {
-        AgentRow {
-            agent_id: agent_id.into(),
-            owner_account_id: "owner".into(),
-            name: name.into(),
-            description: String::new(),
-            source: "host_runtime".into(),
-            runtime_agent: runtime.into(),
-            model: String::new(),
-            workspace_path: None,
-            created_at_ms: 0,
-            updated_at_ms: 0,
-        }
+        AgentRow::test_stub(agent_id, "owner", name, "host_runtime", runtime)
     }
 
     #[test]
@@ -1441,6 +1532,36 @@ mod tests {
         );
         assert!(mentions.account_ids.is_empty());
         assert_eq!(mentions.agent_ids, vec!["bot-1".to_string()]);
+    }
+
+    #[test]
+    fn bot_sender_summary_prefers_display_name() {
+        let mut row = agent("bot-1", "codex-bin", "codex");
+        row.display_name = "Code Reviewer".into();
+        let summary = bot_sender_summary(Some(&row), "bot-1");
+        match summary {
+            MessageSender::Bot {
+                bot_id,
+                display_name,
+                runtime_agent,
+                name,
+                ..
+            } => {
+                assert_eq!(bot_id, "bot-1");
+                assert_eq!(display_name, "🤖 Code Reviewer");
+                assert_eq!(runtime_agent, "codex");
+                assert_eq!(name.as_deref(), Some("codex-bin"));
+            }
+            MessageSender::Account { .. } => panic!("expected bot sender"),
+        }
+
+        row.display_name.clear();
+        let summary = bot_sender_summary(Some(&row), "bot-1");
+        assert_eq!(summary.display_name(), "🤖 codex-bin");
+
+        let unknown = bot_sender_summary(None, "missing");
+        assert_eq!(unknown.display_name(), "🤖 Unknown Agent");
+        assert_eq!(unknown.bot_id(), Some("missing"));
     }
 
     #[test]

@@ -306,6 +306,56 @@ impl SubscriptionManager {
             .collect()
     }
 
+    /// Live connection(s) for a device installation (Host or Account).
+    /// Used for ephemeral Hub→Host frames such as `BotInboxDelivery`.
+    #[must_use]
+    pub fn connections_for_device(&self, device_id: DeviceId) -> Vec<Arc<ConnectionState>> {
+        self.by_conn
+            .iter()
+            .filter_map(|entry| {
+                let conn = entry.value();
+                (conn.device_id == device_id).then(|| Arc::clone(conn))
+            })
+            .collect()
+    }
+
+    /// Push an ephemeral frame to every live connection for `device_id`.
+    /// Returns how many sockets accepted the frame into their push queue.
+    pub fn push_to_device(&self, device_id: DeviceId, frame: ServerFrame) -> usize {
+        let mut sent = 0usize;
+        for conn in self.connections_for_device(device_id) {
+            match conn.send(frame.clone()) {
+                Ok(()) => sent = sent.saturating_add(1),
+                Err(error) => {
+                    tracing::warn!(
+                        target: "minos_backend::realtime::subscription",
+                        device_id = %device_id,
+                        conn_id = %conn.conn_id,
+                        error = %error,
+                        "failed to push ephemeral frame to device connection"
+                    );
+                }
+            }
+        }
+        sent
+    }
+
+    /// Live host connections for a specific installation id (mailbox delivery).
+    #[must_use]
+    pub fn host_connections_for_device(&self, host_device_id: DeviceId) -> Vec<Arc<ConnectionState>> {
+        self.by_conn
+            .iter()
+            .filter_map(|entry| {
+                let conn = entry.value();
+                if conn.role == DeviceRole::AgentHost && conn.device_id == host_device_id {
+                    Some(Arc::clone(conn))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// Force-unsubscribe `topic` on every connection for `account_id` (membership revoke).
     /// Returns how many connections lost the topic.
     pub fn revoke_topic_for_account(&self, account_id: &str, topic: &RealtimeTopic) -> usize {

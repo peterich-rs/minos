@@ -128,6 +128,9 @@ CREATE UNIQUE INDEX idx_agents_host_runtime_unique
     ON agents(owner_account_id, runtime_agent)
     WHERE source = 'host_runtime';
 
+-- Digital body columns (display_name, status, system_prompt, …) and
+-- idx_agents_owner_name_active land in 0004_agent_digital_body.sql.
+
 CREATE TABLE projects (
     project_id       TEXT PRIMARY KEY,
     account_id       TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
@@ -202,7 +205,8 @@ CREATE INDEX idx_conversation_agent_members_agent
 CREATE TABLE chat_messages (
     message_id           TEXT PRIMARY KEY,
     conversation_id      TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
-    sender_account_id    TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    -- Human author account; NULL for agent-authored rows (bot is sender_agent_id).
+    sender_account_id    TEXT REFERENCES accounts(account_id) ON DELETE CASCADE,
     text                 TEXT NOT NULL,
     created_at_ms        BIGINT NOT NULL,
     message_seq          BIGINT NOT NULL,
@@ -214,7 +218,12 @@ CREATE TABLE chat_messages (
     -- Request provenance for client_message_id fingerprint (idempotency conflict).
     message_source       TEXT NOT NULL DEFAULT 'client_live'
         CHECK (message_source IN ('client_live', 'host_projection', 'system')),
-    UNIQUE (conversation_id, message_seq)
+    UNIQUE (conversation_id, message_seq),
+    CHECK (
+        (sender_type = 'user' AND sender_account_id IS NOT NULL AND sender_agent_id IS NULL)
+        OR
+        (sender_type = 'agent' AND sender_agent_id IS NOT NULL)
+    )
 );
 
 CREATE INDEX idx_chat_messages_conversation_seq
@@ -597,7 +606,8 @@ CREATE TABLE push_dispatch_queue (
 CREATE INDEX idx_push_dispatch_queue_due
     ON push_dispatch_queue(status, next_attempt_at_ms);
 
-CREATE TABLE agent_dispatch_queue (
+-- Bot mailbox (domain: bot_message_deliveries).
+CREATE TABLE bot_message_deliveries (
     dispatch_id          TEXT PRIMARY KEY,
     origin_message_id    TEXT NOT NULL,
     conversation_id      TEXT NOT NULL,
@@ -614,13 +624,19 @@ CREATE TABLE agent_dispatch_queue (
     last_error           TEXT,
     created_at_ms        BIGINT NOT NULL,
     updated_at_ms        BIGINT NOT NULL,
+    lease_owner_host_id  TEXT,
+    lease_expires_at_ms  BIGINT,
+    automation_hop       INT NOT NULL DEFAULT 0,
     UNIQUE (origin_message_id, agent_id)
 );
 
-CREATE INDEX idx_agent_dispatch_queue_due
-    ON agent_dispatch_queue(status, next_attempt_at_ms);
-CREATE INDEX idx_agent_dispatch_queue_conversation
-    ON agent_dispatch_queue(conversation_id);
+CREATE INDEX idx_bot_message_deliveries_due
+    ON bot_message_deliveries(status, next_attempt_at_ms);
+CREATE INDEX idx_bot_message_deliveries_conversation
+    ON bot_message_deliveries(conversation_id);
+CREATE INDEX idx_bot_message_deliveries_lease
+    ON bot_message_deliveries(lease_owner_host_id, lease_expires_at_ms)
+    WHERE lease_owner_host_id IS NOT NULL;
 
 -- Durable CompletionWatch: restart-safe turn projection (in-memory is cache).
 CREATE TABLE completion_watches (

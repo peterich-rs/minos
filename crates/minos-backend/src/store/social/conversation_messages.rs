@@ -502,7 +502,7 @@ pub async fn insert_message_with_id_in_tx(
                         ),
                     });
                 }
-                if existing.sender_account_id != sender_account_id {
+                if existing.sender_account_id.as_deref() != Some(sender_account_id) {
                     return Err(idempotency_conflict(
                         id,
                         "already used by a different sender",
@@ -600,7 +600,7 @@ pub async fn insert_message_with_id_in_tx(
         row: ChatMessageRow {
             message_id,
             conversation_id: conversation_id.to_string(),
-            sender_account_id: sender_account_id.to_string(),
+            sender_account_id: Some(sender_account_id.to_string()),
             sender_agent_id: None,
             text: text.to_string(),
             created_at_ms,
@@ -754,30 +754,28 @@ pub async fn bind_session_to_message(
 pub async fn bind_session_to_message_for_agent(
     store: &impl AsStorePool,
     message_id: &str,
-    agent_id: &str,
+    _agent_id: &str,
     session_id: &str,
 ) -> Result<(), BackendError> {
+    // Session binding only. Never set sender_agent_id on the origin row —
+    // user messages must keep sender_agent_id NULL (bot identity is not the author).
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => sqlx::query(
             "UPDATE chat_messages
-                    SET agent_session_id = ?,
-                        sender_agent_id = COALESCE(sender_agent_id, ?)
+                    SET agent_session_id = ?
                   WHERE message_id = ?",
         )
         .bind(session_id)
-        .bind(agent_id)
         .bind(message_id)
         .execute(pool)
         .await
         .map(|_| ()),
         StorePoolRef::Postgres(pool) => sqlx::query(
             "UPDATE chat_messages
-                    SET agent_session_id = $1,
-                        sender_agent_id = COALESCE(sender_agent_id, $2)
-                  WHERE message_id = $3",
+                    SET agent_session_id = $1
+                  WHERE message_id = $2",
         )
         .bind(session_id)
-        .bind(agent_id)
         .bind(message_id)
         .execute(pool)
         .await
@@ -861,15 +859,17 @@ pub async fn lookup_latest_session_id_for_conversation_agent(
     conversation_id: &str,
     agent_id: &str,
 ) -> Result<Option<String>, BackendError> {
+    // Session SSOT is agent_sessions (per conversation × bot). Do not infer from
+    // chat_messages.sender_agent_id — user origin rows bind agent_session_id only.
     match store.as_store_pool() {
         StorePoolRef::Sqlite(pool) => {
             sqlx::query_scalar::<_, Option<String>>(
-                "SELECT agent_session_id
-                   FROM chat_messages
+                "SELECT session_id
+                   FROM agent_sessions
                   WHERE conversation_id = ?
-                    AND sender_agent_id = ?
-                    AND agent_session_id IS NOT NULL
-                  ORDER BY created_at_ms DESC
+                    AND agent_id = ?
+                    AND status NOT IN ('ended', 'failed', 'stopped')
+                  ORDER BY started_at_ms DESC
                   LIMIT 1",
             )
             .bind(conversation_id)
@@ -879,12 +879,12 @@ pub async fn lookup_latest_session_id_for_conversation_agent(
         }
         StorePoolRef::Postgres(pool) => {
             sqlx::query_scalar::<_, Option<String>>(
-                "SELECT agent_session_id
-                   FROM chat_messages
+                "SELECT session_id
+                   FROM agent_sessions
                   WHERE conversation_id = $1
-                    AND sender_agent_id = $2
-                    AND agent_session_id IS NOT NULL
-                  ORDER BY created_at_ms DESC
+                    AND agent_id = $2
+                    AND status NOT IN ('ended', 'failed', 'stopped')
+                  ORDER BY started_at_ms DESC
                   LIMIT 1",
             )
             .bind(conversation_id)

@@ -1777,7 +1777,7 @@ fn convert_chat_message(row: store::social::ChatMessageRow) -> MessageRow {
         message_id: row.message_id,
         conversation_id: row.conversation_id,
         sender_kind: row.sender_type,
-        sender_account_id: Some(row.sender_account_id),
+        sender_account_id: row.sender_account_id,
         sender_agent_id: row.sender_agent_id,
         body_json: serde_json::json!({ "text": row.text }).to_string(),
         reply_to_message_id: row.reply_to_message_id,
@@ -1826,7 +1826,7 @@ impl ConversationMessagesRepository for StoreBackedConversationMessagesRepositor
                 message_id: row.message_id,
                 conversation_id: row.conversation_id,
                 sender_kind: row.sender_type,
-                sender_account_id: Some(row.sender_account_id),
+                sender_account_id: row.sender_account_id,
                 sender_agent_id: row.sender_agent_id,
                 body_json: serde_json::json!({ "text": row.text }).to_string(),
                 reply_to_message_id: row.reply_to_message_id,
@@ -1877,11 +1877,17 @@ impl ConversationMessagesRepository for StoreBackedConversationMessagesRepositor
                 operation: "conversation_messages.recall".into(),
                 message: "message not found".into(),
             })?;
+        let Some(account_id) = msg.sender_account_id.as_deref() else {
+            return Err(BackendError::StoreQuery {
+                operation: "conversation_messages.recall".into(),
+                message: "agent messages cannot be recalled via account path".into(),
+            });
+        };
         let result = store::social::recall_message(
             &self.store,
             &msg.conversation_id,
             message_id,
-            &msg.sender_account_id,
+            account_id,
             at_ms,
         )
         .await?;

@@ -242,14 +242,24 @@ async fn connect_formal_gateway_ws(
     role: DeviceRole,
     account_id: Option<&str>,
 ) -> anyhow::Result<WsClient> {
-    let ticket = if role.is_account_client() {
+    if role.is_account_client() {
         let acct = account_id.expect("account client connect requires an account_id");
-        issue_client_ws_ticket(relay, acct, device_id, role).await?
-    } else {
-        issue_host_ws_ticket(relay, device_id).await?
-    };
+        let ticket = issue_client_ws_ticket(relay, acct, device_id, role).await?;
+        return Ok(connect_gateway_ws_with_ticket(relay, gateway_path_for_role(role), &ticket).await?);
+    }
+    let hit = store::test_support::issue_test_host_token(&relay.pool, device_id, 0).await;
+    connect_host_bearer(relay, &hit).await
+}
 
-    Ok(connect_gateway_ws_with_ticket(relay, gateway_path_for_role(role), &ticket).await?)
+async fn connect_host_bearer(relay: &Relay, hit_token: &str) -> anyhow::Result<WsClient> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let url = format!("ws://{}/ws/host", relay.addr);
+    let mut request = url.into_client_request()?;
+    request
+        .headers_mut()
+        .insert("authorization", format!("Bearer {hit_token}").parse()?);
+    let (ws, _resp) = tokio_tungstenite::connect_async(request).await?;
+    Ok(ws)
 }
 
 async fn connect_gateway_ws_with_legacy_ticket_query(
@@ -278,13 +288,8 @@ async fn issue_client_ws_ticket(
         .ticket)
 }
 
-async fn issue_host_ws_ticket(relay: &Relay, host_id: DeviceId) -> anyhow::Result<String> {
-    Ok(relay
-        .auth
-        .issue_host_ws_ticket(host_id)
-        .await
-        .map_err(|error| anyhow::anyhow!("issue_host_ws_ticket failed: {error:?}"))?
-        .ticket)
+async fn issue_host_bearer(relay: &Relay, host_id: DeviceId) -> anyhow::Result<String> {
+    Ok(store::test_support::issue_test_host_token(&relay.pool, host_id, 0).await)
 }
 
 async fn connect_gateway_ws_with_ticket(
@@ -620,11 +625,11 @@ async fn ws_client_rejects_reused_formal_ticket() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn ws_host_accepts_formal_host_ticket_query_auth() -> anyhow::Result<()> {
+async fn ws_host_accepts_bearer_hit_auth() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
     let host_id = register_agent_host(&relay.pool).await;
-    let ticket = issue_host_ws_ticket(&relay, host_id).await?;
-    let mut ws = connect_gateway_ws_with_ticket(&relay, "/ws/host", &ticket).await?;
+    let hit = issue_host_bearer(&relay, host_id).await?;
+    let mut ws = connect_host_bearer(&relay, &hit).await?;
 
     match recv_server_frame(&mut ws).await? {
         ServerFrame::Hello { .. } => {}
@@ -682,22 +687,7 @@ async fn ws_host_last_link_revoke_closes_live_socket_with_auth_revoked() -> anyh
     let fixture = formally_paired_host(&relay).await?;
     let mut app = router(relay.state.clone());
 
-    let headers = host_headers(&fixture);
-    let header_refs: Vec<(&str, &str)> = headers
-        .iter()
-        .map(|(key, value)| (*key, value.as_str()))
-        .collect();
-    let (status, body) = post_json(
-        &mut app,
-        "/v1/host/realtime/ws-ticket",
-        &header_refs,
-        json!({}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "body={body}");
-    let ticket = body["data"]["ticket"].as_str().unwrap().to_string();
-
-    let mut ws = connect_gateway_ws_with_ticket(&relay, "/ws/host", &ticket).await?;
+    let mut ws = connect_host_bearer(&relay, &fixture.token).await?;
     match recv_server_frame(&mut ws).await? {
         ServerFrame::Hello { .. } => {}
         other => panic!("expected Hello, got {other:?}"),

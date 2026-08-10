@@ -347,6 +347,7 @@ async fn send_message_inner(
             message_source,
             client_sent_at_ms,
             &attachment_blob_ids,
+            &[],
         )
         .await
         .map_err(map_conversation_error)?;
