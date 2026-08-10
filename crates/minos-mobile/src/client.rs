@@ -838,6 +838,7 @@ impl MobileClient {
         text: String,
         reply_to_message_id: Option<String>,
         client_message_id: Option<String>,
+        mentions: Vec<minos_protocol::MentionTarget>,
     ) -> Result<minos_protocol::ChatMessageSummary, MinosError> {
         // Collaboration writes are Account WS AppendMessage only (no REST write path).
         // Outbox retries on socket/timeout; nack is definitive.
@@ -856,6 +857,7 @@ impl MobileClient {
                 &conversation_id,
                 &text,
                 reply_to_message_id.as_deref(),
+                mentions,
             )
             .await
         {
@@ -928,6 +930,7 @@ impl MobileClient {
         conversation_id: &str,
         text: &str,
         reply_to_message_id: Option<&str>,
+        mentions: Vec<minos_protocol::MentionTarget>,
     ) -> ChatSendWaitResult {
         if !matches!(self.current_state(), ConnectionState::Connected) {
             return ChatSendWaitResult::Socket;
@@ -943,7 +946,7 @@ impl MobileClient {
             client_operation_id: client_operation_id.to_string(),
             conversation_id: conversation_id.to_string(),
             text: text.to_string(),
-            mentions: Vec::new(),
+            mentions,
             reply_to_message_id: reply_to_message_id
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
@@ -978,7 +981,7 @@ impl MobileClient {
         })
     }
 
-    /// Toggle Hub reaction; `client_op_id` is the Intent Outbox id (B6/C5).
+    /// Toggle Hub reaction; `client_op_id` is the Intent Outbox id.
     pub async fn toggle_reaction(
         &self,
         conversation_id: String,

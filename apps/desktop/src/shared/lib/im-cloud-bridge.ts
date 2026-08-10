@@ -7,18 +7,18 @@
  * No daemon_append of cloud IM into Host SQLite.
  */
 
-import { conversationTopic } from "@/shared/lib/hub-cursors";
+import { conversationTopic } from "@/shared/lib/cloud-cursors";
 import {
-  HubRealtimeSession,
-  type HubRealtimeSyncState,
-} from "@/shared/lib/hub-realtime";
+  CloudRealtimeSession,
+  type CloudRealtimeSyncState,
+} from "@/shared/lib/cloud-realtime";
 import { mapHubChatMessageToTimeline } from "@/shared/lib/im-cloud-inbound";
 import {
-  isHubImMode,
-  mergeHubAndLocalTimeline,
+  isCloudImMode,
+  mergeCloudAndLocalTimeline,
   removeMessageFromTimeline,
-  upsertHubMessageIntoTimeline,
-} from "@/shared/lib/hub-timeline";
+  upsertCloudMessageIntoTimeline,
+} from "@/shared/lib/cloud-timeline";
 import { startImOutboxWorker } from "@/shared/lib/im-cloud-sync";
 import {
   pullHubConversationMessagePage,
@@ -33,8 +33,8 @@ import {
   messageHistoryFromWindow,
   trimMessagesHardMax,
 } from "@/shared/lib/message-history";
-import { hubDigestCache } from "@/shared/lib/hub-digest-cache";
-import { ensureHubDigestHydrated } from "@/shared/lib/hub-digest-ensure";
+import { cloudDigestCache } from "@/shared/lib/cloud-digest-cache";
+import { ensureCloudDigestHydrated } from "@/shared/lib/cloud-digest-ensure";
 import {
   positiveMs,
   railActivityFromTimeline,
@@ -45,9 +45,9 @@ import { useWorkspaceStore } from "@/store/workspace-store";
 import type { HubChatMessage } from "@/shared/lib/minos-cloud";
 import type { TimelineMessage } from "@/shared/lib/mock-data";
 
-let session: HubRealtimeSession | null = null;
+let session: CloudRealtimeSession | null = null;
 let startedForToken: string | null = null;
-let lastSyncState: HubRealtimeSyncState = "disconnected";
+let lastSyncState: CloudRealtimeSyncState = "disconnected";
 /** C6.1 lifecycle listeners registered once per process. */
 let lifecycleBound = false;
 
@@ -93,7 +93,7 @@ function ensureLifecycleHandlers(): void {
     if (!session) return;
     // Spec C6.1: show/online → if state ≠ live, force reconnect.
     if (session.state === "live") return;
-    console.info("[im-hub-bridge] forceReconnect", reason, session.state);
+    console.info("[im-cloud-bridge] forceReconnect", reason, session.state);
     session.forceReconnect();
   };
 
@@ -201,7 +201,7 @@ async function onHubChatMessage(message: HubChatMessage): Promise<void> {
   if (focused || hasWindow) {
     useWorkspaceStore.setState((s) => {
       const prev = s.messagesByConversation[conversationId] ?? [];
-      const merged = upsertHubMessageIntoTimeline(prev, ui);
+      const merged = upsertCloudMessageIntoTimeline(prev, ui);
       const trimmed = trimMessagesHardMax(merged);
       const prevHist =
         s.messageHistoryByConversation[conversationId] ?? EMPTY_MESSAGE_HISTORY;
@@ -272,7 +272,7 @@ function patchRailFromDigest(input: {
   if (!conversationId) return;
   const ws = useWorkspaceStore.getState();
   const focused = ws.focusedConversationId === conversationId;
-  const prevDigest = hubDigestCache.get(conversationId);
+  const prevDigest = cloudDigestCache.get(conversationId);
   const timeline = Object.prototype.hasOwnProperty.call(
     ws.messagesByConversation,
     conversationId,
@@ -316,7 +316,7 @@ function patchRailFromDigest(input: {
   if (focused) {
     unread = 0;
   }
-  hubDigestCache.patchOne(conversationId, {
+  cloudDigestCache.patchOne(conversationId, {
     preview,
     lastMessageAtMs: resolvedLastAt,
     unreadCount: unread,
@@ -436,11 +436,11 @@ async function onSnapshotRequired(topic: string): Promise<void> {
   const conversationId = conversationIdFromTopic(topic);
   if (!conversationId) {
     // account:* snapshot — invalidate digest cache and cold re-hydrate.
-    hubDigestCache.invalidate();
+    cloudDigestCache.invalidate();
     try {
-      await ensureHubDigestHydrated({ force: true });
+      await ensureCloudDigestHydrated({ force: true });
     } catch (error) {
-      console.warn("[im-hub-bridge] account snapshot hydrate failed", error);
+      console.warn("[im-cloud-bridge] account snapshot hydrate failed", error);
     }
     const ws = useWorkspaceStore.getState();
     if (ws.source === "daemon") {
@@ -487,7 +487,7 @@ async function reconcileConversationFromHub(
       }
     } catch (error) {
       console.warn(
-        "[im-hub-bridge] snapshot forward gap fill failed",
+        "[im-cloud-bridge] snapshot forward gap fill failed",
         error,
       );
     }
@@ -519,7 +519,7 @@ async function reconcileConversationFromHub(
       }
     } catch (error) {
       console.warn(
-        "[im-hub-bridge] snapshot before_seq repair failed",
+        "[im-cloud-bridge] snapshot before_seq repair failed",
         error,
       );
     }
@@ -551,7 +551,7 @@ async function reconcileConversationFromHub(
       localPrev.length > 0
         ? mergeMessagesQuietTail(localPrev, hubRows)
         : hubRows;
-    const merged = mergeHubAndLocalTimeline({
+    const merged = mergeCloudAndLocalTimeline({
       hubMessages: hubRows,
       localMessages: withTail,
     });
@@ -579,10 +579,10 @@ async function reconcileConversationFromHub(
 }
 
 /** Start or refresh hub WS when Minos account session is available. */
-export function ensureImHubBridge(): void {
+export function ensureImCloudBridge(): void {
   const { deviceId, session: account, authPhase } = useAccountStore.getState();
   if (authPhase !== "authenticated" || !account?.accessToken?.trim()) {
-    stopImHubBridge();
+    stopImCloudBridge();
     return;
   }
   const token = account.accessToken;
@@ -596,8 +596,8 @@ export function ensureImHubBridge(): void {
     }
     return;
   }
-  stopImHubBridge();
-  session = new HubRealtimeSession({
+  stopImCloudBridge();
+  session = new CloudRealtimeSession({
     onChatMessage: (msg) => {
       void onHubChatMessage(msg);
     },
@@ -657,7 +657,7 @@ export function ensureImHubBridge(): void {
   startImOutboxWorker();
 }
 
-export function stopImHubBridge(): void {
+export function stopImCloudBridge(): void {
   session?.stop();
   session = null;
   startedForToken = null;
@@ -666,7 +666,7 @@ export function stopImHubBridge(): void {
   cancelPendingFocusedMarkRead();
 }
 
-export function getHubRealtimeState(): HubRealtimeSyncState {
+export function getCloudRealtimeState(): CloudRealtimeSyncState {
   return session?.state ?? lastSyncState;
 }
 
@@ -675,16 +675,35 @@ export function getHubRealtimeState(): HubRealtimeSyncState {
  * Waits for ChatSendAck/Nack. Returns a result so callers can REST-fallback
  * only on socket/timeout (not on definitive nack, which would double-send).
  */
-export async function appendMessageOnHub(input: {
+export async function appendMessageOnCloud(input: {
   clientOperationId: string;
   conversationId: string;
   text: string;
   replyToMessageId?: string | null;
+  mentions?: Array<
+    | {
+        kind: "bot";
+        bot_id: string;
+        start?: number;
+        length?: number;
+      }
+    | {
+        kind: "account";
+        account_id: string;
+        start?: number;
+        length?: number;
+      }
+  >;
 }): Promise<
-  | { ok: true }
+  | {
+      ok: true;
+      messageId: string;
+      messageSeq: number;
+      conversationId: string;
+    }
   | { ok: false; reason: "socket" | "timeout" | "nack"; code?: string; message?: string }
 > {
-  ensureImHubBridge();
+  ensureImCloudBridge();
   if (!session) {
     return { ok: false, reason: "socket" };
   }
@@ -693,8 +712,16 @@ export async function appendMessageOnHub(input: {
     conversationId: input.conversationId,
     text: input.text,
     replyToMessageId: input.replyToMessageId,
+    mentions: input.mentions,
   });
-  if (result.ok) return { ok: true };
+  if (result.ok) {
+    return {
+      ok: true,
+      messageId: result.messageId,
+      messageSeq: result.messageSeq,
+      conversationId: result.conversationId,
+    };
+  }
   return {
     ok: false,
     reason: result.reason,
@@ -704,21 +731,36 @@ export async function appendMessageOnHub(input: {
 }
 
 /**
- * @deprecated Fire-and-forget; prefer appendMessageOnHub for outbox.
+ * @deprecated Fire-and-forget; prefer appendMessageOnCloud for outbox.
  */
-export function tryAppendMessageOnHub(input: {
+export function tryAppendMessageOnCloud(input: {
   clientOperationId: string;
   conversationId: string;
   text: string;
   replyToMessageId?: string | null;
+  mentions?: Array<
+    | {
+        kind: "bot";
+        bot_id: string;
+        start?: number;
+        length?: number;
+      }
+    | {
+        kind: "account";
+        account_id: string;
+        start?: number;
+        length?: number;
+      }
+  >;
 }): boolean {
-  ensureImHubBridge();
+  ensureImCloudBridge();
   return (
     session?.trySendAppendMessage({
       clientOperationId: input.clientOperationId,
       conversationId: input.conversationId,
       text: input.text,
       replyToMessageId: input.replyToMessageId,
+      mentions: input.mentions,
     }) ?? false
   );
 }
@@ -727,12 +769,12 @@ export function tryAppendMessageOnHub(input: {
  * Subscribe conversation durable topic only (no timeline merge).
  * loadTimeline owns cold hydrate to avoid dual writers.
  */
-export function ensureConversationSubscribedOnHub(conversationId: string): void {
+export function ensureConversationSubscribedOnCloud(conversationId: string): void {
   if (!conversationId.trim()) return;
-  ensureImHubBridge();
+  ensureImCloudBridge();
   const { session: account, authPhase } = useAccountStore.getState();
   if (
-    !isHubImMode({
+    !isCloudImMode({
       authPhase,
       accessToken: account?.accessToken,
     })
@@ -743,24 +785,24 @@ export function ensureConversationSubscribedOnHub(conversationId: string): void 
 }
 
 /**
- * @deprecated Prefer ensureConversationSubscribedOnHub + loadTimeline.
+ * @deprecated Prefer ensureConversationSubscribedOnCloud + loadTimeline.
  * Kept as alias for call sites that only need subscribe (no dual hydrate).
  */
-export function focusConversationOnHub(conversationId: string): void {
-  ensureConversationSubscribedOnHub(conversationId);
+export function focusConversationOnCloud(conversationId: string): void {
+  ensureConversationSubscribedOnCloud(conversationId);
 }
 
 /**
  * Phase 5.1: Hub recall for Linked mode.
  * POST Hub recall API then remove from Hub-sourced timeline projection.
  */
-export async function recallMessageOnHub(
+export async function recallMessageOnCloud(
   conversationId: string,
   messageId: string,
 ): Promise<void> {
   const { deviceId, session, authPhase } = useAccountStore.getState();
   if (
-    !isHubImMode({
+    !isCloudImMode({
       authPhase,
       accessToken: session?.accessToken,
     }) ||
@@ -779,6 +821,6 @@ export async function recallMessageOnHub(
 }
 
 /** Topic string helper for tests / diagnostics. */
-export function hubConversationTopic(conversationId: string): string {
+export function cloudConversationTopic(conversationId: string): string {
   return conversationTopic(conversationId);
 }

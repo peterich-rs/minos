@@ -59,7 +59,7 @@ export function Sidebar() {
   const [updateDismissed, setUpdateDismissed] = useState(false);
   const attention = projects.reduce((sum, p) => sum + p.needsAttention, 0);
 
-  // Keep Host hubOnline fresh (secondary readiness for bot runtime).
+  // Keep Host cloudOnline fresh (secondary readiness for bot runtime).
   useEffect(() => {
     if (source !== "daemon") return;
     void refreshDaemonStatus();
@@ -70,8 +70,8 @@ export function Sidebar() {
   }, [source, refreshDaemonStatus]);
 
   useEffect(() => {
-    syncCloudFromHub(connection?.hubOnline);
-  }, [connection?.hubOnline, syncCloudFromHub]);
+    syncCloudFromHub(connection?.cloudOnline);
+  }, [connection?.cloudOnline, syncCloudFromHub]);
 
   // Primary Online = Account IM sync; Host is secondary (bot runtime).
   const presence = deriveHostPresence({
@@ -79,7 +79,7 @@ export function Sidebar() {
     daemonConnected: source === "daemon" && connection?.connected === true,
     accountSync: session ? accountSyncStatus : "unknown",
     cloud: session ? cloudStatus : "unknown",
-    hubOnline: connection?.hubOnline,
+    cloudOnline: connection?.cloudOnline,
   });
   const presenceTitle =
     presence.cloud === "online" && !presence.hostReady

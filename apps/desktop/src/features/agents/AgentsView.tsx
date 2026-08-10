@@ -122,7 +122,7 @@ export function AgentsView() {
   const source = useWorkspaceStore((s) => s.source);
   const deviceId = useAccountStore((s) => s.deviceId);
   const accessToken = useAccountStore((s) => s.session?.accessToken);
-  const hubOnline = Boolean(accessToken?.trim());
+  const cloudOnline = Boolean(accessToken?.trim());
   const queryClient = useQueryClient();
 
   // Hub bot directory is SSOT when account is online.
@@ -136,7 +136,7 @@ export function AgentsView() {
   const [error, setError] = useState<string | null>(null);
 
   const bots = useMemo((): BotRow[] => {
-    if (hubOnline && cloudAgentsQuery.isSuccess) {
+    if (cloudOnline && cloudAgentsQuery.isSuccess) {
       // Prefer user-configured bots in the product directory; host_runtime is seed-only.
       const hub = (cloudAgentsQuery.data ?? [])
         .filter((a) => (a.source || "user") !== "host_runtime")
@@ -146,24 +146,24 @@ export function AgentsView() {
     // Offline / not signed in: fall back to daemon cache.
     return daemonProfiles.map(daemonProfileToRow);
   }, [
-    hubOnline,
+    cloudOnline,
     cloudAgentsQuery.isSuccess,
     cloudAgentsQuery.data,
     daemonProfiles,
   ]);
 
   const botsLoading =
-    (hubOnline &&
+    (cloudOnline &&
       (cloudAgentsQuery.isLoading || cloudAgentsQuery.isFetching)) ||
-    (!hubOnline &&
+    (!cloudOnline &&
       (profilesQuery.isLoading || profilesQuery.isFetching));
 
   const loadBots = useCallback(async () => {
-    if (hubOnline) {
+    if (cloudOnline) {
       await queryClient.invalidateQueries({ queryKey: queryKeys.cloudAgents });
     }
     await queryClient.invalidateQueries({ queryKey: queryKeys.agentProfiles });
-  }, [queryClient, hubOnline]);
+  }, [queryClient, cloudOnline]);
 
   useEffect(() => {
     if (source !== "daemon") return;
@@ -174,7 +174,7 @@ export function AgentsView() {
   // Account comes online (global-bot-identity Phase 5). Idempotent by name.
   const importOnceRef = useRef(false);
   useEffect(() => {
-    if (!hubOnline || !accessToken?.trim() || !deviceId) return;
+    if (!cloudOnline || !accessToken?.trim() || !deviceId) return;
     if (importOnceRef.current) return;
     if (!profilesQuery.isSuccess || !cloudAgentsQuery.isSuccess) return;
     importOnceRef.current = true;
@@ -211,7 +211,7 @@ export function AgentsView() {
       }
     })();
   }, [
-    hubOnline,
+    cloudOnline,
     accessToken,
     deviceId,
     profilesQuery.isSuccess,
@@ -222,17 +222,17 @@ export function AgentsView() {
   ]);
 
   useEffect(() => {
-    const err = hubOnline ? cloudAgentsQuery.error : profilesQuery.error;
+    const err = cloudOnline ? cloudAgentsQuery.error : profilesQuery.error;
     if (err) {
       setError(err instanceof Error ? err.message : String(err));
     } else if (
-      (hubOnline && cloudAgentsQuery.isSuccess) ||
-      (!hubOnline && profilesQuery.isSuccess)
+      (cloudOnline && cloudAgentsQuery.isSuccess) ||
+      (!cloudOnline && profilesQuery.isSuccess)
     ) {
       setError(null);
     }
   }, [
-    hubOnline,
+    cloudOnline,
     cloudAgentsQuery.error,
     cloudAgentsQuery.isSuccess,
     profilesQuery.error,
@@ -246,7 +246,7 @@ export function AgentsView() {
       <PageHeader
         title="Agents"
         description={
-          hubOnline
+          cloudOnline
             ? "Global bot directory on Hub (identity SSOT). Edit digital body — model, reasoning effort, system prompt — then pull bots into conversations as participants. Local CLI inventory is Host capability only."
             : "Sign in to manage the Hub bot directory (identity SSOT). Offline: Host CLI inventory and local profile cache only — not multi-device identity."
         }
@@ -358,7 +358,7 @@ export function AgentsView() {
         <section>
           <div className="mb-3 flex items-center justify-between px-0.5">
             <h2 className="text-2xs font-semibold uppercase tracking-[0.08em] text-ink-muted">
-              {hubOnline ? "Bot directory (Hub)" : "Local profile cache"}
+              {cloudOnline ? "Bot directory (Hub)" : "Local profile cache"}
             </h2>
             <div className="flex items-center gap-2">
               {botsLoading ? (
@@ -376,7 +376,7 @@ export function AgentsView() {
           </div>
           {bots.length === 0 ? (
             <p className="rounded-2xl border border-dashed border-ink/10 bg-surface-raised/70 px-4 py-10 text-center text-sm leading-relaxed text-ink-muted">
-              {hubOnline
+              {cloudOnline
                 ? "No bots yet. Create one on Hub to pin runtime, model, role brief, and system prompt — then add it as a conversation participant."
                 : "No local profile cache. Sign in to create bots on Hub (identity SSOT), or create offline for this Host only."}
             </p>
@@ -522,7 +522,7 @@ export function AgentsView() {
       {createOpen ? (
         <CreateAgentDialog
           clis={clis}
-          hubOnline={hubOnline}
+          cloudOnline={cloudOnline}
           deviceId={deviceId}
           accessToken={accessToken}
           onClose={() => setCreateOpen(false)}
@@ -536,7 +536,7 @@ export function AgentsView() {
       {editBot ? (
         <EditAgentDialog
           bot={editBot}
-          hubOnline={hubOnline && editBot.source === "hub"}
+          cloudOnline={cloudOnline && editBot.source === "hub"}
           deviceId={deviceId}
           accessToken={accessToken}
           onClose={() => setEditBot(null)}
@@ -552,14 +552,14 @@ export function AgentsView() {
 
 function CreateAgentDialog({
   clis,
-  hubOnline,
+  cloudOnline,
   deviceId,
   accessToken,
   onClose,
   onCreated,
 }: {
   clis: RuntimeCliDescriptor[];
-  hubOnline: boolean;
+  cloudOnline: boolean;
   deviceId: string;
   accessToken: string | undefined;
   onClose: () => void;
@@ -648,7 +648,7 @@ function CreateAgentDialog({
       const trimmedInstr = instructions.trim();
       const effortVal = showEffort ? effort.trim() : "";
 
-      if (hubOnline) {
+      if (cloudOnline) {
         const token = accessToken?.trim();
         if (!token) {
           throw new Error("Sign in required to create Hub bots");
@@ -725,7 +725,7 @@ function CreateAgentDialog({
               Create agent
             </h2>
             <p className="mt-0.5 text-xs text-ink-muted">
-              {hubOnline
+              {cloudOnline
                 ? "Creates a global Hub bot (identity SSOT). Digital body is shared across conversations."
                 : "Offline: Host profile cache only. Sign in to create a Hub bot."}
             </p>
@@ -943,14 +943,14 @@ function CreateAgentDialog({
  */
 function EditAgentDialog({
   bot,
-  hubOnline,
+  cloudOnline,
   deviceId,
   accessToken,
   onClose,
   onSaved,
 }: {
   bot: BotRow;
-  hubOnline: boolean;
+  cloudOnline: boolean;
   deviceId: string;
   accessToken: string | undefined;
   onClose: () => void;
@@ -984,7 +984,7 @@ function EditAgentDialog({
       const trimmedInstr = instructions.trim();
       const effortVal = showEffort ? effort.trim() : bot.reasoningEffort;
 
-      if (hubOnline && bot.source === "hub") {
+      if (cloudOnline && bot.source === "hub") {
         const token = accessToken?.trim();
         if (!token) {
           throw new Error("Sign in required to update Hub bots");

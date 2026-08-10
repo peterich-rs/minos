@@ -22,8 +22,8 @@ const HARD_LINES = 800;
 const ALLOWLIST = {
   // Agents page create/list/edit + Hub registry; split to AgentsView sections next wave.
   "features/agents/AgentsView.tsx": 1250,
-  // WS connect / inbox digest / subscription fanout; split hub-realtime lanes next wave.
-  "shared/lib/hub-realtime.ts": 1000,
+  // WS connect / inbox digest / subscription fanout; split cloud-realtime lanes next wave.
+  "shared/lib/cloud-realtime.ts": 1000,
   // Hub REST helpers (auth + conversations + agents). sendConversationMessage removed;
   // further split to minos-cloud-hub.ts / agents helpers planned (freeze above current LOC).
   "shared/lib/minos-cloud.ts": 1100,

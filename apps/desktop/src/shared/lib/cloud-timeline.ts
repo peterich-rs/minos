@@ -28,7 +28,7 @@ const RUNTIMES: AgentRuntime[] = [
 ];
 
 /** True when Minos account is authenticated (multi-end IM intent). */
-export function isHubImMode(input: {
+export function isCloudImMode(input: {
   authPhase?: string | null;
   accessToken?: string | null;
 }): boolean {
@@ -39,7 +39,7 @@ export function isHubImMode(input: {
 }
 
 /** Infer runtime bin from hub agent display / id map (fallback only). */
-export function runtimeFromHubAgent(message: HubChatMessage): AgentRuntime | undefined {
+export function runtimeFromCloudAgent(message: HubChatMessage): AgentRuntime | undefined {
   if (message.senderType !== "agent") return undefined;
   // Prefer wire MessageSender.runtime_agent (badge field, not identity).
   if (message.runtimeAgent) {
@@ -55,7 +55,7 @@ export function runtimeFromHubAgent(message: HubChatMessage): AgentRuntime | und
   return undefined;
 }
 
-export function hubChatMessageToTimeline(
+export function cloudChatMessageToTimeline(
   message: HubChatMessage,
   opts?: { agentRuntimeMap?: Map<string, string> },
 ): TimelineMessage | null {
@@ -72,7 +72,7 @@ export function hubChatMessageToTimeline(
   if (isAgent) {
     const mapped = opts?.agentRuntimeMap?.get(message.senderAccountId);
     const fromMap = mapped ? normalizeHostRuntime(mapped) : null;
-    agent = (fromMap as AgentRuntime | null) ?? runtimeFromHubAgent(message);
+    agent = (fromMap as AgentRuntime | null) ?? runtimeFromCloudAgent(message);
   }
 
   // Preserve explicit empty array so merge treats Hub "no reactions" as SSOT
@@ -144,7 +144,7 @@ export function removeMessageFromTimeline(
  * Whether a local daemon timeline row is a multi-end chat bubble that Hub owns
  * when Linked. Tool/git/system/approval cards stay local.
  */
-export function isLocalChatBubbleForHubSsot(m: TimelineMessage): boolean {
+export function isLocalChatBubbleForCloudSsot(m: TimelineMessage): boolean {
   const kind = m.kind ?? "text";
   if (kind === "tool_summary" || kind === "git_activity" || kind === "approval") {
     return false;
@@ -223,7 +223,7 @@ function anchorForHostCard(
  *   (never inject host daemon seq into social `messageSeq`).
  * - Local chat missing from Hub: optimistic / user / agent-result gap-fill only.
  */
-export function mergeHubAndLocalTimeline(input: {
+export function mergeCloudAndLocalTimeline(input: {
   hubMessages: TimelineMessage[];
   localMessages: TimelineMessage[];
 }): TimelineMessage[] {
@@ -234,7 +234,7 @@ export function mergeHubAndLocalTimeline(input: {
 
   // Local host-only cards with Hub-space anchors.
   for (const m of input.localMessages) {
-    if (isLocalChatBubbleForHubSsot(m)) continue;
+    if (isLocalChatBubbleForCloudSsot(m)) continue;
     if (!isHostOnlyTimelineCard(m) && m.kind !== "system") {
       // Non-chat local rows that are not host cards (defensive).
       byId.set(m.id, m);
@@ -284,7 +284,7 @@ export function mergeHubAndLocalTimeline(input: {
 
   // Gap-fill local chat not yet on Hub.
   for (const m of input.localMessages) {
-    if (!isLocalChatBubbleForHubSsot(m)) continue;
+    if (!isLocalChatBubbleForCloudSsot(m)) continue;
     if (byId.has(m.id)) {
       const cur = byId.get(m.id)!;
       // Never overwrite Hub messageSeq with host daemon seq.
@@ -318,7 +318,7 @@ export function mergeHubAndLocalTimeline(input: {
 }
 
 /** Apply one hub realtime message into an existing timeline window. */
-export function upsertHubMessageIntoTimeline(
+export function upsertCloudMessageIntoTimeline(
   prev: TimelineMessage[] | undefined,
   hub: TimelineMessage,
 ): TimelineMessage[] {

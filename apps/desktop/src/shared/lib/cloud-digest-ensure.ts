@@ -2,20 +2,20 @@
  * Single-flight ensure for HubDigestCache hydrate.
  */
 
-import { hubDigestCache } from "@/shared/lib/hub-digest-cache";
+import { cloudDigestCache } from "@/shared/lib/cloud-digest-cache";
 import { listHubConversations } from "@/shared/lib/minos-cloud";
 import { useAccountStore } from "@/store/account-store";
-import { isHubImMode } from "@/shared/lib/hub-timeline";
+import { isCloudImMode } from "@/shared/lib/cloud-timeline";
 
 let hydrateInFlight: Promise<void> | null = null;
 
 /** Hydrate HubDigestCache once (or after invalidate). Concurrent callers share one request. */
-export async function ensureHubDigestHydrated(
+export async function ensureCloudDigestHydrated(
   opts?: { force?: boolean },
 ): Promise<void> {
   const { deviceId, session, authPhase } = useAccountStore.getState();
   if (
-    !isHubImMode({
+    !isCloudImMode({
       authPhase,
       accessToken: session?.accessToken,
     }) ||
@@ -24,7 +24,7 @@ export async function ensureHubDigestHydrated(
     return;
   }
 
-  if (!opts?.force && hubDigestCache.isHydrated()) {
+  if (!opts?.force && cloudDigestCache.isHydrated()) {
     return;
   }
 
@@ -37,20 +37,20 @@ export async function ensureHubDigestHydrated(
     }
   }
 
-  if (!opts?.force && hubDigestCache.isHydrated()) {
+  if (!opts?.force && cloudDigestCache.isHydrated()) {
     return;
   }
 
   hydrateInFlight = (async () => {
     try {
       if (opts?.force) {
-        hubDigestCache.invalidate();
+        cloudDigestCache.invalidate();
       }
       const digests = await listHubConversations(
         deviceId,
         session.accessToken,
       );
-      hubDigestCache.hydrate(digests);
+      cloudDigestCache.hydrate(digests);
     } finally {
       hydrateInFlight = null;
     }

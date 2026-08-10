@@ -11,10 +11,10 @@
  * - focusedConversationId is set only by open/select (Timeline mount →
  *   markConversationRead) — never by loadTimeline (quiet or full).
  * - Focused live inbound: local unread stays 0; Hub mark-read is debounced
- *   (im-hub-bridge scheduleFocusedMarkRead, 400ms).
+ *   (im-cloud-bridge scheduleFocusedMarkRead, 400ms).
  */
 
-export type HubConversationDigest = {
+export type CloudConversationDigest = {
   conversationId: string;
   title: string;
   preview: string | null;
@@ -27,7 +27,7 @@ export type HubConversationDigest = {
 
 type DigestDelta = Partial<
   Pick<
-    HubConversationDigest,
+    CloudConversationDigest,
     | "title"
     | "preview"
     | "lastMessageAtMs"
@@ -36,12 +36,12 @@ type DigestDelta = Partial<
   >
 >;
 
-let digestsById: Map<string, HubConversationDigest> = new Map();
+let digestsById: Map<string, CloudConversationDigest> = new Map();
 let hydrated = false;
 
-export const hubDigestCache = {
+export const cloudDigestCache = {
   /** Sole HTTP fill path. Replaces all digests. */
-  hydrate(digests: readonly HubConversationDigest[]): void {
+  hydrate(digests: readonly CloudConversationDigest[]): void {
     digestsById = new Map(
       digests
         .filter((d) => d.conversationId.trim())
@@ -96,11 +96,11 @@ export const hubDigestCache = {
     return hydrated;
   },
 
-  get(conversationId: string): HubConversationDigest | undefined {
+  get(conversationId: string): CloudConversationDigest | undefined {
     return digestsById.get(conversationId);
   },
 
-  getAll(): HubConversationDigest[] {
+  getAll(): CloudConversationDigest[] {
     return [...digestsById.values()];
   },
 

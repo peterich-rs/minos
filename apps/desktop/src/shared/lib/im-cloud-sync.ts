@@ -18,15 +18,15 @@ import {
   toggleHubReaction,
   upsertConversation,
 } from "@/shared/lib/minos-cloud";
-import { isHubImMode } from "@/shared/lib/hub-timeline";
-import { appendMessageOnHub } from "@/shared/lib/im-hub-bridge";
+import { isCloudImMode } from "@/shared/lib/cloud-timeline";
+import { appendMessageOnCloud } from "@/shared/lib/im-cloud-bridge";
 import {
   displayNameForRuntime,
   isCanonicalAgentResultId,
   isProjectableAgentMessage,
   normalizeHostRuntime,
 } from "@/shared/lib/im-cloud-sync-helpers";
-import { sessionIdFromAgentResultId } from "@/shared/lib/hub-timeline";
+import { sessionIdFromAgentResultId } from "@/shared/lib/cloud-timeline";
 import {
   enqueueAgentResult,
   enqueueApprovalResolve,
@@ -231,7 +231,17 @@ const RUNTIMES_FROM_ID = [
   "grok",
 ] as const;
 
-async function postUserMessageFromOutbox(entry: ImOutboxEntry): Promise<void> {
+export type HubUserMessageAck = {
+  messageId: string;
+  messageSeq: number;
+  conversationId: string;
+};
+
+const userMessageAcks = new Map<string, HubUserMessageAck>();
+
+async function postUserMessageFromOutbox(
+  entry: ImOutboxEntry,
+): Promise<HubUserMessageAck> {
   const auth = cloudAuth();
   if (!auth) {
     throw new Error("Not signed in — message not synced to cloud");
@@ -257,7 +267,7 @@ async function postUserMessageFromOutbox(entry: ImOutboxEntry): Promise<void> {
   }
 
   // Linked Hub-first sends use client_live so Hub can @-dispatch.
-  // Entries without explicit source default to client_live (Phase 3).
+  // Entries without explicit source default to client_live.
   const messageSource = entry.messageSource ?? "client_live";
 
   // Account WS AppendMessage only (no REST collaboration write path).
@@ -271,14 +281,19 @@ async function postUserMessageFromOutbox(entry: ImOutboxEntry): Promise<void> {
     );
   }
 
-  const wsResult = await appendMessageOnHub({
+  const wsResult = await appendMessageOnCloud({
     clientOperationId: entry.clientMessageId,
     conversationId: entry.conversationId,
     text: entry.text,
     replyToMessageId: entry.replyToMessageId,
+    mentions: entry.mentions,
   });
   if (wsResult.ok) {
-    return;
+    return {
+      messageId: wsResult.messageId,
+      messageSeq: wsResult.messageSeq,
+      conversationId: wsResult.conversationId,
+    };
   }
   if (wsResult.reason === "nack") {
     throw new Error(
@@ -443,7 +458,7 @@ async function postApprovalResolveFromOutbox(
   const hubRoute =
     payload.route === "hub" ||
     (payload.route !== "daemon" &&
-      isHubImMode({
+      isCloudImMode({
         authPhase,
         accessToken: session?.accessToken,
       }));
@@ -473,11 +488,10 @@ async function postApprovalResolveFromOutbox(
 
 async function postOutboxEntry(
   entry: ImOutboxEntry,
-): Promise<HubReactionToggleResult | void> {
+): Promise<HubReactionToggleResult | HubUserMessageAck | void> {
   switch (entry.kind) {
     case "user_message":
-      await postUserMessageFromOutbox(entry);
-      return;
+      return postUserMessageFromOutbox(entry);
     case "agent_result":
       await postAgentResultFromOutbox(entry);
       return;
@@ -564,7 +578,7 @@ export async function syncApprovalResolve(input: {
   const { session, authPhase } = useAccountStore.getState();
   const route =
     input.route ??
-    (isHubImMode({
+    (isCloudImMode({
       authPhase,
       accessToken: session?.accessToken,
     })
@@ -613,13 +627,17 @@ export async function syncUserMessageToCloud(input: {
    * Rare host_projection only when replaying already-executed local rows.
    */
   messageSource?: "client_live" | "host_projection" | "system";
-}): Promise<void> {
+  /** Structured AppendMessage mentions (bot/account). */
+  mentions?: ImOutboxEntry["mentions"];
+}): Promise<HubUserMessageAck | null> {
   const auth = cloudAuth();
-  if (!auth) return;
+  if (!auth) return null;
   const text = input.text.trim();
   const messageId = input.messageId.trim();
-  if (!text || !input.conversationId.trim() || !messageId) return;
-  if (await isAcked(messageId)) return;
+  if (!text || !input.conversationId.trim() || !messageId) return null;
+  if (await isAcked(messageId)) {
+    return userMessageAcks.get(messageId) ?? null;
+  }
 
   await enqueueUserMessage({
     conversationId: input.conversationId,
@@ -630,9 +648,11 @@ export async function syncUserMessageToCloud(input: {
     agentRuntimes: input.agentRuntimes,
     clientSentAtMs: input.createdAtMs,
     messageSource: input.messageSource ?? "client_live",
+    mentions: input.mentions,
   });
 
   await waitForOutboxSettlement(messageId, { throwOnTerminal: true });
+  return userMessageAcks.get(messageId) ?? null;
 }
 
 /**
@@ -654,7 +674,13 @@ async function flushOutboxEntry(
       rememberProjected(entry.clientMessageId);
     }
     if (entry.kind === "reaction_toggle" && result) {
-      reactionResults.set(entry.clientMessageId, result);
+      reactionResults.set(
+        entry.clientMessageId,
+        result as HubReactionToggleResult,
+      );
+    }
+    if (entry.kind === "user_message" && result && "messageSeq" in result) {
+      userMessageAcks.set(entry.clientMessageId, result as HubUserMessageAck);
     }
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);

@@ -19,8 +19,10 @@
 
 import {
   KNOWN_AGENTS,
+  parseAgentRouteTarget,
   parseAllAgentRoutings,
   type KnownAgent,
+  type MentionHuman,
   type MentionProfile,
 } from "../../shared/lib/agent-route.ts";
 
@@ -33,6 +35,32 @@ export type DispatchTarget = {
    * Present only for explicit profile/bot-name routes, not bare runtime.
    */
   profileId?: string;
+};
+
+/**
+ * Wire `MentionTarget` for Account WS AppendMessage (snake_case tag `kind`).
+ * Backend validates membership only; body never invents delivery.
+ */
+export type WireMentionTarget =
+  | {
+      kind: "bot";
+      bot_id: string;
+      start?: number;
+      length?: number;
+    }
+  | {
+      kind: "account";
+      account_id: string;
+      start?: number;
+      length?: number;
+    };
+
+export type BuildStructuredMentionsOptions = {
+  /**
+   * Optional human roster for `@minos_id` → account mentions.
+   * When omitted, only bot mentions are emitted.
+   */
+  mentionHumans?: readonly MentionHuman[];
 };
 
 export type ResolveDispatchTargetsInput = {
@@ -172,6 +200,112 @@ export function resolveDispatchTargets(
 
   // 0 agents → pure human IM; multi agents without @ → pure human (no fan-out).
   return { targets: [], multiRoutedCount: 0 };
+}
+
+/**
+ * Build structured AppendMessage mentions from the message body.
+ *
+ * - Bot tokens reuse `parseAgentRouteTarget` against roster-scoped profiles
+ *   (same parse surface as `resolveDispatchTargets` / `parseAllAgentRoutings`).
+ * - `bot_id` = resolved profileId when present; otherwise the first roster
+ *   profile whose runtime matches the bare agent token.
+ * - Optional `start`/`length` are UTF-16 code-unit spans covering `@token`.
+ * - Humans (`@minos_id`) are included when `options.mentionHumans` is provided.
+ * - Appearance order; deduped by identity (`bot:` / `account:`).
+ */
+export function buildStructuredMentions(
+  messageBody: string,
+  mentionProfiles: readonly MentionProfile[],
+  options?: BuildStructuredMentionsOptions,
+): WireMentionTarget[] {
+  const text = messageBody ?? "";
+  if (!text) return [];
+
+  const profiles = mentionProfiles ?? [];
+  const humans = options?.mentionHumans ?? [];
+  const humanByMinos = new Map(
+    humans
+      .map((h) => {
+        const key = h.minosId.trim().toLowerCase();
+        return key ? ([key, h] as const) : null;
+      })
+      .filter((x): x is readonly [string, MentionHuman] => x != null),
+  );
+
+  const out: WireMentionTarget[] = [];
+  const seen = new Set<string>();
+
+  // Same token surface as parseAllAgentRoutings / firstUnresolvedAgentishToken.
+  const re = /(^|[\s([{"'`])@([^\s@]+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text)) !== null) {
+    const prefix = match[1] ?? "";
+    const token = (match[2] ?? "").trim();
+    if (!token) continue;
+    const atStart = match.index + prefix.length;
+    const spanLen = 1 + token.length; // include leading '@'
+
+    // Prefer bot route parse (profile / runtime / p/<id>).
+    const route = parseAgentRouteTarget(token, profiles);
+    if (route) {
+      const botId = resolveBotIdForRoute(route, profiles);
+      if (botId) {
+        const key = `bot:${botId}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          out.push({
+            kind: "bot",
+            bot_id: botId,
+            start: atStart,
+            length: spanLen,
+          });
+        }
+        continue;
+      }
+    }
+
+    // Human @minos_id (only when roster humans provided).
+    if (humans.length > 0) {
+      const namePart = token.split("#")[0]?.trim() ?? token;
+      const human = humanByMinos.get(namePart.toLowerCase());
+      if (human?.accountId.trim()) {
+        const accountId = human.accountId.trim();
+        const key = `account:${accountId}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          out.push({
+            kind: "account",
+            account_id: accountId,
+            start: atStart,
+            length: spanLen,
+          });
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
+/** Resolve wire bot_id for a parsed route against roster profiles. */
+function resolveBotIdForRoute(
+  route: { agent: KnownAgent; profileId?: string },
+  profiles: readonly MentionProfile[],
+): string | null {
+  if (route.profileId?.trim()) {
+    const id = route.profileId.trim();
+    // Prefer exact roster id; still accept parse-resolved id if caller passed it.
+    const onRoster = profiles.find((p) => p.id === id);
+    return onRoster?.id ?? id;
+  }
+  // Bare runtime → first roster profile with matching runtimeAgent.
+  const runtime = route.agent.trim().toLowerCase();
+  const byRuntime = profiles.find(
+    (p) => p.runtimeAgent.trim().toLowerCase() === runtime,
+  );
+  if (byRuntime?.id.trim()) return byRuntime.id.trim();
+  // No stable bot identity for bare runtime without roster profile.
+  return null;
 }
 
 /** Map a sole roster token to a KnownAgent runtime for Host launch. */

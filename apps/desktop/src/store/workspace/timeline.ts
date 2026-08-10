@@ -32,14 +32,14 @@ import {
 } from "@/shared/lib/im-cloud-sync";
 import { pullHubConversationMessagePage } from "@/shared/lib/im-cloud-inbound";
 import {
-  isHubImMode,
-  mergeHubAndLocalTimeline,
-} from "@/shared/lib/hub-timeline";
+  isCloudImMode,
+  mergeCloudAndLocalTimeline,
+} from "@/shared/lib/cloud-timeline";
 import { useAccountStore } from "@/store/account-store";
 
 function hubImEnabled(): boolean {
   const { session, authPhase } = useAccountStore.getState();
-  return isHubImMode({
+  return isCloudImMode({
     authPhase,
     accessToken: session?.accessToken,
   });
@@ -98,11 +98,11 @@ export function createTimelineActions(
           const linked = hubImEnabled();
 
           // Subscribe only — loadTimeline is the sole cold-hydrate writer.
-          // (focusConversationOnHub must not dual-merge the window.)
+          // (focusConversationOnCloud must not dual-merge the window.)
           if (linked) {
-            void import("@/shared/lib/im-hub-bridge").then(
-              ({ ensureConversationSubscribedOnHub }) => {
-                ensureConversationSubscribedOnHub(conversationId);
+            void import("@/shared/lib/im-cloud-bridge").then(
+              ({ ensureConversationSubscribedOnCloud }) => {
+                ensureConversationSubscribedOnCloud(conversationId);
               },
             );
           }
@@ -154,7 +154,7 @@ export function createTimelineActions(
               // Hub SSOT for chat bubbles when present. Always include localUi so
               // host agent-result appears before / without Hub uplink.
               // prev window keeps optimistic sending/failed + local tool cards.
-              merged = mergeHubAndLocalTimeline({
+              merged = mergeCloudAndLocalTimeline({
                 hubMessages: hubRows,
                 localMessages: [...localUi, ...(prevMessages ?? [])],
               });
@@ -212,7 +212,7 @@ export function createTimelineActions(
 
           // loadTimeline is hydrate-only: never mark-read / never write focus.
           // Focus + Hub mark-read live on open/select (Timeline mount) and
-          // debounced inbound while focused (im-hub-bridge).
+          // debounced inbound while focused (im-cloud-bridge).
 
           // User Outbox drain + Host→Hub agent-result uplink for Desktop-native
           // turns (Hub projector only arms client_live Mobile dispatches).
@@ -238,7 +238,7 @@ export function createTimelineActions(
               if (isStale()) return;
               set((s) => {
                 const prev = s.messagesByConversation[conversationId] ?? [];
-                const merged = mergeHubAndLocalTimeline({
+                const merged = mergeCloudAndLocalTimeline({
                   hubMessages: page.messages,
                   localMessages: [...localUi, ...prev],
                 });
@@ -368,7 +368,7 @@ export function createTimelineActions(
         const existingWindow = s.messagesByConversation[conversationId] ?? [];
         let older = olderLocal;
         if (linked) {
-          older = mergeHubAndLocalTimeline({
+          older = mergeCloudAndLocalTimeline({
             hubMessages: hubPage.messages,
             localMessages: olderLocal,
           });

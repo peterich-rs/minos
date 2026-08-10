@@ -969,7 +969,7 @@ export async function createWsTicket(
 }
 
 /** Absolute WS URL for formal client gateway from ticket response + HTTP base. */
-export function hubClientWsUrl(gatewayUrl: string, ticket: string): string {
+export function cloudClientWsUrl(gatewayUrl: string, ticket: string): string {
   const httpBase = backendHttpBase();
   let pathOrUrl = gatewayUrl.trim();
   // Relative path → absolute against backend origin.

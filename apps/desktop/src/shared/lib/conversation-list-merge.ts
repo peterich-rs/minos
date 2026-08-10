@@ -1,7 +1,7 @@
 /**
  * Merge daemon project conversation rows with Hub digests for the rail.
  *
- * Gate: isHubImMode = authenticated + token (NOT host-linked).
+ * Gate: isCloudImMode = authenticated + token (NOT host-linked).
  * When daemon is absent (auth without host / no local shell), still show
  * Hub-only rows with defaults for host-local fields.
  *
@@ -20,7 +20,7 @@
 
 import type { Conversation } from "./mock-data.ts";
 import { runtimesOfBots } from "./mock-data.ts";
-import type { HubConversationDigest } from "./hub-digest-cache.ts";
+import type { CloudConversationDigest } from "./cloud-digest-cache.ts";
 import { positiveMs } from "./rail-activity.ts";
 
 export type DaemonListRow = {
@@ -51,7 +51,7 @@ export type DaemonListRow = {
 /** Where rail unread badges come from (P1 single-track). */
 export type UnreadSource = "hub" | "local";
 
-function hubPreview(d: HubConversationDigest): string {
+function hubPreview(d: CloudConversationDigest): string {
   return d.preview?.trim() || "No messages yet";
 }
 
@@ -109,7 +109,7 @@ export function resolveLastActivityMs(
  * preview so host_projection lag does not freeze the rail.
  */
 export function resolveListPreview(input: {
-  hub?: HubConversationDigest | null;
+  hub?: CloudConversationDigest | null;
   daemonPreview?: string | null;
   hubLastMessageAtMs?: number | null;
   daemonUpdatedAtMs?: number | null;
@@ -160,7 +160,7 @@ export function resolveRailUnread(input: {
  */
 export function mergeConversationList(input: {
   daemonRows: readonly DaemonListRow[];
-  hubDigests: readonly HubConversationDigest[];
+  hubDigests: readonly CloudConversationDigest[];
   projectId: string;
   /** When true, include Hub digests that have no matching daemon row. */
   includeHubOnly?: boolean;

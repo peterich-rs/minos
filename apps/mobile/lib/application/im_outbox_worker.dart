@@ -132,6 +132,8 @@ class ImOutboxWorker {
       return false;
     }
     final replyTo = payload['reply_to_message_id'] as String?;
+    // Structured MentionTarget list for AppendMessage (body never invents targets).
+    final mentionsJson = _mentionsJsonFromPayload(payload);
 
     await repository.markOutboxInflight(entry.clientOpId);
     await repository.markMessageSending(entry.clientOpId);
@@ -142,6 +144,7 @@ class ImOutboxWorker {
         text: text,
         replyToMessageId: replyTo,
         clientMessageId: entry.clientOpId,
+        mentionsJson: mentionsJson,
       );
       await repository.markMessageSent(
         localId: entry.clientOpId,
@@ -164,6 +167,15 @@ class ImOutboxWorker {
       onConversationDirty?.call(entry.conversationId);
       return false;
     }
+  }
+
+  /// Encode outbox `mentions` array as JSON string for FFI, or null when empty.
+  String? _mentionsJsonFromPayload(Map<String, dynamic> payload) {
+    final raw = payload['mentions'];
+    if (raw is! List || raw.isEmpty) {
+      return null;
+    }
+    return jsonEncode(raw);
   }
 
   Future<bool> _flushReactionToggle(

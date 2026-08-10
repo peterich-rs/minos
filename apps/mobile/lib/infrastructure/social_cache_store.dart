@@ -369,13 +369,19 @@ class SocialCacheStore {
     });
   }
 
-  Future<SocialChatMessage> insertPendingMessage({
+  /// Atomically insert optimistic pending message + outbox row.
+  ///
+  /// One SQLite TX so a crash cannot leave a sending message without an outbox
+  /// cover (or an outbox without a local row). [reconcileSendingMessagesOnStartup]
+  /// remains the safety net for stranded sending rows.
+  Future<SocialChatMessage> insertPendingMessageWithOutbox({
     required String conversationId,
     required MessageSender sender,
     required String text,
     ChatMessageReplySummary? replyTo,
     List<String> mentionedAccountIds = const <String>[],
     List<String> mentionedAgentIds = const <String>[],
+    List<Map<String, Object?>> structuredMentions = const <Map<String, Object?>>[],
   }) async {
     // client_message_id == localId: stable wire id for Hub idempotent insert.
     final clientMessageId = _newClientMessageId();
@@ -394,6 +400,11 @@ class SocialCacheStore {
       mentionedAccountIds: List<String>.unmodifiable(mentionedAccountIds),
       mentionedAgentIds: List<String>.unmodifiable(mentionedAgentIds),
     );
+    final payloadJson = _userMessageOutboxPayload(
+      text: text,
+      replyToMessageId: replyTo?.messageId,
+      structuredMentions: structuredMentions,
+    );
 
     final db = await _database();
     if (db == null) {
@@ -408,6 +419,13 @@ class SocialCacheStore {
         _messageToRow(nextMessage),
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
+      await _enqueueOutboxTxn(
+        txn,
+        clientOpId: clientMessageId,
+        kind: ImOutboxKind.userMessage,
+        conversationId: conversationId,
+        payloadJson: payloadJson,
+      );
       return nextMessage;
     });
     return persisted;
@@ -415,22 +433,38 @@ class SocialCacheStore {
 
   // ── IM Outbox ────────────────────────────────────────────────────────
 
+  /// Re-queue a failed user message (same client_message_id). Prefer
+  /// [insertPendingMessageWithOutbox] for first send.
   Future<void> enqueueUserMessageOutbox({
     required String clientMessageId,
     required String conversationId,
     required String text,
     String? replyToMessageId,
+    List<Map<String, Object?>> structuredMentions = const <Map<String, Object?>>[],
   }) async {
-    final payload = jsonEncode(<String, Object?>{
-      'text': text,
-      'reply_to_message_id': replyToMessageId,
-    });
+    final payload = _userMessageOutboxPayload(
+      text: text,
+      replyToMessageId: replyToMessageId,
+      structuredMentions: structuredMentions,
+    );
     await _enqueueOutbox(
       clientOpId: clientMessageId,
       kind: ImOutboxKind.userMessage,
       conversationId: conversationId,
       payloadJson: payload,
     );
+  }
+
+  String _userMessageOutboxPayload({
+    required String text,
+    String? replyToMessageId,
+    List<Map<String, Object?>> structuredMentions = const <Map<String, Object?>>[],
+  }) {
+    return jsonEncode(<String, Object?>{
+      'text': text,
+      'reply_to_message_id': replyToMessageId,
+      if (structuredMentions.isNotEmpty) 'mentions': structuredMentions,
+    });
   }
 
   /// Enqueue reaction toggle; `clientOpId` is B6 client_op_id.
@@ -462,8 +496,26 @@ class SocialCacheStore {
     if (db == null) {
       return;
     }
+    await db.transaction((txn) async {
+      await _enqueueOutboxTxn(
+        txn,
+        clientOpId: clientOpId,
+        kind: kind,
+        conversationId: conversationId,
+        payloadJson: payloadJson,
+      );
+    });
+  }
+
+  Future<void> _enqueueOutboxTxn(
+    DatabaseExecutor txn, {
+    required String clientOpId,
+    required ImOutboxKind kind,
+    required String conversationId,
+    required String payloadJson,
+  }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
-    final existing = await db.query(
+    final existing = await txn.query(
       'im_outbox',
       where: 'client_op_id = ?',
       whereArgs: <Object>[clientOpId],
@@ -476,7 +528,7 @@ class SocialCacheStore {
       if (status == ImOutboxStatus.acked) {
         return;
       }
-      await db.update(
+      await txn.update(
         'im_outbox',
         <String, Object?>{
           'payload_json': payloadJson,
@@ -491,7 +543,7 @@ class SocialCacheStore {
       );
       return;
     }
-    await db.insert('im_outbox', <String, Object?>{
+    await txn.insert('im_outbox', <String, Object?>{
       'client_op_id': clientOpId,
       'kind': imOutboxKindWire(kind),
       'conversation_id': conversationId,

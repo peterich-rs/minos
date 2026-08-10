@@ -8,8 +8,9 @@ import {
   resumeAfterFromCursors,
   loadTopicCursors,
   saveTopicCursors,
-  HUB_CURSOR_STORAGE_KEY,
-} from "./hub-cursors.ts";
+  CLOUD_CURSOR_STORAGE_KEY,
+  LEGACY_CLOUD_CURSOR_STORAGE_KEY,
+} from "./cloud-cursors.ts";
 
 describe("advanceTopicCursor", () => {
   it("inserts and advances monotonically", () => {
@@ -61,10 +62,39 @@ describe("topic helpers + storage", () => {
       setItem: (k: string, v: string) => {
         bag.set(k, v);
       },
+      removeItem: (k: string) => {
+        bag.delete(k);
+      },
     };
     saveTopicCursors({ "conversation:x": 7 }, storage);
-    assert.ok(bag.has(HUB_CURSOR_STORAGE_KEY));
+    assert.ok(bag.has(CLOUD_CURSOR_STORAGE_KEY));
+    assert.equal(bag.has(LEGACY_CLOUD_CURSOR_STORAGE_KEY), false);
     const loaded = loadTopicCursors(storage);
     assert.equal(loaded["conversation:x"], 7);
+  });
+
+  it("migrates legacy hub cursor key to cloud key", () => {
+    const bag = new Map<string, string>();
+    bag.set(
+      LEGACY_CLOUD_CURSOR_STORAGE_KEY,
+      JSON.stringify({ "conversation:legacy": 42 }),
+    );
+    const storage = {
+      getItem: (k: string) => bag.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        bag.set(k, v);
+      },
+      removeItem: (k: string) => {
+        bag.delete(k);
+      },
+    };
+    const loaded = loadTopicCursors(storage);
+    assert.equal(loaded["conversation:legacy"], 42);
+    assert.ok(bag.has(CLOUD_CURSOR_STORAGE_KEY));
+    assert.equal(bag.has(LEGACY_CLOUD_CURSOR_STORAGE_KEY), false);
+    assert.equal(
+      JSON.parse(bag.get(CLOUD_CURSOR_STORAGE_KEY)! )["conversation:legacy"],
+      42,
+    );
   });
 });

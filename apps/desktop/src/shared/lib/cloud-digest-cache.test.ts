@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it, beforeEach } from "node:test";
-import { hubDigestCache } from "./hub-digest-cache.ts";
+import { cloudDigestCache } from "./cloud-digest-cache.ts";
 import {
   mergeConversationList,
   resolveLastActivityMs,
@@ -10,14 +10,14 @@ import {
 
 // Pure helpers only — no @/ path aliases (node:test strip-types).
 
-describe("hubDigestCache", () => {
+describe("cloudDigestCache", () => {
   beforeEach(() => {
-    hubDigestCache._resetForTests();
+    cloudDigestCache._resetForTests();
   });
 
   it("hydrates once and patches live deltas", () => {
-    assert.equal(hubDigestCache.isHydrated(), false);
-    hubDigestCache.hydrate([
+    assert.equal(cloudDigestCache.isHydrated(), false);
+    cloudDigestCache.hydrate([
       {
         conversationId: "c1",
         title: "One",
@@ -29,22 +29,22 @@ describe("hubDigestCache", () => {
         memberCount: 2,
       },
     ]);
-    assert.equal(hubDigestCache.isHydrated(), true);
-    assert.equal(hubDigestCache.getAll().length, 1);
+    assert.equal(cloudDigestCache.isHydrated(), true);
+    assert.equal(cloudDigestCache.getAll().length, 1);
 
-    hubDigestCache.patchOne("c1", {
+    cloudDigestCache.patchOne("c1", {
       preview: "hello",
       lastMessageAtMs: 200,
       unreadCount: 2,
     });
-    const row = hubDigestCache.get("c1");
+    const row = cloudDigestCache.get("c1");
     assert.equal(row?.preview, "hello");
     assert.equal(row?.unreadCount, 2);
     assert.equal(row?.title, "One");
   });
 
   it("invalidate clears hydrate flag", () => {
-    hubDigestCache.hydrate([
+    cloudDigestCache.hydrate([
       {
         conversationId: "c1",
         title: "One",
@@ -56,9 +56,9 @@ describe("hubDigestCache", () => {
         memberCount: 1,
       },
     ]);
-    hubDigestCache.invalidate();
-    assert.equal(hubDigestCache.isHydrated(), false);
-    assert.equal(hubDigestCache.getAll().length, 0);
+    cloudDigestCache.invalidate();
+    assert.equal(cloudDigestCache.isHydrated(), false);
+    assert.equal(cloudDigestCache.getAll().length, 0);
   });
 });
 

@@ -8,7 +8,7 @@
 import { create } from "zustand";
 import { daemonApi, isTauriRuntime } from "@/shared/lib/daemon";
 import { toast } from "@/shared/lib/toast";
-import { isHubImMode } from "@/shared/lib/hub-timeline";
+import { isCloudImMode } from "@/shared/lib/cloud-timeline";
 import { syncReactionToggleToCloud } from "@/shared/lib/im-cloud-sync";
 import { useAccountStore } from "@/store/account-store";
 import {
@@ -177,7 +177,7 @@ export const useReactionStore = create<ReactionState>((set, get) => ({
     const optimistic = toggleReactionGroup(prev, emoji);
 
     const { session, authPhase } = useAccountStore.getState();
-    const hubMode = isHubImMode({
+    const hubMode = isCloudImMode({
       authPhase,
       accessToken: session?.accessToken,
     });

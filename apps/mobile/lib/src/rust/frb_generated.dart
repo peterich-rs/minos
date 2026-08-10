@@ -352,6 +352,7 @@ abstract class RustLibApi extends BaseApi {
     required String text,
     String? replyToMessageId,
     String? clientMessageId,
+    String? mentionsJson,
   });
 
   Future<void> crateApiMinosMobileClientSendUserMessage({
@@ -2563,6 +2564,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String text,
     String? replyToMessageId,
     String? clientMessageId,
+    String? mentionsJson,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -2576,6 +2578,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(text, serializer);
           sse_encode_opt_String(replyToMessageId, serializer);
           sse_encode_opt_String(clientMessageId, serializer);
+          sse_encode_opt_String(mentionsJson, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -2594,6 +2597,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           text,
           replyToMessageId,
           clientMessageId,
+          mentionsJson,
         ],
         apiImpl: this,
       ),
@@ -2609,6 +2613,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           "text",
           "replyToMessageId",
           "clientMessageId",
+          "mentionsJson",
         ],
       );
 
@@ -10360,12 +10365,14 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
     required String text,
     String? replyToMessageId,
     String? clientMessageId,
+    String? mentionsJson,
   }) => RustLib.instance.api.crateApiMinosMobileClientSendChatMessage(
     that: this,
     conversationId: conversationId,
     text: text,
     replyToMessageId: replyToMessageId,
     clientMessageId: clientMessageId,
+    mentionsJson: mentionsJson,
   );
 
   /// Send a follow-up user message to an existing agent session.

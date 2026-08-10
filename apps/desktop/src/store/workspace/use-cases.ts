@@ -12,11 +12,14 @@ import type { MentionProfile } from "@/shared/lib/agent-route";
 import type { DeliveryStatus, TimelineMessage } from "@/shared/lib/mock-data";
 import type { TranscriptItem } from "@/shared/lib/daemon";
 import { quietRefreshConversationSlices } from "./shared";
-import { resolveDispatchTargets } from "./send-dispatch";
+import {
+  buildStructuredMentions,
+  resolveDispatchTargets,
+} from "./send-dispatch";
 import { syncUserMessageToCloud } from "@/shared/lib/im-cloud-sync";
-import { isHubImMode } from "@/shared/lib/hub-timeline";
+import { isCloudImMode } from "@/shared/lib/cloud-timeline";
 import { formatLocalClock } from "@/shared/lib/time";
-import { hubDigestCache } from "@/shared/lib/hub-digest-cache";
+import { cloudDigestCache } from "@/shared/lib/cloud-digest-cache";
 import { positiveMs } from "@/shared/lib/rail-activity";
 import { useAccountStore } from "@/store/account-store";
 import type { Conversation } from "@/shared/lib/mock-data";
@@ -47,11 +50,11 @@ function patchRailActivity(
   const text = preview.trim() || "No messages yet";
   const clamped = positiveMs(atMs);
   if (!clamped) return;
-  hubDigestCache.patchOne(id, {
+  cloudDigestCache.patchOne(id, {
     preview: text,
     lastMessageAtMs: Math.max(
       clamped,
-      positiveMs(hubDigestCache.get(id)?.lastMessageAtMs),
+      positiveMs(cloudDigestCache.get(id)?.lastMessageAtMs),
     ),
   });
   set((s) => ({
@@ -67,9 +70,9 @@ function patchRailActivity(
   }));
 }
 /** True when Minos account is signed in (multi-end Hub projection available). */
-function hubAuthenticated(): boolean {
+function cloudAuthenticated(): boolean {
   const { session, authPhase } = useAccountStore.getState();
-  return isHubImMode({
+  return isCloudImMode({
     authPhase,
     accessToken: session?.accessToken,
   });
@@ -242,7 +245,7 @@ export function createUseCasesActions(
         requestId,
         decision: payload,
         clientOpId,
-        route: hubAuthenticated() ? "hub" : "daemon",
+        route: cloudAuthenticated() ? "hub" : "daemon",
       });
       set({ actionError: null });
       // Pull fresh tail after the agent continues.
@@ -384,8 +387,8 @@ export function createUseCasesActions(
         c.id === conversationId ? { ...c, unread: undefined } : c,
       ),
     }));
-    void import("@/shared/lib/hub-digest-cache").then(({ hubDigestCache }) => {
-      hubDigestCache.patchOne(conversationId, {
+    void import("@/shared/lib/cloud-digest-cache").then(({ cloudDigestCache }) => {
+      cloudDigestCache.patchOne(conversationId, {
         unreadCount: 0,
         unreadMentionCount: 0,
       });
@@ -394,12 +397,12 @@ export function createUseCasesActions(
     // Only submit max *observed* Hub message_seq from the loaded timeline —
     // never server-latest (would silently mark unread rows as read).
     void import("@/shared/lib/minos-cloud").then(async (cloud) => {
-      const { isHubImMode } = await import("@/shared/lib/hub-timeline");
+      const { isCloudImMode } = await import("@/shared/lib/cloud-timeline");
       const { lastMessageSeq } = await import("@/shared/lib/message-history");
       const { useAccountStore } = await import("@/store/account-store");
       const { deviceId, session, authPhase } = useAccountStore.getState();
       if (
-        !isHubImMode({
+        !isCloudImMode({
           authPhase,
           accessToken: session?.accessToken,
         }) ||
@@ -523,6 +526,11 @@ export function createUseCasesActions(
         installedAgents,
         mentionProfiles,
       });
+      // Structured mentions for AppendMessage (Hub validates membership only).
+      const structuredMentions = buildStructuredMentions(
+        messageBody,
+        mentionProfiles,
+      );
 
       const convTitle = conv.title;
       // Host runtime bins for cloud upsert — derived from bot roster SSOT.
@@ -533,25 +541,16 @@ export function createUseCasesActions(
         if (fromBots && fromBots.length > 0) return fromBots;
         return conv.participatingAgents;
       })();
-      const accountOn = hubAuthenticated();
+      const accountOn = cloudAuthenticated();
       if (!accountOn) {
         throw new Error(
           "Sign in to send collaboration messages. Bot delivery requires Account Hub sync.",
         );
       }
 
-      // Local workbench timeline append (idempotent by message_id).
-      const { messageSeq } = await daemonApi.appendUserMessage(
-        conversationId,
-        messageBody,
-        resolvedId,
-      );
-      patchDelivery("sent", messageSeq, clock);
-      patchRailActivity(set, conversationId, railPreview, createdAtMs);
-
-      // Collaboration path: client_live only. Hub plan_agent_deliveries +
-      // BotInboxDelivery runs on the bound Host; never local dual-start.
-      void syncUserMessageToCloud({
+      // Collaboration write authority is Hub only. "sent" comes from ChatSendAck
+      // (or durable echo); local daemon workbench is a projection after Ack.
+      const hubAck = await syncUserMessageToCloud({
         conversationId,
         messageId: resolvedId,
         text: messageBody,
@@ -560,7 +559,25 @@ export function createUseCasesActions(
         createdAtMs,
         agentRuntimes,
         messageSource: "client_live",
+        mentions:
+          structuredMentions.length > 0 ? structuredMentions : undefined,
       });
+      const messageSeq = hubAck?.messageSeq;
+      patchDelivery("sent", messageSeq, clock);
+      patchRailActivity(set, conversationId, railPreview, createdAtMs);
+      // Optional local workbench projection (idempotent by message_id) — not write authority.
+      try {
+        await daemonApi.appendUserMessage(
+          conversationId,
+          messageBody,
+          resolvedId,
+        );
+      } catch (localErr) {
+        console.warn(
+          "[workspace] local workbench projection after Hub Ack failed",
+          localErr,
+        );
+      }
       set({ actionError: null });
       void get().loadTimeline(conversationId, { quiet: true });
 
@@ -654,20 +671,37 @@ export function createUseCasesActions(
         installedAgents,
         mentionProfiles,
       });
-      if (!hubAuthenticated()) {
+      const structuredMentions = buildStructuredMentions(
+        messageBody,
+        mentionProfiles,
+      );
+      if (!cloudAuthenticated()) {
         throw new Error(
           "Sign in to send collaboration messages. Bot delivery requires Account Hub sync.",
         );
       }
 
-      const { messageSeq } = await daemonApi.appendUserMessage(
-        conversationId,
-        messageBody,
-        messageId,
-      );
       const retryAt = failed.createdAtMs ?? Date.now();
       const retryClock = formatLocalClock(retryAt) || formatLocalClock(Date.now());
-      patchDelivery("sent", messageSeq);
+      const hubAck = await syncUserMessageToCloud({
+        conversationId,
+        messageId,
+        text: messageBody,
+        title: conv.title,
+        replyToMessageId,
+        createdAtMs: retryAt,
+        agentRuntimes: (() => {
+          const fromBots = conv.participatingBots
+            ?.map((b) => b.runtime.trim().toLowerCase())
+            .filter(Boolean);
+          if (fromBots && fromBots.length > 0) return fromBots;
+          return conv.participatingAgents;
+        })(),
+        messageSource: "client_live",
+        mentions:
+          structuredMentions.length > 0 ? structuredMentions : undefined,
+      });
+      patchDelivery("sent", hubAck?.messageSeq);
       set((s) => ({
         messagesByConversation: {
           ...s.messagesByConversation,
@@ -684,23 +718,18 @@ export function createUseCasesActions(
           ? `${messageBody.trim().slice(0, 88)}…`
           : messageBody.trim();
       patchRailActivity(set, conversationId, railPreview, retryAt);
-
-      void syncUserMessageToCloud({
-        conversationId,
-        messageId,
-        text: messageBody,
-        title: conv.title,
-        replyToMessageId,
-        createdAtMs: retryAt,
-        agentRuntimes: (() => {
-          const fromBots = conv.participatingBots
-            ?.map((b) => b.runtime.trim().toLowerCase())
-            .filter(Boolean);
-          if (fromBots && fromBots.length > 0) return fromBots;
-          return conv.participatingAgents;
-        })(),
-        messageSource: "client_live",
-      });
+      try {
+        await daemonApi.appendUserMessage(
+          conversationId,
+          messageBody,
+          messageId,
+        );
+      } catch (localErr) {
+        console.warn(
+          "[workspace] local workbench projection after Hub Ack failed",
+          localErr,
+        );
+      }
       set({ actionError: null });
       void get().loadTimeline(conversationId, { quiet: true });
 

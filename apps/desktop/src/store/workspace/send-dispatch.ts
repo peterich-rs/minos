@@ -7,7 +7,10 @@
  */
 
 export {
+  buildStructuredMentions,
   resolveDispatchTargets,
+  type BuildStructuredMentionsOptions,
   type DispatchTarget,
   type ResolveDispatchTargetsInput,
+  type WireMentionTarget,
 } from "./resolve-dispatch-targets";

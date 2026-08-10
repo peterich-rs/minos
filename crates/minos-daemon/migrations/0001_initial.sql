@@ -244,3 +244,24 @@ CREATE INDEX idx_bot_identities_updated
 
 CREATE INDEX idx_bot_identities_runtime
     ON bot_identities (runtime_agent, updated_at_ms DESC);
+
+-- Durable BotInboxDelivery ledger (restart-safe exactly-once inject).
+CREATE TABLE bot_delivery_ledger (
+    delivery_id      TEXT PRIMARY KEY NOT NULL,
+    conversation_id  TEXT NOT NULL,
+    bot_id           TEXT NOT NULL,
+    session_id       TEXT,
+    status           TEXT NOT NULL CHECK (status IN (
+        'received', 'injected', 'completed', 'rejected'
+    )),
+    accepted         INTEGER,
+    last_error       TEXT,
+    created_at_ms    INTEGER NOT NULL,
+    updated_at_ms    INTEGER NOT NULL,
+    CHECK(length(delivery_id) > 0),
+    CHECK(length(conversation_id) > 0),
+    CHECK(length(bot_id) > 0)
+);
+
+CREATE INDEX idx_bot_delivery_ledger_status
+    ON bot_delivery_ledger(status, updated_at_ms);

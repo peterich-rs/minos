@@ -16,11 +16,11 @@ import {
   resumeAfterFromCursors,
   saveTopicCursors,
   type TopicCursorMap,
-} from "@/shared/lib/hub-cursors";
+} from "@/shared/lib/cloud-cursors";
 import { conversationSubscriptionLruTouch } from "@/shared/lib/conversation-sub-lru";
 import {
   createWsTicket,
-  hubClientWsUrl,
+  cloudClientWsUrl,
   type HubChatMessage,
 } from "@/shared/lib/minos-cloud";
 
@@ -29,7 +29,7 @@ export {
   conversationSubscriptionLruTouch,
 } from "@/shared/lib/conversation-sub-lru";
 
-export type HubRealtimeSyncState =
+export type CloudRealtimeSyncState =
   | "disconnected"
   | "connecting"
   | "syncing"
@@ -91,7 +91,7 @@ type DurableMessagePayload = {
 };
 
 /** Account-topic T2 digest for rail/inbox only (R3). */
-export type HubInboxDigest = {
+export type CloudInboxDigest = {
   conversationId: string;
   messageId: string;
   preview: string;
@@ -103,14 +103,14 @@ export type HubInboxDigest = {
   isRecall: boolean;
 };
 
-export type HubRealtimeHandlers = {
+export type CloudRealtimeHandlers = {
   onChatMessage: (message: HubChatMessage) => void;
   /** Multi-end recall: remove or mark recalled in Hub timeline. */
   onChatMessageRecalled?: (message: HubChatMessage) => void;
   /**
    * Account T2 thin digest — patch rail/inbox only; never full timeline body.
    */
-  onAccountInboxDigest?: (digest: HubInboxDigest) => void;
+  onAccountInboxDigest?: (digest: CloudInboxDigest) => void;
   /**
    * Conversation reaction aggregate update. Clients apply `reactions` as full
    * replace; `action` is animation-only and must not drive state.
@@ -143,7 +143,7 @@ export type HubRealtimeHandlers = {
     code: string;
     message: string;
   }) => void;
-  onConnectionChange?: (state: HubRealtimeSyncState) => void;
+  onConnectionChange?: (state: CloudRealtimeSyncState) => void;
   /**
    * Cursor too old for topic — clear projection for conversation topics and
    * cold-pull snapshot page, then reset cursor.
@@ -236,7 +236,7 @@ const REACTION_KINDS = new Set([
 function mapAccountDigest(
   payload: DurableMessagePayload,
   isRecall: boolean,
-): HubInboxDigest | null {
+): CloudInboxDigest | null {
   const conversationId = payload.conversation_id?.trim();
   const messageId = payload.message_id?.trim();
   if (!conversationId || !messageId) return null;
@@ -267,7 +267,7 @@ function mapAccountDigest(
   };
 }
 
-export class HubRealtimeSession {
+export class CloudRealtimeSession {
   private ws: WebSocket | null = null;
   private stopped = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -275,13 +275,13 @@ export class HubRealtimeSession {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   /** When true, skip starting ping (document hidden); resume on show. */
   private pingPaused = false;
-  private readonly handlers: HubRealtimeHandlers;
+  private readonly handlers: CloudRealtimeHandlers;
   private auth: {
     deviceId: string;
     accessToken: string;
     accountId: string;
   } | null = null;
-  private syncState: HubRealtimeSyncState = "disconnected";
+  private syncState: CloudRealtimeSyncState = "disconnected";
   /**
    * Desired conversation topics (open windows); re-subscribed on reconnect.
    * Insertion/access order is LRU: first key = oldest for eviction (R4).
@@ -302,11 +302,11 @@ export class HubRealtimeSession {
     }
   >();
 
-  constructor(handlers: HubRealtimeHandlers) {
+  constructor(handlers: CloudRealtimeHandlers) {
     this.handlers = handlers;
   }
 
-  get state(): HubRealtimeSyncState {
+  get state(): CloudRealtimeSyncState {
     return this.syncState;
   }
 
@@ -322,6 +322,21 @@ export class HubRealtimeSession {
       conversationId: string;
       text: string;
       replyToMessageId?: string | null;
+      /** Structured SSOT mentions (bot/account). Omitted when empty. */
+      mentions?: Array<
+        | {
+            kind: "bot";
+            bot_id: string;
+            start?: number;
+            length?: number;
+          }
+        | {
+            kind: "account";
+            account_id: string;
+            start?: number;
+            length?: number;
+          }
+      >;
     },
     opts?: { timeoutMs?: number },
   ): Promise<AppendMessageWsResult> {
@@ -351,6 +366,9 @@ export class HubRealtimeSession {
     if (reply) {
       frame.reply_to_message_id = reply;
     }
+    if (input.mentions && input.mentions.length > 0) {
+      frame.mentions = input.mentions;
+    }
     const timeoutMs = opts?.timeoutMs ?? 8_000;
     return new Promise<AppendMessageWsResult>((resolve) => {
       const timer = setTimeout(() => {
@@ -377,6 +395,20 @@ export class HubRealtimeSession {
     conversationId: string;
     text: string;
     replyToMessageId?: string | null;
+    mentions?: Array<
+      | {
+          kind: "bot";
+          bot_id: string;
+          start?: number;
+          length?: number;
+        }
+      | {
+          kind: "account";
+          account_id: string;
+          start?: number;
+          length?: number;
+        }
+    >;
   }): boolean {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
     if (this.syncState !== "live" && this.syncState !== "syncing") return false;
@@ -392,6 +424,9 @@ export class HubRealtimeSession {
     const reply = input.replyToMessageId?.trim();
     if (reply) {
       frame.reply_to_message_id = reply;
+    }
+    if (input.mentions && input.mentions.length > 0) {
+      frame.mentions = input.mentions;
     }
     this.ws.send(JSON.stringify(frame));
     return true;
@@ -542,7 +577,7 @@ export class HubRealtimeSession {
     return this.conversationIds.size;
   }
 
-  private setState(state: HubRealtimeSyncState): void {
+  private setState(state: CloudRealtimeSyncState): void {
     if (this.syncState === state) return;
     this.syncState = state;
     this.handlers.onConnectionChange?.(state);
@@ -624,7 +659,7 @@ export class HubRealtimeSession {
         this.auth.accessToken,
       );
       if (this.stopped) return;
-      const url = hubClientWsUrl(ticket.gatewayUrl, ticket.ticket);
+      const url = cloudClientWsUrl(ticket.gatewayUrl, ticket.ticket);
       const ws = new WebSocket(url);
       this.ws = ws;
 
@@ -650,7 +685,7 @@ export class HubRealtimeSession {
         this.scheduleReconnect();
       };
     } catch (error) {
-      console.warn("[hub-realtime] connect failed", error);
+      console.warn("[cloud-realtime] connect failed", error);
       this.setState("error");
       this.scheduleReconnect();
     }
@@ -714,7 +749,7 @@ export class HubRealtimeSession {
     }
 
     if (type === "subscription_denied") {
-      console.warn("[hub-realtime] subscription denied", frame);
+      console.warn("[cloud-realtime] subscription denied", frame);
       return;
     }
 
@@ -732,7 +767,7 @@ export class HubRealtimeSession {
           (frame.payload as { current?: number } | undefined)?.current ??
           0,
       );
-      console.warn("[hub-realtime] subscription limit exceeded", {
+      console.warn("[cloud-realtime] subscription limit exceeded", {
         limit,
         current,
       });
@@ -861,7 +896,7 @@ export class HubRealtimeSession {
         }
         return true;
       } catch (error) {
-        console.warn("[hub-realtime] failed to map chat message", error);
+        console.warn("[cloud-realtime] failed to map chat message", error);
         return false;
       }
     }
@@ -897,7 +932,7 @@ export class HubRealtimeSession {
         }
         return false;
       } catch (error) {
-        console.warn("[hub-realtime] failed to map recall", error);
+        console.warn("[cloud-realtime] failed to map recall", error);
         return false;
       }
     }

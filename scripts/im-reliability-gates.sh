@@ -37,18 +37,18 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 2) body soft-dedupe 120s window (production hub-timeline / merge paths)
+# 2) body soft-dedupe 120s window (production cloud-timeline / merge paths)
 #    Active soft-dedupe logic is forbidden. Comments that document removal
 #    ("no soft-dedupe") are allowed.
 # ---------------------------------------------------------------------------
-# Look for 120_000 / 120000 near soft-dedupe in hub-timeline production file.
+# Look for 120_000 / 120000 near soft-dedupe in cloud-timeline production file.
 soft_window="$(
-  rg -n '120_000|120000' apps/desktop/src/shared/lib/hub-timeline.ts 2>/dev/null || true
+  rg -n '120_000|120000' apps/desktop/src/shared/lib/cloud-timeline.ts 2>/dev/null || true
 )"
 if [[ -n "${soft_window}" ]]; then
-  fail "hub-timeline.ts still has 120s window constant" "${soft_window}"
+  fail "cloud-timeline.ts still has 120s window constant" "${soft_window}"
 else
-  pass "hub-timeline.ts has no 120s soft-dedupe window"
+  pass "cloud-timeline.ts has no 120s soft-dedupe window"
 fi
 
 # Ensure merge docs claim id-only (sanity: soft-dedupe phrase only in "no …" comments).
@@ -56,7 +56,7 @@ fi
 # (comment lines: //, block *, or C2: markers). No identifiers as live code.
 soft_impl="$(
   rg -n 'soft.?dedupe|SOFT_DEDUPE' \
-    apps/desktop/src/shared/lib/hub-timeline.ts \
+    apps/desktop/src/shared/lib/cloud-timeline.ts \
     apps/desktop/src/store/workspace/live-ingress.ts \
     apps/desktop/src/features/chat/Timeline.tsx \
     2>/dev/null || true

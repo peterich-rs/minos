@@ -53,6 +53,29 @@ describe("im-outbox", () => {
     assert.equal(again.status, "acked");
   });
 
+  it("persists structured mentions on user_message enqueue", async () => {
+    const mentions = [
+      { kind: "bot" as const, bot_id: "bot-codex", start: 0, length: 6 },
+      {
+        kind: "account" as const,
+        account_id: "acct-1",
+        start: 7,
+        length: 5,
+      },
+    ];
+    const entry = await enqueueUserMessage({
+      conversationId: "c1",
+      clientMessageId: "m-mentions",
+      text: "@codex @alice hi",
+      mentions,
+    });
+    assert.deepEqual(entry.mentions, mentions);
+    const due = await listDuePending();
+    const row = due.find((e) => e.clientMessageId === "m-mentions");
+    assert.ok(row);
+    assert.deepEqual(row!.mentions, mentions);
+  });
+
   it("network errors stay pending after many attempts (no terminal burn)", async () => {
     await enqueueUserMessage({
       conversationId: "c1",

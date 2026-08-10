@@ -84,14 +84,14 @@ async function runConversationTurnEndRefresh(
   //    empty until leave/return hard hydrate.
   try {
     const { useAccountStore } = await import("@/store/account-store");
-    const { isHubImMode } = await import("@/shared/lib/hub-timeline");
+    const { isCloudImMode } = await import("@/shared/lib/cloud-timeline");
     const { projectMissingLocalAgentResultsToHub, flushImOutbox } =
       await import("@/shared/lib/im-cloud-sync");
     const { toUiMessage } = await import("./helpers");
     const { daemonApi } = await import("@/shared/lib/daemon");
     const { session, authPhase } = useAccountStore.getState();
     if (
-      !isHubImMode({
+      !isCloudImMode({
         authPhase,
         accessToken: session?.accessToken,
       })

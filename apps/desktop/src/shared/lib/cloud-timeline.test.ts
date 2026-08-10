@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   agentResultSessionKey,
-  hubChatMessageToTimeline,
-  mergeHubAndLocalTimeline,
+  cloudChatMessageToTimeline,
+  mergeCloudAndLocalTimeline,
   removeMessageFromTimeline,
   sessionIdFromAgentResultId,
-  upsertHubMessageIntoTimeline,
-} from "./hub-timeline.ts";
+  upsertCloudMessageIntoTimeline,
+} from "./cloud-timeline.ts";
 import type { TimelineMessage } from "./mock-data.ts";
 import type { HubChatMessage } from "./minos-cloud.ts";
 
@@ -33,9 +33,9 @@ describe("agentResultSessionKey", () => {
   });
 });
 
-describe("mergeHubAndLocalTimeline", () => {
+describe("mergeCloudAndLocalTimeline", () => {
   it("prefers hub on same id; keeps local tool + agent-result gap by id", () => {
-    const merged = mergeHubAndLocalTimeline({
+    const merged = mergeCloudAndLocalTimeline({
       hubMessages: [
         local({ id: "hub-u", role: "user", body: "from mobile", createdAtMs: 10 }),
         local({
@@ -81,7 +81,7 @@ describe("mergeHubAndLocalTimeline", () => {
   });
 
   it("Hub empty reactions win over stale local reactions", () => {
-    const merged = mergeHubAndLocalTimeline({
+    const merged = mergeCloudAndLocalTimeline({
       hubMessages: [
         local({
           id: "m1",
@@ -116,7 +116,7 @@ describe("mergeHubAndLocalTimeline", () => {
   it("uses Hub messageSeq as social SSOT (not host daemon seq)", () => {
     // Hub insert order is the multi-end social order. Host finish seq stays
     // local-only and must not overwrite Hub message_seq on same id.
-    const merged = mergeHubAndLocalTimeline({
+    const merged = mergeCloudAndLocalTimeline({
       hubMessages: [
         local({
           id: "msg_user",
@@ -160,7 +160,7 @@ describe("mergeHubAndLocalTimeline", () => {
   });
 
   it("keeps hub-only mobile messageSeq for social order", () => {
-    const merged = mergeHubAndLocalTimeline({
+    const merged = mergeCloudAndLocalTimeline({
       hubMessages: [
         local({
           id: "mobile-only",
@@ -209,7 +209,7 @@ describe("mergeHubAndLocalTimeline", () => {
   });
 
   it("drops bare non-canonical agent locals not on hub (no dual SSOT ghosts)", () => {
-    const merged = mergeHubAndLocalTimeline({
+    const merged = mergeCloudAndLocalTimeline({
       hubMessages: [
         local({ id: "hub-u", role: "user", body: "hi", createdAtMs: 1 }),
       ],
@@ -237,7 +237,7 @@ describe("mergeHubAndLocalTimeline", () => {
   it("does not soft-dedupe by body or session when origin ids differ", () => {
     // Pre-C2: same session different durable suffix suppressed local.
     // C2: only same id collapses.
-    const merged = mergeHubAndLocalTimeline({
+    const merged = mergeCloudAndLocalTimeline({
       hubMessages: [
         local({
           id: "agent-result:conv1:sessA:user-msg-1",
@@ -261,7 +261,7 @@ describe("mergeHubAndLocalTimeline", () => {
   });
 
   it("keeps optimistic sending/failed user rows not yet on hub", () => {
-    const merged = mergeHubAndLocalTimeline({
+    const merged = mergeCloudAndLocalTimeline({
       hubMessages: [],
       localMessages: [
         local({
@@ -305,7 +305,7 @@ describe("mergeHubAndLocalTimeline", () => {
       deliveryStatus: "sending",
       createdAtMs: 202,
     });
-    const merged = mergeHubAndLocalTimeline({
+    const merged = mergeCloudAndLocalTimeline({
       hubMessages: [hub],
       localMessages: [localDup, localOnlyUser, tool, optimistic],
     });
@@ -318,11 +318,11 @@ describe("mergeHubAndLocalTimeline", () => {
   });
 });
 
-describe("upsertHubMessageIntoTimeline", () => {
+describe("upsertCloudMessageIntoTimeline", () => {
   it("inserts and updates by id", () => {
-    const a = upsertHubMessageIntoTimeline([], local({ id: "m1", body: "a", createdAtMs: 1 }));
+    const a = upsertCloudMessageIntoTimeline([], local({ id: "m1", body: "a", createdAtMs: 1 }));
     assert.equal(a.length, 1);
-    const b = upsertHubMessageIntoTimeline(a, local({ id: "m1", body: "b", createdAtMs: 1 }));
+    const b = upsertCloudMessageIntoTimeline(a, local({ id: "m1", body: "b", createdAtMs: 1 }));
     assert.equal(b.length, 1);
     assert.equal(b[0]?.body, "b");
   });
@@ -336,7 +336,7 @@ describe("upsertHubMessageIntoTimeline", () => {
         createdAtMs: 10,
       }),
     ];
-    const next = upsertHubMessageIntoTimeline(
+    const next = upsertCloudMessageIntoTimeline(
       prev,
       local({
         id: "agent-result:c:s1:origin-hub",
@@ -365,7 +365,7 @@ describe("removeMessageFromTimeline", () => {
   });
 });
 
-describe("hubChatMessageToTimeline mentions", () => {
+describe("cloudChatMessageToTimeline mentions", () => {
   it("carries structured account + agent mention SSOT", () => {
     const agentMap = new Map([["agent-uuid-1", "codex"]]);
     const msg: HubChatMessage = {
@@ -381,7 +381,7 @@ describe("hubChatMessageToTimeline mentions", () => {
       mentionedAccountIds: ["acct-bob"],
       mentionedAgentIds: ["agent-uuid-1"],
     };
-    const row = hubChatMessageToTimeline(msg, { agentRuntimeMap: agentMap });
+    const row = cloudChatMessageToTimeline(msg, { agentRuntimeMap: agentMap });
     assert.ok(row);
     assert.equal(row?.mentions?.length, 2);
     assert.deepEqual(row?.mentions?.[0], {
@@ -408,7 +408,7 @@ describe("hubChatMessageToTimeline mentions", () => {
       senderDisplayName: "Code Reviewer",
       runtimeAgent: "claude",
     };
-    const row = hubChatMessageToTimeline(msg);
+    const row = cloudChatMessageToTimeline(msg);
     assert.ok(row);
     assert.equal(row?.role, "agent");
     assert.equal(row?.senderDisplayName, "Code Reviewer");

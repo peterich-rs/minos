@@ -35,6 +35,9 @@ pub struct ImOutboxEntryDto {
     pub client_sent_at_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_source: Option<String>,
+    /// Structured AppendMessage mentions (wire shape kept as JSON values).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mentions: Option<Vec<serde_json::Value>>,
     pub status: String,
     pub attempts: i64,
     pub next_attempt_at: i64,
@@ -78,6 +81,7 @@ impl ImOutboxStore {
                agent_session_id    TEXT,
                client_sent_at_ms   INTEGER,
                message_source      TEXT,
+               mentions_json       TEXT,
                status              TEXT NOT NULL
                  CHECK (status IN ('pending','inflight','acked','failed_terminal')),
                attempts            INTEGER NOT NULL DEFAULT 0,
@@ -91,6 +95,12 @@ impl ImOutboxStore {
              CREATE INDEX IF NOT EXISTS idx_im_outbox_conversation
                ON im_outbox(conversation_id, created_at_ms);",
         )?;
+        // Optional structured mentions JSON (AppendMessage wire targets).
+        // ALTER is idempotent: ignore "duplicate column" on existing DBs.
+        let _ = conn.execute(
+            "ALTER TABLE im_outbox ADD COLUMN mentions_json TEXT",
+            [],
+        );
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -104,8 +114,8 @@ impl ImOutboxStore {
         let mut stmt = conn.prepare(
             "SELECT client_message_id, id, kind, conversation_id, text, title,
                     reply_to_message_id, agent_runtimes_json, agent_id, agent_session_id,
-                    client_sent_at_ms, message_source, status, attempts, next_attempt_at,
-                    last_error, created_at_ms, updated_at_ms
+                    client_sent_at_ms, message_source, mentions_json, status, attempts,
+                    next_attempt_at, last_error, created_at_ms, updated_at_ms
                FROM im_outbox
            ORDER BY created_at_ms ASC, client_message_id ASC",
         )?;
@@ -174,9 +184,9 @@ impl ImOutboxStore {
             "INSERT INTO im_outbox (
                 client_message_id, id, kind, conversation_id, text, title,
                 reply_to_message_id, agent_runtimes_json, agent_id, agent_session_id,
-                client_sent_at_ms, message_source, status, attempts, next_attempt_at,
-                last_error, created_at_ms, updated_at_ms
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
+                client_sent_at_ms, message_source, mentions_json, status, attempts,
+                next_attempt_at, last_error, created_at_ms, updated_at_ms
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
              ON CONFLICT(client_message_id) DO UPDATE SET
                 id=excluded.id,
                 kind=excluded.kind,
@@ -189,6 +199,7 @@ impl ImOutboxStore {
                 agent_session_id=excluded.agent_session_id,
                 client_sent_at_ms=excluded.client_sent_at_ms,
                 message_source=excluded.message_source,
+                mentions_json=excluded.mentions_json,
                 status=excluded.status,
                 attempts=excluded.attempts,
                 next_attempt_at=excluded.next_attempt_at,
@@ -207,6 +218,7 @@ impl ImOutboxStore {
                 entry.agent_session_id,
                 entry.client_sent_at_ms,
                 entry.message_source,
+                mentions_json(&entry.mentions),
                 entry.status,
                 entry.attempts,
                 entry.next_attempt_at,
@@ -265,9 +277,9 @@ fn insert_entry(tx: &rusqlite::Transaction<'_>, entry: &ImOutboxEntryDto) -> Res
         "INSERT INTO im_outbox (
             client_message_id, id, kind, conversation_id, text, title,
             reply_to_message_id, agent_runtimes_json, agent_id, agent_session_id,
-            client_sent_at_ms, message_source, status, attempts, next_attempt_at,
-            last_error, created_at_ms, updated_at_ms
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+            client_sent_at_ms, message_source, mentions_json, status, attempts,
+            next_attempt_at, last_error, created_at_ms, updated_at_ms
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
         params![
             entry.client_message_id,
             entry.id,
@@ -281,6 +293,7 @@ fn insert_entry(tx: &rusqlite::Transaction<'_>, entry: &ImOutboxEntryDto) -> Res
             entry.agent_session_id,
             entry.client_sent_at_ms,
             entry.message_source,
+            mentions_json(&entry.mentions),
             entry.status,
             entry.attempts,
             entry.next_attempt_at,
@@ -297,9 +310,21 @@ fn runtimes_json(v: &Option<Vec<String>>) -> Option<String> {
         .map(|r| serde_json::to_string(r).unwrap_or_else(|_| "[]".into()))
 }
 
+fn mentions_json(v: &Option<Vec<serde_json::Value>>) -> Option<String> {
+    v.as_ref().and_then(|m| {
+        if m.is_empty() {
+            None
+        } else {
+            serde_json::to_string(m).ok()
+        }
+    })
+}
+
 fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ImOutboxEntryDto> {
     let runtimes_raw: Option<String> = row.get(7)?;
     let agent_runtimes = runtimes_raw.and_then(|s| serde_json::from_str(&s).ok());
+    let mentions_raw: Option<String> = row.get(12)?;
+    let mentions = mentions_raw.and_then(|s| serde_json::from_str(&s).ok());
     Ok(ImOutboxEntryDto {
         client_message_id: row.get(0)?,
         id: row.get(1)?,
@@ -313,12 +338,13 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ImOutboxEntryDto> {
         agent_session_id: row.get(9)?,
         client_sent_at_ms: row.get(10)?,
         message_source: row.get(11)?,
-        status: row.get(12)?,
-        attempts: row.get(13)?,
-        next_attempt_at: row.get(14)?,
-        last_error: row.get(15)?,
-        created_at_ms: row.get(16)?,
-        updated_at_ms: row.get(17)?,
+        mentions,
+        status: row.get(13)?,
+        attempts: row.get(14)?,
+        next_attempt_at: row.get(15)?,
+        last_error: row.get(16)?,
+        created_at_ms: row.get(17)?,
+        updated_at_ms: row.get(18)?,
     })
 }
 
@@ -346,6 +372,7 @@ mod tests {
             agent_session_id: None,
             client_sent_at_ms: Some(1),
             message_source: Some("client_live".into()),
+            mentions: None,
             status: status.into(),
             attempts: 0,
             next_attempt_at: 1,

@@ -490,19 +490,33 @@ impl MobileClient {
             .await
     }
 
+    /// `mentions_json` is an optional JSON array of wire `MentionTarget` objects.
     pub async fn send_chat_message(
         &self,
         conversation_id: String,
         text: String,
         reply_to_message_id: Option<String>,
         client_message_id: Option<String>,
+        mentions_json: Option<String>,
     ) -> Result<ChatMessageSummary, MinosError> {
+        let mentions = match mentions_json
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            None => Vec::new(),
+            Some(raw) => serde_json::from_str(raw).map_err(|error| MinosError::RpcCallFailed {
+                method: "AppendMessage".into(),
+                message: format!("invalid mentions json: {error}"),
+            })?,
+        };
         self.0
             .send_chat_message(
                 conversation_id,
                 text,
                 reply_to_message_id,
                 client_message_id,
+                mentions,
             )
             .await
     }

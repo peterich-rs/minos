@@ -286,6 +286,7 @@ abstract class MobileClient implements RustOpaqueInterface {
     required String text,
     String? replyToMessageId,
     String? clientMessageId,
+    String? mentionsJson,
   });
 
   /// Send a follow-up user message to an existing agent session.

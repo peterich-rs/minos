@@ -388,20 +388,14 @@ class SocialConversation extends _$SocialConversation {
           )
           .toList(growable: false),
     );
-    final pending = await repository.insertPendingMessage(
+    final pending = await repository.insertPendingMessageWithOutbox(
       conversationId: _conversationId,
       sender: sender,
       text: trimmed,
       replyTo: replyPreview,
       mentionedAccountIds: optimistic.accountIds,
       mentionedAgentIds: optimistic.agentIds,
-    );
-    final clientMessageId = pending.wireClientMessageId;
-    await repository.enqueueUserMessageOutbox(
-      clientMessageId: clientMessageId,
-      conversationId: _conversationId,
-      text: trimmed,
-      replyToMessageId: replyPreview?.messageId,
+      structuredMentions: optimistic.structuredMentions,
     );
     await repository.touchConversationPreview(
       conversationId: _conversationId,
@@ -448,11 +442,40 @@ class SocialConversation extends _$SocialConversation {
 
     await repository.markMessageSending(localId);
     // Reuse the same client_message_id — never mint a new key on retry.
+    // Rebuild structured mentions from body + current roster (Hub validates).
+    final participants = ref
+        .read(conversationParticipantsProvider(_conversationId))
+        .asData
+        ?.value;
+    final selfAccountId = await repository.loadCurrentAccountId();
+    final optimistic = extractOptimisticMentions(
+      text: target.text,
+      selfAccountId: selfAccountId,
+      humans: (participants?.humans ?? const [])
+          .map(
+            (h) => MentionHumanRef(accountId: h.accountId, minosId: h.minosId),
+          )
+          .toList(growable: false),
+      agents: (participants?.agents ?? const [])
+          .where(
+            (a) =>
+                a.status.trim().isEmpty || a.status.toLowerCase() == 'active',
+          )
+          .map(
+            (a) => MentionAgentRef(
+              agentId: a.agentId,
+              runtimeAgent: a.runtimeAgent,
+              name: a.name,
+            ),
+          )
+          .toList(growable: false),
+    );
     await repository.enqueueUserMessageOutbox(
       clientMessageId: clientMessageId,
       conversationId: _conversationId,
       text: target.text,
       replyToMessageId: replyToMessageId,
+      structuredMentions: optimistic.structuredMentions,
     );
     final messages = await repository.loadMessages(_conversationId);
     state = state.withMessages(messages);

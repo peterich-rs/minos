@@ -300,11 +300,13 @@ class MinosCore implements MinosCoreProtocol {
     required String text,
     String? replyToMessageId,
     String? clientMessageId,
+    String? mentionsJson,
   }) => _client.sendChatMessage(
     conversationId: conversationId,
     text: text,
     replyToMessageId: replyToMessageId,
     clientMessageId: clientMessageId,
+    mentionsJson: mentionsJson,
   );
 
   @override

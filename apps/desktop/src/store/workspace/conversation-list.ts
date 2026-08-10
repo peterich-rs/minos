@@ -17,9 +17,9 @@ import { singleFlightLoad } from "@/shared/lib/desktop-inflight";
 import { minosQueryClient } from "@/shared/api/queryClient";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { syncConversationToCloud } from "@/shared/lib/im-cloud-sync";
-import { isHubImMode } from "@/shared/lib/hub-timeline";
-import { hubDigestCache } from "@/shared/lib/hub-digest-cache";
-import { ensureHubDigestHydrated } from "@/shared/lib/hub-digest-ensure";
+import { isCloudImMode } from "@/shared/lib/cloud-timeline";
+import { cloudDigestCache } from "@/shared/lib/cloud-digest-cache";
+import { ensureCloudDigestHydrated } from "@/shared/lib/cloud-digest-ensure";
 import { mergeConversationList } from "@/shared/lib/conversation-list-merge";
 import { reuseStableConversations } from "@/shared/lib/list-identity";
 import { useAccountStore } from "@/store/account-store";
@@ -56,7 +56,7 @@ export function createConversationListActions(
 
           try {
             const { session, authPhase } = useAccountStore.getState();
-            const hubMode = isHubImMode({
+            const hubMode = isCloudImMode({
               authPhase,
               accessToken: session?.accessToken,
             });
@@ -86,11 +86,11 @@ export function createConversationListActions(
                 throw err;
               });
 
-            // Reuse live-patched digests (im-hub-bridge patchOne). Never force-invalidate
+            // Reuse live-patched digests (im-cloud-bridge patchOne). Never force-invalidate
             // from list load — force rewrites every rail row (visible flicker).
             // SnapshotRequired / reconnect paths own full digest rebuild.
             const hubPromise = hubMode
-              ? ensureHubDigestHydrated()
+              ? ensureCloudDigestHydrated()
               : Promise.resolve();
 
             const [rows] = await Promise.all([daemonPromise, hubPromise]);
@@ -127,7 +127,7 @@ export function createConversationListActions(
               // Hub-only rows live with empty projectId in a single global set.
               list = mergeConversationList({
                 daemonRows: daemonUi,
-                hubDigests: hubDigestCache.getAll(),
+                hubDigests: cloudDigestCache.getAll(),
                 projectId,
                 includeHubOnly: false,
                 focusedConversationId: focused,
@@ -154,7 +154,7 @@ export function createConversationListActions(
             const hubOnly = hubMode
               ? mergeConversationList({
                   daemonRows: [],
-                  hubDigests: hubDigestCache.getAll().filter(
+                  hubDigests: cloudDigestCache.getAll().filter(
                     (d) => !allDaemonIds.has(d.conversationId),
                   ),
                   projectId: "",
@@ -164,7 +164,7 @@ export function createConversationListActions(
                 })
               : [];
             // Preserve previous hub-only shells when digest cache is still cold
-            // on a quiet peek (ensureHubDigestHydrated no-ops if already warm;
+            // on a quiet peek (ensureCloudDigestHydrated no-ops if already warm;
             // if empty, do not wipe rows that were painted by hard open).
             const prevHubOnly =
               hubMode && hubOnly.length === 0

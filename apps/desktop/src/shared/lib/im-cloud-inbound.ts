@@ -4,7 +4,7 @@
  * Map Hub messages into the workspace timeline projection only.
  * Never append cloud IM into Host daemon SQLite (collaboration SSOT = Hub).
  *
- * Cold open / realtime both use `hubChatMessageToTimeline` + store merge.
+ * Cold open / realtime both use `cloudChatMessageToTimeline` + store merge.
  * Gap fill uses `before_seq` / `after_seq` (messages/query).
  */
 
@@ -14,7 +14,7 @@ import {
   type HubChatMessage,
   type HubMessagePage,
 } from "@/shared/lib/minos-cloud";
-import { hubChatMessageToTimeline } from "@/shared/lib/hub-timeline";
+import { cloudChatMessageToTimeline } from "@/shared/lib/cloud-timeline";
 import { useAccountStore } from "@/store/account-store";
 import { markMessageProjected } from "@/shared/lib/im-cloud-sync";
 import type { TimelineMessage } from "@/shared/lib/mock-data";
@@ -55,7 +55,7 @@ export async function mapHubChatMessageToTimeline(
   message: HubChatMessage,
 ): Promise<TimelineMessage | null> {
   await ensureAgentRuntimeMap();
-  return hubChatMessageToTimeline(message, {
+  return cloudChatMessageToTimeline(message, {
     agentRuntimeMap: agentIdToRuntime,
   });
 }
@@ -79,7 +79,7 @@ function mapPageToTimeline(page: HubMessagePage): {
   const out: TimelineMessage[] = [];
   for (const m of ordered) {
     markMessageProjected(m.messageId);
-    const row = hubChatMessageToTimeline(m, {
+    const row = cloudChatMessageToTimeline(m, {
       agentRuntimeMap: agentIdToRuntime,
     });
     if (row) out.push(row);

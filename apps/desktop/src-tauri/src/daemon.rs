@@ -58,7 +58,7 @@ pub struct ConnectionDto {
     /// False when disconnected, connecting, or non-managed external daemon
     /// without a handle (cannot observe relay link).
     #[serde(default)]
-    pub hub_online: bool,
+    pub cloud_online: bool,
     /// Local `hit_` present (host can dial hub). Not a product "Link" flag.
     #[serde(default)]
     pub has_host_token: bool,
@@ -660,7 +660,7 @@ impl DaemonBridge {
     }
 
     fn status_locked(guard: &BridgeInner) -> ConnectionDto {
-        let hub_online = guard.managed.as_ref().is_some_and(|h| {
+        let cloud_online = guard.managed.as_ref().is_some_and(|h| {
             matches!(
                 h.current_relay_link(),
                 minos_domain::RelayLinkState::Connected
@@ -676,7 +676,7 @@ impl DaemonBridge {
             error: guard.last_error.clone(),
             source: guard.source.clone(),
             managed: guard.managed.is_some(),
-            hub_online,
+            cloud_online,
             has_host_token,
         }
     }

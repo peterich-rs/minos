@@ -235,6 +235,7 @@ impl DaemonHandle {
                 peers_store: peers_store.clone(),
                 last_error: last_error.clone(),
                 ingest_sync: ingest_sync_slot.clone(),
+                store: store.clone(),
             },
         );
 
