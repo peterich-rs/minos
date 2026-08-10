@@ -216,7 +216,7 @@ fn current_exe_sidecar_command(current_exe: &Path) -> Option<LocatedMcpCommand> 
 fn is_teamwork_mcp_sidecar_host(stem: &str) -> bool {
     matches!(
         stem.to_ascii_lowercase().as_str(),
-        "minos-tui" | "minos-daemon" | "minos-desktop" | "minos"
+        "minos-daemon" | "minos-desktop" | "minos"
     )
 }
 
@@ -616,14 +616,14 @@ mod tests {
     }
 
     #[test]
-    fn teamwork_mcp_locator_uses_current_tui_as_hidden_sidecar_before_path() {
+    fn teamwork_mcp_locator_uses_current_daemon_as_hidden_sidecar_before_path() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let exe_dir = tmp.path().join("exe");
         let path_dir = tmp.path().join("path");
         std::fs::create_dir_all(&exe_dir).expect("mkdir exe");
         std::fs::create_dir_all(&path_dir).expect("mkdir path");
 
-        let current_exe = exe_dir.join("minos-tui");
+        let current_exe = exe_dir.join("minos-daemon");
         let path_bin = path_dir.join(teamwork_mcp_filename());
         make_executable(&current_exe);
         make_executable(&path_bin);
@@ -667,7 +667,7 @@ mod tests {
 
     #[test]
     fn is_teamwork_mcp_sidecar_host_covers_desktop_names() {
-        assert!(is_teamwork_mcp_sidecar_host("minos-tui"));
+        assert!(!is_teamwork_mcp_sidecar_host("minos-tui"));
         assert!(is_teamwork_mcp_sidecar_host("minos-daemon"));
         assert!(is_teamwork_mcp_sidecar_host("minos-desktop"));
         assert!(is_teamwork_mcp_sidecar_host("Minos"));
