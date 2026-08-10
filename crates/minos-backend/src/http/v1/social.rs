@@ -2965,11 +2965,13 @@ mod tests {
     fn automation_hop_budget_is_small_positive() {
         // bot-mailbox loop control: human root hop=0; each bot→bot increments;
         // enqueue when hop would exceed MAX is skipped.
-        assert_eq!(MAX_AUTOMATION_HOP, 3);
-        assert!(MAX_AUTOMATION_HOP > 0);
         // hop 0 (human) → enqueue 0; hop 2 origin agent → enqueue 3 (allowed);
         // hop 3 origin agent → enqueue 4 (blocked).
-        assert!(3 <= MAX_AUTOMATION_HOP);
-        assert!(4 > MAX_AUTOMATION_HOP);
+        const {
+            assert!(MAX_AUTOMATION_HOP > 0);
+            assert!(MAX_AUTOMATION_HOP == 3);
+            assert!(3 <= MAX_AUTOMATION_HOP);
+            assert!(4 > MAX_AUTOMATION_HOP);
+        }
     }
 }

@@ -6703,14 +6703,14 @@ mod tests {
             .await
             .unwrap();
 
-        let response = test
-            .glue
-            .remove_conversation_agent(minos_protocol::RemoveConversationAgentParams {
+        let response = Box::pin(test.glue.remove_conversation_agent(
+            minos_protocol::RemoveConversationAgentParams {
                 conversation_id: "conversation-roster".into(),
                 agent: "claude".into(),
-            })
-            .await
-            .unwrap();
+            },
+        ))
+        .await
+        .unwrap();
 
         assert!(!response
             .conversation

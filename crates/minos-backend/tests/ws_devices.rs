@@ -92,10 +92,6 @@ async fn post_json(
     common::send(app, builder.body(json_body(body)).unwrap()).await
 }
 
-fn host_headers(fixture: &FormalHostFixture) -> Vec<(&'static str, String)> {
-    vec![("authorization", format!("Bearer {}", fixture.token))]
-}
-
 async fn formally_paired_host(relay: &Relay) -> anyhow::Result<FormalHostFixture> {
     const LINK_PATH: &str = "v1/hosts/link";
 
