@@ -1230,6 +1230,9 @@ fn agent_sender_summary(agent: Option<&social::AgentRow>, agent_id: &str) -> Use
 /// Only conversation participants match. Human tokens resolve by `minos_id`;
 /// agent tokens resolve by agent_id / runtime_agent / display name (and optional
 /// `#session_short` suffix is stripped for matching).
+///
+/// Order is **body appearance order** (first unique hit wins) — not lex by id.
+/// Delivery planning and multi-@ fan-out rely on this order as SSOT.
 pub(crate) fn extract_participant_mentions(
     text: &str,
     sender_account_id: &str,
@@ -1240,25 +1243,29 @@ pub(crate) fn extract_participant_mentions(
         .iter()
         .map(|member| (member.minos_id.as_str(), member.account_id.as_str()))
         .collect::<HashMap<_, _>>();
-    let mut account_ids = std::collections::BTreeSet::<String>::new();
-    let mut agent_ids = std::collections::BTreeSet::<String>::new();
+    let mut account_ids = Vec::<String>::new();
+    let mut agent_ids = Vec::<String>::new();
+    let mut seen_accounts = std::collections::HashSet::<String>::new();
+    let mut seen_agents = std::collections::HashSet::<String>::new();
 
     for token in collect_mention_tokens(text) {
         let (name_part, _session_short) = split_agent_session_token(token);
         if let Some(account_id) = by_minos_id.get(name_part) {
-            if *account_id != sender_account_id {
-                account_ids.insert((*account_id).to_string());
+            if *account_id != sender_account_id && seen_accounts.insert((*account_id).to_string()) {
+                account_ids.push((*account_id).to_string());
             }
             continue;
         }
         if let Some(agent) = match_agent_token(name_part, agents) {
-            agent_ids.insert(agent.agent_id.clone());
+            if seen_agents.insert(agent.agent_id.clone()) {
+                agent_ids.push(agent.agent_id.clone());
+            }
         }
     }
 
     social::MessageMentions {
-        account_ids: account_ids.into_iter().collect(),
-        agent_ids: agent_ids.into_iter().collect(),
+        account_ids,
+        agent_ids,
     }
 }
 
@@ -1308,14 +1315,14 @@ pub(crate) fn collect_mention_tokens(text: &str) -> Vec<&str> {
     tokens
 }
 
-fn split_agent_session_token(token: &str) -> (&str, Option<&str>) {
+pub(crate) fn split_agent_session_token(token: &str) -> (&str, Option<&str>) {
     match token.split_once('#') {
         Some((name, short)) if !name.is_empty() && !short.is_empty() => (name, Some(short)),
         _ => (token, None),
     }
 }
 
-fn match_agent_token<'a>(
+pub(crate) fn match_agent_token<'a>(
     token: &str,
     agents: &'a [social::AgentRow],
 ) -> Option<&'a social::AgentRow> {
@@ -1329,6 +1336,25 @@ fn match_agent_token<'a>(
             || agent.runtime_agent.eq_ignore_ascii_case(&lower)
             || agent.name.eq_ignore_ascii_case(t)
     })
+}
+
+/// First `@agent#short` session hint for a structured agent mention (text is not
+/// a delivery target — only a session-resolution hint for agents already in
+/// `mentioned_agent_ids`).
+pub(crate) fn session_short_hint_for_agent<'a>(
+    text: &'a str,
+    agent: &social::AgentRow,
+) -> Option<&'a str> {
+    for token in collect_mention_tokens(text) {
+        let (name_part, short) = split_agent_session_token(token);
+        if short.is_none() {
+            continue;
+        }
+        if match_agent_token(name_part, std::slice::from_ref(agent)).is_some() {
+            return short;
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -1384,6 +1410,26 @@ mod tests {
     }
 
     #[test]
+    fn extract_participant_mentions_preserves_body_appearance_order() {
+        let members = vec![profile("acct-alice", "alice")];
+        // Lex order of agent_id would be bot-a < bot-z; body order is z then a.
+        let agents = vec![
+            agent("bot-z", "Claude", "claude"),
+            agent("bot-a", "Codex", "codex"),
+        ];
+        let mentions = extract_participant_mentions(
+            "@claude first @codex second @claude again",
+            "acct-alice",
+            &members,
+            &agents,
+        );
+        assert_eq!(
+            mentions.agent_ids,
+            vec!["bot-z".to_string(), "bot-a".to_string()]
+        );
+    }
+
+    #[test]
     fn extract_participant_mentions_skips_self_and_unknown_tokens() {
         let members = vec![profile("acct-alice", "alice")];
         let agents = vec![agent("bot-1", "Codex", "codex")];
@@ -1395,5 +1441,19 @@ mod tests {
         );
         assert!(mentions.account_ids.is_empty());
         assert_eq!(mentions.agent_ids, vec!["bot-1".to_string()]);
+    }
+
+    #[test]
+    fn session_short_hint_only_from_matching_agent_token() {
+        let agent = agent("bot-1", "Codex", "codex");
+        assert_eq!(
+            session_short_hint_for_agent("@codex#abcd please", &agent),
+            Some("abcd")
+        );
+        assert_eq!(session_short_hint_for_agent("@codex please", &agent), None);
+        assert_eq!(
+            session_short_hint_for_agent("@claude#zzzz please", &agent),
+            None
+        );
     }
 }

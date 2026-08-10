@@ -191,6 +191,49 @@ where
     }
 }
 
+/// List all inbox rows for an origin, ordered by enqueue time (appearance order
+/// for multi-@ fan-out when plans are enqueued in extract order).
+pub async fn list_by_origin<S>(
+    store: &S,
+    origin_message_id: &str,
+) -> Result<Vec<AgentDispatchRow>, BackendError>
+where
+    S: AsStorePool + ?Sized,
+{
+    match store.as_store_pool() {
+        StorePoolRef::Sqlite(pool) => {
+            let rows = sqlx::query_as::<_, AgentDispatchSqlRow>(
+                "SELECT dispatch_id, origin_message_id, conversation_id, account_id, agent_id,
+                        session_id, forwarded_text, mention_sender, sender_minos_id, status,
+                        attempts, next_attempt_at_ms, last_error, created_at_ms, updated_at_ms
+                 FROM agent_dispatch_queue
+                 WHERE origin_message_id = ?1
+                 ORDER BY created_at_ms ASC, dispatch_id ASC",
+            )
+            .bind(origin_message_id)
+            .fetch_all(pool)
+            .await
+            .map_err(store_err("agent_dispatch_queue::list_by_origin"))?;
+            Ok(rows.into_iter().map(Into::into).collect())
+        }
+        StorePoolRef::Postgres(pool) => {
+            let rows = sqlx::query_as::<_, AgentDispatchSqlRowPg>(
+                "SELECT dispatch_id, origin_message_id, conversation_id, account_id, agent_id,
+                        session_id, forwarded_text, mention_sender, sender_minos_id, status,
+                        attempts, next_attempt_at_ms, last_error, created_at_ms, updated_at_ms
+                 FROM agent_dispatch_queue
+                 WHERE origin_message_id = $1
+                 ORDER BY created_at_ms ASC, dispatch_id ASC",
+            )
+            .bind(origin_message_id)
+            .fetch_all(pool)
+            .await
+            .map_err(store_err("agent_dispatch_queue::list_by_origin"))?;
+            Ok(rows.into_iter().map(Into::into).collect())
+        }
+    }
+}
+
 /// Count dispatch rows for an origin (multi-@ fan-out size).
 pub async fn count_by_origin<S>(store: &S, origin_message_id: &str) -> Result<i64, BackendError>
 where

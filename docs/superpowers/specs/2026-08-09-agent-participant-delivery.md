@@ -95,7 +95,7 @@ send_message (Account, message_source=client_live)
 
 未匹配的「像 agent 的 @」且无成员：用户可见失败（不静默）。
 
-**Auto-attach host_runtime（`@codex` 等）**：过渡期可保留，但必须文档化为 **显式 ensure membership**，终态倾向 membership-first（无成员则失败，不暗挂）。
+**Membership-first（已落地）**：无 silent auto-attach。`@codex` 等 host_runtime token 若会话 roster 无对应 bot 成员 → 用户可见失败（`no_agents_in_conversation` / `agent_not_in_conversation`），不暗挂。显式成员变更走 participants / agents/add；`POST /agents/ensure-host-runtime` 只 ensure agent registry 行，不自动 join 会话。
 
 ### 3.4 Desktop-native vs client_live
 
@@ -231,11 +231,13 @@ Daemon：
 | **1** | polymorphic mentions + participants API + 统一 extract |
 | **2** | inbox 语义收口（单一 plan 入口）；worker/runtime 不变可先 |
 | **3** | Desktop/Mobile composer participants；Online 组合状态 |
-| **4** | 弱化 auto-attach；收敛 Desktop-native 与 client_live 领域事件；删过时叙述 |
+| **4** | **membership-first live**；删 silent auto-attach；收敛 Desktop-native 与 client_live 领域事件 |
 
-### Phase 4 notes (current)
+### Phase 4 notes (current / live backend)
 
-- **Auto-attach** (`ensure_host_runtime_agents_for_mentions`): transitional ensure for known host runtimes (`codex`/`claude`/…) so Mobile text `@` still delivers when Desktop never upserted roster. Bounded to `HOST_RUNTIME_MENTIONS`; attaches only under sender account ownership. Prefer membership-first (participants / upsert) for new clients.
+- **Auto-attach removed**: no `ensure_host_runtime_agents_for_mentions` on send. Delivery targets = reply-to-agent → structured `mentioned_agent_ids` (appearance order) → sole-agent room rule. Text is never a delivery target; `#session_short` is only a session hint for agents already in structured mentions.
+- **Unmatched `@codex`**: user-visible failure bubble / `agent_error` when token looks agentish but roster has no match.
+- **Mentions migration**: fresh 0001 is polymorphic; `0002_polymorphic_message_mentions` + SQLite post-migrate rebuild upgrades volumes that still have `mentioned_account_id`.
 - **Desktop-native**: local CLI still runs on-device; Hub uplink uses `message_source=host_projection` so Agent inbox never re-delivers. Same domain events as Mobile `client_live` for human messages.
 - **Online UI**: Desktop `accountSyncStatus` (`/ws/client`) is primary Online; `cloudStatus`/`hubOnline` is Host readiness only.
 
@@ -270,13 +272,14 @@ Daemon：
 
 | Concern | Path |
 |---------|------|
-| Send + post-hoc delivery | `http/v1/conversations.rs` → `try_agent_dispatch` (gated by `message_source.allows_agent_dispatch`) |
-| Plan / forward | `http/v1/social.rs` `plan_agent_deliveries` (structured `mentioned_agent_ids` → text routes → sole-agent) |
+| Send + post-hoc delivery | `http/v1/conversations.rs` → `try_agent_dispatch` (gated by `message_source.allows_agent_dispatch`; pipeline errors → `notify_agent_dispatch_pipeline_error`) |
+| Plan / forward | `http/v1/social.rs` `plan_agent_deliveries` (reply → structured `mentioned_agent_ids` appearance order → sole-agent) |
 | Inbox table | `store/agent_dispatch_queue.rs` (domain: Agent inbox) |
 | Worker | `jobs/agent_dispatch_worker.rs` |
-| Mentions (human + agent) | `conversations/use_case.rs` `extract_participant_mentions` |
+| Mentions (human + agent) | `conversations/use_case.rs` `extract_participant_mentions` (single extract path; Vec+seen appearance order) |
 | Participants API | `POST …/conversations/{id}/participants` |
 | Agent bubble insert | `store/social/agents.rs` |
 | Projector | `turn_completion.rs`, `completion_watch.rs` |
+| Mentions forward migrate | `migrations/*/0002_polymorphic_message_mentions.sql` + `store::ensure_polymorphic_message_mentions_sqlite` |
 
 演进原则：**reuse 队列与幂等，替换产品语义与统一 mention/入口**。

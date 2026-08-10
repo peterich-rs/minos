@@ -2115,7 +2115,8 @@ async fn multi_agent_mentions_fan_out_inbox_rows() {
         .unwrap();
     }
 
-    let text = format!("@{} @{} count off", codex.agent_id, claude.agent_id);
+    // Appearance order deliberately reverse of agent_id lex order when ids differ.
+    let text = format!("@{} @{} count off", claude.agent_id, codex.agent_id);
     let (status, body) = common::send(
         &mut app,
         authed_request(
@@ -2139,14 +2140,22 @@ async fn multi_agent_mentions_fan_out_inbox_rows() {
         .iter()
         .filter_map(|v| v.as_str().map(str::to_string))
         .collect();
-    assert_eq!(mentioned.len(), 2);
-    assert!(mentioned.contains(&codex.agent_id));
-    assert!(mentioned.contains(&claude.agent_id));
+    assert_eq!(
+        mentioned,
+        vec![claude.agent_id.clone(), codex.agent_id.clone()],
+        "wire mentioned_agent_ids must follow body appearance order"
+    );
 
-    let count = minos_backend::store::agent_dispatch_queue::count_by_origin(&state.store, &origin)
-        .await
-        .unwrap();
-    assert_eq!(count, 2, "multi-@ must enqueue one inbox row per agent");
+    let rows =
+        minos_backend::store::agent_dispatch_queue::list_by_origin(&state.store, &origin)
+            .await
+            .unwrap();
+    assert_eq!(rows.len(), 2, "multi-@ must enqueue one inbox row per agent");
+    assert_eq!(rows[0].agent_id, claude.agent_id);
+    assert_eq!(rows[1].agent_id, codex.agent_id);
+    // 1-human room: structured path uses room rule, not hardcoded true.
+    assert!(!rows[0].mention_sender);
+    assert!(!rows[1].mention_sender);
 }
 
 /// Phase 2 invariant: host_projection never re-delivers to Agent inbox.
@@ -2285,4 +2294,177 @@ async fn system_message_does_not_enqueue_agent_inbox() {
         .await
         .unwrap();
     assert_eq!(count, 0);
+}
+
+/// Membership-first: bare `@codex` with empty bot roster does not silent-join.
+#[tokio::test]
+async fn unmatched_host_runtime_mention_does_not_auto_attach_or_enqueue() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let conversation =
+        social::create_group_conversation(&state.store, &alice.account_id, "No bots", &[], 100)
+            .await
+            .unwrap();
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(serde_json::json!({ "text": "@codex please help" }).to_string()),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let origin = body["message_id"].as_str().unwrap().to_string();
+
+    let mentioned = body["mentioned_agent_ids"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        mentioned.is_empty(),
+        "no roster member → no structured agent mention"
+    );
+    assert!(
+        social::list_conversation_agents(&state.store, &conversation.conversation_id)
+            .await
+            .unwrap()
+            .is_empty(),
+        "must not silent auto-attach host_runtime agent"
+    );
+    let count = minos_backend::store::agent_dispatch_queue::count_by_origin(&state.store, &origin)
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "unmatched @codex must not enqueue agent inbox");
+}
+
+/// Multi-agent room + no explicit @ → zero inbox (no sole-agent rule).
+#[tokio::test]
+async fn multi_agent_room_without_mention_enqueues_zero_inbox() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let conversation =
+        social::create_group_conversation(&state.store, &alice.account_id, "Two bots", &[], 100)
+            .await
+            .unwrap();
+    for (name, runtime, ts) in [("Codex", "codex", 100), ("Claude", "claude", 101)] {
+        let agent = social::register_agent(
+            &state.store,
+            &alice.account_id,
+            name,
+            "Assistant",
+            runtime,
+            "",
+            None,
+            ts,
+        )
+        .await
+        .unwrap();
+        social::add_agent_to_conversation(
+            &state.store,
+            &conversation.conversation_id,
+            &agent.agent_id,
+            &alice.account_id,
+            ts,
+        )
+        .await
+        .unwrap();
+    }
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(serde_json::json!({ "text": "hello room, no at-mention" }).to_string()),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let origin = body["message_id"].as_str().unwrap().to_string();
+    let count = minos_backend::store::agent_dispatch_queue::count_by_origin(&state.store, &origin)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+/// Sole-agent room bare text still auto-routes exactly one inbox row.
+#[tokio::test]
+async fn sole_agent_room_bare_text_enqueues_one_inbox() {
+    let state = backend_state().await;
+    let mut app = router(state.clone());
+
+    let alice = minos_backend::store::accounts::create(&state.store, "alice@example.com")
+        .await
+        .unwrap();
+    let alice_device = DeviceId::new();
+    let conversation =
+        social::create_group_conversation(&state.store, &alice.account_id, "Solo bot", &[], 100)
+            .await
+            .unwrap();
+    let agent = social::register_agent(
+        &state.store,
+        &alice.account_id,
+        "Codex",
+        "Assistant",
+        "codex",
+        "gpt-5",
+        None,
+        100,
+    )
+    .await
+    .unwrap();
+    social::add_agent_to_conversation(
+        &state.store,
+        &conversation.conversation_id,
+        &agent.agent_id,
+        &alice.account_id,
+        100,
+    )
+    .await
+    .unwrap();
+
+    let (status, body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(serde_json::json!({ "text": "continue without at" }).to_string()),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let origin = body["message_id"].as_str().unwrap().to_string();
+    let row = minos_backend::store::agent_dispatch_queue::get_by_origin(&state.store, &origin)
+        .await
+        .unwrap()
+        .expect("sole-agent bare text must enqueue");
+    assert_eq!(row.agent_id, agent.agent_id);
+    assert!(!row.mention_sender, "sole-agent auto-route never @s sender");
 }

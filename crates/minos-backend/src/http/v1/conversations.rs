@@ -355,7 +355,7 @@ async fn send_message_inner(
 
     // Participant delivery (Agent inbox) only for live client sends.
     // host_projection / system never re-deliver (anti-loop; Desktop native path).
-    // Failures are user-visible (timeline bubble + StreamEvent agent_error).
+    // Failures must not be silent: surface via the existing agent_error path.
     if message_source.allows_agent_dispatch() {
         if let Err(e) = super::social::try_agent_dispatch(
             &state,
@@ -374,6 +374,14 @@ async fn send_message_inner(
                 message_id = %message.message_id,
                 "agent inbox pipeline error after message send"
             );
+            super::social::notify_agent_dispatch_pipeline_error(
+                &state,
+                &account_id,
+                &conversation_id,
+                &message.message_id,
+                &e,
+            )
+            .await;
         }
     }
 

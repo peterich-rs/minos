@@ -617,13 +617,13 @@ async fn insert_mention_rows_sqlite(
     message_id: &str,
     mentions: &super::MessageMentions,
 ) -> Result<(), BackendError> {
-    let mut account_ids = mentions.account_ids.clone();
-    account_ids.sort();
-    account_ids.dedup();
-    let mut agent_ids = mentions.agent_ids.clone();
-    agent_ids.sort();
-    agent_ids.dedup();
-    for target_id in account_ids {
+    // Preserve caller appearance order; only de-dupe, do not sort by id.
+    let mut seen_accounts = std::collections::HashSet::new();
+    let mut seen_agents = std::collections::HashSet::new();
+    for target_id in &mentions.account_ids {
+        if !seen_accounts.insert(target_id.clone()) {
+            continue;
+        }
         sqlx::query(
             "INSERT INTO chat_message_mentions
                 (message_id, target_kind, target_id)
@@ -635,7 +635,10 @@ async fn insert_mention_rows_sqlite(
         .await
         .map_err(store_err("social::insert_message.insert_mention"))?;
     }
-    for target_id in agent_ids {
+    for target_id in &mentions.agent_ids {
+        if !seen_agents.insert(target_id.clone()) {
+            continue;
+        }
         sqlx::query(
             "INSERT INTO chat_message_mentions
                 (message_id, target_kind, target_id)
@@ -655,13 +658,13 @@ async fn insert_mention_rows_postgres(
     message_id: &str,
     mentions: &super::MessageMentions,
 ) -> Result<(), BackendError> {
-    let mut account_ids = mentions.account_ids.clone();
-    account_ids.sort();
-    account_ids.dedup();
-    let mut agent_ids = mentions.agent_ids.clone();
-    agent_ids.sort();
-    agent_ids.dedup();
-    for target_id in account_ids {
+    // Preserve caller appearance order; only de-dupe, do not sort by id.
+    let mut seen_accounts = std::collections::HashSet::new();
+    let mut seen_agents = std::collections::HashSet::new();
+    for target_id in &mentions.account_ids {
+        if !seen_accounts.insert(target_id.clone()) {
+            continue;
+        }
         sqlx::query(
             "INSERT INTO chat_message_mentions
                 (message_id, target_kind, target_id)
@@ -673,7 +676,10 @@ async fn insert_mention_rows_postgres(
         .await
         .map_err(store_err("social::insert_message.insert_mention"))?;
     }
-    for target_id in agent_ids {
+    for target_id in &mentions.agent_ids {
+        if !seen_agents.insert(target_id.clone()) {
+            continue;
+        }
         sqlx::query(
             "INSERT INTO chat_message_mentions
                 (message_id, target_kind, target_id)
