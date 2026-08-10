@@ -136,6 +136,53 @@ impl ConnectionPrincipal {
 }
 
 // ─── WS wire frames ───────────────────────────────────────────────────
+//
+// Target architecture ([bot-mailbox-ws-im-bus-design]): Account and Host
+// principals use different frame *semantics*. Wire still uses one tagged
+// enum per direction for a single codec; gateway must reject host-only
+// frames on /ws/client and account-only frames on /ws/host.
+//
+// Account collaboration write path (target): `AppendMessage` on /ws/client.
+// Bot mailbox path (target): Hub → Host `BotInboxDelivery`; Host → Hub
+// `AppendBotMessage` / `DeliveryAccepted`.
+
+/// Structured mention target on AppendMessage / AppendBotMessage.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MentionTarget {
+    Account { account_id: String },
+    /// Global bot identity (`agents.agent_id` / bot_id).
+    Bot { bot_id: String },
+}
+
+/// Launch snapshot embedded in BotInboxDelivery (body frozen at schedule time).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BotLaunchSnapshot {
+    pub bot_id: String,
+    pub runtime_agent: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub default_reasoning_effort: String,
+    #[serde(default)]
+    pub system_prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    /// Host workspace for cold-start session (from agent digital body).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
+}
+
+/// Session binding for a mailbox delivery.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionBinding {
+    /// Existing formal/local session to resume, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// When true, host should create a new session for (conversation, bot).
+    #[serde(default)]
+    pub create_if_missing: bool,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -152,6 +199,41 @@ pub enum ClientFrame {
     },
     Ping {
         ts: i64,
+    },
+    /// Account → Hub: WS-native collaboration message write (IM bus).
+    /// Idempotent on `client_operation_id` (same as HTTP `client_message_id`).
+    AppendMessage {
+        client_operation_id: String,
+        conversation_id: String,
+        text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        mentions: Vec<MentionTarget>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reply_to_message_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachment_ids: Vec<String>,
+    },
+    /// Host → Hub: bot authored a final conversation message after a delivery.
+    AppendBotMessage {
+        delivery_id: String,
+        operation_id: String,
+        conversation_id: String,
+        bot_id: String,
+        text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        mentions: Vec<MentionTarget>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reply_to_message_id: Option<String>,
+    },
+    /// Host → Hub: accepted a BotInboxDelivery lease (optional explicit ack).
+    DeliveryAccepted {
+        delivery_id: String,
+    },
+    /// Host → Hub: cannot fulfill delivery (capacity, missing workspace, …).
+    DeliveryRejected {
+        delivery_id: String,
+        code: String,
+        detail: String,
     },
     HostCommandAck {
         command_id: String,
@@ -225,6 +307,35 @@ pub enum ServerFrame {
     HostForceClose {
         reason: String,
         close_code: u16,
+    },
+    /// Hub → Account: AppendMessage committed (only after TX success).
+    ChatSendAck {
+        client_operation_id: String,
+        conversation_id: String,
+        message_id: String,
+        message_seq: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<ChatMessageSummary>,
+    },
+    /// Hub → Account: AppendMessage rejected (validation / membership / …).
+    ChatSendNack {
+        client_operation_id: String,
+        conversation_id: String,
+        code: String,
+        message: String,
+    },
+    /// Hub → Host: bot mailbox delivery (logical inbox row leased to this host).
+    BotInboxDelivery {
+        delivery_id: String,
+        conversation_id: String,
+        message: ChatMessageSummary,
+        bot: BotLaunchSnapshot,
+        session: SessionBinding,
+        lease_expires_at_ms: i64,
+    },
+    /// Hub → Host: cancel a previously leased delivery.
+    CancelDelivery {
+        delivery_id: String,
     },
     HostIngestAck {
         session_id: String,
@@ -764,7 +875,7 @@ mod tests {
             message: Some(ChatMessageSummary {
                 message_id: "msg-1".into(),
                 conversation_id: "conv-1".into(),
-                sender: crate::UserSummary {
+                sender: crate::MessageSender::Account {
                     account_id: "other".into(),
                     minos_id: "o".into(),
                     display_name: "Other".into(),
