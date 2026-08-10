@@ -1,5 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { daemonApi } from "@/shared/lib/daemon";
+import { listCloudAgents } from "@/shared/lib/minos-cloud";
+import { useAccountStore } from "@/store/account-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { minosQueryClient } from "./queryClient";
 import { queryKeys } from "./queryKeys";
@@ -40,6 +42,11 @@ export function useClisQuery() {
   });
 }
 
+/**
+ * Host daemon agent profile cache.
+ * Offline buffer / session launch helper — **not** bot identity SSOT.
+ * Prefer `useCloudAgentsQuery` when account is online.
+ */
 export function useAgentProfilesQuery() {
   const enabled = useDaemonEnabled();
   const bootEpoch = useWorkspaceStore((s) => s.bootEpoch);
@@ -50,6 +57,26 @@ export function useAgentProfilesQuery() {
       return res.profiles;
     },
     enabled,
+  });
+}
+
+/**
+ * Hub bot directory (global bot identity SSOT).
+ * Enabled when the account has an access token.
+ */
+export function useCloudAgentsQuery() {
+  const deviceId = useAccountStore((s) => s.deviceId);
+  const accessToken = useAccountStore((s) => s.session?.accessToken);
+  const enabled = Boolean(accessToken?.trim());
+  return useQuery({
+    queryKey: [...queryKeys.cloudAgents, deviceId, accessToken ?? ""],
+    queryFn: async () => {
+      const token = accessToken?.trim();
+      if (!token) return [];
+      return listCloudAgents(deviceId, token);
+    },
+    enabled,
+    staleTime: 30_000,
   });
 }
 
@@ -99,6 +126,9 @@ export function invalidateCatalogQueries(opts?: {
   void minosQueryClient.invalidateQueries({ queryKey: queryKeys.clis });
   void minosQueryClient.invalidateQueries({
     queryKey: queryKeys.agentProfiles,
+  });
+  void minosQueryClient.invalidateQueries({
+    queryKey: queryKeys.cloudAgents,
   });
   if (opts?.projectId) {
     void minosQueryClient.invalidateQueries({

@@ -62,6 +62,43 @@ export type Project = {
   hostName?: string;
 };
 
+/** Conversation bot member card (membership key = botId). */
+export type ParticipatingBot = {
+  botId: string;
+  name: string;
+  runtime: string;
+};
+
+/** Derive unique runtime labels from structured bots (host-runtime ensure / badges). */
+export function runtimesOfBots(bots: readonly ParticipatingBot[] | undefined): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const b of bots ?? []) {
+    const r = b.runtime.trim().toLowerCase();
+    if (!r || seen.has(r)) continue;
+    seen.add(r);
+    out.push(r);
+  }
+  return out;
+}
+
+/** Membership tokens for @ resolve: botId ∪ name ∪ runtime (all lowercased). */
+export function membershipTokensOfBots(
+  bots: readonly ParticipatingBot[] | undefined,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const b of bots ?? []) {
+    for (const raw of [b.botId, b.name, b.runtime]) {
+      const t = raw.trim().toLowerCase();
+      if (!t || seen.has(t)) continue;
+      seen.add(t);
+      out.push(t);
+    }
+  }
+  return out;
+}
+
 export type Conversation = {
   id: string;
   projectId: string;
@@ -78,8 +115,13 @@ export type Conversation = {
   boardColumn: ConversationBoardColumn;
   agentSessionCount: number;
   /**
-   * Runtime agents on the conversation roster (membership SSOT).
-   * @mention / start_agent are gated on this list — not on installed CLIs alone.
+   * Bot participants on the conversation roster (membership SSOT).
+   * Membership key is `botId`; `runtime` is launch/badge only.
+   */
+  participatingBots: ParticipatingBot[];
+  /**
+   * @deprecated Derived runtime labels from `participatingBots` for host-runtime
+   * ensure / badges. Do not use as membership SSOT.
    */
   participatingAgents: string[];
   runningCount: number;
@@ -166,7 +208,15 @@ export type TimelineMessage = {
   /** Daemon host seq for host-only pagination (never mixed into Hub before_seq). */
   hostMessageSeq?: number;
   role: "user" | "agent" | "system";
+  /** Runtime family (codex/claude/…) for badges / tone; not bot identity. */
   agent?: AgentRuntime;
+  /**
+   * Hub bot display name (MessageSender::Bot) or human display name when known.
+   * Prefer this over runtime-keyed `agentMeta` for author labels.
+   */
+  senderDisplayName?: string;
+  /** Global bot id when role=agent (MessageSender::Bot.bot_id). */
+  botId?: string;
   sessionId?: string;
   body: string;
   time: string;
@@ -281,6 +331,7 @@ export const conversations: Conversation[] = [
     messageCount: 14,
     boardColumn: "running",
     agentSessionCount: 2,
+    participatingBots: [{ botId: "local-rt-codex", name: "codex", runtime: "codex" }, { botId: "local-rt-claude", name: "claude", runtime: "claude" }],
     participatingAgents: ["codex", "claude"],
     runningCount: 1,
     approvalCount: 1,
@@ -298,6 +349,7 @@ export const conversations: Conversation[] = [
     messageCount: 6,
     boardColumn: "needs_you",
     agentSessionCount: 1,
+    participatingBots: [{ botId: "local-rt-codex", name: "codex", runtime: "codex" }],
     participatingAgents: ["codex"],
     runningCount: 0,
     approvalCount: 1,
@@ -314,6 +366,7 @@ export const conversations: Conversation[] = [
     messageCount: 9,
     boardColumn: "done",
     agentSessionCount: 1,
+    participatingBots: [{ botId: "local-rt-codex", name: "codex", runtime: "codex" }],
     participatingAgents: ["codex"],
     runningCount: 0,
     approvalCount: 0,
@@ -330,6 +383,7 @@ export const conversations: Conversation[] = [
     messageCount: 1,
     boardColumn: "backlog",
     agentSessionCount: 0,
+    participatingBots: [],
     participatingAgents: [],
     runningCount: 0,
     approvalCount: 0,
@@ -346,6 +400,7 @@ export const conversations: Conversation[] = [
     messageCount: 1,
     boardColumn: "backlog",
     agentSessionCount: 0,
+    participatingBots: [{ botId: "local-rt-claude", name: "claude", runtime: "claude" }],
     participatingAgents: ["claude"],
     runningCount: 0,
     approvalCount: 0,
@@ -362,6 +417,7 @@ export const conversations: Conversation[] = [
     messageCount: 4,
     boardColumn: "done",
     agentSessionCount: 1,
+    participatingBots: [{ botId: "local-rt-gemini", name: "gemini", runtime: "gemini" }],
     participatingAgents: ["gemini"],
     runningCount: 0,
     approvalCount: 0,
@@ -379,6 +435,7 @@ export const conversations: Conversation[] = [
     messageCount: 3,
     boardColumn: "needs_you",
     agentSessionCount: 1,
+    participatingBots: [{ botId: "local-rt-grok", name: "grok", runtime: "grok" }],
     participatingAgents: ["grok"],
     runningCount: 1,
     approvalCount: 1,

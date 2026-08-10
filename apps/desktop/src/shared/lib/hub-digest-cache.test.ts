@@ -181,6 +181,9 @@ describe("mergeConversationList", () => {
           title: "Daemon title",
           preview: "daemon preview",
           updatedAtMs: 50,
+          participatingBots: [
+            { botId: "local-rt-codex", name: "codex", runtime: "codex" },
+          ],
           participatingAgents: ["codex"],
           runningCount: 1,
           approvalCount: 0,

@@ -394,4 +394,25 @@ describe("hubChatMessageToTimeline mentions", () => {
       agent: "codex",
     });
   });
+
+  it("projects MessageSender bot identity (display name + bot_id + runtime)", () => {
+    const msg: HubChatMessage = {
+      messageId: "m-bot",
+      conversationId: "c1",
+      text: "done",
+      createdAtMs: 2000,
+      messageSeq: 4,
+      senderType: "agent",
+      senderAccountId: "bot-uuid-cr1",
+      senderMinosId: "CodeReviewer",
+      senderDisplayName: "Code Reviewer",
+      runtimeAgent: "claude",
+    };
+    const row = hubChatMessageToTimeline(msg);
+    assert.ok(row);
+    assert.equal(row?.role, "agent");
+    assert.equal(row?.senderDisplayName, "Code Reviewer");
+    assert.equal(row?.botId, "bot-uuid-cr1");
+    assert.equal(row?.agent, "claude");
+  });
 });

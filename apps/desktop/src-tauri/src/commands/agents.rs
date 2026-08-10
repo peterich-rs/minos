@@ -65,6 +65,27 @@ pub async fn daemon_create_agent_profile(
 }
 
 #[tauri::command]
+pub async fn daemon_update_agent_profile(
+    state: State<'_, AppState>,
+    id: String,
+    name: String,
+    description: String,
+    instructions: Option<String>,
+) -> Result<minos_protocol::AgentProfileSummary, String> {
+    let req = minos_protocol::UpdateAgentProfileRequest {
+        id,
+        name,
+        description,
+        instructions: instructions.unwrap_or_default(),
+    };
+    state
+        .daemon
+        .update_agent_profile(req)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn daemon_delete_agent_profile(
     state: State<'_, AppState>,
     id: String,

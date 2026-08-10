@@ -143,4 +143,44 @@ describe("resolveDispatchTargets", () => {
     assert.equal(r.targets[0]?.profileId, "profile-research");
     assert.equal(r.multiRoutedCount, 1);
   });
+
+  it("throws when named profile runtime is not on roster", () => {
+    assert.throws(
+      () =>
+        resolveDispatchTargets({
+          messageBody: "@ResearchGrok dig in",
+          participatingAgents: ["codex"],
+          installedAgents: installed,
+          mentionProfiles: profiles,
+        }),
+      /not a member/,
+    );
+  });
+
+  it("does not route unjoined profile not present in roster-scoped mentionProfiles", () => {
+    // Multi-member room + bare text → pure human (no fan-out). Profile absent
+    // from mentionProfiles cannot be @-resolved even if Host still has it.
+    const r = resolveDispatchTargets({
+      messageBody: "hello team",
+      participatingAgents: ["codex", "claude"],
+      installedAgents: installed,
+      mentionProfiles: [],
+    });
+    assert.deepEqual(r.targets, []);
+  });
+
+  it("unknown @Name with empty roster profiles does not profile-route (sole may still apply)", () => {
+    // ResearchGrok is not a known runtime and not in mentionProfiles → no profile
+    // target. Sole-bot room may still auto-route bare intent (Hub parity for
+    // non-agentish tokens). Callers must not pass unjoined profiles in mentionProfiles.
+    const r = resolveDispatchTargets({
+      messageBody: "@ResearchGrok dig in",
+      participatingAgents: ["grok"],
+      installedAgents: installed,
+      mentionProfiles: [],
+    });
+    assert.equal(r.targets.length, 1);
+    assert.equal(r.targets[0]?.agent, "grok");
+    assert.equal(r.targets[0]?.profileId, undefined);
+  });
 });

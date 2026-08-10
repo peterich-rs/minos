@@ -1,6 +1,15 @@
 /**
  * Pure participant-delivery target resolution (no daemon / store deps).
- * Room rules: ADR 0021 / agent-participant-delivery.
+ * Room rules: ADR 0021 / agent-participant-delivery / global-bot-identity.
+ *
+ * Delivery targets are **roster-only**. Callers must pass:
+ * - `participatingAgents`: conversation member tokens (runtime and/or bot name /
+ *   agent_id lowercased) — never the full Host profile directory.
+ * - `mentionProfiles`: only bots already on the roster (Hub participants or
+ *   equivalent). Unjoined global profiles must not be included.
+ *
+ * Bare runtime names and local-only profiles are **not** multi-end identity;
+ * they may only route when those tokens appear on the roster.
  */
 
 import {
@@ -14,13 +23,26 @@ export type DispatchTarget = {
   agent: KnownAgent;
   prompt: string;
   sessionShortId?: string;
+  /**
+   * Host profile / Hub agent id when the mention resolved to a named bot body.
+   * Present only for explicit profile/bot-name routes, not bare runtime.
+   */
   profileId?: string;
 };
 
 export type ResolveDispatchTargetsInput = {
   messageBody: string;
+  /**
+   * Conversation roster membership tokens (lowercased by resolver).
+   * Prefer agent_id / bot name from Hub participants; runtime bins only when
+   * that is what the local conversation roster still stores.
+   */
   participatingAgents: string[] | undefined;
   installedAgents: ReadonlySet<string>;
+  /**
+   * Roster-scoped bot cards for @Name / @p/<id> parse.
+   * Must not include unjoined Host profiles when Hub participants are known.
+   */
   mentionProfiles: MentionProfile[];
   /**
    * Human member count when known (Hub participants). Sole-agent auto-route
@@ -44,7 +66,9 @@ export function resolveDispatchTargets(
   input: ResolveDispatchTargetsInput,
 ): { targets: DispatchTarget[]; multiRoutedCount: number } {
   const messageBody = input.messageBody;
-  const multiRouted = parseAllAgentRoutings(messageBody, input.mentionProfiles);
+  // Only roster-scoped profiles participate in parse (caller contract).
+  const rosterProfiles = input.mentionProfiles;
+  const multiRouted = parseAllAgentRoutings(messageBody, rosterProfiles);
   const members = (input.participatingAgents ?? [])
     .map((a) => a.trim().toLowerCase())
     .filter((a) => a.length > 0);
@@ -54,30 +78,59 @@ export function resolveDispatchTargets(
   if (multiRouted.length > 0) {
     for (const routed of multiRouted) {
       const agent = routed.target.agent;
-      if (!memberSet.has(agent)) {
+      const profileId = routed.target.profileId;
+      // Membership: runtime token, or named bot id/name when present on roster.
+      const memberOk =
+        memberSet.has(agent) ||
+        (profileId != null &&
+          (memberSet.has(profileId.toLowerCase()) ||
+            rosterProfiles.some(
+              (p) =>
+                p.id === profileId &&
+                (memberSet.has(p.name.trim().toLowerCase()) ||
+                  memberSet.has(p.runtimeAgent.trim().toLowerCase()) ||
+                  memberSet.has(p.id.toLowerCase())),
+            )));
+      if (!memberOk) {
         throw new Error(
           memberSet.size === 0
             ? `@${agent} is not a member of this conversation. Add the bot as a participant before @mentioning.`
             : `@${agent} is not a member of this conversation. Only roster agents can be @mentioned.`,
         );
       }
+      // Named profile/bot must itself be roster-scoped (no unjoined profile fan-in).
+      if (profileId) {
+        const profile = rosterProfiles.find((p) => p.id === profileId);
+        if (!profile) {
+          throw new Error(
+            `Bot profile is not a member of this conversation. Only roster bots can be @mentioned.`,
+          );
+        }
+        const profileTokenOk =
+          memberSet.has(profile.id.toLowerCase()) ||
+          memberSet.has(profile.name.trim().toLowerCase()) ||
+          memberSet.has(profile.runtimeAgent.trim().toLowerCase());
+        if (!profileTokenOk) {
+          throw new Error(
+            `@${profile.name} is not a member of this conversation. Only roster agents can be @mentioned.`,
+          );
+        }
+      }
       targets.push({
         agent,
         prompt: routed.prompt,
         sessionShortId: routed.target.sessionShortId,
-        profileId: routed.target.profileId,
+        profileId,
       });
     }
     return { targets, multiRoutedCount: multiRouted.length };
   }
 
-  // Unresolved agentish @ (known runtime name not on roster) blocks sole-route.
-  // parseAllAgentRoutings only returns members that resolve as KnownAgent tokens;
-  // unmatched known names still appear as body @tokens and must not activate sole bot.
+  // Unresolved agentish @ (known runtime / botish name not on roster) blocks sole-route.
   const unresolvedAgentish = firstUnresolvedAgentishToken(
     messageBody,
     memberSet,
-    input.mentionProfiles,
+    rosterProfiles,
   );
   if (unresolvedAgentish) {
     throw new Error(
@@ -88,24 +141,57 @@ export function resolveDispatchTargets(
   }
 
   // Bare text: sole agent member may auto-route (Hub group + 1 human + 1 agent).
+  // Sole token must resolve to an installed runtime bin for Host execution.
   const kind = (input.conversationKind ?? "group").toLowerCase();
   const humans = input.humanMemberCount ?? 1;
   if (kind === "group" && humans === 1 && members.length === 1) {
-    const sole = members[0] as KnownAgent;
-    if (!input.installedAgents.has(sole)) {
+    const soleToken = members[0]!;
+    const soleRuntime = resolveSoleRuntime(soleToken, rosterProfiles);
+    if (!soleRuntime) {
       throw new Error(
-        `Bot @${sole} is a conversation member but not installed on this Host. Install the runtime or @mention only when available.`,
+        `Bot @${soleToken} is a conversation member but has no runnable runtime on this Host.`,
+      );
+    }
+    if (!input.installedAgents.has(soleRuntime)) {
+      throw new Error(
+        `Bot @${soleRuntime} is a conversation member but not installed on this Host. Install the runtime or @mention only when available.`,
       );
     }
     if (!messageBody.trim()) {
       throw new Error("Cannot start an agent session with an empty prompt.");
     }
-    targets.push({ agent: sole, prompt: messageBody });
+    targets.push({ agent: soleRuntime, prompt: messageBody });
     return { targets, multiRoutedCount: 0 };
   }
 
   // 0 agents → pure human IM; multi agents without @ → pure human (no fan-out).
   return { targets: [], multiRoutedCount: 0 };
+}
+
+/** Map a sole roster token to a KnownAgent runtime for Host launch. */
+function resolveSoleRuntime(
+  token: string,
+  profiles: readonly MentionProfile[],
+): KnownAgent | null {
+  const lower = token.trim().toLowerCase();
+  if ((KNOWN_AGENTS as readonly string[]).includes(lower)) {
+    return lower as KnownAgent;
+  }
+  const byId = profiles.find((p) => p.id.toLowerCase() === lower);
+  if (byId) {
+    const agent = byId.runtimeAgent.trim().toLowerCase();
+    if ((KNOWN_AGENTS as readonly string[]).includes(agent)) {
+      return agent as KnownAgent;
+    }
+  }
+  const byName = profiles.find((p) => p.name.trim().toLowerCase() === lower);
+  if (byName) {
+    const agent = byName.runtimeAgent.trim().toLowerCase();
+    if ((KNOWN_AGENTS as readonly string[]).includes(agent)) {
+      return agent as KnownAgent;
+    }
+  }
+  return null;
 }
 
 /** First known-agentish @token that is not a roster member (membership-first). */
@@ -119,18 +205,36 @@ function firstUnresolvedAgentishToken(
   const profileByName = new Map(
     profiles.map((p) => [p.name.trim().toLowerCase(), p]),
   );
+  const profileById = new Map(
+    profiles.map((p) => [p.id.toLowerCase(), p]),
+  );
   while ((match = re.exec(text)) !== null) {
     const raw = (match[2] ?? "").trim();
     if (!raw) continue;
+    // Explicit p/<id> form
+    const pidMatch = /^p[/:](.+)$/i.exec(raw);
+    if (pidMatch) {
+      const id = (pidMatch[1] ?? "").trim().toLowerCase();
+      const profile = profileById.get(id);
+      if (!profile) return raw;
+      const ok =
+        memberSet.has(profile.id.toLowerCase()) ||
+        memberSet.has(profile.name.trim().toLowerCase()) ||
+        memberSet.has(profile.runtimeAgent.trim().toLowerCase());
+      if (!ok) return profile.name || raw;
+      continue;
+    }
     const namePart = raw.split("#")[0]?.trim() ?? raw;
     if (!namePart) continue;
     const lower = namePart.toLowerCase();
+    if (memberSet.has(lower)) continue;
     const profile = profileByName.get(lower);
     if (profile) {
-      const runtime = profile.runtimeAgent.trim().toLowerCase();
-      if (runtime && !memberSet.has(runtime)) {
-        return namePart;
-      }
+      const ok =
+        memberSet.has(profile.id.toLowerCase()) ||
+        memberSet.has(profile.name.trim().toLowerCase()) ||
+        memberSet.has(profile.runtimeAgent.trim().toLowerCase());
+      if (!ok) return namePart;
       continue;
     }
     const known = (KNOWN_AGENTS as readonly string[]).includes(lower);

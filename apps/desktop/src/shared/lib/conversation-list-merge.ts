@@ -33,6 +33,7 @@ export type DaemonListRow = {
   messageCount?: number;
   unread?: number;
   agentSessionCount?: number;
+  participatingBots?: Conversation["participatingBots"];
   participatingAgents?: string[];
   runningCount?: number;
   approvalCount?: number;
@@ -221,7 +222,10 @@ export function mergeConversationList(input: {
       messageCount: row.messageCount ?? 0,
       boardColumn: row.boardColumn ?? "backlog",
       agentSessionCount: row.agentSessionCount ?? 0,
-      participatingAgents: row.participatingAgents ?? [],
+      participatingBots: row.participatingBots ?? [],
+      participatingAgents:
+        row.participatingAgents ??
+        (row.participatingBots ?? []).map((b) => b.runtime.toLowerCase()),
       runningCount: row.runningCount ?? 0,
       approvalCount: row.approvalCount ?? 0,
       priority: row.priority,
@@ -258,6 +262,7 @@ export function mergeConversationList(input: {
         messageCount: 0,
         boardColumn: "backlog",
         agentSessionCount: 0,
+        participatingBots: [],
         participatingAgents: [],
         runningCount: 0,
         approvalCount: 0,

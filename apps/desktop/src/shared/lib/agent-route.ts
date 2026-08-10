@@ -1,4 +1,4 @@
-/** Parse `@agent` / `@agent#short` / `@profile` routing (aligned with minos-tui agent_route.rs + desktop profiles). */
+/** Parse `@agent` / `@agent#short` / `@profile` routing (Desktop + Hub bot roster). */
 
 /**
  * Offline parse fallback for `@agent` tokens when CLI inventory is empty.

@@ -39,7 +39,7 @@ On **Host → Account & remote**:
 
 ```bash
 # Tauri shell: connects to existing local-rpc daemon if present, otherwise
-# starts a managed in-process daemon (same strategy as minos-tui).
+# starts a managed in-process daemon.
 just dev-desktop
 ```
 

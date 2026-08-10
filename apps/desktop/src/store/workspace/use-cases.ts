@@ -12,16 +12,23 @@ import type { MentionProfile } from "@/shared/lib/agent-route";
 import type { DeliveryStatus, TimelineMessage } from "@/shared/lib/mock-data";
 import type { TranscriptItem } from "@/shared/lib/daemon";
 import { quietRefreshConversationSlices } from "./shared";
-import {
-  fanOutAgentTurns,
-  resolveDispatchTargets,
-} from "./send-dispatch";
+import { resolveDispatchTargets } from "./send-dispatch";
 import { syncUserMessageToCloud } from "@/shared/lib/im-cloud-sync";
 import { isHubImMode } from "@/shared/lib/hub-timeline";
 import { formatLocalClock } from "@/shared/lib/time";
 import { hubDigestCache } from "@/shared/lib/hub-digest-cache";
 import { positiveMs } from "@/shared/lib/rail-activity";
 import { useAccountStore } from "@/store/account-store";
+import type { Conversation } from "@/shared/lib/mock-data";
+import { membershipTokensOfBots } from "@/shared/lib/mock-data";
+
+function membershipTokensFromConv(conv: Conversation): string[] {
+  const fromBots = membershipTokensOfBots(conv.participatingBots);
+  if (fromBots.length > 0) return fromBots;
+  return (conv.participatingAgents ?? [])
+    .map((a) => a.trim().toLowerCase())
+    .filter((a) => a.length > 0);
+}
 
 /** Preview + last-activity bump for the conversation rail (local-first). */
 function patchRailActivity(
@@ -98,15 +105,67 @@ function commitResolvedApprovalState(
   };
 }
 
-/** Load host profiles for @ProfileName / @p/id parse (best-effort). */
-async function loadMentionProfiles(): Promise<MentionProfile[]> {
+/**
+ * Load mention profiles for dispatch parse.
+ * Prefer Hub conversation participants (roster SSOT). Fall back to Host profiles
+ * **filtered by conversation roster** — never the full unjoined profile directory.
+ */
+async function loadMentionProfiles(
+  conversationId: string,
+  participatingAgents: string[] | undefined,
+  participatingBots?: Array<{ botId: string; name: string; runtime: string }>,
+): Promise<MentionProfile[]> {
+  const memberSet = new Set<string>();
+  for (const b of participatingBots ?? []) {
+    for (const raw of [b.botId, b.name, b.runtime]) {
+      const t = raw.trim().toLowerCase();
+      if (t) memberSet.add(t);
+    }
+  }
+  for (const a of participatingAgents ?? []) {
+    const t = a.trim().toLowerCase();
+    if (t) memberSet.add(t);
+  }
+
+  // Hub participants when account is online.
+  try {
+    const { useAccountStore } = await import("@/store/account-store");
+    const { listConversationParticipants } = await import(
+      "@/shared/lib/minos-cloud"
+    );
+    const { deviceId, session } = useAccountStore.getState();
+    const token = session?.accessToken?.trim();
+    if (token && conversationId) {
+      const parts = await listConversationParticipants(
+        deviceId,
+        token,
+        conversationId,
+      );
+      return parts.agents.map((a) => ({
+        id: a.agentId,
+        name: a.displayName || a.name || a.agentId,
+        runtimeAgent: a.runtimeAgent,
+      }));
+    }
+  } catch {
+    /* fall through to host cache */
+  }
+
   try {
     const { profiles } = await daemonApi.listAgentProfiles();
-    return (profiles ?? []).map((p) => ({
+    const all = (profiles ?? []).map((p) => ({
       id: p.id,
       name: p.name,
       runtimeAgent: p.runtime_agent,
     }));
+    // Roster-only: keep profiles whose runtime (or name/id) is a conversation member.
+    if (memberSet.size === 0) return [];
+    return all.filter(
+      (p) =>
+        memberSet.has(p.runtimeAgent.trim().toLowerCase()) ||
+        memberSet.has(p.name.trim().toLowerCase()) ||
+        memberSet.has(p.id.toLowerCase()),
+    );
   } catch {
     return [];
   }
@@ -433,25 +492,37 @@ export function createUseCasesActions(
       }
 
       // Validate routing BEFORE durable append (same order as retry).
-      const mentionProfiles = await loadMentionProfiles();
+      // mentionProfiles are roster-scoped (Hub participants preferred).
+      const mentionProfiles = await loadMentionProfiles(
+        conversationId,
+        conv.participatingAgents,
+        conv.participatingBots,
+      );
       const installedAgents = new Set(
         get()
           .clis.filter((c) => c.installed)
           .map((c) => c.agent.toLowerCase()),
       );
-      const { targets, multiRoutedCount } = resolveDispatchTargets({
+      const membershipTokens = membershipTokensFromConv(conv);
+      // Validate @ targets (membership / sole-route). Bot activation itself is
+      // Hub-only when Account is live — no local startAgent fan-out.
+      resolveDispatchTargets({
         messageBody,
-        participatingAgents: conv.participatingAgents,
+        participatingAgents: membershipTokens,
         installedAgents,
         mentionProfiles,
       });
 
       const convTitle = conv.title;
-      const agentRuntimes = conv.participatingAgents;
+      const agentRuntimes =
+        conv.participatingBots?.map((b) => b.runtime) ??
+        conv.participatingAgents;
       const accountOn = hubAuthenticated();
-      // Local runtime only when this Host owns bot delivery targets.
-      // Pure human / multi-bot bare text: Hub client_live only (no HostCommand).
-      const hasBotTargets = targets.length > 0;
+      if (!accountOn) {
+        throw new Error(
+          "Sign in to send collaboration messages. Bot delivery requires Account Hub sync.",
+        );
+      }
 
       // Local workbench timeline append (idempotent by message_id).
       const { messageSeq } = await daemonApi.appendUserMessage(
@@ -461,47 +532,21 @@ export function createUseCasesActions(
       );
       patchDelivery("sent", messageSeq, clock);
       patchRailActivity(set, conversationId, railPreview, createdAtMs);
-      if (accountOn) {
-        void syncUserMessageToCloud({
-          conversationId,
-          messageId: resolvedId,
-          text: messageBody,
-          title: convTitle,
-          replyToMessageId,
-          createdAtMs,
-          agentRuntimes,
-          // Bot delivery runs natively here → host_projection anti-loop.
-          // No bot targets → client_live collaboration message (Hub may deliver).
-          messageSource: hasBotTargets ? "host_projection" : "client_live",
-        });
-      }
-      void get().loadTimeline(conversationId, { quiet: true });
 
-      let fanoutErrors: string[] = [];
-      if (hasBotTargets) {
-        fanoutErrors = await fanOutAgentTurns({
-          get,
-          set,
-          conversationId,
-          workspacePath: project.workspacePath,
-          messageBody,
-          originMessageId: resolvedId,
-          targets,
-          multiRoutedCount,
-        });
-        if (fanoutErrors.length > 0) {
-          set({
-            actionError:
-              fanoutErrors.length === targets.length
-                ? fanoutErrors[0] ?? "Agent fan-out failed"
-                : `Partial fan-out failure (${fanoutErrors.length}/${targets.length}): ${fanoutErrors[0]}`,
-          });
-        } else {
-          set({ actionError: null });
-        }
-      } else {
-        set({ actionError: null });
-      }
+      // Collaboration path: client_live only. Hub plan_agent_deliveries +
+      // BotInboxDelivery runs on the bound Host; never local dual-start.
+      void syncUserMessageToCloud({
+        conversationId,
+        messageId: resolvedId,
+        text: messageBody,
+        title: convTitle,
+        replyToMessageId,
+        createdAtMs,
+        agentRuntimes,
+        messageSource: "client_live",
+      });
+      set({ actionError: null });
+      void get().loadTimeline(conversationId, { quiet: true });
 
       await quietRefreshConversationSlices(get, conversationId);
       await minosQueryClient.invalidateQueries({
@@ -514,9 +559,6 @@ export function createUseCasesActions(
         queryKey: queryKeys.inspectorSessions(conversationId),
       });
       await get().loadConversations(conv.projectId);
-      if (hasBotTargets && fanoutErrors.length === targets.length) {
-        throw new Error(fanoutErrors[0] ?? "Agent fan-out failed");
-      }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       set({ actionError: message });
@@ -579,20 +621,28 @@ export function createUseCasesActions(
         throw new Error("conversation or project not found");
       }
 
-      // Same pipeline as sendMessage: validate → append → sent → fan-out.
-      const mentionProfiles = await loadMentionProfiles();
+      // Same pipeline as sendMessage: validate → append → Hub uplink.
+      const mentionProfiles = await loadMentionProfiles(
+        conversationId,
+        conv.participatingAgents,
+        conv.participatingBots,
+      );
       const installedAgents = new Set(
         get()
           .clis.filter((c) => c.installed)
           .map((c) => c.agent.toLowerCase()),
       );
-      const { targets, multiRoutedCount } = resolveDispatchTargets({
+      resolveDispatchTargets({
         messageBody,
-        participatingAgents: conv.participatingAgents,
+        participatingAgents: membershipTokensFromConv(conv),
         installedAgents,
         mentionProfiles,
       });
-      const hasBotTargets = targets.length > 0;
+      if (!hubAuthenticated()) {
+        throw new Error(
+          "Sign in to send collaboration messages. Bot delivery requires Account Hub sync.",
+        );
+      }
 
       const { messageSeq } = await daemonApi.appendUserMessage(
         conversationId,
@@ -618,45 +668,21 @@ export function createUseCasesActions(
           ? `${messageBody.trim().slice(0, 88)}…`
           : messageBody.trim();
       patchRailActivity(set, conversationId, railPreview, retryAt);
-      if (hubAuthenticated()) {
-        void syncUserMessageToCloud({
-          conversationId,
-          messageId,
-          text: messageBody,
-          title: conv.title,
-          replyToMessageId,
-          createdAtMs: retryAt,
-          agentRuntimes: conv.participatingAgents,
-          messageSource: hasBotTargets ? "host_projection" : "client_live",
-        });
-      }
-      void get().loadTimeline(conversationId, { quiet: true });
 
-      let fanoutErrors: string[] = [];
-      if (hasBotTargets) {
-        fanoutErrors = await fanOutAgentTurns({
-          get,
-          set,
-          conversationId,
-          workspacePath: project.workspacePath,
-          messageBody,
-          originMessageId: messageId,
-          targets,
-          multiRoutedCount,
-        });
-        if (fanoutErrors.length > 0) {
-          set({
-            actionError:
-              fanoutErrors.length === targets.length
-                ? fanoutErrors[0] ?? "Agent fan-out failed"
-                : `Partial fan-out failure (${fanoutErrors.length}/${targets.length}): ${fanoutErrors[0]}`,
-          });
-        } else {
-          set({ actionError: null });
-        }
-      } else {
-        set({ actionError: null });
-      }
+      void syncUserMessageToCloud({
+        conversationId,
+        messageId,
+        text: messageBody,
+        title: conv.title,
+        replyToMessageId,
+        createdAtMs: retryAt,
+        agentRuntimes:
+          conv.participatingBots?.map((b) => b.runtime) ??
+          conv.participatingAgents,
+        messageSource: "client_live",
+      });
+      set({ actionError: null });
+      void get().loadTimeline(conversationId, { quiet: true });
 
       await quietRefreshConversationSlices(get, conversationId);
       await minosQueryClient.invalidateQueries({
@@ -669,9 +695,6 @@ export function createUseCasesActions(
         queryKey: queryKeys.inspectorSessions(conversationId),
       });
       await get().loadConversations(conv.projectId);
-      if (hasBotTargets && fanoutErrors.length === targets.length) {
-        throw new Error(fanoutErrors[0] ?? "Agent fan-out failed");
-      }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       set({ actionError: message });

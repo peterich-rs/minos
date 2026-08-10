@@ -187,7 +187,14 @@ export function toUiConversation(
       approvalCount,
     }),
     agentSessionCount: row.agentSessionCount,
-    participatingAgents: row.participatingAgents ?? [],
+    participatingBots: (row.participatingBots ?? []).map((b) => ({
+      botId: b.botId,
+      name: b.name || b.runtime,
+      runtime: b.runtime,
+    })),
+    participatingAgents:
+      row.participatingAgents ??
+      (row.participatingBots ?? []).map((b) => b.runtime.toLowerCase()),
     runningCount,
     approvalCount,
     priority,

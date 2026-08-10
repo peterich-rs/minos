@@ -83,8 +83,17 @@ export const MessageRow = memo(function MessageRow({
   const sessionShort = message.sessionId
     ? shortSessionId(message.sessionId)
     : undefined;
-  const agentLabel = agent?.label ?? message.agent ?? "Agent";
-  const authorLabel = isUser ? "You" : agentLabel;
+  // Prefer Hub bot display name (global identity) over runtime badge label.
+  const agentLabel =
+    message.senderDisplayName?.trim() ||
+    agent?.label ||
+    message.agent ||
+    "Agent";
+  const authorLabel = isUser
+    ? "You"
+    : message.role === "agent"
+      ? agentLabel
+      : message.senderDisplayName?.trim() || "You";
   const avatarTone = isUser ? "slate" : (agent?.tone ?? "slate");
 
   // Always format from epoch ms in local TZ — never trust wire `time` alone.

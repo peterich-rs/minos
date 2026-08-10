@@ -70,6 +70,11 @@ export function createConversationMutationActions(
           messageCount: 0,
           boardColumn: "backlog",
           agentSessionCount: 0,
+          participatingBots: agents.map((a) => ({
+            botId: `local-rt-${a.agent}`,
+            name: a.agent,
+            runtime: a.agent,
+          })),
           participatingAgents: agents.map((a) => a.agent),
           runningCount: 0,
           approvalCount: 0,

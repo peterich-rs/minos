@@ -5,15 +5,18 @@ export const MESSAGE_GROUP_WINDOW_MS = 10 * 60 * 1000;
 
 /**
  * Author key for grouping: user messages share one key; agent messages group
- * by agent + session; system / tool_summary never group.
+ * by global bot identity (+ session); system / tool_summary never group.
+ *
+ * Prefer `botId` (MessageSender::Bot) over runtime `agent` so two bots that
+ * share a runtime family never collapse into one avatar group.
  */
 export function messageAuthorKey(m: TimelineMessage): string | null {
   if (m.role === "system") return null;
   if (m.kind === "tool_summary") return null;
   if (m.role === "user") return "user";
-  const agent = m.agent ?? "agent";
+  const bot = m.botId?.trim() || m.agent || "agent";
   const session = m.sessionId ?? "";
-  return `agent:${agent}:${session}`;
+  return `agent:${bot}:${session}`;
 }
 
 /**

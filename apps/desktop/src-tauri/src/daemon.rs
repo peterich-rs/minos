@@ -1,4 +1,4 @@
-//! Local JSON-RPC client for `minos-daemon` (same contract as `minos-tui` DaemonBackend).
+//! Local JSON-RPC client for `minos-daemon` (Desktop Host shell).
 //!
 //! Connect path mirrors TUI:
 //! 1. Try discovery file / explicit URL
@@ -78,6 +78,14 @@ pub struct ProjectDto {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ParticipatingBotDto {
+    pub bot_id: String,
+    pub name: String,
+    pub runtime: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConversationDto {
     pub id: String,
     pub project_id: String,
@@ -87,6 +95,9 @@ pub struct ConversationDto {
     pub updated_at_ms: i64,
     pub message_count: u32,
     pub agent_session_count: u32,
+    /// Structured roster (membership SSOT). Prefer over derived runtime labels.
+    pub participating_bots: Vec<ParticipatingBotDto>,
+    /// Derived runtime labels for badges / host-runtime ensure (not membership key).
     pub participating_agents: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub priority: Option<String>,
@@ -138,6 +149,10 @@ pub struct MessageDto {
     /// Durable timeline sort key (`chat_messages.message_seq`). UI uses ASC.
     pub message_seq: i64,
     pub role: String,
+    /// Bot identity for agent-authored rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bot_id: Option<String>,
+    /// Runtime family badge derived from bot identity when known.
     pub agent: Option<String>,
     pub session_id: Option<String>,
     pub body: String,
@@ -349,7 +364,12 @@ pub enum ConversationEventDto {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RosterMemberDto {
+    /// Stable bot identity (membership key).
+    pub bot_id: String,
+    /// Runtime family badge (`codex` / `claude` / …).
     pub agent: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub brief: Option<String>,
     pub joined_at_ms: i64,
@@ -1163,6 +1183,17 @@ impl DaemonBridge {
             .context("minos_local_create_agent_profile")
     }
 
+    pub async fn update_agent_profile(
+        &self,
+        req: minos_protocol::UpdateAgentProfileRequest,
+    ) -> Result<minos_protocol::AgentProfileSummary> {
+        let client = self.client().await?;
+        client
+            .request("minos_local_update_agent_profile", [req])
+            .await
+            .context("minos_local_update_agent_profile")
+    }
+
     pub async fn delete_agent_profile(&self, id: String) -> Result<()> {
         let client = self.client().await?;
         let req = minos_protocol::DeleteAgentProfileRequest { id };
@@ -1184,6 +1215,8 @@ impl DaemonBridge {
             text,
             origin_message_id,
             attachments: vec![],
+            delivery_id: None,
+            bot_id: None,
         };
         client
             .request::<(), _>("minos_local_send_user_message", [req])
@@ -1387,7 +1420,7 @@ async fn start_managed_daemon() -> Result<(Arc<DaemonHandle>, String)> {
         .map_err(|e| anyhow!("LocalState::load_or_init: {e}"))?;
     let discovery_path = minos_daemon::paths::run_dir()
         .map_err(|e| anyhow!(e.to_string()))?
-        .join("tui-daemon-rpc.json");
+        .join("daemon-rpc.json");
     // Clear any stale discovery before bind so external clients cannot attach
     // to a dead port while we start.
     let _ = std::fs::remove_file(&discovery_path);
@@ -1463,14 +1496,14 @@ fn daemon_discovery_path() -> Option<PathBuf> {
     // for cold discovery before minos_home exists, fall back to $HOME/.minos.
     minos_daemon::paths::run_dir()
         .ok()
-        .map(|d| d.join("tui-daemon-rpc.json"))
+        .map(|d| d.join("daemon-rpc.json"))
         .or_else(|| {
             let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
             Some(
                 PathBuf::from(home)
                     .join(".minos")
                     .join("run")
-                    .join("tui-daemon-rpc.json"),
+                    .join("daemon-rpc.json"),
             )
         })
 }
@@ -1490,6 +1523,45 @@ fn map_project(p: ProjectSummary) -> ProjectDto {
 }
 
 fn map_conversation(c: LocalConversationSummary) -> ConversationDto {
+    let participating_bots: Vec<ParticipatingBotDto> = if c.roster.is_empty() {
+        // Older summaries without roster: synthesize bot cards from runtime labels.
+        c.participating_agents
+            .iter()
+            .map(|agent| {
+                let runtime = agent_label(agent.clone());
+                ParticipatingBotDto {
+                    bot_id: format!("local-rt-{runtime}"),
+                    name: runtime.clone(),
+                    runtime,
+                }
+            })
+            .collect()
+    } else {
+        c.roster
+            .iter()
+            .map(|m| {
+                let runtime = agent_label(m.agent.clone());
+                let name = m
+                    .display_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(runtime.as_str())
+                    .to_string();
+                ParticipatingBotDto {
+                    bot_id: m.bot_id.clone(),
+                    name,
+                    runtime,
+                }
+            })
+            .collect()
+    };
+    let participating_agents: Vec<String> = participating_bots
+        .iter()
+        .map(|b| b.runtime.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
     ConversationDto {
         id: c.conversation_id,
         project_id: c.project_id,
@@ -1503,11 +1575,8 @@ fn map_conversation(c: LocalConversationSummary) -> ConversationDto {
         updated_at_ms: c.updated_at_ms,
         message_count: c.message_count,
         agent_session_count: c.agent_session_count,
-        participating_agents: c
-            .participating_agents
-            .into_iter()
-            .map(agent_label)
-            .collect(),
+        participating_bots,
+        participating_agents,
         priority: c.priority,
         progress: if c.progress.is_empty() {
             "todo".into()
@@ -1575,6 +1644,7 @@ fn map_message(m: LocalConversationMessage) -> MessageDto {
         id: m.message_id,
         message_seq: m.message_seq,
         role: m.sender_role,
+        bot_id: m.bot_id,
         agent: m.agent.map(agent_label),
         session_id: m.session_id,
         body: m.body,
@@ -3100,7 +3170,7 @@ fn truncate_str(s: &str, max: usize) -> String {
 
 /// Bare target for a tool header (path/cmd/pattern — no `file=` labels).
 /// Agent-agnostic: consumes unified translator names (`"read: path"`, …).
-/// Mirrors minos-tui `translation/tool_summary.rs` essentials.
+/// Host-local tool summary projection for timeline enrichment.
 ///
 /// Prefer OpenCode `state.title` / path / command. Never return the bare tool
 /// name as the target (avoids "Reading read"). Never return markup first lines.
@@ -3853,7 +3923,9 @@ fn spawn_conversation_pump(
                         members: members
                             .into_iter()
                             .map(|m| RosterMemberDto {
+                                bot_id: m.bot_id,
                                 agent: agent_label(m.agent),
+                                display_name: m.display_name,
                                 brief: m.brief,
                                 joined_at_ms: m.joined_at_ms,
                             })

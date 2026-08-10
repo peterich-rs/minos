@@ -133,67 +133,96 @@ export function Composer({ conversationId }: { conversationId: string }) {
     void loadInspector(conversationId, { quiet: hasKey });
   }, [mentionActive, sessions.length, conversationId, source, loadInspector]);
 
-  // Load host agent profiles for @ProfileName options while the picker is open.
-  useEffect(() => {
-    if (source !== "daemon" || !mentionActive || !isTauriRuntime()) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const res = await daemonApi.listAgentProfiles();
-        if (cancelled) return;
-        setMentionProfiles(
-          (res.profiles ?? []).map((p) => ({
-            id: p.id,
-            name: p.name,
-            runtimeAgent: p.runtime_agent,
-          })),
-        );
-      } catch {
-        if (!cancelled) setMentionProfiles(EMPTY_PROFILES);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [mentionActive, source]);
-
-  // Unified participants (humans ∪ agents) for @ picker — ADR 0021.
+  // Unified participants (humans ∪ agents) for @ picker — ADR 0021 / global-bot-identity.
+  // @ targets = conversation roster only (Hub participants preferred). Never mix
+  // unjoined Host profiles into collab send targets.
   useEffect(() => {
     if (!mentionActive) return;
     const token = session?.accessToken?.trim();
-    if (!token || !conversationId) return;
     let cancelled = false;
     void (async () => {
-      try {
-        const parts = await listConversationParticipants(
-          deviceId,
-          token,
-          conversationId,
-        );
-        if (cancelled) return;
-        setMentionHumans(
-          parts.humans.map((h) => ({
-            accountId: h.accountId,
-            minosId: h.minosId,
-            displayName: h.displayName,
-          })),
-        );
-        const runtimes = parts.agents
-          .map((a) => a.runtimeAgent.trim().toLowerCase())
-          .filter(Boolean);
-        // Always apply fetch result, including [] (pure-human rooms).
-        setParticipantAgents(runtimes);
-      } catch {
-        if (!cancelled) {
-          setMentionHumans(EMPTY_HUMANS);
-          setParticipantAgents(null);
+      // Prefer Hub participants when account is online.
+      if (token && conversationId) {
+        try {
+          const parts = await listConversationParticipants(
+            deviceId,
+            token,
+            conversationId,
+          );
+          if (cancelled) return;
+          setMentionHumans(
+            parts.humans.map((h) => ({
+              accountId: h.accountId,
+              minosId: h.minosId,
+              displayName: h.displayName,
+            })),
+          );
+          // Membership tokens: runtime + bot name + agent_id (all roster-scoped).
+          // Disabled bots stay on participants for UI, but are not @-targets.
+          const memberTokens = new Set<string>();
+          const rosterProfiles: MentionProfile[] = [];
+          for (const a of parts.agents) {
+            if ((a.status || "active").toLowerCase() === "disabled") continue;
+            const runtime = a.runtimeAgent.trim().toLowerCase();
+            if (runtime) memberTokens.add(runtime);
+            const name = (a.displayName || a.name).trim();
+            if (name) memberTokens.add(name.toLowerCase());
+            if (a.agentId) memberTokens.add(a.agentId.toLowerCase());
+            rosterProfiles.push({
+              id: a.agentId,
+              name: name || a.agentId,
+              runtimeAgent: a.runtimeAgent,
+            });
+          }
+          setParticipantAgents([...memberTokens]);
+          setMentionProfiles(rosterProfiles);
+          return;
+        } catch {
+          if (cancelled) return;
+          // Fall through to offline roster.
         }
+      }
+
+      // Offline / no Hub: gate by local conversation roster only (no full profile dir).
+      if (source === "daemon" && isTauriRuntime()) {
+        try {
+          const res = await daemonApi.listAgentProfiles();
+          if (cancelled) return;
+          const memberSet = new Set(
+            participatingAgents.map((a) => a.trim().toLowerCase()).filter(Boolean),
+          );
+          const rosterOnly = (res.profiles ?? [])
+            .filter((p) => memberSet.has(p.runtime_agent.trim().toLowerCase()))
+            .map((p) => ({
+              id: p.id,
+              name: p.name,
+              runtimeAgent: p.runtime_agent,
+            }));
+          setMentionProfiles(rosterOnly);
+          setParticipantAgents(participatingAgents.map((a) => a.toLowerCase()));
+          setMentionHumans(EMPTY_HUMANS);
+          return;
+        } catch {
+          /* fall through */
+        }
+      }
+      if (!cancelled) {
+        setMentionHumans(EMPTY_HUMANS);
+        setMentionProfiles(EMPTY_PROFILES);
+        setParticipantAgents(null);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [mentionActive, conversationId, deviceId, session?.accessToken]);
+  }, [
+    mentionActive,
+    conversationId,
+    deviceId,
+    session?.accessToken,
+    source,
+    participatingAgents,
+  ]);
 
   useEffect(() => {
     setMentionIndex(0);

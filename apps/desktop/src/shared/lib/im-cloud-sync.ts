@@ -1,15 +1,10 @@
 /**
  * Desktop → Hub IM helpers (conversation shell + user-message Outbox).
  *
- * Agent final bubbles:
- * - Hub TurnCompletionProjector covers Mobile `client_live` participant delivery.
- * - Desktop-native bot turns: user row uses `host_projection` (anti-loop); after
- *   local completion Host uplinks agent-result via POST …/agents/message
- *   (host_projection + stable client_message_id).
- *
- * User messages (message-driven, ADR 0021):
- * - Pure human / no local bot targets: `client_live` collaboration message
- * - Local bot delivery on this Host: `host_projection` so Hub does not re-deliver
+ * Collaboration path (Account live only):
+ * - User messages: `client_live` via Account WS `AppendMessage` (no REST write).
+ * - Bot delivery: Hub Agent inbox → BotInboxDelivery on the bound Host.
+ * - Agent final text: Host AppendBotMessage (or TurnCompletionProjector offline).
  *
  * Conversation shell upsert + host-runtime agent resolve remain.
  */
@@ -20,11 +15,11 @@ import {
   ensureHostRuntimeAgent,
   respondHubApproval,
   sendAgentConversationMessage,
-  sendConversationMessage,
   toggleHubReaction,
   upsertConversation,
 } from "@/shared/lib/minos-cloud";
 import { isHubImMode } from "@/shared/lib/hub-timeline";
+import { appendMessageOnHub } from "@/shared/lib/im-hub-bridge";
 import {
   displayNameForRuntime,
   isCanonicalAgentResultId,
@@ -265,17 +260,37 @@ async function postUserMessageFromOutbox(entry: ImOutboxEntry): Promise<void> {
   // Entries without explicit source default to client_live (Phase 3).
   const messageSource = entry.messageSource ?? "client_live";
 
-  await sendConversationMessage(
-    auth.deviceId,
-    auth.accessToken,
-    entry.conversationId,
-    {
-      text: entry.text,
-      clientMessageId: entry.clientMessageId,
-      replyToMessageId: entry.replyToMessageId ?? undefined,
-      clientSentAtMs: entry.clientSentAtMs ?? undefined,
-      messageSource,
-    },
+  // Account WS AppendMessage only (no REST collaboration write path).
+  // Wait for ChatSendAck before treating outbox as success.
+  // Socket/timeout → retry via outbox; definitive nack fails the entry.
+  if (messageSource !== "client_live") {
+    // host_projection / system user rows are not collaboration writes here.
+    // Agent final text uses postAgentResultFromOutbox.
+    throw new Error(
+      `Unsupported user-message source for Hub uplink: ${messageSource}`,
+    );
+  }
+
+  const wsResult = await appendMessageOnHub({
+    clientOperationId: entry.clientMessageId,
+    conversationId: entry.conversationId,
+    text: entry.text,
+    replyToMessageId: entry.replyToMessageId,
+  });
+  if (wsResult.ok) {
+    return;
+  }
+  if (wsResult.reason === "nack") {
+    throw new Error(
+      `ChatSendNack: ${wsResult.code ?? "nack"}${
+        wsResult.message ? ` — ${wsResult.message}` : ""
+      }`,
+    );
+  }
+  throw new Error(
+    wsResult.reason === "timeout"
+      ? "AppendMessage timed out waiting for ChatSendAck"
+      : "AppendMessage unavailable (Account WS not live)",
   );
 }
 

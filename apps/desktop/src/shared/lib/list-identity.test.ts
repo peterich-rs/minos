@@ -67,6 +67,9 @@ describe("conversationEqual / reuseStableConversations", () => {
       unread: 1,
       runningCount: 0,
       approvalCount: 0,
+      participatingBots: [
+        { botId: "local-rt-grok", name: "grok", runtime: "grok" },
+      ],
       participatingAgents: ["grok"],
     };
     assert.equal(conversationEqual(base, { ...base }), true);
