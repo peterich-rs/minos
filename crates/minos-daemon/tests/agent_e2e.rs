@@ -544,6 +544,8 @@ async fn start_send_stream_stop_against_fake_codex_server() -> anyhow::Result<()
             text: "hello from mobile".into(),
             origin_message_id: None,
             attachments: vec![],
+            delivery_id: None,
+            bot_id: None,
         })
         .await?;
 

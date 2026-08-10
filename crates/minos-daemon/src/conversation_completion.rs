@@ -53,17 +53,25 @@
 //! - `Running` / user `MessageStarted` → reset turn-scoped projection fields.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use minos_agent_runtime::{AgentManager, SessionState};
 use minos_chat_store::{TeamworkSourceDeliveryStatus, TeamworkStore};
 use minos_domain::AgentName;
+use minos_protocol::realtime::ClientFrame;
 use minos_protocol::{ConversationMention, LocalConversationEvent};
 use minos_ui_protocol::{MessageRole, UiEventMessage};
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{broadcast, mpsc, Mutex};
 use tracing::{debug, info, warn};
 
 use crate::store::LocalStore;
+
+/// Mailbox delivery context for a single bot turn (Host → Hub AppendBotMessage).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MailboxDeliveryContext {
+    pub delivery_id: String,
+    pub bot_id: String,
+}
 
 #[derive(Default)]
 struct SessionProjection {
@@ -103,6 +111,10 @@ struct SessionProjection {
     /// Hub collab / Linked turns must not fall back to message_key/t{ms}.
     /// Set when a Hub conversation is bound or origin is staged for collab.
     require_canonical_origin: bool,
+    /// Active mailbox delivery for this turn (cleared on true next turn).
+    mailbox_delivery: Option<MailboxDeliveryContext>,
+    /// Staged mailbox delivery applied on the next [`begin_turn`].
+    pending_mailbox_delivery: Option<MailboxDeliveryContext>,
 }
 
 impl SessionProjection {
@@ -120,6 +132,7 @@ impl SessionProjection {
     ///   durable ids cannot leak across turns.
     fn begin_turn(&mut self) {
         let staged = self.pending_origin_message_id.take();
+        let staged_mailbox = self.pending_mailbox_delivery.take();
         // Compute before clearing turn-scoped buffers.
         let redundant_same_turn = staged.is_none()
             && self.origin_message_id.is_some()
@@ -152,6 +165,14 @@ impl SessionProjection {
             self.origin_message_id = None;
             self.turn_write_id = None;
         }
+
+        // Mailbox delivery is turn-scoped like origin: promote staged, keep on
+        // redundant same-turn begin, clear on a true subsequent turn.
+        if let Some(mailbox) = staged_mailbox {
+            self.mailbox_delivery = Some(mailbox);
+        } else if !redundant_same_turn {
+            self.mailbox_delivery = None;
+        }
     }
 
     /// Stage origin for the next turn (or apply immediately if turn already open).
@@ -170,6 +191,15 @@ impl SessionProjection {
         // call note_require_canonical_origin / set_require_canonical_origin
         // separately. Local turns may stage an origin without forbidding
         // message_key fallback on a later origin-less turn.
+    }
+
+    /// Stage mailbox delivery for the next turn (or apply immediately).
+    fn set_mailbox_delivery(&mut self, delivery: MailboxDeliveryContext) {
+        if delivery.delivery_id.trim().is_empty() || delivery.bot_id.trim().is_empty() {
+            return;
+        }
+        self.pending_mailbox_delivery = Some(delivery.clone());
+        self.mailbox_delivery = Some(delivery);
     }
 
     /// Mark this session as Hub collab so completion refuses non-canonical ids.
@@ -448,6 +478,8 @@ pub(crate) struct ConversationCompletion {
     default_workspace: std::path::PathBuf,
     local_conversation_event_tx: broadcast::Sender<LocalConversationEvent>,
     projections: Arc<Mutex<HashMap<String, SessionProjection>>>,
+    /// Relay outbound (Host `/ws/host`) for AppendBotMessage uplink.
+    host_out_tx: Arc<StdMutex<Option<mpsc::Sender<ClientFrame>>>>,
 }
 
 impl ConversationCompletion {
@@ -463,6 +495,14 @@ impl ConversationCompletion {
             default_workspace,
             local_conversation_event_tx,
             projections: Arc::new(Mutex::new(HashMap::new())),
+            host_out_tx: Arc::new(StdMutex::new(None)),
+        }
+    }
+
+    /// Attach Host WS outbound sender after relay is constructed.
+    pub(crate) fn set_host_outbound(&self, tx: mpsc::Sender<ClientFrame>) {
+        if let Ok(mut guard) = self.host_out_tx.lock() {
+            *guard = Some(tx);
         }
     }
 
@@ -499,6 +539,28 @@ impl ConversationCompletion {
         let mut projections = self.projections.lock().await;
         let projection = projections.entry(session_id.to_owned()).or_default();
         projection.set_origin_message_id(origin_message_id);
+    }
+
+    /// Pin mailbox delivery context so turn final text emits AppendBotMessage.
+    pub(crate) async fn note_mailbox_delivery(
+        &self,
+        session_id: &str,
+        delivery_id: &str,
+        bot_id: &str,
+    ) {
+        let delivery_id = delivery_id.trim();
+        let bot_id = bot_id.trim();
+        if delivery_id.is_empty() || bot_id.is_empty() {
+            return;
+        }
+        let mut projections = self.projections.lock().await;
+        let projection = projections.entry(session_id.to_owned()).or_default();
+        projection.set_mailbox_delivery(MailboxDeliveryContext {
+            delivery_id: delivery_id.to_owned(),
+            bot_id: bot_id.to_owned(),
+        });
+        // Mailbox turns are always Hub collab: refuse non-canonical agent-result ids.
+        projection.set_require_canonical_origin();
     }
 
     /// Hub collab session: completion must not fall back to message_key/t{ms}.
@@ -558,7 +620,7 @@ impl ConversationCompletion {
         }
         let conversation_id = thread_row.conversation_id.clone();
 
-        let (message_key, text, durable_id, agent) = {
+        let (message_key, text, durable_id, agent, mailbox) = {
             let mut projections = self.projections.lock().await;
             let Some(projection) = projections.get_mut(session_id) else {
                 return;
@@ -585,7 +647,8 @@ impl ConversationCompletion {
             let agent = projection
                 .agent
                 .or_else(|| parse_agent_label(&thread_row.agent));
-            (key, text, durable, agent)
+            let mailbox = projection.mailbox_delivery.clone();
+            (key, text, durable, agent, mailbox)
         };
 
         if text.trim().is_empty() {
@@ -597,7 +660,14 @@ impl ConversationCompletion {
         }
 
         if let Err(error) = self
-            .write_result(&conversation_id, session_id, &durable_id, &text, agent)
+            .write_result(
+                &conversation_id,
+                session_id,
+                &durable_id,
+                &text,
+                agent,
+                mailbox.as_ref(),
+            )
             .await
         {
             warn!(
@@ -628,6 +698,7 @@ impl ConversationCompletion {
         durable_id: &str,
         text: &str,
         agent: Option<AgentName>,
+        mailbox: Option<&MailboxDeliveryContext>,
     ) -> anyhow::Result<()> {
         let teamwork =
             open_teamwork_store(&self.store, conversation_id, &self.default_workspace).await?;
@@ -666,12 +737,40 @@ impl ConversationCompletion {
                     Some(delegation.delegation_id.clone()),
                 )
             } else {
-                (text.trim().to_owned(), None, Vec::new(), None)
+                // Mailbox turns reply to the origin human/bot message.
+                let reply_to = if mailbox.is_some() {
+                    Some(durable_id.to_owned())
+                } else {
+                    None
+                };
+                (text.trim().to_owned(), reply_to, Vec::new(), None)
             };
 
-        let agent_label = agent.map(|a| a.bin_name().to_owned());
         let mentions_json = serde_json::to_string(&mentions).unwrap_or_else(|_| "[]".into());
         let now = current_unix_ms();
+        // Prefer mailbox bot_id, then session.bot_id, then local-rt seed for runtime.
+        let bot_id = if let Some(m) = mailbox {
+            Some(m.bot_id.clone())
+        } else if let Ok(Some(session)) = self.store.get_session(session_id).await {
+            if let Some(bid) = session.bot_id.filter(|s| !s.is_empty()) {
+                Some(bid)
+            } else {
+                self.store
+                    .ensure_local_runtime_bot(&session.agent, now)
+                    .await
+                    .ok()
+            }
+        } else if let Some(a) = agent {
+            self.store
+                .ensure_local_runtime_bot(a.bin_name(), now)
+                .await
+                .ok()
+        } else {
+            None
+        };
+        let bot_id = bot_id.ok_or_else(|| {
+            anyhow::anyhow!("agent result write requires bot_id for session {session_id}")
+        })?;
         let message_seq = self
             .store
             .upsert_conversation_message(
@@ -679,7 +778,7 @@ impl ConversationCompletion {
                 &message_id,
                 Some(session_id),
                 "agent",
-                agent_label.as_deref(),
+                Some(bot_id.as_str()),
                 &body,
                 now,
                 reply_to.as_deref(),
@@ -716,14 +815,92 @@ impl ConversationCompletion {
                 .await?;
         }
 
+        // Primary multi-end path for mailbox deliveries: Host → Hub AppendBotMessage.
+        // operation_id == local agent-result id so Hub/Desktop merge is idempotent.
+        // Local agent-result still writes for Host workbench; projector may still
+        // run for non-mailbox desktop-native turns.
+        if let Some(mailbox) = mailbox {
+            self.emit_append_bot_message(
+                conversation_id,
+                session_id,
+                &message_id,
+                durable_id,
+                &body,
+                mailbox,
+            )
+            .await;
+        }
+
         info!(
             target: "minos_daemon::conversation_completion",
             conversation_id,
             session_id,
             message_id = %message_id,
+            mailbox_delivery_id = mailbox.map(|m| m.delivery_id.as_str()).unwrap_or(""),
             "recorded agent conversation result"
         );
         Ok(())
+    }
+
+    /// Best-effort Host uplink of final bot text for a mailbox delivery.
+    /// Failures are logged only — local agent-result already committed, and Hub
+    /// lease reclaim / redelivery can retry. Do not fail the local write path.
+    async fn emit_append_bot_message(
+        &self,
+        conversation_id: &str,
+        session_id: &str,
+        operation_id: &str,
+        origin_message_id: &str,
+        text: &str,
+        mailbox: &MailboxDeliveryContext,
+    ) {
+        let Some(tx) = self
+            .host_out_tx
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+        else {
+            warn!(
+                target: "minos_daemon::conversation_completion",
+                delivery_id = %mailbox.delivery_id,
+                conversation_id,
+                session_id,
+                "AppendBotMessage skipped: host outbound not wired"
+            );
+            return;
+        };
+        let frame = ClientFrame::AppendBotMessage {
+            delivery_id: mailbox.delivery_id.clone(),
+            operation_id: operation_id.to_owned(),
+            conversation_id: conversation_id.to_owned(),
+            bot_id: mailbox.bot_id.clone(),
+            text: text.to_owned(),
+            mentions: Vec::new(),
+            reply_to_message_id: Some(origin_message_id.to_owned()),
+        };
+        match tx.try_send(frame) {
+            Ok(()) => {
+                info!(
+                    target: "minos_daemon::conversation_completion",
+                    delivery_id = %mailbox.delivery_id,
+                    bot_id = %mailbox.bot_id,
+                    conversation_id,
+                    session_id,
+                    operation_id,
+                    "emitted AppendBotMessage for mailbox delivery"
+                );
+            }
+            Err(error) => {
+                warn!(
+                    target: "minos_daemon::conversation_completion",
+                    delivery_id = %mailbox.delivery_id,
+                    conversation_id,
+                    session_id,
+                    error = %error,
+                    "failed to enqueue AppendBotMessage"
+                );
+            }
+        }
     }
 
     /// Outbox-first source delivery: durable row with stable id before provider send.
@@ -1188,6 +1365,41 @@ mod tests {
         );
         let claimed = p.claim_write().expect("local fallback still allowed");
         assert_eq!(claimed.2, "m2");
+    }
+
+    #[test]
+    fn mailbox_delivery_survives_dual_begin_and_clears_on_next_turn() {
+        let mut p = SessionProjection::default();
+        p.set_require_canonical_origin();
+        p.set_origin_message_id("origin-msg-1");
+        p.set_mailbox_delivery(MailboxDeliveryContext {
+            delivery_id: "del-1".into(),
+            bot_id: "bot-abc".into(),
+        });
+
+        p.begin_turn(); // Running
+        assert_eq!(
+            p.mailbox_delivery.as_ref().map(|m| m.delivery_id.as_str()),
+            Some("del-1")
+        );
+        p.apply_events(AgentName::Grok, &[user_start("synth-user")]); // second begin
+        assert_eq!(
+            p.mailbox_delivery.as_ref().map(|m| m.bot_id.as_str()),
+            Some("bot-abc"),
+            "redundant same-turn begin must keep mailbox delivery"
+        );
+
+        p.apply_events(
+            AgentName::Grok,
+            &[assistant_start("a1"), delta("a1", "final"), completed("a1")],
+        );
+        let claimed = p.claim_write().expect("mailbox turn claim");
+        assert_eq!(claimed.2, "origin-msg-1");
+        p.finish_write_ok();
+
+        p.begin_turn(); // true next turn
+        assert!(p.mailbox_delivery.is_none());
+        assert!(p.origin_message_id.is_none());
     }
 
     #[test]

@@ -276,6 +276,8 @@ async fn send_user_message_round_trips() {
                 text: "hello test".into(),
                 origin_message_id: None,
                 attachments: vec![],
+                delivery_id: None,
+                bot_id: None,
             }],
         )
         .await
@@ -380,6 +382,7 @@ async fn list_conversation_messages_returns_messages_from_local_db_newest_first(
             "conversation-main",
             "/tmp/ws",
             "codex",
+            Some("local-rt-codex"),
             Some("thread-1"),
             None,
             "idle",
@@ -409,7 +412,7 @@ async fn list_conversation_messages_returns_messages_from_local_db_newest_first(
             "msg-2",
             Some("thread-1"),
             "agent",
-            Some("codex"),
+            Some("local-rt-codex"),
             "auth summary",
             11,
             None,
@@ -688,6 +691,7 @@ async fn list_local_sessions_includes_persisted_suspended_threads() {
             "c-persisted",
             "/tmp/persisted",
             "claude",
+            Some("local-rt-claude"),
             None,
             None,
             "idle",

@@ -130,6 +130,8 @@ async fn start_agent_and_send_message_round_trip() {
                 text: "integration test message".into(),
                 origin_message_id: None,
                 attachments: vec![],
+                delivery_id: None,
+                bot_id: None,
             }],
         )
         .await

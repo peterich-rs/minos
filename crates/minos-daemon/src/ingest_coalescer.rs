@@ -278,7 +278,16 @@ mod tests {
             .unwrap();
         store
             .insert_session_in_conversation(
-                session_id, "c", "/w", "codex", None, None, "idle", 1, true,
+                session_id,
+                "c",
+                "/w",
+                "codex",
+                Some("local-rt-codex"),
+                None,
+                None,
+                "idle",
+                1,
+                true,
             )
             .await
             .unwrap();

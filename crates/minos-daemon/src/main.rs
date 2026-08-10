@@ -408,7 +408,7 @@ async fn start(args: StartArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn std
             .parse()
             .map_err(|e| std::io::Error::other(format!("invalid --local-rpc-addr: {e}")))?;
         let run_dir = paths::run_dir()?;
-        let discovery_path = run_dir.join("tui-daemon-rpc.json");
+        let discovery_path = run_dir.join("daemon-rpc.json");
         Some(LocalRpcConfig {
             addr,
             discovery_path: discovery_path.clone(),
@@ -428,7 +428,7 @@ async fn start(args: StartArgs, paths: &ResolvedPaths) -> Result<(), Box<dyn std
     .await?;
 
     if args.local_rpc {
-        let discovery = paths::run_dir()?.join("tui-daemon-rpc.json");
+        let discovery = paths::run_dir()?.join("daemon-rpc.json");
         println!("local rpc:  {}", discovery.display());
     }
 

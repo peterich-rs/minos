@@ -257,6 +257,7 @@ impl LocalStore {
         conversation_id: &str,
         workspace_root: &str,
         agent: &str,
+        bot_id: Option<&str>,
         provider_session_id: Option<&str>,
         parent_session_id: Option<&str>,
         status: &str,
@@ -264,15 +265,16 @@ impl LocalStore {
     ) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT OR IGNORE INTO sessions( \
-                session_id, conversation_id, workspace_root, parent_session_id, agent, provider_session_id, status, \
-                last_seq, started_at, last_activity_at \
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                session_id, conversation_id, workspace_root, parent_session_id, agent, bot_id, \
+                provider_session_id, status, last_seq, started_at, last_activity_at \
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
         )
         .bind(session_id)
         .bind(conversation_id)
         .bind(workspace_root)
         .bind(parent_session_id)
         .bind(agent)
+        .bind(bot_id)
         .bind(provider_session_id)
         .bind(status)
         .bind(ts_ms)
@@ -749,8 +751,11 @@ impl LocalStore {
         Ok(rows)
     }
 
-    /// Roster of runtime agents allowed in each conversation (membership SSOT).
+    /// Roster bot_ids allowed in each conversation (membership SSOT).
     /// Distinct from sessions: a member may have zero sessions yet.
+    ///
+    /// Values are `bot_id` strings (not runtime labels). UI layers that need
+    /// runtime badges resolve via [`Self::list_conversation_roster`] / bot_identities.
     pub async fn list_agents_for_conversations(
         &self,
         conversation_ids: &[String],
@@ -762,9 +767,9 @@ impl LocalStore {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT conversation_id, agent, brief, joined_at_ms FROM conversation_agent_members \
+            "SELECT conversation_id, bot_id, brief, joined_at_ms FROM conversation_agent_members \
              WHERE conversation_id IN ({placeholders}) \
-             ORDER BY conversation_id, joined_at_ms ASC, agent"
+             ORDER BY conversation_id, joined_at_ms ASC, bot_id"
         );
         let mut query = sqlx::query(&sql);
         for id in conversation_ids {
@@ -776,20 +781,23 @@ impl LocalStore {
             by_conversation
                 .entry(row.try_get("conversation_id")?)
                 .or_default()
-                .push(row.try_get("agent")?);
+                .push(row.try_get("bot_id")?);
         }
         Ok(by_conversation)
     }
 
-    /// Full roster rows (agent + brief + join time) for one conversation.
+    /// Full roster rows (bot_id + resolved identity + brief + join time).
     pub async fn list_conversation_roster(
         &self,
         conversation_id: &str,
     ) -> anyhow::Result<Vec<ConversationAgentMemberRow>> {
         let rows = sqlx::query(
-            "SELECT agent, brief, joined_at_ms FROM conversation_agent_members \
-             WHERE conversation_id = ? \
-             ORDER BY joined_at_ms ASC, agent",
+            "SELECT m.bot_id, m.brief, m.joined_at_ms, \
+                    b.runtime_agent, b.display_name \
+             FROM conversation_agent_members m \
+             LEFT JOIN bot_identities b ON b.bot_id = m.bot_id \
+             WHERE m.conversation_id = ? \
+             ORDER BY m.joined_at_ms ASC, m.bot_id",
         )
         .bind(conversation_id)
         .fetch_all(&self.pool)
@@ -797,32 +805,65 @@ impl LocalStore {
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             let brief: String = row.try_get("brief")?;
+            let runtime: Option<String> = row.try_get("runtime_agent")?;
+            let display: Option<String> = row.try_get("display_name")?;
             out.push(ConversationAgentMemberRow {
-                agent: row.try_get("agent")?,
+                bot_id: row.try_get("bot_id")?,
                 brief: if brief.is_empty() { None } else { Some(brief) },
                 joined_at_ms: row.try_get("joined_at_ms")?,
+                runtime_agent: runtime.filter(|s| !s.is_empty()),
+                display_name: display.filter(|s| !s.is_empty()),
             });
         }
         Ok(out)
     }
 
+    /// Membership check by bot identity id.
     pub async fn is_conversation_agent_member(
         &self,
         conversation_id: &str,
-        agent: &str,
+        bot_id: &str,
     ) -> anyhow::Result<bool> {
+        let trimmed = bot_id.trim();
+        if trimmed.is_empty() {
+            return Ok(false);
+        }
         let row: Option<(i64,)> = sqlx::query_as(
             "SELECT 1 FROM conversation_agent_members \
-             WHERE conversation_id = ? AND agent = ? LIMIT 1",
+             WHERE conversation_id = ? AND bot_id = ? LIMIT 1",
         )
         .bind(conversation_id)
-        .bind(agent)
+        .bind(trimmed)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.is_some())
     }
 
-    /// Replace the full agent roster for a conversation (deduped, order preserved).
+    /// Offline start helper: true when any roster bot for this conversation has
+    /// the given runtime family (join roster + bot_identities).
+    pub async fn is_member_by_runtime(
+        &self,
+        conversation_id: &str,
+        runtime_agent: &str,
+    ) -> anyhow::Result<bool> {
+        let runtime = runtime_agent.trim().to_ascii_lowercase();
+        if runtime.is_empty() {
+            return Ok(false);
+        }
+        let row: Option<(i64,)> = sqlx::query_as(
+            "SELECT 1 FROM conversation_agent_members m \
+             INNER JOIN bot_identities b ON b.bot_id = m.bot_id \
+             WHERE m.conversation_id = ? AND lower(b.runtime_agent) = ? \
+             LIMIT 1",
+        )
+        .bind(conversation_id)
+        .bind(runtime)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.is_some())
+    }
+
+    /// Replace the full agent roster for a conversation (deduped by bot_id, order preserved).
     pub async fn set_conversation_agent_members(
         &self,
         conversation_id: &str,
@@ -836,14 +877,14 @@ impl LocalStore {
             .await?;
         let mut seen = std::collections::HashSet::new();
         for member in members {
-            let trimmed = member.agent.trim();
-            if trimmed.is_empty() || !seen.insert(trimmed.to_ascii_lowercase()) {
+            let trimmed = member.bot_id.trim();
+            if trimmed.is_empty() || !seen.insert(trimmed.to_string()) {
                 continue;
             }
             let brief = normalize_roster_brief(member.brief.as_deref());
             sqlx::query(
                 "INSERT INTO conversation_agent_members \
-                 (conversation_id, agent, joined_at_ms, brief) \
+                 (conversation_id, bot_id, joined_at_ms, brief) \
                  VALUES (?, ?, ?, ?)",
             )
             .bind(conversation_id)
@@ -857,24 +898,24 @@ impl LocalStore {
         Ok(())
     }
 
-    /// Idempotent add of one runtime agent to the conversation roster.
+    /// Idempotent add of one bot to the conversation roster.
     /// When the row already exists, `brief` is updated when non-empty.
     pub async fn add_conversation_agent_member(
         &self,
         conversation_id: &str,
-        agent: &str,
+        bot_id: &str,
         joined_at_ms: i64,
         brief: Option<&str>,
     ) -> anyhow::Result<()> {
-        let trimmed = agent.trim();
+        let trimmed = bot_id.trim();
         if trimmed.is_empty() {
             return Ok(());
         }
         let brief = normalize_roster_brief(brief);
         sqlx::query(
             "INSERT INTO conversation_agent_members \
-             (conversation_id, agent, joined_at_ms, brief) VALUES (?, ?, ?, ?) \
-             ON CONFLICT(conversation_id, agent) DO UPDATE SET \
+             (conversation_id, bot_id, joined_at_ms, brief) VALUES (?, ?, ?, ?) \
+             ON CONFLICT(conversation_id, bot_id) DO UPDATE SET \
                brief = CASE \
                  WHEN excluded.brief != '' THEN excluded.brief \
                  ELSE conversation_agent_members.brief \
@@ -889,26 +930,58 @@ impl LocalStore {
         Ok(())
     }
 
-    /// Remove one runtime agent from the conversation roster.
+    /// Remove one bot from the conversation roster.
     /// Returns `true` when a membership row was deleted.
     pub async fn remove_conversation_agent_member(
         &self,
         conversation_id: &str,
-        agent: &str,
+        bot_id: &str,
     ) -> anyhow::Result<bool> {
-        let trimmed = agent.trim();
+        let trimmed = bot_id.trim();
         if trimmed.is_empty() {
             return Ok(false);
         }
         let result = sqlx::query(
             "DELETE FROM conversation_agent_members \
-             WHERE conversation_id = ? AND agent = ?",
+             WHERE conversation_id = ? AND bot_id = ?",
         )
         .bind(conversation_id)
         .bind(trimmed)
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() > 0)
+    }
+
+    /// Remove all roster members whose bot identity has the given runtime.
+    /// Returns bot_ids that were removed.
+    pub async fn remove_conversation_members_by_runtime(
+        &self,
+        conversation_id: &str,
+        runtime_agent: &str,
+    ) -> anyhow::Result<Vec<String>> {
+        let runtime = runtime_agent.trim().to_ascii_lowercase();
+        if runtime.is_empty() {
+            return Ok(Vec::new());
+        }
+        let bot_ids: Vec<(String,)> = sqlx::query_as(
+            "SELECT m.bot_id FROM conversation_agent_members m \
+             INNER JOIN bot_identities b ON b.bot_id = m.bot_id \
+             WHERE m.conversation_id = ? AND lower(b.runtime_agent) = ?",
+        )
+        .bind(conversation_id)
+        .bind(&runtime)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut removed = Vec::new();
+        for (bot_id,) in bot_ids {
+            if self
+                .remove_conversation_agent_member(conversation_id, &bot_id)
+                .await?
+            {
+                removed.push(bot_id);
+            }
+        }
+        Ok(removed)
     }
 
     pub async fn list_sessions_by_conversation(
@@ -931,6 +1004,7 @@ impl LocalStore {
         conversation_id: &str,
         workspace_root: &str,
         agent: &str,
+        bot_id: Option<&str>,
         provider_session_id: Option<&str>,
         parent_session_id: Option<&str>,
         status: &str,
@@ -940,15 +1014,16 @@ impl LocalStore {
         let mut tx = self.pool.begin().await?;
         let inserted = sqlx::query(
             "INSERT OR IGNORE INTO sessions( \
-                session_id, conversation_id, workspace_root, parent_session_id, agent, provider_session_id, status, \
-                last_seq, started_at, last_activity_at \
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                session_id, conversation_id, workspace_root, parent_session_id, agent, bot_id, \
+                provider_session_id, status, last_seq, started_at, last_activity_at \
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
         )
         .bind(session_id)
         .bind(conversation_id)
         .bind(workspace_root)
         .bind(parent_session_id)
         .bind(agent)
+        .bind(bot_id)
         .bind(provider_session_id)
         .bind(status)
         .bind(ts_ms)
@@ -992,7 +1067,7 @@ impl LocalStore {
         message_id: &str,
         session_id: Option<&str>,
         sender_role: &str,
-        agent: Option<&str>,
+        bot_id: Option<&str>,
         body: &str,
         ts_ms: i64,
         reply_to_message_id: Option<&str>,
@@ -1010,13 +1085,13 @@ impl LocalStore {
         let message_seq = if let Some(seq) = existing {
             sqlx::query(
                 "UPDATE chat_messages \
-                 SET session_id = ?, sender_role = ?, agent = ?, body = ?, \
+                 SET session_id = ?, sender_role = ?, bot_id = ?, body = ?, \
                      reply_to_message_id = ?, delegation_id = ?, mentions_json = ? \
                  WHERE message_id = ?",
             )
             .bind(session_id)
             .bind(sender_role)
-            .bind(agent)
+            .bind(bot_id)
             .bind(body)
             .bind(reply_to_message_id)
             .bind(delegation_id)
@@ -1028,7 +1103,7 @@ impl LocalStore {
         } else {
             let result = sqlx::query(
                 "INSERT INTO chat_messages( \
-                    message_id, conversation_id, session_id, created_at_ms, sender_role, agent, body, \
+                    message_id, conversation_id, session_id, created_at_ms, sender_role, bot_id, body, \
                     reply_to_message_id, delegation_id, mentions_json \
                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
@@ -1037,7 +1112,7 @@ impl LocalStore {
             .bind(session_id)
             .bind(ts_ms)
             .bind(sender_role)
-            .bind(agent)
+            .bind(bot_id)
             .bind(body)
             .bind(reply_to_message_id)
             .bind(delegation_id)
@@ -1289,7 +1364,10 @@ pub struct SessionRow {
     pub session_id: String,
     pub conversation_id: String,
     pub workspace_root: String,
+    /// Runtime agent label for CLI launch (execution detail).
     pub agent: String,
+    /// Bot identity link when known.
+    pub bot_id: Option<String>,
     pub provider_session_id: Option<String>,
     pub parent_session_id: Option<String>,
     pub status: String,
@@ -1310,6 +1388,7 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for SessionRow {
             conversation_id: row.try_get("conversation_id")?,
             workspace_root: row.try_get("workspace_root")?,
             agent: row.try_get("agent")?,
+            bot_id: row.try_get("bot_id")?,
             provider_session_id: row.try_get("provider_session_id")?,
             parent_session_id: row.try_get("parent_session_id")?,
             status: row.try_get("status")?,
@@ -1324,19 +1403,23 @@ impl<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> for SessionRow {
     }
 }
 
-/// One roster membership write (create / set members).
+/// One roster membership write (create / set members) — keyed by bot_id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationAgentMemberInput {
-    pub agent: String,
+    pub bot_id: String,
     pub brief: Option<String>,
 }
 
-/// Durable roster row with optional peer-facing brief.
+/// Durable roster row with optional peer-facing brief and resolved identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversationAgentMemberRow {
-    pub agent: String,
+    pub bot_id: String,
     pub brief: Option<String>,
     pub joined_at_ms: i64,
+    /// From bot_identities when present.
+    pub runtime_agent: Option<String>,
+    /// From bot_identities when present.
+    pub display_name: Option<String>,
 }
 
 /// Cap and trim roster briefs stored in SQLite.
@@ -1434,7 +1517,7 @@ pub struct ChatMessageRow {
     pub session_id: Option<String>,
     pub created_at_ms: i64,
     pub sender_role: String,
-    pub agent: Option<String>,
+    pub bot_id: Option<String>,
     pub body: String,
     pub reply_to_message_id: Option<String>,
     pub delegation_id: Option<String>,
@@ -1467,9 +1550,37 @@ pub struct EventRow {
     pub source: String,
 }
 
-// ── Host agent profiles ───────────────────────────────────────────────────
+// ── Host bot identities (replaces agent_profiles) ─────────────────────────
+
+/// Source values for [`BotIdentityRow::source`].
+pub const BOT_SOURCE_USER_CONFIGURED: &str = "user_configured";
+pub const BOT_SOURCE_HOST_RUNTIME_SEED: &str = "host_runtime_seed";
+
+/// Stable bot_id prefix for offline runtime seeds (`local-rt-{runtime}`).
+pub fn local_runtime_bot_id(runtime: &str) -> String {
+    format!("local-rt-{}", runtime.trim().to_ascii_lowercase())
+}
 
 #[derive(Debug, Clone, sqlx::FromRow)]
+pub struct BotIdentityRow {
+    pub bot_id: String,
+    pub display_name: String,
+    pub description: String,
+    pub runtime_agent: String,
+    pub model: String,
+    pub reasoning_effort: String,
+    pub system_prompt: String,
+    pub env_json: String,
+    pub source: String,
+    pub owner_account_id: Option<String>,
+    pub synced_at_ms: Option<i64>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+/// Wire-compat view of a bot identity as a historical AgentProfile row.
+/// `id` == `bot_id`; `name` == `display_name`; `instructions` == `system_prompt`.
+#[derive(Debug, Clone)]
 pub struct AgentProfileRow {
     pub id: String,
     pub name: String,
@@ -1483,16 +1594,211 @@ pub struct AgentProfileRow {
     pub updated_at_ms: i64,
 }
 
+impl From<BotIdentityRow> for AgentProfileRow {
+    fn from(row: BotIdentityRow) -> Self {
+        Self {
+            id: row.bot_id,
+            name: row.display_name,
+            description: row.description,
+            runtime_agent: row.runtime_agent,
+            model: row.model,
+            reasoning_effort: row.reasoning_effort,
+            instructions: row.system_prompt,
+            env_json: row.env_json,
+            created_at_ms: row.created_at_ms,
+            updated_at_ms: row.updated_at_ms,
+        }
+    }
+}
+
 impl LocalStore {
-    pub async fn list_agent_profiles(&self) -> anyhow::Result<Vec<AgentProfileRow>> {
-        let rows = sqlx::query_as::<_, AgentProfileRow>(
-            "SELECT id, name, description, runtime_agent, model, reasoning_effort, \
-             instructions, env_json, created_at_ms, updated_at_ms \
-             FROM agent_profiles ORDER BY updated_at_ms DESC",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+    const BOT_SELECT_COLS: &'static str = "bot_id, display_name, description, runtime_agent, \
+        model, reasoning_effort, system_prompt, env_json, source, owner_account_id, \
+        synced_at_ms, created_at_ms, updated_at_ms";
+
+    pub async fn list_bot_identities(&self) -> anyhow::Result<Vec<BotIdentityRow>> {
+        let sql = format!(
+            "SELECT {} FROM bot_identities ORDER BY updated_at_ms DESC",
+            Self::BOT_SELECT_COLS
+        );
+        let rows = sqlx::query_as::<_, BotIdentityRow>(&sql)
+            .fetch_all(&self.pool)
+            .await?;
         Ok(rows)
+    }
+
+    pub async fn get_bot_identity(&self, bot_id: &str) -> anyhow::Result<Option<BotIdentityRow>> {
+        let sql = format!(
+            "SELECT {} FROM bot_identities WHERE bot_id = ?",
+            Self::BOT_SELECT_COLS
+        );
+        let row = sqlx::query_as::<_, BotIdentityRow>(&sql)
+            .bind(bot_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row)
+    }
+
+    /// Insert or replace a bot identity row (cloud sync / local upsert).
+    pub async fn upsert_bot_identity(
+        &self,
+        bot_id: &str,
+        display_name: &str,
+        description: &str,
+        runtime_agent: &str,
+        model: &str,
+        reasoning_effort: &str,
+        system_prompt: &str,
+        env_json: &str,
+        source: &str,
+        owner_account_id: Option<&str>,
+        synced_at_ms: Option<i64>,
+        now_ms: i64,
+    ) -> anyhow::Result<BotIdentityRow> {
+        sqlx::query(
+            "INSERT INTO bot_identities ( \
+                bot_id, display_name, description, runtime_agent, model, reasoning_effort, \
+                system_prompt, env_json, source, owner_account_id, synced_at_ms, \
+                created_at_ms, updated_at_ms \
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT(bot_id) DO UPDATE SET \
+                display_name = excluded.display_name, \
+                description = excluded.description, \
+                runtime_agent = excluded.runtime_agent, \
+                model = excluded.model, \
+                reasoning_effort = excluded.reasoning_effort, \
+                system_prompt = excluded.system_prompt, \
+                env_json = excluded.env_json, \
+                source = excluded.source, \
+                owner_account_id = excluded.owner_account_id, \
+                synced_at_ms = excluded.synced_at_ms, \
+                updated_at_ms = excluded.updated_at_ms",
+        )
+        .bind(bot_id)
+        .bind(display_name)
+        .bind(description)
+        .bind(runtime_agent)
+        .bind(model)
+        .bind(reasoning_effort)
+        .bind(system_prompt)
+        .bind(env_json)
+        .bind(source)
+        .bind(owner_account_id)
+        .bind(synced_at_ms)
+        .bind(now_ms)
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await?;
+        self.get_bot_identity(bot_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("bot identity missing after upsert"))
+    }
+
+    pub async fn create_bot_identity(
+        &self,
+        bot_id: &str,
+        display_name: &str,
+        description: &str,
+        runtime_agent: &str,
+        model: &str,
+        reasoning_effort: &str,
+        system_prompt: &str,
+        now_ms: i64,
+    ) -> anyhow::Result<BotIdentityRow> {
+        self.upsert_bot_identity(
+            bot_id,
+            display_name,
+            description,
+            runtime_agent,
+            model,
+            reasoning_effort,
+            system_prompt,
+            "[]",
+            BOT_SOURCE_USER_CONFIGURED,
+            None,
+            None,
+            now_ms,
+        )
+        .await
+    }
+
+    pub async fn update_bot_identity(
+        &self,
+        bot_id: &str,
+        display_name: &str,
+        description: &str,
+        system_prompt: &str,
+        now_ms: i64,
+    ) -> anyhow::Result<Option<BotIdentityRow>> {
+        let n = sqlx::query(
+            "UPDATE bot_identities SET display_name = ?, description = ?, system_prompt = ?, \
+             updated_at_ms = ? WHERE bot_id = ?",
+        )
+        .bind(display_name)
+        .bind(description)
+        .bind(system_prompt)
+        .bind(now_ms)
+        .bind(bot_id)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if n == 0 {
+            return Ok(None);
+        }
+        self.get_bot_identity(bot_id).await
+    }
+
+    pub async fn delete_bot_identity(&self, bot_id: &str) -> anyhow::Result<bool> {
+        let n = sqlx::query("DELETE FROM bot_identities WHERE bot_id = ?")
+            .bind(bot_id)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        Ok(n > 0)
+    }
+
+    /// Ensure a stable host-runtime seed bot exists for `runtime` (`local-rt-{runtime}`).
+    /// Upserts if missing; returns bot_id.
+    pub async fn ensure_local_runtime_bot(
+        &self,
+        runtime: &str,
+        now_ms: i64,
+    ) -> anyhow::Result<String> {
+        let runtime = runtime.trim().to_ascii_lowercase();
+        if runtime.is_empty() {
+            anyhow::bail!("runtime is empty");
+        }
+        let bot_id = local_runtime_bot_id(&runtime);
+        if self.get_bot_identity(&bot_id).await?.is_some() {
+            return Ok(bot_id);
+        }
+        self.upsert_bot_identity(
+            &bot_id,
+            &runtime,
+            "",
+            &runtime,
+            "",
+            "",
+            "",
+            "[]",
+            BOT_SOURCE_HOST_RUNTIME_SEED,
+            None,
+            None,
+            now_ms,
+        )
+        .await?;
+        Ok(bot_id)
+    }
+
+    // ── Thin agent_profile wire wrappers (id ↔ bot_id) ────────────────────
+
+    pub async fn list_agent_profiles(&self) -> anyhow::Result<Vec<AgentProfileRow>> {
+        Ok(self
+            .list_bot_identities()
+            .await?
+            .into_iter()
+            .map(AgentProfileRow::from)
+            .collect())
     }
 
     pub async fn create_agent_profile(
@@ -1506,37 +1812,23 @@ impl LocalStore {
         instructions: &str,
         now_ms: i64,
     ) -> anyhow::Result<AgentProfileRow> {
-        sqlx::query(
-            "INSERT INTO agent_profiles (id, name, description, runtime_agent, model, \
-             reasoning_effort, instructions, env_json, created_at_ms, updated_at_ms) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?, ?)",
-        )
-        .bind(id)
-        .bind(name)
-        .bind(description)
-        .bind(runtime_agent)
-        .bind(model)
-        .bind(reasoning_effort)
-        .bind(instructions)
-        .bind(now_ms)
-        .bind(now_ms)
-        .execute(&self.pool)
-        .await?;
-        self.get_agent_profile(id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("agent profile missing after insert"))
+        let row = self
+            .create_bot_identity(
+                id,
+                name,
+                description,
+                runtime_agent,
+                model,
+                reasoning_effort,
+                instructions,
+                now_ms,
+            )
+            .await?;
+        Ok(AgentProfileRow::from(row))
     }
 
     pub async fn get_agent_profile(&self, id: &str) -> anyhow::Result<Option<AgentProfileRow>> {
-        let row = sqlx::query_as::<_, AgentProfileRow>(
-            "SELECT id, name, description, runtime_agent, model, reasoning_effort, \
-             instructions, env_json, created_at_ms, updated_at_ms \
-             FROM agent_profiles WHERE id = ?",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(row)
+        Ok(self.get_bot_identity(id).await?.map(AgentProfileRow::from))
     }
 
     pub async fn update_agent_profile(
@@ -1547,39 +1839,20 @@ impl LocalStore {
         instructions: &str,
         now_ms: i64,
     ) -> anyhow::Result<Option<AgentProfileRow>> {
-        let n = sqlx::query(
-            "UPDATE agent_profiles SET name = ?, description = ?, instructions = ?, \
-             updated_at_ms = ? WHERE id = ?",
-        )
-        .bind(name)
-        .bind(description)
-        .bind(instructions)
-        .bind(now_ms)
-        .bind(id)
-        .execute(&self.pool)
-        .await?
-        .rows_affected();
-        if n == 0 {
-            return Ok(None);
-        }
-        self.get_agent_profile(id).await
+        Ok(self
+            .update_bot_identity(id, name, description, instructions, now_ms)
+            .await?
+            .map(AgentProfileRow::from))
     }
 
     pub async fn delete_agent_profile(&self, id: &str) -> anyhow::Result<bool> {
-        let n = sqlx::query("DELETE FROM agent_profiles WHERE id = ?")
-            .bind(id)
-            .execute(&self.pool)
-            .await?
-            .rows_affected();
-        Ok(n > 0)
+        self.delete_bot_identity(id).await
     }
 
-    /// Newest non-empty profile `description` for a runtime (peer role-brief fallback).
+    /// Newest non-empty bot `description` for a runtime (peer role-brief fallback).
     ///
-    /// Profile description is the durable Host-level role brief; conversation
-    /// roster `brief` overrides it when set. Used when listing roster / building
-    /// session-start briefings so teammates see configured intros even if the
-    /// conversation member row left brief empty.
+    /// Prefer identity-scoped briefs when available; conversation roster `brief`
+    /// overrides. Used when listing roster / building session-start briefings.
     pub async fn latest_profile_description_for_runtime(
         &self,
         runtime_agent: &str,
@@ -1589,7 +1862,7 @@ impl LocalStore {
             return Ok(None);
         }
         let row: Option<(String,)> = sqlx::query_as(
-            "SELECT description FROM agent_profiles \
+            "SELECT description FROM bot_identities \
              WHERE lower(runtime_agent) = ? AND trim(description) != '' \
              ORDER BY updated_at_ms DESC LIMIT 1",
         )
@@ -1601,7 +1874,15 @@ impl LocalStore {
             .filter(|s| !s.is_empty()))
     }
 
-    /// Fill empty roster briefs from the newest host profile description per runtime.
+    /// Newest non-empty description for a specific bot (roster brief fallback).
+    pub async fn bot_description(&self, bot_id: &str) -> anyhow::Result<Option<String>> {
+        let row = self.get_bot_identity(bot_id).await?;
+        Ok(row
+            .map(|r| normalize_roster_brief(Some(r.description.as_str())))
+            .filter(|s| !s.is_empty()))
+    }
+
+    /// Fill empty roster briefs from the bot identity description (then runtime fallback).
     pub async fn enrich_roster_with_profile_briefs(
         &self,
         members: Vec<ConversationAgentMemberRow>,
@@ -1615,11 +1896,14 @@ impl LocalStore {
                 .filter(|s| !s.is_empty())
                 .is_some();
             if !has_brief {
-                if let Some(desc) = self
-                    .latest_profile_description_for_runtime(&m.agent)
-                    .await?
-                {
+                if let Some(desc) = self.bot_description(&m.bot_id).await? {
                     m.brief = Some(desc);
+                } else if let Some(runtime) = m.runtime_agent.clone() {
+                    if let Some(desc) =
+                        self.latest_profile_description_for_runtime(&runtime).await?
+                    {
+                        m.brief = Some(desc);
+                    }
                 }
             } else if let Some(b) = m.brief.take() {
                 let n = normalize_roster_brief(Some(b.as_str()));
@@ -1748,20 +2032,25 @@ mod tests {
             .await
             .unwrap();
 
+        let codex_bot = store.ensure_local_runtime_bot("codex", 10).await.unwrap();
+        let claude_bot = store.ensure_local_runtime_bot("claude", 10).await.unwrap();
+        assert_eq!(codex_bot, "local-rt-codex");
+        assert_eq!(claude_bot, "local-rt-claude");
+
         store
             .set_conversation_agent_members(
                 "c1",
                 &[
                     ConversationAgentMemberInput {
-                        agent: "codex".into(),
+                        bot_id: codex_bot.clone(),
                         brief: Some("implements features".into()),
                     },
                     ConversationAgentMemberInput {
-                        agent: "claude".into(),
+                        bot_id: claude_bot.clone(),
                         brief: Some("reviews PRs".into()),
                     },
                     ConversationAgentMemberInput {
-                        agent: "codex".into(),
+                        bot_id: codex_bot.clone(),
                         brief: None,
                     },
                 ],
@@ -1771,10 +2060,11 @@ mod tests {
             .unwrap();
         let roster = store.list_conversation_roster("c1").await.unwrap();
         assert_eq!(roster.len(), 2);
-        // Same joined_at_ms → secondary sort by agent name.
-        assert_eq!(roster[0].agent, "claude");
+        // Same joined_at_ms → secondary sort by bot_id.
+        assert_eq!(roster[0].bot_id, claude_bot);
         assert_eq!(roster[0].brief.as_deref(), Some("reviews PRs"));
-        assert_eq!(roster[1].agent, "codex");
+        assert_eq!(roster[0].runtime_agent.as_deref(), Some("claude"));
+        assert_eq!(roster[1].bot_id, codex_bot);
         assert_eq!(roster[1].brief.as_deref(), Some("implements features"));
         let map = store
             .list_agents_for_conversations(&["c1".into()])
@@ -1782,42 +2072,45 @@ mod tests {
             .unwrap();
         assert_eq!(
             map.get("c1").map(Vec::as_slice),
-            Some(&["claude".into(), "codex".into()][..])
+            Some(&[claude_bot.clone(), codex_bot.clone()][..])
         );
         assert!(store
-            .is_conversation_agent_member("c1", "codex")
+            .is_conversation_agent_member("c1", &codex_bot)
             .await
             .unwrap());
         assert!(!store
-            .is_conversation_agent_member("c1", "grok")
+            .is_conversation_agent_member("c1", "local-rt-grok")
             .await
             .unwrap());
+        assert!(store.is_member_by_runtime("c1", "codex").await.unwrap());
+        assert!(!store.is_member_by_runtime("c1", "grok").await.unwrap());
 
+        let grok_bot = store.ensure_local_runtime_bot("grok", 12).await.unwrap();
         store
-            .add_conversation_agent_member("c1", "grok", 12, Some("experiments"))
+            .add_conversation_agent_member("c1", &grok_bot, 12, Some("experiments"))
             .await
             .unwrap();
         assert!(store
-            .is_conversation_agent_member("c1", "grok")
+            .is_conversation_agent_member("c1", &grok_bot)
             .await
             .unwrap());
 
         assert!(store
-            .remove_conversation_agent_member("c1", "grok")
+            .remove_conversation_agent_member("c1", &grok_bot)
             .await
             .unwrap());
         assert!(!store
-            .is_conversation_agent_member("c1", "grok")
+            .is_conversation_agent_member("c1", &grok_bot)
             .await
             .unwrap());
         assert!(!store
-            .remove_conversation_agent_member("c1", "grok")
+            .remove_conversation_agent_member("c1", &grok_bot)
             .await
             .unwrap());
     }
 
     #[tokio::test]
-    async fn roster_brief_falls_back_to_newest_profile_description() {
+    async fn roster_brief_falls_back_to_bot_identity_description() {
         let tmp = tempfile::tempdir().unwrap();
         let store = LocalStore::open(&tmp.path().join("profile-brief.sqlite"))
             .await
@@ -1831,38 +2124,8 @@ mod tests {
             .await
             .unwrap();
         store
-            .set_conversation_agent_members(
-                "c1",
-                &[
-                    ConversationAgentMemberInput {
-                        agent: "codex".into(),
-                        brief: None,
-                    },
-                    ConversationAgentMemberInput {
-                        agent: "claude".into(),
-                        brief: Some("conversation override".into()),
-                    },
-                ],
-                11,
-            )
-            .await
-            .unwrap();
-        store
             .create_agent_profile(
-                "profile-old",
-                "Old Codex",
-                "stale brief",
-                "codex",
-                "gpt-5",
-                "",
-                "",
-                100,
-            )
-            .await
-            .unwrap();
-        store
-            .create_agent_profile(
-                "profile-new",
+                "bot-codex",
                 "Feature Codex",
                 "implements features in the worktree",
                 "codex",
@@ -1875,7 +2138,7 @@ mod tests {
             .unwrap();
         store
             .create_agent_profile(
-                "profile-claude",
+                "bot-claude",
                 "Reviewer",
                 "from profile — should not win over roster brief",
                 "claude",
@@ -1886,17 +2149,36 @@ mod tests {
             )
             .await
             .unwrap();
+        store
+            .set_conversation_agent_members(
+                "c1",
+                &[
+                    ConversationAgentMemberInput {
+                        bot_id: "bot-codex".into(),
+                        brief: None,
+                    },
+                    ConversationAgentMemberInput {
+                        bot_id: "bot-claude".into(),
+                        brief: Some("conversation override".into()),
+                    },
+                ],
+                11,
+            )
+            .await
+            .unwrap();
 
         let raw = store.list_conversation_roster("c1").await.unwrap();
         let enriched = store.enrich_roster_with_profile_briefs(raw).await.unwrap();
-        let by_agent: std::collections::HashMap<_, _> =
-            enriched.into_iter().map(|m| (m.agent, m.brief)).collect();
+        let by_bot: std::collections::HashMap<_, _> = enriched
+            .into_iter()
+            .map(|m| (m.bot_id, m.brief))
+            .collect();
         assert_eq!(
-            by_agent.get("codex").and_then(|b| b.as_deref()),
+            by_bot.get("bot-codex").and_then(|b| b.as_deref()),
             Some("implements features in the worktree")
         );
         assert_eq!(
-            by_agent.get("claude").and_then(|b| b.as_deref()),
+            by_bot.get("bot-claude").and_then(|b| b.as_deref()),
             Some("conversation override")
         );
     }
@@ -2027,7 +2309,16 @@ mod tests {
 
         store
             .insert_session_in_conversation(
-                "parent", "c", "/w", "codex", None, None, "idle", 10, true,
+                "parent",
+                "c",
+                "/w",
+                "codex",
+                Some("local-rt-codex"),
+                None,
+                None,
+                "idle",
+                10,
+                true,
             )
             .await
             .unwrap();
@@ -2037,6 +2328,7 @@ mod tests {
                 "c",
                 "/w",
                 "codex",
+                Some("local-rt-codex"),
                 None,
                 Some("parent"),
                 "idle",
@@ -2072,7 +2364,16 @@ mod tests {
         seed_conversation(&store).await;
         store
             .insert_session_in_conversation(
-                "parent", "c", "/w", "codex", None, None, "idle", 10, true,
+                "parent",
+                "c",
+                "/w",
+                "codex",
+                Some("local-rt-codex"),
+                None,
+                None,
+                "idle",
+                10,
+                true,
             )
             .await
             .unwrap();
@@ -2082,6 +2383,7 @@ mod tests {
                 "c",
                 "/w",
                 "codex",
+                Some("local-rt-codex"),
                 None,
                 Some("parent"),
                 "idle",
@@ -2102,7 +2404,7 @@ mod tests {
                 "parent-result",
                 Some("parent"),
                 "agent",
-                Some("codex"),
+                Some("local-rt-codex"),
                 "parent result",
                 13,
                 None,
@@ -2117,7 +2419,7 @@ mod tests {
                 "sub-result",
                 Some("sub"),
                 "agent",
-                Some("codex"),
+                Some("local-rt-codex"),
                 "sub result",
                 14,
                 None,
@@ -2164,11 +2466,33 @@ mod tests {
         .unwrap();
         seed_conversation(&store).await;
         store
-            .insert_session_in_conversation("t-a", "c", "/w", "codex", None, None, "idle", 1, true)
+            .insert_session_in_conversation(
+                "t-a",
+                "c",
+                "/w",
+                "codex",
+                Some("local-rt-codex"),
+                None,
+                None,
+                "idle",
+                1,
+                true,
+            )
             .await
             .unwrap();
         store
-            .insert_session_in_conversation("t-b", "c", "/w", "claude", None, None, "idle", 2, true)
+            .insert_session_in_conversation(
+                "t-b",
+                "c",
+                "/w",
+                "claude",
+                Some("local-rt-claude"),
+                None,
+                None,
+                "idle",
+                2,
+                true,
+            )
             .await
             .unwrap();
 
@@ -2193,7 +2517,7 @@ mod tests {
                 "mcp-delegation:c:1",
                 Some("t-a"),
                 "agent",
-                Some("codex"),
+                Some("local-rt-codex"),
                 "@claude#tb do X",
                 200,
                 None,
@@ -2209,7 +2533,7 @@ mod tests {
                 "agent-result:c:t-b:k1",
                 Some("t-b"),
                 "agent",
-                Some("claude"),
+                Some("local-rt-claude"),
                 "@codex#ta done",
                 300,
                 Some("mcp-delegation:c:1"),
@@ -2224,7 +2548,7 @@ mod tests {
                 "agent-result:c:t-a:k2",
                 Some("t-a"),
                 "agent",
-                Some("codex"),
+                Some("local-rt-codex"),
                 "here is the answer",
                 400,
                 None,
@@ -2245,7 +2569,7 @@ mod tests {
                 "agent-result:c:t-b:k1",
                 Some("t-b"),
                 "agent",
-                Some("claude"),
+                Some("local-rt-claude"),
                 "@codex#ta done (revised)",
                 999,
                 Some("mcp-delegation:c:1"),

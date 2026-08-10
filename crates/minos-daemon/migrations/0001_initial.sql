@@ -60,28 +60,32 @@ CREATE TABLE conversations (
 CREATE INDEX conversations_by_project_updated
     ON conversations(project_id, updated_at_ms DESC, conversation_id);
 
--- Host-local conversation roster (runtime agent names). Mentions / starts are
--- gated on membership; sessions alone do not imply membership.
+-- Host-local conversation roster keyed by bot identity (not runtime string).
+-- Mentions / starts are gated on membership; sessions alone do not imply membership.
+-- Runtime is resolved from bot_identities at query time.
 -- `brief` is a short peer-facing role description for multi-agent coordination.
 CREATE TABLE conversation_agent_members (
     conversation_id  TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
-    agent            TEXT NOT NULL,
+    bot_id           TEXT NOT NULL,
     joined_at_ms     INTEGER NOT NULL,
     brief            TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (conversation_id, agent),
-    CHECK(length(agent) > 0),
+    PRIMARY KEY (conversation_id, bot_id),
+    CHECK(length(bot_id) > 0),
     CHECK(length(brief) <= 500)
 );
 
-CREATE INDEX conversation_agent_members_by_agent
-    ON conversation_agent_members(agent, conversation_id);
+CREATE INDEX conversation_agent_members_by_bot
+    ON conversation_agent_members(bot_id, conversation_id);
 
 CREATE TABLE sessions (
     session_id            TEXT PRIMARY KEY,
     conversation_id       TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
     workspace_root        TEXT NOT NULL REFERENCES workspaces(root),
     parent_session_id     TEXT REFERENCES sessions(session_id) ON DELETE CASCADE,
+    -- Runtime agent label used for CLI launch (execution detail, not identity).
     agent                 TEXT NOT NULL,
+    -- Bot identity this session belongs to (nullable for legacy/direct paths).
+    bot_id                TEXT,
     provider_session_id   TEXT,
     status                TEXT NOT NULL CHECK(status IN (
         'starting', 'idle', 'running', 'resuming', 'suspended', 'closed'
@@ -97,6 +101,10 @@ CREATE TABLE sessions (
     CHECK(length(agent) > 0),
     CHECK(last_seq >= 0)
 );
+
+CREATE INDEX sessions_by_conversation_bot_last
+    ON sessions(conversation_id, bot_id, last_activity_at DESC, session_id)
+    WHERE bot_id IS NOT NULL;
 
 CREATE INDEX sessions_by_conversation_last
     ON sessions(conversation_id, last_activity_at DESC, session_id);
@@ -120,8 +128,9 @@ CREATE TABLE chat_messages (
     conversation_id      TEXT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
     session_id           TEXT REFERENCES sessions(session_id) ON DELETE SET NULL,
     created_at_ms        INTEGER NOT NULL,
-    sender_role          TEXT NOT NULL CHECK(sender_role IN ('user', 'agent')),
-    agent                TEXT,
+    sender_role          TEXT NOT NULL CHECK(sender_role IN ('user', 'agent', 'system')),
+    -- Bot identity for agent-authored rows (not runtime string).
+    bot_id               TEXT,
     body                 TEXT NOT NULL,
     -- Delegation / mention metadata
     reply_to_message_id  TEXT,
@@ -129,9 +138,9 @@ CREATE TABLE chat_messages (
     mentions_json        TEXT NOT NULL DEFAULT '[]',
     CHECK(length(message_id) > 0),
     CHECK(
-        (sender_role = 'user' AND session_id IS NULL AND agent IS NULL)
+        (sender_role IN ('user', 'system') AND session_id IS NULL AND bot_id IS NULL)
         OR
-        (sender_role = 'agent' AND session_id IS NOT NULL AND agent IS NOT NULL)
+        (sender_role = 'agent' AND session_id IS NOT NULL AND bot_id IS NOT NULL)
     )
 );
 
@@ -207,19 +216,31 @@ CREATE TABLE ingest_sync_state (
     FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 ) WITHOUT ROWID;
 
--- Host-local personalized agent profiles (fixed runtime + model + effort).
-CREATE TABLE agent_profiles (
-    id                TEXT PRIMARY KEY NOT NULL,
-    name              TEXT NOT NULL,
-    description       TEXT NOT NULL DEFAULT '',
-    runtime_agent     TEXT NOT NULL,
-    model             TEXT NOT NULL,
-    reasoning_effort  TEXT NOT NULL DEFAULT '',
-    env_json          TEXT NOT NULL DEFAULT '[]',
-    instructions      TEXT NOT NULL DEFAULT '',
-    created_at_ms     INTEGER NOT NULL,
-    updated_at_ms     INTEGER NOT NULL
+-- Host-local bot identity cache (cloud agents mirror + offline runtime seeds).
+-- Replaces agent_profiles: keyed by bot_id; system_prompt was instructions.
+CREATE TABLE bot_identities (
+    bot_id             TEXT PRIMARY KEY NOT NULL,
+    display_name       TEXT NOT NULL,
+    description        TEXT NOT NULL DEFAULT '',
+    runtime_agent      TEXT NOT NULL,
+    model              TEXT NOT NULL,
+    reasoning_effort   TEXT NOT NULL DEFAULT '',
+    system_prompt      TEXT NOT NULL DEFAULT '',
+    env_json           TEXT NOT NULL DEFAULT '[]',
+    -- user_configured | host_runtime_seed
+    source             TEXT NOT NULL DEFAULT 'user_configured',
+    owner_account_id   TEXT,
+    synced_at_ms       INTEGER,
+    created_at_ms      INTEGER NOT NULL,
+    updated_at_ms      INTEGER NOT NULL,
+    CHECK(length(bot_id) > 0),
+    CHECK(length(display_name) > 0),
+    CHECK(length(runtime_agent) > 0),
+    CHECK(source IN ('user_configured', 'host_runtime_seed'))
 );
 
-CREATE INDEX idx_agent_profiles_updated
-    ON agent_profiles (updated_at_ms DESC);
+CREATE INDEX idx_bot_identities_updated
+    ON bot_identities (updated_at_ms DESC);
+
+CREATE INDEX idx_bot_identities_runtime
+    ON bot_identities (runtime_agent, updated_at_ms DESC);
