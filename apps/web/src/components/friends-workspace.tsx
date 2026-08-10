@@ -55,6 +55,8 @@ import {
   runWithSessionRefresh,
   searchUsers,
   sendConversationMessage,
+  senderHandle,
+  senderIsMine,
 } from '@/lib/minos'
 import { useAppStore } from '@/lib/store'
 import { cn } from '@/lib/utils'
@@ -301,7 +303,7 @@ export function FriendsWorkspace() {
       sortConversations(
         prev.map((c) => {
           if (c.conversation_id !== event.conversation_id) return c
-          const fromMe = event.message.sender.account_id === activeSession.accountId
+          const fromMe = senderIsMine(event.message.sender, activeSession.accountId)
           const isRecall = Boolean(event.message.recalled_at_ms)
           const inc =
             !isActive && !alreadyLoaded && !isRecall && !fromMe
@@ -330,7 +332,7 @@ export function FriendsWorkspace() {
         }),
       ),
     )
-    if (isActive && event.message.sender.account_id !== activeSession.accountId) {
+    if (isActive && !senderIsMine(event.message.sender, activeSession.accountId)) {
       runWithSessionRefresh(activeSession, deviceId, setSession, (current) =>
         markConversationRead(deviceId, current.accessToken, event.conversation_id),
       ).catch(() => {})
@@ -862,7 +864,7 @@ export function FriendsWorkspace() {
                 ) : (
                   <div className="flex flex-col gap-4">
                     {activeMessages.map((m) => {
-                      const isMine = m.sender.account_id === activeSession.accountId
+                      const isMine = senderIsMine(m.sender, activeSession.accountId)
                       const mentionsMe =
                         !isMine &&
                         (m.mentioned_account_ids ?? []).includes(activeSession.accountId)
@@ -878,7 +880,7 @@ export function FriendsWorkspace() {
                               {isMine ? '我' : m.sender.display_name}
                             </span>
                             {!isMine ? (
-                              <span className="mono">@{m.sender.minos_id}</span>
+                              <span className="mono">@{senderHandle(m.sender)}</span>
                             ) : null}
                             <span>{formatClock(m.created_at_ms)}</span>
                           </div>

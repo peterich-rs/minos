@@ -116,6 +116,7 @@ class AgentProfile {
   /// Hub bot id (`agents.agent_id`) used for membership and @ delivery.
   /// Local-only drafts may temporarily mint a placeholder until Hub register.
   final String agentId;
+
   /// Display label; when synced from Hub prefer `AgentSummary.display_name`.
   final String name;
   final String description;
@@ -210,10 +211,9 @@ class AgentProfile {
     // Older device-local cache rows written before agentId may omit it; mint a
     // stable local placeholder so offline drafts still load (not multi-end SSOT).
     final rawAgentId = (json['agentId'] as String?)?.trim();
-    final agentId =
-        (rawAgentId != null && rawAgentId.isNotEmpty)
-            ? rawAgentId
-            : _localDraftAgentId(id);
+    final agentId = (rawAgentId != null && rawAgentId.isNotEmpty)
+        ? rawAgentId
+        : _localDraftAgentId(id);
     return AgentProfile(
       id: id,
       agentId: agentId,

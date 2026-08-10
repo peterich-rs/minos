@@ -43,7 +43,9 @@ class GroupMember {
 
   /// Create a [GroupMember] from an [AgentProfile].
   factory GroupMember.fromAgent(AgentProfile profile) {
-    final label = profile.name.trim().isEmpty ? profile.agentId : profile.name.trim();
+    final label = profile.name.trim().isEmpty
+        ? profile.agentId
+        : profile.name.trim();
     return GroupMember(
       id: profile.agentId,
       displayName: '🤖 $label',

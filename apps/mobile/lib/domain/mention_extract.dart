@@ -10,7 +10,7 @@ List<String> collectMentionTokens(String text) {
   final bytes = text.codeUnits;
   var index = 0;
   while (index < bytes.length) {
-    if (bytes[index] != 0x40 /* @ */) {
+    if (bytes[index] != 0x40 /* @ */ ) {
       index += 1;
       continue;
     }
@@ -57,10 +57,7 @@ String mentionNamePart(String token) {
 
 /// Participant-facing human row for optimistic extract.
 class MentionHumanRef {
-  const MentionHumanRef({
-    required this.accountId,
-    required this.minosId,
-  });
+  const MentionHumanRef({required this.accountId, required this.minosId});
 
   final String accountId;
   final String minosId;

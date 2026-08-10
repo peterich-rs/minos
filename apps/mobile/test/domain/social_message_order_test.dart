@@ -5,10 +5,10 @@ import 'package:minos/src/rust/api/minos.dart';
 
 void main() {
   MessageSender sender() => const MessageSender.account(
-        accountId: 'a',
-        minosId: 'm',
-        displayName: 'n',
-      );
+    accountId: 'a',
+    minosId: 'm',
+    displayName: 'n',
+  );
 
   SocialChatMessage msg({
     required String id,

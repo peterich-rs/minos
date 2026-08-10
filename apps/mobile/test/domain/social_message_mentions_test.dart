@@ -6,10 +6,10 @@ import 'package:minos/src/rust/api/minos.dart';
 
 void main() {
   MessageSender sender() => const MessageSender.account(
-        accountId: 'a1',
-        minosId: 'alice',
-        displayName: 'Alice',
-      );
+    accountId: 'a1',
+    minosId: 'alice',
+    displayName: 'Alice',
+  );
 
   SocialChatMessage base({
     List<String> mentionedAccountIds = const <String>[],
@@ -42,7 +42,10 @@ void main() {
         mentionedAgentIds: const <String>['agent-codex', 'agent-claude'],
       );
       expect(message.mentionedAccountIds, <String>['a1']);
-      expect(message.mentionedAgentIds, <String>['agent-codex', 'agent-claude']);
+      expect(message.mentionedAgentIds, <String>[
+        'agent-codex',
+        'agent-claude',
+      ]);
     });
 
     test('copyWith updates mentionedAgentIds without dropping accounts', () {
@@ -66,14 +69,12 @@ void main() {
       );
       final accountJson = jsonEncode(message.mentionedAccountIds);
       final agentJson = jsonEncode(message.mentionedAgentIds);
-      final accounts =
-          (jsonDecode(accountJson) as List<dynamic>)
-              .map((value) => value as String)
-              .toList(growable: false);
-      final agents =
-          (jsonDecode(agentJson) as List<dynamic>)
-              .map((value) => value as String)
-              .toList(growable: false);
+      final accounts = (jsonDecode(accountJson) as List<dynamic>)
+          .map((value) => value as String)
+          .toList(growable: false);
+      final agents = (jsonDecode(agentJson) as List<dynamic>)
+          .map((value) => value as String)
+          .toList(growable: false);
       final restored = message.copyWith(
         mentionedAccountIds: accounts,
         mentionedAgentIds: agents,

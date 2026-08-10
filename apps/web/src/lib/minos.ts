@@ -165,6 +165,22 @@ export type MessageSender =
       avatar_url?: string | null
     }
 
+/** Human account_id when sender is Account; null for bots. */
+export function senderAccountId(sender: MessageSender): string | null {
+  return sender.kind === 'account' ? sender.account_id : null
+}
+
+/** @handle for humans (`minos_id`) or bots (`name` / `bot_id`). */
+export function senderHandle(sender: MessageSender): string {
+  if (sender.kind === 'account') return sender.minos_id
+  const name = sender.name?.trim()
+  return name && name.length > 0 ? name : sender.bot_id
+}
+
+export function senderIsMine(sender: MessageSender, accountId: string): boolean {
+  return sender.kind === 'account' && sender.account_id === accountId
+}
+
 export interface ChatMessageReplySummary {
   message_id: string
   sender: MessageSender

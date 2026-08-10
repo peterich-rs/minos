@@ -27,6 +27,7 @@ class SocialChatMessage {
 
   final String localId;
   final String conversationId;
+
   /// First-class author card (Account | Bot). Never stuff bot id into account_id.
   final MessageSender sender;
   final String text;

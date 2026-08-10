@@ -5,17 +5,9 @@ import 'package:minos/ui/features/social/lib/message_grouping.dart';
 
 MessageSender _sender(String id, {SenderType type = SenderType.user}) {
   if (type == SenderType.agent) {
-    return MessageSender.bot(
-      botId: id,
-      displayName: id,
-      runtimeAgent: 'codex',
-    );
+    return MessageSender.bot(botId: id, displayName: id, runtimeAgent: 'codex');
   }
-  return MessageSender.account(
-    accountId: id,
-    minosId: id,
-    displayName: id,
-  );
+  return MessageSender.account(accountId: id, minosId: id, displayName: id);
 }
 
 SocialChatMessage _msg({

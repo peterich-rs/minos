@@ -4,36 +4,36 @@ import 'package:minos/src/rust/api/minos.dart';
 extension MessageSenderExt on MessageSender {
   /// Primary identity id: account_id or bot_id.
   String get identityId => switch (this) {
-        MessageSender_Account(:final accountId) => accountId,
-        MessageSender_Bot(:final botId) => botId,
-      };
+    MessageSender_Account(:final accountId) => accountId,
+    MessageSender_Bot(:final botId) => botId,
+  };
 
   /// Account principal when human; null for bots.
   String? get accountIdOrNull => switch (this) {
-        MessageSender_Account(:final accountId) => accountId,
-        MessageSender_Bot() => null,
-      };
+    MessageSender_Account(:final accountId) => accountId,
+    MessageSender_Bot() => null,
+  };
 
   /// Bot id when bot; null for humans.
   String? get botIdOrNull => switch (this) {
-        MessageSender_Bot(:final botId) => botId,
-        MessageSender_Account() => null,
-      };
+    MessageSender_Bot(:final botId) => botId,
+    MessageSender_Account() => null,
+  };
 
   String get minosIdOrEmpty => switch (this) {
-        MessageSender_Account(:final minosId) => minosId,
-        MessageSender_Bot(:final name, :final botId) =>
-          (name != null && name.trim().isNotEmpty) ? name.trim() : botId,
-      };
+    MessageSender_Account(:final minosId) => minosId,
+    MessageSender_Bot(:final name, :final botId) =>
+      (name != null && name.trim().isNotEmpty) ? name.trim() : botId,
+  };
 
   bool get isBot => this is MessageSender_Bot;
   bool get isAccount => this is MessageSender_Account;
 
   /// Grouping / ownership key used by timeline UI.
   String get groupingKey => switch (this) {
-        MessageSender_Account(:final accountId) => 'user:$accountId',
-        MessageSender_Bot(:final botId) => 'bot:$botId',
-      };
+    MessageSender_Account(:final accountId) => 'user:$accountId',
+    MessageSender_Bot(:final botId) => 'bot:$botId',
+  };
 }
 
 /// Serialize [MessageSender] for local SQLite cache (latest-only shape).

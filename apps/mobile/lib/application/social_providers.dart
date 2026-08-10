@@ -371,15 +371,13 @@ class SocialConversation extends _$SocialConversation {
       selfAccountId: sender.identityId,
       humans: (participants?.humans ?? const [])
           .map(
-            (h) => MentionHumanRef(
-              accountId: h.accountId,
-              minosId: h.minosId,
-            ),
+            (h) => MentionHumanRef(accountId: h.accountId, minosId: h.minosId),
           )
           .toList(growable: false),
       agents: (participants?.agents ?? const [])
           .where(
-            (a) => a.status.trim().isEmpty || a.status.toLowerCase() == 'active',
+            (a) =>
+                a.status.trim().isEmpty || a.status.toLowerCase() == 'active',
           )
           .map(
             (a) => MentionAgentRef(

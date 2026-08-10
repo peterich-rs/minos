@@ -7,19 +7,11 @@ import 'package:minos/ui/features/social/widgets/conversation_system_message.dar
 import 'package:minos/ui/theme/theme.dart';
 
 MessageSender _account(String id, {String name = 'Alice'}) {
-  return MessageSender.account(
-    accountId: id,
-    minosId: id,
-    displayName: name,
-  );
+  return MessageSender.account(accountId: id, minosId: id, displayName: name);
 }
 
 MessageSender _bot(String id, {String name = 'Bot'}) {
-  return MessageSender.bot(
-    botId: id,
-    displayName: name,
-    runtimeAgent: 'codex',
-  );
+  return MessageSender.bot(botId: id, displayName: name, runtimeAgent: 'codex');
 }
 
 SocialChatMessage _msg({

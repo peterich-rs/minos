@@ -193,7 +193,9 @@ class AgentProfilesController extends AsyncNotifier<AgentWorkspaceState> {
     // empty agentId and are not multi-end collab identity until import/mint.
     String agentId = '';
     try {
-      final hub = await ref.read(socialRepositoryProvider).registerAgent(
+      final hub = await ref
+          .read(socialRepositoryProvider)
+          .registerAgent(
             name: draft.name.trim(),
             description: draft.description.trim(),
             runtimeAgent: draft.runtimeAgent.name,
