@@ -42,6 +42,7 @@ pub use minos_domain::{
 pub use minos_protocol::{
     AgentSummary, AuthSummary, ChatMessageAttachment, ChatMessageReplySummary, ChatMessageSummary,
     CloseReason, ConversationAgentMembersResponse, ConversationKind, ConversationMembersResponse,
+    ConversationParticipantsResponse,
     ConversationReadResponse, ConversationResponse, ConversationSummary, ConversationsResponse,
     CreateProjectRequest, CreateProjectResponse, DeleteProjectRequest, FriendRequestStatus,
     FriendRequestSummary, FriendRequestsResponse, FriendSummary, FriendsResponse, HostSkillError,
@@ -418,6 +419,15 @@ impl MobileClient {
         conversation_id: String,
     ) -> Result<ConversationAgentMembersResponse, MinosError> {
         self.0.list_conversation_agents(conversation_id).await
+    }
+
+    pub async fn list_conversation_participants(
+        &self,
+        conversation_id: String,
+    ) -> Result<ConversationParticipantsResponse, MinosError> {
+        self.0
+            .list_conversation_participants(conversation_id)
+            .await
     }
 
     pub async fn add_agent_to_conversation(
@@ -1554,6 +1564,13 @@ pub struct _ListAgentsResponse {
 #[allow(dead_code)]
 #[frb(mirror(ConversationAgentMembersResponse))]
 pub struct _ConversationAgentMembersResponse {
+    pub agents: Vec<AgentSummary>,
+}
+
+#[allow(dead_code)]
+#[frb(mirror(ConversationParticipantsResponse))]
+pub struct _ConversationParticipantsResponse {
+    pub humans: Vec<UserSummary>,
     pub agents: Vec<AgentSummary>,
 }
 

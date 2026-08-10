@@ -39,13 +39,12 @@ class SocialRepository {
     return _core.setMinosId(minosId: minosId);
   }
 
-  Future<List<UserSummary>> conversationMembers({
+  /// Unified participants (humans ∪ bot agents). Preferred for @ picker and
+  /// membership-first roster reads (ADR 0021).
+  Future<ConversationParticipantsResponse> listConversationParticipants({
     required String conversationId,
-  }) async {
-    final response = await _core.conversationMembers(
-      conversationId: conversationId,
-    );
-    return response.members;
+  }) {
+    return _core.listConversationParticipants(conversationId: conversationId);
   }
 
   Future<List<SocialChatMessage>> loadMessages(String conversationId) {

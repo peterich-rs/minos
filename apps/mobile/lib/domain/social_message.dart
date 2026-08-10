@@ -21,6 +21,7 @@ class SocialChatMessage {
     this.replyTo,
     this.recalledAtMs,
     this.mentionedAccountIds = const <String>[],
+    this.mentionedAgentIds = const <String>[],
     this.reactions = const <ReactionGroup>[],
   });
 
@@ -38,6 +39,10 @@ class SocialChatMessage {
   final ChatMessageReplySummary? replyTo;
   final int? recalledAtMs;
   final List<String> mentionedAccountIds;
+
+  /// Structured bot mentions (`target_kind=agent`) from Hub wire.
+  /// Survives hydrate/reload via SQLite cache — not derived from body text.
+  final List<String> mentionedAgentIds;
 
   /// Hub reaction aggregates (viewer-resolved when available).
   final List<ReactionGroup> reactions;
@@ -88,6 +93,7 @@ class SocialChatMessage {
     Object? replyTo = _socialMessageUnset,
     Object? recalledAtMs = _socialMessageUnset,
     List<String>? mentionedAccountIds,
+    List<String>? mentionedAgentIds,
     List<ReactionGroup>? reactions,
   }) {
     return SocialChatMessage(
@@ -115,6 +121,7 @@ class SocialChatMessage {
           ? this.recalledAtMs
           : recalledAtMs as int?,
       mentionedAccountIds: mentionedAccountIds ?? this.mentionedAccountIds,
+      mentionedAgentIds: mentionedAgentIds ?? this.mentionedAgentIds,
       reactions: reactions ?? this.reactions,
     );
   }

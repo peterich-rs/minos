@@ -24,7 +24,8 @@ use minos_domain::{ConnectionState, DeviceId, MinosError};
 use minos_protocol::{
     realtime::ClientFrame, AddAgentToGroupRequest, AddGroupMemberRequest, AgentSummary,
     ApprovalDecisionRequest, AuthSummary, ChatMessageSummary, ConversationAgentMembersResponse,
-    ConversationMembersResponse, ConversationReadResponse, ConversationResponse,
+    ConversationMembersResponse, ConversationParticipantsResponse, ConversationReadResponse,
+    ConversationResponse,
     ConversationsResponse, CreateFriendRequestRequest, CreateGroupConversationRequest,
     EnsureDirectConversationRequest, FriendRequestSummary, FriendRequestsResponse, FriendsResponse,
     GetSessionLastSeqParams, GetSessionLastSeqResponse, HostSummary, ListAgentsResponse,
@@ -723,6 +724,15 @@ impl MobileClient {
     ) -> Result<ConversationAgentMembersResponse, MinosError> {
         auth_http_call!(self, |http, access| {
             http.list_conversation_agents(&access, &conversation_id)
+        })
+    }
+
+    pub async fn list_conversation_participants(
+        &self,
+        conversation_id: String,
+    ) -> Result<ConversationParticipantsResponse, MinosError> {
+        auth_http_call!(self, |http, access| {
+            http.list_conversation_participants(&access, &conversation_id)
         })
     }
 

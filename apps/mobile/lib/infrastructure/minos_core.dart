@@ -236,14 +236,9 @@ class MinosCore implements MinosCoreProtocol {
   );
 
   @override
-  Future<ConversationMembersResponse> conversationMembers({
+  Future<ConversationParticipantsResponse> listConversationParticipants({
     required String conversationId,
-  }) => _client.conversationMembers(conversationId: conversationId);
-
-  @override
-  Future<ConversationAgentMembersResponse> listConversationAgents({
-    required String conversationId,
-  }) => _client.listConversationAgents(conversationId: conversationId);
+  }) => _client.listConversationParticipants(conversationId: conversationId);
 
   @override
   Future<void> addAgentToConversation({

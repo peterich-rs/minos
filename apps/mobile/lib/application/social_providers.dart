@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart' show StateProvider;
 import 'package:minos/application/agent_activity_provider.dart';
 import 'package:minos/application/conversations_sort.dart';
+import 'package:minos/application/group_agent_provider.dart';
 import 'package:minos/application/im_outbox_worker.dart';
 import 'package:minos/data/repositories/social_repository.dart';
 import 'package:minos/data/repositories/thread_repository.dart';
@@ -98,11 +99,13 @@ final socialSearchProvider = FutureProvider.family
       return ref.watch(socialRepositoryProvider).searchUsers(minosId: trimmed);
     });
 
+/// Human members derived from unified participants (ADR 0021).
 final conversationMembersProvider = FutureProvider.family
     .autoDispose<List<UserSummary>, String>((ref, conversationId) async {
-      return ref
-          .watch(socialRepositoryProvider)
-          .conversationMembers(conversationId: conversationId);
+      final participants = await ref.watch(
+        conversationParticipantsProvider(conversationId).future,
+      );
+      return participants.humans;
     });
 
 @riverpod
@@ -915,7 +918,7 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
           .read(socialRepositoryProvider)
           .deleteConversation(conversationId: conversationId);
       ref.invalidate(socialConversationProvider(conversationId));
-      ref.invalidate(conversationMembersProvider(conversationId));
+      ref.invalidate(conversationParticipantsProvider(conversationId));
     } catch (error, stackTrace) {
       state = previous;
       Error.throwWithStackTrace(error, stackTrace);

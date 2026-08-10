@@ -34,8 +34,7 @@ Future<ConversationResponse> createAgentConversation(
 
   ref.read(activeSessionControllerProvider.notifier).reset();
   ref.invalidate(conversationsProvider);
-  ref.invalidate(conversationMembersProvider(conversation.conversationId));
-  ref.invalidate(conversationAgentMembersProvider(conversation.conversationId));
+  ref.invalidate(conversationParticipantsProvider(conversation.conversationId));
 
   return conversation;
 }

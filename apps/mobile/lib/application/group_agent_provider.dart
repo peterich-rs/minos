@@ -6,15 +6,30 @@ import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/domain/group_member.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
-final conversationAgentMembersProvider =
-    FutureProvider.family<List<AgentSummary>, String>((
+/// Unified conversation participants (humans ∪ bots). Membership-first SSOT
+/// for @ picker and roster reads (ADR 0021 / agent-participant-delivery).
+final conversationParticipantsProvider = FutureProvider.family
+    .autoDispose<ConversationParticipantsResponse, String>((
       ref,
       conversationId,
     ) async {
       return ref
           .read(groupAgentRepositoryProvider)
-          .listConversationAgents(conversationId);
+          .listConversationParticipants(conversationId);
     });
+
+/// Bot members derived from [conversationParticipantsProvider].
+final conversationAgentMembersProvider =
+    FutureProvider.family<List<AgentSummary>, String>((
+      ref,
+      conversationId,
+    ) async {
+      final participants = await ref.watch(
+        conversationParticipantsProvider(conversationId).future,
+      );
+      return participants.agents;
+    });
+
 final groupAgentsProvider = Provider.family<List<AgentProfile>, String>((
   ref,
   conversationId,
@@ -38,10 +53,26 @@ final groupAgentsProvider = Provider.family<List<AgentProfile>, String>((
       .toList(growable: false);
 });
 
+/// @-mentionable participants currently in the conversation (membership-first).
+/// Humans exclude the viewer; agents are all bot members.
 final groupMentionableMembersProvider =
     Provider.family<List<GroupMember>, String>((ref, conversationId) {
-      final agents = ref.watch(groupAgentsProvider(conversationId));
-      return agents.map(GroupMember.fromAgent).toList(growable: false);
+      final participants = ref
+          .watch(conversationParticipantsProvider(conversationId))
+          .asData
+          ?.value;
+      if (participants == null) {
+        return const <GroupMember>[];
+      }
+
+      final humans = participants.humans
+          .map(GroupMember.fromUser)
+          .toList(growable: false);
+      final agents = ref
+          .watch(groupAgentsProvider(conversationId))
+          .map(GroupMember.fromAgent)
+          .toList(growable: false);
+      return <GroupMember>[...agents, ...humans];
     });
 
 AgentProfile _resolveProfile(

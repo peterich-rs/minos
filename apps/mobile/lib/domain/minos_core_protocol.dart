@@ -87,11 +87,9 @@ abstract class MinosCoreProtocol {
     required String memberAccountId,
   });
 
-  Future<ConversationMembersResponse> conversationMembers({
-    required String conversationId,
-  });
-
-  Future<ConversationAgentMembersResponse> listConversationAgents({
+  /// Unified participants read model: humans ∪ bot agents (ADR 0021).
+  /// Preferred over split members/agents list endpoints.
+  Future<ConversationParticipantsResponse> listConversationParticipants({
     required String conversationId,
   });
 

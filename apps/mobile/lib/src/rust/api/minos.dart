@@ -149,6 +149,10 @@ abstract class MobileClient implements RustOpaqueInterface {
     required String conversationId,
   });
 
+  Future<ConversationParticipantsResponse> listConversationParticipants({
+    required String conversationId,
+  });
+
   /// Scan host-side skills for the selected runtime host.
   Future<ListHostSkillsResponse> listHostSkills({
     String? hostDeviceId,
@@ -802,6 +806,27 @@ class ConversationMembersResponse {
       other is ConversationMembersResponse &&
           runtimeType == other.runtimeType &&
           members == other.members;
+}
+
+class ConversationParticipantsResponse {
+  final List<UserSummary> humans;
+  final List<AgentSummary> agents;
+
+  const ConversationParticipantsResponse({
+    required this.humans,
+    required this.agents,
+  });
+
+  @override
+  int get hashCode => humans.hashCode ^ agents.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConversationParticipantsResponse &&
+          runtimeType == other.runtimeType &&
+          humans == other.humans &&
+          agents == other.agents;
 }
 
 class ConversationReadResponse {
