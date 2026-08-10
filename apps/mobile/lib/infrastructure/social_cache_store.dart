@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:minos/domain/message_sender_ext.dart';
 import 'package:minos/domain/social_message.dart';
 import 'package:minos/domain/social_message_order.dart';
 import 'package:minos/infrastructure/app_paths.dart';
@@ -370,7 +371,7 @@ class SocialCacheStore {
 
   Future<SocialChatMessage> insertPendingMessage({
     required String conversationId,
-    required UserSummary sender,
+    required MessageSender sender,
     required String text,
     ChatMessageReplySummary? replyTo,
     List<String> mentionedAccountIds = const <String>[],
@@ -782,7 +783,7 @@ class SocialCacheStore {
           'conversation_id': message.conversationId,
           'server_message_id': message.messageId,
           'client_message_id': existing.clientMessageId ?? existing.localId,
-          'sender_json': jsonEncode(_userSummaryToMap(message.sender)),
+          'sender_json': jsonEncode(messageSenderToMap(message.sender)),
           'text': message.text,
           'created_at_ms': platformInt64ToInt(message.createdAtMs),
           'server_order_key': platformInt64ToInt(message.messageSeq),
@@ -908,7 +909,7 @@ class SocialCacheStore {
           'conversation_id': message.conversationId,
           'server_message_id': message.messageId,
           'client_message_id': existing.clientMessageId ?? message.messageId,
-          'sender_json': jsonEncode(_userSummaryToMap(message.sender)),
+          'sender_json': jsonEncode(messageSenderToMap(message.sender)),
           'text': message.text,
           'created_at_ms': platformInt64ToInt(message.createdAtMs),
           'server_order_key': platformInt64ToInt(message.messageSeq),
@@ -936,7 +937,7 @@ class SocialCacheStore {
       'conversation_id': message.conversationId,
       'server_message_id': message.messageId,
       'client_message_id': message.messageId,
-      'sender_json': jsonEncode(_userSummaryToMap(message.sender)),
+      'sender_json': jsonEncode(messageSenderToMap(message.sender)),
       'text': message.text,
       'created_at_ms': platformInt64ToInt(message.createdAtMs),
       'client_seq': nextClientSeq,
@@ -1005,9 +1006,7 @@ class SocialCacheStore {
     return SocialChatMessage(
       localId: localId,
       conversationId: row['conversation_id']! as String,
-      sender: _userSummaryFromMap(
-        jsonDecode(row['sender_json']! as String) as Map<String, Object?>,
-      ),
+      sender: _messageSenderFromJson(row['sender_json'] as String?),
       text: row['text']! as String,
       createdAtMs: row['created_at_ms']! as int,
       clientSeq: row['client_seq']! as int,
@@ -1038,7 +1037,7 @@ class SocialCacheStore {
       'conversation_id': message.conversationId,
       'server_message_id': message.serverMessageId,
       'client_message_id': message.clientMessageId ?? message.localId,
-      'sender_json': jsonEncode(_userSummaryToMap(message.sender)),
+      'sender_json': jsonEncode(messageSenderToMap(message.sender)),
       'text': message.text,
       'created_at_ms': message.createdAtMs,
       'client_seq': message.clientSeq,
@@ -1158,7 +1157,7 @@ class SocialCacheStore {
   Map<String, Object?> _replyPreviewToMap(ChatMessageReplySummary reply) {
     return <String, Object?>{
       'message_id': reply.messageId,
-      'sender': _userSummaryToMap(reply.sender),
+      'sender': messageSenderToMap(reply.sender),
       'text': reply.text,
       'recalled_at_ms': platformInt64ToNullableInt(reply.recalledAtMs),
     };
@@ -1171,7 +1170,7 @@ class SocialCacheStore {
     final map = jsonDecode(raw) as Map<String, Object?>;
     return ChatMessageReplySummary(
       messageId: map['message_id']! as String,
-      sender: _userSummaryFromMap(map['sender']! as Map<String, Object?>),
+      sender: messageSenderFromMap(map['sender']! as Map<String, Object?>),
       text: map['text']! as String,
       recalledAtMs: map['recalled_at_ms'] == null
           ? null
@@ -1200,6 +1199,17 @@ class SocialCacheStore {
       return null;
     }
     return _userSummaryFromMap(jsonDecode(raw) as Map<String, Object?>);
+  }
+
+  MessageSender _messageSenderFromJson(String? raw) {
+    if (raw == null || raw.isEmpty) {
+      return const MessageSender.account(
+        accountId: '',
+        minosId: '',
+        displayName: '',
+      );
+    }
+    return messageSenderFromMap(jsonDecode(raw) as Map<String, Object?>);
   }
 
   /// UUIDv4 used as wire `client_message_id` / local pending primary key.

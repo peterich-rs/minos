@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
@@ -228,28 +230,30 @@ class _ReactionStrip extends StatelessWidget {
   }
 
   void _showPicker(BuildContext context) {
-    showModalBottomSheet<void>(
-      context: context,
-      builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(MinosSpacing.md),
-            child: Wrap(
-              spacing: 12,
-              children: [
-                for (final emoji in _kQuickReactionEmojis)
-                  GestureDetector(
-                    onTap: () {
-                      Navigator.of(ctx).pop();
-                      onToggle?.call(emoji);
-                    },
-                    child: Text(emoji, style: const TextStyle(fontSize: 28)),
-                  ),
-              ],
+    unawaited(
+      showModalBottomSheet<void>(
+        context: context,
+        builder: (ctx) {
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(MinosSpacing.md),
+              child: Wrap(
+                spacing: 12,
+                children: [
+                  for (final emoji in _kQuickReactionEmojis)
+                    GestureDetector(
+                      onTap: () {
+                        Navigator.of(ctx).pop();
+                        onToggle?.call(emoji);
+                      },
+                      child: Text(emoji, style: const TextStyle(fontSize: 28)),
+                    ),
+                ],
+              ),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 }

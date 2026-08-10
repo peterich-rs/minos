@@ -27,7 +27,8 @@ class SocialChatMessage {
 
   final String localId;
   final String conversationId;
-  final UserSummary sender;
+  /// First-class author card (Account | Bot). Never stuff bot id into account_id.
+  final MessageSender sender;
   final String text;
   final int createdAtMs;
   final int clientSeq;
@@ -81,7 +82,7 @@ class SocialChatMessage {
   SocialChatMessage copyWith({
     String? localId,
     String? conversationId,
-    UserSummary? sender,
+    MessageSender? sender,
     String? text,
     int? createdAtMs,
     int? clientSeq,

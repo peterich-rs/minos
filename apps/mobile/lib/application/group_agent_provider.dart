@@ -68,9 +68,9 @@ final groupMentionableMembersProvider =
       final humans = participants.humans
           .map(GroupMember.fromUser)
           .toList(growable: false);
-      final agents = ref
-          .watch(groupAgentsProvider(conversationId))
-          .map(GroupMember.fromAgent)
+      // Prefer Hub AgentSummary.display_name for bot cards / @ picker labels.
+      final agents = participants.agents
+          .map(GroupMember.fromAgentSummary)
           .toList(growable: false);
       return <GroupMember>[...agents, ...humans];
     });
@@ -82,24 +82,42 @@ AgentProfile _resolveProfile(
   if (workspaceState != null) {
     for (final profile in workspaceState.profiles) {
       if (profile.agentId == summary.agentId) {
+        // Prefer Hub display_name when present (global bot face).
+        final display = summary.displayName.trim().isNotEmpty
+            ? summary.displayName.trim()
+            : summary.name;
+        if (display.isNotEmpty && display != profile.name) {
+          return profile.copyWith(name: display);
+        }
         return profile;
       }
     }
   }
 
+  final displayName = summary.displayName.trim().isNotEmpty
+      ? summary.displayName.trim()
+      : summary.name;
   return AgentProfile(
     id: 'server-${summary.agentId}',
     agentId: summary.agentId,
-    name: summary.name,
+    name: displayName,
     description: summary.description,
     runtimeAgent: _runtimeAgentFromString(summary.runtimeAgent),
     model: summary.model,
     workspacePath: summary.workspacePath,
-    reasoningEffort: AgentReasoningEffort.medium,
+    reasoningEffort: _reasoningEffortFromString(summary.defaultReasoningEffort),
     environmentVariables: const <AgentEnvironmentVariable>[],
     createdAtMs: summary.createdAtMs.toInt(),
     updatedAtMs: summary.updatedAtMs.toInt(),
   );
+}
+
+AgentReasoningEffort _reasoningEffortFromString(String value) {
+  return switch (value.trim().toLowerCase()) {
+    'low' => AgentReasoningEffort.low,
+    'high' => AgentReasoningEffort.high,
+    _ => AgentReasoningEffort.medium,
+  };
 }
 
 AgentName _runtimeAgentFromString(String value) {

@@ -11,6 +11,7 @@ import 'package:minos/data/repositories/social_repository.dart';
 import 'package:minos/data/repositories/thread_repository.dart';
 import 'package:minos/data/services/minos_core_service.dart';
 import 'package:minos/domain/mention_extract.dart';
+import 'package:minos/domain/message_sender_ext.dart';
 import 'package:minos/domain/social_message.dart';
 import 'package:minos/domain/social_message_order.dart';
 import 'package:minos/src/rust/api/minos.dart';
@@ -366,7 +367,7 @@ class SocialConversation extends _$SocialConversation {
         ?.value;
     final optimistic = extractOptimisticMentions(
       text: trimmed,
-      selfAccountId: sender.accountId,
+      selfAccountId: sender.identityId,
       humans: (participants?.humans ?? const [])
           .map(
             (h) => MentionHumanRef(
@@ -376,6 +377,9 @@ class SocialConversation extends _$SocialConversation {
           )
           .toList(growable: false),
       agents: (participants?.agents ?? const [])
+          .where(
+            (a) => a.status.trim().isEmpty || a.status.toLowerCase() == 'active',
+          )
           .map(
             (a) => MentionAgentRef(
               agentId: a.agentId,
@@ -762,12 +766,16 @@ class SocialConversation extends _$SocialConversation {
     } catch (_) {}
   }
 
-  Future<UserSummary> _localSender() async {
+  Future<MessageSender> _localSender() async {
     final accountId =
         state.myAccountId ??
         await ref.read(socialRepositoryProvider).loadCurrentAccountId() ??
         'local-self';
-    return UserSummary(accountId: accountId, minosId: 'me', displayName: '我');
+    return MessageSender.account(
+      accountId: accountId,
+      minosId: 'me',
+      displayName: '我',
+    );
   }
 
   ChatMessageReplySummary? _replyPreviewForMessage(SocialChatMessage? message) {
@@ -1065,7 +1073,7 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
     final isOwn =
         myAccountId != null &&
         myAccountId.isNotEmpty &&
-        message.sender.accountId == myAccountId;
+        message.sender.accountIdOrNull == myAccountId;
     final mention =
         myAccountId != null &&
         message.mentionedAccountIds.contains(myAccountId);

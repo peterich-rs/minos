@@ -300,6 +300,9 @@ abstract class RustLibApi extends BaseApi {
     required String runtimeAgent,
     required String model,
     String? workspacePath,
+    String? displayName,
+    String? defaultReasoningEffort,
+    String? systemPrompt,
   });
 
   Future<FriendRequestSummary> crateApiMinosMobileClientRejectFriendRequest({
@@ -414,6 +417,10 @@ abstract class RustLibApi extends BaseApi {
     required String runtimeAgent,
     required String model,
     String? workspacePath,
+    String? displayName,
+    String? defaultReasoningEffort,
+    String? systemPrompt,
+    String? status,
   });
 
   Future<void> crateApiMinosMobileClientUpdateProject({
@@ -2198,6 +2205,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String runtimeAgent,
     required String model,
     String? workspacePath,
+    String? displayName,
+    String? defaultReasoningEffort,
+    String? systemPrompt,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -2212,6 +2222,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(runtimeAgent, serializer);
           sse_encode_String(model, serializer);
           sse_encode_opt_String(workspacePath, serializer);
+          sse_encode_opt_String(displayName, serializer);
+          sse_encode_opt_String(defaultReasoningEffort, serializer);
+          sse_encode_opt_String(systemPrompt, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -2231,6 +2244,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           runtimeAgent,
           model,
           workspacePath,
+          displayName,
+          defaultReasoningEffort,
+          systemPrompt,
         ],
         apiImpl: this,
       ),
@@ -2247,6 +2263,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           "runtimeAgent",
           "model",
           "workspacePath",
+          "displayName",
+          "defaultReasoningEffort",
+          "systemPrompt",
         ],
       );
 
@@ -3047,6 +3066,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String runtimeAgent,
     required String model,
     String? workspacePath,
+    String? displayName,
+    String? defaultReasoningEffort,
+    String? systemPrompt,
+    String? status,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -3062,6 +3085,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(runtimeAgent, serializer);
           sse_encode_String(model, serializer);
           sse_encode_opt_String(workspacePath, serializer);
+          sse_encode_opt_String(displayName, serializer);
+          sse_encode_opt_String(defaultReasoningEffort, serializer);
+          sse_encode_opt_String(systemPrompt, serializer);
+          sse_encode_opt_String(status, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -3082,6 +3109,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           runtimeAgent,
           model,
           workspacePath,
+          displayName,
+          defaultReasoningEffort,
+          systemPrompt,
+          status,
         ],
         apiImpl: this,
       ),
@@ -3099,6 +3130,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           "runtimeAgent",
           "model",
           "workspacePath",
+          "displayName",
+          "defaultReasoningEffort",
+          "systemPrompt",
+          "status",
         ],
       );
 
@@ -4370,18 +4405,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   AgentSummary dco_decode_agent_summary(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 9)
-      throw Exception('unexpected arr length: expect 9 but see ${arr.length}');
+    if (arr.length != 15)
+      throw Exception('unexpected arr length: expect 15 but see ${arr.length}');
     return AgentSummary(
       agentId: dco_decode_String(arr[0]),
       ownerAccountId: dco_decode_String(arr[1]),
       name: dco_decode_String(arr[2]),
-      description: dco_decode_String(arr[3]),
-      runtimeAgent: dco_decode_String(arr[4]),
-      model: dco_decode_String(arr[5]),
-      workspacePath: dco_decode_opt_String(arr[6]),
-      createdAtMs: dco_decode_i_64(arr[7]),
-      updatedAtMs: dco_decode_i_64(arr[8]),
+      displayName: dco_decode_String(arr[3]),
+      description: dco_decode_String(arr[4]),
+      avatarUrl: dco_decode_opt_String(arr[5]),
+      source: dco_decode_String(arr[6]),
+      status: dco_decode_String(arr[7]),
+      runtimeAgent: dco_decode_String(arr[8]),
+      model: dco_decode_String(arr[9]),
+      defaultReasoningEffort: dco_decode_String(arr[10]),
+      systemPrompt: dco_decode_String(arr[11]),
+      workspacePath: dco_decode_opt_String(arr[12]),
+      createdAtMs: dco_decode_i_64(arr[13]),
+      updatedAtMs: dco_decode_i_64(arr[14]),
     );
   }
 
@@ -4588,7 +4629,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return ChatMessageReplySummary(
       messageId: dco_decode_String(arr[0]),
-      sender: dco_decode_user_summary(arr[1]),
+      sender: dco_decode_message_sender(arr[1]),
       text: dco_decode_String(arr[2]),
       recalledAtMs: dco_decode_opt_box_autoadd_i_64(arr[3]),
     );
@@ -4603,7 +4644,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     return ChatMessageSummary(
       messageId: dco_decode_String(arr[0]),
       conversationId: dco_decode_String(arr[1]),
-      sender: dco_decode_user_summary(arr[2]),
+      sender: dco_decode_message_sender(arr[2]),
       text: dco_decode_String(arr[3]),
       createdAtMs: dco_decode_i_64(arr[4]),
       messageSeq: dco_decode_i_64(arr[5]),
@@ -5236,6 +5277,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   MessageRole dco_decode_message_role(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return MessageRole.values[raw as int];
+  }
+
+  @protected
+  MessageSender dco_decode_message_sender(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    switch (raw[0]) {
+      case 0:
+        return MessageSender_Account(
+          accountId: dco_decode_String(raw[1]),
+          minosId: dco_decode_String(raw[2]),
+          displayName: dco_decode_String(raw[3]),
+        );
+      case 1:
+        return MessageSender_Bot(
+          botId: dco_decode_String(raw[1]),
+          displayName: dco_decode_String(raw[2]),
+          runtimeAgent: dco_decode_String(raw[3]),
+          name: dco_decode_opt_String(raw[4]),
+          avatarUrl: dco_decode_opt_String(raw[5]),
+        );
+      default:
+        throw Exception("unreachable");
+    }
   }
 
   @protected
@@ -6079,9 +6143,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_agentId = sse_decode_String(deserializer);
     var var_ownerAccountId = sse_decode_String(deserializer);
     var var_name = sse_decode_String(deserializer);
+    var var_displayName = sse_decode_String(deserializer);
     var var_description = sse_decode_String(deserializer);
+    var var_avatarUrl = sse_decode_opt_String(deserializer);
+    var var_source = sse_decode_String(deserializer);
+    var var_status = sse_decode_String(deserializer);
     var var_runtimeAgent = sse_decode_String(deserializer);
     var var_model = sse_decode_String(deserializer);
+    var var_defaultReasoningEffort = sse_decode_String(deserializer);
+    var var_systemPrompt = sse_decode_String(deserializer);
     var var_workspacePath = sse_decode_opt_String(deserializer);
     var var_createdAtMs = sse_decode_i_64(deserializer);
     var var_updatedAtMs = sse_decode_i_64(deserializer);
@@ -6089,9 +6159,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       agentId: var_agentId,
       ownerAccountId: var_ownerAccountId,
       name: var_name,
+      displayName: var_displayName,
       description: var_description,
+      avatarUrl: var_avatarUrl,
+      source: var_source,
+      status: var_status,
       runtimeAgent: var_runtimeAgent,
       model: var_model,
+      defaultReasoningEffort: var_defaultReasoningEffort,
+      systemPrompt: var_systemPrompt,
       workspacePath: var_workspacePath,
       createdAtMs: var_createdAtMs,
       updatedAtMs: var_updatedAtMs,
@@ -6315,7 +6391,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_messageId = sse_decode_String(deserializer);
-    var var_sender = sse_decode_user_summary(deserializer);
+    var var_sender = sse_decode_message_sender(deserializer);
     var var_text = sse_decode_String(deserializer);
     var var_recalledAtMs = sse_decode_opt_box_autoadd_i_64(deserializer);
     return ChatMessageReplySummary(
@@ -6333,7 +6409,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_messageId = sse_decode_String(deserializer);
     var var_conversationId = sse_decode_String(deserializer);
-    var var_sender = sse_decode_user_summary(deserializer);
+    var var_sender = sse_decode_message_sender(deserializer);
     var var_text = sse_decode_String(deserializer);
     var var_createdAtMs = sse_decode_i_64(deserializer);
     var var_messageSeq = sse_decode_i_64(deserializer);
@@ -7163,6 +7239,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_i_32(deserializer);
     return MessageRole.values[inner];
+  }
+
+  @protected
+  MessageSender sse_decode_message_sender(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var tag_ = sse_decode_i_32(deserializer);
+    switch (tag_) {
+      case 0:
+        var var_accountId = sse_decode_String(deserializer);
+        var var_minosId = sse_decode_String(deserializer);
+        var var_displayName = sse_decode_String(deserializer);
+        return MessageSender_Account(
+          accountId: var_accountId,
+          minosId: var_minosId,
+          displayName: var_displayName,
+        );
+      case 1:
+        var var_botId = sse_decode_String(deserializer);
+        var var_displayName = sse_decode_String(deserializer);
+        var var_runtimeAgent = sse_decode_String(deserializer);
+        var var_name = sse_decode_opt_String(deserializer);
+        var var_avatarUrl = sse_decode_opt_String(deserializer);
+        return MessageSender_Bot(
+          botId: var_botId,
+          displayName: var_displayName,
+          runtimeAgent: var_runtimeAgent,
+          name: var_name,
+          avatarUrl: var_avatarUrl,
+        );
+      default:
+        throw UnimplementedError('');
+    }
   }
 
   @protected
@@ -8209,9 +8318,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.agentId, serializer);
     sse_encode_String(self.ownerAccountId, serializer);
     sse_encode_String(self.name, serializer);
+    sse_encode_String(self.displayName, serializer);
     sse_encode_String(self.description, serializer);
+    sse_encode_opt_String(self.avatarUrl, serializer);
+    sse_encode_String(self.source, serializer);
+    sse_encode_String(self.status, serializer);
     sse_encode_String(self.runtimeAgent, serializer);
     sse_encode_String(self.model, serializer);
+    sse_encode_String(self.defaultReasoningEffort, serializer);
+    sse_encode_String(self.systemPrompt, serializer);
     sse_encode_opt_String(self.workspacePath, serializer);
     sse_encode_i_64(self.createdAtMs, serializer);
     sse_encode_i_64(self.updatedAtMs, serializer);
@@ -8442,7 +8557,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.messageId, serializer);
-    sse_encode_user_summary(self.sender, serializer);
+    sse_encode_message_sender(self.sender, serializer);
     sse_encode_String(self.text, serializer);
     sse_encode_opt_box_autoadd_i_64(self.recalledAtMs, serializer);
   }
@@ -8455,7 +8570,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.messageId, serializer);
     sse_encode_String(self.conversationId, serializer);
-    sse_encode_user_summary(self.sender, serializer);
+    sse_encode_message_sender(self.sender, serializer);
     sse_encode_String(self.text, serializer);
     sse_encode_i_64(self.createdAtMs, serializer);
     sse_encode_i_64(self.messageSeq, serializer);
@@ -9157,6 +9272,35 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_message_role(MessageRole self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.index, serializer);
+  }
+
+  @protected
+  void sse_encode_message_sender(MessageSender self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    switch (self) {
+      case MessageSender_Account(
+        accountId: final accountId,
+        minosId: final minosId,
+        displayName: final displayName,
+      ):
+        sse_encode_i_32(0, serializer);
+        sse_encode_String(accountId, serializer);
+        sse_encode_String(minosId, serializer);
+        sse_encode_String(displayName, serializer);
+      case MessageSender_Bot(
+        botId: final botId,
+        displayName: final displayName,
+        runtimeAgent: final runtimeAgent,
+        name: final name,
+        avatarUrl: final avatarUrl,
+      ):
+        sse_encode_i_32(1, serializer);
+        sse_encode_String(botId, serializer);
+        sse_encode_String(displayName, serializer);
+        sse_encode_String(runtimeAgent, serializer);
+        sse_encode_opt_String(name, serializer);
+        sse_encode_opt_String(avatarUrl, serializer);
+    }
   }
 
   @protected
@@ -10131,6 +10275,9 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
     required String runtimeAgent,
     required String model,
     String? workspacePath,
+    String? displayName,
+    String? defaultReasoningEffort,
+    String? systemPrompt,
   }) => RustLib.instance.api.crateApiMinosMobileClientRegisterAgent(
     that: this,
     name: name,
@@ -10138,6 +10285,9 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
     runtimeAgent: runtimeAgent,
     model: model,
     workspacePath: workspacePath,
+    displayName: displayName,
+    defaultReasoningEffort: defaultReasoningEffort,
+    systemPrompt: systemPrompt,
   );
 
   Future<FriendRequestSummary> rejectFriendRequest({
@@ -10303,6 +10453,10 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
     required String runtimeAgent,
     required String model,
     String? workspacePath,
+    String? displayName,
+    String? defaultReasoningEffort,
+    String? systemPrompt,
+    String? status,
   }) => RustLib.instance.api.crateApiMinosMobileClientUpdateAgent(
     that: this,
     agentId: agentId,
@@ -10311,6 +10465,10 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
     runtimeAgent: runtimeAgent,
     model: model,
     workspacePath: workspacePath,
+    displayName: displayName,
+    defaultReasoningEffort: defaultReasoningEffort,
+    systemPrompt: systemPrompt,
+    status: status,
   );
 
   /// Update a project's name.

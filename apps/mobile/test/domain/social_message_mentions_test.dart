@@ -5,8 +5,11 @@ import 'package:minos/domain/social_message.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
 void main() {
-  UserSummary sender() =>
-      UserSummary(accountId: 'a1', minosId: 'alice', displayName: 'Alice');
+  MessageSender sender() => const MessageSender.account(
+        accountId: 'a1',
+        minosId: 'alice',
+        displayName: 'Alice',
+      );
 
   SocialChatMessage base({
     List<String> mentionedAccountIds = const <String>[],

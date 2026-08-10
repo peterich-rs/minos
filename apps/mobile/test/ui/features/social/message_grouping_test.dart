@@ -3,8 +3,19 @@ import 'package:minos/domain/social_message.dart';
 import 'package:minos/src/rust/api/minos.dart';
 import 'package:minos/ui/features/social/lib/message_grouping.dart';
 
-UserSummary _user(String id, {String? name}) {
-  return UserSummary(accountId: id, minosId: id, displayName: name ?? id);
+MessageSender _sender(String id, {SenderType type = SenderType.user}) {
+  if (type == SenderType.agent) {
+    return MessageSender.bot(
+      botId: id,
+      displayName: id,
+      runtimeAgent: 'codex',
+    );
+  }
+  return MessageSender.account(
+    accountId: id,
+    minosId: id,
+    displayName: id,
+  );
 }
 
 SocialChatMessage _msg({
@@ -19,7 +30,7 @@ SocialChatMessage _msg({
   return SocialChatMessage(
     localId: id,
     conversationId: 'c1',
-    sender: _user(accountId),
+    sender: _sender(accountId, type: senderType),
     text: text,
     createdAtMs: createdAtMs,
     clientSeq: 1,

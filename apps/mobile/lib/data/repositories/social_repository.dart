@@ -69,7 +69,7 @@ class SocialRepository {
 
   Future<SocialChatMessage> insertPendingMessage({
     required String conversationId,
-    required UserSummary sender,
+    required MessageSender sender,
     required String text,
     ChatMessageReplySummary? replyTo,
     List<String> mentionedAccountIds = const <String>[],
@@ -332,6 +332,9 @@ class SocialRepository {
     required String runtimeAgent,
     required String model,
     String? workspacePath,
+    String? displayName,
+    String? defaultReasoningEffort,
+    String? systemPrompt,
   }) {
     return _core.registerAgent(
       name: name,
@@ -339,6 +342,9 @@ class SocialRepository {
       runtimeAgent: runtimeAgent,
       model: model,
       workspacePath: workspacePath,
+      displayName: displayName,
+      defaultReasoningEffort: defaultReasoningEffort,
+      systemPrompt: systemPrompt,
     );
   }
 
@@ -349,6 +355,10 @@ class SocialRepository {
     required String runtimeAgent,
     required String model,
     String? workspacePath,
+    String? displayName,
+    String? defaultReasoningEffort,
+    String? systemPrompt,
+    String? status,
   }) {
     return _core.updateAgent(
       agentId: agentId,
@@ -357,6 +367,10 @@ class SocialRepository {
       runtimeAgent: runtimeAgent,
       model: model,
       workspacePath: workspacePath,
+      displayName: displayName,
+      defaultReasoningEffort: defaultReasoningEffort,
+      systemPrompt: systemPrompt,
+      status: status,
     );
   }
 

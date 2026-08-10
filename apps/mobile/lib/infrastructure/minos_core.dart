@@ -168,12 +168,18 @@ class MinosCore implements MinosCoreProtocol {
     required String runtimeAgent,
     required String model,
     String? workspacePath,
+    String? displayName,
+    String? defaultReasoningEffort,
+    String? systemPrompt,
   }) => _client.registerAgent(
     name: name,
     description: description,
     runtimeAgent: runtimeAgent,
     model: model,
     workspacePath: workspacePath,
+    displayName: displayName,
+    defaultReasoningEffort: defaultReasoningEffort,
+    systemPrompt: systemPrompt,
   );
 
   @override
@@ -184,6 +190,10 @@ class MinosCore implements MinosCoreProtocol {
     required String runtimeAgent,
     required String model,
     String? workspacePath,
+    String? displayName,
+    String? defaultReasoningEffort,
+    String? systemPrompt,
+    String? status,
   }) => _client.updateAgent(
     agentId: agentId,
     name: name,
@@ -191,6 +201,10 @@ class MinosCore implements MinosCoreProtocol {
     runtimeAgent: runtimeAgent,
     model: model,
     workspacePath: workspacePath,
+    displayName: displayName,
+    defaultReasoningEffort: defaultReasoningEffort,
+    systemPrompt: systemPrompt,
+    status: status,
   );
 
   @override

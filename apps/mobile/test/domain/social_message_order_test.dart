@@ -4,8 +4,11 @@ import 'package:minos/domain/social_message_order.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
 void main() {
-  UserSummary sender() =>
-      UserSummary(accountId: 'a', minosId: 'm', displayName: 'n');
+  MessageSender sender() => const MessageSender.account(
+        accountId: 'a',
+        minosId: 'm',
+        displayName: 'n',
+      );
 
   SocialChatMessage msg({
     required String id,

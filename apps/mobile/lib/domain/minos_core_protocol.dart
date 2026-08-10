@@ -51,6 +51,9 @@ abstract class MinosCoreProtocol {
     required String runtimeAgent,
     required String model,
     String? workspacePath,
+    String? displayName,
+    String? defaultReasoningEffort,
+    String? systemPrompt,
   });
 
   Future<AgentSummary> updateAgent({
@@ -60,6 +63,10 @@ abstract class MinosCoreProtocol {
     required String runtimeAgent,
     required String model,
     String? workspacePath,
+    String? displayName,
+    String? defaultReasoningEffort,
+    String? systemPrompt,
+    String? status,
   });
 
   Future<ListAgentsResponse> listAgents();

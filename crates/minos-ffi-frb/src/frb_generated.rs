@@ -2559,6 +2559,9 @@ fn wire__crate__api__minos__MobileClient_register_agent_impl(
             let api_runtime_agent = <String>::sse_decode(&mut deserializer);
             let api_model = <String>::sse_decode(&mut deserializer);
             let api_workspace_path = <Option<String>>::sse_decode(&mut deserializer);
+            let api_display_name = <Option<String>>::sse_decode(&mut deserializer);
+            let api_default_reasoning_effort = <Option<String>>::sse_decode(&mut deserializer);
+            let api_system_prompt = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::minos::MinosError>(
@@ -2587,6 +2590,9 @@ fn wire__crate__api__minos__MobileClient_register_agent_impl(
                             api_runtime_agent,
                             api_model,
                             api_workspace_path,
+                            api_display_name,
+                            api_default_reasoning_effort,
+                            api_system_prompt,
                         )
                         .await?;
                         Ok(output_ok)
@@ -3787,6 +3793,10 @@ fn wire__crate__api__minos__MobileClient_update_agent_impl(
             let api_runtime_agent = <String>::sse_decode(&mut deserializer);
             let api_model = <String>::sse_decode(&mut deserializer);
             let api_workspace_path = <Option<String>>::sse_decode(&mut deserializer);
+            let api_display_name = <Option<String>>::sse_decode(&mut deserializer);
+            let api_default_reasoning_effort = <Option<String>>::sse_decode(&mut deserializer);
+            let api_system_prompt = <Option<String>>::sse_decode(&mut deserializer);
+            let api_status = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::minos::MinosError>(
@@ -3816,6 +3826,10 @@ fn wire__crate__api__minos__MobileClient_update_agent_impl(
                             api_runtime_agent,
                             api_model,
                             api_workspace_path,
+                            api_display_name,
+                            api_default_reasoning_effort,
+                            api_system_prompt,
+                            api_status,
                         )
                         .await?;
                         Ok(output_ok)
@@ -5309,9 +5323,15 @@ const _: fn() = || {
         let _: String = AgentSummary.agent_id;
         let _: String = AgentSummary.owner_account_id;
         let _: String = AgentSummary.name;
+        let _: String = AgentSummary.display_name;
         let _: String = AgentSummary.description;
+        let _: Option<String> = AgentSummary.avatar_url;
+        let _: String = AgentSummary.source;
+        let _: String = AgentSummary.status;
         let _: String = AgentSummary.runtime_agent;
         let _: String = AgentSummary.model;
+        let _: String = AgentSummary.default_reasoning_effort;
+        let _: String = AgentSummary.system_prompt;
         let _: Option<String> = AgentSummary.workspace_path;
         let _: i64 = AgentSummary.created_at_ms;
         let _: i64 = AgentSummary.updated_at_ms;
@@ -5340,7 +5360,7 @@ const _: fn() = || {
     {
         let ChatMessageReplySummary = None::<crate::api::minos::ChatMessageReplySummary>.unwrap();
         let _: String = ChatMessageReplySummary.message_id;
-        let _: crate::api::minos::UserSummary = ChatMessageReplySummary.sender;
+        let _: crate::api::minos::MessageSender = ChatMessageReplySummary.sender;
         let _: String = ChatMessageReplySummary.text;
         let _: Option<i64> = ChatMessageReplySummary.recalled_at_ms;
     }
@@ -5348,7 +5368,7 @@ const _: fn() = || {
         let ChatMessageSummary = None::<crate::api::minos::ChatMessageSummary>.unwrap();
         let _: String = ChatMessageSummary.message_id;
         let _: String = ChatMessageSummary.conversation_id;
-        let _: crate::api::minos::UserSummary = ChatMessageSummary.sender;
+        let _: crate::api::minos::MessageSender = ChatMessageSummary.sender;
         let _: String = ChatMessageSummary.text;
         let _: i64 = ChatMessageSummary.created_at_ms;
         let _: i64 = ChatMessageSummary.message_seq;
@@ -5545,6 +5565,30 @@ const _: fn() = || {
         let ListSessionsResponse = None::<crate::api::minos::ListSessionsResponse>.unwrap();
         let _: Vec<SessionSummary> = ListSessionsResponse.sessions;
         let _: Option<i64> = ListSessionsResponse.next_before_ts_ms;
+    }
+    match None::<crate::api::minos::MessageSender>.unwrap() {
+        crate::api::minos::MessageSender::Account {
+            account_id,
+            minos_id,
+            display_name,
+        } => {
+            let _: String = account_id;
+            let _: String = minos_id;
+            let _: String = display_name;
+        }
+        crate::api::minos::MessageSender::Bot {
+            bot_id,
+            display_name,
+            runtime_agent,
+            name,
+            avatar_url,
+        } => {
+            let _: String = bot_id;
+            let _: String = display_name;
+            let _: String = runtime_agent;
+            let _: Option<String> = name;
+            let _: Option<String> = avatar_url;
+        }
     }
     match None::<crate::api::minos::MinosError>.unwrap() {
         crate::api::minos::MinosError::BindFailed { addr, message } => {
@@ -6102,9 +6146,15 @@ impl SseDecode for crate::api::minos::AgentSummary {
         let mut var_agentId = <String>::sse_decode(deserializer);
         let mut var_ownerAccountId = <String>::sse_decode(deserializer);
         let mut var_name = <String>::sse_decode(deserializer);
+        let mut var_displayName = <String>::sse_decode(deserializer);
         let mut var_description = <String>::sse_decode(deserializer);
+        let mut var_avatarUrl = <Option<String>>::sse_decode(deserializer);
+        let mut var_source = <String>::sse_decode(deserializer);
+        let mut var_status = <String>::sse_decode(deserializer);
         let mut var_runtimeAgent = <String>::sse_decode(deserializer);
         let mut var_model = <String>::sse_decode(deserializer);
+        let mut var_defaultReasoningEffort = <String>::sse_decode(deserializer);
+        let mut var_systemPrompt = <String>::sse_decode(deserializer);
         let mut var_workspacePath = <Option<String>>::sse_decode(deserializer);
         let mut var_createdAtMs = <i64>::sse_decode(deserializer);
         let mut var_updatedAtMs = <i64>::sse_decode(deserializer);
@@ -6112,9 +6162,15 @@ impl SseDecode for crate::api::minos::AgentSummary {
             agent_id: var_agentId,
             owner_account_id: var_ownerAccountId,
             name: var_name,
+            display_name: var_displayName,
             description: var_description,
+            avatar_url: var_avatarUrl,
+            source: var_source,
+            status: var_status,
             runtime_agent: var_runtimeAgent,
             model: var_model,
+            default_reasoning_effort: var_defaultReasoningEffort,
+            system_prompt: var_systemPrompt,
             workspace_path: var_workspacePath,
             created_at_ms: var_createdAtMs,
             updated_at_ms: var_updatedAtMs,
@@ -6209,7 +6265,7 @@ impl SseDecode for crate::api::minos::ChatMessageReplySummary {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_messageId = <String>::sse_decode(deserializer);
-        let mut var_sender = <crate::api::minos::UserSummary>::sse_decode(deserializer);
+        let mut var_sender = <crate::api::minos::MessageSender>::sse_decode(deserializer);
         let mut var_text = <String>::sse_decode(deserializer);
         let mut var_recalledAtMs = <Option<i64>>::sse_decode(deserializer);
         return crate::api::minos::ChatMessageReplySummary {
@@ -6226,7 +6282,7 @@ impl SseDecode for crate::api::minos::ChatMessageSummary {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_messageId = <String>::sse_decode(deserializer);
         let mut var_conversationId = <String>::sse_decode(deserializer);
-        let mut var_sender = <crate::api::minos::UserSummary>::sse_decode(deserializer);
+        let mut var_sender = <crate::api::minos::MessageSender>::sse_decode(deserializer);
         let mut var_text = <String>::sse_decode(deserializer);
         let mut var_createdAtMs = <i64>::sse_decode(deserializer);
         let mut var_messageSeq = <i64>::sse_decode(deserializer);
@@ -7136,6 +7192,42 @@ impl SseDecode for crate::api::minos::MessageRole {
             2 => crate::api::minos::MessageRole::System,
             _ => unreachable!("Invalid variant for MessageRole: {}", inner),
         };
+    }
+}
+
+impl SseDecode for crate::api::minos::MessageSender {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut tag_ = <i32>::sse_decode(deserializer);
+        match tag_ {
+            0 => {
+                let mut var_accountId = <String>::sse_decode(deserializer);
+                let mut var_minosId = <String>::sse_decode(deserializer);
+                let mut var_displayName = <String>::sse_decode(deserializer);
+                return crate::api::minos::MessageSender::Account {
+                    account_id: var_accountId,
+                    minos_id: var_minosId,
+                    display_name: var_displayName,
+                };
+            }
+            1 => {
+                let mut var_botId = <String>::sse_decode(deserializer);
+                let mut var_displayName = <String>::sse_decode(deserializer);
+                let mut var_runtimeAgent = <String>::sse_decode(deserializer);
+                let mut var_name = <Option<String>>::sse_decode(deserializer);
+                let mut var_avatarUrl = <Option<String>>::sse_decode(deserializer);
+                return crate::api::minos::MessageSender::Bot {
+                    bot_id: var_botId,
+                    display_name: var_displayName,
+                    runtime_agent: var_runtimeAgent,
+                    name: var_name,
+                    avatar_url: var_avatarUrl,
+                };
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
     }
 }
 
@@ -8700,9 +8792,15 @@ impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::AgentSummar
             self.0.agent_id.into_into_dart().into_dart(),
             self.0.owner_account_id.into_into_dart().into_dart(),
             self.0.name.into_into_dart().into_dart(),
+            self.0.display_name.into_into_dart().into_dart(),
             self.0.description.into_into_dart().into_dart(),
+            self.0.avatar_url.into_into_dart().into_dart(),
+            self.0.source.into_into_dart().into_dart(),
+            self.0.status.into_into_dart().into_dart(),
             self.0.runtime_agent.into_into_dart().into_dart(),
             self.0.model.into_into_dart().into_dart(),
+            self.0.default_reasoning_effort.into_into_dart().into_dart(),
+            self.0.system_prompt.into_into_dart().into_dart(),
             self.0.workspace_path.into_into_dart().into_dart(),
             self.0.created_at_ms.into_into_dart().into_dart(),
             self.0.updated_at_ms.into_into_dart().into_dart(),
@@ -9715,6 +9813,53 @@ impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::MessageRole
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::MessageSender> {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        match self.0 {
+            crate::api::minos::MessageSender::Account {
+                account_id,
+                minos_id,
+                display_name,
+            } => [
+                0.into_dart(),
+                account_id.into_into_dart().into_dart(),
+                minos_id.into_into_dart().into_dart(),
+                display_name.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            crate::api::minos::MessageSender::Bot {
+                bot_id,
+                display_name,
+                runtime_agent,
+                name,
+                avatar_url,
+            } => [
+                1.into_dart(),
+                bot_id.into_into_dart().into_dart(),
+                display_name.into_into_dart().into_dart(),
+                runtime_agent.into_into_dart().into_dart(),
+                name.into_into_dart().into_dart(),
+                avatar_url.into_into_dart().into_dart(),
+            ]
+            .into_dart(),
+            _ => {
+                unimplemented!("");
+            }
+        }
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for FrbWrapper<crate::api::minos::MessageSender>
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<FrbWrapper<crate::api::minos::MessageSender>>
+    for crate::api::minos::MessageSender
+{
+    fn into_into_dart(self) -> FrbWrapper<crate::api::minos::MessageSender> {
+        self.into()
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for FrbWrapper<crate::api::minos::MinosError> {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         match self.0 {
@@ -10703,9 +10848,15 @@ impl SseEncode for crate::api::minos::AgentSummary {
         <String>::sse_encode(self.agent_id, serializer);
         <String>::sse_encode(self.owner_account_id, serializer);
         <String>::sse_encode(self.name, serializer);
+        <String>::sse_encode(self.display_name, serializer);
         <String>::sse_encode(self.description, serializer);
+        <Option<String>>::sse_encode(self.avatar_url, serializer);
+        <String>::sse_encode(self.source, serializer);
+        <String>::sse_encode(self.status, serializer);
         <String>::sse_encode(self.runtime_agent, serializer);
         <String>::sse_encode(self.model, serializer);
+        <String>::sse_encode(self.default_reasoning_effort, serializer);
+        <String>::sse_encode(self.system_prompt, serializer);
         <Option<String>>::sse_encode(self.workspace_path, serializer);
         <i64>::sse_encode(self.created_at_ms, serializer);
         <i64>::sse_encode(self.updated_at_ms, serializer);
@@ -10778,7 +10929,7 @@ impl SseEncode for crate::api::minos::ChatMessageReplySummary {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.message_id, serializer);
-        <crate::api::minos::UserSummary>::sse_encode(self.sender, serializer);
+        <crate::api::minos::MessageSender>::sse_encode(self.sender, serializer);
         <String>::sse_encode(self.text, serializer);
         <Option<i64>>::sse_encode(self.recalled_at_ms, serializer);
     }
@@ -10789,7 +10940,7 @@ impl SseEncode for crate::api::minos::ChatMessageSummary {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.message_id, serializer);
         <String>::sse_encode(self.conversation_id, serializer);
-        <crate::api::minos::UserSummary>::sse_encode(self.sender, serializer);
+        <crate::api::minos::MessageSender>::sse_encode(self.sender, serializer);
         <String>::sse_encode(self.text, serializer);
         <i64>::sse_encode(self.created_at_ms, serializer);
         <i64>::sse_encode(self.message_seq, serializer);
@@ -11494,6 +11645,41 @@ impl SseEncode for crate::api::minos::MessageRole {
             },
             serializer,
         );
+    }
+}
+
+impl SseEncode for crate::api::minos::MessageSender {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        match self {
+            crate::api::minos::MessageSender::Account {
+                account_id,
+                minos_id,
+                display_name,
+            } => {
+                <i32>::sse_encode(0, serializer);
+                <String>::sse_encode(account_id, serializer);
+                <String>::sse_encode(minos_id, serializer);
+                <String>::sse_encode(display_name, serializer);
+            }
+            crate::api::minos::MessageSender::Bot {
+                bot_id,
+                display_name,
+                runtime_agent,
+                name,
+                avatar_url,
+            } => {
+                <i32>::sse_encode(1, serializer);
+                <String>::sse_encode(bot_id, serializer);
+                <String>::sse_encode(display_name, serializer);
+                <String>::sse_encode(runtime_agent, serializer);
+                <Option<String>>::sse_encode(name, serializer);
+                <Option<String>>::sse_encode(avatar_url, serializer);
+            }
+            _ => {
+                unimplemented!("");
+            }
+        }
     }
 }
 

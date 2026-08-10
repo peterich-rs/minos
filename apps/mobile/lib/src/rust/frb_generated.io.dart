@@ -430,6 +430,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MessageRole dco_decode_message_role(dynamic raw);
 
   @protected
+  MessageSender dco_decode_message_sender(dynamic raw);
+
+  @protected
   MinosError dco_decode_minos_error(dynamic raw);
 
   @protected
@@ -1024,6 +1027,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   MessageRole sse_decode_message_role(SseDeserializer deserializer);
+
+  @protected
+  MessageSender sse_decode_message_sender(SseDeserializer deserializer);
 
   @protected
   MinosError sse_decode_minos_error(SseDeserializer deserializer);
@@ -1782,6 +1788,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_message_role(MessageRole self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_message_sender(MessageSender self, SseSerializer serializer);
 
   @protected
   void sse_encode_minos_error(MinosError self, SseSerializer serializer);

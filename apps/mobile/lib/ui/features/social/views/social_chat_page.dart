@@ -12,6 +12,7 @@ import 'package:minos/application/social_providers.dart';
 import 'package:minos/data/repositories/social_repository.dart';
 import 'package:minos/domain/agent_profile.dart';
 import 'package:minos/domain/group_member.dart';
+import 'package:minos/domain/message_sender_ext.dart';
 import 'package:minos/domain/social_message.dart';
 import 'package:minos/infrastructure/platform_int64.dart';
 import 'package:minos/src/rust/api/minos.dart';
@@ -562,17 +563,26 @@ String _resolveConversationTitle({
 String? _counterpartTitleFromMessages(SocialConversationState conversation) {
   for (final message in conversation.messages.reversed) {
     if (conversation.myAccountId != null &&
-        message.sender.accountId == conversation.myAccountId) {
+        message.sender.accountIdOrNull == conversation.myAccountId) {
       continue;
     }
     if (conversation.myAccountId == null &&
-        (message.sender.minosId == 'me' ||
+        (message.sender.minosIdOrEmpty == 'me' ||
             message.sender.displayName.trim() == '我')) {
       continue;
     }
-    return _userTitle(message.sender);
+    return _senderTitle(message.sender);
   }
   return null;
+}
+
+String? _senderTitle(MessageSender? sender) {
+  if (sender == null) return null;
+  return _firstNonEmpty(<String?>[
+    sender.displayName.trim(),
+    sender.minosIdOrEmpty.trim(),
+    sender.identityId.trim(),
+  ]);
 }
 
 String? _userTitle(UserSummary? user) {
@@ -616,7 +626,7 @@ class _ConversationMessagePane extends ConsumerWidget {
         final sessions = await ref
             .read(socialRepositoryProvider)
             .listAgentSessions(conversationId: conversationId, limit: 20);
-        final agentKey = message.sender.accountId.trim();
+        final agentKey = message.sender.identityId.trim();
         final matched = sessions.where((s) {
           final id = s.agentId?.trim();
           return id != null &&
@@ -758,7 +768,8 @@ class _ConversationMessagePane extends ConsumerWidget {
                     previous,
                     message,
                   );
-                  final isMine = message.sender.accountId == state.myAccountId;
+                  final isMine =
+                      message.sender.accountIdOrNull == state.myAccountId;
                   final isAgent = message.senderType == SenderType.agent;
                   final mentionsMe =
                       !isMine &&
@@ -924,9 +935,7 @@ class _ConversationComposer extends ConsumerWidget {
             children: <Widget>[
               if (kind == ConversationKind.group) ...<Widget>[
                 MinosButton.outline(
-                  onPressed: !hasMentionable
-                      ? null
-                      : () => onShowMentionPicker(),
+                  onPressed: !hasMentionable ? null : onShowMentionPicker,
                   child: const Text('@'),
                 ),
                 const SizedBox(width: 8),
@@ -1328,7 +1337,7 @@ bool _isWaitingForAgentReply(
     if (message.senderType == SenderType.agent) {
       return false;
     }
-    if (message.sender.accountId == myAccountId) {
+    if (message.sender.accountIdOrNull == myAccountId) {
       return message.deliveryState == SocialMessageDeliveryState.sent;
     }
     return false;

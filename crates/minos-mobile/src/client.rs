@@ -32,7 +32,7 @@ use minos_protocol::{
     ListChatMessagesResponse, ListClisResponse, ListHostSkillsResponse, ListSessionsParams,
     ListSessionsResponse, MyProfileResponse, ReadSessionParams, ReadSessionResponse,
     RefreshResponse, RegisterAgentRequest, RemoveAgentFromGroupRequest, RemoveGroupMemberRequest,
-    SendChatMessageRequest, SetMinosIdRequest, UpdateAgentRequest, UserSummary,
+    SetMinosIdRequest, UpdateAgentRequest, UserSummary,
     WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::UiEventMessage;
@@ -44,13 +44,18 @@ use uuid::Uuid;
 
 use crate::auth::{AuthSession, AuthStateFrame};
 use crate::openwire_trace::OpenwireTraceFactory;
-use crate::realtime::{RealtimeSession, SubscriptionManager};
+use crate::realtime::{
+    wait_for_result, ChatSendWaitResult, RealtimeSession, SharedChatSendWaiters,
+    SubscriptionManager,
+};
 use crate::store::{InMemoryPairingStore, MobilePairingStore, PersistedPairingState};
 use crate::ReconnectController;
 
 const WS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 const WS_PING_INTERVAL: Duration = Duration::from_secs(30);
 const WS_PONG_TIMEOUT: Duration = Duration::from_secs(45);
+/// Match Desktop hub-realtime AppendMessage waiter default.
+const CHAT_SEND_ACK_TIMEOUT: Duration = Duration::from_secs(8);
 
 macro_rules! auth_http_call {
     ($self:expr, |$http:ident, $access:ident| $call:expr) => {{
@@ -116,6 +121,8 @@ pub struct MobileClient {
     /// Sender into the live realtime task. Stored so app code can request
     /// additional topic subscriptions after the WebSocket is already open.
     outbound_tx: Arc<Mutex<Option<tokio::sync::mpsc::Sender<ClientFrame>>>>,
+    /// Waiters for ChatSendAck/Nack keyed by client_operation_id.
+    chat_send_waiters: SharedChatSendWaiters,
     /// Watch channel publishing the latest [`AuthStateFrame`] to UI /
     /// reconnect-loop subscribers.
     auth_state_tx: watch::Sender<AuthStateFrame>,
@@ -158,6 +165,7 @@ impl MobileClient {
             tasks: Arc::new(Mutex::new(Vec::new())),
             subscription_mgr: SubscriptionManager::new(),
             outbound_tx: Arc::new(Mutex::new(None)),
+            chat_send_waiters: Arc::new(crate::realtime::ChatSendWaiterRegistry::new()),
             auth_state_tx,
             auth_state_rx,
             auth_session: Arc::new(RwLock::new(None)),
@@ -234,6 +242,7 @@ impl MobileClient {
             tasks: Arc::new(Mutex::new(Vec::new())),
             subscription_mgr: SubscriptionManager::new(),
             outbound_tx: Arc::new(Mutex::new(None)),
+            chat_send_waiters: Arc::new(crate::realtime::ChatSendWaiterRegistry::new()),
             auth_state_tx,
             auth_state_rx,
             auth_session: Arc::new(RwLock::new(live_auth)),
@@ -562,6 +571,7 @@ impl MobileClient {
         auth_http_call!(self, |http, access| http.friends(&access))
     }
 
+    /// Register a Hub bot identity (digital body). Local profile cache is not SSOT.
     pub async fn register_agent(
         &self,
         name: String,
@@ -569,21 +579,37 @@ impl MobileClient {
         runtime_agent: String,
         model: String,
         workspace_path: Option<String>,
+        display_name: Option<String>,
+        default_reasoning_effort: Option<String>,
+        system_prompt: Option<String>,
     ) -> Result<AgentSummary, MinosError> {
+        let display_name = display_name
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let default_reasoning_effort = default_reasoning_effort
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_default();
+        let system_prompt = system_prompt.unwrap_or_default();
         auth_http_call!(self, |http, access| {
             http.register_agent(
                 &access,
                 RegisterAgentRequest {
                     name,
+                    display_name,
                     description,
+                    avatar_url: None,
                     runtime_agent,
                     model,
+                    default_reasoning_effort,
+                    system_prompt,
                     workspace_path,
                 },
             )
         })
     }
 
+    /// Update a Hub bot identity owned by the caller.
     pub async fn update_agent(
         &self,
         agent_id: String,
@@ -592,17 +618,38 @@ impl MobileClient {
         runtime_agent: String,
         model: String,
         workspace_path: Option<String>,
+        display_name: Option<String>,
+        default_reasoning_effort: Option<String>,
+        system_prompt: Option<String>,
+        status: Option<String>,
     ) -> Result<AgentSummary, MinosError> {
+        let display_name = display_name
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        // Preserve Option: None → server keeps current digital-body field.
+        let default_reasoning_effort = default_reasoning_effort
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let system_prompt = system_prompt.map(|s| s.to_string());
+        let status = status
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         auth_http_call!(self, |http, access| {
             http.update_agent(
                 &access,
                 &agent_id,
                 UpdateAgentRequest {
                     name,
+                    display_name,
                     description,
+                    // Omitted so Hub keeps current avatar (mobile draft has no avatar edit yet).
+                    avatar_url: None,
                     runtime_agent,
                     model,
+                    default_reasoning_effort,
+                    system_prompt,
                     workspace_path,
+                    status,
                 },
             )
         })
@@ -793,22 +840,130 @@ impl MobileClient {
         reply_to_message_id: Option<String>,
         client_message_id: Option<String>,
     ) -> Result<minos_protocol::ChatMessageSummary, MinosError> {
-        auth_http_call!(self, |http, access| {
-            http.send_chat_message(
-                &access,
+        // Collaboration writes are Account WS AppendMessage only (no REST write path).
+        // Outbox retries on socket/timeout; nack is definitive.
+        let client_op = client_message_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| MinosError::RpcCallFailed {
+                method: "AppendMessage".into(),
+                message: "client_message_id is required for collaboration sends".into(),
+            })?;
+
+        match self
+            .send_append_message_wait(
+                client_op,
                 &conversation_id,
-                SendChatMessageRequest {
-                    text,
-                    reply_to_message_id,
-                    client_message_id,
-                    // Mobile live sends are client_live so Hub can @-dispatch.
-                    message_source: Some(minos_protocol::MessageSource::ClientLive),
-                    client_sent_at_ms: Some(chrono::Utc::now().timestamp_millis()),
-                    created_at_ms: None,
-                    attachment_blob_ids: Vec::new(),
-                },
+                &text,
+                reply_to_message_id.as_deref(),
             )
-        })
+            .await
+        {
+            ChatSendWaitResult::Ack {
+                message,
+                message_id,
+                conversation_id: ack_conversation_id,
+                message_seq,
+            } => {
+                if let Some(summary) = message {
+                    return Ok(summary);
+                }
+                // Ack without full summary: synthesize a minimal committed row.
+                // Timeline hydrate will fill author/mentions from Hub Durable.
+                tracing::debug!(
+                    target: "minos_mobile::client",
+                    message_id = %message_id,
+                    conversation_id = %ack_conversation_id,
+                    message_seq,
+                    "ChatSendAck without message summary; synthesizing local commit"
+                );
+                Ok(minos_protocol::ChatMessageSummary {
+                    message_id,
+                    conversation_id: ack_conversation_id,
+                    sender: minos_protocol::MessageSender::Account {
+                        account_id: String::new(),
+                        minos_id: String::new(),
+                        display_name: String::new(),
+                    },
+                    text,
+                    created_at_ms: chrono::Utc::now().timestamp_millis(),
+                    message_seq,
+                    reply_to: None,
+                    recalled_at_ms: None,
+                    mentioned_account_ids: Vec::new(),
+                    mentioned_agent_ids: Vec::new(),
+                    sender_type: minos_protocol::SenderType::User,
+                    reactions: Vec::new(),
+                    attachments: Vec::new(),
+                })
+            }
+            ChatSendWaitResult::Nack {
+                code,
+                message,
+                conversation_id: nack_conversation_id,
+            } => Err(MinosError::RpcCallFailed {
+                method: "AppendMessage".into(),
+                message: format!(
+                    "ChatSendNack conversation={nack_conversation_id} code={code}: {message}"
+                ),
+            }),
+            ChatSendWaitResult::Socket => Err(MinosError::RpcCallFailed {
+                method: "AppendMessage".into(),
+                message: "AppendMessage unavailable (Account WS not live)".into(),
+            }),
+            ChatSendWaitResult::Timeout => Err(MinosError::RpcCallFailed {
+                method: "AppendMessage".into(),
+                message: "AppendMessage timed out waiting for ChatSendAck".into(),
+            }),
+        }
+    }
+
+    /// Account WS AppendMessage + wait for ChatSendAck/Nack (or timeout).
+    async fn send_append_message_wait(
+        &self,
+        client_operation_id: &str,
+        conversation_id: &str,
+        text: &str,
+        reply_to_message_id: Option<&str>,
+    ) -> ChatSendWaitResult {
+        if !matches!(self.current_state(), ConnectionState::Connected) {
+            return ChatSendWaitResult::Socket;
+        }
+        let sender = self.outbound_tx.lock().await.clone();
+        let Some(sender) = sender else {
+            return ChatSendWaitResult::Socket;
+        };
+        let Some(rx) = self.chat_send_waiters.register(client_operation_id) else {
+            return ChatSendWaitResult::Socket;
+        };
+        let frame = ClientFrame::AppendMessage {
+            client_operation_id: client_operation_id.to_string(),
+            conversation_id: conversation_id.to_string(),
+            text: text.to_string(),
+            mentions: Vec::new(),
+            reply_to_message_id: reply_to_message_id
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+            attachment_ids: Vec::new(),
+        };
+        if let Err(error) = sender.try_send(frame) {
+            self.chat_send_waiters.cancel(client_operation_id);
+            tracing::debug!(
+                target: "minos_mobile::client",
+                error = %error,
+                "AppendMessage not sent on live socket"
+            );
+            return ChatSendWaitResult::Socket;
+        }
+        wait_for_result(
+            &self.chat_send_waiters,
+            client_operation_id,
+            rx,
+            CHAT_SEND_ACK_TIMEOUT,
+        )
+        .await
     }
 
     pub async fn recall_chat_message(
@@ -1242,6 +1397,7 @@ impl MobileClient {
             social_events_tx: self.social_events_tx.clone(),
             subscription_mgr: self.subscription_mgr.clone(),
             outbound_tx: self.outbound_tx.clone(),
+            chat_send_waiters: self.chat_send_waiters.clone(),
             tasks: self.tasks.clone(),
             device_id: self.device_id,
             self_name: self.self_name.clone(),
@@ -1429,6 +1585,7 @@ impl MobileClient {
             self.social_events_tx.clone(),
             self.state_tx.clone(),
             frame_rx,
+            self.chat_send_waiters.clone(),
         ));
 
         let mut tasks = self.tasks.lock().await;
@@ -1459,6 +1616,7 @@ impl MobileClient {
 
     async fn shutdown_outbound(&self) {
         *self.outbound_tx.lock().await = None;
+        self.chat_send_waiters.fail_all_socket();
         let mut tasks = self.tasks.lock().await;
         for h in tasks.drain(..) {
             h.abort();
@@ -1674,6 +1832,7 @@ struct ReconnectContext {
     social_events_tx: broadcast::Sender<SocialEventFrame>,
     subscription_mgr: Arc<SubscriptionManager>,
     outbound_tx: Arc<Mutex<Option<tokio::sync::mpsc::Sender<ClientFrame>>>>,
+    chat_send_waiters: SharedChatSendWaiters,
     tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     device_id: DeviceId,
     self_name: String,
@@ -1902,6 +2061,7 @@ async fn clear_auth_session_and_disconnect_ctx(ctx: &ReconnectContext) {
         handle.abort();
     }
     *ctx.outbound_tx.lock().await = None;
+    ctx.chat_send_waiters.fail_all_socket();
     let _ = ctx.state_tx.send(ConnectionState::Disconnected);
 }
 
@@ -1978,6 +2138,7 @@ async fn connect_with_handles(
         ctx.social_events_tx.clone(),
         ctx.state_tx.clone(),
         frame_rx,
+        ctx.chat_send_waiters.clone(),
     ));
 
     let mut tasks = ctx.tasks.lock().await;
