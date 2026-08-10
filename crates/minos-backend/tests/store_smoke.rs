@@ -23,6 +23,11 @@ async fn connect_creates_tables_and_migrates() {
         "audit_events",
         "project_members",
         "projects",
+        "agents",
+        "chat_message_mentions",
+        "bot_message_deliveries",
+        "bot_revisions",
+        "bot_deployments",
     ] {
         let row: Option<String> =
             sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
@@ -40,6 +45,10 @@ async fn connect_creates_tables_and_migrates() {
         "idx_host_commands_host_status_deadline",
         "idx_durable_event_log_topic_seq",
         "idx_outbox_events_status_available",
+        "idx_agents_owner_name_active",
+        "idx_bot_message_deliveries_due",
+        "idx_bot_revisions_agent_created",
+        "idx_bot_deployments_host",
     ] {
         let idx: Option<String> =
             sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='index' AND name=?")

@@ -213,7 +213,7 @@ agents (
 );
 
 -- 同一 owner 下 active bot 名唯一（case-insensitive；@ 解析与索引一致）
--- 实现：migrations/*/0004_agent_digital_body.sql → idx_agents_owner_name_active
+-- 实现：migrations/*/0001_initial.sql → idx_agents_owner_name_active
 UNIQUE (owner_account_id, lower(name)) WHERE status = 'active';
 
 -- host_runtime_seed 仍可 per (owner, runtime) 唯一；user_configured 不受此限
@@ -474,11 +474,12 @@ Rationale：先锁语义，避免实现期回流本地 profile SSOT。
 
 ## Phase 1: Hub schema + protocol for digital body — **DONE (core)**
 
-**File: `crates/minos-backend/migrations/*/0004_agent_digital_body.sql`**
+**File: `crates/minos-backend/migrations/{sqlite,postgres}/0001_initial.sql`（latest-only；无 0004 增量）**
 
-- 扩展 `agents`：`display_name`, `avatar_url`, `status`, `default_reasoning_effort`, `system_prompt`。  
-- `name` 在 owner 下 active 唯一索引。  
-- `prompt_bundle_id` / `tools_policy_json` 仍可后续加列。  
+- `agents` CREATE 即含数字肉身：`display_name`, `avatar_url`, `status`, `default_reasoning_effort`, `system_prompt`。  
+- `idx_agents_owner_name_active`：owner 下 active bot name 唯一。  
+- 同文件含 `bot_revisions` / `bot_deployments`。  
+- `prompt_bundle_id` / `tools_policy_json` 仍可后续直接改 0001 + wipe。  
 - `workspace_path` 保留为 default hint only。
 
 **File: `crates/minos-protocol/src/messages.rs`**

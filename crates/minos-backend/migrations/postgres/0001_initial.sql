@@ -108,17 +108,23 @@ CREATE INDEX idx_friendships_high
     ON friendships(account_high_id, created_at_ms DESC);
 
 CREATE TABLE agents (
-    agent_id          TEXT PRIMARY KEY,
-    owner_account_id  TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    name              TEXT NOT NULL,
-    description       TEXT NOT NULL DEFAULT '',
-    source            TEXT NOT NULL DEFAULT 'user'
-                        CHECK (source IN ('user', 'host_runtime', 'system')),
-    runtime_agent     TEXT NOT NULL CHECK (runtime_agent IN ('codex', 'claude', 'gemini', 'opencode', 'grok')),
-    model             TEXT NOT NULL DEFAULT '',
-    workspace_path    TEXT,
-    created_at_ms     BIGINT NOT NULL,
-    updated_at_ms     BIGINT NOT NULL
+    agent_id                   TEXT PRIMARY KEY,
+    owner_account_id           TEXT NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    name                       TEXT NOT NULL,
+    display_name               TEXT NOT NULL DEFAULT '',
+    description                TEXT NOT NULL DEFAULT '',
+    avatar_url                 TEXT,
+    source                     TEXT NOT NULL DEFAULT 'user'
+                                 CHECK (source IN ('user', 'host_runtime', 'system')),
+    status                     TEXT NOT NULL DEFAULT 'active'
+                                 CHECK (status IN ('active', 'disabled')),
+    runtime_agent              TEXT NOT NULL CHECK (runtime_agent IN ('codex', 'claude', 'gemini', 'opencode', 'grok')),
+    model                      TEXT NOT NULL DEFAULT '',
+    default_reasoning_effort   TEXT NOT NULL DEFAULT '',
+    system_prompt              TEXT NOT NULL DEFAULT '',
+    workspace_path             TEXT,
+    created_at_ms              BIGINT NOT NULL,
+    updated_at_ms              BIGINT NOT NULL
 );
 
 CREATE INDEX idx_agents_owner
@@ -128,8 +134,10 @@ CREATE UNIQUE INDEX idx_agents_host_runtime_unique
     ON agents(owner_account_id, runtime_agent)
     WHERE source = 'host_runtime';
 
--- Digital body columns (display_name, status, system_prompt, …) and
--- idx_agents_owner_name_active land in 0004_agent_digital_body.sql.
+-- Case-insensitive unique bot name per owner among active bots (mention resolve).
+CREATE UNIQUE INDEX idx_agents_owner_name_active
+    ON agents (owner_account_id, lower(name))
+    WHERE status = 'active';
 
 CREATE TABLE projects (
     project_id       TEXT PRIMARY KEY,
@@ -692,3 +700,32 @@ CREATE TABLE chat_message_attachments (
 
 CREATE INDEX idx_chat_message_attachments_blob
     ON chat_message_attachments(blob_id);
+
+-- Immutable digital-body snapshot at mailbox schedule time + host capability.
+CREATE TABLE bot_revisions (
+    revision_id              TEXT PRIMARY KEY,
+    agent_id                 TEXT NOT NULL REFERENCES agents(agent_id) ON DELETE CASCADE,
+    runtime_agent            TEXT NOT NULL,
+    model                    TEXT NOT NULL DEFAULT '',
+    default_reasoning_effort TEXT NOT NULL DEFAULT '',
+    system_prompt            TEXT NOT NULL DEFAULT '',
+    display_name             TEXT NOT NULL DEFAULT '',
+    workspace_path           TEXT,
+    created_at_ms            BIGINT NOT NULL
+);
+
+CREATE INDEX idx_bot_revisions_agent_created
+    ON bot_revisions(agent_id, created_at_ms DESC);
+
+CREATE TABLE bot_deployments (
+    agent_id              TEXT NOT NULL REFERENCES agents(agent_id) ON DELETE CASCADE,
+    host_installation_id  TEXT NOT NULL REFERENCES device_installations(installation_id) ON DELETE CASCADE,
+    status                TEXT NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'disabled')),
+    updated_at_ms         BIGINT NOT NULL,
+    PRIMARY KEY (agent_id, host_installation_id)
+);
+
+CREATE INDEX idx_bot_deployments_host
+    ON bot_deployments(host_installation_id, status);
+

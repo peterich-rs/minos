@@ -249,8 +249,8 @@ Daemon：
 
 - **Auto-attach removed**: no `ensure_host_runtime_agents_for_mentions` on send. Delivery targets = reply-to-agent → structured `mentioned_agent_ids` (appearance order) → sole-agent room rule. Text is never a delivery target; `#session_short` is only a session hint for agents already in structured mentions.
 - **Unmatched `@codex`**: user-visible failure bubble / `agent_error` when token looks agentish but roster has no match.
-- **Mentions migration**: fresh 0001 is polymorphic; `0002_polymorphic_message_mentions` + SQLite post-migrate rebuild upgrades volumes that still have `mentioned_account_id`.
-- **Desktop-native**: local CLI still runs on-device; Hub uplink uses `message_source=host_projection` so Agent inbox never re-delivers. Same domain events as Mobile `client_live` for human messages.
+- **Mentions / mailbox schema**: polymorphic mentions + `bot_message_deliveries` + digital body + revisions/deployments all live in single latest-only `migrations/*/0001_initial.sql` (wipe volumes; no 0002+ ALTER chain, no post-migrate legacy rebuild).
+- **Desktop collab**: Account live → WS `AppendMessage` only; bot activation is Hub mailbox (no Composer local fan-out dual path).
 - **Online UI**: Desktop `accountSyncStatus` (`/ws/client`) is primary Online; `cloudStatus`/`hubOnline` is Host readiness only.
 
 ---
@@ -287,12 +287,12 @@ Daemon：
 |---------|------|
 | Send + post-hoc delivery | `http/v1/conversations.rs` → `try_agent_dispatch` (gated by `message_source.allows_agent_dispatch`; pipeline errors → `notify_agent_dispatch_pipeline_error`) |
 | Plan / forward | `http/v1/social.rs` `plan_agent_deliveries` (reply → structured `mentioned_agent_ids` appearance order → sole-agent) |
-| Inbox table | `store/agent_dispatch_queue.rs` (domain: Agent inbox) |
+| Inbox table | 物理表 `bot_message_deliveries`；模块 `store/agent_dispatch_queue.rs`（领域：Agent inbox / Bot mailbox） |
 | Worker | `jobs/agent_dispatch_worker.rs` |
 | Mentions (human + agent) | `conversations/use_case.rs` `extract_participant_mentions` (single extract path; Vec+seen appearance order) |
-| Participants API | `POST …/conversations/{id}/participants` |
+| Participants API | `…/conversations/{id}/participants` |
 | Agent bubble insert | `store/social/agents.rs` |
 | Projector | `turn_completion.rs`, `completion_watch.rs` |
-| Mentions forward migrate | `migrations/*/0002_polymorphic_message_mentions.sql` + `store::ensure_polymorphic_message_mentions_sqlite` |
+| Schema | latest-only `migrations/{sqlite,postgres}/0001_initial.sql` only |
 
-演进原则：**reuse 队列与幂等，替换产品语义与统一 mention/入口**。
+演进原则：**reuse 队列与幂等，替换产品语义与统一 mention/入口**；schema 不保留增量兼容链。

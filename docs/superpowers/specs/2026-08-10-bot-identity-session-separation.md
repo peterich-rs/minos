@@ -225,7 +225,7 @@ REMOVE BOT FROM CONVERSATION
 
 ### Phase 1: Backend identity-layer enrichment — **DONE (core)**
 
-Shipped via `0004_agent_digital_body.sql` + `AgentSummary` / register-update APIs (see global-bot-identity-design Phase 1).
+Shipped in latest-only `0001_initial.sql` agents digital-body columns + `AgentSummary` / register-update APIs (see global-bot-identity-design Phase 1).
 
 **File: `crates/minos-backend/migrations/sqlite/0001_initial.sql`** (lines 120-132)
 - Add columns to `agents` table:

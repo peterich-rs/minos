@@ -223,13 +223,18 @@ Postgres 集成 smoke（默认 skip）：`MINOS_PG_TESTS=1 MINOS_DATABASE_URL=po
 | `friendships` | 好友关系 |
 | `conversations` | 对话（直接/群组） |
 | `chat_messages` | 聊天消息 |
-| `agents` | Agent 定义 |
+| `chat_message_mentions` | 多态 mention SSOT（`target_kind` ∈ account/agent + `ordinal`） |
+| `agents` | 全局 bot 身份 + 数字肉身（display_name / status / system_prompt / effort …） |
+| `conversation_agent_members` | bot membership（进群不 clone bot） |
+| `bot_message_deliveries` | Agent inbox / Bot mailbox（lease + automation_hop；模块名可仍为 `agent_dispatch_queue`） |
+| `bot_revisions` | mailbox 调度时的不可变数字肉身快照 |
+| `bot_deployments` | bot × host 执行能力 |
 | `projects` | 项目 |
 | `agent_sessions` | Agent 会话 |
 | `agent_turns` | Agent 轮次 |
 | `agent_turn_events` | 轮次流事件 |
 | `approval_requests` | 审批请求 |
-| `host_commands` | 持久化命令队列 |
+| `host_commands` | 持久化命令队列（runtime port adapter） |
 | `durable_event_log` | 按 topic 排序的事件日志（payload；可被 retention 删除） |
 | `topic_metadata` | **序号权威**：`high_watermark`（永不回退）+ `retention_floor`（payload 删除上界） |
 | `outbox_events` | 分发工作队列（`lane`: `social_durable` \| `host_command`） |
@@ -308,7 +313,7 @@ RuntimeShell           -- 拥有 AppContext、后台任务、集群监听
 | `AuditIndexerJob` | 审计数据索引 |
 | `OutboxDispatcherJob` | 分发 `social_durable` 车道 outbox |
 | `HostCommandOutboxJob` | 分发 `host_command` 车道（与 social 隔离 claim/lease） |
-| `AgentDispatchWorkerJob` | 异步 drain `agent_dispatch_queue`；arm CompletionWatch |
+| `AgentDispatchWorkerJob` | 异步 drain `bot_message_deliveries`（模块名 `agent_dispatch_queue`）；arm CompletionWatch |
 
 所有任务实现 `Job` trait（`tick()`, `idle_interval()`, `applies_to(runtime_mode)`）。`SessionLifecycleJob` / `AgentDispatchWorkerJob` 需要 `AppContext`（registry + completion_watches）。
 
