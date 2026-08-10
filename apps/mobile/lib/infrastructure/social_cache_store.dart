@@ -467,7 +467,7 @@ class SocialCacheStore {
     });
   }
 
-  /// Enqueue reaction toggle; `clientOpId` is B6 client_op_id.
+  /// Enqueue reaction toggle; `clientOpId` is the wire client_op_id.
   Future<void> enqueueReactionToggleOutbox({
     required String clientOpId,
     required String conversationId,

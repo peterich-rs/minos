@@ -217,7 +217,7 @@ export const useReactionStore = create<ReactionState>((set, get) => ({
     void (async () => {
       try {
         if (useHub && conversationId && session?.accessToken) {
-          // C5.1 single path: enqueue → flush via outbox (same machine as
+          // Single path: enqueue → flush via outbox (same machine as
           // user_message). No parallel inline POST.
           const clientOpId = newReactionClientOpId();
           try {

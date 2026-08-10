@@ -655,7 +655,7 @@ class SocialConversation extends _$SocialConversation {
     state = state.withMessages(messages).copyWith(error: null);
   }
 
-  /// Toggle reaction via Intent Outbox (C5.2); optimistic UI then worker drain.
+  /// Toggle reaction via Intent Outbox; optimistic UI then worker drain.
   Future<void> toggleReaction({
     required String messageId,
     required String emoji,
@@ -1202,7 +1202,7 @@ class ConversationsController extends AsyncNotifier<ConversationsResponse> {
   }
 
   Future<void> _onSocialEvent(SocialEventFrame frame) async {
-    // Reactions are conversation-only; do not bump sidebar unread (B6.2).
+    // Reactions are conversation-only; do not bump sidebar unread.
     // Open conversation controller acks conversation reaction topics.
     if (frame.kind == 'reaction_updated') {
       return;

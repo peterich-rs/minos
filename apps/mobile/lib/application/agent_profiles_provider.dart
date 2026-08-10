@@ -10,7 +10,7 @@ import 'package:minos/src/rust/api/minos.dart';
 
 /// Local launch-preference cache + optional Hub bot mirror.
 ///
-/// Product bot identity SSOT is Hub `agents` (see global-bot-identity-design).
+/// Product bot identity SSOT is Hub `agents`.
 /// This controller may still hold device-local drafts; create/update prefer
 /// Hub register/update when authenticated.
 ///

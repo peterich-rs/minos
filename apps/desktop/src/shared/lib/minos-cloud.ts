@@ -791,8 +791,8 @@ export async function listHubConversationMessages(
 }
 
 /**
- * P3: Hub approval intent (`POST /v1/approvals/respond`).
- * `client_request_id` is top-level Intent Outbox id (C5.3); never nest inside
+ * Hub approval intent (`POST /v1/approvals/respond`).
+ * `client_request_id` is top-level Intent Outbox id; never nest inside
  * agent decision JSON.
  */
 export async function respondHubApproval(
@@ -869,7 +869,7 @@ export async function toggleHubReaction(
   conversationId: string,
   messageId: string,
   emoji: string,
-  /** Required B6: outbox entry id; same value on retry for event_id idempotency. */
+  /** Required outbox entry id; same value on retry for event_id idempotency. */
   clientOpId: string,
 ): Promise<{
   messageId: string;

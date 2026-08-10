@@ -21,11 +21,11 @@ part 'auth_provider.g.dart';
 /// the stream replaces it on the next microtask. Components watching
 /// this provider should treat [AuthBootstrapping] as "show splash".
 ///
-/// Phase 8.9: on the first `Authenticated` transition, the controller
-/// also kicks the Rust WS reconnect path via `resumePersistedSession()`
-/// so the chat surface lights up without a separate trigger.
+/// On the first `Authenticated` transition, the controller also kicks the
+/// Rust WS reconnect path via `resumePersistedSession()` so the chat
+/// surface lights up without a separate trigger.
 ///
-/// Phase 11.3 + ADR-0020 — cross-account migration sequence:
+/// Cross-account migration sequence:
 ///   1. `register` / `login` go through Supabase IdP then
 ///      [MinosCore.loginWithSupabase], which adopt the freshly minted
 ///      `account_id` against the prior persisted snapshot.

@@ -1,14 +1,12 @@
 //! Backend-internal error type.
 //!
 //! Kept crate-local for now; a `From<BackendError> for minos_domain::MinosError`
-//! conversion will land in step 10 when `main.rs` wires the HTTP/WebSocket
-//! surface. Per spec §10.1, store errors still collapse to the existing
-//! generic internal-error fallback in `minos_domain::MinosError`, but the
-//! concrete mapping table is deferred until the outer boundary actually
-//! needs it.
+//! conversion lands when `main.rs` wires the HTTP/WebSocket surface. Store
+//! errors still collapse to the existing generic internal-error fallback in
+//! `minos_domain::MinosError`, but the concrete mapping table is deferred
+//! until the outer boundary actually needs it.
 //!
-//! Start minimal — steps 5–10 will add variants as the auth, REST, and hub
-//! layers grow. The enum mirrors the `#[derive(thiserror::Error, Debug)]`
+//! The enum mirrors the `#[derive(thiserror::Error, Debug)]`
 //! + `#[error("...")]` style used in `minos-domain::MinosError`.
 
 #[derive(Debug, thiserror::Error)]
@@ -94,7 +92,7 @@ pub enum BackendError {
     /// Emitted by `session::SessionRegistry::route` when the destination
     /// `DeviceId` has no live `SessionHandle` in the registry, or when the
     /// destination's outbox receiver has been dropped (session ended mid-
-    /// route). Mirrors `MinosError::PeerOffline`; the step-10 boundary maps
+    /// route). Mirrors `MinosError::PeerOffline`; the boundary maps
     /// this variant straight across.
     ///
     /// `peer_device_id` is stringly-typed because the error is also used

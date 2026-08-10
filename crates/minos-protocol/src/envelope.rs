@@ -12,9 +12,9 @@
 //! - Every envelope carries `"v": 1` (the field is named `version` in Rust
 //!   but renamed to `v` on the wire). Future breaking changes bump the
 //!   version; clients that see an unrecognised `v` are expected to close
-//!   the socket with a typed error (spec §6.3).
+//!   the socket with a typed error.
 //! - `EventKind` flattens into [`Envelope::Event`] with a `type`
-//!   discriminator matching spec §6.
+//!   discriminator.
 //!
 //! The Rust types here plus the golden JSON fixtures under
 //! `tests/golden/envelope/` are the authoritative wire definition.
@@ -35,7 +35,7 @@ pub enum Envelope {
     /// Client → Relay. Relay forwards `payload` opaquely to the paired
     /// peer as an [`Envelope::Forwarded`]. The relay does not inspect or
     /// mutate `payload`; correlation of request/response is the clients'
-    /// responsibility (see spec §6.2).
+    /// responsibility.
     Forward {
         /// Protocol version.
         #[serde(rename = "v")]
@@ -86,25 +86,24 @@ pub enum Envelope {
 /// Server-initiated state change pushed to the client, body of
 /// [`Envelope::Event`].
 ///
-/// On the wire, the `type` key carries the variant name in `snake_case`
-/// (spec §6). Payload fields sit alongside `type` thanks to the
+/// On the wire, the `type` key carries the variant name in `snake_case`.
+/// Payload fields sit alongside `type` thanks to the
 /// `#[serde(flatten)]` in [`Envelope::Event`].
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum EventKind {
     /// Emitted only to the Mac side after an iPhone successfully consumes
-    /// a pairing token (spec §7.1). Delivers the iPhone's identity plus
+    /// a pairing token. Delivers the iPhone's identity plus
     /// the long-lived `DeviceSecret` the Mac will use for future
-    /// WebSocket auth (spec §9.4).
+    /// WebSocket auth.
     Paired {
         /// The iPhone's `DeviceId`.
         peer_device_id: DeviceId,
         /// Display name the iPhone registered during `pair`.
         peer_name: String,
         /// Long-lived bearer secret for the Mac recipient. `None` when this
-        /// event is delivered to an iOS recipient (iOS rail is bearer-only;
-        /// see ADR-0020).
+        /// event is delivered to an iOS recipient (iOS rail is bearer-only).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         your_device_secret: Option<DeviceSecret>,
     },

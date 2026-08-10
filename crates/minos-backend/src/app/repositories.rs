@@ -185,7 +185,7 @@ pub struct PushTokenRow {
 }
 
 // ---------------------------------------------------------------------------
-// Existing repository traits (preserved from before P0.S2)
+// Repository traits
 // ---------------------------------------------------------------------------
 
 #[async_trait]
@@ -272,7 +272,7 @@ pub trait AccountHostPairingsRepository: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// New P0.S2 repository traits
+// Repository traits
 // ---------------------------------------------------------------------------
 
 #[async_trait]
@@ -583,14 +583,14 @@ pub trait PushTokensRepository: Send + Sync {
 // ---------------------------------------------------------------------------
 
 pub struct RepositorySet {
-    // -- existing fields (store-backed, wired in P1-P4) --
+    // -- store-backed repositories --
     pub agent_sessions: Arc<dyn AgentSessionsRepository>,
     pub agent_turns: Arc<dyn AgentTurnsRepository>,
     pub agent_turn_events: Arc<dyn AgentTurnEventsRepository>,
     pub approval_requests: Arc<dyn ApprovalRequestsRepository>,
     pub account_host_pairings: Arc<dyn AccountHostPairingsRepository>,
 
-    // -- P0.S2 placeholders (stub impls, real store-backed impls in P1-P4) --
+    // -- store-backed repositories --
     pub accounts: Arc<dyn AccountsRepository>,
     pub installations: Arc<dyn InstallationsRepository>,
     pub refresh_tokens: Arc<dyn RefreshTokensRepository>,
@@ -1335,7 +1335,7 @@ impl HostLinksRepository for StoreBackedHostLinksRepository {
 // Store-backed implementations — AgentsRepository
 //
 // Social agents table is shared across SQLite and Postgres (owner + runtime_agent +
-// source). AgentsRepository projects that shape into the legacy AgentRow DTO.
+// source). AgentsRepository projects that shape into the AgentRow DTO.
 // ---------------------------------------------------------------------------
 
 struct StoreBackedAgentsRepository {

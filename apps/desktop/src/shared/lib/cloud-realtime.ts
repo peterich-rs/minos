@@ -1,7 +1,7 @@
 /**
  * Desktop Account client → minos-backend formal `/ws/client` realtime.
  *
- * Phase 4 Sync Engine:
+ * Sync engine:
  *   Disconnected → Connecting → Syncing → Live
  *   per-topic resume_after cursors (localStorage)
  *   Subscribe conversation:{id} when open

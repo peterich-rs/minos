@@ -1,13 +1,10 @@
-//! `sessions` table CRUD (see spec §9.1).
+//! `sessions` table CRUD.
 //!
 //! A `session` is one live session on an agent-host. Rows are created
 //! implicitly by the first `raw_event` ingest (`upsert`) and mutated as
 //! subsequent events arrive: `update_title` when the translator produces a
 //! `SessionTitleUpdated`, `increment_message_count` when a new message is
 //! placed, `mark_ended` when the backend sees `SessionClosed`.
-//!
-//! The formal agent-session and project APIs still use these summaries while
-//! the ingest path is being folded into room-first storage.
 
 use std::collections::HashMap;
 

@@ -1,5 +1,5 @@
 /**
- * Per-topic durable resume cursors for Hub realtime (Phase 4).
+ * Per-topic durable resume cursors for Hub realtime.
  *
  * Keyed by full topic string (`account:{id}`, `conversation:{id}`).
  * Values are last applied `topic_seq` (resume_after = that seq).
@@ -10,7 +10,7 @@
 export type TopicCursorMap = Record<string, number>;
 
 export const CLOUD_CURSOR_STORAGE_KEY = "minos.cloud.topic_cursors.v1";
-/** Pre-Phase-5 key; read for migration, never written. */
+/** Legacy storage key; read for migration, never written. */
 export const LEGACY_CLOUD_CURSOR_STORAGE_KEY = "minos.hub.topic_cursors.v1";
 
 function parseTopicCursors(raw: string | null): TopicCursorMap {

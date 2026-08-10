@@ -48,7 +48,7 @@ const AUTH_REFRESH_REUSE_TOTAL: &str = "minos_backend_auth_refresh_reuse_total";
 const APPROVAL_DECISION_TOTAL: &str = "minos_backend_approval_decision_total";
 const DB_QUERY_DURATION_SECONDS: &str = "minos_backend_db_query_duration_seconds";
 
-// ── P7: notification + job metrics ────────────────────────────────────
+// ── notification + job metrics ────────────────────────────────────────
 
 const PUSH_SEND_TOTAL: &str = "minos_backend_push_send_total";
 const PUSH_DECISION_TOTAL: &str = "minos_backend_push_decision_total";
@@ -402,7 +402,7 @@ pub fn increment_host_command_timeout() {
     metrics::counter!(HOST_COMMAND_TIMEOUT_TOTAL).increment(1);
 }
 
-/// Host-command outbox row expired without host observation → dead_letter (B2.4).
+/// Host-command outbox row expired without host observation → dead_letter.
 pub fn increment_host_command_outbox_expired() {
     init();
     metrics::counter!(OUTBOX_HOST_COMMAND_EXPIRED_TOTAL).increment(1);

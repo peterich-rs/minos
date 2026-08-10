@@ -494,7 +494,7 @@ async fn assert_agent_start_host_command(
     assert_eq!(row.params_json["runtime_agent"], "codex");
     assert_eq!(row.params_json["conversation_id"], expected_conversation_id);
     assert_eq!(row.params_json["initial_user_message"], expected_text);
-    // B4: origin_message_id must reach host so daemon pins agent-result suffix.
+    // origin_message_id must reach host so daemon pins agent-result suffix.
     assert_eq!(
         row.params_json["origin_message_id"], _origin_message_id,
         "agent_session.start must carry origin_message_id"
@@ -882,7 +882,7 @@ async fn send_message_publishes_account_realtime_event_with_thin_digest() {
             event.payload_json["conversation_id"],
             conversation.conversation_id
         );
-        // R3: account topic carries thin digest only (no nested full message).
+        // Account topic carries thin digest only (no nested full message).
         assert_eq!(event.payload_json["message_id"], message_id);
         assert_eq!(event.payload_json["preview"], "live hello");
         assert!(event.payload_json.get("message").is_none());
@@ -1266,7 +1266,7 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
             .as_deref(),
         Some(session_id.as_str())
     );
-    // B4 frozen id: agent-result:{conv}:{session}:{origin_message_id}
+    // Frozen id: agent-result:{conv}:{session}:{origin_message_id}
     assert_eq!(
         agent_reply.message_id,
         format!(
@@ -1831,7 +1831,7 @@ async fn mobile_at_agent_reuses_desktop_formal_session_without_chat_bind() {
     );
 }
 
-/// B3: no live host → message HTTP 200 + queue row pending (no host command).
+/// No live host → message HTTP 200 + queue row pending (no host command).
 #[tokio::test]
 async fn agent_dispatch_queues_when_host_offline() {
     let state = backend_state().await;
@@ -1918,7 +1918,7 @@ async fn agent_dispatch_queues_when_host_offline() {
         .is_none());
 }
 
-/// B3: pending dispatch drains when host becomes online.
+/// Pending dispatch drains when host becomes online.
 #[tokio::test]
 async fn agent_dispatch_drains_when_host_comes_online() {
     let state = backend_state().await;
@@ -2032,7 +2032,7 @@ async fn agent_dispatch_drains_when_host_comes_online() {
     .await;
 }
 
-/// B4: two rapid dispatches on same session → two agent bubbles with distinct ids.
+/// Two rapid dispatches on same session → two agent bubbles with distinct ids.
 #[tokio::test]
 async fn two_rapid_dispatches_project_two_agent_bubbles() {
     let state = backend_state().await;
@@ -2353,7 +2353,7 @@ async fn send_message_persists_agent_mentions_and_enqueues_inbox() {
     );
 }
 
-/// Phase 2 multi-@: each structured agent mention becomes its own inbox row.
+/// Multi-@: each structured agent mention becomes its own inbox row.
 #[tokio::test]
 async fn multi_agent_mentions_fan_out_inbox_rows() {
     let state = backend_state().await;
@@ -2458,7 +2458,7 @@ async fn multi_agent_mentions_fan_out_inbox_rows() {
     assert!(!rows[1].mention_sender);
 }
 
-/// Phase 2 invariant: host_projection never re-delivers to Agent inbox.
+/// Invariant: host_projection never re-delivers to Agent inbox.
 #[tokio::test]
 async fn host_projection_message_does_not_enqueue_agent_inbox() {
     let state = backend_state().await;

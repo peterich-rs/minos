@@ -171,7 +171,8 @@ export function AgentsView() {
   }, [source, loadClis]);
 
   // One-shot: import offline daemon profile cache into Hub bot directory when
-  // Account comes online (global-bot-identity Phase 5). Idempotent by name.
+  // Account comes online: import offline daemon profile cache into Hub bot
+  // directory. Idempotent by name.
   const importOnceRef = useRef(false);
   useEffect(() => {
     if (!cloudOnline || !accessToken?.trim() || !deviceId) return;

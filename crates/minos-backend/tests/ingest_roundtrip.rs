@@ -1,7 +1,7 @@
-//! Retired legacy ingest-over-WebSocket coverage.
+//! Retired ingest-over-WebSocket coverage.
 //!
 //! These tests exercised the old `Envelope::Ingest` wire path. The topic
-//! gateway no longer accepts legacy envelopes, so the behavior is kept here
+//! gateway no longer accepts that envelope, so the behavior is kept here
 //! only as historical reference and is ignored in favor of the new realtime
 //! gateway coverage.
 
@@ -201,15 +201,14 @@ async fn recv_ui_event(ws: &mut WsClient) -> anyhow::Result<(String, u64, UiEven
 }
 
 #[tokio::test]
-#[ignore = "legacy Envelope::Ingest websocket path removed from the topic gateway"]
+#[ignore = "Envelope::Ingest websocket path removed from the topic gateway"]
 async fn ingest_translates_and_fans_out_to_paired_mobile() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
     // Pre-seed: a Mac (with a hashed secret) and a paired iOS device under
-    // a real account; ADR-0020 keys fan-out off
-    // `account_host_pairings(host, account)` and walks devices(account_id) to
-    // find the iOS receivers, so the iOS row needs `account_id` set and no
-    // secret hash.
+    // a real account; fan-out keys off `account_host_pairings(host, account)`
+    // and walks devices(account_id) to find the iOS receivers, so the iOS row
+    // needs `account_id` set and no secret hash.
     let host_id = DeviceId::new();
     insert_test_host(&relay.pool, host_id, "mac", 0).await;
 
@@ -229,9 +228,8 @@ async fn ingest_translates_and_fans_out_to_paired_mobile() -> anyhow::Result<()>
     )
     .await?;
 
-    // Drain the initial Unpaired presence frame (Phase G activate hook
-    // emits Unpaired on every upgrade until Phase M re-introduces
-    // multi-host presence).
+    // Drain the initial Unpaired presence frame (activate currently emits
+    // Unpaired on every upgrade until multi-host presence returns).
     let _initial_presence = recv_envelope(&mut phone).await?;
 
     let mut host = connect_client(&relay, host_id, DeviceRole::AgentHost, None).await?;
@@ -286,7 +284,7 @@ async fn ingest_translates_and_fans_out_to_paired_mobile() -> anyhow::Result<()>
 }
 
 #[tokio::test]
-#[ignore = "legacy Envelope::Ingest websocket path removed from the topic gateway"]
+#[ignore = "Envelope::Ingest websocket path removed from the topic gateway"]
 async fn ingest_retransmit_is_no_op() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
@@ -322,7 +320,7 @@ async fn ingest_retransmit_is_no_op() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "legacy Envelope::Ingest websocket path removed from the topic gateway"]
+#[ignore = "Envelope::Ingest websocket path removed from the topic gateway"]
 async fn ingest_derives_title_from_first_user_message_and_fans_out_synthetic_update(
 ) -> anyhow::Result<()> {
     let relay = spawn_relay().await?;

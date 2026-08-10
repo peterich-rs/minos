@@ -1,7 +1,7 @@
 //! `minos-backend` binary entrypoint.
 //!
 //! Wires the library modules (`config`, `store`, `pairing`, `session`,
-//! `http`) into a running axum server. Plan §10 acceptance:
+//! `http`) into a running axum server.
 //!
 //! ```sh
 //! cargo run -p minos-backend -- --listen 127.0.0.1:8787 --db ./tmp.db
@@ -45,21 +45,21 @@ use minos_protocol::{Envelope, EventKind};
 use tokio::signal;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-/// Default drain window after broadcasting `ServerShutdown` (plan §10 step 8).
+/// Default drain window after broadcasting `ServerShutdown`.
 const SHUTDOWN_DRAIN: Duration = Duration::from_millis(500);
 
 /// Default shutdown timeout if `MINOS_SHUTDOWN_TIMEOUT_SECS` is not set.
 const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
 
-/// xlog file prefix. Spec §9.4 reserves `backend` for the server process.
+/// xlog file prefix. `backend` for the server process.
 const XLOG_NAME_PREFIX: &str = "backend";
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cfg = Config::parse();
 
-    // Fail fast on invalid CF Access configuration rather than handing out
-    // pairing QRs that will be rejected at the CF edge. See spec §13.3.
+    // Fail fast on invalid configuration rather than handing out
+    // pairing QRs that will be rejected at the CF edge.
     if let Err(msg) = cfg.validate() {
         eprintln!("minos-backend: configuration error: {msg}");
         std::process::exit(2);
@@ -216,7 +216,7 @@ async fn main() -> Result<()> {
 /// Install the mars-xlog layer + an `EnvFilter`-gated fmt layer as the
 /// global tracing subscriber.
 ///
-/// Mirrors the daemon crate's `logging::init` wiring (spec §9.4). The xlog
+/// Mirrors the daemon crate's `logging::init` wiring. The xlog
 /// layer writes `backend_YYYYMMDD.xlog` under `--log-dir`; the fmt layer
 /// emits human-readable records to stdout for developer ergonomics.
 fn init_tracing(cfg: &Config) -> Result<()> {

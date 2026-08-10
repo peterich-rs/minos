@@ -1,4 +1,4 @@
-//! Bearer-token extractor (spec §5.4). Pattern mirrors
+//! Bearer-token extractor. Pattern mirrors
 //! `crate::http::auth::authenticate` — handler-level call, not axum
 //! middleware, so handlers can opt in per route.
 

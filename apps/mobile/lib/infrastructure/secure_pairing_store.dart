@@ -7,16 +7,16 @@ import 'package:minos/src/rust/api/minos.dart';
 /// The Rust `minos_mobile::MobileClient` keeps this state in its own
 /// in-memory `MobilePairingStore` for the lifetime of the process. This
 /// Dart-side store is what survives an app cold-start; it persists the
-/// Minos device id **and** (since Phase 4) the account auth tuple
-/// so the Rust core can rehydrate `auth_session` synchronously on cold
-/// launch via `MobileClient::new_with_persisted_state` and emit
+/// Minos device id **and** the account auth tuple so the Rust core can
+/// rehydrate `auth_session` synchronously on cold launch via
+/// `MobileClient::new_with_persisted_state` and emit
 /// `AuthStateFrame::Authenticated` immediately.
 ///
-/// ADR-0020 (server-centric pair): the iOS device no longer holds a
-/// `device_secret` — the bearer token alone authenticates the WS, and
-/// Mac partners are tracked server-side under `account_mac_pairings`.
-/// The legacy `minos.device_secret` keychain entry is wiped on the next
-/// cold launch by [loadState] (see "Legacy wipe" below).
+/// The iOS device does not hold a `device_secret` — the bearer token alone
+/// authenticates the WS, and Mac partners are tracked server-side under
+/// `account_mac_pairings`. The legacy `minos.device_secret` keychain entry
+/// is wiped on the next cold launch by [loadState] (see "Legacy wipe"
+/// below).
 ///
 /// Backend routing config is no longer persisted here — it lives in
 /// `minos_mobile::build_config` (compile-time consts populated by
@@ -30,7 +30,7 @@ class SecurePairingStore {
 
   static const _keyDeviceId = 'minos.device_id';
 
-  // Phase 4 auth fields. All five are written/read as a tuple — partial
+  // Auth fields. All five are written/read as a tuple — partial
   // snapshots are wiped on the next [loadState] call.
   static const _keyAccessToken = 'minos.access_token';
   static const _keyAccessExpiresAtMs = 'minos.access_expires_at_ms';
@@ -43,7 +43,7 @@ class SecurePairingStore {
   static const _keyPeerDisplayName = 'minos.peer_display_name';
 
   Future<PersistedPairingState?> loadState() async {
-    // Legacy wipe: pre ADR-0020 keychain entry. Best-effort; idempotent.
+    // Legacy wipe: obsolete device_secret keychain entry. Best-effort; idempotent.
     await _storage.delete(key: 'minos.device_secret');
 
     final deviceId = await _storage.read(key: _keyDeviceId);
@@ -139,10 +139,9 @@ class SecurePairingStore {
 
   /// Snapshot is valid iff a stable [deviceId] is recorded **and** the
   /// auth tuple is complete (handled separately by [_hasCompleteAuth]).
-  /// Post ADR-0020 the device-secret clause is gone — bearer-only auth
-  /// means a paired-but-logged-out branch keeps `deviceId` plus no auth
-  /// keys, and an authenticated-pre-pair branch keeps `deviceId` plus
-  /// the full auth tuple.
+  /// Bearer-only auth: a paired-but-logged-out branch keeps `deviceId`
+  /// plus no auth keys, and an authenticated-pre-pair branch keeps
+  /// `deviceId` plus the full auth tuple.
   bool _isValidSnapshot(PersistedPairingState state) {
     return state.deviceId != null;
   }

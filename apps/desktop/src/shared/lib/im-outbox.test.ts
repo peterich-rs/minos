@@ -184,7 +184,7 @@ describe("im-outbox", () => {
     assert.equal((await listDuePending()).length, 0);
   });
 
-  it("includes reaction_toggle in due queue (C5.1)", async () => {
+  it("includes reaction_toggle in due queue", async () => {
     await enqueueReactionToggle({
       conversationId: "c1",
       clientMessageId: "react-1",
@@ -217,7 +217,7 @@ describe("im-outbox", () => {
     assert.ok((next as number) > Date.now() + 10_000);
   });
 
-  it("includes approval_resolve in due queue with stable client op id (C5.3)", async () => {
+  it("includes approval_resolve in due queue with stable client op id", async () => {
     const first = await enqueueApprovalResolve({
       conversationId: "session-1",
       clientMessageId: "approval-op-1",

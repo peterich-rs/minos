@@ -4,8 +4,8 @@
 //! (`POST /v1/hosts/unlink`), and agent-session control-plane calls.
 //! Live event push still flows over the WebSocket.
 //!
-//! ADR-0020 removed the iOS device-secret rail; every iOS-originated
-//! request authenticates with the bearer alone.
+//! The iOS device-secret rail is gone; every iOS-originated request
+//! authenticates with the bearer alone.
 
 use std::collections::HashSet;
 use std::time::Duration;
@@ -396,7 +396,7 @@ impl MobileHttpClient {
         }
     }
 
-    /// Bearer-only after ADR-0020. Lists the calling account's sessions.
+    /// Bearer-only. Lists the calling account's sessions.
     pub async fn list_sessions(
         &self,
         access_token: &str,
@@ -2045,7 +2045,7 @@ impl MobileHttpClient {
     }
 
     /// `POST /v1/auth/refresh` — rotate the bearer + refresh pair.
-    /// Bearer-only post ADR-0020.
+    /// Bearer-only.
     pub async fn refresh(&self, refresh_token: &str) -> Result<RefreshResponse, MinosError> {
         let url = format!("{}/v1/auth/refresh", self.base);
         let trace_id = start_http_trace(
@@ -2063,7 +2063,7 @@ impl MobileHttpClient {
     }
 
     /// `POST /v1/auth/logout` — revoke the named refresh token.
-    /// Bearer-only post ADR-0020.
+    /// Bearer-only.
     pub async fn logout(&self, access_token: &str, refresh_token: &str) -> Result<(), MinosError> {
         let url = format!("{}/v1/auth/logout", self.base);
         let trace_id = start_http_trace(

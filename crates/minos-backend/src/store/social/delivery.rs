@@ -399,7 +399,7 @@ mod tests {
                 "op-conv-only-1",
             )
         );
-        // B6: formula ends with client_op_id, not a random UUID.
+        // Formula ends with client_op_id, not a random UUID.
         assert!(pending.event_id.ends_with("op-conv-only-1"));
         tx.commit().await.unwrap();
 

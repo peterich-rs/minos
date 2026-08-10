@@ -205,7 +205,7 @@ export function createUseCasesActions(
       typeof decision === "string" ? { decision } : { ...decision };
     // Never inject client_request_id into agent decision (daemon/Hub strip).
     delete (payload as Record<string, unknown>).client_request_id;
-    // P3 / C5.3: Intent Outbox — Hub HTTP + client_request_id when authenticated;
+    // Intent Outbox — Hub HTTP + client_request_id when authenticated;
     // otherwise local daemon path (decision JSON stays clean).
     const clientOpId =
       typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -393,7 +393,7 @@ export function createUseCasesActions(
         unreadMentionCount: 0,
       });
     });
-    // Phase 5.3: Linked / authenticated → Hub mark-read (multi-end inbox).
+    // Linked / authenticated → Hub mark-read (multi-end inbox).
     // Only submit max *observed* Hub message_seq from the loaded timeline —
     // never server-latest (would silently mark unread rows as read).
     void import("@/shared/lib/minos-cloud").then(async (cloud) => {

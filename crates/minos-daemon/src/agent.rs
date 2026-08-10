@@ -42,10 +42,10 @@ pub struct AgentSessionSnapshot {
 /// 3. Bridges `AgentManager::ingest_stream()` -> `EventWriter::write_live` so
 ///    every codex notification is persisted before being broadcast outbound.
 ///
-/// The legacy single-session `AgentRuntime` was retired in Phase C; the
-/// existing daemon FFI surface (`StartAgentRequest` / `SendUserMessageRequest`
-/// / `stop_agent` / `state_stream`) is preserved here as a thin shim until
-/// Tasks C16-C18 rewrite the protocol + FFI together.
+/// The legacy single-session `AgentRuntime` was retired; the existing daemon
+/// FFI surface (`StartAgentRequest` / `SendUserMessageRequest` / `stop_agent`
+/// / `state_stream`) is preserved here as a thin shim over multi-session
+/// `AgentManager`.
 pub struct AgentGlue {
     pub manager: Arc<AgentManager>,
     pub writer: Arc<EventWriter>,

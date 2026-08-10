@@ -137,7 +137,7 @@ impl ConnectionPrincipal {
 
 // ─── WS wire frames ───────────────────────────────────────────────────
 //
-// Target architecture ([bot-mailbox-ws-im-bus-design]): Account and Host
+// Target architecture: Account and Host
 // principals use different frame *semantics*. Wire still uses one tagged
 // enum per direction for a single codec; gateway must reject host-only
 // frames on /ws/client and account-only frames on /ws/host.

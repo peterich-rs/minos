@@ -1,6 +1,6 @@
 //! Envelope dispatcher: the per-WebSocket state machine.
 //!
-//! Once an incoming WS is authenticated (step 9) and a `SessionHandle` is
+//! Once an incoming WS is authenticated and a `SessionHandle` is
 //! inserted into the `SessionRegistry`, the backend transfers control to
 //! [`run_session`]. That function owns the socket for its lifetime and
 //! drives three concurrent branches via `tokio::select!`:
@@ -12,29 +12,27 @@
 //!    ([`mpsc::Receiver<Envelope>`]) onto the wire. Anything that
 //!    originates server-side (peer forwards, events) lands here.
 //! 3. **Heartbeat**: every 15s send a WS `Ping`; if no `Pong` returns
-//!    within 90s (single window post ADR-0020 — see [`PAIRED_TIMEOUT`])
-//!    close the socket with code 1011 per plan §8.
+//!    within 90s (see [`PAIRED_TIMEOUT`])
+//!    close the socket with code 1011.
 //!
 //! # WS type choice
 //!
 //! The dispatcher is concrete on `axum::extract::ws::WebSocket`. A mock
-//! WS pair for step-8 unit tests would require either a full axum test
-//! harness (heavy) or a generic trait gate (intrusive). Per the plan's
-//! "recommended simplification", we leave the full loop's e2e coverage to
-//! step 12 (which uses a real `tokio-tungstenite::connect_async` against
-//! a real axum router). This module's tests cover the PURE handler
-//! [`handle_forward`] — which contains the actual business logic; the loop
-//! itself is just glue.
+//! WS pair for unit tests would require either a full axum test
+//! harness (heavy) or a generic trait gate (intrusive). We leave the full
+//! loop's e2e coverage to integration tests (which use a real
+//! `tokio-tungstenite::connect_async` against a real axum router). This
+//! module's tests cover the PURE handler [`handle_forward`] — which
+//! contains the actual business logic; the loop itself is just glue.
 //!
 //! # Heartbeat policy
 //!
-//! Matches plan risks §2: bounded per-peer backpressure + liveness.
+//! Bounded per-peer backpressure + liveness.
 //!
-//! Single 90s window post ADR-0020. The previous Unpaired/Paired split
-//! depended on the per-session `paired_with` slot, which is gone — a Mac
-//! may be paired to multiple iOS accounts, so there is no single boolean
-//! we could derive from the handle alone. Anonymous sockets (no auth)
-//! never reach this loop; they're rejected pre-upgrade.
+//! Single 90s window. A Mac may be paired to multiple iOS accounts, so
+//! there is no single boolean we could derive from the handle alone.
+//! Anonymous sockets (no auth) never reach this loop; they're rejected
+//! pre-upgrade.
 //!
 //! `last_pong_at` lives on [`SessionHandle`] and is updated from the read
 //! branch when we see a `Pong` frame. The heartbeat branch only reads it.
@@ -62,19 +60,19 @@ use crate::{
     store::{AsStorePool, StoreHandle},
 };
 
-/// Cadence of the heartbeat tick. Spec / plan §8 name 15s as the ping
-/// interval; this is the lower of our two timeout windows' granularity.
+/// Cadence of the heartbeat tick. 15s as the ping interval; this is the
+/// lower of our two timeout windows' granularity.
 const HEARTBEAT_TICK: Duration = Duration::from_secs(15);
 
 /// Liveness window for an authenticated session. 90s doesn't fit the
 /// `from_mins` helper cleanly; keep the raw secs form for the
 /// intermediate value.
 ///
-/// ADR-0020 / Phase G: there is no longer a separate "unpaired" timeout.
-/// Multi-mac removed the single `paired_with` slot, so the heartbeat
-/// can't decide which window to use from the handle alone. Anonymous
-/// sockets close at the auth-handshake step; once we're in this loop we
-/// always grant the longer (formerly "paired") window.
+/// There is no longer a separate "unpaired" timeout. Multi-mac removed
+/// the single `paired_with` slot, so the heartbeat can't decide which
+/// window to use from the handle alone. Anonymous sockets close at the
+/// auth-handshake step; once we're in this loop we always grant the
+/// longer window.
 const PAIRED_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// WS close code for heartbeat / internal server errors (RFC 6455).
@@ -84,7 +82,7 @@ const CLOSE_CODE_INTERNAL_ERROR: u16 = 1011;
 const CLOSE_CODE_NORMAL: u16 = 1000;
 
 /// WS close code "Bad Request" — our signal for malformed envelope kinds
-/// or unsupported versions (per plan §8).
+/// or unsupported versions.
 const CLOSE_CODE_BAD_REQUEST: u16 = 4400;
 
 /// WS close code used when a live session's auth backing was revoked.
@@ -304,8 +302,8 @@ impl HeartbeatPolicy {
 ///
 /// Returns `Err(BackendError)` only for the internal book-keeping failures
 /// that callers would plausibly surface; normal socket-close paths are
-/// `Ok(())`. Step 10 wires a [`From<BackendError>`] into the outer error
-/// surface at the axum handler layer.
+/// `Ok(())`. A [`From<BackendError>`] into the outer error surface
+/// exists at the axum handler layer.
 pub async fn run_session(
     mut ws: WebSocket,
     session: SessionHandle,
@@ -336,9 +334,8 @@ pub async fn run_session(
     // Cleanup on any exit path: remove only if this is still the live
     // registry entry. A reconnect may already have replaced it.
     //
-    // ADR-0020 / Phase G: comprehensive multi-mac presence broadcast on
-    // disconnect is deferred to Phase M. We previously notified the single
-    // `paired_with` peer here; that field no longer exists.
+    // Comprehensive multi-mac presence broadcast on disconnect is not
+    // emitted here.
     let _ = registry.remove_current(&session);
 
     if session.role.is_account_client() && store.is_sqlite() {
@@ -421,8 +418,8 @@ async fn run_session_inner(
 
             // Heartbeat: periodic liveness probe + timeout check.
             _ = heartbeat.tick() => {
-                // ADR-0020: there is no per-session "paired" boolean
-                // anymore. Treat any authenticated session as engaged-class
+                // There is no per-session "paired" boolean anymore.
+                // Treat any authenticated session as engaged-class
                 // (longer timeout); truly anonymous (FirstConnect) sockets
                 // close on the AUTH timeout before reaching the heartbeat
                 // path.
@@ -605,13 +602,13 @@ async fn finalize_session_exit(ws: &mut WebSocket, session: &SessionHandle, exit
 ///   caller does nothing.
 /// - Returns `Some(Envelope::Forwarded{..})` carrying a synthesised
 ///   JSON-RPC error when the peer is offline; caller sends it back to the
-///   sender (spec §7.3 `(*)` note).
+///   sender.
 ///
-/// Post ADR-0020 / Phase G: `target_device_id` is stamped on the wire by
-/// the iOS sender (a single Mac it wants to reach). For Mac-side replies
-/// the same field carries the originating iOS device id; the backend
-/// double-checks the request_id → requester mapping first so legacy
-/// reply-only flows that don't yet stamp `target_device_id` keep working.
+/// `target_device_id` is stamped on the wire by the iOS sender (a single
+/// Mac it wants to reach). For Mac-side replies the same field carries
+/// the originating iOS device id; the backend double-checks the request_id
+/// → requester mapping first so reply-only flows that don't yet stamp
+/// `target_device_id` keep working.
 pub async fn handle_forward(
     session: &SessionHandle,
     registry: &SessionRegistry,
@@ -632,8 +629,8 @@ pub async fn handle_forward(
                 return None;
             }
             // Try the reply-target mapping first; if found, prefer it
-            // over the wire-stamped target so legacy reply-only flows
-            // still work and so daemons that don't yet stamp
+            // over the wire-stamped target so reply-only flows still
+            // work and so daemons that don't yet stamp
             // `target_device_id` on replies stay routable.
             if let Some(target) = session.take_rpc_reply_target(reply_id) {
                 return route_or_synth(session, registry, target, payload).await;
@@ -729,7 +726,7 @@ fn json_rpc_id(payload: &serde_json::Value) -> Option<u64> {
     payload.get("id").and_then(serde_json::Value::as_u64)
 }
 
-/// Synthesise a JSON-RPC 2.0 "peer offline" error response (spec §7.3 `(*)`).
+/// Synthesise a JSON-RPC 2.0 "peer offline" error response.
 ///
 /// The caller's `Forward.payload` is expected to look like a JSON-RPC
 /// request; we copy its `id` across so the caller's jsonrpsee client can

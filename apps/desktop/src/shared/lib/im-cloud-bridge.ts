@@ -793,7 +793,7 @@ export function focusConversationOnCloud(conversationId: string): void {
 }
 
 /**
- * Phase 5.1: Hub recall for Linked mode.
+ * Hub recall for Linked mode.
  * POST Hub recall API then remove from Hub-sourced timeline projection.
  */
 export async function recallMessageOnCloud(

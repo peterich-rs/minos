@@ -208,7 +208,7 @@ abstract class MinosCoreProtocol {
   /// Synchronous snapshot of the current [ConnectionState].
   ConnectionState get currentConnectionState;
 
-  // ---- Auth (Phase 8) ----
+  // ---- Auth ----
 
   /// Exchange a Supabase Auth access token for a Minos session (only human
   /// account create/login path). Surfaces `Authenticated` on [authStates]
@@ -224,7 +224,7 @@ abstract class MinosCoreProtocol {
   /// [authStates].
   Future<void> logout();
 
-  // ---- Agent dispatch (Phase 8) ----
+  // ---- Agent dispatch ----
 
   /// Send a follow-up user message to an existing agent session. The
   /// `sessionId` is the session/session identifier.
@@ -272,7 +272,7 @@ abstract class MinosCoreProtocol {
     required bool enabled,
   });
 
-  // ---- Lifecycle (Phase 8) ----
+  // ---- Lifecycle ----
 
   /// Mark the app as foregrounded. Resets the WS reconnect backoff so the
   /// next connect attempt happens promptly.
@@ -298,7 +298,7 @@ abstract class MinosCoreProtocol {
     required String sessionId,
     required Map<String, dynamic> decision,
 
-    /// Hub Intent Outbox id (C5.3). Stable across retries of the same intent.
+    /// Hub Intent Outbox id. Stable across retries of the same intent.
     String? clientRequestId,
   });
 
@@ -314,7 +314,6 @@ abstract class MinosCoreProtocol {
   /// is already `Connected`, and an error when no pairing snapshot exists.
   ///
   /// Called by `AuthController` on the first `Authenticated` transition
-  /// (Phase 8.9) so the WS reconnect loop only spawns under an
-  /// authenticated session.
+  /// so the WS reconnect loop only spawns under an authenticated session.
   Future<void> resumePersistedSession();
 }

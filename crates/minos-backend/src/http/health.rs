@@ -1,6 +1,6 @@
 //! Health endpoints.
 //!
-//! Three-way split per production hardening guide §3.8:
+//! Three-way split:
 //!
 //! - `GET /health/live`  — process is up. Always 200 unless the runtime
 //!   itself is toast. Used by orchestrators (launchd / k8s) for

@@ -25,7 +25,7 @@ use serde_json::json;
 /// Known Host runtime bins that Mobile/Desktop may @-mention for dispatch.
 
 /// Max bot→bot automation hops from a root human (or unknown) message.
-/// Exceeding this skips enqueue (loop control; bot-mailbox design).
+/// Exceeding this skips enqueue (loop control).
 
 pub fn router() -> Router<BackendState> {
     Router::new()
@@ -119,7 +119,7 @@ pub fn require_account_id_from_state(
 ///
 /// Prefer writers that already committed `chat_messages` + durable + outbox in
 /// one transaction (Transactional Outbox). This helper:
-/// 1. best-effort legacy envelope fanout
+/// 1. best-effort envelope fanout
 /// 2. **repairs** missing durable/outbox rows if a prior crash left a hole
 /// 3. publishes durable events (outbox dispatcher remains the reliability backstop)
 pub async fn fan_out_social_message(state: &BackendState, message: &ChatMessageSummary) {
@@ -470,7 +470,7 @@ async fn arm_completion_watch(
     mention_minos_id: Option<String>,
 ) {
     let now_ms = chrono::Utc::now().timestamp_millis();
-    // Watch TTL is enforced by SessionLifecycle (B5); arm with a long ceiling.
+    // Watch TTL is enforced by SessionLifecycle; arm with a long ceiling.
     let deadline_at_ms = now_ms + 30 * 60 * 1000;
     let watch = crate::completion_watch::CompletionWatch {
         dispatch_id: dispatch_id.clone(),
@@ -2424,7 +2424,7 @@ async fn unmatched_structured_agent_intent_error(
 
 /// Expire CompletionWatch rows past `deadline_at_ms`: user-visible failure + remove.
 ///
-/// Called by SessionLifecycle (B5). Returns the number of watches drained.
+/// Called by SessionLifecycle. Returns the number of watches drained.
 pub async fn expire_completion_watches(
     state: &BackendState,
     now_ms: i64,

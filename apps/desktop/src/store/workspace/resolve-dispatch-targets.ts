@@ -1,6 +1,6 @@
 /**
  * Pure participant-delivery target resolution (no daemon / store deps).
- * Room rules: ADR 0021 / agent-participant-delivery / global-bot-identity.
+ * Room rules: agent participant delivery + Hub bot identity SSOT.
  *
  * Delivery targets are **roster-only**. Membership SSOT on Conversation is
  * `participatingBots` (botId + name + runtime). Callers should pass

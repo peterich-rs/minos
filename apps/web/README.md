@@ -71,7 +71,7 @@ pnpm build
 - Legacy demo routes under `src/components/*-workspace.tsx` are no longer mounted
 
 Desktop UI SSOT: import pure presenters via `@/shared/*` → `apps/desktop/src/shared/*`
-(see `docs/superpowers/specs/2026-07-30-program/03-client-ports-ui.md`).
+(see docs/architecture-desktop.md).
 
 ## Notes
 

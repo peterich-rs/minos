@@ -140,7 +140,7 @@ export function Composer({ conversationId }: { conversationId: string }) {
     void loadInspector(conversationId, { quiet: hasKey });
   }, [mentionActive, sessions.length, conversationId, source, loadInspector]);
 
-  // Unified participants (humans ∪ agents) for @ picker — ADR 0021 / global-bot-identity.
+  // Unified participants (humans ∪ agents) for @ picker.
   // @ targets = conversation roster only (Hub participants preferred). Never mix
   // unjoined Host profiles into collab send targets.
   useEffect(() => {

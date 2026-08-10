@@ -12,12 +12,11 @@
 //!   device calls `registry.route(..)` or picks up the handle via `get`
 //!   and uses the sender directly.
 //!
-//! ADR-0020 / Phase G: there is no longer a per-session `paired_with`
-//! slot. A Mac can be paired to multiple iOS accounts, so a single
-//! `Option<DeviceId>` field cannot represent live pairing. iOS callers
-//! stamp `target_device_id` on the wire (`Envelope::Forward`) and the
-//! envelope dispatcher validates against `host_links::exists`
-//! for the caller's account.
+//! There is no longer a per-session `paired_with` slot. A Mac can be
+//! paired to multiple iOS accounts, so a single `Option<DeviceId>` field
+//! cannot represent live pairing. iOS callers stamp `target_device_id` on
+//! the wire (`Envelope::Forward`) and the envelope dispatcher validates
+//! against `host_links::exists` for the caller's account.
 //!
 //! Values are cheap to clone (one `Arc` + one `mpsc::Sender` bump), so the
 //! API returns owned clones rather than `DashMap` guards. This keeps
@@ -33,7 +32,7 @@
 //!
 //! A true drop-oldest policy still has to live in the writer loop, not here:
 //! the registry owns only the sender side and cannot pop from the receiver.
-//! If step 12's e2e coverage shows that retry-on-backpressure is not enough,
+//! If e2e coverage shows that retry-on-backpressure is not enough,
 //! revisit this with a writer-owned `drain_one_then_retry` path.
 //!
 //! On [`TrySendError::Closed`] we translate to [`BackendError::PeerOffline`].
@@ -58,7 +57,7 @@ use tokio::sync::{mpsc, watch, RwLock};
 
 use crate::error::BackendError;
 
-/// Outbox capacity in frames. 256 matches spec §7 bullet "Bounded mpsc".
+/// Outbox capacity in frames. 256 matches the "Bounded mpsc" target.
 ///
 /// Sized for "a few seconds of chatty pair traffic before the TCP send
 /// buffer drains". A reasonable default; tune later with e2e data.
@@ -85,7 +84,7 @@ pub enum SessionRevocation {
 
 /// One live WebSocket session, indexed by its [`DeviceId`].
 ///
-/// Constructed by the WS accept handler (step 8); removed by the same
+/// Constructed by the WS accept handler; removed by the same
 /// handler on close. Cheaply clonable — clones share the outbox `Sender`,
 /// the `account_id` lock, and the `last_pong_at` lock.
 #[derive(Debug, Clone)]
@@ -93,7 +92,7 @@ pub struct SessionHandle {
     /// Identity of the device owning this session. Also the registry key.
     pub device_id: DeviceId,
     /// The role this device speaks in (known at handshake time via the
-    /// `X-Device-Role` header; step 9 will parse it). Drives role-gated
+    /// `X-Device-Role` header). Drives role-gated
     /// local RPC dispatch, e.g. `request_pairing_token` accepts only
     /// [`DeviceRole::AgentHost`].
     pub role: DeviceRole,
@@ -106,7 +105,7 @@ pub struct SessionHandle {
     /// distinguishing reconnect supersede from auth/token revocation.
     revoked: watch::Sender<Option<SessionRevocation>>,
     /// Timestamp of the most recent `Pong` frame we received from this
-    /// client. Updated by the dispatcher's read branch (step 8); consumed
+    /// client. Updated by the dispatcher's read branch; consumed
     /// by the heartbeat tick branch to decide when to close the socket as
     /// dead. Wrapped in `Arc<RwLock<_>>` so the writer/reader tasks can
     /// share it cheaply.
@@ -131,7 +130,7 @@ pub struct SessionHandle {
 impl SessionHandle {
     /// Construct a fresh handle and its paired outbox receiver.
     ///
-    /// The caller (step 8's WS accept handler) typically moves the
+    /// The caller (the WS accept handler) typically moves the
     /// receiver into the per-socket writer task and passes a clone of the
     /// handle into the reader task and the registry. `last_pong_at` is
     /// seeded with `Instant::now()` so the first heartbeat tick treats a
@@ -157,7 +156,7 @@ impl SessionHandle {
         let _ = self.revoked.send(Some(reason));
     }
 
-    /// Bind this session to an account (spec §5.5). Called by the iOS WS
+    /// Bind this session to an account. Called by the iOS WS
     /// upgrade handler after [`crate::auth::bearer::require`] succeeds and
     /// by the pairing/consume handler after the Mac side adopts its
     /// peer's account. Idempotent overwrite — the most-recent claim wins.
@@ -516,7 +515,7 @@ impl SessionRegistry {
     /// Route `payload` from `from` to `to` as an [`Envelope::Forwarded`].
     ///
     /// Mechanical forward — does NOT verify `from` is paired with `to`.
-    /// The caller (envelope dispatcher, plan step 8) enforces pairing
+    /// The caller (envelope dispatcher) enforces pairing
     /// before calling `route`.
     ///
     /// Behaviour:
@@ -537,8 +536,8 @@ impl SessionRegistry {
     /// See variants above.
     ///
     /// The function is declared `async` on purpose even though today's
-    /// body uses only `try_send` (sync). The plan §7 signature is `async`,
-    /// and step 8 may introduce a bounded `send_timeout` or a
+    /// body uses only `try_send` (sync). The signature is `async`,
+    /// and a future change may introduce a bounded `send_timeout` or a
     /// drain-one-then-retry path for true drop-oldest backpressure —
     /// both of which need `.await`. Keeping the signature stable now
     /// avoids churning every call site later.
@@ -1089,7 +1088,7 @@ mod tests {
 
     // ── routing: ABA-safe eviction on reconnect race ─────────────────
 
-    /// Models the step 8/9/12 reconnect race: the caller observed Closed
+    /// Models the reconnect race: the caller observed Closed
     /// on H1 but, before eviction runs, H2 for the same DeviceId has
     /// replaced it. A blind `remove` would nuke the fresh session; the
     /// scoped `remove_if` + `same_channel` preserves H2.

@@ -8,7 +8,7 @@ use crate::store::durable_event_log;
 
 /// Cleans old entries from the durable event log and agent turn events.
 ///
-/// Default retention: **90 days** (after Phase A SnapshotRequired path ships).
+/// Default retention: **90 days**.
 /// Override via `MINOS_DURABLE_RETENTION_DAYS`. Multi-batch drain per tick.
 const DEFAULT_RETENTION_DAYS: i64 = 90;
 const BATCH_SIZE: u32 = 1000;

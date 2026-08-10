@@ -1,7 +1,6 @@
 //! Same-account host link rail (`POST /v1/hosts/link`, unlink, list).
 //!
-//! Replaces QR pairing as the primary account↔host binding path while QR
-//! endpoints remain mounted until Phase D cleanup.
+//! Account↔host binding path.
 
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
@@ -124,7 +123,7 @@ async fn post_link(
         .await
         .map_err(host_link_error)?;
 
-    // T2 HostLinked durable was enqueued in the same tx — wake outbox fanout.
+    // HostLinked durable was enqueued in the same tx — wake outbox fanout.
     state.wake_outbox();
 
     Ok(Json(ResponseEnvelope::new(
@@ -174,7 +173,7 @@ async fn post_unlink(
         .await
         .map_err(host_link_error)?;
 
-    // T2 HostUnlinked durable was enqueued in the same tx — wake outbox fanout.
+    // HostUnlinked durable was enqueued in the same tx — wake outbox fanout.
     state.wake_outbox();
 
     Ok(StatusCode::NO_CONTENT)
@@ -231,7 +230,7 @@ async fn get_hosts(
             host_installation_id: pair.host_device_id.to_string(),
             host_display_name,
             linked_at_ms: pair.paired_at_ms,
-            // IM **device online**: host installation has live `/ws/host`.
+            // **device online**: host installation has live `/ws/host`.
             online: state.registry.get(pair.host_device_id).is_some(),
             last_seen_at_ms,
         });

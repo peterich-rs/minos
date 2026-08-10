@@ -16,7 +16,7 @@
 //!    the first, and the replacement keeps serving traffic while `/metrics`
 //!    records `reason="session_superseded"`.
 //! 3. `e2e_legacy_envelope_frame_returns_validation_error` — a mobile
-//!    client sends a legacy `Envelope` payload and the topic gateway rejects
+//!    client sends a server-only `Envelope` payload and the topic gateway rejects
 //!    it with a `validation_format` error while keeping the socket alive.
 //! 4. `e2e_presence_tracks_live_peer_membership` — paired devices observe
 //!    `Event::PeerOnline` / `Event::PeerOffline` on each other's connect
@@ -440,22 +440,21 @@ async fn e2e_legacy_envelope_frame_returns_validation_error() -> anyhow::Result<
     Ok(())
 }
 
-// ADR-0020 / Phase G: single-peer presence tracking
-// (`PeerOnline`/`PeerOffline` on connect/disconnect) was deleted with the
-// device-keyed pairings module. The activate hook now always emits
-// `Unpaired`. Multi-host account-scoped presence rebuild is deferred to
-// Phase M.
+// Single-peer presence tracking (`PeerOnline`/`PeerOffline` on
+// connect/disconnect) was deleted with the device-keyed pairings module. The
+// activate hook now always emits `Unpaired`. Multi-host account-scoped
+// presence rebuild is deferred.
 #[tokio::test]
-#[ignore = "ADR-0020 single-peer presence model removed; Phase M will reintroduce multi-host coverage"]
+#[ignore = "single-peer presence model removed; multi-host presence coverage deferred"]
 async fn e2e_presence_tracks_live_peer_membership() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
     let mac_id = DeviceId::new();
 
     insert_test_host(&relay.pool, mac_id, "mac", 0).await;
-    // ADR-0020: insert via account_host_pairings instead of legacy device-keyed
-    // pairings. The body of this test still asserts presence semantics that
-    // were removed in Phase G; #[ignore]'d at the test attribute.
+    // Insert via account_host_pairings instead of device-keyed
+    // pairings. The body still asserts presence semantics that were removed;
+    // #[ignore]'d at the test attribute.
     let account_id = store::accounts::create(&relay.pool, "presence@example.com")
         .await?
         .account_id;

@@ -105,7 +105,7 @@ pnpm check:all
 - Frontend lives in `src/` and is intentionally **not** shared with `apps/web` yet — visual baseline is the desktop mockup, not the current web admin demo.
 - Rust host process lives in `src-tauri/` as a **standalone Cargo package** (not a workspace member of the root `crates/*` workspace).
 - Bridge to `minos-daemon` will reuse the same local JSON-RPC surface the TUI uses (`minos_local_*`).
-- **Wave 1 Phase 4:** design tokens live in `src/index.css` (`:root` CSS vars) and map through `tailwind.config.js`. Markdown/code polish is in `shared/ui/MarkdownText.tsx` + tone CSS vars (streaming still plain text). See [docs/architecture-desktop.md](../../docs/architecture-desktop.md) § Design tokens + markdown.
+- **Design tokens** live in `src/index.css` (`:root` CSS vars) and map through `tailwind.config.js`. Markdown/code polish is in `shared/ui/MarkdownText.tsx` + tone CSS vars (streaming still plain text). See [docs/architecture-desktop.md](../../docs/architecture-desktop.md) § Design tokens + markdown.
 - **Chat reactions:** MessageRow action bar + emoji-mart picker; durable via local daemon (`toggle_conversation_message_reaction` / `chat_message_reactions`); `reaction-store` optimistic toggle (generation-gated) + hydrate from `list_conversation_messages`; mock seed only in browser Vite. See [docs/architecture-desktop.md](../../docs/architecture-desktop.md).
 
 See [docs/architecture-desktop.md](../../docs/architecture-desktop.md).

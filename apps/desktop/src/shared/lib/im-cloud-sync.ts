@@ -385,7 +385,7 @@ async function postReactionToggleFromOutbox(
   if (!messageId || !emoji) {
     throw new Error("invalid_payload: reaction_toggle requires messageId+emoji");
   }
-  // clientMessageId == B6 client_op_id; retries reuse the same id.
+  // clientMessageId == wire client_op_id; retries reuse the same id.
   return toggleHubReaction(
     auth.deviceId,
     auth.accessToken,
@@ -421,7 +421,7 @@ function isApprovalAlreadyResolvedError(error: unknown): boolean {
 }
 
 /**
- * P3 branch by auth mode (no dual SSOT):
+ * Branch by auth mode (no dual SSOT):
  * - Hub IM mode: POST /v1/approvals/respond + top-level client_request_id
  * - Local-only: daemon resolveApproval; decision JSON never carries client_request_id
  */
@@ -508,9 +508,9 @@ async function postOutboxEntry(
 }
 
 /**
- * C5.1 single path: enqueue reaction_toggle then drain via lane worker.
+ * Single path: enqueue reaction_toggle then drain via lane worker.
  * Returns Hub aggregate for generation-gated apply (from worker side map).
- * Logical op id = clientOpId (= B6 client_op_id); row id = outbox:${clientOpId}.
+ * Logical op id = clientOpId (= wire client_op_id); row id = outbox:${clientOpId}.
  */
 export async function syncReactionToggleToCloud(input: {
   conversationId: string;
@@ -549,7 +549,7 @@ export async function syncReactionToggleToCloud(input: {
 }
 
 /**
- * C5.3 / P3: durable approval intent via Intent Outbox.
+ * Durable approval intent via Intent Outbox.
  *
  * - Hub authenticated: POST /v1/approvals/respond with top-level
  *   `client_request_id` (= clientOpId). Decision body is agent-facing only.

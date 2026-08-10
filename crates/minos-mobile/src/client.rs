@@ -174,8 +174,8 @@ impl MobileClient {
     }
 
     /// FFI-friendly constructor. The Dart side owns real persistence via
-    /// `flutter_secure_storage` (plan D5); this default is the in-memory
-    /// backing so the FFI surface never leaks `Arc<dyn MobilePairingStore>`.
+    /// `flutter_secure_storage`; this default is the in-memory backing so
+    /// the FFI surface never leaks `Arc<dyn MobilePairingStore>`.
     #[must_use]
     pub fn new_with_in_memory_store(self_name: String) -> Self {
         Self::new(Arc::new(InMemoryPairingStore::new()), self_name)
@@ -404,8 +404,7 @@ impl MobileClient {
 
     // ─────────────────────────── history rpcs ────────────────────────────
 
-    /// Request a page of thread summaries from the backend. Bearer-only
-    /// post ADR-0020.
+    /// Request a page of thread summaries from the backend. Bearer-only.
     pub async fn list_sessions(
         &self,
         req: ListSessionsParams,
@@ -1325,13 +1324,12 @@ impl MobileClient {
     }
 
     /// Log out of the current session. Wipes local auth state and drops the
-    /// WS; the daemon's per-session close happens via `close_session` (Phase C
-    /// rewrite — the legacy `stop_agent` RPC is gone). Spec §5.4 / §8.3.
+    /// WS; the daemon's per-session close happens via `close_session` (the
+    /// legacy `stop_agent` RPC is gone).
     pub async fn logout(&self) -> Result<(), MinosError> {
-        // Pre-Phase-C this called `stop_agent` to halt the active session.
-        // Post-Phase-C the daemon owns multiple sessions; logout no longer
-        // closes them implicitly. The Mac side reaps idle sessions via the
-        // manager's reaper (C19) once the iOS client disconnects.
+        // Logout no longer implicitly closes host sessions: the daemon owns
+        // multiple sessions, and the Mac reaps idle ones via the manager's
+        // reaper once the iOS client disconnects.
 
         let session = self.auth_session.read().await.clone();
         if let Some(s) = session {
@@ -1411,8 +1409,7 @@ impl MobileClient {
 
     /// Spawn the reconnect loop as a background task. Idempotent: a
     /// running loop short-circuits the call. Aborted on Unauthenticated
-    /// / RefreshFailed by `clear_auth_session_and_disconnect`. Spec §6.3,
-    /// plan 08a Task 6.2.
+    /// / RefreshFailed by `clear_auth_session_and_disconnect`.
     async fn ensure_reconnect_loop(&self) {
         let mut guard = self.reconnect_handle.lock().await;
         if let Some(h) = guard.as_ref() {
@@ -2262,9 +2259,8 @@ mod tests {
 
     #[tokio::test]
     async fn list_sessions_without_persisted_state_errors_unauthorized() {
-        // ADR-0020 dropped the device-secret rail; list_sessions is
-        // bearer-only. With no auth_session it surfaces Unauthorized
-        // (not StoreCorrupt — the device-secret is no longer required).
+        // list_sessions is bearer-only. With no auth_session it surfaces
+        // Unauthorized (not StoreCorrupt — device-secret is not required).
         let client = MobileClient::new_with_in_memory_store("test".into());
         let err = client
             .list_sessions(ListSessionsParams {

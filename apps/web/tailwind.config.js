@@ -1,6 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 /**
- * Theme maps to CSS variables in src/index.css (Wave 1 Phase 4).
+ * Theme maps to CSS variables in src/index.css.
  * Use rgb(... / <alpha-value>) so utilities like bg-ink/5 keep working.
  */
 export default {

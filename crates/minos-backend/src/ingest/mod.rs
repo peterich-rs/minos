@@ -13,7 +13,7 @@
 //!    `EventKind::UiEventMessage` and fans it out to every client
 //!    installation under every account linked to the ingesting host
 //!    (`owner_device_id`). See [`broadcast_to_peers_of`] for the
-//!    `host_links → device_installations` walk (ADR-0020 / Phase G).
+//!    `host_links → device_installations` walk.
 //!
 //! The formal host gateway path (`HostIngestLiveBatch`) persists raw in
 //! `realtime::gateway`, then **server-translates** with the same
@@ -232,7 +232,7 @@ pub async fn dispatch(
 /// Apply formal `agent_sessions` / `agent_turns` mutations implied by projected
 /// UI events (running / failed / ended + assistant turn summaries).
 ///
-/// Shared by the legacy `Envelope::Ingest` path and the formal
+/// Shared by the `Envelope::Ingest` path and the formal
 /// `HostIngestLiveBatch` gateway path so cloud session status stays honest.
 pub async fn sync_formal_agent_session_from_ui_events(
     store: &impl AsStorePool,
@@ -438,10 +438,10 @@ async fn replace_assistant_turn_summary(
 
 /// Persist approval request / timeout side effects from a host ingest payload.
 ///
-/// Returns the legacy `EventKind` envelope payload when the method is an
+/// Returns the `EventKind` envelope payload when the method is an
 /// approval control plane event; `Ok(None)` for ordinary agent events.
 ///
-/// Used by both the legacy envelope ingest path and the formal
+/// Used by both the envelope ingest path and the formal
 /// `HostIngestLiveBatch` gateway so remote `/v1/approvals/respond` has a row.
 pub async fn apply_approval_side_effects_from_payload(
     approvals: &dyn ApprovalService,
@@ -647,7 +647,7 @@ fn sanitize_title(text: &str) -> Option<String> {
 /// offline, full outbox) are logged at debug/warn and swallowed — ingest
 /// must stay crash-safe.
 ///
-/// ADR-0020 / Phase G: pair table is `host_links` keyed on
+/// The pair table is `host_links` keyed on
 /// `(host_installation_id, account_id)`. Fan-out targets come from
 /// `host_links::list_account_client_targets_for_host`.
 async fn broadcast_to_peers_of(

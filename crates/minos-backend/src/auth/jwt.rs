@@ -1,4 +1,4 @@
-//! HS256 JWT helpers. Spec §5.3.
+//! HS256 JWT helpers.
 //!
 //! Claims: { sub: account_id, did: device_id, iat, exp, jti }. The
 //! `did` claim binds the access token to a specific device — replay

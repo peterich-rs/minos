@@ -3,7 +3,7 @@
 //! Design: `clap` 4 derive + `env = "..."` attributes so every flag has a
 //! paired environment-variable override. Defaults are codified as
 //! `default_value`/`default_value_t` literals so `--help` prints the exact
-//! values the plan (§10) mandates.
+//! values.
 //!
 //! The log directory default is platform-dependent (see [`default_log_dir`])
 //! and therefore resolved at runtime rather than being a clap literal — the
@@ -13,9 +13,9 @@
 //! # Exit-after-migrate
 //!
 //! `--exit-after-migrate` is a boot-time flag used by
-//! `cargo xtask backend-db-reset` (plan §11). When set, `main.rs` applies
+//! `cargo xtask backend-db-reset`. When set, `main.rs` applies
 //! migrations and exits with code 0 without binding the axum listener or
-//! spawning the GC task. The plan's §10 "steps 1–8" body only runs when
+//! spawning the GC task. The normal boot body only runs when
 //! this flag is absent.
 
 use std::net::SocketAddr;
@@ -27,7 +27,7 @@ use serde::Serialize;
 
 use crate::realtime::{CacheBackendKind, MessageBusBackendKind};
 
-/// Default pairing-token TTL (5 minutes) per plan §10.
+/// Default pairing-token TTL (5 minutes).
 pub(crate) const DEFAULT_TOKEN_TTL_SECS: u64 = 300;
 pub(crate) const DEFAULT_DB_MAX_CONNECTIONS: u32 = 32;
 pub(crate) const DEFAULT_CLUSTER_CHANNEL: &str = "minos.backend.cluster";
@@ -159,7 +159,7 @@ pub struct Config {
     #[arg(long)]
     pub exit_after_migrate: bool,
 
-    /// HS256 secret used to sign account-auth bearer tokens (spec §5.3).
+    /// HS256 secret used to sign account-auth bearer tokens.
     ///
     /// Required at boot in the binary. Optional at the CLI level so the
     /// crate's own unit tests / `BackendState::new()` can assemble a
@@ -415,7 +415,7 @@ impl Config {
 
 /// Platform-specific fallback for the xlog directory.
 ///
-/// On macOS the canonical location is `~/Library/Logs/Minos/` (spec §9.4).
+/// On macOS the canonical location is `~/Library/Logs/Minos/`.
 /// On non-Apple targets we fall back to `$TMPDIR/minos` (or `/tmp/minos`
 /// when `$TMPDIR` is absent) — CI runners, containers, and developer
 /// sandboxes usually honour `TMPDIR` via `tempfile::tempdir`, so this keeps
@@ -482,14 +482,14 @@ mod tests {
     }
 
     #[test]
-    fn default_flags_match_plan_defaults() {
+    fn default_flags_match_defaults() {
         let _g = env_scope();
 
         let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
         assert_eq!(
             cfg.listen,
             "127.0.0.1:8787".parse::<SocketAddr>().unwrap(),
-            "default --listen must match plan §10"
+            "default --listen must match"
         );
         assert_eq!(cfg.db, PathBuf::from("./minos-backend.db"));
         assert_eq!(cfg.storage_mode, StorageMode::Sqlite);
@@ -517,7 +517,7 @@ mod tests {
         let _g = env_scope();
 
         let cfg = Config::try_parse_from(["minos-backend"]).unwrap();
-        // Plan §10 default: 300 seconds. `from_mins(5)` is the same
+        // Default: 300 seconds. `from_mins(5)` is the same
         // Duration; clippy prefers the larger-unit form.
         assert_eq!(cfg.token_ttl(), Duration::from_mins(5));
 

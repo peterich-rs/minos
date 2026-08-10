@@ -60,7 +60,7 @@
 /// │  ├── group_member          Group membership model       │
 /// │  └── minos_error_display   Error presentation helpers   │
 /// │  Note: Hub `agents` is bot identity SSOT; local JSON is │
-/// │  cache/draft only (global-bot-identity-design Phase 4). │
+/// │  cache/draft only (Hub `agents` is identity SSOT).     │
 /// └─────────────────────────────────────────────────────────┘
 /// ```
 ///

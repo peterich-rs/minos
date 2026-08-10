@@ -177,7 +177,7 @@ async fn seed_host(relay: &Relay) -> anyhow::Result<DeviceId> {
 
 /// Register a real Hub bot (global identity) for session starts.
 /// Product paths reject virtual aliases (`agent_codex`); integration tests must
-/// use a real `agents.agent_id` (see global-bot-identity-design).
+/// use a real `agents.agent_id`.
 async fn seed_hub_bot(relay: &Relay, owner_account_id: &str) -> anyhow::Result<String> {
     let agent = store::social::register_agent(
         &relay.pool,

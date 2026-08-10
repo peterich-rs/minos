@@ -285,7 +285,7 @@ pub use message_reactions::{
     set_reaction_client_op_action_in_tx, toggle_user_in_tx, try_claim_reaction_client_op_in_tx,
     MessageReactionRow, ReactionClientOpRow, ToggleReactionOutcome,
 };
-// B6 event_id helper
+// Deterministic reaction durable event_id helper.
 pub use delivery::reaction_event_id;
 
 // ─── Tests ────────────────────────────────────────────────────────────

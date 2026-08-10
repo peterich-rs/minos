@@ -121,13 +121,12 @@ pub struct SocialEventFrame {
 
 /// Durable mobile pairing snapshot mirrored into the iOS keychain.
 ///
-/// Phase 4 added the five auth fields (access/refresh tokens + bound
-/// account identity) so the Dart-side secure store can rehydrate the full
-/// session on cold launch. All five auth fields are persisted as a tuple —
-/// either every one is present or all are `None`.
+/// Includes the five auth fields (access/refresh tokens + bound account
+/// identity) so the Dart-side secure store can rehydrate the full session
+/// on cold launch. All five auth fields are persisted as a tuple — either
+/// every one is present or all are `None`.
 ///
-/// ADR-0020 dropped the device_secret from this snapshot — the iOS rail
-/// is bearer-only.
+/// Device secret is not stored here — the iOS rail is bearer-only.
 ///
 /// Backend URL and CF Access service-token headers were dropped from the
 /// snapshot when pairing transitioned to compile-time `build_config` — the
@@ -531,7 +530,7 @@ impl MobileClient {
             .await
     }
 
-    /// Toggle Hub reaction; `client_op_id` is the Intent Outbox id (B6/C5).
+    /// Toggle Hub reaction; `client_op_id` is the Intent Outbox id.
     pub async fn toggle_reaction(
         &self,
         conversation_id: String,
@@ -749,7 +748,7 @@ impl MobileClient {
 
     /// Submit a user approval decision for a pending host request.
     ///
-    /// `client_request_id` is the Hub Intent Outbox id (C5.3). When omitted,
+    /// `client_request_id` is the Hub Intent Outbox id. When omitted,
     /// the mobile client generates one so the wire body never hardcodes null.
     pub async fn send_approval_decision(
         &self,
