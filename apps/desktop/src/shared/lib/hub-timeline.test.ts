@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   agentResultSessionKey,
+  hubChatMessageToTimeline,
   mergeHubAndLocalTimeline,
   removeMessageFromTimeline,
   sessionIdFromAgentResultId,
   upsertHubMessageIntoTimeline,
 } from "./hub-timeline.ts";
 import type { TimelineMessage } from "./mock-data.ts";
+import type { HubChatMessage } from "./minos-cloud.ts";
 
 function local(
   partial: Partial<TimelineMessage> & Pick<TimelineMessage, "id">,
@@ -360,5 +362,36 @@ describe("removeMessageFromTimeline", () => {
     assert.equal(next.length, 1);
     assert.equal(next[0]?.id, "m2");
     assert.equal(removeMessageFromTimeline(list, "missing"), list);
+  });
+});
+
+describe("hubChatMessageToTimeline mentions", () => {
+  it("carries structured account + agent mention SSOT", () => {
+    const agentMap = new Map([["agent-uuid-1", "codex"]]);
+    const msg: HubChatMessage = {
+      messageId: "m-mentions",
+      conversationId: "c1",
+      text: "@bob @codex please review",
+      createdAtMs: 1000,
+      messageSeq: 3,
+      senderType: "user",
+      senderAccountId: "acct-me",
+      senderMinosId: "me",
+      senderDisplayName: "Me",
+      mentionedAccountIds: ["acct-bob"],
+      mentionedAgentIds: ["agent-uuid-1"],
+    };
+    const row = hubChatMessageToTimeline(msg, { agentRuntimeMap: agentMap });
+    assert.ok(row);
+    assert.equal(row?.mentions?.length, 2);
+    assert.deepEqual(row?.mentions?.[0], {
+      kind: "account",
+      targetId: "acct-bob",
+    });
+    assert.deepEqual(row?.mentions?.[1], {
+      kind: "agent",
+      targetId: "agent-uuid-1",
+      agent: "codex",
+    });
   });
 });

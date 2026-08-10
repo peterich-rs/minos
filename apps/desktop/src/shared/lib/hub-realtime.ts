@@ -66,6 +66,8 @@ type DurableMessagePayload = {
     };
     reply_to?: { message_id: string } | null;
     recalled_at_ms?: number | null;
+    mentioned_account_ids?: string[] | null;
+    mentioned_agent_ids?: string[] | null;
   };
 };
 
@@ -145,6 +147,16 @@ function mapMessage(
     senderDisplayName: raw.sender.display_name,
     replyToMessageId: raw.reply_to?.message_id ?? null,
     recalledAtMs: raw.recalled_at_ms ?? null,
+    mentionedAccountIds: Array.isArray(raw.mentioned_account_ids)
+      ? raw.mentioned_account_ids.filter(
+          (id): id is string => typeof id === "string" && id.length > 0,
+        )
+      : undefined,
+    mentionedAgentIds: Array.isArray(raw.mentioned_agent_ids)
+      ? raw.mentioned_agent_ids.filter(
+          (id): id is string => typeof id === "string" && id.length > 0,
+        )
+      : undefined,
   };
 }
 

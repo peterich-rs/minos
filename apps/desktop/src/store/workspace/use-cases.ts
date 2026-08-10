@@ -449,10 +449,11 @@ export function createUseCasesActions(
       const convTitle = conv.title;
       const agentRuntimes = conv.participatingAgents;
       const accountOn = hubAuthenticated();
+      // Local runtime only when this Host owns bot delivery targets.
+      // Pure human / multi-bot bare text: Hub client_live only (no HostCommand).
+      const hasBotTargets = targets.length > 0;
 
-      // Desktop workbench always executes agents natively on this Host.
-      // Linked/Hub is multi-end IM projection only — never the primary start path.
-      // Append is idempotent by message_id. Success here only means durable.
+      // Local workbench timeline append (idempotent by message_id).
       const { messageSeq } = await daemonApi.appendUserMessage(
         conversationId,
         messageBody,
@@ -469,28 +470,35 @@ export function createUseCasesActions(
           replyToMessageId,
           createdAtMs,
           agentRuntimes,
-          messageSource: "host_projection",
+          // Bot delivery runs natively here → host_projection anti-loop.
+          // No bot targets → client_live collaboration message (Hub may deliver).
+          messageSource: hasBotTargets ? "host_projection" : "client_live",
         });
       }
       void get().loadTimeline(conversationId, { quiet: true });
 
-      const fanoutErrors = await fanOutAgentTurns({
-        get,
-        set,
-        conversationId,
-        workspacePath: project.workspacePath,
-        messageBody,
-        originMessageId: resolvedId,
-        targets,
-        multiRoutedCount,
-      });
-      if (fanoutErrors.length > 0) {
-        set({
-          actionError:
-            fanoutErrors.length === targets.length
-              ? fanoutErrors[0] ?? "Agent fan-out failed"
-              : `Partial fan-out failure (${fanoutErrors.length}/${targets.length}): ${fanoutErrors[0]}`,
+      let fanoutErrors: string[] = [];
+      if (hasBotTargets) {
+        fanoutErrors = await fanOutAgentTurns({
+          get,
+          set,
+          conversationId,
+          workspacePath: project.workspacePath,
+          messageBody,
+          originMessageId: resolvedId,
+          targets,
+          multiRoutedCount,
         });
+        if (fanoutErrors.length > 0) {
+          set({
+            actionError:
+              fanoutErrors.length === targets.length
+                ? fanoutErrors[0] ?? "Agent fan-out failed"
+                : `Partial fan-out failure (${fanoutErrors.length}/${targets.length}): ${fanoutErrors[0]}`,
+          });
+        } else {
+          set({ actionError: null });
+        }
       } else {
         set({ actionError: null });
       }
@@ -506,7 +514,7 @@ export function createUseCasesActions(
         queryKey: queryKeys.inspectorSessions(conversationId),
       });
       await get().loadConversations(conv.projectId);
-      if (fanoutErrors.length === targets.length) {
+      if (hasBotTargets && fanoutErrors.length === targets.length) {
         throw new Error(fanoutErrors[0] ?? "Agent fan-out failed");
       }
     } catch (e) {
@@ -584,6 +592,7 @@ export function createUseCasesActions(
         installedAgents,
         mentionProfiles,
       });
+      const hasBotTargets = targets.length > 0;
 
       const { messageSeq } = await daemonApi.appendUserMessage(
         conversationId,
@@ -618,28 +627,33 @@ export function createUseCasesActions(
           replyToMessageId,
           createdAtMs: retryAt,
           agentRuntimes: conv.participatingAgents,
-          messageSource: "host_projection",
+          messageSource: hasBotTargets ? "host_projection" : "client_live",
         });
       }
       void get().loadTimeline(conversationId, { quiet: true });
 
-      const fanoutErrors = await fanOutAgentTurns({
-        get,
-        set,
-        conversationId,
-        workspacePath: project.workspacePath,
-        messageBody,
-        originMessageId: messageId,
-        targets,
-        multiRoutedCount,
-      });
-      if (fanoutErrors.length > 0) {
-        set({
-          actionError:
-            fanoutErrors.length === targets.length
-              ? fanoutErrors[0] ?? "Agent fan-out failed"
-              : `Partial fan-out failure (${fanoutErrors.length}/${targets.length}): ${fanoutErrors[0]}`,
+      let fanoutErrors: string[] = [];
+      if (hasBotTargets) {
+        fanoutErrors = await fanOutAgentTurns({
+          get,
+          set,
+          conversationId,
+          workspacePath: project.workspacePath,
+          messageBody,
+          originMessageId: messageId,
+          targets,
+          multiRoutedCount,
         });
+        if (fanoutErrors.length > 0) {
+          set({
+            actionError:
+              fanoutErrors.length === targets.length
+                ? fanoutErrors[0] ?? "Agent fan-out failed"
+                : `Partial fan-out failure (${fanoutErrors.length}/${targets.length}): ${fanoutErrors[0]}`,
+          });
+        } else {
+          set({ actionError: null });
+        }
       } else {
         set({ actionError: null });
       }
@@ -655,7 +669,7 @@ export function createUseCasesActions(
         queryKey: queryKeys.inspectorSessions(conversationId),
       });
       await get().loadConversations(conv.projectId);
-      if (fanoutErrors.length === targets.length) {
+      if (hasBotTargets && fanoutErrors.length === targets.length) {
         throw new Error(fanoutErrors[0] ?? "Agent fan-out failed");
       }
     } catch (e) {

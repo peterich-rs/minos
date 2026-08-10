@@ -2,15 +2,14 @@
  * Desktop → Hub IM helpers (conversation shell + user-message Outbox).
  *
  * Agent final bubbles:
- * - Hub TurnCompletionProjector covers Mobile `client_live` dispatches.
- * - Desktop-native turns never arm that watcher (user rows use host_projection).
- * - After local conversation_completion, Host uplinks agent-result via
- *   POST …/agents/message (host_projection + stable client_message_id) so
- *   Mobile/other devices see the final bubble (SSOT §2.4 Host Outbox path).
+ * - Hub TurnCompletionProjector covers Mobile `client_live` participant delivery.
+ * - Desktop-native bot turns: user row uses `host_projection` (anti-loop); after
+ *   local completion Host uplinks agent-result via POST …/agents/message
+ *   (host_projection + stable client_message_id).
  *
- * User messages:
- * - Linked / authenticated: Hub-first (client_live) via Outbox (Phase 3.4)
- * - Desktop native path uses host_projection so Hub does not re-dispatch
+ * User messages (message-driven, ADR 0021):
+ * - Pure human / no local bot targets: `client_live` collaboration message
+ * - Local bot delivery on this Host: `host_projection` so Hub does not re-deliver
  *
  * Conversation shell upsert + host-runtime agent resolve remain.
  */

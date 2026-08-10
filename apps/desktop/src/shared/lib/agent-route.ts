@@ -180,7 +180,7 @@ export function parseAgentRouteTarget(
  * `@codex hello` → { target: { agent: "codex" }, prompt: "hello", messageBody: "@codex hello" }
  * `@ResearchGrok hello` → profile target when name unique
  * `@p/profile-uuid hello` → profile by id
- * plain text → null (caller may fall back to default agent)
+ * plain text → null (caller uses room rules: sole bot / pure human / multi bare)
  *
  * Routing semantics:
  * - `@agent prompt` → start/reuse session for that agent (newest profile default on create)

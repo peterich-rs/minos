@@ -488,6 +488,10 @@ export type HubChatMessage = {
   senderDisplayName: string;
   replyToMessageId?: string | null;
   recalledAtMs?: number | null;
+  /** Structured human mention targets (protocol ChatMessageSummary). */
+  mentionedAccountIds?: string[];
+  /** Structured bot mention targets (protocol ChatMessageSummary). */
+  mentionedAgentIds?: string[];
   /** Viewer-resolved reaction aggregates from messages/query. */
   reactions?: HubReactionGroup[];
 };
@@ -506,6 +510,8 @@ function mapHubChatMessage(raw: {
   };
   reply_to?: { message_id: string } | null;
   recalled_at_ms?: number | null;
+  mentioned_account_ids?: string[] | null;
+  mentioned_agent_ids?: string[] | null;
   reactions?: Array<{
     emoji: string;
     count: number;
@@ -533,6 +539,16 @@ function mapHubChatMessage(raw: {
     senderDisplayName: raw.sender.display_name,
     replyToMessageId: raw.reply_to?.message_id ?? null,
     recalledAtMs: raw.recalled_at_ms ?? null,
+    mentionedAccountIds: Array.isArray(raw.mentioned_account_ids)
+      ? raw.mentioned_account_ids.filter(
+          (id): id is string => typeof id === "string" && id.length > 0,
+        )
+      : undefined,
+    mentionedAgentIds: Array.isArray(raw.mentioned_agent_ids)
+      ? raw.mentioned_agent_ids.filter(
+          (id): id is string => typeof id === "string" && id.length > 0,
+        )
+      : undefined,
     reactions: (raw.reactions ?? []).map((g) => ({
       emoji: g.emoji,
       count: g.count,

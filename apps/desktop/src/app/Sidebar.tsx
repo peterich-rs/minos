@@ -81,6 +81,12 @@ export function Sidebar() {
     cloud: session ? cloudStatus : "unknown",
     hubOnline: connection?.hubOnline,
   });
+  const presenceTitle =
+    presence.cloud === "online" && !presence.hostReady
+      ? "Account online · Host offline — bots unavailable"
+      : presence.cloud === "online" && presence.hostReady
+        ? "Account online · Host ready"
+        : "Open Host status";
 
   return (
     <AppRail
@@ -88,7 +94,7 @@ export function Sidebar() {
         <button
           type="button"
           onClick={() => setPrimaryNav("host")}
-          title="Open Host status"
+          title={presenceTitle}
           className="flex max-w-full items-center gap-1 rounded-md text-left transition-colors duration-150 hover:text-ink"
         >
           <Circle
@@ -97,7 +103,12 @@ export function Sidebar() {
               presenceDotClass(presence.tone),
             )}
           />
-          <span className="truncate">{presence.label}</span>
+          <span className="truncate">
+            {presence.label}
+            {presence.cloud === "online" && !presence.hostReady
+              ? " · bots offline"
+              : ""}
+          </span>
         </button>
       }
       navItems={navItems.map((item) => {

@@ -83,6 +83,20 @@ describe("deriveHostPresence", () => {
     });
     assert.equal(p.label, "Online");
   });
+
+  it("Account online + Host offline: humans can chat, bots not ready", () => {
+    const p = deriveHostPresence({
+      source: "daemon",
+      daemonConnected: true,
+      accountSync: "online",
+      hubOnline: false,
+    });
+    assert.equal(p.label, "Online");
+    assert.equal(p.cloud, "online");
+    assert.equal(p.hostReady, false);
+    assert.equal(p.hostLabel, "Host offline");
+    assert.equal(p.runtimeReady, true);
+  });
 });
 
 describe("cloudModeFromAccountSync", () => {

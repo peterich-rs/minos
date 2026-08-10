@@ -1,88 +1,23 @@
 /**
- * Shared Desktop user-turn dispatch: target resolution + multi-@ fan-out.
+ * Desktop user-turn dispatch: participant delivery target resolution + fan-out.
  *
- * First send and retry must share the same intent semantics:
- *   1. resolve targets (may throw — no durable append yet)
- *   2. append user message
- *   3. mark bubble sent
- *   4. fan-out agent turns (failures never re-fail a durable bubble)
+ * Aligns with Hub room rules (ADR 0021 / agent-participant-delivery).
+ * Empty targets still allow send: append user bubble + Hub client_live uplink;
+ * do not start daemon sessions or HostCommand.
  */
 
 import type { WorkspaceGet, WorkspaceSet } from "./types";
 import { commitSessionEntity, findSessionRow } from "./projection";
 import { patchSessionEntity } from "@/shared/lib/session-entity";
 import { daemonApi } from "@/shared/lib/daemon";
-import {
-  parseAllAgentRoutings,
-  type KnownAgent,
-  type MentionProfile,
-} from "@/shared/lib/agent-route";
 import { ensureSessionsForRouting, startNewAgentSession } from "./shared";
+import type { DispatchTarget } from "./resolve-dispatch-targets";
 
-export type DispatchTarget = {
-  agent: KnownAgent;
-  prompt: string;
-  sessionShortId?: string;
-  profileId?: string;
-};
-
-export type ResolveDispatchTargetsInput = {
-  messageBody: string;
-  participatingAgents: string[] | undefined;
-  installedAgents: ReadonlySet<string>;
-  mentionProfiles: MentionProfile[];
-};
-
-/**
- * Resolve multi-@ or default-member targets. Throws before any append.
- */
-export function resolveDispatchTargets(
-  input: ResolveDispatchTargetsInput,
-): { targets: DispatchTarget[]; multiRoutedCount: number } {
-  const messageBody = input.messageBody;
-  const multiRouted = parseAllAgentRoutings(messageBody, input.mentionProfiles);
-  const members = new Set(
-    (input.participatingAgents ?? []).map((a) => a.toLowerCase()),
-  );
-
-  const targets: DispatchTarget[] = [];
-  if (multiRouted.length > 0) {
-    for (const routed of multiRouted) {
-      const agent = routed.target.agent;
-      if (!members.has(agent)) {
-        throw new Error(
-          members.size === 0
-            ? "No agents in this conversation. Select agents when creating it before @mentioning."
-            : `@${agent} is not a member of this conversation. Only roster agents can be @mentioned.`,
-        );
-      }
-      targets.push({
-        agent,
-        prompt: routed.prompt,
-        sessionShortId: routed.target.sessionShortId,
-        profileId: routed.target.profileId,
-      });
-    }
-  } else {
-    const firstMember = (input.participatingAgents ?? []).find((name) =>
-      input.installedAgents.has(name.toLowerCase()),
-    );
-    const agent = (firstMember as KnownAgent | undefined) ?? null;
-    if (!agent) {
-      throw new Error(
-        members.size === 0
-          ? "No agents in this conversation. Select agents when creating it."
-          : "No installed agents among conversation members. Install a member runtime or recreate with different agents.",
-      );
-    }
-    if (!messageBody.trim()) {
-      throw new Error("Cannot start an agent session with an empty prompt.");
-    }
-    targets.push({ agent, prompt: messageBody });
-  }
-
-  return { targets, multiRoutedCount: multiRouted.length };
-}
+export {
+  resolveDispatchTargets,
+  type DispatchTarget,
+  type ResolveDispatchTargetsInput,
+} from "./resolve-dispatch-targets";
 
 export async function fanOutAgentTurns(input: {
   get: WorkspaceGet;
@@ -104,6 +39,8 @@ export async function fanOutAgentTurns(input: {
     targets,
     multiRoutedCount,
   } = input;
+
+  if (targets.length === 0) return [];
 
   await ensureSessionsForRouting(get, conversationId);
 

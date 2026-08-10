@@ -76,7 +76,11 @@ export function Composer({ conversationId }: { conversationId: string }) {
 
   const phase = timelineStatus?.phase ?? "idle";
   const detailError = timelineStatus?.error;
-  const accountOffline = accountSyncStatus === "offline";
+  // Account-primary send gate: when signed in, only fully online can send.
+  // connecting/unknown/offline must not present send-ready chat (ADR 0021 §6).
+  const accountLinked = Boolean(session?.accessToken?.trim());
+  const accountSendReady = !accountLinked || accountSyncStatus === "online";
+  const accountBlocked = accountLinked && accountSyncStatus !== "online";
 
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -177,9 +181,8 @@ export function Composer({ conversationId }: { conversationId: string }) {
         const runtimes = parts.agents
           .map((a) => a.runtimeAgent.trim().toLowerCase())
           .filter(Boolean);
-        if (runtimes.length > 0) {
-          setParticipantAgents(runtimes);
-        }
+        // Always apply fetch result, including [] (pure-human rooms).
+        setParticipantAgents(runtimes);
       } catch {
         if (!cancelled) {
           setMentionHumans(EMPTY_HUMANS);
@@ -235,12 +238,15 @@ export function Composer({ conversationId }: { conversationId: string }) {
   const onSend = async () => {
     const text = draft.trim();
     if (!text || !conversationId) return;
-    if (accountOffline) {
-      toast.error(
-        "Messages offline",
-        "Account sync is disconnected — reconnect to send chat.",
-      );
-      setSendError("Messages offline — Account sync disconnected");
+    if (accountBlocked) {
+      const detail =
+        accountSyncStatus === "connecting"
+          ? "Account is still connecting — wait until Online to send."
+          : accountSyncStatus === "unknown"
+            ? "Account sync not ready — wait until Online to send."
+            : "Account sync is disconnected — reconnect to send chat.";
+      toast.error("Cannot send", detail);
+      setSendError(detail);
       return;
     }
     // WeChat-style: empty the composer immediately. The message body is
@@ -266,12 +272,23 @@ export function Composer({ conversationId }: { conversationId: string }) {
     }
   };
 
+  const accountHint =
+    !accountLinked
+      ? null
+      : accountSyncStatus === "online"
+        ? null
+        : accountSyncStatus === "connecting"
+          ? "Connecting… · cannot send until Account is Online"
+          : accountSyncStatus === "unknown"
+            ? "Account sync starting… · cannot send yet"
+            : "Messages offline · cannot send until Account reconnects";
+
   const hint = (
     <>
-      {accountOffline
-        ? "Messages offline · cannot send until Account reconnects"
+      {accountHint
+        ? accountHint
         : source === "daemon"
-          ? "Connected · @member or @agent · ⌘/Ctrl+Enter send"
+          ? "Connected · @member or @bot · ⌘/Ctrl+Enter send"
           : "Mock mode"}
       {phase === "loading" && hasCachedMessages ? " · refreshing…" : ""}
       {sendError || (phase === "error" && detailError) ? (
@@ -389,10 +406,13 @@ export function Composer({ conversationId }: { conversationId: string }) {
             }
           },
           rows: 3,
-          placeholder: accountOffline
-            ? "Messages offline — reconnect Account to send"
+          placeholder: accountBlocked
+            ? accountSyncStatus === "connecting" ||
+              accountSyncStatus === "unknown"
+              ? "Connecting… wait until Account is Online to send"
+              : "Messages offline — reconnect Account to send"
             : "Message… type @ to mention a member or bot",
-          disabled: accountOffline,
+          disabled: accountBlocked,
         }}
         toolbarStart={
           <>
@@ -420,7 +440,7 @@ export function Composer({ conversationId }: { conversationId: string }) {
           </>
         }
         sendLabel={sending ? "Sending…" : "Send"}
-        sendDisabled={sending || !draft.trim()}
+        sendDisabled={sending || !draft.trim() || !accountSendReady}
         onSend={() => void onSend()}
         hint={hint}
       />

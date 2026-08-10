@@ -82,6 +82,21 @@ export function hubChatMessageToTimeline(
           })),
         }));
 
+  const mentions = [
+    ...(message.mentionedAccountIds ?? []).map((id) => ({
+      kind: "account" as const,
+      targetId: id,
+    })),
+    ...(message.mentionedAgentIds ?? []).map((id) => {
+      const runtime = opts?.agentRuntimeMap?.get(id);
+      return {
+        kind: "agent" as const,
+        targetId: id,
+        agent: runtime,
+      };
+    }),
+  ];
+
   return {
     id: message.messageId,
     role: message.senderType === "agent" ? "agent" : "user",
@@ -98,6 +113,7 @@ export function hubChatMessageToTimeline(
     replyToMessageId: message.replyToMessageId ?? undefined,
     deliveryStatus: "sent",
     reactions,
+    mentions: mentions.length > 0 ? mentions : undefined,
   };
 }
 

@@ -41,19 +41,15 @@ export function CloudConnectionBanner() {
   const accountOnline = accountSyncStatus === "online";
   const accountConnecting = accountSyncStatus === "connecting";
   const accountOffline = accountSyncStatus === "offline";
-  const hostOffline =
-    cloudStatus === "offline" ||
-    (cloudStatus !== "online" &&
-      cloudStatus !== "unknown" &&
-      cloudStatus !== "connecting");
+  const hostOffline = cloudStatus === "offline";
 
   // Fully healthy: Account can send/receive (Host readiness is optional secondary).
   if (accountOnline && (cloudStatus === "online" || cloudStatus === "unknown")) {
     return null;
   }
-  // Account online but Host offline → soft secondary banner still useful for @agent.
+  // Account online but Host offline → soft secondary banner (bots unavailable).
   // Account unknown (boot) without host failure → stay quiet.
-  if (accountSyncStatus === "unknown" && cloudStatus !== "offline") {
+  if (accountSyncStatus === "unknown" && !hostOffline) {
     return null;
   }
 
@@ -66,8 +62,8 @@ export function CloudConnectionBanner() {
     ? "Connecting…"
     : accountOffline
       ? "Messages offline"
-      : hostOffline || cloudStatus === "offline"
-        ? "Host offline"
+      : hostOffline
+        ? "Host offline · bots unavailable"
         : "Connecting…";
 
   const detail = connecting
@@ -75,7 +71,7 @@ export function CloudConnectionBanner() {
     : accountOffline
       ? "Cannot send or receive chat until Account reconnects. Local coding may still work."
       : cloudError ??
-        "This Mac host runtime is offline. Chat still works; @agent may wait until host reconnects.";
+        "This Mac host is offline — bots unavailable. Humans can still chat while Account is online.";
 
   return (
     <div

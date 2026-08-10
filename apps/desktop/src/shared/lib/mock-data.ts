@@ -101,9 +101,14 @@ export type Conversation = {
 };
 
 export type TimelineMention = {
-  agent: string;
+  /** Runtime agent name when kind is agent (legacy workbench rows). */
+  agent?: string;
   sessionId?: string;
   sessionShortId?: string;
+  /** Structured mention kind from Hub SSOT. */
+  kind?: "account" | "agent";
+  /** account_id or agent_id depending on kind. */
+  targetId?: string;
 };
 
 export type DeliveryStatus = "sending" | "sent" | "failed";
