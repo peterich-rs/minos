@@ -19,13 +19,15 @@
 | [superpowers/specs/2026-08-03-client-im-sync-engine.md](superpowers/specs/2026-08-03-client-im-sync-engine.md) | 客户端 Sync Engine 终态 |
 | [superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md](superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md) | 后端 Outbox 车道 / Push / **Agent inbox**（表名可仍为 dispatch）/ CompletionWatch 终态 |
 | [superpowers/specs/2026-08-09-agent-participant-delivery.md](superpowers/specs/2026-08-09-agent-participant-delivery.md) | **Agent = bot participant**：mention → participant delivery → runtime → agent 回消息 |
+| [superpowers/specs/global-bot-identity-design.md](superpowers/specs/global-bot-identity-design.md) | **全局 bot 身份**：数字肉身在 Hub `agents`；进群 = membership；session per conversation |
+| [superpowers/specs/bot-mailbox-ws-im-bus-design.md](superpowers/specs/bot-mailbox-ws-im-bus-design.md) | **WS 原生 IM + Bot 逻辑邮箱**：Account AppendMessage；Host BotInboxDelivery；无 per-bot WS |
 | [adr/0021-agent-as-conversation-bot-participant.md](adr/0021-agent-as-conversation-bot-participant.md) | 产品决策：消息驱动协作；Host 为 runtime port |
 | ADR 0004 / 0009 / 0011 | JSON-RPC、Broker 拓扑、Envelope 历史决策 |
 | ADR 0020 | Account vs Host 人机分权（与 bot participant 正交） |
 
 线类型源码：`crates/minos-protocol/src/realtime.rs`。
 
-**文档权威阶梯（冲突时）**：ADR 0021 + 本文 §1/§3 → participant-delivery spec → Hub SSOT / delivery orchestration 实现细节 → 各端 architecture-* 。
+**文档权威阶梯（冲突时）**：ADR 0021 + 本文 §1/§3 → [global-bot-identity](superpowers/specs/global-bot-identity-design.md)（身份/肉身）→ [bot-mailbox-ws-im-bus](superpowers/specs/bot-mailbox-ws-im-bus-design.md)（写路径/邮箱/Host 口）→ participant-delivery（房规细节）→ Hub SSOT / delivery orchestration 实现细节 → 各端 architecture-* 。
 
 ---
 
@@ -36,9 +38,9 @@
 Minos 的**产品核心是对话协作**（Project → Conversation → Timeline），形态对齐成熟 IM（Slack / 企微 / Discord）：同一账号多端连续聊天；**不是**「远程 Agent 运维台」，也**不是**以 HostCommand 总线当协作主协议。
 
 - **主场景**：人与人、人与 **bot 成员（Agent）** 在同一 Conversation 时间线协作（发消息、@、回复、撤回、reaction、未读与通知）。  
-- **Agent**：Conversation 的 **一等参与者（bot）**——可进 roster、可被 @、可发气泡；**不是**真人 Account（无登录 JWT）。类比 Slack Bot / Discord Bot。  
-- **协作驱动**：**纯消息**。`@人` 与 `@agent` 都是 mention → participant delivery；bot 的「身体」是 Host 上的 daemon/CLI，属于 **runtime 适配**，不是第二套协作模型。  
-- **Host / Daemon**：bot 落地的算力与工具边界；对用户是能力面，不是每天打开的主隐喻。`/ws/host` 是 **执行面传输**，不是 IM 主轴。
+- **Agent / Bot**：Hub 上的 **全局唯一 bot 用户**（稳定 `agent_id` + 数字肉身：模型/推理/系统提示词/runtime 等）——可被拉入多个 conversation（membership），可被 @、可发气泡；**不是**真人 Account（无登录 JWT）。类比 Slack Bot / Discord Bot。每个 conversation 仅为该 bot 维护独立 **session**（执行上下文），进群不新建 bot。见 [global-bot-identity-design](superpowers/specs/global-bot-identity-design.md)。  
+- **协作驱动**：**纯消息**。`@人` 与 `@agent` 都是 mention → participant delivery；bot 的「执行身体」是 Host 上的 daemon/CLI，属于 **runtime 适配**，不是第二套协作模型。  
+- **Host / Daemon**：bot 落地的算力与工具边界；对用户是能力面，不是每天打开的主隐喻。`/ws/host` 是 **执行面传输**，不是 IM 主轴。本地 agent profile 可作 cache，**不是**多端 bot 身份 SSOT。
 
 Desktop：主舞台是 **Timeline + Composer**；Session / Approval 是侧栏或 Attention，不是独立产品。
 
@@ -69,9 +71,37 @@ Desktop：主舞台是 **Timeline + Composer**；Session / Approval 是侧栏或
    - 发送成功 = 用户消息落库；bot 投递进 **Agent inbox**（异步）。  
    - Runtime 调用（今日 HostCommand）是 inbox consumer 的私有适配，**不是**产品层「命令式协作」。  
 8. **Agent 最终气泡写者（路径不同，Hub 权威唯一）**：  
-   - **client_live**（如 Mobile）：Hub `TurnCompletionProjector`（CompletionWatch per `origin_message_id`）或显式 agent reply。  
-   - **Desktop-native Linked**：本机 `agent-result:…` + Outbox **`host_projection`** 上行同 id（Hub **不**二次投递 bot）。  
-   - 禁止 UI 扫本地时间线无 id 投影；禁止 body 软去重。
+   - **client_live**（Desktop/Mobile Account）：Hub mailbox 路径 `AppendBotMessage` 或 `TurnCompletionProjector`（CompletionWatch per `origin_message_id`）。  
+   - **host_projection**：仅 Host 已执行结果的上行 provenance（如 offline runtime-port 适配后的 agent-result）；**永不**再投递 Agent inbox。  
+   - 禁止 UI 扫本地时间线无 id 投影；禁止 body 软去重。  
+9. **协作消息主写 = Account WS `AppendMessage`**。服务端 HTTP `POST …/messages` 可与 WS 同 domain commit（测试/工具）；**客户端不得 REST 写协作气泡**。  
+10. **Bot 激活只经 Hub Agent inbox / Bot mailbox**；禁止 Desktop Composer 本地 `startAgent` fan-out。
+
+### 1.3 命名对照（产品 · 模块 · 物理表）
+
+协作与 bot 投递在文档/日志/代码中混用历史名。**以下为现行 SSOT 对照**（latest-only；新代码优先右列产品名，物理 rename 可后置）：
+
+| 产品 / 领域名 | 含义 | 代码模块 / 符号（可暂留） | 物理表 / wire |
+|---------------|------|---------------------------|---------------|
+| **Bot identity** | 全局唯一 bot 用户 + 数字肉身 | `agents` row / `AgentSummary` / `bot_id`≡`agent_id` | `agents` |
+| **Bot membership** | 某 conversation 的 bot 成员 | `conversation_agent_members` | 同左 |
+| **Session** | bot 在 conversation 内执行上下文 | `agent_sessions` / daemon `sessions` | 同左 |
+| **Participant** | human ∪ bot 统一读模型 | `…/participants` API | members + agent_members 聚合 |
+| **Agent inbox / Bot mailbox** | bot 侧投递队列（幂等 intent） | `store/agent_dispatch_queue.rs`、`plan_agent_deliveries`、`try_agent_dispatch` | **`bot_message_deliveries`**（历史名 `agent_dispatch_queue` 已退役） |
+| **delivery_id** | inbox 行主键 | `dispatch_id` 列可别名 | `bot_message_deliveries.dispatch_id` |
+| **BotInboxDelivery** | Hub→Host 邮箱投递帧 | `ServerFrame::BotInboxDelivery` | `/ws/host` |
+| **AppendMessage** | Account 协作消息主写 | `ClientFrame::AppendMessage` → `send_message` use case | `/ws/client` |
+| **AppendBotMessage** | Host 上送 bot 最终气泡 | `ClientFrame::AppendBotMessage` | `/ws/host` |
+| **Runtime port** | 私有执行适配（非协作协议） | `HostCommand` / `agent_session.start\|send_input` / `runtime_port_inject` | 仅 Host offline 或内部 |
+| **host_projection** | 已执行结果上行的 provenance；**不**再投递 inbox | `MessageSource::HostProjection` | `chat_messages.message_source` |
+| **client_live** | 真人客户端消息；可触发 inbox | `MessageSource::ClientLive` | 同左 |
+
+**禁止混用**：
+
+- 「远程协作」≠ HostCommand 总线  
+- Agent inbox / Bot mailbox = 同一投递队列的产品名；**不要**再写「dispatch 是第二套协作协议」  
+- `agent_id` 与 `bot_id` 在 wire 上指同一全局身份（新字段优先 `bot_id` / `MessageSender::Bot`）  
+- daemon 本地 `bot_identities` / 历史 `agent_profiles` = **cache**，不是多端身份 SSOT  
 
 ---
 
@@ -80,7 +110,7 @@ Desktop：主舞台是 **Timeline + Composer**；Session / Approval 是侧栏或
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  端侧 Presentation / Projection                                              │
-│  Mobile (Flutter+FRB) · Web (React) · Desktop Account UI · TUI              │
+│  Mobile (Flutter+FRB) · Web (React) · Desktop Account UI              │
 │  热路径: WS StreamEvent / DurableEvent   冷路径: HTTP list/read-turns/msgs  │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  端侧 Connection & Sync SDK（成熟 IM 的「长连接 + 同步引擎」）                 │
@@ -163,13 +193,13 @@ Gateway ──推送──► 订阅方（online / offline / last_seen）
 | **离线 Push** | presence + 偏好 + event_id 幂等 决策（见 Plane P / Backend B1）；**非**「与 presence 脱钩」 |
 
 ```
-Client/Host
-  │  Bearer / hit_* installation token
+Account client (browser / mobile / desktop UI)
+  │  Bearer access JWT
   ▼
-POST /v1/realtime/ws-ticket  (或 host 变体)
+POST /v1/realtime/ws-ticket     # 保留：浏览器 WS 难设 Authorization
   │  60s 一次性 ticket
   ▼
-GET /ws/client?ticket=…  或  /ws/host?ticket=…
+GET /ws/client?ticket=…
   │  校验 + 消费 ticket + 角色匹配
   ▼
 ServerFrame::Hello { conn_id, server_time_ms, heartbeat_interval_ms }
@@ -177,19 +207,35 @@ ServerFrame::Hello { conn_id, server_time_ms, heartbeat_interval_ms }
   │  **默认 topic 仅 live register**（可选 SubscribeAck）；**不** `replay_topic(0)`
   ▼
 ClientFrame::Subscribe { topics, resume_after? }
-  │  含 account/host 默认 topic + 打开的 conversation；catch-up 靠 resume_after
+  │  含 account 默认 topic + 打开的 conversation；catch-up 靠 resume_after
+  │  终态还可：ClientFrame::AppendMessage（协作消息主写，见 bot-mailbox-ws-im-bus）
   ▼
-SubscribeAck / SubscriptionDenied / SnapshotRequired
+SubscribeAck / SubscriptionDenied / SnapshotRequired / ChatSendAck
   │
   ├─ 热路径：DurableEvent / StreamEvent（含 presence）
   ├─ 心跳：server WS Ping ↔ client Pong；或 ClientFrame::Ping ↔ Pong
   └─ 退出：remove registry（若仍是 current）→ presence offline
+
+Host daemon (native) — 终态（bot-mailbox-ws-im-bus-design §6 / Phase 2.5）
+  │  Authorization: Bearer hit_*     # 无 host ticket 链
+  ▼
+GET /ws/host
+  │  校验 token hash / revocation / AgentHost / installation
+  ▼
+ServerFrame::Hello { … }
+  │  BotInboxDelivery / CancelDelivery（mailbox）
+  │  Host ingest / 既有 host 控制帧
+  └─ 退出 / revoke → HostForceClose + presence offline
+
+# 过渡期仍可能：POST /v1/host/realtime/ws-ticket → /ws/host?ticket=
+# 正式删除后不得再依赖 host ticket；WS 401 不得一律清本地 hit_
 ```
 
 客户端断线后指数退避重连（典型 1s→30s 封顶）；冷路径 HTTP 列表用 `online` + `last_seen_at_ms` 纠偏。  
-**不变量**：Hello 静默（无历史洪水）；`resume_after < retention_floor` → `SnapshotRequired`（冷重建），禁止静默空回放。
+**不变量**：Hello 静默（无历史洪水）；`resume_after < retention_floor` → `SnapshotRequired`（冷重建），禁止静默空回放。  
+**Host 鉴权不变量**：强身份（Link 证明 + hashed `hit_*` + revoke 踢连接）保留；Host ticket 重复链删除后，邮箱/WS IM 做完也不会再出现 self→ticket→WS 三连验。
 
-代码：`realtime/gateway.rs`、`realtime/liveness.rs`、`realtime/presence.rs`；线类型 `PresencePayload` / `PRESENCE_STREAM_KIND`（`minos-protocol`）。
+代码：`realtime/gateway.rs`、`realtime/liveness.rs`、`realtime/presence.rs`；线类型 `PresencePayload` / `PRESENCE_STREAM_KIND`（`minos-protocol`）；Host Bearer 见 [bot-mailbox-ws-im-bus-design](superpowers/specs/bot-mailbox-ws-im-bus-design.md)。
 
 ### 3.3 Topic 模型（频道 / 会话分区）
 
@@ -709,7 +755,7 @@ topic_cursors: Map<topic, last_topic_seq>
 | Session 热流 | Host ingest → Hub Stream | 侧栏 / 底栏，不写扩散进 chat 气泡 |
 
 **目标读路径（Linked）**：打开 conversation → `Subscribe conversation:{id}` + `resume_after` → 冷拉 gap（`before_seq` / `after_seq`）；UI merge「Hub 气泡 + 本地 tool/git 卡」（**同 id 相等**；禁止 body 软去重）。  
-**目标写路径（Linked）**：Composer → Hub HTTP（`client_message_id` 幂等 + 显式 `message_source`）→ 客户端 Outbox 可重试；Agent 最终气泡由 **Hub TurnCompletionProjector**（`client_live`）或 **Host `host_projection`** 上行；id = `agent-result:{conv}:{session}:{origin_message_id}`。
+**目标写路径（Linked）**：Composer → Account WS **`AppendMessage`**（`client_message_id` 幂等 + `client_live`）→ 客户端 Outbox 可重试；bot 激活经 Hub Agent inbox；Agent 最终气泡由 **AppendBotMessage** / TurnCompletionProjector；id = `agent-result:{conv}:{session}:{origin_message_id}`。
 
 Hub SSOT 收敛：  
 → [2026-08-02-hub-collaboration-message-ssot.md](superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md)  
@@ -723,8 +769,8 @@ Hub SSOT 收敛：
 |------|------|----------------|------|
 | Conversation 壳 + agent roster | 创建 / 改标题 / 列表 / 起 session | `POST /v1/conversations/upsert` | ✅ 保留 |
 | Host runtime → cloud agent | 首次 resolve runtime | `POST /v1/agents/ensure-host-runtime` + `source=host_runtime` | ✅ |
-| 用户气泡（Desktop 本机工作台） | **native 本地** append + 本机 bot 消费；已登录时 Outbox `host_projection` | `…/messages` + `client_message_id` | ✅ Desktop **本机执行**；Hub 投影；**不**二次 agent inbox |
-| 用户气泡（Mobile / client_live） | Hub POST → **Agent inbox**（表 `agent_dispatch_queue`）→ worker → **runtime port**（HostCommand） | 同上 | ✅ 落库后立即 200；投递异步；领域语义 = bot participant delivery。仍需 **live Host** 才执行 |
+| 用户气泡（Desktop / Account live） | 本地工作台 append + Account WS **`AppendMessage`**（`client_live`） | 无 REST 协作写；同 domain commit | ✅ bot 激活仅经 Hub Agent inbox / Bot mailbox；**禁止** Composer 本地 fan-out |
+| 用户气泡（Mobile / client_live） | Account WS **`AppendMessage`** → **Agent inbox**（表 `bot_message_deliveries`）→ `BotInboxDelivery` / runtime port | 无 REST 协作写 | ✅ 落库后 ACK；投递异步；仍需 **live Host** 才执行 |
 | Agent 气泡（client_live） | Hub `TurnCompletionProjector`（CompletionWatch per **origin_message_id** → last-segment） | `insert_agent_message_with_session` 幂等 `agent-result:{conv}:{session}:{origin}` | ✅ B4；禁止 session 单 slot 覆盖 |
 | Agent 气泡（Desktop-native） | 本机 daemon 写工作台 `agent-result:…`；Desktop Outbox **`host_projection`** 上行（仅 `isCanonicalAgentResultId`） | `POST …/agents/message` + 同 id | ✅ 可信上行，非 UI 扫时间线；Hub 不二次投递 |
 | 跳过二次 bot 投递 | **仅** `message_source=host_projection\|system` | — | ✅ 防环（provenance 门控） |
@@ -733,7 +779,7 @@ Hub SSOT 收敛：
 | 撤回 | Hub `POST …/messages/:id/recall` + Durable `*Recalled` | conversation + account topics | ✅ |
 | Reaction | Hub toggle + conversation durable | Hub API + Intent Outbox | Desktop/Mobile `reaction_toggle` outbox + B6 `client_op_id` 幂等；conversation-only fanout |
 | 未读 / mark-read | Linked 打开会话 → `POST …/read` body `{ read_up_to_message_seq }`（客户端 observed watermark，服务端单调 MAX clamp） | Hub + local count | ✅ **observed-seq**；禁止服务端静默标到最新 |
-| Mobile `@agent` → bot 投递 | 消息落库后 **Agent inbox** + CompletionWatch(per origin×session) | Backend **B3/B4**；产品语义见 [participant delivery](superpowers/specs/2026-08-09-agent-participant-delivery.md) | ✅ 异步 enqueue；**多 @ fan-out**（`UNIQUE(origin, agent_id)`）；watch 键 = `{origin}:{session_id}`。实现表名可仍为 dispatch |
+| Mobile `@agent` → bot 投递 | 消息落库后 **Agent inbox** + CompletionWatch(per origin×session) | Backend **B3/B4**；产品语义见 [participant delivery](superpowers/specs/2026-08-09-agent-participant-delivery.md) | ✅ 异步 enqueue；**多 @ fan-out**（`UNIQUE(origin, agent_id)`）；watch 键 = `{origin}:{session_id}`。物理表 `bot_message_deliveries` |
 | Agent 表情互动 | teamwork MCP `react_to_message` → daemon 本地 reaction | Host workbench | ✅ **硬门禁**：仅允许对 **@ 了该 agent** 的消息；actor_kind=`agent` |
 | Session 生命周期 | `session_lifecycle` job：失联 host → session `failed` + durable end；watch TTL → 失败气泡 + remove | Backend **B5** | ✅ 非 COUNT-only |
 

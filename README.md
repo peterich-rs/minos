@@ -112,7 +112,7 @@ SQLite/workspaces runtime instead of only affecting `local-state.json`.
 Agent teamwork uses the `minos-teamwork-mcp` sidecar. Runtime lookup checks
 `MINOS_TEAMWORK_MCP_BIN`, then a sibling binary next to the running executable,
 then reuses the host binary with a hidden `__minos-teamwork-mcp` subcommand
-(`minos-desktop` / `Minos.app`, `minos-daemon`, `minos-tui`), then `PATH`. If
+(`minos-desktop` / `Minos.app`, `minos-daemon`), then `PATH`. If
 nothing is found, MCP injection is skipped and the agent session continues
 without teamwork tools. Desktop **release** bundles do not ship a separate
 `minos-teamwork-mcp` file — the app binary is the sidecar host. Manager args

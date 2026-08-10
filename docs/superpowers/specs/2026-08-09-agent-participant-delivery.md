@@ -5,13 +5,16 @@
 | Status | **Normative target**（2026-08-09） |
 | Date | 2026-08-09 |
 | ADR | [0021-agent-as-conversation-bot-participant](../../adr/0021-agent-as-conversation-bot-participant.md) |
+| Global bot identity | [global-bot-identity-design](global-bot-identity-design.md) — 全局唯一 bot 用户、数字肉身、membership vs session |
+| Bot mailbox + WS IM | [bot-mailbox-ws-im-bus-design](bot-mailbox-ws-im-bus-design.md) — 严格 IM 写路径 + Bot 逻辑邮箱 + Host 执行口 |
 | SSOT product framing | [architecture-messaging.md](../../architecture-messaging.md) |
 | Hub bubble ownership | [2026-08-02-hub-collaboration-message-ssot](2026-08-02-hub-collaboration-message-ssot.md)（写者/幂等保留；触发语义以本文为准） |
 | Backend jobs | [2026-08-03-backend-im-delivery-orchestration](2026-08-03-backend-im-delivery-orchestration.md)（`AgentDispatchQueue` = Agent inbox 物理表） |
 | Client sync | [2026-08-03-client-im-sync-engine](2026-08-03-client-im-sync-engine.md) |
 | Non-goals | E2EE；云上跑 CLI；Agent 登录为 Account；为旧 wire 双写兼容 |
 
-> **一句话**：协作只认 Conversation 消息；Agent 是 bot 成员；`@agent` 与 `@人` 同属 mention → participant delivery；HostCommand/CLI 是 runtime 适配器，不是第二套协作协议。
+> **一句话**：协作只认 Conversation 消息；Agent 是 **全局 bot 用户** 被拉入 conversation 后的成员；`@agent` 与 `@人` 同属 mention → participant delivery；HostCommand/CLI 是 runtime 适配器，不是第二套协作协议。  
+> **身份不变量**：bot `agent_id` 跨 conversation 复用；进群只写 membership；每个 conversation 为该 bot 维护独立 session。细节见 [global-bot-identity-design](global-bot-identity-design.md)。
 
 **规划约束**：遵守 AGENTS.md Final-Architecture Planning Rule — 只设计终态；实现可分 Phase，但不得再把「命令式 @agent」写成产品主轴。
 
@@ -21,22 +24,26 @@
 
 | Term | Meaning |
 |------|---------|
+| **Bot identity** | 全局唯一 `agent_id` + 数字肉身（Hub `agents` SSOT）；可被多个 conversation 引用。见 [global-bot-identity-design](global-bot-identity-design.md) |
 | **Human participant** | `account_id` 在 `conversation_members`；经 `/ws/client` + Push 收消息 |
-| **Agent participant (bot)** | `agent_id` 在 `conversation_agent_members`；**不是** Account；经 bound Host runtime 消费投递 |
+| **Agent participant (bot)** | 全局 `agent_id` 的 **membership** 行在 `conversation_agent_members`；**不是** Account；经 bound Host runtime 消费投递 |
 | **Participant** | Human ∪ Agent 的统一读模型 |
-| **Mention** | 消息上的结构化目标：`target_kind ∈ {account, agent}` + `target_id` |
+| **Session** | bot 在某 conversation 内的执行上下文（`agent_sessions`）；**不是** bot 身份；默认 per `(conversation_id, agent_id)` |
+| **Mention** | 消息上的结构化目标：`target_kind ∈ {account, agent}` + `target_id`（agent 目标 = 全局 `agent_id`） |
 | **Participant delivery** | 消息 commit 后，按 mention/房规把意图投递给参与者的过程 |
-| **Agent inbox** | Agent 侧投递队列（今日表名 `agent_dispatch_queue`；领域名 inbox） |
+| **Agent inbox** | Agent 侧投递队列（今日表名 `agent_dispatch_queue`；领域名 inbox）；幂等键含全局 `agent_id` |
 | **Runtime port** | Host 上执行 CLI 的通道（今日 `HostCommand` / `/ws/host`） |
-| **Agent reply** | `sender_type=agent` 的 Hub 时间线消息 |
+| **Agent reply** | `sender_type=agent` 的 Hub 时间线消息（作者身份 = 全局 bot） |
 | **Account sync live** | 人类 IM 可发可收（产品主 Online） |
-| **Agent available** | bot 成员可执行：roster 在 + bound Host `/ws/host` live |
+| **Agent available** | bot 成员可执行：roster 在 + bot status active + bound Host `/ws/host` live |
 
 **禁止混用**：
 
 - 「远程协作」≠「下发 HostCommand」  
 - 「Online」≠「仅 live `/ws/host`」  
-- 「dual rails」= Account/Host **传输**分轨；≠ 聊天气泡 dual-write 权威
+- 「dual rails」= Account/Host **传输**分轨；≠ 聊天气泡 dual-write 权威  
+- bot identity ≠ session ≠ runtime bin 名（`codex`）≠ 端侧本地 profile 行  
+- 进群 ≠ 新建 bot
 
 ---
 
@@ -111,22 +118,27 @@ send_message (Account, message_source=client_live)
 
 ## 4. Data model (target)
 
-### 4.1 Participants（读模型 Phase A）
+### 4.1 Participants + global bot directory
 
-保留：
+保留双表 membership（Phase A），但 **bot 身份全局唯一**：
 
-- `conversation_members`（human）  
-- `conversation_agent_members`（bot）  
-- `agents`（registry：owner、source、runtime_agent、…）
+- `agents` — **全局 bot 目录 + 数字肉身**（name / model / reasoning_effort / system_prompt / runtime / status …）；同一 `agent_id` 可加入多个 conversation  
+- `conversation_members`（human membership）  
+- `conversation_agent_members`（bot membership only — **不** clone bot）  
+- `agent_sessions` — per `(conversation_id, agent_id)` 执行上下文  
 
 统一 API：
 
 ```http
 GET/POST …/conversations/{id}/participants
 → { humans: UserSummary[], agents: AgentSummary[] }
+
+POST …/agents                     # 创建全局 bot（肉身）
+POST …/conversations/{id}/agents/add  # 仅 membership：已有 agent_id
 ```
 
-（现有 list members + list agents 可先聚合；新客户端只用 participants。）
+（现有 list members + list agents 可先聚合；新客户端只用 participants。）  
+身份字段与迁移见 [global-bot-identity-design](global-bot-identity-design.md)。
 
 ### 4.2 Mentions（Phase 1）
 
@@ -265,6 +277,7 @@ Daemon：
 | Client sync 2026-08-03 | Outbox/cursor | Online 以 Account 为主 |
 | Realtime surface | T0–T4 | mention 目标含 agent；bot availability |
 | ADR 0020 | Account vs Host 人机分权 | 另见 0021 bots |
+| [global-bot-identity-design](global-bot-identity-design.md) | 全局 bot 身份、数字肉身、membership vs session | 本文管投递；身份/肉身 SSOT 以该文为准 |
 
 ---
 

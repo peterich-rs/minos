@@ -4,7 +4,7 @@
 
 ## 概述
 
-`minos-daemon` 是运行在 Mac（或未来其他平台）上的守护进程，负责：连接后端 relay、管理本地 AI agent 子进程、处理配对、持久化本地状态。它是 macOS 应用的 Rust 核心，也通过 JSON-RPC 与 TUI 通信。
+`minos-daemon` 是运行在 Mac（或未来其他平台）上的守护进程，负责：连接后端 relay、管理本地 AI agent 子进程、处理配对、持久化本地状态。它是 macOS 应用的 Rust 核心，也通过 JSON-RPC 与 Desktop 通信。
 
 **源码路径**: `crates/minos-daemon/`
 
@@ -27,7 +27,7 @@
 
 1. 初始化 logging（mars-xlog）
 2. 解析路径，加载 `LocalState`（或用新 DeviceId 初始化）
-3. 可选配置本地 JSON-RPC 服务器（给 TUI 用）
+3. 可选配置本地 JSON-RPC 服务器（给 Desktop 用）
 4. 调用 `DaemonHandle::start_with_local_rpc()`（内部：open store → `mark_orphans_suspended` → **`prune_orphan_worktrees`** → agent/relay）
 5. 可选打印配对 QR
 6. 阻塞等待 SIGINT/SIGTERM
@@ -43,14 +43,14 @@
 DaemonInner {
     relay_client:      RelayClient,        // → 后端 relay 连接
     agent_glue:        AgentGlue,          // → 本地 agent 管理
-    local_rpc:         Option<RpcServer>,  // → TUI JSON-RPC 服务器
+    local_rpc:         Option<RpcServer>,  // → Desktop JSON-RPC 服务器
     peer_store:        PeerStore,          // → 配对设备信息
     relay_link_rx:     watch::Receiver,    // → relay 连接状态
     peer_rx:           watch::Receiver,    // → 配对状态
 }
 ```
 
-### Desktop/TUI local RPC 暴露给 Swift 的方法
+### Desktop local RPC 方法
 
 | 方法 | 用途 |
 |------|------|
@@ -77,7 +77,7 @@ DaemonInner {
 1. 等待 host 安装令牌（poll + Notify）
 2. 进入 `run_once` 循环:
    - 验证令牌: `POST /v1/host/installations/self`
-   - 获取 WS ticket: `POST /v1/host/realtime/ws-ticket`
+   - Host 实时：`Authorization: Bearer hit_*` 直连 `/ws/host`（无 host ticket）
    - WebSocket 升级: `tokio_tungstenite::connect_async`
    - 双向分发循环（inbound `ServerFrame`, outbound `ClientFrame`, ping/pong）
 3. 断开后: 指数退避重连（1s → 2s → 4s → 8s → 16s → 30s 封顶）
@@ -103,7 +103,7 @@ DaemonInner {
 |------|------|
 | `POST /v1/host/bootstrap/nonce` | 获取请求签名 nonce |
 | `POST /v1/host/pairing/redeem` | 赎回配对码 |
-| `POST /v1/host/realtime/ws-ticket` | 获取 WS ticket |
+| `GET /ws/host` with `Authorization: Bearer hit_*` | Host 实时口（无 ticket） |
 | `POST /v1/host/installations/self` | 验证安装令牌 + 获取 peers |
 | `POST /v1/me/peers/query` | 查询配对设备 |
 
@@ -121,7 +121,7 @@ DaemonInner {
 2. **`IngestCoalescer` + `EventWriter`**：projection + 父行就绪缓冲；**seq 仅在 SQLite 事务内分配**，单写者本地持久化
 3. **Watch channel**：镜像最新线程状态
 
-subagent 也是普通 thread，只是在 `SessionAdded` / `SessionSummary` / `LocalSessionSnapshot` 上携带 `parent_session_id`。daemon 收到 `SessionAdded { parent_session_id: Some(parent) }` 时复用父线程的 conversation 插入子线程行，且不增加 `conversations.agent_session_count`。TUI 通过现有 `list_conversation_agent_sessions` 得到父子 thread，不新增 `list_subagents` RPC。conversation message 读路径会过滤 `session_id` 指向 subagent 的旧消息行，summary 的 preview/count 也只计算可见消息，避免 subagent transcript/result 污染 conversation 主时间线。
+subagent 也是普通 thread，只是在 `SessionAdded` / `SessionSummary` / `LocalSessionSnapshot` 上携带 `parent_session_id`。daemon 收到 `SessionAdded { parent_session_id: Some(parent) }` 时复用父线程的 conversation 插入子线程行，且不增加 `conversations.agent_session_count`。Desktop 通过现有 `list_conversation_agent_sessions` 得到父子 thread，不新增 `list_subagents` RPC。conversation message 读路径会过滤 `session_id` 指向 subagent 的旧消息行，summary 的 preview/count 也只计算可见消息，避免 subagent transcript/result 污染 conversation 主时间线。
 
 **Conversation 主时间线排序契约：** `chat_messages.message_seq`（SQLite rowid PK）是唯一排序键；list 按 `message_seq DESC` 分页，客户端 reverse 为 ASC 展示。`message_id` upsert 复用原 `message_seq`（body/metadata 可更新）。`created_at_ms` 仅展示。多 agent 完成顺序 = durable 落库顺序（finish/write order）；因果关系用 `reply_to_message_id` / `mentions` / `delegation_id` 表达（例如 MCP 委托 result 引用 request），不通过重排历史 seq。Agent 回合结果由 `conversation_completion` 在 turn boundary 写入 `agent-result:…`；subagent session 不写 conversation result。
 
@@ -147,7 +147,7 @@ subagent 也是普通 thread，只是在 `SessionAdded` / `SessionSummary` / `Lo
 
 Codex app-server 启动分两段超时：initialize handshake 默认 5 秒，`thread/start` 默认 30 秒。后者独立配置为 `AgentRuntimeConfig.thread_start_timeout`，因为线程创建会受 workspace 初始化、skills/MCP 注入和 Codex 冷启动状态影响。
 
-Teamwork MCP 注入不依赖单一外部 sidecar。`AgentRuntimeConfig` 优先使用 `MINOS_TEAMWORK_MCP_BIN` 或同目录 `minos-teamwork-mcp`；找不到时，`minos-daemon __minos-teamwork-mcp` hidden 子命令可直接作为 stdio MCP server。TUI 托管 daemon 时当前可执行文件是 `minos-tui`，同一逻辑会回落到 `minos-tui __minos-teamwork-mcp`，因此 `minos-tui --backend daemon` 不要求用户额外构建 MCP bin。
+Teamwork MCP 注入不依赖单一外部 sidecar。`AgentRuntimeConfig` 优先使用 `MINOS_TEAMWORK_MCP_BIN` 或同目录 `minos-teamwork-mcp`；找不到时，`minos-daemon __minos-teamwork-mcp` hidden 子命令可直接作为 stdio MCP server。Desktop / daemon 作为 host binary 时，同一逻辑回落到 `__minos-teamwork-mcp` hidden sidecar。
 
 ### 支持的 Agent
 
@@ -172,7 +172,7 @@ Teamwork MCP 注入不依赖单一外部 sidecar。`AgentRuntimeConfig` 优先�
 
 ### 停机与 resume（host-local）
 
-Managed TUI/Desktop 退出会调用 `DaemonHandle::stop`：
+Managed Desktop 退出会调用 `DaemonHandle::stop`：
 
 1. **`AgentGlue::shutdown`**：对每个内存中非 Closed 线程 `suspend_for_daemon_stop`（best-effort cancel + 内存态 `Suspended { DaemonRestart }`），并按停机前状态写入 `needs_continue`（`running`/`starting`/`resuming` → 1，idle/已 suspended → 0）。**同步** `suspend_thread_for_daemon_restart` 落库：mid-flight → durable `suspended`；idle → durable **`idle`**（不把回合间停机标成用户 Pause）。Manager event bridge **不**把 `Suspended{DaemonRestart}` 再写一次 SQLite（避免与同步落库竞态）。**不**调用 `close_session`。
 2. `shutdown_instances` SIGTERM/SIGKILL provider 进程组。
@@ -226,12 +226,13 @@ Starting → Idle → Running { turn_started_at_ms }
 | `workspaces` | workspace root 注册 |
 | `projects` | 项目（含 `workspace_path`） |
 | `conversations` | 协作对话 + priority/progress/git work-unit 元数据（`branch`、`worktree_path`、`git_mode`、`git_dirty`、`git_head`） |
-| `sessions` | agent session（`session_id`、`parent_session_id`、`needs_continue`、status…） |
-| `chat_messages` | conversation 主时间线（含 reply/delegation/mentions） |
+| `sessions` | agent session（`session_id`、runtime `agent`、nullable `bot_id`、`parent_session_id`、`needs_continue`、status…） |
+| `conversation_agent_members` | roster membership PK `(conversation_id, bot_id)` + optional peer `brief` |
+| `chat_messages` | conversation 主时间线（agent 行写 `bot_id`；含 reply/delegation/mentions；`sender_role` 含 system） |
 | `chat_message_reactions` | 主时间线消息上的本机 emoji 反应（`message_id + emoji + actor`；host actor=`local`/`user`/`You`；幂等 toggle；非 Nostr kind:7；云端 social 延后） |
 | `events` / `artifacts` | session transcript 事件与大 payload |
 | `ingest_sync_state` | backend ack 水位 + host dirty range |
-| `agent_profiles` | 本机个性化 runtime+model+effort+instructions |
+| `bot_identities` | 本机 bot 身份缓存（`bot_id`、display_name、runtime、model、effort、system_prompt、source=`user_configured`\|`host_runtime_seed`）；替代旧 `agent_profiles` |
 
 `sessions.parent_session_id` 表示 subagent 归属。顶层 session 为 `NULL`；subagent 行引用父 session，事件仍写入各自 session 的 `events`，因此历史回放和实时 fanout 不需要单独的数据面。
 
@@ -242,7 +243,7 @@ Starting → Idle → Running { turn_started_at_ms }
 - 等待父线程行存在（指数退避重试）
 - 只写本地 SQLite，不转发 relay，不受 WS 背压影响
 - 持久化 `body_kind/body_inline/artifact_*`，避免把大 JSON DOM 在通道中重复 clone
-- 持久化 `projection_json`，TUI replay 不再依赖重新读取完整 raw payload
+- 持久化 `projection_json`，Desktop replay 不再依赖重新读取完整 raw payload
 - 区分 `live` 和 `jsonl_recovery` 事件来源
 
 ### Ingest Sync (`src/ingest_sync.rs`)
@@ -289,11 +290,11 @@ Starting → Idle → Running { turn_started_at_ms }
 
 支持的方法: `health`, `list_clis`, `list_models`, `list_agent_profiles`, `create_agent_profile`, `update_agent_profile`, `delete_agent_profile`, `list_host_skills`, `write_host_skill_config`, `start_agent` (optional `profile_id` / `model` / `reasoning_effort` / `instructions`), `start_agent_in_conversation` (same), `send_user_message`, `approval_decision`, `respond_opencode_question`, `interrupt_session`, `close_session`, `list_sessions`, `get_session`
 
-Host-local **agent profiles**（`agent_profiles` 表，见 `0001_initial`）store personalized runtime+model+effort+instructions bindings. Model discovery is best-effort via Codex `model/list`, CLI probes (`grok models`, `opencode models`), or static aliases (Claude/Gemini).
+Host-local **bot identities**（`bot_identities` 表，见 `0001_initial`；wire 仍用 `list/create/update/delete_agent_profiles`，`id` ≡ `bot_id`，`instructions` ≡ `system_prompt`）cache personalized runtime+model+effort+system_prompt for local launch and offline roster. **Product bot identity SSOT is Hub `agents`** (global bot user + digital body); local rows are a Host cache / launch helper and must not mint a second multi-end identity. Offline create-conversation runtime labels map to stable seeds `local-rt-{runtime}` via `ensure_local_runtime_bot` (`source=host_runtime_seed`). See [global-bot-identity-design](superpowers/specs/global-bot-identity-design.md) and [bot-identity-session-separation Phase 2](superpowers/specs/2026-08-10-bot-identity-session-separation.md). Model discovery remains best-effort via Codex `model/list`, CLI probes (`grok models`, `opencode models`), or static aliases (Claude/Gemini).
 
 **Profile name rules**: display names are also `@Name` mention tokens. `create_agent_profile` / `update_agent_profile` reject empty names and names containing whitespace, `#`, or `@` (breaks single-token routing / `agent#short` form). Desktop create form + `profileMentionInsert` enforce the same; non-clean names force `@p/<id>` insert as defense in depth.
 
-**Profile start resolution** (`AgentGlue::resolve_launch_options`): when `profile_id` is set, load profile and require `request.agent == profile.runtime_agent`; merge launch fields with precedence **explicit request > profile > None**. Missing profile or agent mismatch → protocol error. Structured log on start includes `profile_id`, `agent`, `session_id`.
+**Launch resolution** (`AgentGlue::resolve_launch_options`): when `profile_id`/`bot_id` is set, load bot identity and require `request.agent == identity.runtime_agent`; merge launch fields with precedence **explicit request > identity > None**. Missing identity or agent mismatch → protocol error. Structured log on start includes `profile_id`, `bot_id`, `agent`, `session_id`.
 
 **Agents capability SSOT**: runtime set and capability flags come from `minos_domain::AgentName` / `AgentDescriptor` (filled in `list_clis` via `minos-cli-detect`). Per-model effort ladders come only from `list_models` (`model_catalog.rs`); unsupported runtimes must return empty `supported_reasoning_efforts` — never invent default ladders for Claude/Gemini/OpenCode. Desktop projects these values and must not maintain a rival capability table.
 
@@ -303,23 +304,23 @@ Host-local **agent profiles**（`agent_profiles` 表，见 `0001_initial`）stor
 
 ## 本地 RPC 服务器 (`src/local_rpc.rs`)
 
-`LocalRpcImpl` 实现 `LocalDaemonRpcServer` trait，服务 TUI。
+`LocalRpcImpl` 实现 `LocalDaemonRpcServer` trait，服务 Desktop。
 
 额外方法: `delete_session`, `resume_session`, `respond_opencode_question`, `read_session_raw_history`, `list_conversations`, `create_conversation`, `update_conversation`, `remove_conversation_agent`, `list_conversation_messages`, `toggle_conversation_message_reaction`, `append_conversation_message`, `start_agent_in_conversation`, 以及 host-local git 服务：`git_get_status`, `git_get_diff`, `git_create_worktree`, `git_remove_worktree`, `git_ensure_identity`, `git_push_branch`, `git_open_pull_request`, `post_git_update`。
 
-Conversation 元数据（`conversations` 表，见 `0001_initial`）：`priority`、`progress`（默认 `todo`）、git work-unit 绑定（`branch` / `worktree_path` / `git_mode` / `git_dirty` / `git_head`）。`create_conversation` 接受可选 `git_mode`：`worktree`（项目是 git 仓库时的**默认**）会在 `{repo_parent}/.minos-worktrees/<slug>-<id>` 下 `git worktree add -b minos/...` 并写入绑定；`inherit` 只快照 project workspace。创建成功后会向时间线发一条结构化 `worktree_created` git activity（body 内嵌 `<!--minos-git-activity:{...}-->`）。Agent **roster** 在 `conversation_agent_members`（runtime 名 + 可选 `brief` 角色简介）；`create_conversation` 接受 `agents: [{ agent, brief? }]`。`LocalConversationSummary` 含 `participating_agents` 与完整 `roster`（含 brief）。成员 `brief` 为空时，`list_conversation_roster` / session-start briefing / idle host inject 会 **fallback** 到该 runtime **最新** host profile 的 `description`（同样 ≤500）。`start_agent_in_conversation` 将 roster briefing 注入 session-start instructions。`add_conversation_agent` / `remove_conversation_agent` 变更 roster 时会：(1) 写 `sender_role=system` 协调消息（`[minos:system]…`，可见于时间线）；(2) 广播 `LocalConversationEvent::RosterChanged`；(3) 向该 conversation 内 **Idle** 的 top-level 存活 session 注入 host 协调输入（`[minos:host] kind=roster_changed`，`session_state_stream` 判定 Idle；走 provider user-input 通道，**不**写 conversation 用户行；Running/Suspended/closed/subagent 跳过）。MCP：`list_conversation_roster`。Desktop 创建对话可为每个选中 agent 填 role brief。`start_agent_in_conversation` 要求目标 agent 已是成员，否则 protocol error；cwd **优先 conversation `worktree_path`**，并在启动时 refresh git dirty/head 缓存。`update_conversation` 可改 title / priority / progress。`remove_conversation_agent` 从 roster 移除 runtime，并 **关闭** 该 agent 在会话内的非 closed sessions（`last_close_reason=roster_removed`）、**取消** 其作为 source/target 的 running teamwork delegations；被移除后 MCP source 校验拒绝 closed / 非成员 session。列表同时聚合 `running_count` 与 `needs_attention_count`（suspended sessions）。首次 `start_agent_in_conversation` 时若 progress 仍为 `todo` 则升为 `in_progress`。
+Conversation 元数据（`conversations` 表，见 `0001_initial`）：`priority`、`progress`（默认 `todo`）、git work-unit 绑定（`branch` / `worktree_path` / `git_mode` / `git_dirty` / `git_head`）。`create_conversation` 接受可选 `git_mode`：`worktree`（项目是 git 仓库时的**默认**）会在 `{repo_parent}/.minos-worktrees/<slug>-<id>` 下 `git worktree add -b minos/...` 并写入绑定；`inherit` 只快照 project workspace。创建成功后会向时间线发一条结构化 `worktree_created` git activity（body 内嵌 `<!--minos-git-activity:{...}-->`）。Agent **roster** 在 `conversation_agent_members`（PK=`(conversation_id, bot_id)` + 可选 `brief`）；wire `create_conversation` 仍接受 runtime labels `agents: [{ agent, brief? }]`，daemon 经 `ensure_local_runtime_bot` 转为 `local-rt-{runtime}` 后写入 membership。`ConversationRosterMember` 含 `bot_id` + runtime `agent` badge + optional `display_name`/`brief`。`LocalConversationSummary` 的 `participating_agents` 仍为 runtime 列表（从 roster bots 推导），`roster` 为完整成员。成员 `brief` 为空时 fallback 到该 `bot_id` 的 identity `description`（再 fallback 同 runtime 最新 description，≤500）。`start_agent_in_conversation` 按 `bot_id`（`profile_id` 或 local-rt seed）做 membership 检查，并将 roster briefing 注入 session-start instructions；session 行写入 `bot_id`。`add_conversation_agent` / `remove_conversation_agent` 变更 roster 时会：(1) 写 `sender_role=system` 协调消息（`[minos:system]…`）；(2) 广播 `LocalConversationEvent::RosterChanged`；(3) 向 **Idle** top-level session 注入 host 协调输入。MCP：`list_conversation_roster`。`remove_conversation_agent` 按 runtime 移除相关 bot memberships，关闭匹配 sessions（`roster_removed`）、取消 running delegations。列表聚合 `running_count` 与 `needs_attention_count`。首次 start 时若 progress 仍为 `todo` 则升为 `in_progress`。
 
-Host git 实现位于 `crates/minos-daemon/src/git/`（`exec` / `snapshot` / `worktree` / `diff` / `identity` / `activity`），经 LocalDaemonRpc 暴露，供 TUI/Desktop/Mobile 共用；不做 forge hosting。`git_push_branch` 要求完整 `user.name`/`user.email` 且工作区干净，并对 `remote` 做 `^[A-Za-z0-9._/-]+$` 校验（拒绝 leading `-`）；`git_open_pull_request` 走本机 `gh pr create` 并自动 `post_git_update(pr_opened)`。`create_conversation_worktree` 按 repo toplevel 串行化（`Mutex`），分支是否已存在用 `git show-ref --verify` 判断。daemon 启动时 `prune_orphan_worktrees`：扫描各 project 的 `.minos-worktrees/`，删除 **DB 无引用** 的孤儿目录（不自动删 `minos/*` 分支）。`post_git_update` / `format_activity_body` 对 summary/url/subjects 等有 per-field 长度上限，防止灌库扇出。
+Host git 实现位于 `crates/minos-daemon/src/git/`（`exec` / `snapshot` / `worktree` / `diff` / `identity` / `activity`），经 LocalDaemonRpc 暴露，供 Desktop/Mobile 共用；不做 forge hosting。`git_push_branch` 要求完整 `user.name`/`user.email` 且工作区干净，并对 `remote` 做 `^[A-Za-z0-9._/-]+$` 校验（拒绝 leading `-`）；`git_open_pull_request` 走本机 `gh pr create` 并自动 `post_git_update(pr_opened)`。`create_conversation_worktree` 按 repo toplevel 串行化（`Mutex`），分支是否已存在用 `git show-ref --verify` 判断。daemon 启动时 `prune_orphan_worktrees`：扫描各 project 的 `.minos-worktrees/`，删除 **DB 无引用** 的孤儿目录（不自动删 `minos/*` 分支）。`post_git_update` / `format_activity_body` 对 summary/url/subjects 等有 per-field 长度上限，防止灌库扇出。
 
 Desktop：打开 conversation（Timeline mount）时调用 `git_get_status(refresh=true)` 刷新 header 上的 branch/dirty；create conversation 表单可显式选 `git_mode`（isolated worktree / project workspace）；时间线对 `git_activity` 消息渲染专用卡片（`GitActivityCard`）。
 
 订阅: `subscribe_ingest()`、`subscribe_manager_events()` 和 `subscribe_conversation_events()`
 
-`AgentGlue` 维护本地 manager event 与 conversation event 两条总线。agent runtime 状态事件通过 `subscribe_manager_events()` 进入 TUI；`append_conversation_message`、daemon Teamwork MCP 的 `post_conversation_update` / `post_git_update` 和 delegation 可见消息写入成功后都会通过 `subscribe_conversation_events()` 发布 `ConversationMessageAppended { conversation_id, message_seq }`，TUI 据此刷新当前 conversation。`toggle_conversation_message_reaction` 在本机 `chat_message_reactions` 上幂等 add/remove（host actor=`local`），并发布 `ConversationReactionToggled { conversation_id, message_id, reactions }`（完整聚合，UI 无需 re-list）；`list_conversation_messages` 同步嵌入各消息的 `reactions`。云端 social reactions 不在本层。daemon 的 `delegate_to_agent` 与 TUI embedded handler 共用 `TeamworkStore` 深度策略：delegated source thread 只能 delegate 回原 source agent，不能启动第三个 agent。`delegate_to_agent` 支持可选 `profile_id` / `target_profile`（name）；仅 `target_agent` 时 convenience 绑定该 runtime 最新 host profile，再经 `start_agent_in_conversation_with_options` 应用 launch 字段（与 RPC profile 启动同一语义，不在 MCP client 侧 merge model/effort/instructions）。`wait_delegation` 在 daemon 侧按 `timeout_ms` 阻塞到终态；`TeamworkStore` 用同 DB path 共享的 `DelegationSignalBus` 在 complete/cancel 时唤醒 waiter（fallback poll 2s，避免跨进程漏信号）。sidecar→daemon UDS 读超时对 `wait_delegation` 取 `timeout_ms + 5s` margin，其它请求保持 30s；连接失败 / 对端关闭 / daemon 拒绝分别映射 MCP `-32001` / `-32002` / `-32003`。daemon 从本地 `sessions` 表恢复 persisted session 时，会把 `conversation_id` 一并注册回 `AgentManager` 的 `SessionHandle.mcp_conversation_id`，保证恢复/重启后的 agent 仍使用当前 conversation 的 `--source-thread-id` MCP context。
+`AgentGlue` 维护本地 manager event 与 conversation event 两条总线。agent runtime 状态事件通过 `subscribe_manager_events()` 进入 Desktop；`append_conversation_message`、daemon Teamwork MCP 的 `post_conversation_update` / `post_git_update` 和 delegation 可见消息写入成功后都会通过 `subscribe_conversation_events()` 发布 `ConversationMessageAppended { conversation_id, message_seq }`，Desktop 据此刷新当前 conversation。`toggle_conversation_message_reaction` 在本机 `chat_message_reactions` 上幂等 add/remove（host actor=`local`），并发布 `ConversationReactionToggled { conversation_id, message_id, reactions }`（完整聚合，UI 无需 re-list）；`list_conversation_messages` 同步嵌入各消息的 `reactions`。云端 social reactions 不在本层。daemon 的 `delegate_to_agent` 与 daemon embedded handler 共用 `TeamworkStore` 深度策略：delegated source thread 只能 delegate 回原 source agent，不能启动第三个 agent。`delegate_to_agent` 支持可选 `profile_id` / `target_profile`（name）；仅 `target_agent` 时 convenience 绑定该 runtime 最新 host profile，再经 `start_agent_in_conversation_with_options` 应用 launch 字段（与 RPC profile 启动同一语义，不在 MCP client 侧 merge model/effort/instructions）。`wait_delegation` 在 daemon 侧按 `timeout_ms` 阻塞到终态；`TeamworkStore` 用同 DB path 共享的 `DelegationSignalBus` 在 complete/cancel 时唤醒 waiter（fallback poll 2s，避免跨进程漏信号）。sidecar→daemon UDS 读超时对 `wait_delegation` 取 `timeout_ms + 5s` margin，其它请求保持 30s；连接失败 / 对端关闭 / daemon 拒绝分别映射 MCP `-32001` / `-32002` / `-32003`。daemon 从本地 `sessions` 表恢复 persisted session 时，会把 `conversation_id` 一并注册回 `AgentManager` 的 `SessionHandle.mcp_conversation_id`，保证恢复/重启后的 agent 仍使用当前 conversation 的 `--source-thread-id` MCP context。
 
 ### 发现机制
 
-写入 `tui-daemon-rpc.json` 到 `$MINOS_HOME/run/`，TUI/Desktop 可读取该文件发现 WS 地址。托管启动时也会通过 `DaemonHandle::local_rpc_url()` 直接拿到 binder 返回的 URL，避免再读 discovery 文件时撞上陈旧端口。
+写入 `daemon-rpc.json` 到 `$MINOS_HOME/run/`，Desktop 可读取该文件发现 WS 地址。托管启动时也会通过 `DaemonHandle::local_rpc_url()` 直接拿到 binder 返回的 URL，避免再读 discovery 文件时撞上陈旧端口。
 
 ## 模块连接图
 
@@ -335,7 +336,7 @@ main.rs
         │     ├── IngestCoalescer (ingest_coalescer.rs) — seq/projection/chunk 生成
         │     ├── EventWriter (store/event_writer.rs) — SQLite 本地写入
         │     └── LocalStore (store/mod.rs) — SQLite 连接池
-        ├── LocalRpcImpl (local_rpc.rs) — TUI/Desktop JSON-RPC 服务器
+        ├── LocalRpcImpl (local_rpc.rs) — Desktop JSON-RPC 服务器
         │     └── Host Link RPC（需 RelayClient）:
         │           minos_local_host_prepare_link
         │           minos_local_host_sign_link_proof

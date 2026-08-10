@@ -13,6 +13,7 @@
 
 > **产品主轴是消息驱动 IM**（[ADR 0021](adr/0021-agent-as-conversation-bot-participant.md)）。  
 > `POST /v1/agent-sessions/*` / HostCommand 是 **bot runtime 控制面**，不是「远程协作 = 下命令」的产品定义。  
+> Bot 身份是 **全局唯一** 的 Hub `agents` 行（数字肉身）；进 conversation 只写 membership；session 是 per-conversation 执行上下文。见 [global-bot-identity-design](superpowers/specs/global-bot-identity-design.md)。  
 > 细节 SSOT：[architecture-messaging.md](architecture-messaging.md)、[agent-participant-delivery](superpowers/specs/2026-08-09-agent-participant-delivery.md)。
 
 ---
@@ -220,7 +221,7 @@ TUI 直接管理 agent 子进程（进程内 `AgentManager`），无需后端或
 ### Daemon 模式
 
 TUI / Desktop 通过 JSON-RPC 连接 `minos-daemon`:
-1. 读取 `~/.minos/run/tui-daemon-rpc.json` 发现 daemon WS 地址并 `minos_local_health`
+1. 读取 `~/.minos/run/daemon-rpc.json` 发现 daemon WS 地址并 `minos_local_health`
 2. 失败时进程内托管 `DaemonHandle::start_with_local_rpc`，用 `local_rpc_url()` 直连（不依赖再读 discovery）
 3. 连接并订阅 ingest + manager events
 4. 所有操作通过 `minos_local_*` JSON-RPC 方法

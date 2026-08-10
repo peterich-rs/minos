@@ -273,7 +273,7 @@ Flutter Mobile: separate UI; implements CloudPort semantics in Dart
 | Workspace paths / CLI processes | Yes | No (never send raw FS as product default) |
 | Conversation / agent session projection | Yes (local) | Yes (if ingested) |
 | Approvals requiring host | Yes | Prompt on Mobile/Web → command to host |
-| Agent profiles (local) | Yes | Optional later cloud sync — out of scope v1 |
+| Agent / bot identity (数字肉身) | Host may cache | **Hub `agents` SSOT** — 全局 bot 用户；见 [global-bot-identity-design](global-bot-identity-design.md)。本地 daemon/Mobile profile 不再是身份权威 |
 
 ### 4.7 Explicitly out of scope (for this program)
 

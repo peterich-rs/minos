@@ -42,7 +42,7 @@ conversation using the source agent/thread metadata from the MCP sidecar. If
 the update body starts with `@agent` or `@agent#short_thread`, Minos also sends
 the clean body to that target thread; `@agent` starts a new conversation-bound
 session, while `@agent#short_thread` routes to the exact existing session.
-Successful appends publish `ConversationMessageAppended` so TUI refreshes.
+Successful appends publish `ConversationMessageAppended` so Desktop refreshes.
 `delegate_to_agent` starts the target agent through the same conversation start
 path as UI (`start_agent_in_conversation` + optional host profile launch options).
 Tool args:
@@ -71,7 +71,7 @@ durable status, optional `result_text`, and `source_delivery`
 ## Completion ownership (daemon)
 
 Agent final-result writeback and delegation completion are owned by
-`minos-daemon` (`conversation_completion`), not TUI. Writeback is **turn-boundary
+`minos-daemon` (`conversation_completion`), not a UI client. Writeback is **turn-boundary
 latched**, not message-boundary:
 
 - `ThreadState::Idle` / `Closed` sets `pending_boundary` and tries to record.
@@ -102,7 +102,7 @@ On successful record for a top-level conversation thread the daemon:
    the busy-delivery policy (Codex steers while running; Gemini/Grok queue until
    Idle).
 
-TUI only subscribes to conversation events for display.
+Desktop only subscribes to conversation events for display.
 
 `TeamworkStore` schema is latest-only（与 daemon 本地库分离，属 minos-chat-store）。
 开发态若列形状变更，清库/重建即可；不维护对旧 `daemon.sqlite` 的 dual-read ALTER 链。
@@ -130,7 +130,7 @@ The command may be the standalone `minos-teamwork-mcp` binary or the hidden
 sidecar form:
 
 ```text
-minos-tui __minos-teamwork-mcp --conversation-id ... --source-agent ... --source-session-id ... --socket-path ...
+minos-daemon __minos-teamwork-mcp --conversation-id ... --source-agent ... --source-session-id ... --socket-path ...
 minos-daemon __minos-teamwork-mcp --conversation-id ... --source-agent ... --source-session-id ... --socket-path ...
 minos-desktop / Minos.app binary __minos-teamwork-mcp --conversation-id ... --source-agent ... --source-session-id ... --socket-path ...
 ```
@@ -141,7 +141,7 @@ Canonical skill body (Task B SSOT):
 
 - `crates/minos-prompt-runtime/packages/minos.teamwork/fragments/skill/SKILL.md`
 
-On TUI startup, Minos installs that embedded package skill into global skill folders:
+On Host startup, Minos installs that embedded package skill into global skill folders:
 
 - `~/.agents/skills/minos-teamwork/SKILL.md`
 - `~/.claude/skills/minos-teamwork/SKILL.md`
@@ -190,7 +190,7 @@ Minos prompt delivery is split into layers with distinct ownership:
 | Runtime contract | Provider adapter | Tool/MCP names and provider-specific mappings only |
 | Profile instructions | Agent profile resolved by daemon | New sessions using that profile |
 | Conversation briefing | Conversation/session launcher | Roster, role brief, worktree (later) |
-| Skill body | TUI-installed skill catalog (Task D moves reconcile to daemon) | On-demand skill load; not full system prompt |
+| Skill body | Host-installed skill catalog (Task D moves reconcile to daemon) | On-demand skill load; not full system prompt |
 
 Compiler seam (final, Task A):
 `compile_session_context(SessionContext) -> CompiledPromptBundle`.
@@ -205,7 +205,7 @@ Compiler seam (final, Task A):
 
 ### Remaining gaps
 
-- Skill reconciliation still runs from TUI startup only (Task D moves install
+- Skill reconciliation still runs from Host startup only (Task D moves install
   to daemon + ownership/digest state machine).
 - Gemini / OpenCode profile instructions are not proven on the wire (Task C).
 - Session metadata does not yet persist `compiled_prompt_digest` (Task D).

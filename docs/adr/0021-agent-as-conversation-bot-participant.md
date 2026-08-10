@@ -7,6 +7,8 @@
 | Deciders | fannnzhang |
 | Supersedes | Product framing that treats `@agent` as a **command-orchestration primary path** parallel to IM; does **not** supersede dual Account/Host principals ([0020](0020-server-centric-auth-and-account-pairs.md)) |
 | Normative detail | [2026-08-09-agent-participant-delivery.md](../superpowers/specs/2026-08-09-agent-participant-delivery.md) |
+| Global bot identity | [global-bot-identity-design.md](../superpowers/specs/global-bot-identity-design.md) — bot 是全局唯一数字身份；conversation 只持 membership；session 是 per-conversation 执行上下文 |
+| Bot mailbox + WS IM bus | [bot-mailbox-ws-im-bus-design.md](../superpowers/specs/bot-mailbox-ws-im-bus-design.md) — Account WS 写消息；Bot 逻辑邮箱；Host 共享执行连接 |
 
 ## Context
 
@@ -30,6 +32,7 @@ We need a single product decision: **agents are bot participants on the conversa
 ## Decision
 
 1. **Agent is a first-class conversation participant (bot), not a human Account.**
+   - **Global bot identity**: one stable `agent_id` (数字肉身：name / model / reasoning / system prompt / runtime 等) is reused across conversations; joining a conversation is **membership only**, not creating a new bot. Per-conversation **sessions** are execution context, not identity. Normative: [global-bot-identity-design](../superpowers/specs/global-bot-identity-design.md).
    - Appears in conversation roster / participants API.
    - Can be @-mentioned with the **same mention semantics** as humans (structured targets).
    - Can author timeline messages (`sender_type=agent`).
@@ -69,6 +72,8 @@ We need a single product decision: **agents are bot participants on the conversa
 ### Storage / API (directional; detail in normative spec)
 
 - Mentions become polymorphic: `target_kind ∈ {account, agent}` (or equivalent).
+- `agents` is the **global bot directory** (digital body SSOT on Hub); `conversation_agent_members` is membership only; `agent_sessions` is per-(conversation, agent) runtime context.
+- Local daemon/Mobile “agent profiles” are **not** multi-end identity authority; they may cache Hub bots after sync.
 - `AgentDispatchQueue` is the physical table for **Agent inbox** (rename semantic now; physical rename optional later).
 - `message_source` remains **provenance + loop gate** (`host_projection`/`system` never re-deliver to agents), not “Desktop magic skip.”
 - Wire author should stop abusing `UserSummary.account_id = agent_id` long-term (`SenderRef`-style); transitional clients may still branch on `sender_type`.
@@ -93,7 +98,9 @@ We need a single product decision: **agents are bot participants on the conversa
 
 ## References
 
-- Normative: [agent-participant-delivery](../superpowers/specs/2026-08-09-agent-participant-delivery.md)
+- Normative delivery: [agent-participant-delivery](../superpowers/specs/2026-08-09-agent-participant-delivery.md)
+- Global bot identity / digital body: [global-bot-identity-design](../superpowers/specs/global-bot-identity-design.md)
+- Bot mailbox + WS-native IM bus: [bot-mailbox-ws-im-bus-design](../superpowers/specs/bot-mailbox-ws-im-bus-design.md)
 - Hub bubbles: [hub-collaboration-message-ssot](../superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md)
 - Delivery jobs: [backend-im-delivery-orchestration](../superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md)
 - Auth principals: [0020](0020-server-centric-auth-and-account-pairs.md)
