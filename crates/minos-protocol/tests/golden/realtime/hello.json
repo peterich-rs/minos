@@ -1,0 +1,6 @@
+{
+  "type": "hello",
+  "conn_id": "11111111-1111-1111-1111-111111111111",
+  "server_time_ms": 1700000000000,
+  "heartbeat_interval_ms": 25000
+}

@@ -1,0 +1,8 @@
+{
+  "type": "durable_event",
+  "topic": "conversation:conv-1",
+  "topic_seq": 42,
+  "kind": "message_created",
+  "payload": { "message_id": "msg-1" },
+  "event_id": "evt-1"
+}

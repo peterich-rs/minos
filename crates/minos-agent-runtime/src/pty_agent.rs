@@ -5,14 +5,14 @@
 //! output. The backend's ingest pipeline will wrap these as
 //! `UiEventMessage::Raw` for fan-out to clients.
 //!
-//! Historical R3.4 behavior spawned a CLI, piped stdout/stderr lines as
+//! Earlier behavior spawned a CLI, piped stdout/stderr lines as
 //! `UiEventMessage::Raw`, and piped composer text into stdin. Current Gemini
 //! support uses ACP instead of this adapter.
 //!
 //! ## Design decisions
 //!
-//! - Uses `tokio::process::Command` (not `portable-pty`) per plan §open
-//!   decision #1. Revisit only if a supported line-oriented CLI refuses output
+//! - Uses `tokio::process::Command` (not `portable-pty`).
+//!   Revisit only if a supported line-oriented CLI refuses output
 //!   without a TTY.
 //! - Line-buffers stdout+stderr to avoid partial-line fan-out.
 //! - SIGTERM → 3s → SIGKILL escalation on close.

@@ -8,7 +8,7 @@
 //!
 //! # State plumbing
 //!
-//! [`BackendState`] bundles the three runtime Arcs (`SessionRegistry`,
+//! [`BackendState`] bundles the three runtime Arcs (`RealtimeConnectionRegistry`,
 //! `HostLinkService`, `SqlitePool`) plus the backend version string. It is
 //! [`Clone`] so axum's [`axum::extract::State`] can hand it to every
 //! handler without borrowing; inner fields are either `Arc`-wrapped,
@@ -45,9 +45,8 @@ use tower_http::trace::TraceLayer;
 
 use crate::{
     host_link::HostLinkService,
-    realtime::{MessageBusBackend, PeerTargetCacheBackend},
+    realtime::{MessageBusBackend, PeerTargetCacheBackend, RealtimeConnectionRegistry},
     runtime::{AppContext, AppRuntimeConfig},
-    session::SessionRegistry,
 };
 
 pub mod auth;
@@ -669,7 +668,7 @@ impl BackendState {
     /// version string can build the struct literally.
     #[must_use]
     pub fn new(
-        registry: Arc<SessionRegistry>,
+        registry: Arc<RealtimeConnectionRegistry>,
         host_link: Arc<HostLinkService>,
         store: SqlitePool,
         token_ttl: Duration,
@@ -705,7 +704,7 @@ impl BackendState {
 
     #[must_use]
     pub fn new_with_runtime(
-        registry: Arc<SessionRegistry>,
+        registry: Arc<RealtimeConnectionRegistry>,
         host_link: Arc<HostLinkService>,
         store: SqlitePool,
         token_ttl: Duration,
@@ -951,7 +950,7 @@ pub mod test_support {
     use crate::host_link::HostLinkService;
     use crate::realtime::{MessageBusBackend, PeerTargetCacheBackend};
     use crate::runtime::{AppContext, AppRuntimeConfig};
-    use crate::session::SessionRegistry;
+    use crate::realtime::RealtimeConnectionRegistry;
     use crate::store::test_support::memory_pool;
     use std::sync::Arc;
     use std::time::Duration;
@@ -971,7 +970,7 @@ pub mod test_support {
     /// 5-minute token TTL and the deterministic test JWT secret.
     pub async fn backend_state() -> BackendState {
         let pool = memory_pool().await;
-        let registry = Arc::new(SessionRegistry::new());
+        let registry = Arc::new(RealtimeConnectionRegistry::new());
         let host_link = Arc::new(HostLinkService::new(pool.clone()));
         BackendState::new(
             registry,
@@ -984,11 +983,48 @@ pub mod test_support {
         )
     }
 
+    /// Seed a live formal connection in the registry (online presence tests).
+    ///
+    /// Keeps the outbox receiver alive via the returned handle; drop it only
+    /// after the connection is removed/revoked.
+    pub fn seed_live_connection(
+        state: &BackendState,
+        device_id: minos_domain::DeviceId,
+        role: minos_domain::DeviceRole,
+        account_id: Option<&str>,
+    ) -> (
+        std::sync::Arc<crate::realtime::ConnectionState>,
+        tokio::sync::mpsc::Receiver<crate::realtime::wire::ServerFrame>,
+    ) {
+        use crate::realtime::{ConnectionState, wire::ServerFrame};
+        use minos_protocol::realtime::ConnectionPrincipal;
+        use tokio::sync::mpsc;
+
+        let (tx, rx) = mpsc::channel::<ServerFrame>(8);
+        let principal = match role {
+            minos_domain::DeviceRole::AgentHost => ConnectionPrincipal::Host {
+                host_installation_id: device_id.to_string(),
+            },
+            _ => ConnectionPrincipal::Account {
+                account_id: account_id.unwrap_or("acct-test").to_string(),
+            },
+        };
+        let conn = std::sync::Arc::new(ConnectionState::new(
+            principal,
+            device_id,
+            role,
+            tx,
+            chrono::Utc::now().timestamp_millis(),
+        ));
+        state.registry.insert(std::sync::Arc::clone(&conn));
+        (conn, rx)
+    }
+
     /// Like [`backend_state`] but with an HS256 Supabase verifier so
     /// `/v1/auth/supabase` can be exercised without network JWKS.
     pub async fn backend_state_with_supabase() -> BackendState {
         let pool = memory_pool().await;
-        let registry = Arc::new(SessionRegistry::new());
+        let registry = Arc::new(RealtimeConnectionRegistry::new());
         let host_link = Arc::new(HostLinkService::new(pool.clone()));
         let verifier = SupabaseTokenVerifier::for_tests(
             TEST_SUPABASE_ISS,
@@ -1039,7 +1075,7 @@ mod tests {
         CacheBackendKind, MessageBusBackend, MessageBusBackendKind, PeerTargetCacheBackend,
     };
     use crate::runtime::{AppContext, AppRuntimeConfig};
-    use crate::session::SessionRegistry;
+    use crate::realtime::RealtimeConnectionRegistry;
 
     #[tokio::test]
     async fn route_inventory_matches_router() {
@@ -1098,7 +1134,7 @@ mod tests {
                 token_ttl_secs: 300,
                 cluster_channel: DEFAULT_CLUSTER_CHANNEL.to_string(),
             },
-            Arc::new(SessionRegistry::new()),
+            Arc::new(RealtimeConnectionRegistry::new()),
             Arc::new(HostLinkService::new(pool.clone())),
             pool.into(),
             Duration::from_mins(5),
@@ -1289,7 +1325,7 @@ mod tests {
                 token_ttl_secs: 300,
                 cluster_channel: DEFAULT_CLUSTER_CHANNEL.to_string(),
             },
-            Arc::new(SessionRegistry::new()),
+            Arc::new(RealtimeConnectionRegistry::new()),
             Arc::new(HostLinkService::new(pool.clone())),
             pool.into(),
             Duration::from_mins(5),

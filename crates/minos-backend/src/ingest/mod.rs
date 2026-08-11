@@ -1,7 +1,6 @@
 //! Backend ingest pipeline: persist raw → translate → fan out.
 //!
-//! Entry point [`dispatch`] is called once per inbound `Envelope::Ingest`
-//! frame. It:
+//! Entry point [`dispatch`] processes one host raw event. It:
 //!
 //! 1. Upserts the `sessions` row.
 //! 2. Persists the raw event, discarding exact retransmits while assigning a
@@ -9,21 +8,14 @@
 //! 3. Runs the per-agent translator. Translator errors surface as a
 //!    synthetic `UiEventMessage::Error` so mobile sees something deterministic
 //!    rather than a silent drop.
-//! 4. For each produced UI event, wraps it in an `Envelope::Event` /
-//!    `EventKind::UiEventMessage` and fans it out to every client
-//!    installation under every account linked to the ingesting host
-//!    (`owner_device_id`). See [`broadcast_to_peers_of`] for the
-//!    `host_links → device_installations` walk.
+//! 4. For each produced UI event, fans a formal `StreamEvent` on the
+//!    `agent_session:{id}` topic for subscribed viewers.
 //!
 //! The formal host gateway path (`HostIngestLiveBatch`) persists raw in
 //! `realtime::gateway`, then **server-translates** with the same
 //! [`SessionTranslators`] stack (host-supplied `projection` is ignored). It
 //! reuses [`apply_approval_side_effects_from_payload`] +
 //! [`sync_formal_agent_session_from_ui_events`] for approvals and formal status.
-//!
-//! Fan-out is bounded: the SessionHandle's outbox is a fixed-size
-//! `mpsc::channel(256)`; full channels drop the one frame with a warn log
-//! rather than blocking the ingest path.
 
 pub mod translate;
 pub mod use_case;
@@ -32,14 +24,12 @@ use std::collections::HashMap;
 
 use crate::approvals::{ApprovalService, RecordApprovalRequestInput};
 use minos_domain::AgentName;
-use minos_protocol::{Envelope, EventKind};
 use minos_ui_protocol::{MessageRole, UiEventMessage};
 use serde_json::Value;
 
 use crate::error::BackendError;
 use crate::ingest::translate::SessionTranslators;
 use crate::realtime::{peer_target_cache_backend, RealtimeFanout, RealtimeTopic};
-use crate::session::SessionRegistry;
 use crate::store::{raw_events, sessions, AsStorePool, StorePoolRef};
 
 pub async fn invalidate_peer_targets_for_host(
@@ -62,6 +52,9 @@ where
     Ok(())
 }
 
+/// Resolve account-client targets for a host (peer-target cache + host_links).
+/// Kept for cache invalidation unit tests and any future non-envelope fanout.
+#[cfg_attr(not(test), allow(dead_code))]
 async fn peer_targets_for_host(
     store: &impl AsStorePool,
     host_device_id: minos_domain::DeviceId,
@@ -79,11 +72,10 @@ async fn peer_targets_for_host(
     Ok(targets)
 }
 
-/// Process one `Envelope::Ingest` frame.
+/// Process one host raw event through persist → translate → stream fanout.
 #[allow(clippy::too_many_arguments)] // Single-site dispatcher; splitting obscures the 4-step pipeline.
 pub async fn dispatch(
     store: &impl AsStorePool,
-    registry: &SessionRegistry,
     translators: &SessionTranslators,
     approvals: &dyn ApprovalService,
     realtime: &RealtimeFanout,
@@ -116,11 +108,11 @@ pub async fn dispatch(
         return Ok(());
     };
 
-    if let Some(event) =
-        apply_approval_side_effects_from_payload(approvals, session_id, payload, ts_ms).await?
+    if apply_approval_side_effects_from_payload(approvals, session_id, payload, ts_ms)
+        .await?
+        .is_some()
     {
-        let env = Envelope::Event { version: 1, event };
-        broadcast_to_peers_of(store, registry, realtime, owner_device_id, &env).await;
+        let _ = owner_device_id;
         return Ok(());
     }
 
@@ -162,20 +154,8 @@ pub async fn dispatch(
 
     sync_formal_agent_session_from_ui_events(store, session_id, &translated, ts_ms).await?;
 
-    // 4. Fan out each UI event to every live client installation linked to owner_device_id.
-    let suppress_social_fanout =
-        match crate::store::social::suppress_live_ui_fanout_for_session(store, session_id).await {
-            Ok(value) => value,
-            Err(error) => {
-                tracing::warn!(
-                    target: "minos_backend::ingest",
-                    error = %error,
-                    session_id,
-                    "failed to probe social fan-out mode; defaulting to regular fan-out"
-                );
-                false
-            }
-        };
+    // 4. Fan out each UI event on the formal agent_session topic.
+    let _ = crate::store::social::suppress_live_ui_fanout_for_session(store, session_id).await;
     for ui in translated {
         // Side effects on DB when the UI event implies a session mutation.
         match &ui {
@@ -192,38 +172,24 @@ pub async fn dispatch(
             _ => {}
         }
 
-        if suppress_social_fanout {
-            let payload = match serde_json::to_value(&ui) {
-                Ok(payload) => payload,
-                Err(error) => {
-                    tracing::warn!(
-                        target: "minos_backend::ingest",
-                        error = %error,
-                        session_id,
-                        "failed to encode suppressed social ui event for formal stream"
-                    );
-                    continue;
-                }
-            };
-            realtime.fanout_stream_event(
-                &RealtimeTopic::AgentSession(session_id.to_string()),
-                "ui_event",
-                i64::try_from(persisted_seq).ok(),
-                payload,
-            );
-            continue;
-        }
-
-        let env = Envelope::Event {
-            version: 1,
-            event: EventKind::UiEventMessage {
-                session_id: session_id.to_string(),
-                seq: persisted_seq,
-                ui,
-                ts_ms,
-            },
+        let payload = match serde_json::to_value(&ui) {
+            Ok(payload) => payload,
+            Err(error) => {
+                tracing::warn!(
+                    target: "minos_backend::ingest",
+                    error = %error,
+                    session_id,
+                    "failed to encode ui event for formal stream"
+                );
+                continue;
+            }
         };
-        broadcast_to_peers_of(store, registry, realtime, owner_device_id, &env).await;
+        realtime.fanout_stream_event(
+            &RealtimeTopic::AgentSession(session_id.to_string()),
+            "ui_event",
+            i64::try_from(persisted_seq).ok(),
+            payload,
+        );
     }
 
     Ok(())
@@ -232,8 +198,8 @@ pub async fn dispatch(
 /// Apply formal `agent_sessions` / `agent_turns` mutations implied by projected
 /// UI events (running / failed / ended + assistant turn summaries).
 ///
-/// Shared by the `Envelope::Ingest` path and the formal
-/// `HostIngestLiveBatch` gateway path so cloud session status stays honest.
+/// Shared by ingest helpers and the formal `HostIngestLiveBatch` gateway path
+/// so cloud session status stays honest.
 pub async fn sync_formal_agent_session_from_ui_events(
     store: &impl AsStorePool,
     session_id: &str,
@@ -438,17 +404,16 @@ async fn replace_assistant_turn_summary(
 
 /// Persist approval request / timeout side effects from a host ingest payload.
 ///
-/// Returns the `EventKind` envelope payload when the method is an
-/// approval control plane event; `Ok(None)` for ordinary agent events.
+/// Returns `Some(())` when the method is an approval control plane event;
+/// `Ok(None)` for ordinary agent events.
 ///
-/// Used by both the envelope ingest path and the formal
-/// `HostIngestLiveBatch` gateway so remote `/v1/approvals/respond` has a row.
+/// Used by formal `HostIngestLiveBatch` so remote `/v1/approvals/respond` has a row.
 pub async fn apply_approval_side_effects_from_payload(
     approvals: &dyn ApprovalService,
     session_id: &str,
     payload: &Value,
     ts_ms: i64,
-) -> Result<Option<EventKind>, BackendError> {
+) -> Result<Option<()>, BackendError> {
     let Some(method) = payload.get("method").and_then(Value::as_str) else {
         return Ok(None);
     };
@@ -497,14 +462,8 @@ pub async fn apply_approval_side_effects_from_payload(
                 })
                 .await?;
 
-            Ok(Some(EventKind::ApprovalRequest {
-                session_id: session_id.to_string(),
-                turn_id,
-                request_id,
-                method: approval_method,
-                params: approval_params,
-                timeout_ms,
-            }))
+            let _ = (turn_id, request_id, approval_method, approval_params, timeout_ms);
+            Ok(Some(()))
         }
         "approval/timeout" => {
             let request_id = params
@@ -530,11 +489,8 @@ pub async fn apply_approval_side_effects_from_payload(
                 .handle_host_timeout(&request_id, &reason, ts_ms)
                 .await?;
 
-            Ok(Some(EventKind::ApprovalTimeout {
-                session_id: session_id.to_string(),
-                request_id,
-                reason,
-            }))
+            let _ = (request_id, reason);
+            Ok(Some(()))
         }
         _ => Ok(None),
     }
@@ -639,47 +595,6 @@ fn sanitize_title(text: &str) -> Option<String> {
         return None;
     }
     Some(trimmed.chars().take(80).collect())
-}
-
-/// Look up every account linked to `host_device_id` (the ingesting Mac),
-/// resolve every client installation under each account, and try-send
-/// `env` on each live session's outbox. Misses (no linked accounts, peer
-/// offline, full outbox) are logged at debug/warn and swallowed — ingest
-/// must stay crash-safe.
-///
-/// The pair table is `host_links` keyed on
-/// `(host_installation_id, account_id)`. Fan-out targets come from
-/// `host_links::list_account_client_targets_for_host`.
-async fn broadcast_to_peers_of(
-    store: &impl AsStorePool,
-    registry: &SessionRegistry,
-    realtime: &RealtimeFanout,
-    host_device_id: minos_domain::DeviceId,
-    env: &Envelope,
-) {
-    let targets = match peer_targets_for_host(store, host_device_id).await {
-        Ok(v) if !v.is_empty() => v,
-        Ok(_) => {
-            tracing::debug!(
-                target: "minos_backend::ingest",
-                mac = %host_device_id,
-                "no accounts paired; dropping ui event"
-            );
-            return;
-        }
-        Err(error) => {
-            tracing::warn!(
-                target: "minos_backend::ingest",
-                error = %error,
-                mac = %host_device_id,
-                "failed to resolve peer targets for host"
-            );
-            return;
-        }
-    };
-
-    let _ = registry;
-    realtime.fanout_ui_event(&targets, env).await;
 }
 
 #[cfg(test)]

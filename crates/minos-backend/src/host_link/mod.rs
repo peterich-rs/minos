@@ -18,7 +18,7 @@ use uuid::Uuid;
 use crate::{
     app::tx::DbTx,
     error::BackendError,
-    session::{SessionRegistry, SessionRevocation},
+    realtime::{ConnectionRevocation, RealtimeConnectionRegistry},
     store::{
         durable_event_log, host_installation_tokens, host_links, outbox_events, AsStorePool,
         StoreHandle, StorePoolRef,
@@ -296,7 +296,7 @@ impl HostLinkService {
     /// Returns the durable event id.
     pub async fn unlink_host(
         &self,
-        registry: &SessionRegistry,
+        registry: &RealtimeConnectionRegistry,
         host_installation_id: DeviceId,
         account_id: &str,
     ) -> Result<String, HostLinkError> {
@@ -407,9 +407,7 @@ impl HostLinkService {
 
         let _ = crate::ingest::invalidate_peer_targets_for_host(host_installation_id).await;
         let _ = crate::ingest::invalidate_peer_targets_for_account(&self.pool, account_id).await;
-        if let Some(handle) = registry.remove(host_installation_id) {
-            handle.revoke(SessionRevocation::AuthRevoked);
-        }
+        let _ = registry.revoke_device(host_installation_id, ConnectionRevocation::AuthRevoked);
         Ok(durable_event_id)
     }
 }
@@ -452,7 +450,7 @@ fn generate_host_installation_token() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::SessionRegistry;
+    use crate::realtime::RealtimeConnectionRegistry;
     use crate::store::test_support::insert_test_host;
     use crate::store::test_support::{insert_account, insert_ios_device, memory_pool, T0};
     use pretty_assertions::assert_eq;
@@ -518,7 +516,7 @@ mod tests {
         svc.link_host(host, &account, via, Some("Laptop"))
             .await
             .expect("link");
-        let registry = SessionRegistry::new();
+        let registry = RealtimeConnectionRegistry::new();
         let event_id = svc
             .unlink_host(&registry, host, &account)
             .await

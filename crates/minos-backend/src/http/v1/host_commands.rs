@@ -1,7 +1,7 @@
 //! Account-authenticated host command proxy routes.
 //!
 //! These endpoints let mobile callers target one paired host over the backend's
-//! durable host-command queue instead of the legacy relay `Envelope::Forward`
+//! durable host-command queue on the formal host topic
 //! path. They intentionally mirror a narrow subset of the daemon RPC surface.
 
 use std::time::Duration;

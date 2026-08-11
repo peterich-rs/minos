@@ -2,14 +2,13 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use minos_backend::auth::jwt;
 use minos_backend::http::{router, test_support::backend_state, test_support::TEST_JWT_SECRET};
-use minos_backend::session::SessionHandle;
+use minos_backend::http::test_support::seed_live_connection;
 use minos_backend::store::test_support::{insert_test_client, insert_test_host};
 use minos_backend::store::{
     agent_sessions, device_installations, durable_event_log, host_commands, host_links, raw_events,
     sessions, social,
 };
 use minos_domain::{AgentName, DeviceId, DeviceRole};
-use minos_protocol::Envelope;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
 
@@ -81,12 +80,12 @@ async fn seed_host_pair_for_account(
 fn seed_live_host_session(
     state: &minos_backend::http::BackendState,
     host_device_id: DeviceId,
-    account_id: &str,
-) -> tokio::sync::mpsc::Receiver<Envelope> {
-    let (handle, outbox_rx) = SessionHandle::new(host_device_id, DeviceRole::AgentHost);
-    handle.set_account_id(account_id.to_string());
-    state.registry.insert(handle);
-    outbox_rx
+    _account_id: &str,
+) -> (
+    std::sync::Arc<minos_backend::realtime::ConnectionState>,
+    tokio::sync::mpsc::Receiver<minos_backend::realtime::wire::ServerFrame>,
+) {
+    seed_live_connection(state, host_device_id, DeviceRole::AgentHost, None)
 }
 
 #[tokio::test]

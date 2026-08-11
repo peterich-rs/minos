@@ -6,10 +6,8 @@
 //!   boundary).
 //! - `store` — SQLite pool + embedded migrations.
 //! - `host_link` — same-account host link (bind/unbind host installations).
-//! - `session` — in-memory registry of live WebSocket sessions with bounded
-//!   per-peer outboxes (consumed by the WS dispatcher).
-//! - `envelope` — WebSocket envelope dispatcher + local-RPC handlers
-//!   (consumed by the axum upgrade handler).
+//! - `realtime` — formal `/ws/client|host` gateway, connection registry,
+//!   topic subscriptions, and durable fanout.
 //! - `http` — axum router + `/health/*` + `/ws/client|host` gateways
 //!   (consumed by `main.rs`).
 //!
@@ -27,7 +25,6 @@ pub mod auth;
 pub mod completion_watch;
 pub mod config;
 pub mod conversations;
-pub mod envelope;
 pub mod error;
 pub mod friends;
 pub mod host_commands;
@@ -41,9 +38,6 @@ pub mod profiles;
 pub mod project;
 pub mod realtime;
 pub mod runtime;
-pub mod session;
-#[deprecated(note = "Use profiles/friends/conversations modules directly")]
-pub mod social;
 pub mod store;
 pub mod telemetry;
 pub mod turn_completion;

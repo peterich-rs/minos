@@ -1,7 +1,7 @@
 //! `minos-backend` binary entrypoint.
 //!
-//! Wires the library modules (`config`, `store`, `pairing`, `session`,
-//! `http`) into a running axum server.
+//! Wires the library modules (`config`, `store`, `realtime`, `http`) into a
+//! running axum server.
 //!
 //! ```sh
 //! cargo run -p minos-backend -- --listen 127.0.0.1:8787 --db ./tmp.db
@@ -22,12 +22,12 @@
 //! Two-stage teardown (see commit history for the shutdown-ordering fix).
 //! First stage is the `with_graceful_shutdown` future:
 //! [`wait_for_signal`] awaits either `SIGINT` (Ctrl-C) or `SIGTERM`, then
-//! we broadcast `Event::ServerShutdown` to every live session and sleep
-//! 500ms so clients can drain. Only after `axum::serve` returns — which
-//! signals both that the listener has stopped accepting new connections
-//! AND that in-flight handlers have finished — do we abort the token GC
-//! task and close the backing SQL pool. Closing the store earlier would race
-//! handlers still issuing queries and surface `PoolClosed` errors.
+//! we revoke every live formal connection and sleep 500ms so clients can
+//! drain. Only after `axum::serve` returns — which signals both that the
+//! listener has stopped accepting new connections AND that in-flight handlers
+//! have finished — do we abort the token GC task and close the backing SQL
+//! pool. Closing the store earlier would race handlers still issuing queries
+//! and surface `PoolClosed` errors.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,14 +38,14 @@ use mars_xlog::{LogLevel, Xlog, XlogConfig, XlogLayer, XlogLayerConfig};
 use minos_backend::{
     config::{Config, StorageMode},
     http,
+    realtime::ConnectionRevocation,
     runtime::RuntimeShell,
     store,
 };
-use minos_protocol::{Envelope, EventKind};
 use tokio::signal;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-/// Default drain window after broadcasting `ServerShutdown`.
+/// Default drain window after revoking all live connections on shutdown.
 const SHUTDOWN_DRAIN: Duration = Duration::from_millis(500);
 
 /// Default shutdown timeout if `MINOS_SHUTDOWN_TIMEOUT_SECS` is not set.
@@ -160,10 +160,9 @@ async fn main() -> Result<()> {
         let router = http::router(shell.backend_state());
 
         // First stage of teardown runs inside `with_graceful_shutdown`: await a
-        // signal, broadcast `ServerShutdown`, and sleep the drain window.
-        // Axum only stops the listener + waits for in-flight handlers AFTER
-        // this future resolves, so everything that must happen while handlers
-        // are still live (broadcast + drain) belongs here.
+        // signal, revoke formal websocket connections, and sleep the drain
+        // window. Axum only stops the listener + waits for in-flight handlers
+        // AFTER this future resolves, so close + drain while handlers are live.
         let registry_for_shutdown = Arc::clone(&shell.app.registry);
         let shutdown_timeout = Duration::from_secs(
             std::env::var("MINOS_SHUTDOWN_TIMEOUT_SECS")
@@ -178,11 +177,8 @@ async fn main() -> Result<()> {
         axum::serve(listener, router)
             .with_graceful_shutdown(async move {
                 wait_for_signal().await;
-                tracing::info!("broadcasting ServerShutdown to all sessions");
-                registry_for_shutdown.broadcast(Envelope::Event {
-                    version: 1,
-                    event: EventKind::ServerShutdown,
-                });
+                tracing::info!("revoking all formal websocket connections for shutdown");
+                registry_for_shutdown.revoke_all(ConnectionRevocation::AuthRevoked);
                 // Use the configured shutdown timeout for the drain window,
                 // capped at the configured value.
                 let drain = SHUTDOWN_DRAIN.min(shutdown_timeout);

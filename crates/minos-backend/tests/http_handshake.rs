@@ -11,7 +11,7 @@ use minos_backend::{
     auth::use_case::AuthUseCase,
     host_link::HostLinkService,
     http::{router, BackendState},
-    session::SessionRegistry,
+    realtime::RealtimeConnectionRegistry,
     store,
 };
 use minos_domain::{DeviceId, DeviceRole};
@@ -39,7 +39,7 @@ async fn spawn_relay() -> (
     Arc<AuthUseCase>,
 ) {
     let pool = store::connect("sqlite::memory:").await.unwrap();
-    let registry = Arc::new(SessionRegistry::new());
+    let registry = Arc::new(RealtimeConnectionRegistry::new());
     let mut state = BackendState::new(
         registry,
         Arc::new(HostLinkService::new(pool.clone())),

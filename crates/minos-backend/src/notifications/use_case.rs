@@ -15,7 +15,7 @@ use crate::notifications::decision::{
 };
 use crate::notifications::preferences::NotificationPreferences;
 use crate::realtime::event::{DurableEvent, DurableEventEnvelope, SenderRef};
-use crate::session::SessionRegistry;
+use crate::realtime::RealtimeConnectionRegistry;
 use crate::store::{
     agent_sessions, notification_preferences, push_dispatch_log, push_tokens, social, StoreHandle,
 };
@@ -36,13 +36,13 @@ pub trait PresencePort: Send + Sync {
     fn last_mobile_disconnect_at_ms(&self, account_id: &str) -> Option<i64>;
 }
 
-impl PresencePort for SessionRegistry {
+impl PresencePort for RealtimeConnectionRegistry {
     fn has_live_mobile_client(&self, account_id: &str) -> bool {
         self.mobile_client_session_count(account_id) > 0
     }
 
     fn last_mobile_disconnect_at_ms(&self, account_id: &str) -> Option<i64> {
-        SessionRegistry::last_mobile_disconnect_at_ms(self, account_id)
+        RealtimeConnectionRegistry::last_mobile_disconnect_at_ms(self, account_id)
     }
 }
 
@@ -776,18 +776,27 @@ mod tests {
     #[test]
     fn registry_stamps_disconnect_when_last_mobile_leaves() {
         use minos_domain::DeviceRole;
-        let reg = SessionRegistry::new();
-        let (handle, _rx) = crate::session::SessionHandle::new(
-            minos_domain::DeviceId::new(),
+        use crate::realtime::{ConnectionState, RealtimeConnectionRegistry, wire::ServerFrame};
+        use minos_protocol::realtime::ConnectionPrincipal;
+        use tokio::sync::mpsc;
+        let reg = RealtimeConnectionRegistry::new();
+        let device_id = minos_domain::DeviceId::new();
+        let (tx, _rx) = mpsc::channel::<ServerFrame>(8);
+        let conn = std::sync::Arc::new(ConnectionState::new(
+            ConnectionPrincipal::Account {
+                account_id: "acct-grace".into(),
+            },
+            device_id,
             DeviceRole::MobileClient,
-        );
-        handle.set_account_id("acct-grace".into());
-        reg.insert(handle.clone());
+            tx,
+            0,
+        ));
+        reg.insert(std::sync::Arc::clone(&conn));
         assert!(reg.mobile_client_session_count("acct-grace") > 0);
         assert!(reg.last_mobile_disconnect_at_ms("acct-grace").is_none());
 
-        let removed = reg.remove(handle.device_id).expect("removed");
-        assert_eq!(removed.device_id, handle.device_id);
+        let removed = reg.remove(device_id).expect("removed");
+        assert!(removed.same_connection(&conn));
         assert_eq!(reg.mobile_client_session_count("acct-grace"), 0);
         assert!(
             reg.last_mobile_disconnect_at_ms("acct-grace").is_some(),

@@ -50,7 +50,7 @@ impl BearerError {
 /// account principal carried by the token.
 ///
 /// This is the extractor for the formal account rail where `/v1/*` handlers
-/// should not depend on the legacy `X-Device-*` header bundle for business
+/// should not depend on the `X-Device-*` header bundle for business
 /// identity. The token still contains a `did` claim, but handlers that care
 /// about a specific installation must validate it from request data.
 pub fn require_account(

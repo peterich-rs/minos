@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod connection_registry;
 pub mod event;
 pub mod gateway;
 pub mod liveness;
@@ -12,19 +13,17 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use minos_domain::DeviceId;
-use minos_protocol::Envelope;
 use moka::sync::Cache;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::error::BackendError;
 use crate::notifications::NotificationService;
-use crate::session::SessionRegistry;
 use crate::store::{durable_event_log, host_commands, outbox_events, StoreHandle};
 
+pub use connection_registry::{ConnectionRevocation, RealtimeConnectionRegistry};
 pub use event::{ApprovalResolution, DurableEvent, DurableEventEnvelope, SenderRef};
 pub use subscription::{
     ConnectionId, ConnectionPrincipal, ConnectionState, DurableSendResult, SubscriptionManager,
@@ -32,7 +31,6 @@ pub use subscription::{
 pub use topic::{RealtimeTopic, TopicKind};
 const DEFAULT_PEER_TARGET_CACHE_TTL: Duration = Duration::from_secs(5);
 const CLUSTER_RECONNECT_DELAY: Duration = Duration::from_secs(1);
-const REALTIME_WORKER_CAPACITY: usize = 1024;
 /// Social durable fanout: large batch, short lease (publish then ack).
 const SOCIAL_OUTBOX_BATCH_SIZE: u32 = 64;
 const SOCIAL_OUTBOX_CLAIM_LEASE: Duration = Duration::from_secs(30);
@@ -57,16 +55,6 @@ pub enum MessageBusBackendKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum ClusterEvent {
-    UiFanout {
-        origin_instance_id: String,
-        target_device_ids: Vec<DeviceId>,
-        envelope: Envelope,
-    },
-    SocialFanout {
-        origin_instance_id: String,
-        target_account_ids: Vec<String>,
-        envelope: Envelope,
-    },
     DurableFanout {
         origin_instance_id: String,
         topic: String,
@@ -74,18 +62,6 @@ enum ClusterEvent {
         event_kind: String,
         payload: Value,
         event_id: String,
-    },
-}
-
-#[derive(Debug, Clone)]
-enum RealtimeJob {
-    UiFanout {
-        target_device_ids: Vec<DeviceId>,
-        envelope: Envelope,
-    },
-    SocialFanout {
-        target_account_ids: Vec<String>,
-        envelope: Envelope,
     },
 }
 
@@ -351,131 +327,36 @@ impl MessageBusBackend {
 }
 
 pub struct RealtimeFanout {
-    registry: Arc<SessionRegistry>,
     subscription_mgr: Arc<SubscriptionManager>,
     store: StoreHandle,
     bus: MessageBusBackend,
     instance_id: String,
     outbox_worker_id: String,
     notification_service: Option<Arc<dyn NotificationService>>,
-    jobs: mpsc::Sender<RealtimeJob>,
 }
 
 impl RealtimeFanout {
     #[must_use]
     pub fn new(
-        registry: Arc<SessionRegistry>,
         subscription_mgr: Arc<SubscriptionManager>,
         store: StoreHandle,
         bus: MessageBusBackend,
         instance_id: String,
         notification_service: Option<Arc<dyn NotificationService>>,
     ) -> Arc<Self> {
-        let (jobs, rx) = mpsc::channel(REALTIME_WORKER_CAPACITY);
         let outbox_worker_id = format!("realtime-outbox-{instance_id}");
-        let realtime = Arc::new(Self {
-            registry,
+        Arc::new(Self {
             subscription_mgr,
             store,
             bus,
             instance_id,
             outbox_worker_id,
             notification_service,
-            jobs,
-        });
-        Self::spawn_worker(Arc::clone(&realtime), rx);
-        realtime
+        })
     }
 
     pub fn spawn_listener(self: &Arc<Self>) -> Option<JoinHandle<()>> {
         self.bus.spawn_listener(Arc::clone(self))
-    }
-
-    pub async fn fanout_ui_event(&self, target_device_ids: &[DeviceId], envelope: &Envelope) {
-        let job = RealtimeJob::UiFanout {
-            target_device_ids: target_device_ids.to_vec(),
-            envelope: envelope.clone(),
-        };
-        if let Err(error) = self.jobs.try_send(job.clone()) {
-            tracing::warn!(
-                target: "minos_backend::realtime",
-                error = ?error,
-                target_count = target_device_ids.len(),
-                "realtime worker queue full; processing ui fanout inline"
-            );
-            self.process_job(job).await;
-        }
-    }
-
-    pub async fn fanout_social_message(&self, target_account_ids: &[String], envelope: &Envelope) {
-        let job = RealtimeJob::SocialFanout {
-            target_account_ids: target_account_ids.to_vec(),
-            envelope: envelope.clone(),
-        };
-        if let Err(error) = self.jobs.try_send(job.clone()) {
-            tracing::warn!(
-                target: "minos_backend::realtime",
-                error = ?error,
-                target_count = target_account_ids.len(),
-                "realtime worker queue full; processing social fanout inline"
-            );
-            self.process_job(job).await;
-        }
-    }
-
-    fn spawn_worker(realtime: Arc<Self>, mut rx: mpsc::Receiver<RealtimeJob>) {
-        tokio::spawn(async move {
-            while let Some(job) = rx.recv().await {
-                realtime.process_job(job).await;
-            }
-        });
-    }
-
-    async fn process_job(&self, job: RealtimeJob) {
-        match job {
-            RealtimeJob::UiFanout {
-                target_device_ids,
-                envelope,
-            } => {
-                self.broadcast_ui_event_local(&target_device_ids, envelope.clone());
-                if let Err(error) = self
-                    .bus
-                    .publish(&ClusterEvent::UiFanout {
-                        origin_instance_id: self.instance_id.clone(),
-                        target_device_ids,
-                        envelope,
-                    })
-                    .await
-                {
-                    tracing::warn!(
-                        target: "minos_backend::realtime",
-                        error = %error,
-                        "failed to publish cluster ui fanout event"
-                    );
-                }
-            }
-            RealtimeJob::SocialFanout {
-                target_account_ids,
-                envelope,
-            } => {
-                self.broadcast_social_message_local(&target_account_ids, envelope.clone());
-                if let Err(error) = self
-                    .bus
-                    .publish(&ClusterEvent::SocialFanout {
-                        origin_instance_id: self.instance_id.clone(),
-                        target_account_ids,
-                        envelope,
-                    })
-                    .await
-                {
-                    tracing::warn!(
-                        target: "minos_backend::realtime",
-                        error = %error,
-                        "failed to publish cluster social fanout event"
-                    );
-                }
-            }
-        }
     }
 
     /// Dispatch social_durable lane only. Never blocks on host command ack.
@@ -969,26 +850,6 @@ impl RealtimeFanout {
 
     fn apply_cluster_event(&self, event: ClusterEvent) {
         match event {
-            ClusterEvent::UiFanout {
-                origin_instance_id,
-                target_device_ids,
-                envelope,
-            } => {
-                if origin_instance_id == self.instance_id {
-                    return;
-                }
-                self.broadcast_ui_event_local(&target_device_ids, envelope);
-            }
-            ClusterEvent::SocialFanout {
-                origin_instance_id,
-                target_account_ids,
-                envelope,
-            } => {
-                if origin_instance_id == self.instance_id {
-                    return;
-                }
-                self.broadcast_social_message_local(&target_account_ids, envelope);
-            }
             ClusterEvent::DurableFanout {
                 origin_instance_id,
                 topic,
@@ -1024,23 +885,6 @@ impl RealtimeFanout {
                 } else {
                     self.broadcast_durable_event_local(&parsed_topic, &event_id, frame)
                 };
-            }
-        }
-    }
-
-    fn broadcast_ui_event_local(&self, target_device_ids: &[DeviceId], envelope: Envelope) {
-        for device_id in target_device_ids {
-            let Some(handle) = self.registry.get(*device_id) else {
-                continue;
-            };
-            if let Err(error) = self.registry.try_send_current(&handle, envelope.clone()) {
-                crate::telemetry::increment_ingest_outbox_dropped();
-                tracing::warn!(
-                    target: "minos_backend::realtime",
-                    peer = %device_id,
-                    error = ?error,
-                    "peer outbox full or superseded during realtime ui fanout"
-                );
             }
         }
     }
@@ -1099,14 +943,6 @@ impl RealtimeFanout {
             }
         }
         stats
-    }
-
-    fn broadcast_social_message_local(&self, target_account_ids: &[String], envelope: Envelope) {
-        for account_id in target_account_ids {
-            let _ = self
-                .registry
-                .broadcast_mobile_account(account_id, envelope.clone());
-        }
     }
 }
 

@@ -17,7 +17,7 @@ use minos_backend::{
     auth::{jwt, use_case::AuthUseCase},
     host_link::HostLinkService,
     http::{router, BackendState},
-    session::SessionRegistry,
+    realtime::RealtimeConnectionRegistry,
     store,
 };
 use minos_domain::{AgentName, DeviceId, DeviceRole};
@@ -191,7 +191,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
     let tmp_path = tmp.path().to_path_buf();
     let db_url = format!("sqlite://{}?mode=rwc", tmp_path.display());
     let pool = store::connect(&db_url).await?;
-    let registry = Arc::new(SessionRegistry::new());
+    let registry = Arc::new(RealtimeConnectionRegistry::new());
     let mut state = BackendState::new(
         registry,
         Arc::new(HostLinkService::new(pool.clone())),

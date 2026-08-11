@@ -2720,7 +2720,7 @@ impl AgentManager {
             }
         }
 
-        // Phase 1: SIGTERM each process group (negative pid = group whose
+        // SIGTERM each process group (negative pid = group whose
         // leader is this pid; set in each driver's pre_exec setpgid).
         #[cfg(unix)]
         for &pgid in &pgids {
@@ -2730,7 +2730,7 @@ impl AgentManager {
 
         tokio::time::sleep(grace).await;
 
-        // Phase 2: SIGKILL stragglers.
+        // SIGKILL stragglers.
         #[cfg(unix)]
         for &pgid in &pgids {
             let _ = unsafe { libc::kill(-pgid, libc::SIGKILL) };
@@ -3920,7 +3920,7 @@ async fn event_pump_loop(
 
 /// Internal helper for `AppServerInstance::start_thread`. Issues the
 /// `thread/start` JSON-RPC and returns the session id (which doubles as the
-/// codex session id for resume purposes per spec §6.1).
+/// codex session id for resume purposes).
 pub(crate) async fn rpc_start_thread(
     client: &CodexClient,
     cwd: &Path,

@@ -8,7 +8,7 @@
 //!
 //! Signing reality (2025–2026 Supabase projects):
 //! - New projects publish **ES256** keys at `…/auth/v1/.well-known/jwks.json`.
-//! - Some projects still issue **HS256** tokens with the legacy JWT secret.
+//! - Some projects issue **HS256** tokens with the HMAC JWT secret.
 //!   We accept either: try JWKS first, then optional `SUPABASE_JWT_SECRET`.
 
 use std::collections::HashMap;
@@ -61,7 +61,7 @@ pub struct SupabaseConfig {
     pub audience: String,
     /// JWKS URL: `{SUPABASE_URL}/auth/v1/.well-known/jwks.json`.
     pub jwks_url: String,
-    /// Optional legacy HS256 secret (Dashboard → Settings → API → JWT Secret).
+    /// Optional HMAC (HS256/384/512) secret (Dashboard → Settings → API → JWT Secret).
     pub jwt_secret: Option<String>,
 }
 
@@ -315,7 +315,7 @@ where
 pub struct SupabaseTokenVerifier {
     config: SupabaseConfig,
     jwks: Option<JwksCache>,
-    /// Production legacy secret and/or test HMAC material.
+    /// Production and/or test HMAC material.
     hmac_secret: Option<Vec<u8>>,
 }
 

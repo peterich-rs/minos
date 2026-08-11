@@ -1,8 +1,6 @@
 //! Smoke test for `PtyAgent` — spawns a simple shell script, verifies
 //! stdout lines arrive as `RawIngest` events, and that `send_user_message`
 //! reaches the child's stdin.
-//!
-//! Spec R3.4 / Plan P6.3.
 
 use minos_agent_runtime::pty_agent::PtyAgent;
 use minos_agent_runtime::IngestSink;

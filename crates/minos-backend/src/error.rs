@@ -80,20 +80,16 @@ pub enum BackendError {
 
     /// Pairing refused because the candidate state is invalid, for example
     /// a device trying to pair with itself. `actual` captures the observed
-    /// state (currently `"self"` for the live multi-device path, with
-    /// `"paired"` still possible from legacy single-pair DB triggers during
-    /// upgrade).
+    /// state (currently `"self"` on the multi-device path).
     /// Mirrors `MinosError::PairingStateMismatch`.
     #[error("pairing state mismatch: {actual}")]
     PairingStateMismatch { actual: String },
 
     /// The routing target is not currently connected.
     ///
-    /// Emitted by `session::SessionRegistry::route` when the destination
-    /// `DeviceId` has no live `SessionHandle` in the registry, or when the
-    /// destination's outbox receiver has been dropped (session ended mid-
-    /// route). Mirrors `MinosError::PeerOffline`; the boundary maps
-    /// this variant straight across.
+    /// Destination device is not currently connected (or its outbox closed).
+    /// Mirrors `MinosError::PeerOffline`; the boundary maps this variant
+    /// straight across.
     ///
     /// `peer_device_id` is stringly-typed because the error is also used
     /// in log records and API responses where the `DeviceId` newtype is
@@ -104,10 +100,9 @@ pub enum BackendError {
     /// The routing target is connected but cannot currently accept more
     /// forwarded frames.
     ///
-    /// Emitted by `session::SessionRegistry::route` when the destination
-    /// outbox is full. This stays backend-local: callers that can recover in
-    /// protocol space should surface a deterministic retryable error to the
-    /// sender rather than hanging until timeout.
+    /// Destination is connected but cannot currently accept more frames.
+    /// This stays backend-local: callers that can recover in protocol space
+    /// should surface a deterministic retryable error rather than hanging.
     #[error("peer backpressure: {peer_device_id}")]
     PeerBackpressure { peer_device_id: String },
 

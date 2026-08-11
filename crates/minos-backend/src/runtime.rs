@@ -26,9 +26,8 @@ use crate::notifications::NotificationService;
 use crate::project::ProjectService;
 use crate::realtime::{
     configure_peer_target_cache, CacheBackendKind, MessageBusBackend, MessageBusBackendKind,
-    PeerTargetCacheBackend, RealtimeFanout, SubscriptionManager,
+    PeerTargetCacheBackend, RealtimeConnectionRegistry, RealtimeFanout, SubscriptionManager,
 };
-use crate::session::SessionRegistry;
 use crate::store::{self, StoreHandle};
 
 #[derive(Debug, Clone, Serialize)]
@@ -94,7 +93,7 @@ pub struct BackendPlatformDefaults {
 pub struct AppContext {
     pub config: Arc<AppRuntimeConfig>,
     pub data: AppDataContext,
-    pub registry: Arc<SessionRegistry>,
+    pub registry: Arc<RealtimeConnectionRegistry>,
     pub subscription_mgr: Arc<SubscriptionManager>,
     pub host_link: Arc<HostLinkService>,
     pub agent_sessions: Arc<dyn AgentSessionService>,
@@ -107,8 +106,7 @@ pub struct AppContext {
     pub token_ttl: Duration,
     pub ingest: Arc<IngestUseCase>,
     /// Per-session agent translators for host live ingest (raw → UiEventMessage).
-    /// Shared with [`IngestUseCase`] so legacy Envelope::Ingest and HostIngest
-    /// share stateful projection.
+    /// Shared with formal HostIngest paths for stateful projection.
     pub translators: Arc<SessionTranslators>,
     pub realtime: Arc<RealtimeFanout>,
     pub notifications: Arc<dyn NotificationService>,
@@ -137,7 +135,7 @@ impl AppContext {
     #[allow(clippy::too_many_arguments)]
     pub fn compose(
         runtime_config: AppRuntimeConfig,
-        registry: Arc<SessionRegistry>,
+        registry: Arc<RealtimeConnectionRegistry>,
         host_link: Arc<HostLinkService>,
         store: StoreHandle,
         token_ttl: Duration,
@@ -174,7 +172,6 @@ impl AppContext {
                 Arc::clone(&registry) as Arc<dyn crate::notifications::PresencePort>,
             ));
         let realtime = RealtimeFanout::new(
-            Arc::clone(&registry),
             Arc::clone(&subscription_mgr),
             store.clone(),
             message_bus,
@@ -184,7 +181,6 @@ impl AppContext {
         let host_commands: Arc<dyn HostCommandService> =
             RuntimeHostCommandService::new_with_timeout_worker_and_realtime(
                 store.clone(),
-                Some(Arc::clone(&registry)),
                 run_workers,
                 Some(Arc::clone(&realtime)),
             );
@@ -193,11 +189,11 @@ impl AppContext {
             store.clone(),
             Arc::clone(&registry),
             Arc::clone(&host_commands),
+            Some(Arc::clone(&realtime)),
             run_workers,
         );
         let ingest = IngestUseCase::new(
             store.clone(),
-            Arc::clone(&registry),
             Arc::clone(&translators),
             Arc::clone(&approvals),
             Arc::clone(&realtime),
@@ -258,7 +254,7 @@ impl RuntimeShell {
         jwt_secret: String,
         cors_origins: Option<Vec<HeaderValue>>,
     ) -> Result<Self, crate::error::BackendError> {
-        let registry = Arc::new(SessionRegistry::new());
+        let registry = Arc::new(RealtimeConnectionRegistry::new());
         let host_link = Arc::new(HostLinkService::new(store.clone()));
         let instance_id = uuid::Uuid::new_v4().to_string();
         let redis_url = cfg.redis_url.as_deref().unwrap_or_default();

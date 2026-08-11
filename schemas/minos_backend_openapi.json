@@ -3024,7 +3024,7 @@
         "x-minos-probe-path": "/ws/client",
         "x-minos-surface": "client_gateway",
         "x-minos-websocket": true,
-        "x-minos-websocket-schema-ref": "#/schemas/Envelope"
+        "x-minos-websocket-schema-ref": "#/schemas/ClientFrame"
       }
     },
     "/ws/host": {
@@ -3047,7 +3047,7 @@
         "x-minos-probe-path": "/ws/host",
         "x-minos-surface": "host_gateway",
         "x-minos-websocket": true,
-        "x-minos-websocket-schema-ref": "#/schemas/Envelope"
+        "x-minos-websocket-schema-ref": "#/schemas/ClientFrame"
       }
     }
   },

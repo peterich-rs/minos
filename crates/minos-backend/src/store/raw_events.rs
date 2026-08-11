@@ -409,9 +409,8 @@ pub async fn read_range(
 /// `owner_device_id`. Threads with zero raw events are omitted (the
 /// `INNER JOIN` excludes them).
 ///
-/// Kept for legacy raw ingest readers. The production host reconnect path now
-/// uses `HostGapManifest` plus backend-driven `PullIngestRange` instead of a
-/// backend-pushed checkpoint replay command.
+/// Aggregate last seq per session for a host owner (diagnostic / list helpers).
+/// Host reconnect catch-up uses `HostGapManifest` + `PullIngestRange`.
 pub async fn last_seq_per_owner(
     store: &impl AsStorePool,
     owner_device_id: &str,

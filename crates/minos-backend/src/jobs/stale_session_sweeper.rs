@@ -268,7 +268,7 @@ async fn mark_session_failed_with_event(
 mod tests {
     use super::*;
     use crate::host_link::HostLinkService;
-    use crate::session::{SessionHandle, SessionRegistry};
+    use crate::realtime::RealtimeConnectionRegistry;
     use crate::store::social;
     use crate::store::test_support::{insert_account, memory_pool, T0};
     use minos_domain::{DeviceId, DeviceRole};
@@ -276,7 +276,7 @@ mod tests {
     use std::time::Duration;
 
     fn state_for_pool(pool: sqlx::SqlitePool) -> BackendState {
-        let registry = Arc::new(SessionRegistry::new());
+        let registry = Arc::new(RealtimeConnectionRegistry::new());
         let host_link = Arc::new(HostLinkService::new(pool.clone()));
         BackendState::new(
             registry,
@@ -364,8 +364,17 @@ mod tests {
         .await;
 
         let state = state_for_pool(pool.clone());
-        let (handle, _rx) = SessionHandle::new(host, DeviceRole::AgentHost);
-        state.registry.insert(handle);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        let conn = std::sync::Arc::new(crate::realtime::ConnectionState::new(
+            minos_protocol::realtime::ConnectionPrincipal::Host {
+                host_installation_id: host.to_string(),
+            },
+            host,
+            DeviceRole::AgentHost,
+            tx,
+            0,
+        ));
+        state.registry.insert(conn);
 
         let now_ms = T0 + STALE_HOST_THRESHOLD_MS + 60_000;
         let n = end_stale_host_sessions(&state, now_ms).await.unwrap();

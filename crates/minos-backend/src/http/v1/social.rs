@@ -16,9 +16,9 @@ use axum::{Json, Router};
 use minos_domain::AgentName;
 use minos_protocol::{
     AddAgentToGroupRequest, AgentSummary, ChatMessageSummary, ConversationAgentMembersResponse,
-    ConversationParticipantsResponse, EnsureHostRuntimeAgentRequest, Envelope, EventKind,
-    ListAgentsResponse, RealtimeTopic, RegisterAgentRequest, RemoveAgentFromGroupRequest,
-    SendAgentMessageRequest, SenderType, UpdateAgentRequest,
+    ConversationParticipantsResponse, EnsureHostRuntimeAgentRequest, ListAgentsResponse,
+    RealtimeTopic, RegisterAgentRequest, RemoveAgentFromGroupRequest, SendAgentMessageRequest,
+    SenderType, UpdateAgentRequest,
 };
 use serde_json::json;
 
@@ -141,14 +141,26 @@ pub async fn fan_out_social_message(state: &BackendState, message: &ChatMessageS
         }
     };
 
-    let frame = Envelope::Event {
-        version: 1,
-        event: EventKind::SocialMessage {
-            conversation_id: message.conversation_id.clone(),
-            message: message.clone(),
-        },
+    let payload = match serde_json::to_value(message) {
+        Ok(v) => v,
+        Err(error) => {
+            tracing::warn!(
+                target: "minos_backend::social",
+                conversation_id = %message.conversation_id,
+                error = %error,
+                "failed to encode social message for stream fan-out"
+            );
+            return;
+        }
     };
-    state.realtime.fanout_social_message(&members, &frame).await;
+    for account_id in &members {
+        state.realtime.fanout_stream_event(
+            &RealtimeTopic::Account(account_id.clone()),
+            "social_message",
+            None,
+            payload.clone(),
+        );
+    }
 
     match publish_social_message_delivery(state, message, &members).await {
         Ok(()) => {}
@@ -443,15 +455,17 @@ fn fan_out_agent_error(
     code: &str,
     message: String,
 ) {
-    let frame = Envelope::Event {
-        version: 1,
-        event: EventKind::AgentError {
-            session_id,
-            code: code.to_string(),
-            message,
-        },
-    };
-    let _ = state.registry.broadcast_mobile_account(account_id, frame);
+    let payload = json!({
+        "session_id": session_id,
+        "code": code,
+        "message": message,
+    });
+    state.realtime.fanout_stream_event(
+        &RealtimeTopic::Account(account_id.to_string()),
+        "agent_error",
+        None,
+        payload,
+    );
 }
 
 /// Arm TurnCompletionProjector for one origin user message (event-driven).
@@ -1080,17 +1094,16 @@ async fn persist_agent_message_with_delivery(
             "failed to publish agent social message; outbox will retry if enqueued"
         );
     }
-    let frame = Envelope::Event {
-        version: 1,
-        event: EventKind::SocialMessage {
-            conversation_id: message.conversation_id.clone(),
-            message: message.clone(),
-        },
-    };
-    state
-        .realtime
-        .fanout_social_message(&member_ids, &frame)
-        .await;
+    if let Ok(payload) = serde_json::to_value(&message) {
+        for account_id in &member_ids {
+            state.realtime.fanout_stream_event(
+                &RealtimeTopic::Account(account_id.clone()),
+                "social_message",
+                None,
+                payload.clone(),
+            );
+        }
+    }
 
     // Bot→bot hops co-committed on first insert above. Idempotent re-drive of
     // already-committed bot bubbles can still call maybe_enqueue_agent_hops.
@@ -1451,7 +1464,7 @@ async fn list_conversation_agents_handler(
     Ok(Json(ConversationAgentMembersResponse { agents }))
 }
 
-/// Unified participants read model: humans ∪ bot agents (ADR 0021 Phase A).
+/// Unified participants read model: humans ∪ bot agents (ADR 0021).
 async fn list_conversation_participants_handler(
     State(state): State<BackendState>,
     headers: HeaderMap,

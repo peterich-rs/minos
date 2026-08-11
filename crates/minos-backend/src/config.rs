@@ -244,9 +244,9 @@ pub struct Config {
     #[arg(long, env = "SUPABASE_JWT_AUD")]
     pub supabase_jwt_aud: Option<String>,
 
-    /// Optional legacy HS256 JWT secret (Supabase Dashboard → Settings → API
-    /// → JWT Secret). Needed when access tokens are still signed with the
-    /// shared secret rather than the ES256 JWKS key.
+    /// Optional HMAC (HS256) JWT secret (Supabase Dashboard → Settings → API
+    /// → JWT Secret). Needed when access tokens are signed with the shared
+    /// secret rather than the ES256 JWKS key.
     #[arg(long, env = "SUPABASE_JWT_SECRET")]
     pub supabase_jwt_secret: Option<String>,
 }

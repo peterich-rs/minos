@@ -8,7 +8,7 @@ use minos_backend::auth::jwt;
 use minos_backend::http;
 use minos_backend::http::test_support::{backend_state, TEST_JWT_SECRET};
 use minos_backend::http::v1::hosts::LINK_PATH;
-use minos_backend::session::SessionHandle;
+use minos_backend::http::test_support::seed_live_connection;
 use minos_backend::store::{device_installations, host_installation_tokens, host_links};
 use minos_domain::{DeviceId, DeviceRole};
 use serde_json::json;
@@ -160,9 +160,8 @@ async fn host_link_unlink_list_round_trip() {
     assert_eq!(pairs.len(), 1);
     assert_eq!(pairs[0].paired_via_device_id.to_string(), desktop_id);
 
-    // Seed online session for list
-    let (handle, _rx) = SessionHandle::new(host, DeviceRole::AgentHost);
-    state.registry.insert(handle);
+    // Seed online connection for list
+    let (_conn, _rx) = seed_live_connection(&state, host, DeviceRole::AgentHost, None);
 
     let (status, body) = get_json(&mut app, "/v1/hosts", &[("authorization", &auth)]).await;
     assert_eq!(status, StatusCode::OK, "body={body}");
