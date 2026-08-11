@@ -286,8 +286,6 @@ impl MobileClient {
         self.0.my_profile().await
     }
 
-
-
     pub async fn friends(&self) -> Result<FriendsResponse, MinosError> {
         self.0.friends().await
     }
@@ -349,10 +347,6 @@ impl MobileClient {
     pub async fn list_agents(&self) -> Result<ListAgentsResponse, MinosError> {
         self.0.list_agents().await
     }
-
-
-
-
 
     pub async fn conversations(&self) -> Result<ConversationsResponse, MinosError> {
         self.0.conversations().await

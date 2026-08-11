@@ -22,13 +22,14 @@ use std::time::{Duration, Instant};
 use http::{Method, Request};
 use minos_domain::{ConnectionState, DeviceId, MinosError};
 use minos_protocol::{
-    realtime::ClientFrame, AddAgentToGroupRequest, AddGroupMemberRequest, AgentSummary, AuthSummary, ChatMessageSummary, ConversationAgentMembersResponse,
-    ConversationMembersResponse, ConversationParticipantsResponse, ConversationReadResponse,
-    ConversationResponse, ConversationsResponse,
-    CreateGroupConversationRequest, EnsureDirectConversationRequest, FriendsResponse, GetSessionLastSeqParams, GetSessionLastSeqResponse,
-    HostSummary, ListAgentsResponse, ListChatMessagesResponse, ListClisResponse,
-    ListHostSkillsResponse, MyProfileResponse, RefreshResponse, RegisterAgentRequest,
-    RemoveAgentFromGroupRequest, RemoveGroupMemberRequest, UpdateAgentRequest, WriteHostSkillConfigResponse,
+    realtime::ClientFrame, AddAgentToGroupRequest, AddGroupMemberRequest, AgentSummary,
+    AuthSummary, ChatMessageSummary, ConversationAgentMembersResponse, ConversationMembersResponse,
+    ConversationParticipantsResponse, ConversationReadResponse, ConversationResponse,
+    ConversationsResponse, CreateGroupConversationRequest, EnsureDirectConversationRequest,
+    FriendsResponse, GetSessionLastSeqParams, GetSessionLastSeqResponse, HostSummary,
+    ListAgentsResponse, ListChatMessagesResponse, ListClisResponse, ListHostSkillsResponse,
+    MyProfileResponse, RefreshResponse, RegisterAgentRequest, RemoveAgentFromGroupRequest,
+    RemoveGroupMemberRequest, UpdateAgentRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::UiEventMessage;
 use openwire::websocket::WebSocket;
@@ -512,8 +513,6 @@ impl MobileClient {
         auth_http_call!(self, |http, access| http.my_profile(&access))
     }
 
-
-
     pub async fn friends(&self) -> Result<FriendsResponse, MinosError> {
         auth_http_call!(self, |http, access| http.friends(&access))
     }
@@ -605,10 +604,6 @@ impl MobileClient {
     pub async fn list_agents(&self) -> Result<ListAgentsResponse, MinosError> {
         auth_http_call!(self, |http, access| http.list_agents(&access))
     }
-
-
-
-
 
     pub async fn conversations(&self) -> Result<ConversationsResponse, MinosError> {
         auth_http_call!(self, |http, access| http.conversations(&access))
@@ -2070,7 +2065,6 @@ mod tests {
         assert_eq!(url, "wss://edge.example/ws/client?ticket=edge-ticket");
     }
 
-
     #[test]
     fn forbidden_handshake_maps_to_unauthorized_with_status_in_reason() {
         let err = connect_error_to_minos(
@@ -2167,9 +2161,6 @@ mod tests {
             other => panic!("expected ConnectFailed, got {other:?}"),
         }
     }
-
-
-
 
     #[tokio::test]
     async fn subscribe_auth_state_emits_unauthenticated_initially() {
