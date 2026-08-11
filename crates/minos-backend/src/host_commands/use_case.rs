@@ -1,9 +1,7 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use dashmap::DashMap;
 use minos_domain::DeviceId;
 use minos_protocol::ApprovalDecisionRequest;
 use serde_json::Value;
@@ -12,101 +10,11 @@ use tokio::sync::Notify;
 use crate::app::tx::{DbTx, Storage};
 use crate::error::BackendError;
 use crate::realtime::{DurableEvent, RealtimeFanout};
-use crate::session::SessionRegistry;
 use crate::store::{durable_event_log, host_commands, outbox_events, AsStorePool, StoreHandle};
 
 const FORWARD_TIMEOUT: Duration = Duration::from_secs(5);
 const APPROVAL_COMMAND_METHOD: &str = "minos_approval_decision";
 const COMMAND_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const LATE_REPLY_GRACE_MS: i64 = 30_000;
-
-static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
-
-struct PendingHostCommandRpc {
-    command_id: String,
-    target_device_id: DeviceId,
-    deadline_at_ms: i64,
-}
-
-fn pending_host_commands() -> &'static DashMap<u64, PendingHostCommandRpc> {
-    static PENDING: OnceLock<DashMap<u64, PendingHostCommandRpc>> = OnceLock::new();
-    PENDING.get_or_init(DashMap::new)
-}
-
-fn register_pending_host_command(
-    request_id: u64,
-    command_id: &str,
-    target_device_id: DeviceId,
-    deadline_at_ms: i64,
-) {
-    pending_host_commands().insert(
-        request_id,
-        PendingHostCommandRpc {
-            command_id: command_id.to_string(),
-            target_device_id,
-            deadline_at_ms,
-        },
-    );
-}
-
-fn cancel_pending_host_command(request_id: u64) {
-    let _ = pending_host_commands().remove(&request_id);
-}
-
-fn clear_expired_pending_host_commands(now_ms: i64) {
-    let stale_ids = pending_host_commands()
-        .iter()
-        .filter_map(|entry| {
-            let deadline = entry.value().deadline_at_ms;
-            (deadline.saturating_add(LATE_REPLY_GRACE_MS) <= now_ms).then_some(*entry.key())
-        })
-        .collect::<Vec<_>>();
-    for request_id in stale_ids {
-        let _ = pending_host_commands().remove(&request_id);
-    }
-}
-
-pub(crate) async fn resolve_pending_host_command(
-    store: &impl AsStorePool,
-    host_device_id: DeviceId,
-    request_id: u64,
-    payload: Value,
-) -> bool {
-    let Some((_, pending)) = pending_host_commands().remove(&request_id) else {
-        return false;
-    };
-
-    if pending.target_device_id != host_device_id {
-        pending_host_commands().insert(request_id, pending);
-        return false;
-    }
-
-    let finished_at_ms = chrono::Utc::now().timestamp_millis();
-    if let Some(error) = payload.get("error") {
-        let _ = host_commands::finish(
-            store,
-            &pending.command_id,
-            host_commands::HostCommandTerminalStatus::Failed,
-            None,
-            Some(error),
-            finished_at_ms,
-        )
-        .await;
-    } else {
-        let result = payload.get("result").cloned().unwrap_or(Value::Null);
-        let _ = host_commands::finish(
-            store,
-            &pending.command_id,
-            host_commands::HostCommandTerminalStatus::Succeeded,
-            Some(&result),
-            None,
-            finished_at_ms,
-        )
-        .await;
-    }
-
-    true
-}
 
 #[derive(Debug, Clone)]
 pub struct NewHostCommand {
@@ -142,7 +50,6 @@ pub trait HostCommandService: Send + Sync {
 
 pub struct RuntimeHostCommandService {
     store: StoreHandle,
-    registry: Option<Arc<SessionRegistry>>,
     realtime: Option<Arc<RealtimeFanout>>,
     notify: Notify,
 }
@@ -150,29 +57,19 @@ pub struct RuntimeHostCommandService {
 impl RuntimeHostCommandService {
     #[must_use]
     pub fn new(store: StoreHandle) -> Arc<Self> {
-        Self::new_with_timeout_worker(store, None, true)
-    }
-
-    pub fn new_with_timeout_worker(
-        store: StoreHandle,
-        registry: Option<Arc<SessionRegistry>>,
-        _enable_timeout_worker: bool,
-    ) -> Arc<Self> {
-        Self::new_with_timeout_worker_and_realtime(store, registry, _enable_timeout_worker, None)
+        Self::new_with_timeout_worker_and_realtime(store, true, None)
     }
 
     /// Timeout lifecycle is owned solely by [`crate::jobs::host_command_timeout::HostCommandTimeoutJob`]
     /// via [`expire_open_timed_out_commands`]. The `_enable_timeout_worker` flag is retained for
-    /// call-site stability but no longer spawns a private poller (delete dual ownership).
+    /// call-site stability but no longer spawns a private poller.
     pub fn new_with_timeout_worker_and_realtime(
         store: StoreHandle,
-        registry: Option<Arc<SessionRegistry>>,
         _enable_timeout_worker: bool,
         realtime: Option<Arc<RealtimeFanout>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             store,
-            registry,
             realtime,
             notify: Notify::new(),
         })
@@ -312,60 +209,6 @@ impl RuntimeHostCommandService {
         Ok(())
     }
 
-    async fn try_dispatch_via_legacy_session(
-        &self,
-        command_id: &str,
-        host_device_id: DeviceId,
-        method: &str,
-        params: &Value,
-        request_id: u64,
-        created_at_ms: i64,
-        deadline_at_ms: i64,
-    ) -> Result<(), BackendError> {
-        let Some(registry) = &self.registry else {
-            return Ok(());
-        };
-        if registry.get(host_device_id).is_none() {
-            return Ok(());
-        }
-
-        let Some(row) = host_commands::get(&self.store, command_id).await? else {
-            return Ok(());
-        };
-        if row.created_at_ms != created_at_ms
-            || row.host_installation_id != host_device_id
-            || !matches!(
-                row.status,
-                host_commands::HostCommandStatus::Pending | host_commands::HostCommandStatus::Acked
-            )
-        {
-            return Ok(());
-        }
-
-        let payload = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": method,
-            "params": params.clone(),
-        });
-        register_pending_host_command(request_id, command_id, host_device_id, deadline_at_ms);
-        if let Err(error) = registry
-            .route(DeviceId::new(), host_device_id, payload)
-            .await
-        {
-            cancel_pending_host_command(request_id);
-            tracing::debug!(
-                target: "minos_backend::host_commands",
-                command_id = %command_id,
-                host_device_id = %host_device_id,
-                error = %error,
-                "legacy live-session host command dispatch unavailable; relying on durable delivery"
-            );
-        }
-
-        Ok(())
-    }
-
     async fn wait_for_terminal_response(
         &self,
         command_id: &str,
@@ -488,7 +331,6 @@ impl HostCommandService for RuntimeHostCommandService {
         requested_by_account_id: Option<&str>,
         timeout: Duration,
     ) -> Result<Value, BackendError> {
-        let request_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
         let created_at_ms = chrono::Utc::now().timestamp_millis();
         let deadline_at_ms =
             created_at_ms.saturating_add(i64::try_from(timeout.as_millis()).unwrap_or(i64::MAX));
@@ -505,24 +347,9 @@ impl HostCommandService for RuntimeHostCommandService {
         )
         .await?;
 
-        self.try_dispatch_via_legacy_session(
-            command_id,
-            host_device_id,
-            method,
-            params,
-            request_id,
-            created_at_ms,
-            deadline_at_ms,
-        )
-        .await?;
-
-        let result = self
-            .wait_for_terminal_response(command_id, host_device_id, method, timeout)
-            .await;
-        if !matches!(result, Err(BackendError::ForwardRpcTimeout { .. })) {
-            cancel_pending_host_command(request_id);
-        }
-        result
+        // Durable host-topic outbox is the sole delivery path; wait for host observation.
+        self.wait_for_terminal_response(command_id, host_device_id, method, timeout)
+            .await
     }
 
     async fn enqueue_in_tx(
@@ -636,7 +463,6 @@ pub async fn expire_open_timed_out_commands(
             crate::telemetry::increment_host_command_timeout();
         }
     }
-    clear_expired_pending_host_commands(now_ms);
     Ok(expired)
 }
 

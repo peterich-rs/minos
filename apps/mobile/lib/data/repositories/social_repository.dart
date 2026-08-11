@@ -67,21 +67,25 @@ class SocialRepository {
     return platformInt64FromInt(value);
   }
 
-  Future<SocialChatMessage> insertPendingMessage({
+  /// Atomic pending message + outbox insert (preferred send path).
+  Future<SocialChatMessage> insertPendingMessageWithOutbox({
     required String conversationId,
     required MessageSender sender,
     required String text,
     ChatMessageReplySummary? replyTo,
     List<String> mentionedAccountIds = const <String>[],
     List<String> mentionedAgentIds = const <String>[],
+    List<Map<String, Object?>> structuredMentions =
+        const <Map<String, Object?>>[],
   }) {
-    return _cacheStore.insertPendingMessage(
+    return _cacheStore.insertPendingMessageWithOutbox(
       conversationId: conversationId,
       sender: sender,
       text: text,
       replyTo: replyTo,
       mentionedAccountIds: mentionedAccountIds,
       mentionedAgentIds: mentionedAgentIds,
+      structuredMentions: structuredMentions,
     );
   }
 
@@ -130,26 +134,33 @@ class SocialRepository {
     required String text,
     String? replyToMessageId,
     String? clientMessageId,
+    String? mentionsJson,
   }) {
     return _core.sendChatMessage(
       conversationId: conversationId,
       text: text,
       replyToMessageId: replyToMessageId,
       clientMessageId: clientMessageId,
+      mentionsJson: mentionsJson,
     );
   }
 
+  /// Re-queue failed send (same client_message_id). First send uses
+  /// [insertPendingMessageWithOutbox].
   Future<void> enqueueUserMessageOutbox({
     required String clientMessageId,
     required String conversationId,
     required String text,
     String? replyToMessageId,
+    List<Map<String, Object?>> structuredMentions =
+        const <Map<String, Object?>>[],
   }) {
     return _cacheStore.enqueueUserMessageOutbox(
       clientMessageId: clientMessageId,
       conversationId: conversationId,
       text: text,
       replyToMessageId: replyToMessageId,
+      structuredMentions: structuredMentions,
     );
   }
 

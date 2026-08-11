@@ -346,7 +346,7 @@ async fn auth_exchange_revokes_existing_refresh_tokens_for_device() {
 
 #[tokio::test]
 async fn auth_exchange_keeps_other_iphone_ws_sessions_for_same_account() {
-    use minos_backend::session::SessionHandle;
+    use minos_backend::http::test_support::seed_live_connection;
     use minos_domain::{DeviceId, DeviceRole};
 
     let state = backend_state_with_supabase().await;
@@ -366,10 +366,13 @@ async fn auth_exchange_keeps_other_iphone_ws_sessions_for_same_account() {
     )
     .await;
 
-    let (handle_a, mut rx_a) = SessionHandle::new(device_a_id, DeviceRole::MobileClient);
-    handle_a.set_account_id(account_id.clone());
-    state.registry.insert(handle_a.clone());
-    let a_revoked = handle_a.subscribe_revocation();
+    let (conn_a, mut rx_a) = seed_live_connection(
+        &state,
+        device_a_id,
+        DeviceRole::MobileClient,
+        Some(&account_id),
+    );
+    let a_revoked = conn_a.subscribe_revocation();
 
     let (status, _body) = post_json(
         &mut app,
@@ -406,7 +409,7 @@ async fn auth_exchange_keeps_other_iphone_ws_sessions_for_same_account() {
     .await;
     assert_eq!(status, StatusCode::OK, "body={body}");
 
-    drop(handle_a);
+    drop(conn_a);
 }
 
 #[tokio::test]

@@ -1,23 +1,22 @@
 //! Mobile-side `MobilePairingStore`.
 //!
 //! The phone persists multiple pieces of state: the client's own `DeviceId`,
-//! the active-Mac `DeviceId` (post ADR-0020 — what we route forwards to),
-//! and the slack.ai-style account auth tokens (access_token +
-//! access_expires_at_ms + refresh_token) together with the bound account
-//! identity (account_id + email). Backend URL and any CF Access service-
-//! token headers are NOT persisted: they live in the mobile client's
-//! compile-time `build_config` (read by `option_env!` from the shell that
-//! drove the cargo build), so transport-edge configuration never leaks into
-//! business logic or durable storage.
+//! the active-Mac `DeviceId` (what we route forwards to), and the account
+//! auth tokens (access_token + access_expires_at_ms + refresh_token) together
+//! with the bound account identity (account_id + email). Backend URL and any
+//! CF Access service-token headers are NOT persisted: they live in the mobile
+//! client's compile-time `build_config` (read by `option_env!` from the shell
+//! that drove the cargo build), so transport-edge configuration never leaks
+//! into business logic or durable storage.
 //!
-//! ADR-0020 dropped the `DeviceSecret` from this snapshot — the iOS rail is
-//! bearer-only, so the only secret the phone ever holds is the access /
-//! refresh token pair. The Mac's display name and the active-Mac id come
-//! from the backend's `/v1/me/macs` listing rather than persisted state.
+//! The iOS rail is bearer-only: `DeviceSecret` is not stored, so the only
+//! secret the phone ever holds is the access / refresh token pair. The Mac's
+//! display name and the active-Mac id come from the backend's `/v1/me/macs`
+//! listing rather than persisted state.
 //!
 //! In a real iOS build the durable implementation lives in Dart
-//! (`flutter_secure_storage`, plan D5). For Rust unit/integration tests
-//! this module offers an in-memory implementation.
+//! (`flutter_secure_storage`). For Rust unit/integration tests this module
+//! offers an in-memory implementation.
 //!
 //! The trait is mobile-local: durable account session + active-host routing
 //! target. Host binding (Host Link) is performed on Desktop, not via QR.
@@ -31,9 +30,9 @@ use tokio::sync::RwLock;
 pub struct PersistedPairingState {
     pub device_id: Option<String>,
 
-    // Phase 4 (auth): account-bound bearer/refresh tokens. All five fields
-    // are persisted together — the store's `save_auth` writes the whole
-    // tuple atomically, and `clear_auth` wipes all five at once.
+    // Account-bound bearer/refresh tokens. All five fields are persisted
+    // together — the store's `save_auth` writes the whole tuple atomically,
+    // and `clear_auth` wipes all five at once.
     pub access_token: Option<String>,
     pub access_expires_at_ms: Option<i64>,
     pub refresh_token: Option<String>,
@@ -100,7 +99,7 @@ pub trait MobilePairingStore: Send + Sync {
 }
 
 /// In-memory [`MobilePairingStore`] for tests and as the default store
-/// plumbed through frb (real persistence happens in Dart; see plan D5).
+/// plumbed through frb (real persistence happens in Dart).
 #[derive(Default)]
 pub struct InMemoryPairingStore {
     inner: RwLock<InMemoryState>,

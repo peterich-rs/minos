@@ -2,13 +2,11 @@
 //! process(es), speaks their native JSON-RPC, and exposes an `AgentManager`
 //! handle the daemon wires up. Raw notifications are forwarded verbatim as
 //! [`RawIngest`]; translation to `UiEventMessage` is the backend's
-//! responsibility (plan §B6).
+//! responsibility.
 //!
-//! ## Phase C scope
+//! ## Multi-session model
 //!
-//! Phase C retired the single-session `AgentRuntime` (lived in `runtime.rs`)
-//! and the legacy `AgentState` value object (lived in `state.rs`). The
-//! replacement is a multi-workspace `AgentManager` that owns one
+//! The runtime exposes a multi-workspace `AgentManager` that owns one
 //! `AppServerInstance` per workspace and N `SessionHandle`s per instance.
 //!
 //! ## Dependency rule
@@ -32,7 +30,6 @@ pub(crate) mod codex_client;
 pub mod config;
 pub mod gemini_driver;
 pub mod grok_driver;
-pub mod ingest;
 pub mod instance;
 pub mod manager;
 pub mod manager_event;
@@ -55,7 +52,6 @@ pub use config::{
 };
 pub use gemini_driver::GeminiAcpInstance;
 pub use grok_driver::GrokAcpInstance;
-pub use ingest::{Ingestor, IngestorHandle};
 pub use instance::AppServerInstance;
 pub use manager::{
     AgentLaunchOptions, AgentManager, DispatchOutcome, IngestSink, InstanceCaps, SessionPolicies,

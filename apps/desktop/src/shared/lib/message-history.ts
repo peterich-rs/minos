@@ -6,7 +6,7 @@ import { timelineMessageEqual } from "./list-identity.ts";
 export const MESSAGE_PAGE_SIZE = 80;
 
 /**
- * Hard cap on messages retained per conversation timeline window (spec §21).
+ * Hard cap on messages retained per conversation timeline window.
  * Pin/focus may still trim oldest; set hasOlder when trimmed.
  */
 export const TIMELINE_HARD_MAX_MESSAGES = 500;
@@ -16,21 +16,21 @@ export const MESSAGE_AUTOFILL_SLACK_PX = 96;
 
 export type MessageHistoryMeta = {
   /**
-   * @deprecated Prefer hubMinLoadedSeq / hostMinLoadedSeq. Kept as
-   * hubMinLoadedSeq when linked, hostMinLoadedSeq for local-only.
+   * @deprecated Prefer cloudMinLoadedSeq / hostMinLoadedSeq. Kept as
+   * cloudMinLoadedSeq when linked, hostMinLoadedSeq for local-only.
    */
   firstLoadedSeq: number | null;
   /** Lowest Hub social message_seq in the window (Hub before_seq). */
-  hubMinLoadedSeq: number | null;
+  cloudMinLoadedSeq: number | null;
   /** Highest Hub social message_seq in the window. */
-  hubMaxLoadedSeq: number | null;
+  cloudMaxLoadedSeq: number | null;
   /** Lowest host daemon seq among host-only cards / local-only chat. */
   hostMinLoadedSeq: number | null;
   /**
    * Lowest Hub `created_at_ms` in the window (display/debug only).
    */
   firstLoadedCreatedAtMs?: number | null;
-  hasOlderHub: boolean;
+  hasOlderCloud: boolean;
   hasOlderHost: boolean;
   /** True when either Hub or host has older history. */
   hasOlder: boolean;
@@ -40,11 +40,11 @@ export type MessageHistoryMeta = {
 
 export const EMPTY_MESSAGE_HISTORY: MessageHistoryMeta = Object.freeze({
   firstLoadedSeq: null,
-  hubMinLoadedSeq: null,
-  hubMaxLoadedSeq: null,
+  cloudMinLoadedSeq: null,
+  cloudMaxLoadedSeq: null,
   hostMinLoadedSeq: null,
   firstLoadedCreatedAtMs: null,
-  hasOlderHub: false,
+  hasOlderCloud: false,
   hasOlderHost: false,
   hasOlder: false,
   loadingOlder: false,
@@ -58,31 +58,31 @@ export function emptyMessageHistoryMeta(): MessageHistoryMeta {
 export function messageHistoryFromWindow(
   messages: readonly TimelineMessage[],
   opts: {
-    hasOlderHub?: boolean;
+    hasOlderCloud?: boolean;
     hasOlderHost?: boolean;
     loadingOlder?: boolean;
     firstLoadedCreatedAtMs?: number | null;
     prev?: MessageHistoryMeta;
   } = {},
 ): MessageHistoryMeta {
-  const hubMin = firstMessageSeq(messages);
-  const hubMax = lastMessageSeq(messages);
+  const cloudMin = firstMessageSeq(messages);
+  const cloudMax = lastMessageSeq(messages);
   const hostMin = firstHostMessageSeq(messages);
-  const hasOlderHub = opts.hasOlderHub ?? opts.prev?.hasOlderHub ?? false;
+  const hasOlderCloud = opts.hasOlderCloud ?? opts.prev?.hasOlderCloud ?? false;
   const hasOlderHost = opts.hasOlderHost ?? opts.prev?.hasOlderHost ?? false;
   return {
-    firstLoadedSeq: hubMin ?? hostMin,
-    hubMinLoadedSeq: hubMin,
-    hubMaxLoadedSeq: hubMax,
+    firstLoadedSeq: cloudMin ?? hostMin,
+    cloudMinLoadedSeq: cloudMin,
+    cloudMaxLoadedSeq: cloudMax,
     hostMinLoadedSeq: hostMin,
     firstLoadedCreatedAtMs:
       opts.firstLoadedCreatedAtMs ??
       firstMessageCreatedAtMs(messages) ??
       opts.prev?.firstLoadedCreatedAtMs ??
       null,
-    hasOlderHub,
+    hasOlderCloud,
     hasOlderHost,
-    hasOlder: hasOlderHub || hasOlderHost,
+    hasOlder: hasOlderCloud || hasOlderHost,
     loadingOlder: opts.loadingOlder ?? false,
   };
 }
@@ -184,28 +184,28 @@ export function firstHostMessageSeq(
 
 /**
  * Meta after a tail (or full open) page.
- * `hasMoreHost` / `hasMoreHub` are independent namespace flags.
+ * `hasMoreHost` / `hasMoreCloud` are independent namespace flags.
  */
 export function metaAfterMessageTail(
   messages: readonly TimelineMessage[],
   hasMore: boolean,
   firstLoadedCreatedAtMs?: number | null,
-  opts?: { hasMoreHub?: boolean; hasMoreHost?: boolean },
+  opts?: { hasMoreCloud?: boolean; hasMoreHost?: boolean },
 ): MessageHistoryMeta {
-  const hubMin = firstMessageSeq(messages);
-  const hubMax = lastMessageSeq(messages);
+  const cloudMin = firstMessageSeq(messages);
+  const cloudMax = lastMessageSeq(messages);
   const hostMin = firstHostMessageSeq(messages);
-  const hasOlderHub = opts?.hasMoreHub ?? hasMore;
+  const hasOlderCloud = opts?.hasMoreCloud ?? hasMore;
   const hasOlderHost = opts?.hasMoreHost ?? hasMore;
   return {
-    firstLoadedSeq: hubMin ?? hostMin,
-    hubMinLoadedSeq: hubMin,
-    hubMaxLoadedSeq: hubMax,
+    firstLoadedSeq: cloudMin ?? hostMin,
+    cloudMinLoadedSeq: cloudMin,
+    cloudMaxLoadedSeq: cloudMax,
     hostMinLoadedSeq: hostMin,
     firstLoadedCreatedAtMs: firstLoadedCreatedAtMs ?? null,
-    hasOlderHub,
+    hasOlderCloud,
     hasOlderHost,
-    hasOlder: hasOlderHub || hasOlderHost,
+    hasOlder: hasOlderCloud || hasOlderHost,
     loadingOlder: false,
   };
 }

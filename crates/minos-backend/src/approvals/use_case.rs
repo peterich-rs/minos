@@ -3,14 +3,14 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use minos_domain::DeviceId;
-use minos_protocol::{ApprovalDecisionRequest, Envelope, EventKind};
+use minos_protocol::ApprovalDecisionRequest;
 use serde_json::{json, Value};
 use tokio::sync::Notify;
 
 use crate::app::repositories::RepositorySet;
 use crate::error::BackendError;
 use crate::host_commands::HostCommandService;
-use crate::session::SessionRegistry;
+use crate::realtime::{RealtimeConnectionRegistry, RealtimeFanout, RealtimeTopic};
 use crate::store::{self, approval_requests::ApprovalRequestState, StoreHandle};
 
 const APPROVAL_COMMAND_METHOD: &str = "minos_approval_decision";
@@ -67,8 +67,9 @@ pub trait ApprovalService: Send + Sync {
 pub struct DefaultApprovalService {
     repos: Arc<RepositorySet>,
     store: StoreHandle,
-    registry: Arc<SessionRegistry>,
+    registry: Arc<RealtimeConnectionRegistry>,
     host_commands: Arc<dyn HostCommandService>,
+    realtime: Option<Arc<RealtimeFanout>>,
     notify: Notify,
 }
 
@@ -77,8 +78,9 @@ impl DefaultApprovalService {
     pub fn new(
         repos: Arc<RepositorySet>,
         store: StoreHandle,
-        registry: Arc<SessionRegistry>,
+        registry: Arc<RealtimeConnectionRegistry>,
         host_commands: Arc<dyn HostCommandService>,
+        realtime: Option<Arc<RealtimeFanout>>,
         enable_timeout_worker: bool,
     ) -> Arc<Self> {
         let service = Arc::new(Self {
@@ -86,6 +88,7 @@ impl DefaultApprovalService {
             store,
             registry,
             host_commands,
+            realtime,
             notify: Notify::new(),
         });
         if enable_timeout_worker {
@@ -191,21 +194,24 @@ impl DefaultApprovalService {
         request_id: &str,
         reason: &str,
     ) {
-        let frame = Envelope::Event {
-            version: 1,
-            event: EventKind::ApprovalTimeout {
-                session_id: session_id.to_string(),
-                request_id: request_id.to_string(),
-                reason: reason.to_string(),
-            },
+        let Some(realtime) = self.realtime.as_ref() else {
+            return;
         };
+        let payload = json!({
+            "session_id": session_id,
+            "request_id": request_id,
+            "reason": reason,
+        });
 
         match store::host_links::list_accounts_for_host(&self.store, host_device_id).await {
             Ok(accounts) => {
                 for account in accounts {
-                    let _ = self
-                        .registry
-                        .broadcast_mobile_account(&account.mobile_account_id, frame.clone());
+                    realtime.fanout_stream_event(
+                        &RealtimeTopic::Account(account.mobile_account_id),
+                        "approval_timeout",
+                        None,
+                        payload.clone(),
+                    );
                 }
             }
             Err(error) => {
@@ -345,7 +351,7 @@ impl ApprovalService for DefaultApprovalService {
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
 
-        // C5.3: same client_request_id retry → return prior success (no re-dispatch).
+        // Same client_request_id retry → return prior success (no re-dispatch).
         if let Some(ref cid) = client_request_id {
             if let Some(existing) =
                 store::approval_requests::get_by_client_request_id(&self.store, cid).await?

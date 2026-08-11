@@ -40,7 +40,7 @@ pub struct ApprovalRequestRow {
     pub created_at_ms: i64,
     pub resolved_at_ms: Option<i64>,
     pub resolution_json: Option<Value>,
-    /// Client Intent Outbox id when respond carried `client_request_id` (C5.3).
+    /// Client Intent Outbox id when respond carried `client_request_id`.
     pub client_request_id: Option<String>,
 }
 
@@ -145,7 +145,7 @@ pub async fn get(
     row.map(decode_row).transpose()
 }
 
-/// Lookup by client Intent Outbox id (C5.3 respond idempotency).
+/// Lookup by client Intent Outbox id (respond idempotency).
 pub async fn get_by_client_request_id(
     store: &impl AsStorePool,
     client_request_id: &str,
@@ -209,7 +209,7 @@ pub async fn resolve(
 }
 
 /// Resolve a pending approval, optionally stamping `client_request_id` for
-/// respond idempotency (C5.3).
+/// respond idempotency.
 pub async fn resolve_with_client_request_id(
     store: &impl AsStorePool,
     request_id: &str,

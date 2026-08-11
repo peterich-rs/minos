@@ -40,7 +40,7 @@ export type HostPresenceInput = {
   daemonConnected: boolean;
   /**
    * Account IM sync status (primary Online). Prefer this over host-only signals.
-   * Maps from `/ws/client` HubRealtimeSyncState via account-store.
+   * Maps from `/ws/client` CloudRealtimeSyncState via account-store.
    */
   accountSync?: CloudMode;
   /**
@@ -51,18 +51,18 @@ export type HostPresenceInput = {
   /**
    * Live `/ws/host` for bot runtime readiness (secondary).
    */
-  hubOnline?: boolean;
+  cloudOnline?: boolean;
 };
 
 /** Default project locus for projects on this machine. */
 export const PROJECT_HOST_THIS_MAC = "This Mac";
 
 export function deriveHostPresence(input: HostPresenceInput): HostPresence {
-  const hostReady = input.hubOnline === true;
+  const hostReady = input.cloudOnline === true;
   const hostLabel: HostPresence["hostLabel"] =
-    input.hubOnline === true
+    input.cloudOnline === true
       ? "Host ready"
-      : input.hubOnline === false
+      : input.cloudOnline === false
         ? "Host offline"
         : "—";
 
@@ -97,9 +97,9 @@ export function deriveHostPresence(input: HostPresenceInput): HostPresence {
   const cloud: CloudMode =
     input.accountSync ??
     input.cloud ??
-    (input.hubOnline === true
+    (input.cloudOnline === true
       ? "online"
-      : input.hubOnline === false
+      : input.cloudOnline === false
         ? "offline"
         : "unknown");
 

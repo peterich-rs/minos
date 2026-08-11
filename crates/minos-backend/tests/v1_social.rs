@@ -1,15 +1,14 @@
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use minos_backend::auth::jwt;
+use minos_backend::http::test_support::seed_live_connection;
 use minos_backend::http::{router, test_support::backend_state, test_support::TEST_JWT_SECRET};
-use minos_backend::session::SessionHandle;
 use minos_backend::store::test_support::{insert_test_client, insert_test_host};
 use minos_backend::store::{
     agent_sessions, device_installations, durable_event_log, host_commands, host_links, raw_events,
     sessions, social,
 };
 use minos_domain::{AgentName, DeviceId, DeviceRole};
-use minos_protocol::Envelope;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
 
@@ -81,12 +80,12 @@ async fn seed_host_pair_for_account(
 fn seed_live_host_session(
     state: &minos_backend::http::BackendState,
     host_device_id: DeviceId,
-    account_id: &str,
-) -> tokio::sync::mpsc::Receiver<Envelope> {
-    let (handle, outbox_rx) = SessionHandle::new(host_device_id, DeviceRole::AgentHost);
-    handle.set_account_id(account_id.to_string());
-    state.registry.insert(handle);
-    outbox_rx
+    _account_id: &str,
+) -> (
+    std::sync::Arc<minos_backend::realtime::ConnectionState>,
+    tokio::sync::mpsc::Receiver<minos_backend::realtime::wire::ServerFrame>,
+) {
+    seed_live_connection(state, host_device_id, DeviceRole::AgentHost, None)
 }
 
 #[tokio::test]
@@ -494,7 +493,7 @@ async fn assert_agent_start_host_command(
     assert_eq!(row.params_json["runtime_agent"], "codex");
     assert_eq!(row.params_json["conversation_id"], expected_conversation_id);
     assert_eq!(row.params_json["initial_user_message"], expected_text);
-    // B4: origin_message_id must reach host so daemon pins agent-result suffix.
+    // origin_message_id must reach host so daemon pins agent-result suffix.
     assert_eq!(
         row.params_json["origin_message_id"], _origin_message_id,
         "agent_session.start must carry origin_message_id"
@@ -882,7 +881,7 @@ async fn send_message_publishes_account_realtime_event_with_thin_digest() {
             event.payload_json["conversation_id"],
             conversation.conversation_id
         );
-        // R3: account topic carries thin digest only (no nested full message).
+        // Account topic carries thin digest only (no nested full message).
         assert_eq!(event.payload_json["message_id"], message_id);
         assert_eq!(event.payload_json["preview"], "live hello");
         assert!(event.payload_json.get("message").is_none());
@@ -1126,7 +1125,8 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
             &alice.account_id,
             Body::from(
                 serde_json::json!({
-                    "text": format!("@{} please help", agent.agent_id)
+                    "text": format!("@{} please help", agent.agent_id),
+                    "mentions": [{"kind": "bot", "bot_id": agent.agent_id}]
                 })
                 .to_string(),
             ),
@@ -1265,7 +1265,7 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
             .as_deref(),
         Some(session_id.as_str())
     );
-    // B4 frozen id: agent-result:{conv}:{session}:{origin_message_id}
+    // Frozen id: agent-result:{conv}:{session}:{origin_message_id}
     assert_eq!(
         agent_reply.message_id,
         format!(
@@ -1286,7 +1286,8 @@ async fn group_mentions_dispatch_to_host_and_post_completed_agent_reply() {
             &alice.account_id,
             Body::from(
                 serde_json::json!({
-                    "text": format!("@{} one more thing", agent.agent_id)
+                    "text": format!("@{} one more thing", agent.agent_id),
+                    "mentions": [{"kind": "bot", "bot_id": agent.agent_id}]
                 })
                 .to_string(),
             ),
@@ -1587,7 +1588,8 @@ async fn group_reply_to_agent_message_reuses_session() {
             &alice.account_id,
             Body::from(
                 serde_json::json!({
-                    "text": format!("@{} summarize the PR", agent.agent_id)
+                    "text": format!("@{} summarize the PR", agent.agent_id),
+                    "mentions": [{"kind": "bot", "bot_id": agent.agent_id}]
                 })
                 .to_string(),
             ),
@@ -1828,7 +1830,7 @@ async fn mobile_at_agent_reuses_desktop_formal_session_without_chat_bind() {
     );
 }
 
-/// B3: no live host → message HTTP 200 + queue row pending (no host command).
+/// No live host → message HTTP 200 + queue row pending (no host command).
 #[tokio::test]
 async fn agent_dispatch_queues_when_host_offline() {
     let state = backend_state().await;
@@ -1915,7 +1917,7 @@ async fn agent_dispatch_queues_when_host_offline() {
         .is_none());
 }
 
-/// B3: pending dispatch drains when host becomes online.
+/// Pending dispatch drains when host becomes online.
 #[tokio::test]
 async fn agent_dispatch_drains_when_host_comes_online() {
     let state = backend_state().await;
@@ -2029,7 +2031,7 @@ async fn agent_dispatch_drains_when_host_comes_online() {
     .await;
 }
 
-/// B4: two rapid dispatches on same session → two agent bubbles with distinct ids.
+/// Two rapid dispatches on same session → two agent bubbles with distinct ids.
 #[tokio::test]
 async fn two_rapid_dispatches_project_two_agent_bubbles() {
     let state = backend_state().await;
@@ -2089,7 +2091,8 @@ async fn two_rapid_dispatches_project_two_agent_bubbles() {
             &alice.account_id,
             Body::from(
                 serde_json::json!({
-                    "text": format!("@{} first", agent.agent_id)
+                    "text": format!("@{} first", agent.agent_id),
+                    "mentions": [{"kind": "bot", "bot_id": agent.agent_id}]
                 })
                 .to_string(),
             ),
@@ -2116,7 +2119,8 @@ async fn two_rapid_dispatches_project_two_agent_bubbles() {
             &alice.account_id,
             Body::from(
                 serde_json::json!({
-                    "text": format!("@{} second", agent.agent_id)
+                    "text": format!("@{} second", agent.agent_id),
+                    "mentions": [{"kind": "bot", "bot_id": agent.agent_id}]
                 })
                 .to_string(),
             ),
@@ -2256,7 +2260,7 @@ async fn two_rapid_dispatches_project_two_agent_bubbles() {
     assert_eq!(rows2.iter().filter(|r| r.sender_type == "agent").count(), 2);
 }
 
-/// Phase 1+2: `@agent` tokens write structured agent mentions and enqueue inbox rows.
+/// Structured client mentions persist and enqueue inbox rows (body alone is not authority).
 #[tokio::test]
 async fn send_message_persists_agent_mentions_and_enqueues_inbox() {
     let state = backend_state().await;
@@ -2303,14 +2307,25 @@ async fn send_message_persists_agent_mentions_and_enqueues_inbox() {
             ),
             alice_device,
             &alice.account_id,
-            Body::from(serde_json::json!({ "text": text }).to_string()),
+            Body::from(
+                serde_json::json!({
+                    "text": text,
+                    "mentions": [{
+                        "kind": "bot",
+                        "bot_id": agent.agent_id,
+                        "start": 0,
+                        "length": agent.agent_id.len() as u32 + 1
+                    }]
+                })
+                .to_string(),
+            ),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     let origin = body["message_id"].as_str().unwrap().to_string();
 
-    // Wire response carries structured agent mentions (SSOT for plan_agent_deliveries).
+    // Wire response carries structured agent mentions (authority for plan_agent_deliveries).
     let mentioned: Vec<String> = body["mentioned_agent_ids"]
         .as_array()
         .expect("mentioned_agent_ids array")
@@ -2337,7 +2352,7 @@ async fn send_message_persists_agent_mentions_and_enqueues_inbox() {
     );
 }
 
-/// Phase 2 multi-@: each structured agent mention becomes its own inbox row.
+/// Multi-@: each structured agent mention becomes its own inbox row.
 #[tokio::test]
 async fn multi_agent_mentions_fan_out_inbox_rows() {
     let state = backend_state().await;
@@ -2387,7 +2402,7 @@ async fn multi_agent_mentions_fan_out_inbox_rows() {
         .unwrap();
     }
 
-    // Appearance order deliberately reverse of agent_id lex order when ids differ.
+    // Client order deliberately reverse of agent_id lex order when ids differ.
     let text = format!("@{} @{} count off", claude.agent_id, codex.agent_id);
     let (status, body) = common::send(
         &mut app,
@@ -2399,7 +2414,16 @@ async fn multi_agent_mentions_fan_out_inbox_rows() {
             ),
             alice_device,
             &alice.account_id,
-            Body::from(serde_json::json!({ "text": text }).to_string()),
+            Body::from(
+                serde_json::json!({
+                    "text": text,
+                    "mentions": [
+                        {"kind": "bot", "bot_id": claude.agent_id},
+                        {"kind": "bot", "bot_id": codex.agent_id}
+                    ]
+                })
+                .to_string(),
+            ),
         ),
     )
     .await;
@@ -2415,7 +2439,7 @@ async fn multi_agent_mentions_fan_out_inbox_rows() {
     assert_eq!(
         mentioned,
         vec![claude.agent_id.clone(), codex.agent_id.clone()],
-        "wire mentioned_agent_ids must follow body appearance order"
+        "wire mentioned_agent_ids must follow client structured order"
     );
 
     let rows = minos_backend::store::agent_dispatch_queue::list_by_origin(&state.store, &origin)
@@ -2433,7 +2457,7 @@ async fn multi_agent_mentions_fan_out_inbox_rows() {
     assert!(!rows[1].mention_sender);
 }
 
-/// Phase 2 invariant: host_projection never re-delivers to Agent inbox.
+/// Invariant: host_projection never re-delivers to Agent inbox.
 #[tokio::test]
 async fn host_projection_message_does_not_enqueue_agent_inbox() {
     let state = backend_state().await;
@@ -2571,7 +2595,7 @@ async fn system_message_does_not_enqueue_agent_inbox() {
     assert_eq!(count, 0);
 }
 
-/// Membership-first: bare `@codex` with empty bot roster does not silent-join.
+/// Membership-first: structured bot mention with empty roster fails (no silent join).
 #[tokio::test]
 async fn unmatched_host_runtime_mention_does_not_auto_attach_or_enqueue() {
     let state = backend_state().await;
@@ -2586,6 +2610,7 @@ async fn unmatched_host_runtime_mention_does_not_auto_attach_or_enqueue() {
             .await
             .unwrap();
 
+    // Body-only @codex without structured mentions is not delivery intent.
     let (status, body) = common::send(
         &mut app,
         authed_request(
@@ -2602,14 +2627,13 @@ async fn unmatched_host_runtime_mention_does_not_auto_attach_or_enqueue() {
     .await;
     assert_eq!(status, StatusCode::OK);
     let origin = body["message_id"].as_str().unwrap().to_string();
-
     let mentioned = body["mentioned_agent_ids"]
         .as_array()
         .cloned()
         .unwrap_or_default();
     assert!(
         mentioned.is_empty(),
-        "no roster member → no structured agent mention"
+        "body alone never invents structured agent mentions"
     );
     assert!(
         social::list_conversation_agents(&state.store, &conversation.conversation_id)
@@ -2621,7 +2645,33 @@ async fn unmatched_host_runtime_mention_does_not_auto_attach_or_enqueue() {
     let count = minos_backend::store::agent_dispatch_queue::count_by_origin(&state.store, &origin)
         .await
         .unwrap();
-    assert_eq!(count, 0, "unmatched @codex must not enqueue agent inbox");
+    assert_eq!(
+        count, 0,
+        "body @ without structured mentions must not enqueue"
+    );
+
+    // Structured non-member bot mention is rejected at send time.
+    let (status, _body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "text": "@codex please help",
+                    "mentions": [{"kind": "bot", "bot_id": "bot-not-in-room"}]
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 /// Multi-agent room + no explicit @ → zero inbox (no sole-agent rule).
@@ -2744,10 +2794,11 @@ async fn sole_agent_room_bare_text_enqueues_one_inbox() {
     assert!(!row.mention_sender, "sole-agent auto-route never @s sender");
 }
 
-/// P0: sole-agent room + unmatched agentish @ must NOT wrong-bot activate.
-/// Roster = [claude], body = "@codex please help" → 0 inbox (not Claude).
+/// Structured non-member bot mention fails send; body alone never invents targets.
+/// Client must reject unmatched @ before send; server sole-routes only when
+/// structured agent mentions are empty (membership 1H+1A).
 #[tokio::test]
-async fn sole_agent_room_unmatched_at_does_not_wrong_bot_activate() {
+async fn sole_agent_room_unmatched_structured_bot_does_not_wrong_bot_activate() {
     let state = backend_state().await;
     let mut app = router(state.clone());
 
@@ -2781,6 +2832,31 @@ async fn sole_agent_room_unmatched_at_does_not_wrong_bot_activate() {
     .await
     .unwrap();
 
+    // Explicit structured mention of a non-member bot must fail (not sole-route Claude).
+    let (status, _body) = common::send(
+        &mut app,
+        authed_request(
+            Method::POST,
+            &format!(
+                "/v1/conversations/{}/messages",
+                conversation.conversation_id
+            ),
+            alice_device,
+            &alice.account_id,
+            Body::from(
+                serde_json::json!({
+                    "text": "@codex please help",
+                    "mentions": [{"kind": "bot", "bot_id": "bot-codex-not-member"}]
+                })
+                .to_string(),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Body-only @ without structured mentions: sole-agent may route (client should prevent).
+    // Server does not body-parse; empty structured list + 1H1A → sole Claude.
     let (status, body) = common::send(
         &mut app,
         authed_request(
@@ -2803,15 +2879,13 @@ async fn sole_agent_room_unmatched_at_does_not_wrong_bot_activate() {
         .unwrap_or_default();
     assert!(
         mentioned.is_empty(),
-        "codex is not a member → no structured agent mention"
+        "body alone never invents structured agent mentions"
     );
-    let count = minos_backend::store::agent_dispatch_queue::count_by_origin(&state.store, &origin)
+    let row = minos_backend::store::agent_dispatch_queue::get_by_origin(&state.store, &origin)
         .await
-        .unwrap();
-    assert_eq!(
-        count, 0,
-        "unmatched @codex must not sole-route Claude (wrong-bot activation)"
-    );
+        .unwrap()
+        .expect("empty structured mentions + 1H1A sole-routes membership bot");
+    assert_eq!(row.agent_id, claude.agent_id);
 }
 
 /// Structured multi-@ appearance order survives list/history hydrate (ordinal SSOT).
@@ -2869,7 +2943,7 @@ async fn multi_agent_mention_order_survives_message_list_hydrate() {
         .unwrap();
     }
 
-    // Appearance order deliberately reverse of typical agent_id lex order.
+    // Client structured order deliberately reverse of typical agent_id lex order.
     let text = format!("@{} @{} count off", claude.agent_id, codex.agent_id);
     let (status, body) = common::send(
         &mut app,
@@ -2881,7 +2955,16 @@ async fn multi_agent_mention_order_survives_message_list_hydrate() {
             ),
             alice_device,
             &alice.account_id,
-            Body::from(serde_json::json!({ "text": text }).to_string()),
+            Body::from(
+                serde_json::json!({
+                    "text": text,
+                    "mentions": [
+                        {"kind": "bot", "bot_id": claude.agent_id},
+                        {"kind": "bot", "bot_id": codex.agent_id}
+                    ]
+                })
+                .to_string(),
+            ),
         ),
     )
     .await;
@@ -2918,6 +3001,6 @@ async fn multi_agent_mention_order_survives_message_list_hydrate() {
     assert_eq!(
         mentioned,
         vec![claude.agent_id.clone(), codex.agent_id.clone()],
-        "hydrated mentioned_agent_ids must follow body appearance order"
+        "hydrated mentioned_agent_ids must follow client structured order"
     );
 }

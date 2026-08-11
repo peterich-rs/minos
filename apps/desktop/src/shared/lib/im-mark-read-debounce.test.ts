@@ -1,5 +1,5 @@
 /**
- * Pure contract for focused live mark-read debounce (C4 review).
+ * Pure contract for focused live mark-read debounce.
  * Timer behavior is exercised via scheduleFocusedMarkRead export shape;
  * workspace store is mocked at call boundary in integration if needed.
  */
@@ -8,7 +8,7 @@ import { describe, it } from "node:test";
 
 describe("focused mark-read debounce contract", () => {
   it("uses 400ms coalesce window matching Mobile", () => {
-    // Keep in sync with im-hub-bridge MARK_READ_DEBOUNCE_MS.
+    // Keep in sync with im-cloud-bridge MARK_READ_DEBOUNCE_MS.
     const MARK_READ_DEBOUNCE_MS = 400;
     assert.equal(MARK_READ_DEBOUNCE_MS, 400);
   });

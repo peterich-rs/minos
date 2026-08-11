@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   registerHostCredential,
-  waitForHubOnline,
+  waitForCloudOnline,
   type EnsureHostPorts,
 } from "./ensure-host-connection.ts";
 
@@ -90,10 +90,10 @@ describe("registerHostCredential", () => {
   });
 });
 
-describe("waitForHubOnline", () => {
+describe("waitForCloudOnline", () => {
   it("returns true when isOnline becomes true", async () => {
     let n = 0;
-    const ok = await waitForHubOnline(
+    const ok = await waitForCloudOnline(
       async () => {
         n += 1;
         return n >= 2;

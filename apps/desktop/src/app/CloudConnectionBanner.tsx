@@ -17,8 +17,8 @@ export function CloudConnectionBanner() {
   const accountSyncStatus = useAccountStore((s) => s.accountSyncStatus);
   const cloudError = useAccountStore((s) => s.cloudError);
   const retry = useAccountStore((s) => s.retryCloudConnection);
-  const syncCloudFromHub = useAccountStore((s) => s.syncCloudFromHub);
-  const hubOnline = useWorkspaceStore((s) => s.connection?.hubOnline);
+  const syncCloudFromCloud = useAccountStore((s) => s.syncCloudFromCloud);
+  const cloudOnline = useWorkspaceStore((s) => s.connection?.cloudOnline);
   const source = useWorkspaceStore((s) => s.source);
   const refreshDaemonStatus = useWorkspaceStore((s) => s.refreshDaemonStatus);
 
@@ -32,8 +32,8 @@ export function CloudConnectionBanner() {
   }, [session, source, refreshDaemonStatus]);
 
   useEffect(() => {
-    syncCloudFromHub(hubOnline);
-  }, [hubOnline, syncCloudFromHub]);
+    syncCloudFromCloud(cloudOnline);
+  }, [cloudOnline, syncCloudFromCloud]);
 
   if (!session) return null;
 

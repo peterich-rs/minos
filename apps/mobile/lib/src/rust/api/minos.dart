@@ -272,7 +272,7 @@ abstract class MobileClient implements RustOpaqueInterface {
 
   /// Submit a user approval decision for a pending host request.
   ///
-  /// `client_request_id` is the Hub Intent Outbox id (C5.3). When omitted,
+  /// `client_request_id` is the Hub Intent Outbox id. When omitted,
   /// the mobile client generates one so the wire body never hardcodes null.
   Future<void> sendApprovalDecision({
     required String requestId,
@@ -281,11 +281,13 @@ abstract class MobileClient implements RustOpaqueInterface {
     String? clientRequestId,
   });
 
+  /// `mentions_json` is an optional JSON array of wire `MentionTarget` objects.
   Future<ChatMessageSummary> sendChatMessage({
     required String conversationId,
     required String text,
     String? replyToMessageId,
     String? clientMessageId,
+    String? mentionsJson,
   });
 
   /// Send a follow-up user message to an existing agent session.
@@ -306,7 +308,7 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// once Dart drops the stream (detected via `sink.add(...).is_err()`).
   Stream<AuthStateFrame> subscribeAuthState();
 
-  /// Open-chat live path (R3a): subscribe `conversation:{id}` for full T1 frames.
+  /// Open-chat live path: subscribe `conversation:{id}` for full T1 frames.
   Future<void> subscribeConversation({required String conversationId});
 
   /// Subscribe to live `SocialEventFrame`s fanned out from the backend.
@@ -322,7 +324,7 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// subscribers lose old frames rather than blocking the producer.
   Stream<UiEventFrame> subscribeUiEvents();
 
-  /// Toggle Hub reaction; `client_op_id` is the Intent Outbox id (B6/C5).
+  /// Toggle Hub reaction; `client_op_id` is the Intent Outbox id.
   Future<ToggleReactionResponse> toggleReaction({
     required String conversationId,
     required String messageId,
@@ -330,7 +332,7 @@ abstract class MobileClient implements RustOpaqueInterface {
     required String clientOpId,
   });
 
-  /// Leave open-chat conversation topic (R3a).
+  /// Leave open-chat conversation topic.
   Future<void> unsubscribeConversation({required String conversationId});
 
   Future<AgentSummary> updateAgent({
@@ -1696,13 +1698,12 @@ enum PairingState { unpaired, awaitingPeer, paired }
 
 /// Durable mobile pairing snapshot mirrored into the iOS keychain.
 ///
-/// Phase 4 added the five auth fields (access/refresh tokens + bound
-/// account identity) so the Dart-side secure store can rehydrate the full
-/// session on cold launch. All five auth fields are persisted as a tuple —
-/// either every one is present or all are `None`.
+/// Includes the five auth fields (access/refresh tokens + bound account
+/// identity) so the Dart-side secure store can rehydrate the full session
+/// on cold launch. All five auth fields are persisted as a tuple — either
+/// every one is present or all are `None`.
 ///
-/// ADR-0020 dropped the device_secret from this snapshot — the iOS rail
-/// is bearer-only.
+/// Device secret is not stored here — the iOS rail is bearer-only.
 ///
 /// Backend URL and CF Access service-token headers were dropped from the
 /// snapshot when pairing transitioned to compile-time `build_config` — the

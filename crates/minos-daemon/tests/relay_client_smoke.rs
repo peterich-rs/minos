@@ -3,9 +3,8 @@
 //! Each test boots a real in-process backend (axum + sqlx over a temp-file
 //! SQLite DB, copied from `crates/minos-backend/tests/e2e.rs`'s harness) on
 //! `127.0.0.1:0`, spawns a `RelayClient` targeting it, and drives the
-//! flow end-to-end. The assertions freeze the contract Phase F will wire
-//! into `DaemonHandle`:
-//!
+//! flow end-to-end. The assertions freeze the contract that `DaemonHandle`
+//! relies on:
 //! 1. `connect_becomes_connected` — link transitions
 //!    `Connecting{0}` → `Connected` within a bounded window.
 //! 2. `apply_link_token_persists_and_connects` — Host Link token apply
@@ -23,7 +22,7 @@ use std::time::Duration;
 use minos_backend::{
     host_link::HostLinkService,
     http::{router, BackendState},
-    session::SessionRegistry,
+    realtime::RealtimeConnectionRegistry,
     store,
 };
 use minos_daemon::config::RelayConfig;
@@ -103,7 +102,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
     let addr = listener.local_addr()?;
 
     let mut state = BackendState::new(
-        Arc::new(SessionRegistry::new()),
+        Arc::new(RealtimeConnectionRegistry::new()),
         Arc::new(HostLinkService::new(pool.clone())),
         pool.clone(),
         TOKEN_TTL,
@@ -137,8 +136,17 @@ fn test_config() -> RelayConfig {
     RelayConfig::new(String::new())
 }
 
-/// Fresh in-memory `PersistenceCtx` for relay-client tests.
-fn test_persistence() -> PersistenceCtx {
+/// Fresh `PersistenceCtx` for relay-client tests (temp SQLite ledger).
+async fn test_persistence() -> PersistenceCtx {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("relay-smoke.sqlite");
+    // Keep tempdir alive for process lifetime of this test binary via leak.
+    std::mem::forget(dir);
+    let store = Arc::new(
+        minos_daemon::store::LocalStore::open(&db_path)
+            .await
+            .expect("open LocalStore for relay smoke"),
+    );
     PersistenceCtx {
         peer_store: Arc::new(StdMutex::new(None)),
         peers_store: Arc::new(StdMutex::new(Vec::new())),
@@ -146,6 +154,7 @@ fn test_persistence() -> PersistenceCtx {
         // No ingest sync worker wired: these smoke tests exercise the
         // relay-client transport, not host ingest backfill.
         ingest_sync: Arc::new(StdMutex::new(None)),
+        store,
     }
 }
 
@@ -191,7 +200,7 @@ async fn connect_becomes_connected() -> anyhow::Result<()> {
     let _home = MinosHomeGuard::new()?;
     let relay = spawn_relay().await?;
     let backend_url = relay_url(&relay);
-    let persistence = test_persistence();
+    let persistence = test_persistence().await;
     let host_id = DeviceId::new();
     let host_secret = register_formal_host(&relay.pool, host_id).await?;
 
@@ -235,7 +244,7 @@ async fn apply_link_token_persists_and_connects() -> anyhow::Result<()> {
     let _home = MinosHomeGuard::new()?;
     let relay = spawn_relay().await?;
     let backend_url = relay_url(&relay);
-    let persistence = test_persistence();
+    let persistence = test_persistence().await;
 
     let mac_name = "Fan's MacBook Pro".to_string();
     let host_id = DeviceId::new();

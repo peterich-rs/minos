@@ -110,7 +110,7 @@ export type WorkspaceState = {
   transcriptHistoryBySession: Record<string, TranscriptHistoryMeta>;
   /**
    * Attention page queue only (opened-view hydrate). Does NOT drive sidebar
-   * badge — badge uses Σ project.needsAttention (§6.5).
+   * badge — badge uses Σ project.needsAttention.
    */
   attentionSessions: ProjectSession[];
   attentionStatus: ResourceFetchStatus;
@@ -125,7 +125,7 @@ export type WorkspaceState = {
   clisStatus: ResourceFetchStatus;
   /**
    * Local ReadReceipt baseline for **daemon-only / unauthenticated** rail.
-   * Hub IM mode (P1): unread SSOT is Hub digest / live patch only — this map
+   * Hub IM mode: unread SSOT is Hub digest / live patch only — this map
    * is not used for badges while authenticated. Survives bootEpoch for
    * offline fallback after logout.
    */
@@ -134,7 +134,7 @@ export type WorkspaceState = {
   focusedConversationId: string | null;
 
   bootstrap: () => Promise<void>;
-  /** Refresh daemon IPC + hubOnline without full bootstrap. */
+  /** Refresh daemon IPC + cloudOnline without full bootstrap. */
   refreshDaemonStatus: () => Promise<void>;
   refreshProjects: () => Promise<void>;
   loadConversations: (

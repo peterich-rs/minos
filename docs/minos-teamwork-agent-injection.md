@@ -179,9 +179,6 @@ the shared conversation.
 
 ## Prompt Runtime Contract
 
-Full design:
-[`research-superpowers-prompt-organization.md`](research-superpowers-prompt-organization.md).
-
 Minos prompt delivery is split into layers with distinct ownership:
 
 | Layer | Owner | Delivery |

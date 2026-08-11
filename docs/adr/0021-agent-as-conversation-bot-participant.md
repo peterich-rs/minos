@@ -6,9 +6,9 @@
 | Date | 2026-08-09 |
 | Deciders | fannnzhang |
 | Supersedes | Product framing that treats `@agent` as a **command-orchestration primary path** parallel to IM; does **not** supersede dual Account/Host principals ([0020](0020-server-centric-auth-and-account-pairs.md)) |
-| Normative detail | [2026-08-09-agent-participant-delivery.md](../superpowers/specs/2026-08-09-agent-participant-delivery.md) |
-| Global bot identity | [global-bot-identity-design.md](../superpowers/specs/global-bot-identity-design.md) — bot 是全局唯一数字身份；conversation 只持 membership；session 是 per-conversation 执行上下文 |
-| Bot mailbox + WS IM bus | [bot-mailbox-ws-im-bus-design.md](../superpowers/specs/bot-mailbox-ws-im-bus-design.md) — Account WS 写消息；Bot 逻辑邮箱；Host 共享执行连接 |
+| Normative detail | [architecture-messaging.md](../architecture-messaging.md) |
+| Global bot identity | bot 是全局唯一数字身份；conversation 只持 membership；session 是 per-conversation 执行上下文 |
+| Bot mailbox + WS IM bus | Account WS 写消息；Bot 逻辑邮箱；Host 共享执行连接 |
 
 ## Context
 
@@ -32,7 +32,7 @@ We need a single product decision: **agents are bot participants on the conversa
 ## Decision
 
 1. **Agent is a first-class conversation participant (bot), not a human Account.**
-   - **Global bot identity**: one stable `agent_id` (数字肉身：name / model / reasoning / system prompt / runtime 等) is reused across conversations; joining a conversation is **membership only**, not creating a new bot. Per-conversation **sessions** are execution context, not identity. Normative: [global-bot-identity-design](../superpowers/specs/global-bot-identity-design.md).
+   - **Global bot identity**: one stable `agent_id` (数字肉身：name / model / reasoning / system prompt / runtime 等) is reused across conversations; joining a conversation is **membership only**, not creating a new bot. Per-conversation **sessions** are execution context, not identity. The current contract lives in [architecture-messaging.md](../architecture-messaging.md).
    - Appears in conversation roster / participants API.
    - Can be @-mentioned with the **same mention semantics** as humans (structured targets).
    - Can author timeline messages (`sender_type=agent`).
@@ -81,7 +81,7 @@ We need a single product decision: **agents are bot participants on the conversa
 ### Docs
 
 - [architecture-messaging.md](../architecture-messaging.md) is SSOT for the message-driven participant model.
-- Hub bubble write ownership ([2026-08-02 Hub SSOT](../superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md)) **stays**; only the *trigger* wording moves from “dispatch special case” to “participant delivery.”
+- Hub bubble write ownership **stays**; only the *trigger* wording moves from “dispatch special case” to “participant delivery.”
 - Backend delivery orchestration renames AgentDispatch **semantics** to Agent inbox / participant delivery.
 
 ### Non-consequences
@@ -98,9 +98,5 @@ We need a single product decision: **agents are bot participants on the conversa
 
 ## References
 
-- Normative delivery: [agent-participant-delivery](../superpowers/specs/2026-08-09-agent-participant-delivery.md)
-- Global bot identity / digital body: [global-bot-identity-design](../superpowers/specs/global-bot-identity-design.md)
-- Bot mailbox + WS-native IM bus: [bot-mailbox-ws-im-bus-design](../superpowers/specs/bot-mailbox-ws-im-bus-design.md)
-- Hub bubbles: [hub-collaboration-message-ssot](../superpowers/specs/2026-08-02-hub-collaboration-message-ssot.md)
-- Delivery jobs: [backend-im-delivery-orchestration](../superpowers/specs/2026-08-03-backend-im-delivery-orchestration.md)
+- Current messaging, bot identity, mailbox, bubble ownership, and delivery contract: [architecture-messaging.md](../architecture-messaging.md)
 - Auth principals: [0020](0020-server-centric-auth-and-account-pairs.md)

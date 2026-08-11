@@ -223,6 +223,24 @@ void main() {
       expect(after.single.single.clientOpId, 'c2-a');
       expect(store.listDue(t0 + 12).any((e) => e.clientOpId == 'c1-b'), isTrue);
     });
+
+    test('user_message payload can carry structured mentions wire list', () {
+      const payload =
+          '{"text":"@claude hi","reply_to_message_id":null,'
+          '"mentions":[{"kind":"bot","bot_id":"id-claude","start":0,"length":7}]}';
+      store.enqueueUserMessage(
+        clientOpId: 'op-mention',
+        conversationId: 'c1',
+        payloadJson: payload,
+        nowMs: t0,
+      );
+      expect(store.snapshot.single.payloadJson, payload);
+      expect(
+        store.snapshot.single.payloadJson.contains('"kind":"bot"'),
+        isTrue,
+      );
+      expect(store.snapshot.single.payloadJson.contains('id-claude'), isTrue);
+    });
   });
 
   group('buildDueOutboxLanes', () {

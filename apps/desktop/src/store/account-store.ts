@@ -3,7 +3,7 @@
  *
  * Product rule: signing into Desktop on this Mac owns host control.
  * After auth, we silently bind + dial `/ws/host` (runtime). Account IM uses
- * `/ws/client` (im-hub-bridge). Product Online is Account sync primary;
+ * `/ws/client` (im-cloud-bridge). Product Online is Account sync primary;
  * Host readiness is secondary — never Link / Unlink.
  */
 
@@ -42,7 +42,7 @@ import {
 import { daemonApi } from "@/shared/lib/daemon";
 import {
   registerHostCredential,
-  waitForHubOnline,
+  waitForCloudOnline,
 } from "@/features/host/lib/ensure-host-connection";
 import type { DesktopAuthPhase } from "@/shared/lib/desktop-root-gate";
 
@@ -62,7 +62,7 @@ type AccountState = {
   cloudStatus: CloudConnectionStatus;
   /**
    * Account IM sync (`/ws/client`): primary product Online for send/receive.
-   * Driven by im-hub-bridge HubRealtimeSyncState.
+   * Driven by im-cloud-bridge CloudRealtimeSyncState.
    */
   accountSyncStatus: CloudConnectionStatus;
   cloudError: string | null;
@@ -91,10 +91,10 @@ type AccountState = {
   /** Banner Retry: force re-register credential then dial. */
   retryCloudConnection: () => Promise<void>;
 
-  /** Sync Host readiness from latest daemon hubOnline (polling). */
-  syncCloudFromHub: (hubOnline: boolean | undefined) => void;
+  /** Sync Host readiness from latest daemon cloudOnline (polling). */
+  syncCloudFromCloud: (cloudOnline: boolean | undefined) => void;
   /** Sync Account IM Online from `/ws/client` realtime state. */
-  syncAccountFromHub: (
+  syncAccountFromCloud: (
     state: "disconnected" | "connecting" | "syncing" | "live" | "error" | string,
   ) => void;
 
@@ -115,7 +115,7 @@ let ensureInFlight: Promise<void> | null = null;
 let ensureGeneration = 0;
 
 type DaemonCloudFlags = {
-  hubOnline: boolean;
+  cloudOnline: boolean;
   hasHostToken: boolean;
 };
 
@@ -125,16 +125,16 @@ async function refreshDaemonCloudFlags(): Promise<DaemonCloudFlags> {
     await useWorkspaceStore.getState().refreshDaemonStatus();
     const connection = useWorkspaceStore.getState().connection;
     return {
-      hubOnline: connection?.hubOnline === true,
+      cloudOnline: connection?.cloudOnline === true,
       hasHostToken: connection?.hasHostToken === true,
     };
   } catch {
-    return { hubOnline: false, hasHostToken: false };
+    return { cloudOnline: false, hasHostToken: false };
   }
 }
 
-async function refreshHubOnlineFlag(): Promise<boolean> {
-  return (await refreshDaemonCloudFlags()).hubOnline;
+async function refreshCloudOnlineFlag(): Promise<boolean> {
+  return (await refreshDaemonCloudFlags()).cloudOnline;
 }
 
 function applyAuthSuccess(
@@ -159,8 +159,8 @@ function applyAuthSuccess(
     error: null,
     hydrated: true,
   });
-  void import("@/shared/lib/im-hub-bridge").then(({ ensureImHubBridge }) =>
-    ensureImHubBridge(),
+  void import("@/shared/lib/im-cloud-bridge").then(({ ensureImCloudBridge }) =>
+    ensureImCloudBridge(),
   );
   void get().ensureCloudConnection();
 }
@@ -210,8 +210,8 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
         authPhase: "authenticated",
         hydrated: true,
       });
-      void import("@/shared/lib/im-hub-bridge").then(({ ensureImHubBridge }) =>
-        ensureImHubBridge(),
+      void import("@/shared/lib/im-cloud-bridge").then(({ ensureImCloudBridge }) =>
+        ensureImCloudBridge(),
       );
       void get().ensureCloudConnection();
       return;
@@ -298,8 +298,8 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
     }
     await signOutSupabase();
     clearStoredSession();
-    void import("@/shared/lib/im-hub-bridge").then(({ stopImHubBridge }) =>
-      stopImHubBridge(),
+    void import("@/shared/lib/im-cloud-bridge").then(({ stopImCloudBridge }) =>
+      stopImCloudBridge(),
     );
     set({
       session: null,
@@ -342,14 +342,14 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
       const flags = await refreshDaemonCloudFlags();
       if (gen !== ensureGeneration) return;
 
-      if (flags.hubOnline) {
+      if (flags.cloudOnline) {
         set({ cloudStatus: "online", cloudError: null });
         return;
       }
 
       if (!forceReregister && flags.hasHostToken) {
         // Credential exists — only wait for dialer; do not mint/revoke.
-        const online = await waitForHubOnline(refreshHubOnlineFlag, {
+        const online = await waitForCloudOnline(refreshCloudOnlineFlag, {
           timeoutMs: 20_000,
           intervalMs: 500,
         });
@@ -401,7 +401,7 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
       saveStoredHostBind(session.accountId, hostBind);
       set({ hostBind });
 
-      const online = await waitForHubOnline(refreshHubOnlineFlag, {
+      const online = await waitForCloudOnline(refreshCloudOnlineFlag, {
         timeoutMs: 20_000,
         intervalMs: 500,
       });
@@ -431,18 +431,18 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
     await get().ensureCloudConnection({ forceReregister: true });
   },
 
-  syncCloudFromHub: (hubOnline) => {
+  syncCloudFromCloud: (cloudOnline) => {
     const { session, cloudStatus } = get();
     if (!session) return;
     // Do not clobber an in-flight ensure.
     if (cloudStatus === "connecting") return;
-    if (hubOnline === true) {
+    if (cloudOnline === true) {
       if (cloudStatus !== "online") {
         set({ cloudStatus: "online", cloudError: null });
       }
       return;
     }
-    if (hubOnline === false && cloudStatus === "online") {
+    if (cloudOnline === false && cloudStatus === "online") {
       set({
         cloudStatus: "offline",
         cloudError: "Disconnected from server",
@@ -450,7 +450,7 @@ export const useAccountStore = create<AccountState>()((set, get) => ({
     }
   },
 
-  syncAccountFromHub: (state) => {
+  syncAccountFromCloud: (state) => {
     const { session } = get();
     if (!session) {
       if (get().accountSyncStatus !== "unknown") {

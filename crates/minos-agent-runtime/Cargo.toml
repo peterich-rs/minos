@@ -19,7 +19,6 @@ minos-acp-protocol = { path = "../minos-acp-protocol", version = "0.1.0" }
 minos-chat-store = { path = "../minos-chat-store", version = "0.1.0" }
 minos-domain = { path = "../minos-domain", version = "0.1.0" }
 minos-prompt-runtime = { path = "../minos-prompt-runtime", version = "0.1.0" }
-minos-protocol = { path = "../minos-protocol", version = "0.1.0" }
 minos-ui-protocol = { path = "../minos-ui-protocol", version = "0.1.0" }
 anyhow = { workspace = true }
 chrono = { workspace = true }

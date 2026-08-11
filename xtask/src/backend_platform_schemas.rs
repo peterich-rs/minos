@@ -176,7 +176,7 @@ fn render_openapi_operation(route: &minos_backend::http::RouteContract) -> Value
         operation.insert("x-minos-websocket".to_string(), Value::Bool(true));
         operation.insert(
             "x-minos-websocket-schema-ref".to_string(),
-            Value::String("#/schemas/Envelope".to_string()),
+            Value::String("#/schemas/ClientFrame".to_string()),
         );
     }
 
@@ -286,7 +286,7 @@ fn is_websocket_route(route: &minos_backend::http::RouteContract) -> bool {
 
 fn render_backend_ws_schema(workspace_root: &Path) -> Result<String> {
     let platform = minos_backend::runtime::platform_contract_snapshot();
-    let examples = load_envelope_examples(workspace_root)?;
+    let examples = load_realtime_examples(workspace_root)?;
     let example_names = examples
         .keys()
         .cloned()
@@ -301,7 +301,8 @@ fn render_backend_ws_schema(workspace_root: &Path) -> Result<String> {
                 "path": route.path,
                 "auth": route.auth,
                 "probe_path": route.probe_path,
-                "frame_schema_ref": "#/schemas/Envelope",
+                "client_frame_schema_ref": "#/schemas/ClientFrame",
+                "server_frame_schema_ref": "#/schemas/ServerFrame",
                 "example_names": example_names,
             })
         })
@@ -312,11 +313,11 @@ fn render_backend_ws_schema(workspace_root: &Path) -> Result<String> {
         "service": platform.service,
         "version": platform.version,
         "transport": "websocket",
-        "description": "Generated websocket contract for the Minos backend relay envelope.",
+        "description": "Generated websocket contract for the Minos formal topic gateway (ClientFrame / ServerFrame).",
         "gateways": gateways,
         "schemas": {
-            "Envelope": envelope_schema(),
-            "EventKind": event_kind_schema(),
+            "ClientFrame": client_frame_schema(),
+            "ServerFrame": server_frame_schema(),
         },
         "examples": examples,
     });
@@ -324,8 +325,8 @@ fn render_backend_ws_schema(workspace_root: &Path) -> Result<String> {
     render_pretty_json(&doc)
 }
 
-fn load_envelope_examples(workspace_root: &Path) -> Result<Map<String, Value>> {
-    let examples_dir = workspace_root.join("crates/minos-protocol/tests/golden/envelope");
+fn load_realtime_examples(workspace_root: &Path) -> Result<Map<String, Value>> {
+    let examples_dir = workspace_root.join("crates/minos-protocol/tests/golden/realtime");
     let mut entries = fs::read_dir(&examples_dir)
         .with_context(|| format!("read_dir {}", examples_dir.display()))?
         .collect::<std::result::Result<Vec<_>, _>>()
@@ -341,195 +342,138 @@ fn load_envelope_examples(workspace_root: &Path) -> Result<Map<String, Value>> {
         let stem = path
             .file_stem()
             .and_then(|value| value.to_str())
-            .context("envelope example missing file stem")?;
+            .context("realtime example missing file stem")?;
         let raw = fs::read_to_string(&path)
-            .with_context(|| format!("read envelope example {}", path.display()))?;
+            .with_context(|| format!("read realtime example {}", path.display()))?;
         let parsed = serde_json::from_str::<Value>(&raw)
-            .with_context(|| format!("parse envelope example {}", path.display()))?;
+            .with_context(|| format!("parse realtime example {}", path.display()))?;
         examples.insert(stem.to_string(), parsed);
     }
     Ok(examples)
 }
 
-fn envelope_schema() -> Value {
+fn client_frame_schema() -> Value {
     json!({
         "oneOf": [
             {
-                "title": "ForwardEnvelope",
+                "title": "Subscribe",
                 "type": "object",
-                "required": ["kind", "v", "target_device_id", "payload"],
+                "required": ["type", "topics"],
                 "properties": {
-                    "kind": { "const": "forward" },
-                    "v": { "const": 1 },
-                    "target_device_id": uuid_schema(),
-                    "payload": true,
-                }
-            },
-            {
-                "title": "ForwardedEnvelope",
-                "type": "object",
-                "required": ["kind", "v", "from", "payload"],
-                "properties": {
-                    "kind": { "const": "forwarded" },
-                    "v": { "const": 1 },
-                    "from": uuid_schema(),
-                    "payload": true,
-                }
-            },
-            {
-                "title": "EventEnvelope",
-                "allOf": [
-                    {
+                    "type": { "const": "subscribe" },
+                    "topics": { "type": "array", "items": { "type": "string" } },
+                    "resume_after": {
                         "type": "object",
-                        "required": ["kind", "v"],
-                        "properties": {
-                            "kind": { "const": "event" },
-                            "v": { "const": 1 }
-                        }
+                        "additionalProperties": { "type": "integer" }
                     },
-                    { "$ref": "#/schemas/EventKind" }
-                ]
+                    "client_request_id": { "type": "string" }
+                }
             },
             {
-                "title": "IngestEnvelope",
+                "title": "Unsubscribe",
                 "type": "object",
-                "required": ["kind", "v", "agent", "session_id", "seq", "payload", "ts_ms"],
+                "required": ["type", "topics"],
                 "properties": {
-                    "kind": { "const": "ingest" },
-                    "v": { "const": 1 },
-                    "agent": { "type": "string" },
-                    "session_id": { "type": "string" },
-                    "seq": integer_schema(),
-                    "payload": true,
-                    "ts_ms": { "type": "integer" }
+                    "type": { "const": "unsubscribe" },
+                    "topics": { "type": "array", "items": { "type": "string" } }
+                }
+            },
+            {
+                "title": "Ping",
+                "type": "object",
+                "required": ["type", "ts"],
+                "properties": {
+                    "type": { "const": "ping" },
+                    "ts": { "type": "integer" }
+                }
+            },
+            {
+                "title": "HostCommandAck",
+                "type": "object",
+                "required": ["type", "command_id", "ack_at_ms"],
+                "properties": {
+                    "type": { "const": "host_command_ack" },
+                    "command_id": { "type": "string" },
+                    "ack_at_ms": { "type": "integer" }
+                }
+            },
+            {
+                "title": "HostIngestLiveBatch",
+                "type": "object",
+                "required": ["type", "batch"],
+                "properties": {
+                    "type": { "const": "host_ingest_live_batch" },
+                    "batch": true
                 }
             }
         ]
     })
 }
 
-fn event_kind_schema() -> Value {
+fn server_frame_schema() -> Value {
     json!({
         "oneOf": [
             {
-                "title": "PairedEvent",
+                "title": "Hello",
                 "type": "object",
-                "required": ["type", "peer_device_id", "peer_name"],
+                "required": ["type", "conn_id", "server_time_ms", "heartbeat_interval_ms"],
                 "properties": {
-                    "type": { "const": "paired" },
-                    "peer_device_id": uuid_schema(),
-                    "peer_name": { "type": "string" },
-                    "your_device_secret": { "type": "string" }
+                    "type": { "const": "hello" },
+                    "conn_id": { "type": "string" },
+                    "server_time_ms": { "type": "integer" },
+                    "heartbeat_interval_ms": { "type": "integer" }
                 }
             },
             {
-                "title": "PeerOnlineEvent",
+                "title": "Pong",
                 "type": "object",
-                "required": ["type", "peer_device_id"],
+                "required": ["type", "ts", "server_time_ms"],
                 "properties": {
-                    "type": { "const": "peer_online" },
-                    "peer_device_id": uuid_schema()
+                    "type": { "const": "pong" },
+                    "ts": { "type": "integer" },
+                    "server_time_ms": { "type": "integer" }
                 }
             },
             {
-                "title": "PeerOfflineEvent",
+                "title": "SubscribeAck",
                 "type": "object",
-                "required": ["type", "peer_device_id"],
+                "required": ["type", "topics"],
                 "properties": {
-                    "type": { "const": "peer_offline" },
-                    "peer_device_id": uuid_schema()
+                    "type": { "const": "subscribe_ack" },
+                    "topics": { "type": "array", "items": { "type": "string" } },
+                    "client_request_id": { "type": "string" }
                 }
             },
             {
-                "title": "UnpairedEvent",
+                "title": "StreamEvent",
                 "type": "object",
-                "required": ["type"],
+                "required": ["type", "topic", "kind", "payload"],
                 "properties": {
-                    "type": { "const": "unpaired" }
+                    "type": { "const": "stream_event" },
+                    "topic": { "type": "string" },
+                    "kind": { "type": "string" },
+                    "seq": { "type": "integer" },
+                    "payload": true
                 }
             },
             {
-                "title": "ServerShutdownEvent",
+                "title": "DurableEvent",
                 "type": "object",
-                "required": ["type"],
+                "required": ["type", "topic", "topic_seq", "kind", "payload", "event_id"],
                 "properties": {
-                    "type": { "const": "server_shutdown" }
-                }
-            },
-            {
-                "title": "UiEventMessageEvent",
-                "type": "object",
-                "required": ["type", "session_id", "seq", "ui", "ts_ms"],
-                "properties": {
-                    "type": { "const": "ui_event_message" },
-                    "session_id": { "type": "string" },
-                    "seq": integer_schema(),
-                    "ui": true,
-                    "ts_ms": { "type": "integer" }
-                }
-            },
-            {
-                "title": "ApprovalRequestEvent",
-                "type": "object",
-                "required": ["type", "session_id", "turn_id", "request_id", "method", "params", "timeout_ms"],
-                "properties": {
-                    "type": { "const": "approval_request" },
-                    "session_id": { "type": "string" },
-                    "turn_id": { "type": "string" },
-                    "request_id": { "type": "string" },
-                    "method": { "type": "string" },
-                    "params": true,
-                    "timeout_ms": integer_schema()
-                }
-            },
-            {
-                "title": "ApprovalTimeoutEvent",
-                "type": "object",
-                "required": ["type", "session_id", "request_id", "reason"],
-                "properties": {
-                    "type": { "const": "approval_timeout" },
-                    "session_id": { "type": "string" },
-                    "request_id": { "type": "string" },
-                    "reason": { "type": "string" }
-                }
-            },
-            {
-                "title": "AgentErrorEvent",
-                "type": "object",
-                "required": ["type", "code", "message"],
-                "properties": {
-                    "type": { "const": "agent_error" },
-                    "session_id": { "type": "string" },
-                    "code": { "type": "string" },
-                    "message": { "type": "string" }
-                }
-            },
-            {
-                "title": "SocialMessageEvent",
-                "type": "object",
-                "required": ["type", "conversation_id", "message"],
-                "properties": {
-                    "type": { "const": "social_message" },
-                    "conversation_id": { "type": "string" },
-                    "message": true
-                }
-            },
-            {
-                "title": "IngestCheckpointEvent",
-                "type": "object",
-                "required": ["type", "last_seq_per_thread"],
-                "properties": {
-                    "type": { "const": "ingest_checkpoint" },
-                    "last_seq_per_thread": {
-                        "type": "object",
-                        "additionalProperties": integer_schema()
-                    }
+                    "type": { "const": "durable_event" },
+                    "topic": { "type": "string" },
+                    "topic_seq": { "type": "integer" },
+                    "kind": { "type": "string" },
+                    "payload": true,
+                    "event_id": { "type": "string" }
                 }
             }
         ]
     })
 }
 
+#[allow(dead_code)]
 fn uuid_schema() -> Value {
     json!({
         "type": "string",
@@ -537,6 +481,7 @@ fn uuid_schema() -> Value {
     })
 }
 
+#[allow(dead_code)]
 fn integer_schema() -> Value {
     json!({
         "type": "integer",
@@ -600,13 +545,22 @@ mod tests {
         let parsed: Value = serde_json::from_str(&rendered).unwrap();
         assert_eq!(parsed["transport"], "websocket");
         assert_eq!(parsed["gateways"].as_array().unwrap().len(), 2);
-        assert!(parsed["examples"].get("event_paired").is_some());
+        assert!(parsed["examples"].get("hello").is_some());
+        assert!(parsed["examples"].get("ping").is_some());
+        assert!(parsed["examples"].get("subscribe").is_some());
         assert!(
-            parsed["schemas"]["Envelope"]["oneOf"]
+            parsed["schemas"]["ClientFrame"]["oneOf"]
                 .as_array()
                 .unwrap()
                 .len()
-                >= 4
+                >= 3
+        );
+        assert!(
+            parsed["schemas"]["ServerFrame"]["oneOf"]
+                .as_array()
+                .unwrap()
+                .len()
+                >= 3
         );
     }
 }

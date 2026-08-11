@@ -2,7 +2,7 @@
 //!
 //! Submodules:
 //! - [`device_installations`] — client/host installation rows (`kind` enum).
-//! - [`host_links`] — account ↔ host installation links (ADR-0020 / D02).
+//! - [`host_links`] — account ↔ host installation links.
 //! - [`agent_sessions`] — additive agent session metadata scoped to conversations.
 //! - [`agent_turns`] — durable turn metadata for agent sessions.
 //! - [`agent_turn_events`] — per-turn cold-replay stream slices.

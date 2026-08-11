@@ -1,4 +1,4 @@
-//! Compile-time backend URL + runtime Relay configuration. See spec §10.1.
+//! Compile-time backend URL + runtime Relay configuration.
 
 /// Compile-time backend URL. Overridable via `MINOS_BACKEND_URL` env var at build.
 /// Fallback is the local dev backend (`cargo run -p minos-backend`).

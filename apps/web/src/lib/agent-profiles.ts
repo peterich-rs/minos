@@ -7,7 +7,7 @@ import type { AgentName } from './minos'
  * body). This module is a browser-only cache for Web workbench UX until Web
  * fully uses Hub bot CRUD + participants APIs — not a multi-end identity store.
  *
- * See docs/superpowers/specs/global-bot-identity-design.md.
+ * Bot identity SSOT: Hub `agents` (see docs/architecture-overview.md).
  */
 
 export type AgentReasoningEffort = 'low' | 'medium' | 'high'

@@ -29,8 +29,7 @@ use crate::realtime::liveness::{
     LAST_SEEN_DB_MIN_INTERVAL,
 };
 use crate::realtime::presence;
-use crate::realtime::subscription::ConnectionState;
-use crate::session::{ServerFrame as LegacySessionFrame, SessionHandle, SessionRevocation};
+use crate::realtime::{ConnectionRevocation, ConnectionState};
 use crate::store::{
     agent_sessions, agent_turn_events, agent_turns, durable_event_log, host_commands, host_links,
     outbox_events, raw_events, sessions, social, thread_sync_state,
@@ -92,7 +91,7 @@ pub async fn upgrade_host(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<Response, (StatusCode, String)> {
-    // Host auth is Authorization: Bearer hit_* only (bot-mailbox Phase 2.5).
+    // Host auth is Authorization: Bearer hit_* only (no host ws-ticket).
     let result = if bearer_token_from_headers(&headers).is_some() {
         upgrade_host_with_bearer(state, headers, ws).await
     } else {
@@ -398,8 +397,18 @@ struct CloseDirective {
     reason: &'static str,
 }
 
+/// Stable metric label for a device role (kebab-case, matched to wire shape).
+fn role_metric_label(role: DeviceRole) -> &'static str {
+    match role {
+        DeviceRole::AgentHost => "agent-host",
+        DeviceRole::MobileClient => "mobile-client",
+        DeviceRole::BrowserAdmin => "browser-admin",
+        DeviceRole::DesktopConsole => "desktop-console",
+    }
+}
+
 pub async fn run_session(mut ws: WebSocket, state: BackendState, upgrade: GatewayUpgrade) {
-    let role_label = crate::envelope::role_metric_label(upgrade.role);
+    let role_label = role_metric_label(upgrade.role);
     crate::telemetry::record_ws_connect(role_label, crate::telemetry::OUTCOME_OK);
     crate::telemetry::record_session_role_open(role_label);
 
@@ -416,16 +425,11 @@ pub async fn run_session(mut ws: WebSocket, state: BackendState, upgrade: Gatewa
         .subscription_mgr
         .add_connection(std::sync::Arc::clone(&conn));
 
-    // The registry still owns per-device replacement/revocation state while
-    // the rest of the backend migrates off legacy envelope-side sessions.
-    let (legacy_handle, mut legacy_outbox_rx) = SessionHandle::new(upgrade.device_id, upgrade.role);
-    if let Some(account_id) = upgrade.account_id() {
-        legacy_handle.set_account_id(account_id.to_string());
+    // Connection registry is the sole authority for same-device replace / revoke.
+    if let Some(previous) = state.registry.insert(std::sync::Arc::clone(&conn)) {
+        previous.revoke(ConnectionRevocation::Superseded);
     }
-    if let Some(previous) = state.registry.insert(legacy_handle.clone()) {
-        previous.revoke(SessionRevocation::Superseded);
-    }
-    let mut revocation_rx = legacy_handle.subscribe_revocation();
+    let mut revocation_rx = conn.subscribe_revocation();
 
     // Host online edge: force-due pending dispatches for linked accounts, then wake.
     if upgrade.role == DeviceRole::AgentHost {
@@ -459,16 +463,15 @@ pub async fn run_session(mut ws: WebSocket, state: BackendState, upgrade: Gatewa
         &state,
         &upgrade,
         &conn,
-        &mut legacy_outbox_rx,
         &mut push_rx,
         &mut revocation_rx,
     )
     .await;
 
     state.subscription_mgr.remove_connection(conn.conn_id);
-    let _ = state.registry.remove_current(&legacy_handle);
+    let _ = state.registry.remove_current(&conn);
     // Skip offline fanout when a newer connection already owns the device
-    // (session superseded / reconnect race). Unlink/auth revoke that already
+    // (connection superseded / reconnect race). Unlink/auth revoke that already
     // cleared the registry still publishes offline (get is None).
     if state.registry.get(upgrade.device_id).is_none() {
         presence::publish_connection_presence(
@@ -484,15 +487,13 @@ pub async fn run_session(mut ws: WebSocket, state: BackendState, upgrade: Gatewa
     crate::telemetry::record_session_role_close(role_label);
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run_session_inner(
     ws: &mut WebSocket,
     state: &BackendState,
     upgrade: &GatewayUpgrade,
     conn: &std::sync::Arc<ConnectionState>,
-    legacy_outbox_rx: &mut mpsc::Receiver<LegacySessionFrame>,
     push_rx: &mut mpsc::Receiver<ServerFrame>,
-    revocation_rx: &mut tokio::sync::watch::Receiver<Option<SessionRevocation>>,
+    revocation_rx: &mut tokio::sync::watch::Receiver<Option<ConnectionRevocation>>,
 ) -> &'static str {
     if send_server_frame(
         ws,
@@ -529,11 +530,11 @@ async fn run_session_inner(
         let current_revocation = { *revocation_rx.borrow() };
         if let Some(reason) = current_revocation {
             let directive = match reason {
-                SessionRevocation::Superseded => CloseDirective {
+                ConnectionRevocation::Superseded => CloseDirective {
                     code: CLOSE_CODE_AUTH_REVOKED,
                     reason: "session_superseded",
                 },
-                SessionRevocation::AuthRevoked => CloseDirective {
+                ConnectionRevocation::AuthRevoked => CloseDirective {
                     code: CLOSE_CODE_AUTH_REVOKED,
                     reason: "auth_revoked",
                 },
@@ -550,11 +551,11 @@ async fn run_session_inner(
                     let updated_revocation = { *revocation_rx.borrow_and_update() };
                     if let Some(reason) = updated_revocation {
                         let directive = match reason {
-                            SessionRevocation::Superseded => CloseDirective {
+                            ConnectionRevocation::Superseded => CloseDirective {
                                 code: CLOSE_CODE_AUTH_REVOKED,
                                 reason: "session_superseded",
                             },
-                            SessionRevocation::AuthRevoked => CloseDirective {
+                            ConnectionRevocation::AuthRevoked => CloseDirective {
                                 code: CLOSE_CODE_AUTH_REVOKED,
                                 reason: "auth_revoked",
                             },
@@ -648,17 +649,6 @@ async fn run_session_inner(
                 if send_server_frame(ws, &frame).await.is_err() {
                     return "write_failed";
                 }
-            }
-            maybe_legacy_frame = legacy_outbox_rx.recv() => {
-                let Some(legacy_frame) = maybe_legacy_frame else {
-                    continue;
-                };
-                tracing::debug!(
-                    target: "minos_backend::realtime",
-                    device_id = %upgrade.device_id,
-                    frame = ?legacy_frame,
-                    "dropping legacy session-registry frame on topic gateway"
-                );
             }
             _ = heartbeat.tick() => {
                 if liveness::is_heartbeat_expired(last_activity.elapsed(), HEARTBEAT_TIMEOUT) {
@@ -976,7 +966,7 @@ async fn handle_formal_frame(
             handle_host_ingest_pull_response(ws, state, upgrade, response).await?;
             Ok(None)
         }
-        // Bot mailbox / WS-native IM bus (bot-mailbox-ws-im-bus-design Phase 2).
+        // Bot mailbox / WS-native IM bus write.
         // Same commit path as HTTP POST …/messages (not a second SSOT).
         ClientFrame::AppendMessage {
             client_operation_id,
@@ -1048,7 +1038,7 @@ async fn handle_formal_frame(
             conversation_id,
             bot_id,
             text,
-            mentions: _mentions,
+            mentions,
             reply_to_message_id,
         } => {
             if upgrade.role != DeviceRole::AgentHost {
@@ -1070,6 +1060,7 @@ async fn handle_formal_frame(
                 &bot_id,
                 &text,
                 reply_to_message_id.as_deref(),
+                &mentions,
             )
             .await?;
             Ok(None)
@@ -1091,7 +1082,7 @@ fn host_owns_active_lease(
     }
     match row.lease_expires_at_ms {
         Some(expires) if expires >= now_ms => true,
-        // Missing expiry: still honor owner while inflight (legacy rows).
+        // Missing expiry: still honor owner while the lease is inflight.
         None => true,
         Some(_) => false,
     }
@@ -1197,6 +1188,7 @@ async fn handle_append_bot_message(
     bot_id: &str,
     text: &str,
     reply_to_message_id: Option<&str>,
+    structured_mentions: &[minos_protocol::MentionTarget],
 ) -> Result<(), BackendError> {
     let host_id = upgrade.device_id.to_string();
     let now_ms = chrono::Utc::now().timestamp_millis();
@@ -1243,6 +1235,7 @@ async fn handle_append_bot_message(
         reply_to_message_id,
         row.session_id.as_deref(),
         operation_id,
+        structured_mentions,
     )
     .await
     {
@@ -1304,7 +1297,7 @@ async fn handle_append_bot_message(
     Ok(())
 }
 
-/// Account WS-native collaboration write (bot-mailbox-ws-im-bus Phase 2).
+/// Account WS-native collaboration write.
 ///
 /// Shares the same domain commit as HTTP `POST …/messages`:
 /// `DefaultConversationService::send_message` + social fanout + agent inbox.
@@ -1379,8 +1372,8 @@ async fn handle_append_message(
         )
         .await;
 
-    let (message, _members) = match send_result {
-        Ok(pair) => pair,
+    let (message, _members, bot_enqueued) = match send_result {
+        Ok(triple) => triple,
         Err(error) => {
             let (code, msg) = conversation_error_to_chat_nack(&error);
             tracing::warn!(
@@ -1404,36 +1397,10 @@ async fn handle_append_message(
         }
     };
 
-    // Same post-commit path as HTTP send_message_inner.
+    // Fanout + worker wake after commit (bot deliveries already co-committed).
     crate::http::v1::social::fan_out_social_message(state, &message).await;
-
-    if message_source.allows_agent_dispatch() {
-        if let Err(e) = crate::http::v1::social::try_agent_dispatch(
-            state,
-            account_id,
-            &conversation_id,
-            &message,
-            reply_to_message_id.as_deref(),
-            &trimmed,
-        )
-        .await
-        {
-            tracing::warn!(
-                target: "minos_backend::realtime",
-                error = %e,
-                conversation_id = %conversation_id,
-                message_id = %message.message_id,
-                "agent inbox pipeline error after AppendMessage"
-            );
-            crate::http::v1::social::notify_agent_dispatch_pipeline_error(
-                state,
-                account_id,
-                &conversation_id,
-                &message.message_id,
-                &e,
-            )
-            .await;
-        }
+    if bot_enqueued {
+        state.wake_agent_dispatch();
     }
 
     let _ = send_server_frame(
@@ -2044,7 +2011,7 @@ async fn persist_host_ingest_chunk(
         }
 
         // Cloud projection SSOT: host raw payload → SessionTranslators (same
-        // minos-ui-protocol stack as Envelope::Ingest). Host `projection` is
+        // minos-ui-protocol stack). Host `projection` is
         // ignored so viewer UI is not locked to daemon version skew.
         let translated =
             match state

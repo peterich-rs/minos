@@ -4,8 +4,8 @@
 //! (`POST /v1/hosts/unlink`), and agent-session control-plane calls.
 //! Live event push still flows over the WebSocket.
 //!
-//! ADR-0020 removed the iOS device-secret rail; every iOS-originated
-//! request authenticates with the bearer alone.
+//! The iOS device-secret rail is gone; every iOS-originated request
+//! authenticates with the bearer alone.
 
 use std::collections::HashSet;
 use std::time::Duration;
@@ -396,7 +396,7 @@ impl MobileHttpClient {
         }
     }
 
-    /// Bearer-only after ADR-0020. Lists the calling account's sessions.
+    /// Bearer-only. Lists the calling account's sessions.
     pub async fn list_sessions(
         &self,
         access_token: &str,
@@ -642,7 +642,7 @@ impl MobileHttpClient {
         }
     }
 
-    /// `client_request_id` is the Hub Intent Outbox id (C5.3); sent when non-empty.
+    /// `client_request_id` is the Hub Intent Outbox id; sent when non-empty.
     pub async fn submit_approval_decision(
         &self,
         access_token: &str,
@@ -1690,7 +1690,7 @@ impl MobileHttpClient {
         }
     }
 
-    /// `POST …/reactions/toggle` — Hub reaction SSOT (B6 requires client_op_id).
+    /// `POST …/reactions/toggle` — Hub reaction SSOT (`client_op_id` required).
     pub async fn toggle_reaction(
         &self,
         access_token: &str,
@@ -2045,7 +2045,7 @@ impl MobileHttpClient {
     }
 
     /// `POST /v1/auth/refresh` — rotate the bearer + refresh pair.
-    /// Bearer-only post ADR-0020.
+    /// Bearer-only.
     pub async fn refresh(&self, refresh_token: &str) -> Result<RefreshResponse, MinosError> {
         let url = format!("{}/v1/auth/refresh", self.base);
         let trace_id = start_http_trace(
@@ -2063,7 +2063,7 @@ impl MobileHttpClient {
     }
 
     /// `POST /v1/auth/logout` — revoke the named refresh token.
-    /// Bearer-only post ADR-0020.
+    /// Bearer-only.
     pub async fn logout(&self, access_token: &str, refresh_token: &str) -> Result<(), MinosError> {
         let url = format!("{}/v1/auth/logout", self.base);
         let trace_id = start_http_trace(
@@ -2512,7 +2512,7 @@ async fn decode_error(resp: Response<ResponseBody>) -> MinosError {
 }
 
 /// Decode an `AuthResponse` from the backend, mapping `kind` strings on
-/// the failure path to typed `MinosError` variants. Spec §5.4, §8.1.
+/// the failure path to typed `MinosError` variants.
 async fn decode_auth_response(
     resp: Response<ResponseBody>,
     trace_id: u64,
@@ -2560,7 +2560,7 @@ async fn decode_refresh_response(
 
 /// Map an HTTP error response that carries either the old `{ "kind": "..." }`
 /// body or the current `{ "error": { "code": "..." } }` envelope to a typed
-/// `MinosError`. Used by every `/v1/auth/*` endpoint. Spec §8.1.
+/// `MinosError`. Used by every `/v1/auth/*` endpoint.
 async fn decode_kind_error(resp: Response<ResponseBody>) -> MinosError {
     let (parts, body) = resp.into_parts();
     let retry_after = parts

@@ -23,10 +23,10 @@ class AppShellPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final tabIndex = ref.watch(shellTabIndexProvider).clamp(0, 2);
     final colors = context.minosColors;
-    // C6.3: Messages tab badge from Hub inbox unread sum.
+    // Messages tab badge from Hub inbox unread sum.
     final unread = ref.watch(socialUnreadCountProvider);
 
-    // R4: non-silent subscription limit (LRU eviction / cap).
+    // Non-silent subscription limit (LRU eviction / cap).
     ref.listen<SubscriptionLimitNotice?>(subscriptionLimitNoticeProvider, (
       previous,
       next,

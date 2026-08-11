@@ -1,0 +1,4 @@
+{
+  "type": "subscribe_ack",
+  "topics": ["account:acct-1"]
+}

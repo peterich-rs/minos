@@ -52,11 +52,11 @@ class MinosCore implements MinosCoreProtocol {
   /// authenticated row on the backend and be rejected with 401. Dropping
   /// the snapshot lets the next pair attempt mint a fresh device.
   ///
-  /// Phase 8.9: WS startup is now gated on the persisted auth tuple. If
-  /// the snapshot has a device id but no `accessToken`, we hand back the
-  /// rehydrated client *without* calling `resumePersistedSession` — the
-  /// AuthController's stream listener will trigger the WS resume after
-  /// the user logs in (`AuthAuthenticated`).
+  /// WS startup is gated on the persisted auth tuple. If the snapshot has
+  /// a device id but no `accessToken`, we hand back the rehydrated client
+  /// *without* calling `resumePersistedSession` — the AuthController's
+  /// stream listener will trigger the WS resume after the user logs in
+  /// (`AuthAuthenticated`).
   ///
   /// Auth-only snapshots are valid too: exchange happens before QR
   /// pairing, so cold launch must keep the bearer tuple and stable device id.
@@ -300,11 +300,13 @@ class MinosCore implements MinosCoreProtocol {
     required String text,
     String? replyToMessageId,
     String? clientMessageId,
+    String? mentionsJson,
   }) => _client.sendChatMessage(
     conversationId: conversationId,
     text: text,
     replyToMessageId: replyToMessageId,
     clientMessageId: clientMessageId,
+    mentionsJson: mentionsJson,
   );
 
   @override
@@ -449,19 +451,19 @@ class MinosCore implements MinosCoreProtocol {
     await _secure.clearAuth();
   }
 
-  /// Post-auth persistence (Phase 11.3 + ADR-0020).
+  /// Post-auth persistence.
   ///
   /// After a successful Supabase exchange we mirror the freshly minted
   /// auth tuple from the Rust core into the Dart keychain so a cold
   /// relaunch can rehydrate `auth_session` synchronously and the
   /// AuthController's first frame is already `Authenticated`.
   ///
-  /// Cross-account migration: post ADR-0020 the pairing is account-scoped
-  /// on the server (`account_mac_pairings`). Logging in as a different
-  /// account simply yields a different `listPairedHosts` result on the
-  /// next WS upgrade — no local "forget" call is needed. The peer display
-  /// name from the previous account is cleared so a stale label doesn't
-  /// show up before the first Mac sync.
+  /// Cross-account migration: pairing is account-scoped on the server
+  /// (`account_mac_pairings`). Logging in as a different account simply
+  /// yields a different `listPairedHosts` result on the next WS upgrade —
+  /// no local "forget" call is needed. The peer display name from the
+  /// previous account is cleared so a stale label doesn't show up before
+  /// the first Mac sync.
   ///
   /// Best-effort throughout: the Rust side is the source of truth for
   /// the live session, so a keychain write failure does not invalidate

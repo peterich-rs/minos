@@ -1,7 +1,7 @@
-//! Lightweight types previously colocated in `runtime.rs`. Phase C task C18
-//! retired the single-session `AgentRuntime` along with `runtime.rs`; the
-//! configuration value-object and the raw-ingest payload type still need a
-//! permanent home for `AgentManager` consumers.
+//! Lightweight types previously colocated in `runtime.rs`. The single-session
+//! `AgentRuntime` and `runtime.rs` were retired; the configuration value-object
+//! and the raw-ingest payload type still need a permanent home for
+//! `AgentManager` consumers.
 
 use minos_domain::AgentName;
 use minos_ui_protocol::{ArtifactRef, DisplayPayload, MessageRole};

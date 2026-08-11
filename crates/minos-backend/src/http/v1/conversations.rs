@@ -293,6 +293,7 @@ async fn send_message(
         req.message_source.unwrap_or_default(),
         req.client_sent_at_ms,
         req.attachment_blob_ids,
+        req.mentions,
     )
     .await
 }
@@ -312,6 +313,7 @@ async fn send_message_command(
         req.message_source.unwrap_or_default(),
         req.client_sent_at_ms,
         req.attachment_blob_ids,
+        req.mentions,
     )
     .await
 }
@@ -326,6 +328,7 @@ async fn send_message_inner(
     message_source: minos_protocol::MessageSource,
     client_sent_at_ms: Option<i64>,
     attachment_blob_ids: Vec<String>,
+    structured_mentions: Vec<minos_protocol::MentionTarget>,
 ) -> Result<Json<ChatMessageSummary>, (StatusCode, Json<ErrorEnvelope>)> {
     let account_id = super::social::require_account_id_from_state(&state, &headers)?;
     let trimmed = text.trim().to_string();
@@ -337,7 +340,7 @@ async fn send_message_inner(
     }
 
     let conversations_svc = DefaultConversationService::new(state.store.clone());
-    let (message, _members) = conversations_svc
+    let (message, _members, bot_enqueued) = conversations_svc
         .send_message(
             &account_id,
             &conversation_id,
@@ -347,43 +350,15 @@ async fn send_message_inner(
             message_source,
             client_sent_at_ms,
             &attachment_blob_ids,
-            &[],
+            &structured_mentions,
         )
         .await
         .map_err(map_conversation_error)?;
 
     super::social::fan_out_social_message(&state, &message).await;
-
-    // Participant delivery (Agent inbox) only for live client sends.
-    // host_projection / system never re-deliver (anti-loop; Desktop native path).
-    // Failures must not be silent: surface via the existing agent_error path.
-    if message_source.allows_agent_dispatch() {
-        if let Err(e) = super::social::try_agent_dispatch(
-            &state,
-            &account_id,
-            &conversation_id,
-            &message,
-            reply_to_message_id.as_deref(),
-            &trimmed,
-        )
-        .await
-        {
-            tracing::warn!(
-                target: "minos_backend::conversations",
-                error = %e,
-                conversation_id = %conversation_id,
-                message_id = %message.message_id,
-                "agent inbox pipeline error after message send"
-            );
-            super::social::notify_agent_dispatch_pipeline_error(
-                &state,
-                &account_id,
-                &conversation_id,
-                &message.message_id,
-                &e,
-            )
-            .await;
-        }
+    // Bot deliveries were co-committed with the message; only wake the worker.
+    if bot_enqueued {
+        state.wake_agent_dispatch();
     }
 
     Ok(Json(message))

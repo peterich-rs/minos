@@ -1,12 +1,35 @@
-/// Best-effort optimistic mention extract for pending local rows.
+/// Best-effort optimistic mention extract for pending local rows + outbox wire.
 ///
-/// Hub `extract_participant_mentions` remains SSOT after ack. This only seeds
-/// cache/UI so reload before HTTP upsert does not drop bot mentions.
+/// Hub validates structured mentions after ack (body never invents targets).
+/// This seeds cache/UI and builds AppendMessage `mentions` payloads so reload
+/// before HTTP upsert does not drop bot mentions and delivery has explicit
+/// targets.
 library;
 
-/// Collect `@token` name parts from body (alphanumeric / `-` / `_` / optional `#short`).
-List<String> collectMentionTokens(String text) {
-  final tokens = <String>[];
+/// One `@token` occurrence in body text (token without leading `@`).
+class MentionTokenSpan {
+  const MentionTokenSpan({
+    required this.token,
+    required this.start,
+    required this.length,
+  });
+
+  /// Name part after `@` (may include `#short`).
+  final String token;
+
+  /// UTF-16 code-unit index of `@` in the body.
+  final int start;
+
+  /// UTF-16 code-unit length covering `@` + token.
+  final int length;
+}
+
+/// Collect `@token` spans from body (alphanumeric / `-` / `_` / optional `#short`).
+///
+/// [start]/[length] cover the full `@token` (including `@`), matching desktop
+/// wire spans for AppendMessage.
+List<MentionTokenSpan> collectMentionTokenSpans(String text) {
+  final spans = <MentionTokenSpan>[];
   final bytes = text.codeUnits;
   var index = 0;
   while (index < bytes.length) {
@@ -25,6 +48,7 @@ List<String> collectMentionTokens(String text) {
         continue;
       }
     }
+    final atStart = index;
     final start = index + 1;
     var end = start;
     while (end < bytes.length) {
@@ -40,13 +64,26 @@ List<String> collectMentionTokens(String text) {
       end += 1;
     }
     if (end > start) {
-      tokens.add(text.substring(start, end));
+      spans.add(
+        MentionTokenSpan(
+          token: text.substring(start, end),
+          start: atStart,
+          length: end - atStart,
+        ),
+      );
       index = end;
       continue;
     }
     index += 1;
   }
-  return tokens;
+  return spans;
+}
+
+/// Collect `@token` name parts from body (without leading `@`).
+List<String> collectMentionTokens(String text) {
+  return collectMentionTokenSpans(
+    text,
+  ).map((s) => s.token).toList(growable: false);
 }
 
 String mentionNamePart(String token) {
@@ -80,14 +117,24 @@ class OptimisticMentions {
   const OptimisticMentions({
     this.accountIds = const <String>[],
     this.agentIds = const <String>[],
+    this.structuredMentions = const <Map<String, Object?>>[],
   });
 
   final List<String> accountIds;
   final List<String> agentIds;
+
+  /// Wire [MentionTarget] objects for AppendMessage / outbox payload.
+  ///
+  /// Shape:
+  /// - `{"kind":"bot","bot_id":"...","start":0,"length":6}`
+  /// - `{"kind":"account","account_id":"...","start":0,"length":5}`
+  final List<Map<String, Object?>> structuredMentions;
 }
 
 /// Resolve body @tokens against current participants (membership-first).
 /// Order is body appearance order; self account is skipped.
+///
+/// Produces both id lists (local cache) and structured wire mentions (outbox).
 OptimisticMentions extractOptimisticMentions({
   required String text,
   required String? selfAccountId,
@@ -99,17 +146,24 @@ OptimisticMentions extractOptimisticMentions({
   };
   final accountIds = <String>[];
   final agentIds = <String>[];
+  final structured = <Map<String, Object?>>[];
   final seenAccounts = <String>{};
   final seenAgents = <String>{};
   final self = selfAccountId?.trim() ?? '';
 
-  for (final token in collectMentionTokens(text)) {
-    final name = mentionNamePart(token);
+  for (final span in collectMentionTokenSpans(text)) {
+    final name = mentionNamePart(span.token);
     if (name.isEmpty) continue;
     final accountId = byMinos[name];
     if (accountId != null) {
       if (accountId != self && seenAccounts.add(accountId)) {
         accountIds.add(accountId);
+        structured.add(<String, Object?>{
+          'kind': 'account',
+          'account_id': accountId,
+          'start': span.start,
+          'length': span.length,
+        });
       }
       continue;
     }
@@ -125,8 +179,18 @@ OptimisticMentions extractOptimisticMentions({
     }
     if (match != null && seenAgents.add(match.agentId)) {
       agentIds.add(match.agentId);
+      structured.add(<String, Object?>{
+        'kind': 'bot',
+        'bot_id': match.agentId,
+        'start': span.start,
+        'length': span.length,
+      });
     }
   }
 
-  return OptimisticMentions(accountIds: accountIds, agentIds: agentIds);
+  return OptimisticMentions(
+    accountIds: accountIds,
+    agentIds: agentIds,
+    structuredMentions: structured,
+  );
 }

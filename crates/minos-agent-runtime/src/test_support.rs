@@ -99,7 +99,7 @@ pub struct FakeCodexServer {
 
 impl FakeCodexServer {
     /// Bind to an ephemeral loopback port and spawn the accept task.
-    /// Returns `(self, port)`; the port is what Phase C's agent-runtime
+    /// Returns `(self, port)`; the port is what the agent-runtime
     /// connects to via `ws://127.0.0.1:<port>`.
     pub async fn bind(script: Vec<Step>) -> (Self, u16) {
         let listener = TcpListener::bind("127.0.0.1:0")

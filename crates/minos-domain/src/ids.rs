@@ -198,10 +198,7 @@ mod tests {
         assert_eq!(s, back);
     }
 
-    // Plan 05 Task A.3 contract tests: DeviceSecret already existed before
-    // the macOS relay-client migration plan landed (introduced by plan 04),
-    // so these duplicate intent with the tests above. Kept under the plan's
-    // chosen names so the plan's acceptance criteria are visible in tree.
+    // Contract tests for `DeviceSecret` serialization round-trip behavior.
     #[test]
     fn device_secret_round_trips_as_string() {
         let s = DeviceSecret("hunter2-the-32-byte-base64-secret".into());

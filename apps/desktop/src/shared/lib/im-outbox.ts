@@ -59,6 +59,21 @@ export type ImOutboxMessageSource =
   | "host_projection"
   | "system";
 
+/** Structured AppendMessage mention (wire snake_case fields). */
+export type ImOutboxMention =
+  | {
+      kind: "bot";
+      bot_id: string;
+      start?: number;
+      length?: number;
+    }
+  | {
+      kind: "account";
+      account_id: string;
+      start?: number;
+      length?: number;
+    };
+
 export type ImOutboxEntry = {
   id: string;
   kind: OutboxKind;
@@ -72,6 +87,8 @@ export type ImOutboxEntry = {
   agentSessionId?: string | null;
   clientSentAtMs?: number | null;
   messageSource?: ImOutboxMessageSource;
+  /** Structured mentions for AppendMessage (persisted for retry). */
+  mentions?: ImOutboxMention[];
   status: OutboxStatus;
   attempts: number;
   nextAttemptAt: number;
@@ -94,6 +111,7 @@ type ImOutboxWire = {
   agentSessionId?: string | null;
   clientSentAtMs?: number | null;
   messageSource?: string | null;
+  mentions?: ImOutboxMention[] | null;
   status: string;
   attempts: number;
   nextAttemptAt: number;
@@ -150,6 +168,7 @@ function entryToWire(e: ImOutboxEntry): ImOutboxWire {
     agentSessionId: e.agentSessionId ?? null,
     clientSentAtMs: e.clientSentAtMs ?? null,
     messageSource: e.messageSource ?? null,
+    mentions: e.mentions && e.mentions.length > 0 ? e.mentions : null,
     status: e.status,
     attempts: e.attempts,
     nextAttemptAt: e.nextAttemptAt,
@@ -173,6 +192,10 @@ function wireToEntry(w: ImOutboxWire): ImOutboxEntry {
     agentSessionId: w.agentSessionId,
     clientSentAtMs: w.clientSentAtMs,
     messageSource: (w.messageSource as ImOutboxMessageSource | null) ?? undefined,
+    mentions:
+      w.mentions && Array.isArray(w.mentions) && w.mentions.length > 0
+        ? w.mentions
+        : undefined,
     status: w.status as OutboxStatus,
     attempts: w.attempts,
     nextAttemptAt: w.nextAttemptAt,
@@ -376,12 +399,17 @@ async function upsertPendingEntry(input: {
   agentSessionId?: string | null;
   clientSentAtMs?: number | null;
   messageSource?: ImOutboxMessageSource;
+  mentions?: ImOutboxMention[] | null;
 }): Promise<ImOutboxEntry> {
   return withMutation(async () => {
     const clientMessageId = input.clientMessageId.trim();
     const conversationId = input.conversationId.trim();
     const text = input.text.trim();
     const t = nowMs();
+    const mentions =
+      input.mentions && input.mentions.length > 0
+        ? input.mentions.slice()
+        : undefined;
     const existingIdx = entries.findIndex(
       (e) => e.clientMessageId === clientMessageId,
     );
@@ -404,6 +432,7 @@ async function upsertPendingEntry(input: {
         agentSessionId: input.agentSessionId ?? prev.agentSessionId,
         clientSentAtMs: input.clientSentAtMs ?? prev.clientSentAtMs,
         messageSource: input.messageSource ?? prev.messageSource,
+        mentions: mentions ?? prev.mentions,
         status: "pending",
         nextAttemptAt: t,
         updatedAtMs: t,
@@ -429,6 +458,7 @@ async function upsertPendingEntry(input: {
       agentSessionId: input.agentSessionId,
       clientSentAtMs: input.clientSentAtMs,
       messageSource: input.messageSource ?? "client_live",
+      mentions,
       status: "pending",
       attempts: 0,
       nextAttemptAt: t,
@@ -451,6 +481,7 @@ export async function enqueueUserMessage(input: {
   agentRuntimes?: Array<string | null | undefined>;
   clientSentAtMs?: number | null;
   messageSource?: ImOutboxMessageSource;
+  mentions?: ImOutboxMention[] | null;
 }): Promise<ImOutboxEntry> {
   return upsertPendingEntry({
     kind: "user_message",

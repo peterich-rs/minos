@@ -72,6 +72,19 @@ DaemonInner {
 
 ## Relay 连接 (`src/relay_client.rs`)
 
+### BotInboxDelivery 账本（`bot_delivery_ledger`）
+
+Hub→Host 的 bot 投递是 at-least-once。Host 用本地 SQLite 表 `bot_delivery_ledger` 做有效 exactly-once 注入：
+
+| status | 含义 |
+|--------|------|
+| `received` | 已见 delivery_id，inject 进行中 |
+| `injected` | 已注入本地 session/turn（可重放 DeliveryAccepted） |
+| `rejected` | 终态拒绝（可重放 DeliveryRejected） |
+| `completed` | 可选终态（turn 完成） |
+
+重启或缓存淘汰后，同一 `delivery_id` 不会二次 inject agent 副作用。实现：`store/bot_delivery_ledger.rs` + `relay_client` 消费路径。
+
 ### 连接生命周期
 
 1. 等待 host 安装令牌（poll + Notify）
@@ -290,7 +303,7 @@ Starting → Idle → Running { turn_started_at_ms }
 
 支持的方法: `health`, `list_clis`, `list_models`, `list_agent_profiles`, `create_agent_profile`, `update_agent_profile`, `delete_agent_profile`, `list_host_skills`, `write_host_skill_config`, `start_agent` (optional `profile_id` / `model` / `reasoning_effort` / `instructions`), `start_agent_in_conversation` (same), `send_user_message`, `approval_decision`, `respond_opencode_question`, `interrupt_session`, `close_session`, `list_sessions`, `get_session`
 
-Host-local **bot identities**（`bot_identities` 表，见 `0001_initial`；wire 仍用 `list/create/update/delete_agent_profiles`，`id` ≡ `bot_id`，`instructions` ≡ `system_prompt`）cache personalized runtime+model+effort+system_prompt for local launch and offline roster. **Product bot identity SSOT is Hub `agents`** (global bot user + digital body); local rows are a Host cache / launch helper and must not mint a second multi-end identity. Offline create-conversation runtime labels map to stable seeds `local-rt-{runtime}` via `ensure_local_runtime_bot` (`source=host_runtime_seed`). See [global-bot-identity-design](superpowers/specs/global-bot-identity-design.md) and [bot-identity-session-separation Phase 2](superpowers/specs/2026-08-10-bot-identity-session-separation.md). Model discovery remains best-effort via Codex `model/list`, CLI probes (`grok models`, `opencode models`), or static aliases (Claude/Gemini).
+Host-local **bot identities**（`bot_identities` 表，见 `0001_initial`；wire 仍用 `list/create/update/delete_agent_profiles`，`id` ≡ `bot_id`，`instructions` ≡ `system_prompt`）cache personalized runtime+model+effort+system_prompt for local launch and offline roster. **Product bot identity SSOT is Hub `agents`** (global bot user + digital body); local rows are a Host cache / launch helper and must not mint a second multi-end identity. Offline create-conversation runtime labels map to stable seeds `local-rt-{runtime}` via `ensure_local_runtime_bot` (`source=host_runtime_seed`). 身份与投递不变量见 [architecture-messaging.md](architecture-messaging.md)。Model discovery remains best-effort via Codex `model/list`, CLI probes (`grok models`, `opencode models`), or static aliases (Claude/Gemini).
 
 **Profile name rules**: display names are also `@Name` mention tokens. `create_agent_profile` / `update_agent_profile` reject empty names and names containing whitespace, `#`, or `@` (breaks single-token routing / `agent#short` form). Desktop create form + `profileMentionInsert` enforce the same; non-clean names force `@p/<id>` insert as defense in depth.
 

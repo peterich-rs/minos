@@ -5,7 +5,7 @@ import { demoteResolvedApprovalItems } from "./session-status.ts";
 export const TRANSCRIPT_PAGE_EVENTS = 400;
 
 /**
- * Hard cap on transcript items retained per session window (spec §21).
+ * Hard cap on transcript items retained per session window.
  * Pin/focus may still trim oldest; set hasOlder when trimmed.
  */
 export const TRANSCRIPT_HARD_MAX_ITEMS = 2000;

@@ -500,7 +500,7 @@ export type CloudUserSummary = {
   displayName: string;
 };
 
-/** Unified conversation participants (humans ∪ bot agents). ADR 0021 Phase A. */
+/** Unified conversation participants (humans ∪ bot agents). See ADR 0021. */
 export type ConversationParticipants = {
   humans: CloudUserSummary[];
   agents: CloudAgentSummary[];
@@ -520,7 +520,7 @@ function mapUserSummary(raw: {
 
 /**
  * List conversation participants (humans + agents) for composer @ picker.
- * POST …/participants — Phase A dual-table aggregate.
+ * POST …/participants — aggregates humans and bot agents.
  */
 export async function listConversationParticipants(
   deviceId: string,
@@ -548,14 +548,14 @@ export async function listConversationParticipants(
   };
 }
 
-export type HubReactionGroup = {
+export type CloudReactionGroup = {
   emoji: string;
   count: number;
   reactedByMe: boolean;
   actors: Array<{ actorId: string; actorKind: string; displayName: string }>;
 };
 
-export type HubChatMessage = {
+export type CloudChatMessage = {
   messageId: string;
   conversationId: string;
   text: string;
@@ -576,7 +576,7 @@ export type HubChatMessage = {
   /** Structured bot mention targets (protocol ChatMessageSummary). */
   mentionedAgentIds?: string[];
   /** Viewer-resolved reaction aggregates from messages/query. */
-  reactions?: HubReactionGroup[];
+  reactions?: CloudReactionGroup[];
 };
 
 /** Wire `MessageSender` tagged union (kind: account | bot). */
@@ -614,7 +614,7 @@ function mapWireSender(sender: WireMessageSender): {
   if (sender.kind === "bot") {
     return {
       senderType: "agent",
-      // bot_id is the global bot identity; keep field name for HubChatMessage
+      // bot_id is the global bot identity; keep field name for CloudChatMessage
       // consumers that still key agentRuntimeMap by id.
       senderAccountId: sender.bot_id,
       senderMinosId: sender.name?.trim() || sender.bot_id,
@@ -631,7 +631,7 @@ function mapWireSender(sender: WireMessageSender): {
   };
 }
 
-function mapHubChatMessage(raw: {
+function mapCloudChatMessage(raw: {
   message_id: string;
   conversation_id: string;
   text: string;
@@ -653,7 +653,7 @@ function mapHubChatMessage(raw: {
       display_name: string;
     }>;
   }>;
-}): HubChatMessage {
+}): CloudChatMessage {
   const mappedSender = mapWireSender(raw.sender);
   // Prefer tagged sender; fall back to sender_type for sparse frames.
   const senderType =
@@ -701,7 +701,7 @@ function mapHubChatMessage(raw: {
 }
 
 /** Account-scoped conversation digest from POST /v1/conversations/query. */
-export type HubConversationListItem = {
+export type CloudConversationListItem = {
   conversationId: string;
   title: string;
   preview: string | null;
@@ -714,12 +714,12 @@ export type HubConversationListItem = {
 
 /**
  * Account-scoped Hub inbox digests (multi-end SSOT for rail unread/preview).
- * Single-flight hydrate source for HubDigestCache — not per-project.
+ * Single-flight hydrate source for CloudDigestCache — not per-project.
  */
-export async function listHubConversations(
+export async function listCloudConversations(
   deviceId: string,
   accessToken: string,
-): Promise<HubConversationListItem[]> {
+): Promise<CloudConversationListItem[]> {
   const resp = await requestJson<{
     conversations?: Array<{
       conversation_id: string;
@@ -751,8 +751,8 @@ export async function listHubConversations(
 }
 
 /** Page result for Hub cold-path messages/query (gap fill / older pages). */
-export type HubMessagePage = {
-  messages: HubChatMessage[];
+export type CloudMessagePage = {
+  messages: CloudChatMessage[];
   /** Cursor for next older page (`before_seq`); null when no more history. */
   nextBeforeSeq: number | null;
 };
@@ -761,14 +761,14 @@ export type HubMessagePage = {
  * Cold-read hub conversation timeline (Mobile / multi-end).
  * Gap API: `before_seq` / `after_seq` keyset on per-conversation message_seq.
  */
-export async function listHubConversationMessages(
+export async function listCloudConversationMessages(
   deviceId: string,
   accessToken: string,
   conversationId: string,
   opts?: { beforeSeq?: number; afterSeq?: number; limit?: number },
-): Promise<HubMessagePage> {
+): Promise<CloudMessagePage> {
   const resp = await requestJson<{
-    messages: Array<Parameters<typeof mapHubChatMessage>[0]>;
+    messages: Array<Parameters<typeof mapCloudChatMessage>[0]>;
     next_before_seq?: number | null;
   }>(
     `/v1/conversations/${encodeURIComponent(conversationId)}/messages/query`,
@@ -782,7 +782,7 @@ export async function listHubConversationMessages(
       }),
     },
   );
-  const messages = (resp.messages ?? []).map(mapHubChatMessage);
+  const messages = (resp.messages ?? []).map(mapCloudChatMessage);
   return {
     messages,
     nextBeforeSeq:
@@ -791,11 +791,11 @@ export async function listHubConversationMessages(
 }
 
 /**
- * P3: Hub approval intent (`POST /v1/approvals/respond`).
- * `client_request_id` is top-level Intent Outbox id (C5.3); never nest inside
+ * Hub approval intent (`POST /v1/approvals/respond`).
+ * `client_request_id` is top-level Intent Outbox id; never nest inside
  * agent decision JSON.
  */
-export async function respondHubApproval(
+export async function respondCloudApproval(
   deviceId: string,
   accessToken: string,
   input: {
@@ -808,7 +808,7 @@ export async function respondHubApproval(
   const clientRequestId = input.clientRequestId.trim();
   if (!requestId || !clientRequestId) {
     throw new Error(
-      "respondHubApproval requires requestId and clientRequestId",
+      "respondCloudApproval requires requestId and clientRequestId",
     );
   }
   const decision =
@@ -834,7 +834,7 @@ export async function respondHubApproval(
  * `readUpToMessageSeq` is the highest Hub `message_seq` this client has
  * actually observed/loaded — never the server "latest" watermark.
  */
-export async function markHubConversationRead(
+export async function markCloudConversationRead(
   deviceId: string,
   accessToken: string,
   conversationId: string,
@@ -863,13 +863,13 @@ export async function markHubConversationRead(
 }
 
 /** Cloud reaction toggle (Hub message ids only). Aggregate is SSOT. */
-export async function toggleHubReaction(
+export async function toggleCloudReaction(
   deviceId: string,
   accessToken: string,
   conversationId: string,
   messageId: string,
   emoji: string,
-  /** Required B6: outbox entry id; same value on retry for event_id idempotency. */
+  /** Required outbox entry id; same value on retry for event_id idempotency. */
   clientOpId: string,
 ): Promise<{
   messageId: string;
@@ -926,13 +926,13 @@ export async function toggleHubReaction(
 }
 
 /** Hub multi-end recall (sender within window). */
-export async function recallHubMessage(
+export async function recallCloudMessage(
   deviceId: string,
   accessToken: string,
   conversationId: string,
   messageId: string,
-): Promise<HubChatMessage> {
-  const resp = await requestJson<Parameters<typeof mapHubChatMessage>[0]>(
+): Promise<CloudChatMessage> {
+  const resp = await requestJson<Parameters<typeof mapCloudChatMessage>[0]>(
     `/v1/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}/recall`,
     {
       method: "POST",
@@ -940,7 +940,7 @@ export async function recallHubMessage(
       body: JSON.stringify({}),
     },
   );
-  return mapHubChatMessage(resp);
+  return mapCloudChatMessage(resp);
 }
 
 export async function createWsTicket(
@@ -969,7 +969,7 @@ export async function createWsTicket(
 }
 
 /** Absolute WS URL for formal client gateway from ticket response + HTTP base. */
-export function hubClientWsUrl(gatewayUrl: string, ticket: string): string {
+export function cloudClientWsUrl(gatewayUrl: string, ticket: string): string {
   const httpBase = backendHttpBase();
   let pathOrUrl = gatewayUrl.trim();
   // Relative path → absolute against backend origin.

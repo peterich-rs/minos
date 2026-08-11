@@ -16,18 +16,11 @@ use axum::{Json, Router};
 use minos_domain::AgentName;
 use minos_protocol::{
     AddAgentToGroupRequest, AgentSummary, ChatMessageSummary, ConversationAgentMembersResponse,
-    ConversationParticipantsResponse, EnsureHostRuntimeAgentRequest, Envelope, EventKind,
-    ListAgentsResponse, RealtimeTopic, RegisterAgentRequest, RemoveAgentFromGroupRequest,
-    SendAgentMessageRequest, SenderType, UpdateAgentRequest,
+    ConversationParticipantsResponse, EnsureHostRuntimeAgentRequest, ListAgentsResponse,
+    RealtimeTopic, RegisterAgentRequest, RemoveAgentFromGroupRequest, SendAgentMessageRequest,
+    SenderType, UpdateAgentRequest,
 };
 use serde_json::json;
-
-/// Known Host runtime bins that Mobile/Desktop may @-mention for dispatch.
-const HOST_RUNTIME_MENTIONS: &[&str] = &["codex", "claude", "gemini", "opencode", "grok"];
-
-/// Max bot→bot automation hops from a root human (or unknown) message.
-/// Exceeding this skips enqueue (loop control; bot-mailbox design).
-const MAX_AUTOMATION_HOP: i32 = 3;
 
 pub fn router() -> Router<BackendState> {
     Router::new()
@@ -83,6 +76,9 @@ pub struct SendConversationMessageRequest {
     pub client_sent_at_ms: Option<i64>,
     #[serde(default)]
     pub attachment_blob_ids: Vec<String>,
+    /// Structured mention targets. Body text never invents delivery targets.
+    #[serde(default)]
+    pub mentions: Vec<minos_protocol::MentionTarget>,
 }
 
 #[allow(clippy::unused_async)]
@@ -118,7 +114,7 @@ pub fn require_account_id_from_state(
 ///
 /// Prefer writers that already committed `chat_messages` + durable + outbox in
 /// one transaction (Transactional Outbox). This helper:
-/// 1. best-effort legacy envelope fanout
+/// 1. best-effort envelope fanout
 /// 2. **repairs** missing durable/outbox rows if a prior crash left a hole
 /// 3. publishes durable events (outbox dispatcher remains the reliability backstop)
 pub async fn fan_out_social_message(state: &BackendState, message: &ChatMessageSummary) {
@@ -140,14 +136,26 @@ pub async fn fan_out_social_message(state: &BackendState, message: &ChatMessageS
         }
     };
 
-    let frame = Envelope::Event {
-        version: 1,
-        event: EventKind::SocialMessage {
-            conversation_id: message.conversation_id.clone(),
-            message: message.clone(),
-        },
+    let payload = match serde_json::to_value(message) {
+        Ok(v) => v,
+        Err(error) => {
+            tracing::warn!(
+                target: "minos_backend::social",
+                conversation_id = %message.conversation_id,
+                error = %error,
+                "failed to encode social message for stream fan-out"
+            );
+            return;
+        }
     };
-    state.realtime.fanout_social_message(&members, &frame).await;
+    for account_id in &members {
+        state.realtime.fanout_stream_event(
+            &RealtimeTopic::Account(account_id.clone()),
+            "social_message",
+            None,
+            payload.clone(),
+        );
+    }
 
     match publish_social_message_delivery(state, message, &members).await {
         Ok(()) => {}
@@ -196,246 +204,9 @@ pub async fn publish_social_message_delivery(
     Ok(())
 }
 
-#[derive(Clone)]
-struct AgentDispatchPlan {
-    agent: crate::store::social::AgentRow,
-    session_id: Option<String>,
-    forwarded_text: String,
-    mention_sender: bool,
-}
-
 struct ForwardedAgentDispatch {
     session_id: String,
     watcher_from_seq: u64,
-}
-
-/// Plan agent inbox deliveries for a committed message (participant delivery).
-///
-/// Selection order (ADR 0021 / agent-participant-delivery):
-/// 1. reply-to agent message → that agent (reuse session when bound, else start path)
-///    — **human senders only** (bot authors never auto-reply-to-self via priority 1)
-/// 2. structured `mentioned_agent_ids` on the message (SSOT; appearance order)
-///    — for bot authors: other-bot mentions only (self-mention forbidden)
-/// 3. group with exactly 1 human + 1 agent + **bare** text (no unresolved agentish @)
-///    → sole agent — **human senders only**
-/// 4. otherwise empty
-///
-/// Text is never a delivery target. Optional `#session_short` in the body is only a
-/// session-resolution hint for agents already present in structured mentions.
-/// Unmatched agentish `@` never sole-routes (wrong-bot activation is forbidden).
-/// Implementation table remains `bot_message_deliveries`; domain name is Agent inbox.
-async fn plan_agent_deliveries(
-    state: &BackendState,
-    conversation_id: &str,
-    message: &ChatMessageSummary,
-    text: &str,
-    reply_target: Option<&crate::store::social::ChatMessageRow>,
-) -> Result<Vec<AgentDispatchPlan>, (StatusCode, Json<ErrorEnvelope>)> {
-    let conversation = crate::store::social::get_conversation(&state.store, conversation_id)
-        .await
-        .map_err(|e| err("internal", e.to_string()))?
-        .ok_or_else(|| err("not_found", "conversation not found"))?;
-    // Delivery only targets active bots. Disabled members remain on the roster
-    // for participants UI but must not receive mailbox intents.
-    let agents =
-        crate::store::social::list_conversation_agents_active(&state.store, conversation_id)
-            .await
-            .map_err(|e| err("internal", e.to_string()))?;
-    if agents.is_empty() {
-        return Ok(Vec::new());
-    }
-    let human_members =
-        crate::store::social::list_conversation_members(&state.store, conversation_id)
-            .await
-            .map_err(|e| err("internal", e.to_string()))?;
-    // Room rule: only @-mention the human sender back when other humans are present.
-    let mention_sender = human_members.len() > 1;
-    let origin_is_agent = message.sender.is_bot() || message.sender_type == SenderType::Agent;
-    let origin_agent_id = message.sender.bot_id();
-
-    // Priority 1: reply-to an agent bubble → always that agent when still resolvable.
-    // Session bind is optional (older / projected rows may lack agent_session_id).
-    // Bot-authored origins never use reply-to auto-route (would re-enter self/loop).
-    if !origin_is_agent {
-        if let Some(reply_target) = reply_target {
-            if reply_target.sender_type == "agent" {
-                if let Some(agent_id) = reply_target
-                    .sender_agent_id
-                    .as_deref()
-                    .filter(|s| !s.is_empty())
-                {
-                    // Prefer current conversation roster (membership-first); fall back to
-                    // agent registry so a removed-but-still-visible bubble can continue.
-                    let agent = agents.iter().find(|a| a.agent_id == agent_id).cloned();
-                    let agent = match agent {
-                        Some(a) => Some(a),
-                        None => crate::store::social::get_agent(&state.store, agent_id)
-                            .await
-                            .map_err(|e| err("internal", e.to_string()))?
-                            .filter(|a| a.is_active()),
-                    };
-                    if let Some(agent) = agent {
-                        let session_id = crate::store::social::lookup_session_id_for_message(
-                            &state.store,
-                            &reply_target.message_id,
-                        )
-                        .await
-                        .map_err(|e| err("internal", e.to_string()))?;
-                        return Ok(vec![AgentDispatchPlan {
-                            agent,
-                            session_id,
-                            forwarded_text: text.to_string(),
-                            mention_sender,
-                        }]);
-                    }
-                }
-            }
-        }
-    }
-
-    // Priority 2: structured agent mentions written with the bubble (SSOT).
-    // Preserve appearance order from extract; do not re-sort by agent_id.
-    // Non-empty structured list that all fail roster lookup must NOT fall through
-    // to sole-agent (stale/removed mention is skip/error, not wrong-bot route).
-    // Bot authors: only other-bot mentions (self-mention never enqueued).
-    if !message.mentioned_agent_ids.is_empty() {
-        let mut plans = Vec::with_capacity(message.mentioned_agent_ids.len());
-        let mut seen = std::collections::HashSet::new();
-        for agent_id in &message.mentioned_agent_ids {
-            if !seen.insert(agent_id.clone()) {
-                continue;
-            }
-            if origin_agent_id.is_some_and(|self_id| self_id == agent_id.as_str()) {
-                continue;
-            }
-            let Some(agent) = agents.iter().find(|a| a.agent_id == *agent_id).cloned() else {
-                // Mention row without current roster membership: skip (stale/removed).
-                continue;
-            };
-            let session_short =
-                crate::conversations::use_case::session_short_hint_for_agent(text, &agent);
-            let session_id =
-                resolve_dispatch_session_id(state, conversation_id, &agent, session_short)
-                    .await
-                    .map_err(|e| err("internal", e.to_string()))?;
-            plans.push(AgentDispatchPlan {
-                agent,
-                session_id,
-                // Keep full body so each agent sees co-mentions (Buzz-style).
-                forwarded_text: text.to_string(),
-                mention_sender: if origin_is_agent {
-                    false
-                } else {
-                    mention_sender
-                },
-            });
-        }
-        // Structured mention intent was present: never sole-route as a fallback.
-        return Ok(plans);
-    }
-
-    // Bot-authored messages without structured other-bot mentions never sole-route.
-    if origin_is_agent {
-        return Ok(Vec::new());
-    }
-
-    // Unresolved agentish @ blocks sole-agent auto-route (P0: wrong-bot activation).
-    // Example: roster = [claude], body = "@codex please help" → empty plan so
-    // try_agent_dispatch surfaces agent_not_in_conversation, not Claude dispatch.
-    if body_has_unresolved_agentish_mention(text, &agents) {
-        return Ok(Vec::new());
-    }
-
-    // Priority 3: bare text sole-agent room only.
-    if conversation.kind == "group" && human_members.len() == 1 && agents.len() == 1 {
-        let agent = agents[0].clone();
-        let session_id = resolve_dispatch_session_id(state, conversation_id, &agent, None)
-            .await
-            .map_err(|e| err("internal", e.to_string()))?;
-        return Ok(vec![AgentDispatchPlan {
-            agent,
-            session_id,
-            forwarded_text: text.to_string(),
-            mention_sender: false,
-        }]);
-    }
-
-    Ok(Vec::new())
-}
-
-/// True when the body contains an agentish `@token` that does not resolve to a
-/// current conversation agent participant (membership-first unmatched intent).
-fn body_has_unresolved_agentish_mention(
-    text: &str,
-    agents: &[crate::store::social::AgentRow],
-) -> bool {
-    for token in collect_mention_tokens(text) {
-        let (name_part, _) = crate::conversations::use_case::split_agent_session_token(token);
-        let lower = name_part.to_ascii_lowercase();
-        let looks_agentish = HOST_RUNTIME_MENTIONS.contains(&lower.as_str())
-            || lower.starts_with("bot-")
-            || agents.iter().any(|a| {
-                a.agent_id.eq_ignore_ascii_case(name_part)
-                    || a.runtime_agent.eq_ignore_ascii_case(&lower)
-                    || a.name.eq_ignore_ascii_case(name_part)
-            });
-        if !looks_agentish {
-            continue;
-        }
-        if crate::conversations::use_case::match_agent_token(name_part, agents).is_none() {
-            return true;
-        }
-    }
-    false
-}
-
-/// Resolve which formal agent session should receive a Hub `@agent` dispatch.
-///
-/// Order (parity with Desktop workbench reuse):
-/// 1. Explicit `@agent#short` → formal session short-id match
-/// 2. Latest chat_messages bind for this agent (prior Hub dispatch / projector)
-/// 3. Latest reusable formal `agent_sessions` row (Desktop-started via Host ingest)
-async fn resolve_dispatch_session_id(
-    state: &BackendState,
-    conversation_id: &str,
-    agent: &crate::store::social::AgentRow,
-    session_short_id: Option<&str>,
-) -> Result<Option<String>, crate::error::BackendError> {
-    if let Some(short) = session_short_id.map(str::trim).filter(|s| !s.is_empty()) {
-        if let Some(session_id) = crate::store::agent_sessions::find_reusable_by_short_id(
-            &state.store,
-            conversation_id,
-            &agent.agent_id,
-            &agent.runtime_agent,
-            short,
-        )
-        .await?
-        {
-            return Ok(Some(session_id));
-        }
-        // No formal match: fall through to chat bind / latest reuse rather than
-        // hard-fail — Host may still accept send_input if bind points at short.
-    }
-
-    if let Some(session_id) = crate::store::social::lookup_latest_session_id_for_conversation_agent(
-        &state.store,
-        conversation_id,
-        &agent.agent_id,
-    )
-    .await?
-    {
-        return Ok(Some(session_id));
-    }
-
-    // Desktop-started sessions are registered by Host ingest into agent_sessions
-    // without necessarily writing chat_messages.agent_session_id yet.
-    crate::store::agent_sessions::latest_reusable_for_conversation_agent(
-        &state.store,
-        conversation_id,
-        &agent.agent_id,
-        &agent.runtime_agent,
-    )
-    .await
 }
 
 /// Private runtime-port inject: `agent_session.send_input` or `start` via HostCommand.
@@ -639,17 +410,6 @@ fn agent_error_code_for_message(message: &str) -> Option<&'static str> {
     }
 }
 
-/// True when body `@token` resolves to a current conversation agent participant.
-fn text_mentions_any_agent(text: &str, agents: &[crate::store::social::AgentRow]) -> bool {
-    for token in collect_mention_tokens(text) {
-        let (name_part, _) = crate::conversations::use_case::split_agent_session_token(token);
-        if crate::conversations::use_case::match_agent_token(name_part, agents).is_some() {
-            return true;
-        }
-    }
-    false
-}
-
 fn normalize_workspace_path(path: Option<&str>) -> Option<String> {
     path.map(str::trim)
         .filter(|path| !path.is_empty())
@@ -690,15 +450,17 @@ fn fan_out_agent_error(
     code: &str,
     message: String,
 ) {
-    let frame = Envelope::Event {
-        version: 1,
-        event: EventKind::AgentError {
-            session_id,
-            code: code.to_string(),
-            message,
-        },
-    };
-    let _ = state.registry.broadcast_mobile_account(account_id, frame);
+    let payload = json!({
+        "session_id": session_id,
+        "code": code,
+        "message": message,
+    });
+    state.realtime.fanout_stream_event(
+        &RealtimeTopic::Account(account_id.to_string()),
+        "agent_error",
+        None,
+        payload,
+    );
 }
 
 /// Arm TurnCompletionProjector for one origin user message (event-driven).
@@ -717,7 +479,7 @@ async fn arm_completion_watch(
     mention_minos_id: Option<String>,
 ) {
     let now_ms = chrono::Utc::now().timestamp_millis();
-    // Watch TTL is enforced by SessionLifecycle (B5); arm with a long ceiling.
+    // Watch TTL is enforced by SessionLifecycle; arm with a long ceiling.
     let deadline_at_ms = now_ms + 30 * 60 * 1000;
     let watch = crate::completion_watch::CompletionWatch {
         dispatch_id: dispatch_id.clone(),
@@ -1034,6 +796,7 @@ pub async fn persist_agent_message_from_host(
     reply_to_message_id: Option<&str>,
     agent_session_id: Option<&str>,
     client_message_id: &str,
+    structured_mentions: &[minos_protocol::MentionTarget],
 ) -> Result<ChatMessageSummary, crate::error::BackendError> {
     let members =
         crate::store::social::list_conversation_member_profiles(&state.store, conversation_id)
@@ -1041,11 +804,20 @@ pub async fn persist_agent_message_from_host(
     let agents =
         crate::store::social::list_conversation_agents_active(&state.store, conversation_id)
             .await?;
-    let mentions = crate::conversations::use_case::extract_participant_mentions(
-        text,
-        // Agent is not an account; pass agent_id so self-account skip is a no-op.
-        agent_id, &members, &agents,
-    );
+    // Bot authors are not accounts; sender_account_id is only used to drop self-account.
+    let all_agents =
+        crate::store::social::list_conversation_agents(&state.store, conversation_id).await?;
+    let mentions = crate::conversations::use_case::validate_structured_mentions(
+        structured_mentions,
+        agent_id,
+        &members,
+        &agents,
+        &all_agents,
+    )
+    .map_err(|message| crate::error::BackendError::StoreQuery {
+        operation: "validate_structured_mentions".into(),
+        message,
+    })?;
     // Never persist self-mention as a structured agent target.
     let mentioned_agent_ids: Vec<String> = mentions
         .agent_ids
@@ -1142,6 +914,48 @@ async fn persist_agent_message_with_delivery(
     };
     let now_ms = chrono::Utc::now().timestamp_millis();
 
+    // Plan bot→bot hops before opening the write TX (no store reads while holding it).
+    let parent_hop = automation_hop_for_agent_message(&state.store, reply_to_message_id, agent_id)
+        .await
+        .unwrap_or(0);
+    let enqueue_hop = parent_hop.saturating_add(1);
+    let hop_plans = if !mentioned_agent_ids.is_empty()
+        && enqueue_hop <= crate::agent_inbox::MAX_AUTOMATION_HOP
+    {
+        let plan_message = ChatMessageSummary {
+            message_id: String::new(),
+            conversation_id: conversation_id.to_string(),
+            sender: minos_protocol::MessageSender::Bot {
+                bot_id: agent.agent_id.clone(),
+                display_name: String::new(),
+                runtime_agent: agent.runtime_agent.clone(),
+                name: None,
+                avatar_url: None,
+            },
+            text: text.to_string(),
+            created_at_ms: now_ms,
+            message_seq: 0,
+            reply_to: reply_to.clone(),
+            recalled_at_ms: None,
+            mentioned_account_ids: mentioned_account_ids.to_vec(),
+            mentioned_agent_ids: mentioned_agent_ids.to_vec(),
+            sender_type: SenderType::Agent,
+            reactions: vec![],
+            attachments: vec![],
+        };
+        crate::agent_inbox::plan_agent_deliveries(
+            &state.store,
+            conversation_id,
+            &plan_message,
+            text,
+            None,
+        )
+        .await
+        .map_err(|e| err("internal", e.to_string()))?
+    } else {
+        Vec::new()
+    };
+
     let mut tx = Storage::begin(&state.store)
         .await
         .map_err(|e| err("internal", e.to_string()))?;
@@ -1209,9 +1023,24 @@ async fn persist_agent_message_with_delivery(
         crate::store::social::ensure_social_message_delivery_in_tx(&mut tx, &message, &member_ids)
             .await
             .map_err(|e| err("internal", e.to_string()))?;
+        let hop_rows = crate::agent_inbox::build_dispatch_rows(
+            hop_plans,
+            &message,
+            conversation_id,
+            agent.owner_account_id.as_str(),
+            None,
+            enqueue_hop,
+            now_ms,
+        );
+        let bot_enqueued = crate::agent_inbox::enqueue_plans_in_tx(&mut tx, &hop_rows)
+            .await
+            .map_err(|e| err("internal", e.to_string()))?;
         tx.commit()
             .await
             .map_err(|e| err("internal", e.to_string()))?;
+        if bot_enqueued {
+            state.wake_agent_dispatch();
+        }
         // Re-hydrate for API parity with list_messages.
         let mut hydrated =
             crate::conversations::use_case::hydrate_messages(&state.store, vec![outcome.row])
@@ -1259,22 +1088,19 @@ async fn persist_agent_message_with_delivery(
             "failed to publish agent social message; outbox will retry if enqueued"
         );
     }
-    let frame = Envelope::Event {
-        version: 1,
-        event: EventKind::SocialMessage {
-            conversation_id: message.conversation_id.clone(),
-            message: message.clone(),
-        },
-    };
-    state
-        .realtime
-        .fanout_social_message(&member_ids, &frame)
-        .await;
+    if let Ok(payload) = serde_json::to_value(&message) {
+        for account_id in &member_ids {
+            state.realtime.fanout_stream_event(
+                &RealtimeTopic::Account(account_id.clone()),
+                "social_message",
+                None,
+                payload.clone(),
+            );
+        }
+    }
 
-    // Note: agent→agent hop enqueue is intentionally NOT here — calling
-    // try_agent_dispatch_with_hop from persist would recurse through
-    // notify_agent_dispatch_failure → post_agent_social_message → persist.
-    // Callers that want hop-gated bot→bot use maybe_enqueue_agent_hops after.
+    // Bot→bot hops co-committed on first insert above. Idempotent re-drive of
+    // already-committed bot bubbles can still call maybe_enqueue_agent_hops.
     let _ = inserted;
 
     Ok((message, member_ids))
@@ -1333,10 +1159,6 @@ async fn maybe_enqueue_agent_hops(
             "agent→agent inbox pipeline error after bot message"
         );
     }
-}
-
-fn collect_mention_tokens(text: &str) -> Vec<&str> {
-    crate::conversations::use_case::collect_mention_tokens(text)
 }
 
 // ─── Agent Handlers ────────────────────────────────────────────────────
@@ -1636,7 +1458,7 @@ async fn list_conversation_agents_handler(
     Ok(Json(ConversationAgentMembersResponse { agents }))
 }
 
-/// Unified participants read model: humans ∪ bot agents (ADR 0021 Phase A).
+/// Unified participants read model: humans ∪ bot agents (ADR 0021).
 async fn list_conversation_participants_handler(
     State(state): State<BackendState>,
     headers: HeaderMap,
@@ -1779,7 +1601,7 @@ async fn send_agent_message(
         .await
         .map_err(|e| err("internal", e.to_string()))?;
     }
-    // Extract mentions (humans + other bots) for structured SSOT + hop-gated agent→agent.
+    // Structured mentions only (body never invents hop targets).
     let members =
         crate::store::social::list_conversation_member_profiles(&state.store, &conversation_id)
             .await
@@ -1788,12 +1610,17 @@ async fn send_agent_message(
         crate::store::social::list_conversation_agents_active(&state.store, &conversation_id)
             .await
             .map_err(|e| err("internal", e.to_string()))?;
-    let mentions = crate::conversations::use_case::extract_participant_mentions(
-        &trimmed,
+    let all_agents = crate::store::social::list_conversation_agents(&state.store, &conversation_id)
+        .await
+        .map_err(|e| err("internal", e.to_string()))?;
+    let mentions = crate::conversations::use_case::validate_structured_mentions(
+        &req.mentions,
         &req.agent_id,
         &members,
         &agents,
-    );
+        &all_agents,
+    )
+    .map_err(|message| err("bad_request", message))?;
     let mentioned_agent_ids: Vec<String> = mentions
         .agent_ids
         .into_iter()
@@ -1874,7 +1701,7 @@ async fn send_agent_message(
 ///   `try_agent_dispatch(..., automation_hop = 0)`.
 /// - Bot-authored messages (optional agent→agent): pass `automation_hop` from the
 ///   delivery that produced the bot bubble (or 0 if unknown). Enqueue uses hop+1
-///   when origin is agent; skips when hop would exceed [`MAX_AUTOMATION_HOP`].
+///   when origin is agent; skips when hop would exceed agent_inbox::MAX_AUTOMATION_HOP.
 /// - `host_projection` / `system` human paths must not call this (anti-loop).
 pub async fn try_agent_dispatch(
     state: &BackendState,
@@ -1897,6 +1724,9 @@ pub async fn try_agent_dispatch(
 }
 
 /// Same as [`try_agent_dispatch`] with an explicit automation hop for bot→bot chains.
+///
+/// Re-drive path for already-committed messages (host online force, hop recovery).
+/// Live human/bot send paths co-commit deliveries inside the message write TX.
 pub async fn try_agent_dispatch_with_hop(
     state: &BackendState,
     account_id: &str,
@@ -1913,13 +1743,13 @@ pub async fn try_agent_dispatch_with_hop(
     } else {
         0
     };
-    if origin_is_agent && enqueue_hop > MAX_AUTOMATION_HOP {
+    if origin_is_agent && enqueue_hop > crate::agent_inbox::MAX_AUTOMATION_HOP {
         tracing::info!(
             target: "minos_backend::social",
             conversation_id = %conversation_id,
             origin_message_id = %message.message_id,
             automation_hop = enqueue_hop,
-            max = MAX_AUTOMATION_HOP,
+            max = crate::agent_inbox::MAX_AUTOMATION_HOP,
             "agent→agent inbox skipped: automation hop budget exhausted"
         );
         return Ok(());
@@ -1933,24 +1763,24 @@ pub async fn try_agent_dispatch_with_hop(
         Some(message_id) => crate::store::social::get_message(&state.store, message_id).await?,
         None => None,
     };
-    let plans = plan_agent_deliveries(
-        state,
+    let plans = crate::agent_inbox::plan_agent_deliveries(
+        &state.store,
         conversation_id,
         message,
         trimmed_text,
         reply_target.as_ref(),
     )
-    .await
-    .map_err(|(_, body)| crate::error::BackendError::StoreQuery {
-        operation: "social::plan_agent_deliveries".into(),
-        message: body.0.error.message,
-    })?;
+    .await?;
 
     if plans.is_empty() {
-        // User-visible unmatched-@ only for human live sends (not bot→bot hop chains).
+        // User-visible unmatched structured bot mentions only (body never invents intent).
         if !origin_is_agent {
-            if let Some((code, detail)) =
-                unmatched_agent_intent_error(state, conversation_id, trimmed_text).await?
+            if let Some((code, detail)) = unmatched_structured_agent_intent_error(
+                state,
+                conversation_id,
+                &message.mentioned_agent_ids,
+            )
+            .await?
             {
                 tracing::warn!(
                     target: "minos_backend::social",
@@ -1984,40 +1814,25 @@ pub async fn try_agent_dispatch_with_hop(
         .find(|m| m.account_id == account_id)
         .map(|m| m.minos_id.clone());
     let now_ms = chrono::Utc::now().timestamp_millis();
+    let rows = crate::agent_inbox::build_dispatch_rows(
+        plans,
+        message,
+        conversation_id,
+        account_id,
+        sender_minos_id,
+        enqueue_hop,
+        now_ms,
+    );
     let mut any_inserted = false;
-    // Stable multi-@ appearance order: bump created_at_ms by plan index so
-    // list_by_origin / claim ties follow extract order, not UUID lex order.
-    for (ordinal, plan) in plans.into_iter().enumerate() {
-        let dispatch_id = uuid::Uuid::new_v4().to_string();
-        let ordered_ms = now_ms.saturating_add(ordinal as i64);
-        let row = crate::store::agent_dispatch_queue::AgentDispatchRow {
-            dispatch_id,
-            origin_message_id: message.message_id.clone(),
-            conversation_id: conversation_id.to_string(),
-            account_id: account_id.to_string(),
-            agent_id: plan.agent.agent_id.clone(),
-            session_id: plan.session_id.clone(),
-            forwarded_text: plan.forwarded_text,
-            mention_sender: plan.mention_sender,
-            sender_minos_id: sender_minos_id.clone(),
-            status: crate::store::agent_dispatch_queue::STATUS_PENDING.to_string(),
-            attempts: 0,
-            next_attempt_at_ms: now_ms,
-            last_error: None,
-            created_at_ms: ordered_ms,
-            updated_at_ms: ordered_ms,
-            lease_owner_host_id: None,
-            lease_expires_at_ms: None,
-            automation_hop: enqueue_hop,
-        };
-        let inserted = crate::store::agent_dispatch_queue::enqueue(&state.store, &row).await?;
+    for row in &rows {
+        let inserted = crate::store::agent_dispatch_queue::enqueue(&state.store, row).await?;
         if inserted {
             any_inserted = true;
             tracing::info!(
                 target: "minos_backend::social",
                 conversation_id = %conversation_id,
                 origin_message_id = %message.message_id,
-                agent_id = %plan.agent.agent_id,
+                agent_id = %row.agent_id,
                 automation_hop = enqueue_hop,
                 "agent inbox enqueued"
             );
@@ -2025,7 +1840,7 @@ pub async fn try_agent_dispatch_with_hop(
             tracing::debug!(
                 target: "minos_backend::social",
                 origin_message_id = %message.message_id,
-                agent_id = %plan.agent.agent_id,
+                agent_id = %row.agent_id,
                 "agent inbox already queued for origin+agent (idempotent)"
             );
         }
@@ -2362,8 +2177,13 @@ async fn deliver_bot_inbox(
     agent: &crate::store::social::AgentRow,
     now_ms: i64,
 ) -> Result<Option<String>, crate::error::BackendError> {
-    let existing_session =
-        resolve_dispatch_session_id(state, &row.conversation_id, agent, None).await?;
+    let existing_session = crate::agent_inbox::resolve_dispatch_session_id(
+        &state.store,
+        &row.conversation_id,
+        agent,
+        None,
+    )
+    .await?;
 
     let host_device_id = if let Some(ref session_id) = existing_session {
         if let Some(session) = crate::store::agent_sessions::get(&state.store, session_id).await? {
@@ -2557,14 +2377,16 @@ async fn handle_dispatch_forward_error(
     Ok(())
 }
 
-/// When dispatch plan is empty but the text looks like agent intent, explain why.
-/// Membership-first: unmatched `@codex` without roster membership is user-visible.
-async fn unmatched_agent_intent_error(
+/// When the plan is empty despite structured bot mentions, explain why.
+/// Body text is never consulted — only membership-validated mention ids.
+async fn unmatched_structured_agent_intent_error(
     state: &BackendState,
     conversation_id: &str,
-    text: &str,
+    mentioned_agent_ids: &[String],
 ) -> Result<Option<(&'static str, String)>, crate::error::BackendError> {
-    // Full roster for recognition (including disabled); delivery uses active only.
+    if mentioned_agent_ids.is_empty() {
+        return Ok(None);
+    }
     let all_agents =
         crate::store::social::list_conversation_agents(&state.store, conversation_id).await?;
     let active_agents: Vec<_> = all_agents
@@ -2572,72 +2394,41 @@ async fn unmatched_agent_intent_error(
         .filter(|a| a.is_active())
         .cloned()
         .collect();
-    let mut agentish: Vec<String> = Vec::new();
-    for token in collect_mention_tokens(text) {
-        let (name_part, _) = crate::conversations::use_case::split_agent_session_token(token);
-        let lower = name_part.to_ascii_lowercase();
-        let looks_agentish = HOST_RUNTIME_MENTIONS.contains(&lower.as_str())
-            || lower.starts_with("bot-")
-            || all_agents.iter().any(|a| {
-                a.agent_id.eq_ignore_ascii_case(name_part)
-                    || a.runtime_agent.eq_ignore_ascii_case(&lower)
-                    || a.name.eq_ignore_ascii_case(name_part)
-            });
-        if looks_agentish && !agentish.iter().any(|t| t.eq_ignore_ascii_case(name_part)) {
-            agentish.push(name_part.to_string());
-        }
-    }
-    if agentish.is_empty() {
-        return Ok(None);
-    }
-    // Prefer a specific disabled-bot diagnostic when the token matches a member.
-    for token in &agentish {
-        if let Some(disabled) = all_agents.iter().find(|a| {
-            !a.is_active()
-                && (a.agent_id.eq_ignore_ascii_case(token)
-                    || a.name.eq_ignore_ascii_case(token)
-                    || a.runtime_agent.eq_ignore_ascii_case(token))
-        }) {
-            if crate::conversations::use_case::match_agent_token(token, &active_agents).is_none() {
-                let label = if disabled.display_name.trim().is_empty() {
-                    disabled.name.as_str()
-                } else {
-                    disabled.display_name.as_str()
-                };
-                return Ok(Some((
-                    "agent_disabled",
-                    format!(
-                        "Agent「{label}」已停用，无法投递（@{token}）。请在 Agents 中重新启用后再试。"
-                    ),
-                )));
-            }
+    for agent_id in mentioned_agent_ids {
+        if let Some(disabled) = all_agents
+            .iter()
+            .find(|a| !a.is_active() && a.agent_id == *agent_id)
+        {
+            let label = if disabled.display_name.trim().is_empty() {
+                disabled.name.as_str()
+            } else {
+                disabled.display_name.as_str()
+            };
+            return Ok(Some((
+                "agent_disabled",
+                format!("Agent「{label}」已停用，无法投递。请在 Agents 中重新启用后再试。"),
+            )));
         }
     }
     if active_agents.is_empty() {
         return Ok(Some((
             "no_agents_in_conversation",
-            format!(
-                "会话中还没有可用的 Agent（提到了 @{}）。请把 Agent 加进成员后再试。",
-                agentish[0]
-            ),
+            "会话中还没有可用的 Agent。请把 Agent 加进成员后再试。".to_string(),
         )));
     }
-    // Mentions exist but none matched active roster (e.g. @codex when only claude is member).
-    if !text_mentions_any_agent(text, &active_agents) {
-        return Ok(Some((
-            "agent_not_in_conversation",
-            format!(
-                "未匹配到会话成员里的 Agent（@{}）。请确认 Agent 已加入本会话。",
-                agentish[0]
-            ),
-        )));
-    }
-    Ok(None)
+    // Structured ids present but none planned (stale/removed between write and plan).
+    Ok(Some((
+        "agent_not_in_conversation",
+        format!(
+            "未匹配到会话成员里的 Agent（{}）。请确认 Agent 已加入本会话。",
+            mentioned_agent_ids[0]
+        ),
+    )))
 }
 
 /// Expire CompletionWatch rows past `deadline_at_ms`: user-visible failure + remove.
 ///
-/// Called by SessionLifecycle (B5). Returns the number of watches drained.
+/// Called by SessionLifecycle. Returns the number of watches drained.
 pub async fn expire_completion_watches(
     state: &BackendState,
     now_ms: i64,
@@ -2881,15 +2672,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn host_runtime_mention_tokens_are_recognized() {
-        assert!(HOST_RUNTIME_MENTIONS.contains(&"grok"));
-        assert!(HOST_RUNTIME_MENTIONS.contains(&"codex"));
-        let tokens = collect_mention_tokens("@grok 你好 and @codex please");
-        assert!(tokens.iter().any(|t| t.eq_ignore_ascii_case("grok")));
-        assert!(tokens.iter().any(|t| t.eq_ignore_ascii_case("codex")));
-    }
-
-    #[test]
     fn agent_error_code_detects_no_live_host() {
         assert_eq!(
             agent_error_code_for_message("no live host paired to account abc"),
@@ -2928,32 +2710,6 @@ mod tests {
     }
 
     #[test]
-    fn text_mentions_any_agent_matches_roster_tokens() {
-        let agents = vec![
-            crate::store::social::AgentRow::test_stub(
-                "bot-codex",
-                "acc",
-                "Codex",
-                "host_runtime",
-                "codex",
-            ),
-            crate::store::social::AgentRow::test_stub(
-                "bot-claude",
-                "acc",
-                "Claude",
-                "host_runtime",
-                "claude",
-            ),
-        ];
-        assert!(text_mentions_any_agent(
-            "@codex @claude @codex count off 1 2",
-            &agents
-        ));
-        assert!(!text_mentions_any_agent("@gemini please", &agents));
-        assert!(!text_mentions_any_agent("no mention here", &agents));
-    }
-
-    #[test]
     fn host_projection_and_system_never_allow_agent_dispatch() {
         use minos_protocol::MessageSource;
         assert!(MessageSource::ClientLive.allows_agent_dispatch());
@@ -2968,10 +2724,10 @@ mod tests {
         // hop 0 (human) → enqueue 0; hop 2 origin agent → enqueue 3 (allowed);
         // hop 3 origin agent → enqueue 4 (blocked).
         const {
-            assert!(MAX_AUTOMATION_HOP > 0);
-            assert!(MAX_AUTOMATION_HOP == 3);
-            assert!(3 <= MAX_AUTOMATION_HOP);
-            assert!(4 > MAX_AUTOMATION_HOP);
+            assert!(crate::agent_inbox::MAX_AUTOMATION_HOP > 0);
+            assert!(crate::agent_inbox::MAX_AUTOMATION_HOP == 3);
+            assert!(3 <= crate::agent_inbox::MAX_AUTOMATION_HOP);
+            assert!(4 > crate::agent_inbox::MAX_AUTOMATION_HOP);
         }
     }
 }

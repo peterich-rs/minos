@@ -15,8 +15,8 @@
 //!    second authenticated socket for the same `DeviceId` actively revokes
 //!    the first, and the replacement keeps serving traffic while `/metrics`
 //!    records `reason="session_superseded"`.
-//! 3. `e2e_legacy_envelope_frame_returns_validation_error` — a mobile
-//!    client sends a legacy `Envelope` payload and the topic gateway rejects
+//! 3. `e2e_unrecognized_raw_json_frame_returns_validation_error` — a mobile
+//!    client sends unrecognized raw JSON and the topic gateway rejects
 //!    it with a `validation_format` error while keeping the socket alive.
 //! 4. `e2e_presence_tracks_live_peer_membership` — paired devices observe
 //!    `Event::PeerOnline` / `Event::PeerOffline` on each other's connect
@@ -24,7 +24,6 @@
 
 #![allow(clippy::too_many_lines)]
 
-use minos_backend::store::test_support::insert_test_host;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use futures::{SinkExt, StreamExt};
@@ -32,12 +31,11 @@ use minos_backend::{
     auth::use_case::AuthUseCase,
     host_link::HostLinkService,
     http::{router, BackendState},
-    session::SessionRegistry,
+    realtime::RealtimeConnectionRegistry,
     store,
 };
 use minos_domain::{DeviceId, DeviceRole};
 use minos_protocol::realtime::{ClientFrame, ServerFrame};
-use minos_protocol::{Envelope, EventKind};
 use sqlx::SqlitePool;
 use tempfile::NamedTempFile;
 use tokio::{net::TcpStream, task::JoinHandle, time::timeout};
@@ -78,7 +76,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
     let tmp_path = tmp.path().to_path_buf();
     let db_url = format!("sqlite://{}?mode=rwc", tmp_path.display());
     let pool = store::connect(&db_url).await?;
-    let registry = Arc::new(SessionRegistry::new());
+    let registry = Arc::new(RealtimeConnectionRegistry::new());
     let mut state = BackendState::new(
         registry,
         Arc::new(HostLinkService::new(pool.clone())),
@@ -164,29 +162,6 @@ async fn connect_client(
     Ok(ws)
 }
 
-/// Receive the next text frame as an `Envelope`, transparently ignoring
-/// any server-initiated Ping/Pong so tests see only application frames.
-async fn recv_envelope(ws: &mut WsClient) -> anyhow::Result<Envelope> {
-    loop {
-        let next = timeout(RECV_TIMEOUT, ws.next())
-            .await
-            .map_err(|_| anyhow::anyhow!("timed out waiting for envelope"))?;
-        match next {
-            Some(Ok(Message::Text(t))) => return Ok(serde_json::from_str(&t)?),
-            Some(Ok(Message::Ping(p))) => {
-                ws.send(Message::Pong(p)).await?;
-            }
-            Some(Ok(Message::Pong(_))) => {}
-            Some(Ok(Message::Close(f))) => {
-                return Err(anyhow::anyhow!("unexpected close frame: {f:?}"));
-            }
-            Some(Ok(other)) => return Err(anyhow::anyhow!("unexpected frame: {other:?}")),
-            Some(Err(e)) => return Err(anyhow::anyhow!("ws error: {e}")),
-            None => return Err(anyhow::anyhow!("stream ended unexpectedly")),
-        }
-    }
-}
-
 async fn recv_server_frame(ws: &mut WsClient) -> anyhow::Result<ServerFrame> {
     loop {
         let next = timeout(RECV_TIMEOUT, ws.next())
@@ -210,12 +185,6 @@ async fn recv_server_frame(ws: &mut WsClient) -> anyhow::Result<ServerFrame> {
             None => return Err(anyhow::anyhow!("stream ended unexpectedly")),
         }
     }
-}
-
-async fn send_envelope(ws: &mut WsClient, env: &Envelope) -> anyhow::Result<()> {
-    let text = serde_json::to_string(env)?;
-    ws.send(Message::Text(text.into())).await?;
-    Ok(())
 }
 
 async fn send_client_frame(ws: &mut WsClient, frame: &ClientFrame) -> anyhow::Result<()> {
@@ -398,7 +367,7 @@ async fn e2e_reconnect_supersedes_old_socket_records_close_reason_metric() -> an
 }
 
 #[tokio::test]
-async fn e2e_legacy_envelope_frame_returns_validation_error() -> anyhow::Result<()> {
+async fn e2e_unrecognized_raw_json_frame_returns_validation_error() -> anyhow::Result<()> {
     let relay = spawn_relay().await?;
 
     let account_id = store::accounts::create(&relay.pool, "server-frame@example.com")
@@ -414,13 +383,10 @@ async fn e2e_legacy_envelope_frame_returns_validation_error() -> anyhow::Result<
     .await?;
     expect_hello_frame(&mut ws).await?;
 
-    send_envelope(
-        &mut ws,
-        &Envelope::Event {
-            version: 1,
-            event: EventKind::Unpaired,
-        },
-    )
+    // Unrecognized raw JSON (former envelope shape) must not be accepted.
+    ws.send(Message::Text(
+        r#"{"kind":"event","v":1,"type":"unpaired"}"#.into(),
+    ))
     .await?;
 
     match recv_server_frame(&mut ws).await? {
@@ -440,68 +406,13 @@ async fn e2e_legacy_envelope_frame_returns_validation_error() -> anyhow::Result<
     Ok(())
 }
 
-// ADR-0020 / Phase G: single-peer presence tracking
-// (`PeerOnline`/`PeerOffline` on connect/disconnect) was deleted with the
-// device-keyed pairings module. The activate hook now always emits
-// `Unpaired`. Multi-host account-scoped presence rebuild is deferred to
-// Phase M.
+// Single-peer presence tracking (`PeerOnline`/`PeerOffline` on
+// connect/disconnect) was deleted with the device-keyed pairings module.
+// Presence is now ephemeral StreamEvent on formal topics; multi-host coverage
+// is deferred.
 #[tokio::test]
-#[ignore = "ADR-0020 single-peer presence model removed; Phase M will reintroduce multi-host coverage"]
+#[ignore = "single-peer presence model removed; multi-host presence coverage deferred"]
 async fn e2e_presence_tracks_live_peer_membership() -> anyhow::Result<()> {
-    let relay = spawn_relay().await?;
-
-    let mac_id = DeviceId::new();
-
-    insert_test_host(&relay.pool, mac_id, "mac", 0).await;
-    // ADR-0020: insert via account_host_pairings instead of legacy device-keyed
-    // pairings. The body of this test still asserts presence semantics that
-    // were removed in Phase G; #[ignore]'d at the test attribute.
-    let account_id = store::accounts::create(&relay.pool, "presence@example.com")
-        .await?
-        .account_id;
-    let ios_id = store::test_support::insert_ios_device(&relay.pool, &account_id).await;
-    store::host_links::insert_pair(&relay.pool, mac_id, &account_id, ios_id, 0).await?;
-
-    let mut host = connect_client(&relay, mac_id, DeviceRole::AgentHost, None).await?;
-    match recv_envelope(&mut host).await? {
-        Envelope::Event {
-            event: EventKind::PeerOffline { peer_device_id },
-            ..
-        } => assert_eq!(peer_device_id, ios_id),
-        other => panic!("expected initial PeerOffline on host, got {other:?}"),
-    }
-
-    let mut ios =
-        connect_client(&relay, ios_id, DeviceRole::MobileClient, Some(&account_id)).await?;
-    match recv_envelope(&mut ios).await? {
-        Envelope::Event {
-            event: EventKind::PeerOnline { peer_device_id },
-            ..
-        } => assert_eq!(peer_device_id, mac_id),
-        other => panic!("expected initial PeerOnline on ios, got {other:?}"),
-    }
-
-    match recv_envelope(&mut host).await? {
-        Envelope::Event {
-            event: EventKind::PeerOnline { peer_device_id },
-            ..
-        } => assert_eq!(peer_device_id, ios_id),
-        other => panic!("expected PeerOnline on host after ios connect, got {other:?}"),
-    }
-
-    ios.send(Message::Close(None)).await.ok();
-    drop(ios);
-
-    match recv_envelope(&mut host).await? {
-        Envelope::Event {
-            event: EventKind::PeerOffline { peer_device_id },
-            ..
-        } => assert_eq!(peer_device_id, ios_id),
-        other => panic!("expected PeerOffline on host after ios disconnect, got {other:?}"),
-    }
-
-    host.send(Message::Close(None)).await.ok();
-    drop(host);
-
+    let _ = spawn_relay().await?;
     Ok(())
 }

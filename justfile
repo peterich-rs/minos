@@ -4,7 +4,7 @@
 # to recipe subprocesses. CI sets vars in the parent environment instead;
 # this works the same way (just doesn't care where the vars came from).
 #
-# Reference: docs/superpowers/specs/unified-config-pipeline-design.md §4.2
+# The repository-root `.env.local` is the single local configuration source.
 
 set dotenv-load := true
 set dotenv-filename := ".env.local"

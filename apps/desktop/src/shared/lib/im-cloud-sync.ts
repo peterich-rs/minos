@@ -13,20 +13,20 @@ import { useAccountStore } from "@/store/account-store";
 import {
   addAgentToConversation,
   ensureHostRuntimeAgent,
-  respondHubApproval,
+  respondCloudApproval,
   sendAgentConversationMessage,
-  toggleHubReaction,
+  toggleCloudReaction,
   upsertConversation,
 } from "@/shared/lib/minos-cloud";
-import { isHubImMode } from "@/shared/lib/hub-timeline";
-import { appendMessageOnHub } from "@/shared/lib/im-hub-bridge";
+import { isCloudImMode } from "@/shared/lib/cloud-timeline";
+import { appendMessageOnCloud } from "@/shared/lib/im-cloud-bridge";
 import {
   displayNameForRuntime,
   isCanonicalAgentResultId,
   isProjectableAgentMessage,
   normalizeHostRuntime,
 } from "@/shared/lib/im-cloud-sync-helpers";
-import { sessionIdFromAgentResultId } from "@/shared/lib/hub-timeline";
+import { sessionIdFromAgentResultId } from "@/shared/lib/cloud-timeline";
 import {
   enqueueAgentResult,
   enqueueApprovalResolve,
@@ -231,7 +231,17 @@ const RUNTIMES_FROM_ID = [
   "grok",
 ] as const;
 
-async function postUserMessageFromOutbox(entry: ImOutboxEntry): Promise<void> {
+export type CloudUserMessageAck = {
+  messageId: string;
+  messageSeq: number;
+  conversationId: string;
+};
+
+const userMessageAcks = new Map<string, CloudUserMessageAck>();
+
+async function postUserMessageFromOutbox(
+  entry: ImOutboxEntry,
+): Promise<CloudUserMessageAck> {
   const auth = cloudAuth();
   if (!auth) {
     throw new Error("Not signed in — message not synced to cloud");
@@ -257,7 +267,7 @@ async function postUserMessageFromOutbox(entry: ImOutboxEntry): Promise<void> {
   }
 
   // Linked Hub-first sends use client_live so Hub can @-dispatch.
-  // Entries without explicit source default to client_live (Phase 3).
+  // Entries without explicit source default to client_live.
   const messageSource = entry.messageSource ?? "client_live";
 
   // Account WS AppendMessage only (no REST collaboration write path).
@@ -271,14 +281,19 @@ async function postUserMessageFromOutbox(entry: ImOutboxEntry): Promise<void> {
     );
   }
 
-  const wsResult = await appendMessageOnHub({
+  const wsResult = await appendMessageOnCloud({
     clientOperationId: entry.clientMessageId,
     conversationId: entry.conversationId,
     text: entry.text,
     replyToMessageId: entry.replyToMessageId,
+    mentions: entry.mentions,
   });
   if (wsResult.ok) {
-    return;
+    return {
+      messageId: wsResult.messageId,
+      messageSeq: wsResult.messageSeq,
+      conversationId: wsResult.conversationId,
+    };
   }
   if (wsResult.reason === "nack") {
     throw new Error(
@@ -336,7 +351,7 @@ async function postAgentResultFromOutbox(entry: ImOutboxEntry): Promise<void> {
   );
 }
 
-export type HubReactionToggleResult = {
+export type CloudReactionToggleResult = {
   messageId: string;
   conversationId: string;
   action: string;
@@ -354,7 +369,7 @@ export type HubReactionToggleResult = {
 
 async function postReactionToggleFromOutbox(
   entry: ImOutboxEntry,
-): Promise<HubReactionToggleResult> {
+): Promise<CloudReactionToggleResult> {
   const auth = cloudAuth();
   if (!auth) {
     throw new Error("not authenticated");
@@ -370,8 +385,8 @@ async function postReactionToggleFromOutbox(
   if (!messageId || !emoji) {
     throw new Error("invalid_payload: reaction_toggle requires messageId+emoji");
   }
-  // clientMessageId == B6 client_op_id; retries reuse the same id.
-  return toggleHubReaction(
+  // clientMessageId == wire client_op_id; retries reuse the same id.
+  return toggleCloudReaction(
     auth.deviceId,
     auth.accessToken,
     entry.conversationId,
@@ -406,7 +421,7 @@ function isApprovalAlreadyResolvedError(error: unknown): boolean {
 }
 
 /**
- * P3 branch by auth mode (no dual SSOT):
+ * Branch by auth mode (no dual SSOT):
  * - Hub IM mode: POST /v1/approvals/respond + top-level client_request_id
  * - Local-only: daemon resolveApproval; decision JSON never carries client_request_id
  */
@@ -440,22 +455,22 @@ async function postApprovalResolveFromOutbox(
   delete (decision as Record<string, unknown>).client_request_id;
 
   const { session, authPhase } = useAccountStore.getState();
-  const hubRoute =
+  const cloudRoute =
     payload.route === "hub" ||
     (payload.route !== "daemon" &&
-      isHubImMode({
+      isCloudImMode({
         authPhase,
         accessToken: session?.accessToken,
       }));
 
   try {
-    if (hubRoute) {
+    if (cloudRoute) {
       const auth = cloudAuth();
       if (!auth) {
         throw new Error("not authenticated");
       }
       // Top-level client_request_id = outbox logical op id (Intent Outbox).
-      await respondHubApproval(auth.deviceId, auth.accessToken, {
+      await respondCloudApproval(auth.deviceId, auth.accessToken, {
         requestId,
         decision,
         clientRequestId: entry.clientMessageId,
@@ -473,11 +488,10 @@ async function postApprovalResolveFromOutbox(
 
 async function postOutboxEntry(
   entry: ImOutboxEntry,
-): Promise<HubReactionToggleResult | void> {
+): Promise<CloudReactionToggleResult | CloudUserMessageAck | void> {
   switch (entry.kind) {
     case "user_message":
-      await postUserMessageFromOutbox(entry);
-      return;
+      return postUserMessageFromOutbox(entry);
     case "agent_result":
       await postAgentResultFromOutbox(entry);
       return;
@@ -494,16 +508,16 @@ async function postOutboxEntry(
 }
 
 /**
- * C5.1 single path: enqueue reaction_toggle then drain via lane worker.
+ * Single path: enqueue reaction_toggle then drain via lane worker.
  * Returns Hub aggregate for generation-gated apply (from worker side map).
- * Logical op id = clientOpId (= B6 client_op_id); row id = outbox:${clientOpId}.
+ * Logical op id = clientOpId (= wire client_op_id); row id = outbox:${clientOpId}.
  */
 export async function syncReactionToggleToCloud(input: {
   conversationId: string;
   messageId: string;
   emoji: string;
   clientOpId: string;
-}): Promise<HubReactionToggleResult | null> {
+}): Promise<CloudReactionToggleResult | null> {
   const conversationId = input.conversationId.trim();
   const messageId = input.messageId.trim();
   const emoji = input.emoji.trim();
@@ -535,7 +549,7 @@ export async function syncReactionToggleToCloud(input: {
 }
 
 /**
- * C5.3 / P3: durable approval intent via Intent Outbox.
+ * Durable approval intent via Intent Outbox.
  *
  * - Hub authenticated: POST /v1/approvals/respond with top-level
  *   `client_request_id` (= clientOpId). Decision body is agent-facing only.
@@ -564,7 +578,7 @@ export async function syncApprovalResolve(input: {
   const { session, authPhase } = useAccountStore.getState();
   const route =
     input.route ??
-    (isHubImMode({
+    (isCloudImMode({
       authPhase,
       accessToken: session?.accessToken,
     })
@@ -613,13 +627,17 @@ export async function syncUserMessageToCloud(input: {
    * Rare host_projection only when replaying already-executed local rows.
    */
   messageSource?: "client_live" | "host_projection" | "system";
-}): Promise<void> {
+  /** Structured AppendMessage mentions (bot/account). */
+  mentions?: ImOutboxEntry["mentions"];
+}): Promise<CloudUserMessageAck | null> {
   const auth = cloudAuth();
-  if (!auth) return;
+  if (!auth) return null;
   const text = input.text.trim();
   const messageId = input.messageId.trim();
-  if (!text || !input.conversationId.trim() || !messageId) return;
-  if (await isAcked(messageId)) return;
+  if (!text || !input.conversationId.trim() || !messageId) return null;
+  if (await isAcked(messageId)) {
+    return userMessageAcks.get(messageId) ?? null;
+  }
 
   await enqueueUserMessage({
     conversationId: input.conversationId,
@@ -630,9 +648,11 @@ export async function syncUserMessageToCloud(input: {
     agentRuntimes: input.agentRuntimes,
     clientSentAtMs: input.createdAtMs,
     messageSource: input.messageSource ?? "client_live",
+    mentions: input.mentions,
   });
 
   await waitForOutboxSettlement(messageId, { throwOnTerminal: true });
+  return userMessageAcks.get(messageId) ?? null;
 }
 
 /**
@@ -654,7 +674,13 @@ async function flushOutboxEntry(
       rememberProjected(entry.clientMessageId);
     }
     if (entry.kind === "reaction_toggle" && result) {
-      reactionResults.set(entry.clientMessageId, result);
+      reactionResults.set(
+        entry.clientMessageId,
+        result as CloudReactionToggleResult,
+      );
+    }
+    if (entry.kind === "user_message" && result && "messageSeq" in result) {
+      userMessageAcks.set(entry.clientMessageId, result as CloudUserMessageAck);
     }
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -786,7 +812,7 @@ export async function syncAgentResultToCloud(input: {
   const messageId = input.messageId.trim();
   const conversationId = input.conversationId.trim();
   if (!text || !messageId || !conversationId) return;
-  // Uplink gate (C2): only canonical agent-result:{conv}:{session}:{origin}.
+  // Uplink gate: only canonical agent-result:{conv}:{session}:{origin}.
   if (!isCanonicalAgentResultId(messageId, conversationId)) {
     return;
   }
@@ -831,22 +857,22 @@ export async function syncAgentResultToCloud(input: {
  * missing (Desktop-native turns). Canonical id only — skip when Hub already
  * has the same message id (or outbox acked).
  */
-export async function projectMissingLocalAgentResultsToHub(
+export async function projectMissingLocalAgentResultsToCloud(
   conversationId: string,
   localMessages: TimelineMessage[],
-  hubMessages: TimelineMessage[],
+  cloudMessages: TimelineMessage[],
 ): Promise<void> {
   if (!cloudAuth() || !conversationId.trim()) return;
 
-  const hubIds = new Set(hubMessages.map((m) => m.id));
+  const cloudIds = new Set(cloudMessages.map((m) => m.id));
 
   for (const m of localMessages) {
     if (!isProjectableAgentMessage(m)) continue;
     // Only uplink frozen formula ids.
     if (!isCanonicalAgentResultId(m.id, conversationId)) continue;
     if ((await isAcked(m.id)) || projectedMessageIds.has(m.id)) continue;
-    // Same canonical id already on Hub — no soft session/body dedupe (C2).
-    if (hubIds.has(m.id)) {
+    // Same canonical id already on Hub — no soft session/body dedupe.
+    if (cloudIds.has(m.id)) {
       rememberProjected(m.id);
       continue;
     }

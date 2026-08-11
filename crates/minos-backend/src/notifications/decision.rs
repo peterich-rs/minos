@@ -116,7 +116,7 @@ pub fn decide(input: &DecisionInput<'_>) -> Decision {
                 };
             }
 
-            // R3: push uses account digest preview — never full message body.
+            // Push uses account digest preview — never full message body.
             let body = if preview.trim().is_empty() {
                 "You have a new message".into()
             } else {

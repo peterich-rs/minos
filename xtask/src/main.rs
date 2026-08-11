@@ -83,7 +83,7 @@ enum Cmd {
         check: bool,
     },
     /// Scan protocol/FFI/HTTP/SQL surfaces for `mac_*` / `ios_*` identifiers
-    /// (Phase B naming-sweep guard). Fails if any are found.
+    /// (naming-sweep guard). Fails if any are found.
     LintNaming,
     /// Check docs files exist and topic/path consistency is valid.
     LintDocs,
@@ -134,7 +134,7 @@ fn main() -> Result<()> {
 fn check_rust() -> Result<()> {
     let workspace_root = workspace_root()?;
 
-    // --- phase 1: static ---------------------------------------------------
+    // --- step 1: static ---------------------------------------------------
     eprintln!("==> [static] cargo fmt --check");
     run("cargo", &["fmt", "--all", "--check"], &workspace_root)?;
 
@@ -155,7 +155,7 @@ fn check_rust() -> Result<()> {
     eprintln!("==> [static] cargo xtask lint-schema-parity");
     lint_schema_parity::run(&workspace_root)?;
 
-    // --- phase 2: compile --------------------------------------------------
+    // --- step 2: compile --------------------------------------------------
     eprintln!("==> [compile] cargo clippy");
     // Exclude Tauri host shell: it needs platform GUI system deps (GTK/WebKit
     // on Linux, etc.) that plain Linux CI runners do not install. The crate is
@@ -181,7 +181,7 @@ fn check_rust() -> Result<()> {
         &workspace_root,
     )?;
 
-    // --- phase 3: test -----------------------------------------------------
+    // --- step 3: test -----------------------------------------------------
     eprintln!("==> [test] cargo test --workspace (exclude minos-desktop)");
     run(
         "cargo",
@@ -547,7 +547,7 @@ fn bootstrap() -> Result<()> {
     )?;
 
     // iOS rustup targets are required for `cargo xtask build-ios` and the
-    // Phase F real-device path. On non-macOS hosts `rustup target add` still
+    // real-device path. On non-macOS hosts `rustup target add` still
     // succeeds (rustup just records the target as available for future
     // cross-compiles), but the targets are never actually used there. We
     // attempt the add unconditionally to keep one happy path.
@@ -568,8 +568,8 @@ fn bootstrap() -> Result<()> {
     // Prime the Flutter + Dart side so a fresh clone's first
     // `cargo xtask check-all` does not fail for missing `pub get` or
     // `build_runner`-generated files. Gate on the pubspec existing so this
-    // crate still bootstraps cleanly before plan 03's `apps/mobile` scaffold
-    // lands.
+    // crate still bootstraps cleanly when the `apps/mobile` scaffold is
+    // absent.
     let mobile_root = workspace_root.join("apps/mobile");
     if mobile_root.join("pubspec.yaml").exists() {
         if which("fvm").is_none() {
@@ -761,8 +761,8 @@ fn build_ios() -> Result<()> {
 /// Run the backend binary with dev-friendly defaults.
 ///
 /// Convenience wrapper for `cargo run -p minos-backend -- --listen 127.0.0.1:8787
-/// --db ./minos-backend.db --log-level debug`. Used by plan §11 acceptance for
-/// booting the backend during iteration.
+/// --db ./minos-backend.db --log-level debug`. Convenience for booting the
+/// backend during iteration.
 fn backend_run() -> Result<()> {
     let root = workspace_root()?;
     eprintln!("==> cargo run -p minos-backend (dev listen 127.0.0.1:8787)");

@@ -17,7 +17,7 @@
 
 Plan 04 (the relay-backend track) and ADR 0010-cloudflare-tunnel-and-access.md established that public ingress to the broker is fronted by Cloudflare Tunnel + Cloudflare Access, with the **mobile** client carrying a CF Access **service token** (`cf_access_client_id` + `cf_access_client_secret`) attached to every `/devices` WS request via `CF-Access-Client-Id` / `CF-Access-Client-Secret` headers. That part stayed.
 
-The earlier relay spec (`docs/superpowers/specs/minos-relay-backend-design.md` §9.4) said the **mac-host** would hold the CF service token in its keychain and embed it into the QR payload at QR-generation time. Two reasons that broke once we looked at the broader picture:
+An earlier relay design said the **mac-host** would hold the CF service token in its keychain and embed it into the QR payload at QR-generation time. Two reasons that broke once we looked at the broader picture:
 
 1. **The host doesn't need the CF token.** The agent-host talks to the backend over a private LAN address (`ws://127.0.0.1:8787/devices` if same-machine, or a Tailscale-only address). Only the *mobile* WS goes through the CF edge. Putting the secret on the host enlarges its attack surface and introduces a per-host rotation problem with no operational benefit.
 2. **The host binary is meant to be open-sourceable and self-bootstrapped.** A stock build cannot ship a CF token, and asking each operator to mint one and paste it into a Mac keychain is a real adoption cliff. The token is a backend-operator concern, not a per-host concern.

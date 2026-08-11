@@ -174,8 +174,8 @@ impl MobileClient {
     }
 
     /// FFI-friendly constructor. The Dart side owns real persistence via
-    /// `flutter_secure_storage` (plan D5); this default is the in-memory
-    /// backing so the FFI surface never leaks `Arc<dyn MobilePairingStore>`.
+    /// `flutter_secure_storage`; this default is the in-memory backing so
+    /// the FFI surface never leaks `Arc<dyn MobilePairingStore>`.
     #[must_use]
     pub fn new_with_in_memory_store(self_name: String) -> Self {
         Self::new(Arc::new(InMemoryPairingStore::new()), self_name)
@@ -404,8 +404,7 @@ impl MobileClient {
 
     // ─────────────────────────── history rpcs ────────────────────────────
 
-    /// Request a page of thread summaries from the backend. Bearer-only
-    /// post ADR-0020.
+    /// Request a page of thread summaries from the backend. Bearer-only.
     pub async fn list_sessions(
         &self,
         req: ListSessionsParams,
@@ -433,7 +432,7 @@ impl MobileClient {
         Ok(())
     }
 
-    /// Open-chat live path (R3a): subscribe `conversation:{id}` for full T1
+    /// Open-chat live path: subscribe `conversation:{id}` for full T1
     /// message/reaction frames. Account topic remains digest-only for inbox.
     pub async fn subscribe_conversation(&self, conversation_id: String) -> Result<(), MinosError> {
         let id = conversation_id.trim();
@@ -450,7 +449,7 @@ impl MobileClient {
         Ok(())
     }
 
-    /// Leave open-chat conversation topic (R3a). Safe if not currently subscribed.
+    /// Leave open-chat conversation topic. Safe if not currently subscribed.
     pub async fn unsubscribe_conversation(
         &self,
         conversation_id: String,
@@ -838,6 +837,7 @@ impl MobileClient {
         text: String,
         reply_to_message_id: Option<String>,
         client_message_id: Option<String>,
+        mentions: Vec<minos_protocol::MentionTarget>,
     ) -> Result<minos_protocol::ChatMessageSummary, MinosError> {
         // Collaboration writes are Account WS AppendMessage only (no REST write path).
         // Outbox retries on socket/timeout; nack is definitive.
@@ -856,6 +856,7 @@ impl MobileClient {
                 &conversation_id,
                 &text,
                 reply_to_message_id.as_deref(),
+                mentions,
             )
             .await
         {
@@ -928,6 +929,7 @@ impl MobileClient {
         conversation_id: &str,
         text: &str,
         reply_to_message_id: Option<&str>,
+        mentions: Vec<minos_protocol::MentionTarget>,
     ) -> ChatSendWaitResult {
         if !matches!(self.current_state(), ConnectionState::Connected) {
             return ChatSendWaitResult::Socket;
@@ -943,7 +945,7 @@ impl MobileClient {
             client_operation_id: client_operation_id.to_string(),
             conversation_id: conversation_id.to_string(),
             text: text.to_string(),
-            mentions: Vec::new(),
+            mentions,
             reply_to_message_id: reply_to_message_id
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
@@ -978,7 +980,7 @@ impl MobileClient {
         })
     }
 
-    /// Toggle Hub reaction; `client_op_id` is the Intent Outbox id (B6/C5).
+    /// Toggle Hub reaction; `client_op_id` is the Intent Outbox id.
     pub async fn toggle_reaction(
         &self,
         conversation_id: String,
@@ -1167,7 +1169,7 @@ impl MobileClient {
 
     /// Submit a user approval decision back to the backend relay.
     ///
-    /// `client_request_id` is the Hub Intent Outbox id (C5.3). When `None`, a
+    /// `client_request_id` is the Hub Intent Outbox id. When `None`, a
     /// fresh id is generated so the wire body never hardcodes null (retries
     /// from callers that stable-id should pass the same value).
     pub async fn send_approval_decision(
@@ -1263,7 +1265,7 @@ impl MobileClient {
     }
 
     /// Subscribe to auth-state transitions. The first read on the receiver
-    /// returns the current cached frame. Spec §6.1.
+    /// returns the current cached frame.
     #[must_use]
     pub fn subscribe_auth_state(&self) -> watch::Receiver<AuthStateFrame> {
         self.auth_state_rx.clone()
@@ -1293,7 +1295,7 @@ impl MobileClient {
     /// transitions to `Refreshing` for the duration of the call; on
     /// success it returns to `Authenticated` (with the same account
     /// summary), on failure the session is wiped and the watch publishes
-    /// `RefreshFailed`. Spec §5.4 / §6.1.
+    /// `RefreshFailed`.
     pub async fn refresh_session(&self) -> Result<(), MinosError> {
         let session = self.auth_session.read().await.clone().ok_or_else(|| {
             MinosError::AuthRefreshFailed {
@@ -1322,13 +1324,12 @@ impl MobileClient {
     }
 
     /// Log out of the current session. Wipes local auth state and drops the
-    /// WS; the daemon's per-session close happens via `close_session` (Phase C
-    /// rewrite — the legacy `stop_agent` RPC is gone). Spec §5.4 / §8.3.
+    /// WS; the daemon's per-session close happens via `close_session` (the
+    /// legacy `stop_agent` RPC is gone).
     pub async fn logout(&self) -> Result<(), MinosError> {
-        // Pre-Phase-C this called `stop_agent` to halt the active session.
-        // Post-Phase-C the daemon owns multiple sessions; logout no longer
-        // closes them implicitly. The Mac side reaps idle sessions via the
-        // manager's reaper (C19) once the iOS client disconnects.
+        // Logout no longer implicitly closes host sessions: the daemon owns
+        // multiple sessions, and the Mac reaps idle ones via the manager's
+        // reaper once the iOS client disconnects.
 
         let session = self.auth_session.read().await.clone();
         if let Some(s) = session {
@@ -1408,8 +1409,7 @@ impl MobileClient {
 
     /// Spawn the reconnect loop as a background task. Idempotent: a
     /// running loop short-circuits the call. Aborted on Unauthenticated
-    /// / RefreshFailed by `clear_auth_session_and_disconnect`. Spec §6.3,
-    /// plan 08a Task 6.2.
+    /// / RefreshFailed by `clear_auth_session_and_disconnect`.
     async fn ensure_reconnect_loop(&self) {
         let mut guard = self.reconnect_handle.lock().await;
         if let Some(h) = guard.as_ref() {
@@ -1470,7 +1470,7 @@ impl MobileClient {
 
     /// Notify the reconnect controller that the iOS app moved to the
     /// foreground. Resets backoff and clears the paused flag so the loop
-    /// reconnects immediately. Spec §6.3 / §8.3.
+    /// reconnects immediately.
     ///
     /// Sync wrapper so Dart's `WidgetsBindingObserver` (main isolate) can
     /// call without an awaitable; the actual mutation is async-safe. If
@@ -1494,7 +1494,7 @@ impl MobileClient {
     /// Notify the reconnect controller that the iOS app moved to the
     /// background. Starts a short grace window before pausing reconnects
     /// so brief app switches do not force an immediate reconnect on
-    /// return. Spec §6.3 / §8.3. Same runtime-handling shape as
+    /// return. Same runtime-handling shape as
     /// `notify_foregrounded`.
     pub fn notify_backgrounded(&self) {
         let r = self.reconnect.clone();
@@ -1842,7 +1842,7 @@ struct ReconnectContext {
 
 /// Reconnect loop owned by [`MobileClient::ensure_reconnect_loop`].
 ///
-/// Spec §6.3:
+/// Behavior:
 /// - Sleeps `reconnect.next_delay()` between attempts.
 /// - Honours `reconnect.is_paused()` after the background grace window.
 /// - Refreshes the access token if its expiry is within 2 minutes, even while
@@ -1980,7 +1980,7 @@ async fn connected_refresh_delay(ctx: &ReconnectContext) -> Duration {
 
 /// Inline-refresh path used by [`reconnect_loop`]. Returns `true` on
 /// success (or when there's no session to refresh), `false` on failure
-/// (publishes RefreshFailed and clears auth state). Spec §6.3.
+/// (publishes RefreshFailed and clears auth state).
 async fn refresh_inline(ctx: &ReconnectContext, backend_url: &str) -> bool {
     // Hoist the session check above `Refreshing` so a no-op refresh
     // (no session) doesn't publish a `Refreshing → ?` transition with
@@ -2259,9 +2259,8 @@ mod tests {
 
     #[tokio::test]
     async fn list_sessions_without_persisted_state_errors_unauthorized() {
-        // ADR-0020 dropped the device-secret rail; list_sessions is
-        // bearer-only. With no auth_session it surfaces Unauthorized
-        // (not StoreCorrupt — the device-secret is no longer required).
+        // list_sessions is bearer-only. With no auth_session it surfaces
+        // Unauthorized (not StoreCorrupt — device-secret is not required).
         let client = MobileClient::new_with_in_memory_store("test".into());
         let err = client
             .list_sessions(ListSessionsParams {

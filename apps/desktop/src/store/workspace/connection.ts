@@ -27,7 +27,7 @@ export function createConnectionActions(
   | "clearActionError"
 > {
   return {
-  /** Refresh IPC + hubOnline without full bootstrap (IM device presence). */
+  /** Refresh IPC + cloudOnline without full bootstrap (IM device presence). */
   refreshDaemonStatus: async () => {
     if (!isTauriRuntime()) return;
     if (get().source !== "daemon") return;
@@ -189,13 +189,13 @@ export function createConnectionActions(
           set({ livePush: false });
         }
 
-        // §6.5: quietly hydrate ConversationList for all known projects so badge
+        // quietly hydrate ConversationList for all known projects so badge
         // aggregates (unread + approvalCount from DTO) cover the project index.
         void quietHydrateAllConversationLists(get);
 
         // Hub IM bridge (Mobile → Desktop) if account already authenticated.
-        void import("@/shared/lib/im-hub-bridge").then(({ ensureImHubBridge }) =>
-          ensureImHubBridge(),
+        void import("@/shared/lib/im-cloud-bridge").then(({ ensureImCloudBridge }) =>
+          ensureImCloudBridge(),
         );
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);

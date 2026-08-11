@@ -3,8 +3,7 @@
 //!
 //! Each test spawns a real axum server on an ephemeral port and drives it
 //! with a real `tokio-tungstenite` client. This mirrors what the full e2e
-//! (step 12) will do, but with a focused coverage of the handshake path
-//! added in step 9.
+//! coverage does, but with a focused coverage of the handshake path.
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
@@ -12,7 +11,7 @@ use minos_backend::{
     auth::use_case::AuthUseCase,
     host_link::HostLinkService,
     http::{router, BackendState},
-    session::SessionRegistry,
+    realtime::RealtimeConnectionRegistry,
     store,
 };
 use minos_domain::{DeviceId, DeviceRole};
@@ -40,7 +39,7 @@ async fn spawn_relay() -> (
     Arc<AuthUseCase>,
 ) {
     let pool = store::connect("sqlite::memory:").await.unwrap();
-    let registry = Arc::new(SessionRegistry::new());
+    let registry = Arc::new(RealtimeConnectionRegistry::new());
     let mut state = BackendState::new(
         registry,
         Arc::new(HostLinkService::new(pool.clone())),
@@ -237,12 +236,12 @@ async fn ws_client_ticket_connect_emits_hello_frame() {
     assert_eq!(row.account_id.as_deref(), Some(account_id.as_str()));
 }
 
-// ── /ws/host: paired reconnect legacy presence model removed ────────────
+// ── /ws/host: paired reconnect presence model removed ────────────
 
 // The topic gateway now starts with `Hello`; the old single-peer presence
 // bootstrap (`PeerOffline`/`Unpaired`) no longer exists.
 #[tokio::test]
-#[ignore = "ADR-0020 single-peer presence model removed; Phase M will reintroduce multi-host coverage"]
+#[ignore = "single-peer presence model removed; multi-host presence coverage deferred"]
 async fn devices_authenticated_connect_emits_hello_frame_when_peer_is_not_live() {
     use futures::StreamExt;
 

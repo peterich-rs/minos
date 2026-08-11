@@ -3,13 +3,22 @@ use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use dashmap::DashMap;
 use minos_domain::{DeviceId, DeviceRole};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use super::wire::ServerFrame;
 use super::RealtimeTopic;
 
 pub use minos_protocol::realtime::ConnectionPrincipal;
+
+/// Why a live formal connection was actively closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionRevocation {
+    /// A newer socket for the same device replaced this one.
+    Superseded,
+    /// Auth backing was revoked (host unlink, token revoke, process shutdown).
+    AuthRevoked,
+}
 
 const SEEN_DURABLE_EVENT_IDS_CAPACITY: usize = 1024;
 /// Max live frames held per topic while replaying history.
@@ -60,6 +69,8 @@ pub struct ConnectionState {
     /// Topics currently replaying history; live durable frames go to barrier buffer.
     catchup_barriers: RwLock<HashMap<RealtimeTopic, TopicCatchupBarrier>>,
     push: mpsc::Sender<ServerFrame>,
+    /// Active close signal for same-device supersede and auth revoke.
+    revoked: watch::Sender<Option<ConnectionRevocation>>,
     pub created_at_ms: i64,
 }
 
@@ -72,6 +83,7 @@ impl ConnectionState {
         push: mpsc::Sender<ServerFrame>,
         created_at_ms: i64,
     ) -> Self {
+        let (revoked, _rx) = watch::channel(None);
         Self {
             conn_id: ConnectionId::new(),
             principal,
@@ -81,8 +93,32 @@ impl ConnectionState {
             seen_durable_event_ids: RwLock::new(VecDeque::new()),
             catchup_barriers: RwLock::new(HashMap::new()),
             push,
+            revoked,
             created_at_ms,
         }
+    }
+
+    /// Mark this connection revoked and wake the gateway loop.
+    pub fn revoke(&self, reason: ConnectionRevocation) {
+        let _ = self.revoked.send(Some(reason));
+    }
+
+    /// Subscribe to revocation changes for this connection.
+    #[must_use]
+    pub fn subscribe_revocation(&self) -> watch::Receiver<Option<ConnectionRevocation>> {
+        self.revoked.subscribe()
+    }
+
+    /// True when `other` is the same concrete socket connection.
+    #[must_use]
+    pub fn same_connection(&self, other: &Self) -> bool {
+        self.conn_id == other.conn_id
+    }
+
+    /// Account id for account-client principals; `None` for host.
+    #[must_use]
+    pub fn account_id(&self) -> Option<&str> {
+        self.principal.account_id()
     }
 
     /// Begin buffering live durable events for `topic` until [`drain_catchup_barrier`].

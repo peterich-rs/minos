@@ -262,7 +262,7 @@ pub async fn list_for_message_in_tx(
     }
 }
 
-/// Prior successful reaction op for Intent Outbox idempotency (B6/C5).
+/// Prior successful reaction op for Intent Outbox idempotency.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReactionClientOpRow {
     pub client_op_id: String,

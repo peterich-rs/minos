@@ -1,4 +1,4 @@
-//! HTTP DTOs for the `/v1/auth/*` endpoints. Spec §5.2.
+//! HTTP DTOs for the `/v1/auth/*` endpoints.
 //!
 //! Field shapes mirror `crates/minos-backend/src/http/v1/auth.rs::AuthResp`
 //! / `AccountSummary` / `RefreshResp` so the JSON wire contract stays

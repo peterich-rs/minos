@@ -1,10 +1,9 @@
 //! Coarse in-memory rate limiter for auth endpoints. Per-key sliding
-//! window with `permits` slots over `window`. Spec §5.6.
+//! window with `permits` slots over `window`.
 //!
 //! Hand-rolled rather than using `tower-governor` to keep the dep tree
-//! lean (spec §12.1 flagged the ecosystem churn risk). The bucket is
-//! adequate for the auth surface, where the rate limits are coarse and
-//! we never need per-route middleware composition.
+//! lean. The bucket is adequate for the auth surface, where the rate
+//! limits are coarse and we never need per-route middleware composition.
 //!
 //! Key-count is bounded by `max_keys` to prevent memory exhaustion from
 //! rotating-IP attacks. When the limit is reached, the oldest-accessed

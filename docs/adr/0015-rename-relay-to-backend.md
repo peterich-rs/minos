@@ -32,9 +32,7 @@ Rename the crate and all of its public surface in one atomic change. Specificall
 - Internal error type `RelayError` (in `minos-backend/src/error.rs`) is left as-is for now — it's an internal name; renaming it is mechanical churn that doesn't pay back. A follow-up may revisit.
 
 **Not** renamed:
-- The historical spec file `docs/superpowers/specs/minos-relay-backend-design.md` — it is the document of record for plan 04 and is referenced by ADRs 0009 / 0011 / 0012. Its filename is part of its identity; mutating it would obscure history.
 - ADR text in 0009 / 0010 / 0011 / 0012. Those are point-in-time decision records and should describe the world as it was at the time of the decision. Future ADRs can supersede them.
-- Any prose in the plan-04 file `docs/superpowers/plans/04-minos-relay-backend.md`.
 
 No compatibility shim, no legacy crate, no env-var alias. The branch flips the name in one commit and every dependent reference is updated in lockstep. `cargo xtask check-all` is the gate.
 
@@ -50,7 +48,7 @@ Spec reference: §2.1.1 (rename), §15 (ADR list).
 **Negative:**
 - One forced disruption for any operator with a running `minos-relay.service` — env vars must change, the launchd plist must change, the DB file path moves. The runbook update in `docs/ops/cloudflare-tunnel-setup.md` is the migration guide.
 - Everyone with a local `./minos-relay.db` from the dev branch needs to either rename it or rerun `cargo xtask backend-db-reset`. Not a real risk because the dev DB has no production data.
-- ADR 0010 (CF tunnel) and the spec file in `docs/superpowers/specs/minos-relay-backend-design.md` retain the old name in prose. A reader has to know that "relay" in those documents is the same thing that's now called "backend" in code. Acceptable trade vs the alternative (rewriting historical decision records and breaking citation graphs).
+- Earlier ADRs retain the old name in prose. A reader has to know that "relay" in those point-in-time records is the same thing now called "backend" in code.
 
 **Operational migration:**
 - Build with the new branch.

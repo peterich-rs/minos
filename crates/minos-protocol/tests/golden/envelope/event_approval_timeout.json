@@ -1,8 +1,0 @@
-{
-  "kind": "event",
-  "v": 1,
-  "type": "approval_timeout",
-  "session_id": "thr_approval",
-  "request_id": "req_123",
-  "reason": "timeout"
-}

@@ -5,7 +5,7 @@ import 'package:path_provider/path_provider.dart';
 
 /// Per-host workspace MRU (Most Recently Used) store.
 /// Persists to a JSON file with a cap of 8 entries per host.
-/// Spec §5.4 — remember last-used workspaces per host.
+/// Remembers last-used workspaces per host.
 class WorkspaceMruStore {
   static const int _cap = 8;
   static const String _fileName = 'workspace_mru.json';

@@ -1,4 +1,4 @@
-//! Bearer-token extractor (spec §5.4). Pattern mirrors
+//! Bearer-token extractor. Pattern mirrors
 //! `crate::http::auth::authenticate` — handler-level call, not axum
 //! middleware, so handlers can opt in per route.
 
@@ -50,7 +50,7 @@ impl BearerError {
 /// account principal carried by the token.
 ///
 /// This is the extractor for the formal account rail where `/v1/*` handlers
-/// should not depend on the legacy `X-Device-*` header bundle for business
+/// should not depend on the `X-Device-*` header bundle for business
 /// identity. The token still contains a `did` claim, but handlers that care
 /// about a specific installation must validate it from request data.
 pub fn require_account(

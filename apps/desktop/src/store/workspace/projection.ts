@@ -315,7 +315,7 @@ export async function mapPool<T>(
 }
 
 /**
- * Quiet-hydrate ConversationList for every known project so §6.5 badge /
+ * Quiet-hydrate ConversationList for every known project so badge /
  * project.needsAttention cover the full project index (daemon approvalCount
  * on conversation rows). Does not open Attention queue or keep project sessions.
  */

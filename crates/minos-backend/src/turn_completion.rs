@@ -13,7 +13,7 @@
 //!
 //! All runtimes (Codex / Claude / Gemini / OpenCode / Grok) share one projection
 //! path via `minos-ui-protocol` translators — Desktop UI dual-write is **not**
-//! a multi-end agent bubble writer (see hub-collaboration-message-ssot Phase 2).
+//! a multi-end agent bubble writer.
 
 use std::collections::{HashMap, HashSet};
 

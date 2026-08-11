@@ -20,17 +20,21 @@ const HARD_LINES = 800;
 
 /** @type {Record<string, number>} path relative to src/ → temporary hard cap */
 const ALLOWLIST = {
-  // Agents page create/list/edit + Hub registry; split to AgentsView sections next wave.
+  // Agents page create/list/edit + cloud registry; split to AgentsView sections next wave.
   "features/agents/AgentsView.tsx": 1250,
-  // WS connect / inbox digest / subscription fanout; split hub-realtime lanes next wave.
-  "shared/lib/hub-realtime.ts": 1000,
-  // Hub REST helpers (auth + conversations + agents). sendConversationMessage removed;
-  // further split to minos-cloud-hub.ts / agents helpers planned (freeze above current LOC).
+  // WS connect / inbox digest / subscription fanout; split cloud-realtime lanes next wave.
+  // Cap raised after Hub→Cloud identifier rename (hub-realtime @982→cloud-realtime ~1017).
+  "shared/lib/cloud-realtime.ts": 1050,
+  // Cloud REST helpers (auth + conversations + agents). sendConversationMessage removed;
+  // further split to minos-cloud helpers planned (freeze above current LOC).
   "shared/lib/minos-cloud.ts": 1100,
   // Mock fixtures + Conversation types; extract mock-conversations.ts planned.
   "shared/lib/mock-data.ts": 850,
   // Outbox posts + per-lane worker share one module; split to im-outbox-worker.ts next.
   "shared/lib/im-cloud-sync.ts": 950,
+  // Cloud IM bridge (lifecycle + mark-read + timeline merge). Split mark-read /
+  // lifecycle helpers next; cap raised after Hub→Cloud rename (im-hub-bridge @784→~826).
+  "shared/lib/im-cloud-bridge.ts": 850,
 };
 
 /**

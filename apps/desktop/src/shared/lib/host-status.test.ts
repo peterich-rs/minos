@@ -33,7 +33,7 @@ describe("deriveHostPresence", () => {
       source: "daemon",
       daemonConnected: true,
       accountSync: "online",
-      hubOnline: false,
+      cloudOnline: false,
     });
     assert.equal(p.label, "Online");
     assert.equal(p.cloud, "online");
@@ -47,7 +47,7 @@ describe("deriveHostPresence", () => {
       source: "daemon",
       daemonConnected: true,
       accountSync: "offline",
-      hubOnline: true,
+      cloudOnline: true,
     });
     assert.equal(p.label, "Offline");
     assert.equal(p.cloud, "offline");
@@ -75,11 +75,11 @@ describe("deriveHostPresence", () => {
     assert.equal(p.runtimeReady, true);
   });
 
-  it("legacy: maps hubOnline true to Online when accountSync/cloud omitted", () => {
+  it("legacy: maps cloudOnline true to Online when accountSync/cloud omitted", () => {
     const p = deriveHostPresence({
       source: "daemon",
       daemonConnected: true,
-      hubOnline: true,
+      cloudOnline: true,
     });
     assert.equal(p.label, "Online");
   });
@@ -89,7 +89,7 @@ describe("deriveHostPresence", () => {
       source: "daemon",
       daemonConnected: true,
       accountSync: "online",
-      hubOnline: false,
+      cloudOnline: false,
     });
     assert.equal(p.label, "Online");
     assert.equal(p.cloud, "online");

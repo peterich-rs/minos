@@ -90,7 +90,7 @@ export function HostView() {
     daemonConnected: daemonReady,
     accountSync: session ? accountSyncStatus : "unknown",
     cloud: session ? cloudStatus : "unknown",
-    hubOnline: connection?.hubOnline,
+    cloudOnline: connection?.cloudOnline,
   });
 
   const lastError =
@@ -425,7 +425,7 @@ export function HostView() {
                   value={hostBind.hostInstallationId ?? "—"}
                   mono
                 />
-                <Row label="Hub online" value={String(!!connection?.hubOnline)} mono />
+                <Row label="Hub online" value={String(!!connection?.cloudOnline)} mono />
                 <Row label="Cloud" value={cloudStatus} mono />
                 <Row label="Last error" value={lastError ?? "—"} mono />
               </dl>

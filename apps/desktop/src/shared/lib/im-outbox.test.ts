@@ -53,6 +53,29 @@ describe("im-outbox", () => {
     assert.equal(again.status, "acked");
   });
 
+  it("persists structured mentions on user_message enqueue", async () => {
+    const mentions = [
+      { kind: "bot" as const, bot_id: "bot-codex", start: 0, length: 6 },
+      {
+        kind: "account" as const,
+        account_id: "acct-1",
+        start: 7,
+        length: 5,
+      },
+    ];
+    const entry = await enqueueUserMessage({
+      conversationId: "c1",
+      clientMessageId: "m-mentions",
+      text: "@codex @alice hi",
+      mentions,
+    });
+    assert.deepEqual(entry.mentions, mentions);
+    const due = await listDuePending();
+    const row = due.find((e) => e.clientMessageId === "m-mentions");
+    assert.ok(row);
+    assert.deepEqual(row!.mentions, mentions);
+  });
+
   it("network errors stay pending after many attempts (no terminal burn)", async () => {
     await enqueueUserMessage({
       conversationId: "c1",
@@ -161,7 +184,7 @@ describe("im-outbox", () => {
     assert.equal((await listDuePending()).length, 0);
   });
 
-  it("includes reaction_toggle in due queue (C5.1)", async () => {
+  it("includes reaction_toggle in due queue", async () => {
     await enqueueReactionToggle({
       conversationId: "c1",
       clientMessageId: "react-1",
@@ -194,7 +217,7 @@ describe("im-outbox", () => {
     assert.ok((next as number) > Date.now() + 10_000);
   });
 
-  it("includes approval_resolve in due queue with stable client op id (C5.3)", async () => {
+  it("includes approval_resolve in due queue with stable client op id", async () => {
     const first = await enqueueApprovalResolve({
       conversationId: "session-1",
       clientMessageId: "approval-op-1",

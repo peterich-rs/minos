@@ -20,7 +20,7 @@ export type DaemonConnection = {
    * Hub device online: managed daemon live `/ws/host` to minos-backend.
    * Distinct from cloud bind (silent after login) and local daemon IPC.
    */
-  hubOnline?: boolean;
+  cloudOnline?: boolean;
   /**
    * Local host credential (`hit_`) present. Steady-state connect uses this;
    * only missing/invalid credential triggers a one-time silent register.

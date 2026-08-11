@@ -13,8 +13,8 @@
 
 > **产品主轴是消息驱动 IM**（[ADR 0021](adr/0021-agent-as-conversation-bot-participant.md)）。  
 > `POST /v1/agent-sessions/*` / HostCommand 是 **bot runtime 控制面**，不是「远程协作 = 下命令」的产品定义。  
-> Bot 身份是 **全局唯一** 的 Hub `agents` 行（数字肉身）；进 conversation 只写 membership；session 是 per-conversation 执行上下文。见 [global-bot-identity-design](superpowers/specs/global-bot-identity-design.md)。  
-> 细节 SSOT：[architecture-messaging.md](architecture-messaging.md)、[agent-participant-delivery](superpowers/specs/2026-08-09-agent-participant-delivery.md)。
+> Bot 身份是 **全局唯一** 的 Hub `agents` 行（数字肉身）；进 conversation 只写 membership；session 是 per-conversation 执行上下文。
+> 细节 SSOT：[architecture-messaging.md](architecture-messaging.md)。
 
 ---
 
@@ -145,7 +145,7 @@
    `client_message_id = agent-result:{conv}:{session}:{origin_message_id}`
 5. 所有人类端只订阅时间线即可看到 bot 回复
 
-规范：[agent-participant-delivery](superpowers/specs/2026-08-09-agent-participant-delivery.md)。
+投递不变量见 [architecture-messaging.md](architecture-messaging.md)。
 
 ### 5.2 Runtime 控制面（非产品主轴）：Agent 会话生命周期
 
@@ -237,7 +237,7 @@ TUI / Desktop 通过 JSON-RPC 连接 `minos-daemon`:
 | 用户立即发消息 | send 路径 `resume_session(auto_continue=false)` + `send_user_message`；`take_needs_continue` 清 flag，**不**注入 CONTINUE |
 | 用户显式 close | `Closed`，不可 resume / 默认复用 |
 
-常驻 detached daemon + Soft/Hard quit 见 `docs/superpowers/specs/2026-06-23-daemon-lifecycle-and-agent-mention-scope-design.md`（后续）；本路径保证 process-death recovery 正确。
+常驻 detached daemon、Soft/Hard quit 与 process-death recovery 由 [architecture-daemon.md](architecture-daemon.md) 的 Host 生命周期定义。
 
 ### 群聊协调
 

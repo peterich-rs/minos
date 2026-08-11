@@ -47,7 +47,7 @@ pub trait MinosRpc {
     /// session: subsequent calls with the same `workspace` reuse the existing
     /// codex app-server child while distinct workspaces each spawn their own
     /// instance. Response carries the `session_id` consumers must pass to
-    /// `send_user_message` / `interrupt_session` / `close_session`. See spec §5.2.
+    /// `send_user_message` / `interrupt_session` / `close_session`.
     #[method(name = "start_agent")]
     async fn start_agent(
         &self,
@@ -55,8 +55,8 @@ pub trait MinosRpc {
     ) -> jsonrpsee::core::RpcResult<StartAgentResponse>;
 
     /// Send user text into the named thread. Fire-and-observe: streaming
-    /// output arrives via the backend's ingest pipeline (plan §B6), not as
-    /// this RPC's response. See spec §5.2.
+    /// output arrives via the backend's ingest pipeline, not as
+    /// this RPC's response.
     #[method(name = "send_user_message")]
     async fn send_user_message(
         &self,

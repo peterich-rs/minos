@@ -7,7 +7,7 @@ import 'package:minos/domain/group_member.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
 /// Unified conversation participants (humans ∪ bots). Membership-first SSOT
-/// for @ picker and roster reads (ADR 0021 / agent-participant-delivery).
+/// for @ picker and roster reads (ADR 0021).
 final conversationParticipantsProvider = FutureProvider.family
     .autoDispose<ConversationParticipantsResponse, String>((
       ref,

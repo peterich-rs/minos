@@ -1,6 +1,6 @@
 //! Installation presence fanout for the formal IM gateway.
 //!
-//! Online is live-connection truth (`SessionRegistry` / active WS).
+//! Online is live-connection truth (`RealtimeConnectionRegistry` / active WS).
 //! `last_seen_at_ms` is durable on `device_installations` and returned on
 //! HTTP list endpoints. Presence pushes are **ephemeral** `StreamEvent`s
 //! (`kind = presence`) — not DurableEvent log entries.

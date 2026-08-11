@@ -1,6 +1,6 @@
-//! C22 multi-session smoke test against the FakeCodexBackend.
+//! Multi-session smoke test against the FakeCodexBackend.
 //!
-//! Spec §12.2 lays out the scenario; the goal is to exercise spawn, send,
+//! The goal is to exercise spawn, send,
 //! interrupt, implicit resume, and idle-reaper paths against a stand-in
 //! codex server so the test stays hermetic on hosts without a real codex
 //! binary.

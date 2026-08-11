@@ -46,7 +46,7 @@ pub trait AgentStateObserver: Send + Sync {
 
 /// Relay-link push observer. Swift implements this protocol; Rust calls
 /// `on_state` whenever the underlying `watch::Receiver<RelayLinkState>`
-/// fires. See spec §4.3 for the two independent state axes.
+/// fires. Two independent state axes: relay link and peer.
 pub trait RelayLinkStateObserver: Send + Sync {
     fn on_state(&self, state: RelayLinkState);
 }
@@ -61,8 +61,8 @@ pub trait PeerStateObserver: Send + Sync {
 /// Returns a `Subscription` whose `cancel` stops the spawned task.
 ///
 /// Pre-relay glue retained for iOS (minos-mobile) until its relay
-/// migration lands — the macOS side no longer calls this; Phase F.1
-/// replaced the connection-state subscription with dual
+/// migration lands — the macOS side no longer calls this; the
+/// connection-state subscription has been replaced with dual
 /// `subscribe_relay_link` / `subscribe_peer`.
 #[allow(dead_code)]
 pub(crate) fn spawn_observer(

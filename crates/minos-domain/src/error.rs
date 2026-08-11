@@ -1,6 +1,6 @@
 //! Single typed error for all Minos public APIs.
 //!
-//! Variants mirror the table in spec §7.4. `Lang` + `user_message` produce
+//! Variants mirror the typed error table. `Lang` + `user_message` produce
 //! short, user-facing copy (zh / en) so UI layers do not need to translate
 //! by themselves. The `ErrorKind` companion enum mirrors `MinosError`'s
 //! discriminants without payload and carries the single-source-of-truth
@@ -223,7 +223,7 @@ pub enum MinosError {
     #[error("rpc call failed: {method}: {message}")]
     RpcCallFailed { method: String, message: String },
 
-    // ── backend layer (spec §10.1) ──
+    // ── backend layer ──
     #[error("unauthorized for this operation: {reason}")]
     Unauthorized { reason: String },
 
@@ -239,7 +239,7 @@ pub enum MinosError {
     #[error("backend internal error: {message}")]
     BackendInternal { message: String },
 
-    // ── agent runtime layer (spec §5.3) ──
+    // ── agent runtime layer ──
     #[error("failed to spawn codex: {message}")]
     CodexSpawnFailed { message: String },
 
@@ -267,7 +267,7 @@ pub enum MinosError {
     #[error("session id does not match the active session")]
     AgentSessionIdMismatch,
 
-    // ── backend ingest / translation (spec §7.4 additions) ──
+    // ── backend ingest / translation ──
     #[error("ingest seq conflict for thread {session_id}: seq {seq} already present")]
     IngestSeqConflict { session_id: String, seq: u64 },
 
@@ -286,7 +286,7 @@ pub enum MinosError {
     #[error("pairing QR payload version unsupported: {version}")]
     PairingQrVersionUnsupported { version: u8 },
 
-    // ── auth + dispatch + lifecycle (spec §8.1, §8.3) ──
+    // ── auth + dispatch + lifecycle ──
     #[error("request timed out")]
     Timeout,
 
@@ -678,7 +678,7 @@ mod tests {
 
     #[test]
     fn no_tailscale_strings_remain_in_user_messages() {
-        // Relay rollout (spec §10.1) removes Tailscale from the user-facing
+        // Relay rollout removes Tailscale from the user-facing
         // copy; a regression would reintroduce it in a translation edit.
         // Guard both the relay-specific kinds called out in the spec AND
         // every other kind so future edits can't leak these words back in.

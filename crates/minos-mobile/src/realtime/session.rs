@@ -474,7 +474,7 @@ fn parse_chat_message(payload: &serde_json::Value) -> Option<ChatMessageSummary>
     }
 }
 
-/// Parse R3 account thin digest into an inbox-only SocialEventFrame.
+/// Parse account thin digest into an inbox-only SocialEventFrame.
 ///
 /// Builds a stub [`ChatMessageSummary`] (`text` = preview) so existing Dart
 /// inbox patch paths can reuse preview/unread without treating this as

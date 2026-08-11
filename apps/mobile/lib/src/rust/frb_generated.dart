@@ -352,6 +352,7 @@ abstract class RustLibApi extends BaseApi {
     required String text,
     String? replyToMessageId,
     String? clientMessageId,
+    String? mentionsJson,
   });
 
   Future<void> crateApiMinosMobileClientSendUserMessage({
@@ -2563,6 +2564,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String text,
     String? replyToMessageId,
     String? clientMessageId,
+    String? mentionsJson,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -2576,6 +2578,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(text, serializer);
           sse_encode_opt_String(replyToMessageId, serializer);
           sse_encode_opt_String(clientMessageId, serializer);
+          sse_encode_opt_String(mentionsJson, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -2594,6 +2597,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           text,
           replyToMessageId,
           clientMessageId,
+          mentionsJson,
         ],
         apiImpl: this,
       ),
@@ -2609,6 +2613,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           "text",
           "replyToMessageId",
           "clientMessageId",
+          "mentionsJson",
         ],
       );
 
@@ -10340,7 +10345,7 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
 
   /// Submit a user approval decision for a pending host request.
   ///
-  /// `client_request_id` is the Hub Intent Outbox id (C5.3). When omitted,
+  /// `client_request_id` is the Hub Intent Outbox id. When omitted,
   /// the mobile client generates one so the wire body never hardcodes null.
   Future<void> sendApprovalDecision({
     required String requestId,
@@ -10355,17 +10360,20 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
     clientRequestId: clientRequestId,
   );
 
+  /// `mentions_json` is an optional JSON array of wire `MentionTarget` objects.
   Future<ChatMessageSummary> sendChatMessage({
     required String conversationId,
     required String text,
     String? replyToMessageId,
     String? clientMessageId,
+    String? mentionsJson,
   }) => RustLib.instance.api.crateApiMinosMobileClientSendChatMessage(
     that: this,
     conversationId: conversationId,
     text: text,
     replyToMessageId: replyToMessageId,
     clientMessageId: clientMessageId,
+    mentionsJson: mentionsJson,
   );
 
   /// Send a follow-up user message to an existing agent session.
@@ -10402,7 +10410,7 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
   Stream<AuthStateFrame> subscribeAuthState() => RustLib.instance.api
       .crateApiMinosMobileClientSubscribeAuthState(that: this);
 
-  /// Open-chat live path (R3a): subscribe `conversation:{id}` for full T1 frames.
+  /// Open-chat live path: subscribe `conversation:{id}` for full T1 frames.
   Future<void> subscribeConversation({required String conversationId}) =>
       RustLib.instance.api.crateApiMinosMobileClientSubscribeConversation(
         that: this,
@@ -10425,7 +10433,7 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
   Stream<UiEventFrame> subscribeUiEvents() => RustLib.instance.api
       .crateApiMinosMobileClientSubscribeUiEvents(that: this);
 
-  /// Toggle Hub reaction; `client_op_id` is the Intent Outbox id (B6/C5).
+  /// Toggle Hub reaction; `client_op_id` is the Intent Outbox id.
   Future<ToggleReactionResponse> toggleReaction({
     required String conversationId,
     required String messageId,
@@ -10439,7 +10447,7 @@ class MobileClientImpl extends RustOpaque implements MobileClient {
     clientOpId: clientOpId,
   );
 
-  /// Leave open-chat conversation topic (R3a).
+  /// Leave open-chat conversation topic.
   Future<void> unsubscribeConversation({required String conversationId}) =>
       RustLib.instance.api.crateApiMinosMobileClientUnsubscribeConversation(
         that: this,

@@ -1,10 +1,21 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { resolveDispatchTargets } from "./resolve-dispatch-targets.ts";
-import type { MentionProfile } from "../../shared/lib/agent-route.ts";
+import {
+  buildStructuredMentions,
+  resolveDispatchTargets,
+} from "./resolve-dispatch-targets.ts";
+import type {
+  MentionHuman,
+  MentionProfile,
+} from "../../shared/lib/agent-route.ts";
 
 const installed = new Set(["codex", "claude", "grok"]);
 const profiles: MentionProfile[] = [
+  { id: "profile-research", name: "ResearchGrok", runtimeAgent: "grok" },
+];
+const runtimeProfiles: MentionProfile[] = [
+  { id: "bot-codex", name: "Codex", runtimeAgent: "codex" },
+  { id: "bot-claude", name: "Claude", runtimeAgent: "claude" },
   { id: "profile-research", name: "ResearchGrok", runtimeAgent: "grok" },
 ];
 
@@ -182,5 +193,98 @@ describe("resolveDispatchTargets", () => {
     assert.equal(r.targets.length, 1);
     assert.equal(r.targets[0]?.agent, "grok");
     assert.equal(r.targets[0]?.profileId, undefined);
+  });
+});
+
+describe("buildStructuredMentions", () => {
+  it("maps profile @Name to bot_id with start/length", () => {
+    const body = "@ResearchGrok dig in";
+    const mentions = buildStructuredMentions(body, profiles);
+    assert.equal(mentions.length, 1);
+    assert.deepEqual(mentions[0], {
+      kind: "bot",
+      bot_id: "profile-research",
+      start: 0,
+      length: "@ResearchGrok".length,
+    });
+  });
+
+  it("maps bare runtime to roster profile bot_id", () => {
+    const body = "@codex fix the flaky test";
+    const mentions = buildStructuredMentions(body, runtimeProfiles);
+    assert.equal(mentions.length, 1);
+    assert.equal(mentions[0]?.kind, "bot");
+    if (mentions[0]?.kind === "bot") {
+      assert.equal(mentions[0].bot_id, "bot-codex");
+      assert.equal(mentions[0].start, 0);
+      assert.equal(mentions[0].length, "@codex".length);
+    }
+  });
+
+  it("maps @p/<id> profile form", () => {
+    const body = "please @p/profile-research review";
+    const mentions = buildStructuredMentions(body, profiles);
+    assert.equal(mentions.length, 1);
+    assert.deepEqual(mentions[0], {
+      kind: "bot",
+      bot_id: "profile-research",
+      start: "please ".length,
+      length: "@p/profile-research".length,
+    });
+  });
+
+  it("dedupes repeated bot mentions and preserves appearance order", () => {
+    const body = "@codex then @claude and @codex again";
+    const mentions = buildStructuredMentions(body, runtimeProfiles);
+    assert.equal(mentions.length, 2);
+    assert.equal(mentions[0]?.kind, "bot");
+    assert.equal(mentions[1]?.kind, "bot");
+    if (mentions[0]?.kind === "bot" && mentions[1]?.kind === "bot") {
+      assert.equal(mentions[0].bot_id, "bot-codex");
+      assert.equal(mentions[1].bot_id, "bot-claude");
+    }
+  });
+
+  it("returns empty when bare runtime has no roster profile mapping", () => {
+    const mentions = buildStructuredMentions("@codex hello", []);
+    assert.deepEqual(mentions, []);
+  });
+
+  it("includes human @minos_id when mentionHumans provided", () => {
+    const humans: MentionHuman[] = [
+      {
+        accountId: "acct-alice",
+        minosId: "alice",
+        displayName: "Alice",
+      },
+    ];
+    const body = "hey @alice look at this";
+    const mentions = buildStructuredMentions(body, runtimeProfiles, {
+      mentionHumans: humans,
+    });
+    assert.equal(mentions.length, 1);
+    assert.deepEqual(mentions[0], {
+      kind: "account",
+      account_id: "acct-alice",
+      start: "hey ".length,
+      length: "@alice".length,
+    });
+  });
+
+  it("mixes bot and human mentions", () => {
+    const humans: MentionHuman[] = [
+      {
+        accountId: "acct-bob",
+        minosId: "bob",
+        displayName: "Bob",
+      },
+    ];
+    const body = "@bob @codex ship it";
+    const mentions = buildStructuredMentions(body, runtimeProfiles, {
+      mentionHumans: humans,
+    });
+    assert.equal(mentions.length, 2);
+    assert.equal(mentions[0]?.kind, "account");
+    assert.equal(mentions[1]?.kind, "bot");
   });
 });

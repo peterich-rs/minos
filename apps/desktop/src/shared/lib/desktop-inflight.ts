@@ -1,6 +1,6 @@
 /**
  * Process-private in-flight / resume bookkeeping.
- * Replaces former `window.__minos*` globals (spec §12.9).
+ * Replaces former `window.__minos*` globals.
  */
 
 /** Sessions that already received auto-continue resume this boot. */

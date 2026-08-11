@@ -127,6 +127,9 @@ abstract class MinosCoreProtocol {
     required String text,
     String? replyToMessageId,
     String? clientMessageId,
+
+    /// JSON array of wire MentionTarget objects (optional).
+    String? mentionsJson,
   });
 
   Future<ChatMessageSummary> recallChatMessage({
@@ -168,7 +171,7 @@ abstract class MinosCoreProtocol {
   /// Translated UI event history for one session.
   Future<ReadSessionResponse> readThread(ReadSessionParams params);
 
-  // ---- Projects (Phase P) ----
+  // ---- Projects ----
 
   /// Create a new project on the daemon.
   Future<CreateProjectResponse> createProject({
@@ -206,7 +209,7 @@ abstract class MinosCoreProtocol {
   /// Synchronous snapshot of the current [ConnectionState].
   ConnectionState get currentConnectionState;
 
-  // ---- Auth (Phase 8) ----
+  // ---- Auth ----
 
   /// Exchange a Supabase Auth access token for a Minos session (only human
   /// account create/login path). Surfaces `Authenticated` on [authStates]
@@ -222,7 +225,7 @@ abstract class MinosCoreProtocol {
   /// [authStates].
   Future<void> logout();
 
-  // ---- Agent dispatch (Phase 8) ----
+  // ---- Agent dispatch ----
 
   /// Send a follow-up user message to an existing agent session. The
   /// `sessionId` is the session/session identifier.
@@ -234,11 +237,10 @@ abstract class MinosCoreProtocol {
   /// Pause an in-flight turn while keeping the session resumable.
   Future<void> interruptThread({required String sessionId});
 
-  /// Close an agent session by its `session_id`. Replaces the pre-Phase-C
-  /// `stop_agent()` surface — the multi-thread `AgentManager` keys lifecycle
-  /// operations on `session_id` rather than implicitly on the single active
-  /// session. Idempotent on the daemon side; calling for an already-closed
-  /// thread is a benign no-op.
+  /// Close an agent session by its `session_id`. The multi-thread
+  /// `AgentManager` keys lifecycle operations on `session_id` rather than
+  /// implicitly on the single active session. Idempotent on the daemon side;
+  /// calling for an already-closed thread is a benign no-op.
   Future<void> closeThread({required String sessionId});
 
   /// Permanently delete a thread. Used exclusively for the swipe-to-delete
@@ -270,7 +272,7 @@ abstract class MinosCoreProtocol {
     required bool enabled,
   });
 
-  // ---- Lifecycle (Phase 8) ----
+  // ---- Lifecycle ----
 
   /// Mark the app as foregrounded. Resets the WS reconnect backoff so the
   /// next connect attempt happens promptly.
@@ -296,7 +298,7 @@ abstract class MinosCoreProtocol {
     required String sessionId,
     required Map<String, dynamic> decision,
 
-    /// Hub Intent Outbox id (C5.3). Stable across retries of the same intent.
+    /// Hub Intent Outbox id. Stable across retries of the same intent.
     String? clientRequestId,
   });
 
@@ -312,7 +314,6 @@ abstract class MinosCoreProtocol {
   /// is already `Connected`, and an error when no pairing snapshot exists.
   ///
   /// Called by `AuthController` on the first `Authenticated` transition
-  /// (Phase 8.9) so the WS reconnect loop only spawns under an
-  /// authenticated session.
+  /// so the WS reconnect loop only spawns under an authenticated session.
   Future<void> resumePersistedSession();
 }

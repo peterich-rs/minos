@@ -6,7 +6,7 @@ Hosted backend + host daemon + Desktop/TUI host consoles + Flutter mobile for re
 
 Minos is moving from MVP delivery into formal development.
 
-- Historical planning docs under `docs/superpowers/` have been retired.
+- Planning and review artifacts belong in the relevant PR or issue; the repository keeps only current architecture, ADR, and operational documentation.
 - The active backend architecture source of truth is `docs/backend-formal-development.md`.
 - Current shipped surfaces are the hosted Rust backend, `minos-daemon` (host runtime), Desktop (Tauri) / TUI host consoles, the Flutter mobile client, and the browser-admin web client.
 - The legacy Swift `apps/macos` host UI and UniFFI bridge have been removed; Desktop owns the host GUI.
@@ -166,7 +166,7 @@ The current account-based login + agent session flow is:
 
 1. **Sign in via Supabase** — clients authenticate with Supabase Auth, then call `POST /v1/auth/supabase` to obtain Minos access + refresh tokens plus an `account_id`.
 2. **Pair** — once authenticated, the iPhone scans the Mac's QR (v2 payload), POSTs `/v1/pairing/consume` with the bearer, and persists the freshly minted `DeviceSecret`. Same-device subsequent runs re-use the secret; switching accounts on a previously-paired device drops the pairing automatically (`MinosCore._onAuthLanded`).
-3. **`start_agent`** — the iPhone opens an authenticated `/devices` WebSocket, then forwards `minos_start_agent` (and follow-up `minos_send_user_message`) to the Mac via `Envelope::Forward`. The daemon replies with a `session_id`; live `EventKind::UiEventMessage` frames stream back over the same socket.
+3. **Agent session** — clients open formal `/ws/client` (ticket) and the host opens `/ws/host` (Bearer `hit_*`). Host commands are durable (`HostCommandIssued` outbox); live agent UI is delivered as topic `StreamEvent` / `DurableEvent` frames, not legacy envelope forwards.
 
 ### Local setup
 

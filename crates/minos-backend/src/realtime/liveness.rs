@@ -1,6 +1,6 @@
 //! IM connection liveness: heartbeat cadence and timeout policy.
 //!
-//! Formal gateway owns this path (not the legacy envelope session loop).
+//! Formal gateway owns this path for all `/ws/client` and `/ws/host` sockets.
 //! Clients may use protocol `Ping`/`Pong` and/or WebSocket control ping;
 //! either counts as activity.
 
@@ -15,7 +15,7 @@ pub const HEARTBEAT_TICK: Duration = Duration::from_secs(15);
 /// Close the socket when no inbound activity (text / control ping/pong /
 /// client `Ping`) has been observed for this long.
 ///
-/// Sized for ~3–4 missed client intervals at 25–30s, matching legacy
+/// Sized for ~3–4 missed client intervals at 25–30s, matching
 /// envelope `PAIRED_TIMEOUT`.
 pub const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(90);
 

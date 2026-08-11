@@ -1,0 +1,7 @@
+{
+  "type": "stream_event",
+  "topic": "agent_session:sess-1",
+  "kind": "ui_event",
+  "seq": 1,
+  "payload": { "type": "text_delta", "message_id": "m1", "text": "hi" }
+}

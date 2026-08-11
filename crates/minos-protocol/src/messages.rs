@@ -292,7 +292,7 @@ pub struct ConversationMembersResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
 pub struct MarkConversationReadRequest {
     /// Highest `message_seq` the client has actually observed/rendered.
-    /// Omitted or null is rejected by new clients; legacy empty body is not supported.
+    /// Omitted or null is rejected; an empty body is not supported.
     pub read_up_to_message_seq: i64,
 }
 
@@ -335,7 +335,7 @@ pub struct ChatMessageSummary {
     /// Structured SSOT alongside account mentions; agent inbox delivery keys off this.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mentioned_agent_ids: Vec<String>,
-    /// Derived mirror of [`MessageSender`] for legacy clients/FRB.
+    /// Derived mirror of [`MessageSender`] for FRB clients.
     /// **SSOT is `sender`** — always set via [`Self::sender_type_from`] /
     /// `sender.sender_type()`. Do not invent a second identity from this field.
     #[serde(default = "default_sender_type")]
@@ -510,6 +510,9 @@ pub struct SendChatMessageRequest {
     /// Ready media blob ids owned by the sender (upload via the media API first).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachment_blob_ids: Vec<String>,
+    /// Structured mention targets. Body text never invents delivery targets.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentions: Vec<crate::realtime::MentionTarget>,
 }
 
 // ─── Agent in Group Chat ───────────────────────────────────────────────
@@ -529,7 +532,7 @@ fn default_sender_type() -> SenderType {
 /// Request to register a new **global bot** under the caller's account.
 ///
 /// Creates a Hub bot identity (digital body). Joining conversations is a
-/// separate membership step — see global-bot-identity-design.
+/// separate membership step.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct RegisterAgentRequest {
     pub name: String,
@@ -656,8 +659,7 @@ pub struct ConversationAgentMembersResponse {
     pub agents: Vec<AgentSummary>,
 }
 
-/// Unified conversation participants (human ∪ bot). Phase A read model over dual tables.
-/// See ADR 0021 / agent-participant-delivery.
+/// Unified conversation participants (human ∪ bot). See ADR 0021.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ConversationParticipantsResponse {
     pub humans: Vec<UserSummary>,
@@ -685,6 +687,9 @@ pub struct SendAgentMessageRequest {
     /// Client clock for display/debug only. Hub assigns authoritative `created_at_ms`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_sent_at_ms: Option<i64>,
+    /// Structured hop targets (other bots / humans). Body never invents delivery.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentions: Vec<crate::realtime::MentionTarget>,
 }
 
 /// Ensure a Host/Desktop runtime agent exists for the caller's account.
@@ -854,10 +859,10 @@ pub struct WriteHostSkillConfigResponse {
     pub effective_enabled: bool,
 }
 
-/// Parameters for the `start_agent` RPC. See spec §5.2.
+/// Parameters for the `start_agent` RPC.
 ///
-/// Launches always use the app-server / long-running runtime path (JSONL
-/// `codex exec` was retired). There is no launch-mode selector on the wire.
+/// Launches always use the app-server / long-running runtime path.
+/// There is no launch-mode selector on the wire.
 ///
 /// # Profile resolution (latest-only)
 ///
@@ -893,7 +898,7 @@ pub struct StartAgentRequest {
 }
 
 /// Result of a successful `start_agent` RPC — carries the codex `session_id`
-/// as `session_id` and the resolved workspace path. See spec §5.2.
+/// as `session_id` and the resolved workspace path.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StartAgentResponse {
     pub session_id: String,
@@ -901,7 +906,7 @@ pub struct StartAgentResponse {
 }
 
 /// Parameters for the `send_user_message` RPC. `session_id` must match the
-/// active session's id; see spec §5.2 and §5.4.
+/// active session's id.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SendUserMessageRequest {
     pub session_id: String,
@@ -963,19 +968,19 @@ pub struct ApprovalDecisionRequest {
     pub decision: serde_json::Value,
 }
 
-/// Parameters for the `interrupt_session` RPC. See spec §5.2.
+/// Parameters for the `interrupt_session` RPC.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InterruptSessionRequest {
     pub session_id: String,
 }
 
-/// Parameters for the `close_session` RPC. See spec §5.2.
+/// Parameters for the `close_session` RPC.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CloseSessionRequest {
     pub session_id: String,
 }
 
-/// Parameters for the `get_session` RPC. See spec §5.2.
+/// Parameters for the `get_session` RPC.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GetSessionParams {
     pub session_id: String,
@@ -2007,9 +2012,7 @@ mod tests {
             instructions: None,
         };
         let json = serde_json::to_string(&req).unwrap();
-        // Workspace is mandatory post-Phase-C and must serialize.
         assert!(json.contains("workspace"));
-        // Retired launch-mode selector must not reappear on the wire.
         assert!(!json.contains("mode"));
         let back: StartAgentRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(req, back);
@@ -2042,8 +2045,7 @@ mod tests {
 
     #[test]
     fn start_agent_request_ignores_unknown_legacy_mode_field() {
-        // Pre-cleanup clients may still send `mode`; serde denies unknown fields
-        // only when configured — default is to ignore extra fields.
+        // Default serde ignores unknown fields on the wire.
         let json = r#"{"agent":"codex","workspace":"/w","mode":"jsonl"}"#;
         let req: StartAgentRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.agent, AgentName::Codex);

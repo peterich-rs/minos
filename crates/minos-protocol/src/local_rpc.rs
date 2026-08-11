@@ -115,7 +115,7 @@ pub trait LocalDaemonRpc {
     async fn health(&self) -> jsonrpsee::core::RpcResult<crate::HealthResponse>;
 
     /// Fetch host installation identity + bootstrap nonce for Host Link.
-    /// Registered as `minos_local_host_prepare_link` (D02 §7.2).
+    /// Registered as `minos_local_host_prepare_link`.
     #[method(name = "host_prepare_link")]
     async fn host_prepare_link(&self)
         -> jsonrpsee::core::RpcResult<crate::HostPrepareLinkResponse>;

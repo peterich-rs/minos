@@ -4176,7 +4176,6 @@ dependencies = [
  "minos-codex-protocol",
  "minos-domain",
  "minos-prompt-runtime",
- "minos-protocol",
  "minos-ui-protocol",
  "reqwest 0.12.28",
  "serde",

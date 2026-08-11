@@ -2,7 +2,7 @@
 //! logical model (tables, columns+nullability, PK/UNIQUE column sets, FK graph,
 //! critical CHECKs). Physical type encoding and partition children may differ.
 //!
-//! See docs/superpowers/specs/backend-storage-parity-design.md.
+//! Storage parity invariants: see docs/architecture-backend.md.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;

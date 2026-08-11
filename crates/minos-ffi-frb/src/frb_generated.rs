@@ -3065,6 +3065,7 @@ fn wire__crate__api__minos__MobileClient_send_chat_message_impl(
             let api_text = <String>::sse_decode(&mut deserializer);
             let api_reply_to_message_id = <Option<String>>::sse_decode(&mut deserializer);
             let api_client_message_id = <Option<String>>::sse_decode(&mut deserializer);
+            let api_mentions_json = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, crate::api::minos::MinosError>(
@@ -3092,6 +3093,7 @@ fn wire__crate__api__minos__MobileClient_send_chat_message_impl(
                             api_text,
                             api_reply_to_message_id,
                             api_client_message_id,
+                            api_mentions_json,
                         )
                         .await?;
                         Ok(output_ok)

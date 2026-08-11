@@ -1,7 +1,7 @@
 //! Steady-state host installation bearer credential extractor.
 //!
 //! Formal host rail requests authenticate with the opaque
-//! `host_installation_token` issued by `/v1/host/pairing/redeem`. The legacy
+//! `host_installation_token` issued by `/v1/host/pairing/redeem`. The
 //! `X-Device-*` bundle is intentionally not accepted here.
 
 use axum::http::{HeaderMap, StatusCode};

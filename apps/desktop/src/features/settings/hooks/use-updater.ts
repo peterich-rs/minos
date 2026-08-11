@@ -79,7 +79,7 @@ async function isUpdaterPluginEnabled(): Promise<boolean> {
   }
 }
 
-/** Phase C: stop managed daemon / agents before install + relaunch. */
+/** Stop managed daemon / agents before install + relaunch. */
 async function prepareForAppUpdate(): Promise<void> {
   if (!isTauriRuntime()) return;
   await invoke("prepare_for_app_update");

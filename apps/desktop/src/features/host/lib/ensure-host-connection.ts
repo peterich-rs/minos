@@ -152,7 +152,7 @@ export async function registerHostCredential(
 export const ensureHostConnection = registerHostCredential;
 
 /** Poll until hub reports online or timeout (daemon dials `/ws/host` after apply). */
-export async function waitForHubOnline(
+export async function waitForCloudOnline(
   isOnline: () => Promise<boolean>,
   opts?: { timeoutMs?: number; intervalMs?: number },
 ): Promise<boolean> {

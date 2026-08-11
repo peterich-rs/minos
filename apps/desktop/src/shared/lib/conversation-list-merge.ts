@@ -1,11 +1,11 @@
 /**
  * Merge daemon project conversation rows with Hub digests for the rail.
  *
- * Gate: isHubImMode = authenticated + token (NOT host-linked).
+ * Gate: isCloudImMode = authenticated + token (NOT host-linked).
  * When daemon is absent (auth without host / no local shell), still show
  * Hub-only rows with defaults for host-local fields.
  *
- * P1 unread SSOT:
+ * Unread SSOT:
  * - `unreadSource: "hub"` (Hub IM mode): unread only from Hub digest / live
  *   patch. Never use local `readMessageCountById` baseline dual-track.
  * - `unreadSource: "local"` (daemon-only / unauthenticated): row.unread from
@@ -20,7 +20,7 @@
 
 import type { Conversation } from "./mock-data.ts";
 import { runtimesOfBots } from "./mock-data.ts";
-import type { HubConversationDigest } from "./hub-digest-cache.ts";
+import type { CloudConversationDigest } from "./cloud-digest-cache.ts";
 import { positiveMs } from "./rail-activity.ts";
 
 export type DaemonListRow = {
@@ -48,10 +48,10 @@ export type DaemonListRow = {
   gitHead?: string;
 };
 
-/** Where rail unread badges come from (P1 single-track). */
+/** Where rail unread badges come from (single-track). */
 export type UnreadSource = "hub" | "local";
 
-function hubPreview(d: HubConversationDigest): string {
+function cloudPreview(d: CloudConversationDigest): string {
   return d.preview?.trim() || "No messages yet";
 }
 
@@ -78,14 +78,14 @@ export function isPlaceholderConversationTitle(
  * Hub placeholder must not clobber a real local/daemon title.
  */
 export function resolveConversationTitle(input: {
-  hubTitle?: string | null;
+  cloudTitle?: string | null;
   daemonTitle?: string | null;
 }): string {
-  const hub = input.hubTitle?.trim() ?? "";
+  const cloud = input.cloudTitle?.trim() ?? "";
   const daemon = input.daemonTitle?.trim() ?? "";
-  if (!isPlaceholderConversationTitle(hub)) return hub;
+  if (!isPlaceholderConversationTitle(cloud)) return cloud;
   if (!isPlaceholderConversationTitle(daemon)) return daemon;
-  return hub || daemon || "Conversation";
+  return cloud || daemon || "Conversation";
 }
 
 /**
@@ -94,11 +94,11 @@ export function resolveConversationTitle(input: {
  * for sort + list clock.
  */
 export function resolveLastActivityMs(
-  hubLastMessageAtMs: number | null | undefined,
+  cloudLastMessageAtMs: number | null | undefined,
   daemonUpdatedAtMs: number | null | undefined,
 ): number {
   return Math.max(
-    positiveMs(hubLastMessageAtMs),
+    positiveMs(cloudLastMessageAtMs),
     positiveMs(daemonUpdatedAtMs),
   );
 }
@@ -109,32 +109,32 @@ export function resolveLastActivityMs(
  * preview so host_projection lag does not freeze the rail.
  */
 export function resolveListPreview(input: {
-  hub?: HubConversationDigest | null;
+  cloud?: CloudConversationDigest | null;
   daemonPreview?: string | null;
-  hubLastMessageAtMs?: number | null;
+  cloudLastMessageAtMs?: number | null;
   daemonUpdatedAtMs?: number | null;
 }): string {
-  const hubMs = positiveMs(input.hubLastMessageAtMs);
+  const cloudMs = positiveMs(input.cloudLastMessageAtMs);
   const daemonMs = positiveMs(input.daemonUpdatedAtMs);
-  const hub = input.hub;
-  if (hub && hubMs >= daemonMs) {
-    return hubPreview(hub);
+  const cloud = input.cloud;
+  if (cloud && cloudMs >= daemonMs) {
+    return cloudPreview(cloud);
   }
   const local = input.daemonPreview?.trim();
   if (local) return local;
-  if (hub) return hubPreview(hub);
+  if (cloud) return cloudPreview(cloud);
   return "No messages yet";
 }
 
 /**
- * Resolve unread for one row under P1 single-track rules.
+ * Resolve unread for one row under single-track rules.
  * Focused conversation always clears local badge (Hub mark-read is separate).
  */
 export function resolveRailUnread(input: {
   conversationId: string;
   focusedConversationId?: string | null;
   unreadSource: UnreadSource;
-  hubUnreadCount?: number | null;
+  cloudUnreadCount?: number | null;
   localUnread?: number | null;
 }): number | undefined {
   const id = input.conversationId.trim();
@@ -143,7 +143,7 @@ export function resolveRailUnread(input: {
     return undefined;
   }
   if (input.unreadSource === "hub") {
-    const n = input.hubUnreadCount ?? 0;
+    const n = input.cloudUnreadCount ?? 0;
     return n > 0 ? n : undefined;
   }
   const local = input.localUnread ?? 0;
@@ -154,19 +154,19 @@ export function resolveRailUnread(input: {
  * Merge daemon rows (project-scoped) with account-scoped Hub digests.
  * - title → Hub preferred when present
  * - preview / last activity → newer of Hub vs daemon (see resolve*)
- * - unread → see `unreadSource` (P1)
+ * - unread → see `unreadSource`
  * - projectId, agents, git, priority, progress, running, approval → daemon
  * - Hub-only ids (no daemon row) still appear with omit/default host fields
  */
 export function mergeConversationList(input: {
   daemonRows: readonly DaemonListRow[];
-  hubDigests: readonly HubConversationDigest[];
+  cloudDigests: readonly CloudConversationDigest[];
   projectId: string;
   /** When true, include Hub digests that have no matching daemon row. */
-  includeHubOnly?: boolean;
+  includeCloudOnly?: boolean;
   focusedConversationId?: string | null;
   /**
-   * P1: `"hub"` when authenticated Hub IM mode (digest SSOT);
+   * `"hub"` when authenticated Hub IM mode (digest SSOT);
    * `"local"` for daemon-only / unauthenticated baseline.
    * Default `"hub"` when digests are supplied historically; callers in hub
    * mode must pass `"hub"` explicitly for single-track.
@@ -175,15 +175,15 @@ export function mergeConversationList(input: {
 }): Conversation[] {
   const {
     daemonRows,
-    hubDigests,
+    cloudDigests,
     projectId,
-    includeHubOnly = true,
+    includeCloudOnly = true,
     focusedConversationId = null,
-    unreadSource = hubDigests.length > 0 ? "hub" : "local",
+    unreadSource = cloudDigests.length > 0 ? "hub" : "local",
   } = input;
 
-  const hubById = new Map(
-    hubDigests.map((d) => [d.conversationId, d] as const),
+  const cloudById = new Map(
+    cloudDigests.map((d) => [d.conversationId, d] as const),
   );
   const seen = new Set<string>();
   const out: Conversation[] = [];
@@ -192,16 +192,16 @@ export function mergeConversationList(input: {
     const id = row.id?.trim();
     if (!id) continue;
     seen.add(id);
-    const hub = hubById.get(id);
+    const cloud = cloudById.get(id);
     const lastMs = resolveLastActivityMs(
-      hub?.lastMessageAtMs,
+      cloud?.lastMessageAtMs,
       row.updatedAtMs,
     );
     const unread = resolveRailUnread({
       conversationId: id,
       focusedConversationId,
       unreadSource,
-      hubUnreadCount: hub?.unreadCount,
+      cloudUnreadCount: cloud?.unreadCount,
       // Hub mode never falls back to local baseline (single-track).
       localUnread: unreadSource === "local" ? row.unread : undefined,
     });
@@ -209,13 +209,13 @@ export function mergeConversationList(input: {
       id,
       projectId: row.projectId || projectId,
       title: resolveConversationTitle({
-        hubTitle: hub?.title,
+        cloudTitle: cloud?.title,
         daemonTitle: row.title,
       }),
       preview: resolveListPreview({
-        hub,
+        cloud,
         daemonPreview: row.preview,
-        hubLastMessageAtMs: hub?.lastMessageAtMs,
+        cloudLastMessageAtMs: cloud?.lastMessageAtMs,
         daemonUpdatedAtMs: row.updatedAtMs,
       }),
       updatedAtMs: lastMs,
@@ -244,26 +244,26 @@ export function mergeConversationList(input: {
     });
   }
 
-  if (includeHubOnly) {
-    for (const hub of hubDigests) {
-      const id = hub.conversationId;
+  if (includeCloudOnly) {
+    for (const cloud of cloudDigests) {
+      const id = cloud.conversationId;
       if (!id || seen.has(id)) continue;
       // Hub-only: no host shell — still show for multi-end IM inbox.
-      const lastMs = resolveLastActivityMs(hub.lastMessageAtMs, 0);
+      const lastMs = resolveLastActivityMs(cloud.lastMessageAtMs, 0);
       out.push({
         id,
         projectId: projectId || "",
         title: resolveConversationTitle({
-          hubTitle: hub.title,
+          cloudTitle: cloud.title,
           daemonTitle: null,
         }),
-        preview: hubPreview(hub),
+        preview: cloudPreview(cloud),
         updatedAtMs: lastMs,
         unread: resolveRailUnread({
           conversationId: id,
           focusedConversationId,
           unreadSource: "hub",
-          hubUnreadCount: hub.unreadCount,
+          cloudUnreadCount: cloud.unreadCount,
         }),
         messageCount: 0,
         boardColumn: "backlog",

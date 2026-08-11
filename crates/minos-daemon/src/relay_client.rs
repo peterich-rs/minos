@@ -6,7 +6,7 @@
 //!   1. stays `Unpaired` without dialing realtime until a host installation
 //!      token exists;
 //!   2. opens a WSS handshake to `/ws/host` with `Authorization: Bearer hit_*`
-//!      (Phase 2.5 Host Bearer; no host ws-ticket);
+//!      (Host Bearer only; no host ws-ticket);
 //!   3. receives `ServerFrame` messages from the topic-based realtime gateway;
 //!   4. consumes `BotInboxDelivery` / still handles `HostCommandIssued` for
 //!      CLI start adapters;
@@ -62,17 +62,9 @@ const BACKFILL_OUTBOUND_QUEUE_DEPTH: usize = 16;
 const RELAY_PING_INTERVAL: Duration = Duration::from_secs(30);
 const RELAY_PONG_TIMEOUT: Duration = Duration::from_secs(45);
 const HOST_COMMAND_RESULT_CACHE_CAPACITY: usize = 512;
-const DELIVERY_DEDUPE_CAPACITY: usize = 1024;
 const TOKEN_WAIT_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 type HostCommandCache = Arc<Mutex<HashMap<String, HostCommandCacheEntry>>>;
-type DeliveryDedupeCache = Arc<Mutex<HashMap<String, DeliveryDedupeEntry>>>;
-
-#[derive(Clone)]
-enum DeliveryDedupeEntry {
-    InFlight,
-    Completed { accepted: bool },
-}
 
 #[derive(Clone)]
 enum HostCommandCacheEntry {
@@ -168,7 +160,6 @@ impl RelayClient {
             mpsc::channel::<ClientFrame>(BACKFILL_OUTBOUND_QUEUE_DEPTH);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let host_command_cache = Arc::new(Mutex::new(HashMap::new()));
-        let delivery_dedupe = Arc::new(Mutex::new(HashMap::new()));
 
         let secret_store = Arc::new(StdMutex::new(secret));
         let secret_notify = Arc::new(Notify::new());
@@ -206,7 +197,7 @@ impl RelayClient {
             live_rx,
             backfill_rx,
             host_command_cache,
-            delivery_dedupe,
+            store: persistence.store,
             http: http.clone(),
             rpc_server,
             peer_store: peer_store.clone(),
@@ -373,6 +364,8 @@ pub struct PersistenceCtx {
     pub peers_store: Arc<StdMutex<Vec<HostPeerSummary>>>,
     pub last_error: Arc<StdMutex<Option<MinosError>>>,
     pub ingest_sync: Arc<StdMutex<Option<IngestSyncHandle>>>,
+    /// Local SQLite — durable BotInboxDelivery ledger authority.
+    pub store: Arc<crate::store::LocalStore>,
 }
 
 struct DispatchCtx {
@@ -387,8 +380,8 @@ struct DispatchCtx {
     live_rx: mpsc::Receiver<ClientFrame>,
     backfill_rx: mpsc::Receiver<ClientFrame>,
     host_command_cache: HostCommandCache,
-    /// Dedupe BotInboxDelivery by delivery_id (at-least-once fanout).
-    delivery_dedupe: DeliveryDedupeCache,
+    /// Local SQLite ledger for BotInboxDelivery exactly-once inject.
+    store: Arc<crate::store::LocalStore>,
     http: Arc<RelayHttpClient>,
     rpc_server: Option<Arc<RpcServerImpl>>,
     peer_store: Arc<StdMutex<Option<PeerRecord>>>,
@@ -505,7 +498,7 @@ async fn run_once(
     shutdown_rx: &mut oneshot::Receiver<()>,
     secret: &DeviceSecret,
 ) -> CycleOutcome {
-    // Phase 2.5: dial /ws/host with Authorization: Bearer hit_* (no ticket dance).
+    // Dial /ws/host with Authorization: Bearer hit_* (no ticket dance).
     let ws_url = build_host_ws_url(&ctx.backend_url);
     let request = match build_host_ws_request(&ws_url, secret) {
         Ok(req) => req,
@@ -943,12 +936,19 @@ async fn route_server_frame(frame: ServerFrame, ctx: &DispatchCtx) {
                 delivery_id,
                 "received CancelDelivery; marking delivery cancelled if known"
             );
-            let mut entries = ctx.delivery_dedupe.lock().await;
-            entries.insert(
-                delivery_id,
-                DeliveryDedupeEntry::Completed { accepted: false },
-            );
-            prune_delivery_dedupe(&mut entries);
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            if let Err(error) = ctx
+                .store
+                .mark_bot_delivery_rejected(&delivery_id, "cancelled by hub", now_ms)
+                .await
+            {
+                tracing::warn!(
+                    target: "minos_daemon::relay_client",
+                    delivery_id = %delivery_id,
+                    error = %error,
+                    "failed to mark cancelled delivery on ledger"
+                );
+            }
         }
         ServerFrame::ChatSendAck { .. } | ServerFrame::ChatSendNack { .. } => {
             // Account-only frames; ignore on host rail.
@@ -1312,6 +1312,8 @@ async fn handle_bot_inbox_delivery(
     session: SessionBinding,
     lease_expires_at_ms: i64,
 ) {
+    use crate::store::bot_delivery_ledger::BotDeliveryBegin;
+
     tracing::info!(
         target: "minos_daemon::relay_client",
         delivery_id = %delivery_id,
@@ -1321,17 +1323,49 @@ async fn handle_bot_inbox_delivery(
         "received BotInboxDelivery"
     );
 
-    match remember_delivery_start(&ctx.delivery_dedupe, &delivery_id).await {
-        DeliveryRouteAction::Start => {}
-        DeliveryRouteAction::InFlight => {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let session_hint = session.session_id.as_deref().filter(|s| !s.is_empty());
+    let begin = match ctx
+        .store
+        .begin_bot_delivery(
+            &delivery_id,
+            &conversation_id,
+            &bot.bot_id,
+            session_hint,
+            now_ms,
+        )
+        .await
+    {
+        Ok(action) => action,
+        Err(error) => {
+            tracing::error!(
+                target: "minos_daemon::relay_client",
+                delivery_id = %delivery_id,
+                error = %error,
+                "bot delivery ledger begin failed"
+            );
+            let _ = ctx
+                .out_tx
+                .send(ClientFrame::DeliveryRejected {
+                    delivery_id,
+                    code: "host_ledger_error".into(),
+                    detail: error.to_string().chars().take(500).collect(),
+                })
+                .await;
+            return;
+        }
+    };
+    match begin {
+        BotDeliveryBegin::Start => {}
+        BotDeliveryBegin::InFlight => {
             tracing::debug!(
                 target: "minos_daemon::relay_client",
                 delivery_id = %delivery_id,
-                "BotInboxDelivery already in-flight; ignoring duplicate"
+                "BotInboxDelivery already in-flight or terminal; ignoring duplicate"
             );
             return;
         }
-        DeliveryRouteAction::ReplayAccepted => {
+        BotDeliveryBegin::ReplayAccepted => {
             let _ = ctx
                 .out_tx
                 .send(ClientFrame::DeliveryAccepted {
@@ -1340,7 +1374,7 @@ async fn handle_bot_inbox_delivery(
                 .await;
             return;
         }
-        DeliveryRouteAction::ReplayRejected => {
+        BotDeliveryBegin::ReplayRejected => {
             let _ = ctx
                 .out_tx
                 .send(ClientFrame::DeliveryRejected {
@@ -1359,7 +1393,10 @@ async fn handle_bot_inbox_delivery(
             delivery_id = %delivery_id,
             "no rpc_server wired — rejecting BotInboxDelivery"
         );
-        remember_delivery_result(&ctx.delivery_dedupe, &delivery_id, false).await;
+        let _ = ctx
+            .store
+            .mark_bot_delivery_rejected(&delivery_id, "rpc_server not wired", now_ms)
+            .await;
         let _ = ctx
             .out_tx
             .send(ClientFrame::DeliveryRejected {
@@ -1371,8 +1408,8 @@ async fn handle_bot_inbox_delivery(
         return;
     };
 
-    // P0: inject first; only then DeliveryAccepted. Accept-before-inject races
-    // with Hub state and poisons dedupe on transient failure.
+    // Inject first; only then DeliveryAccepted. Accept-before-inject races with
+    // Hub state and poisons the durable ledger on transient failure.
     let origin_message_id = message.message_id.clone();
     let text = message.text.clone();
     let inject = inject_mailbox_delivery(
@@ -1387,7 +1424,18 @@ async fn handle_bot_inbox_delivery(
     .await;
     match inject {
         Ok(()) => {
-            remember_delivery_result(&ctx.delivery_dedupe, &delivery_id, true).await;
+            if let Err(error) = ctx
+                .store
+                .mark_bot_delivery_injected(&delivery_id, session_hint, now_ms)
+                .await
+            {
+                tracing::error!(
+                    target: "minos_daemon::relay_client",
+                    delivery_id = %delivery_id,
+                    error = %error,
+                    "bot delivery ledger inject mark failed after successful inject"
+                );
+            }
             tracing::info!(
                 target: "minos_daemon::relay_client",
                 delivery_id = %delivery_id,
@@ -1401,12 +1449,9 @@ async fn handle_bot_inbox_delivery(
                 .await;
         }
         Err((code, detail)) => {
-            // Retryable inject failure: do not cache as final Completed{false}
-            // so Hub requeue can redeliver. Drop InFlight marker only.
-            {
-                let mut entries = ctx.delivery_dedupe.lock().await;
-                entries.remove(&delivery_id);
-            }
+            // Retryable inject failure: clear non-terminal received so Hub requeue
+            // can redeliver. Do not mark rejected (that would poison redelivery).
+            let _ = ctx.store.clear_bot_delivery_inflight(&delivery_id).await;
             tracing::warn!(
                 target: "minos_daemon::relay_client",
                 delivery_id = %delivery_id,
@@ -1502,60 +1547,6 @@ async fn inject_mailbox_delivery(
                     err.to_string().chars().take(500).collect(),
                 )
             })
-    }
-}
-
-enum DeliveryRouteAction {
-    Start,
-    InFlight,
-    ReplayAccepted,
-    ReplayRejected,
-}
-
-async fn remember_delivery_start(
-    cache: &DeliveryDedupeCache,
-    delivery_id: &str,
-) -> DeliveryRouteAction {
-    if delivery_id.is_empty() {
-        return DeliveryRouteAction::Start;
-    }
-    let mut entries = cache.lock().await;
-    match entries.get(delivery_id).cloned() {
-        Some(DeliveryDedupeEntry::InFlight) => DeliveryRouteAction::InFlight,
-        Some(DeliveryDedupeEntry::Completed { accepted: true }) => {
-            DeliveryRouteAction::ReplayAccepted
-        }
-        Some(DeliveryDedupeEntry::Completed { accepted: false }) => {
-            DeliveryRouteAction::ReplayRejected
-        }
-        None => {
-            entries.insert(delivery_id.to_string(), DeliveryDedupeEntry::InFlight);
-            prune_delivery_dedupe(&mut entries);
-            DeliveryRouteAction::Start
-        }
-    }
-}
-
-async fn remember_delivery_result(cache: &DeliveryDedupeCache, delivery_id: &str, accepted: bool) {
-    if delivery_id.is_empty() {
-        return;
-    }
-    let mut entries = cache.lock().await;
-    entries.insert(
-        delivery_id.to_string(),
-        DeliveryDedupeEntry::Completed { accepted },
-    );
-    prune_delivery_dedupe(&mut entries);
-}
-
-fn prune_delivery_dedupe(entries: &mut HashMap<String, DeliveryDedupeEntry>) {
-    while entries.len() > DELIVERY_DEDUPE_CAPACITY {
-        let Some(key) = entries.iter().find_map(|(id, entry)| {
-            matches!(entry, DeliveryDedupeEntry::Completed { .. }).then(|| id.clone())
-        }) else {
-            break;
-        };
-        entries.remove(&key);
     }
 }
 

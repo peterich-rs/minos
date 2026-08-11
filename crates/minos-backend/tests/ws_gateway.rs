@@ -9,7 +9,7 @@ use minos_backend::{
     host_link::HostLinkService,
     http::{router, BackendState},
     realtime::wire::{ClientFrame, ServerFrame},
-    session::SessionRegistry,
+    realtime::RealtimeConnectionRegistry,
     store,
 };
 use minos_domain::{DeviceId, DeviceRole};
@@ -49,7 +49,7 @@ async fn spawn_relay() -> anyhow::Result<Relay> {
     let tmp_path = tmp.path().to_path_buf();
     let db_url = format!("sqlite://{}?mode=rwc", tmp_path.display());
     let pool = store::connect(&db_url).await?;
-    let registry = Arc::new(SessionRegistry::new());
+    let registry = Arc::new(RealtimeConnectionRegistry::new());
     let mut state = BackendState::new(
         registry,
         Arc::new(HostLinkService::new(pool.clone())),
@@ -177,7 +177,7 @@ async fn seed_host(relay: &Relay) -> anyhow::Result<DeviceId> {
 
 /// Register a real Hub bot (global identity) for session starts.
 /// Product paths reject virtual aliases (`agent_codex`); integration tests must
-/// use a real `agents.agent_id` (see global-bot-identity-design).
+/// use a real `agents.agent_id`.
 async fn seed_hub_bot(relay: &Relay, owner_account_id: &str) -> anyhow::Result<String> {
     let agent = store::social::register_agent(
         &relay.pool,
@@ -845,7 +845,7 @@ async fn account_topic_delivers_social_message_payloads() -> anyhow::Result<()> 
     }
 
     let service = DefaultConversationService::new(relay.state.store.clone());
-    let (message, _) = service
+    let (message, _, bot_enqueued) = service
         .send_message(
             &account_id,
             &conversation.conversation_id,
@@ -859,7 +859,28 @@ async fn account_topic_delivers_social_message_payloads() -> anyhow::Result<()> 
         )
         .await?;
     minos_backend::http::v1::social::fan_out_social_message(&relay.state, &message).await;
+    if bot_enqueued {
+        relay.state.wake_agent_dispatch();
+    }
 
+    // Live path: immediate StreamEvent on the account topic.
+    match recv_server_frame(&mut ws).await? {
+        ServerFrame::StreamEvent {
+            topic,
+            kind,
+            payload,
+            ..
+        } => {
+            assert_eq!(topic, format!("account:{account_id}"));
+            assert_eq!(kind, "social_message");
+            assert_eq!(payload["conversation_id"], conversation.conversation_id);
+            assert_eq!(payload["message_id"], message.message_id);
+            assert_eq!(payload["text"], "hello while chat is open");
+        }
+        other => panic!("expected social StreamEvent, got {other:?}"),
+    }
+
+    // Durable path: outbox publishes thin account digest for catch-up.
     match recv_server_frame(&mut ws).await? {
         ServerFrame::DurableEvent {
             topic,
@@ -870,7 +891,6 @@ async fn account_topic_delivers_social_message_payloads() -> anyhow::Result<()> 
             assert_eq!(topic, format!("account:{account_id}"));
             assert_eq!(kind, "account_conversation_message_appended");
             assert_eq!(payload["conversation_id"], conversation.conversation_id);
-            // R3 thin account digest: ids + preview, not nested ChatMessageSummary.
             assert_eq!(payload["message_id"], message.message_id);
             assert_eq!(payload["preview"], "hello while chat is open");
             assert!(payload.get("message").is_none());

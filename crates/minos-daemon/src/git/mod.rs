@@ -1,7 +1,7 @@
 //! Host-local git operations for conversation work units.
 //!
-//! Phase 1–2 surface: worktree isolation, live status/diff, identity gate.
-//! Phase 3: structured git activity payloads for the conversation timeline.
+//! Worktree isolation, live status/diff, identity gate, and structured git
+//! activity payloads for the conversation timeline.
 
 pub mod activity;
 pub mod diff;
