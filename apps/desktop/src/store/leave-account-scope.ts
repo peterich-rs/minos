@@ -54,6 +54,7 @@ export function leaveAccountScope(
   stopImOutboxWorker();
   stopImCloudBridge();
   resetImCloudSyncState();
+  // stopImCloudBridge already clears unreadCountedMessageIds.
 
   // 2) Hub list / resume state must not carry across accounts.
   cancelCloudDigestHydrate();

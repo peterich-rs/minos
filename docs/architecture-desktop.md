@@ -266,6 +266,7 @@ apps/desktop/
 | Account 边界 leave | `leaveAccountScope`：登出 / 换号 / auth-invalid 唯一入口。停 IM bridge + outbox worker generation、invalidate digest、清 topic cursors、`minosQueryClient.clear`、empty workspace（`workspaceAccountId=null`/`bootEpoch=0`）、清 UI 选中态、best-effort `daemon_host_clear_credential`。bootstrap `alreadyReady` 要求 `workspaceAccountId === session.accountId` |
 | Outbox 账户归属 | `ImOutboxEntry.accountId` 不可变；`listDuePending*` 只领取当前账户；空 accountId 隔离永不发送 |
 | Host 在线归属 | `hostCredentialAccountId` 与 session 一致才可 `cloudStatus=online` / 复用 hit_；换号 force re-register |
+| Timeline 写漏斗 | `store/workspace/timeline-write.ts` 是 `messagesByConversation` 唯一写入口（`applyHubMessage` / `replaceWindowFromHydrate` / `setTimelineWindow` / optimistic + delivery）。Hub bridge、loadTimeline、send/retry 必须经此；daemon live-ingress 只 quiet re-list |
 | Inspector 辅面板 | `AuxiliaryPanel`：`split`（resizable）/ `rail` / `overlay`（&lt;1100px 浮层+backdrop）；`SessionInspector` 统一壳 |
 | Motion tokens | `modalMotion` / `popoverSurface` 统一 Dialog / Popover / Dropdown enter-exit |
 | Modal backdrop | `modalBackdrop`：`backdrop-blur-[10px]` + `bg-black/[0.04] dark:bg-black/25`（偏透毛玻璃，能看清背景结构；禁止 `bg-ink/…` 当 scrim） |

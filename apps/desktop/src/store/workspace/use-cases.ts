@@ -24,6 +24,10 @@ import { positiveMs } from "@/shared/lib/rail-activity";
 import { useAccountStore } from "@/store/account-store";
 import type { Conversation } from "@/shared/lib/mock-data";
 import { membershipTokensOfBots } from "@/shared/lib/mock-data";
+import {
+  applyOptimisticUserMessage,
+  patchMessageDelivery,
+} from "./timeline-write";
 
 /**
  * Flattened membership tokens for resolveDispatchTargets.
@@ -452,16 +456,7 @@ export function createUseCasesActions(
       ...(replyToMessageId ? { replyToMessageId } : {}),
     };
     // Optimistic timeline + rail (do not wait for Hub digest / list re-merge).
-    set((s) => ({
-      messagesByConversation: {
-        ...s.messagesByConversation,
-        [conversationId]: [
-          ...(s.messagesByConversation[conversationId] ?? []),
-          optimistic,
-        ],
-      },
-      error: null,
-    }));
+    applyOptimisticUserMessage(conversationId, optimistic);
     const railPreview =
       messageBody.trim().length > 88
         ? `${messageBody.trim().slice(0, 88)}…`
@@ -473,23 +468,11 @@ export function createUseCasesActions(
       seq?: number,
       time?: string,
     ) => {
-      set((s) => ({
-        messagesByConversation: {
-          ...s.messagesByConversation,
-          [conversationId]: (s.messagesByConversation[conversationId] ?? []).map(
-            (m) =>
-              m.id === resolvedId
-                ? {
-                    ...m,
-                    deliveryStatus: status,
-                    messageSeq: seq ?? m.messageSeq,
-                    time: time ?? m.time,
-                    createdAtMs: m.createdAtMs ?? createdAtMs,
-                  }
-                : m,
-          ),
-        },
-      }));
+      patchMessageDelivery(conversationId, resolvedId, {
+        deliveryStatus: status,
+        ...(seq != null ? { messageSeq: seq } : {}),
+        ...(time != null ? { time } : {}),
+      });
     };
 
     // Mock backend has no RPC: flip to sent synchronously.
@@ -623,21 +606,10 @@ export function createUseCasesActions(
       status: DeliveryStatus,
       seq?: number,
     ) => {
-      set((s) => ({
-        messagesByConversation: {
-          ...s.messagesByConversation,
-          [conversationId]: (s.messagesByConversation[conversationId] ?? []).map(
-            (m) =>
-              m.id === messageId
-                ? {
-                    ...m,
-                    deliveryStatus: status,
-                    messageSeq: seq ?? m.messageSeq,
-                  }
-                : m,
-          ),
-        },
-      }));
+      patchMessageDelivery(conversationId, messageId, {
+        deliveryStatus: status,
+        ...(seq != null ? { messageSeq: seq } : {}),
+      });
     };
 
     patchDelivery("sending");
@@ -702,17 +674,10 @@ export function createUseCasesActions(
           structuredMentions.length > 0 ? structuredMentions : undefined,
       });
       patchDelivery("sent", cloudAck?.messageSeq);
-      set((s) => ({
-        messagesByConversation: {
-          ...s.messagesByConversation,
-          [conversationId]: (s.messagesByConversation[conversationId] ?? []).map(
-            (m) =>
-              m.id === messageId
-                ? { ...m, time: retryClock, createdAtMs: retryAt }
-                : m,
-          ),
-        },
-      }));
+      patchMessageDelivery(conversationId, messageId, {
+        time: retryClock,
+        createdAtMs: retryAt,
+      });
       const railPreview =
         messageBody.trim().length > 88
           ? `${messageBody.trim().slice(0, 88)}…`

@@ -1,10 +1,9 @@
 /**
  * Lifecycle bridge: Account session → Hub realtime → Desktop timeline store.
  *
- * Hub chat messages update `messagesByConversation` directly.
- * Sync Engine: conversation subscribe, resume cursors, SnapshotRequired range rebuild.
- * Cold hydrate is owned by loadTimeline (subscribe-only here on open).
- * No daemon_append of cloud IM into Host SQLite.
+ * Timeline body writes go through the sole funnel (`timeline-write`), not
+ * raw `messagesByConversation` setState. Cold hydrate is owned by
+ * loadTimeline (subscribe-only here on open). No daemon_append of cloud IM.
  */
 
 import { conversationTopic } from "@/shared/lib/cloud-cursors";
@@ -13,12 +12,7 @@ import {
   type CloudRealtimeSyncState,
 } from "@/shared/lib/cloud-realtime";
 import { mapCloudChatMessageToTimeline } from "@/shared/lib/im-cloud-inbound";
-import {
-  isCloudImMode,
-  mergeCloudAndLocalTimeline,
-  removeMessageFromTimeline,
-  upsertCloudMessageIntoTimeline,
-} from "@/shared/lib/cloud-timeline";
+import { isCloudImMode } from "@/shared/lib/cloud-timeline";
 import {
   startImOutboxWorker,
   stopImOutboxWorker,
@@ -28,13 +22,9 @@ import {
   pullCloudForwardGap,
 } from "@/shared/lib/im-cloud-inbound";
 import {
-  EMPTY_MESSAGE_HISTORY,
   MESSAGE_PAGE_SIZE,
   firstMessageSeq,
   lastMessageSeq,
-  mergeMessagesQuietTail,
-  messageHistoryFromWindow,
-  trimMessagesHardMax,
 } from "@/shared/lib/message-history";
 import { cloudDigestCache } from "@/shared/lib/cloud-digest-cache";
 import { ensureCloudDigestHydrated } from "@/shared/lib/cloud-digest-ensure";
@@ -45,6 +35,11 @@ import {
 } from "@/shared/lib/rail-activity";
 import { useAccountStore } from "@/store/account-store";
 import { useWorkspaceStore } from "@/store/workspace-store";
+import {
+  applyHubMessage,
+  removeRecalledMessage,
+  replaceWindowFromHydrate,
+} from "@/store/workspace/timeline-write";
 import type { CloudChatMessage } from "@/shared/lib/minos-cloud";
 import type { TimelineMessage } from "@/shared/lib/mock-data";
 
@@ -202,28 +197,7 @@ async function onCloudChatMessage(message: CloudChatMessage): Promise<void> {
   // Open/focused window: apply body. Background: next open loadTimeline always
   // cold-pulls Hub (no separate dirty flag).
   if (focused || hasWindow) {
-    useWorkspaceStore.setState((s) => {
-      const prev = s.messagesByConversation[conversationId] ?? [];
-      const merged = upsertCloudMessageIntoTimeline(prev, ui);
-      const trimmed = trimMessagesHardMax(merged);
-      const prevHist =
-        s.messageHistoryByConversation[conversationId] ?? EMPTY_MESSAGE_HISTORY;
-      return {
-        messagesByConversation: {
-          ...s.messagesByConversation,
-          [conversationId]: trimmed.messages,
-        },
-        messageHistoryByConversation: {
-          ...s.messageHistoryByConversation,
-          [conversationId]: messageHistoryFromWindow(trimmed.messages, {
-            prev: prevHist,
-            hasOlderCloud: prevHist.hasOlderCloud || trimmed.trimmed,
-            hasOlderHost: prevHist.hasOlderHost,
-            loadingOlder: false,
-          }),
-        },
-      };
-    });
+    applyHubMessage(conversationId, ui);
   }
 
   // Live patch Hub digest + rail row (no per-project Hub re-query).
@@ -401,25 +375,7 @@ async function onCloudChatMessageRecalled(message: CloudChatMessage): Promise<vo
   const messageId = message.messageId;
   if (!conversationId || !messageId) return;
 
-  useWorkspaceStore.setState((s) => {
-    if (
-      !Object.prototype.hasOwnProperty.call(
-        s.messagesByConversation,
-        conversationId,
-      )
-    ) {
-      return s;
-    }
-    const prev = s.messagesByConversation[conversationId];
-    const next = removeMessageFromTimeline(prev, messageId);
-    if (next === prev) return s;
-    return {
-      messagesByConversation: {
-        ...s.messagesByConversation,
-        [conversationId]: next,
-      },
-    };
-  });
+  removeRecalledMessage(conversationId, messageId);
   patchRailFromCloudMessage(message, { isRecall: true });
 }
 
@@ -545,39 +501,17 @@ async function reconcileConversationFromCloud(
     /* reaction store optional in tests */
   }
 
-  useWorkspaceStore.setState((s) => {
-    const localPrev = s.messagesByConversation[conversationId] ?? [];
-    const prevHist =
-      s.messageHistoryByConversation[conversationId] ?? EMPTY_MESSAGE_HISTORY;
-    // Quiet-tail union keeps previously loaded older pages across snapshot.
-    const withTail =
-      localPrev.length > 0
-        ? mergeMessagesQuietTail(localPrev, cloudRows)
-        : cloudRows;
-    const merged = mergeCloudAndLocalTimeline({
-      cloudMessages: cloudRows,
-      localMessages: withTail,
-    });
-    const trimmed = trimMessagesHardMax(merged);
-    const cloudHasOlder =
-      latestPage.nextBeforeSeq != null ||
-      latestPage.rawCount >= MESSAGE_PAGE_SIZE ||
-      trimmed.trimmed;
-    return {
-      messagesByConversation: {
-        ...s.messagesByConversation,
-        [conversationId]: trimmed.messages,
-      },
-      messageHistoryByConversation: {
-        ...s.messageHistoryByConversation,
-        [conversationId]: messageHistoryFromWindow(trimmed.messages, {
-          prev: prevHist,
-          hasOlderCloud: prevHist.hasOlderCloud || cloudHasOlder,
-          hasOlderHost: prevHist.hasOlderHost || trimmed.trimmed,
-          loadingOlder: false,
-        }),
-      },
-    };
+  // Quiet-tail union keeps previously loaded older pages across snapshot.
+  const cloudHasOlder =
+    latestPage.nextBeforeSeq != null ||
+    latestPage.rawCount >= MESSAGE_PAGE_SIZE;
+  replaceWindowFromHydrate(conversationId, {
+    mode: "quiet-tail",
+    cloudMessages: cloudRows,
+    history: {
+      hasOlderCloud: cloudHasOlder,
+      loadingOlder: false,
+    },
   });
 }
 
@@ -668,6 +602,13 @@ export function stopImCloudBridge(): void {
   lastSyncState = "disconnected";
   useAccountStore.getState().syncAccountFromCloud("disconnected");
   cancelPendingFocusedMarkRead();
+  // Account leave / stop must not keep unread id set across sessions.
+  unreadCountedMessageIds.clear();
+}
+
+/** Clear process-local unread dedupe (account leave). */
+export function clearImCloudBridgeUnreadDedupe(): void {
+  unreadCountedMessageIds.clear();
 }
 
 export function getCloudRealtimeState(): CloudRealtimeSyncState {
