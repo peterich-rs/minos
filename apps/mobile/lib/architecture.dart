@@ -24,10 +24,12 @@
 /// │       └── shell/         Root navigation shell          │
 /// ├─────────────────────────────────────────────────────────┤
 /// │  Application Layer (lib/application/)                   │
-/// │  Riverpod providers acting as ViewModels:               │
+/// │  Riverpod + codegen ViewModels / Actions:               │
 /// │  ├── auth_provider         Auth state machine           │
 /// │  ├── minos_providers       Connection / hosts / presence│
-/// │  ├── social_providers      Timeline + inbox + friends   │
+/// │  ├── social/               Conversation IM feature pack │
+/// │  │   freezed timeline state + ViewModel + Actions       │
+/// │  ├── social_providers      Compatibility barrel         │
 /// │  ├── im_outbox_worker      Local IM outbox drain        │
 /// │  ├── agent_profiles_provider  Local bot cache for compose│
 /// │  ├── group_agent_provider  Conversation participants    │

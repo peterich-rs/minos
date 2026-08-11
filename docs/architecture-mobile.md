@@ -36,7 +36,16 @@ lib/
   application/                       # Riverpod providers / ViewModels
     auth_provider.dart               # 认证状态
     minos_providers.dart             # 连接 / linked hosts / presence
-    social_providers.dart            # Timeline + Inbox + friends
+    social/                          # Conversation IM feature modules
+      social_conversation_state.dart # freezed timeline state
+      social_conversation_notifier.dart
+      social_inbox_notifier.dart
+      social_chat_view_model.dart    # feature ViewModel 聚合
+      social_chat_actions.dart       # 意图化 Action
+      social_ui_state.dart
+      social_friends_providers.dart
+      social_realtime_sync.dart
+    social_providers.dart            # 兼容 barrel（re-export social/*）
     im_outbox_worker.dart            # 本地 IM outbox drain
     agent_profiles_provider.dart     # 本地 bot cache（compose 选 bot）
     group_agent_provider.dart        # participants / mention roster
@@ -78,10 +87,12 @@ lib/
 | `hostsRepositoryProvider` | `Provider` | 纯 Dart hosts 列表 + FRB fallback |
 | `conversationsProvider` | `AsyncNotifierProvider` | 对话列表（InboxSync） |
 | `socialConversationProvider` | `@riverpod` family | 打开会话时间线（TimelineSync） |
+| `socialChatViewModelProvider` | `@riverpod` family | SocialChat feature 聚合状态 |
+| `socialChatActionsProvider` | `Provider.family` | SocialChat 意图化 action |
 | `friendsProvider` | `AsyncNotifierProvider` | 好友列表（Messages 选人） |
 | `imOutboxWorkerProvider` | `Provider` | 本地 IM outbox drain |
 
-**模式**: 每个 Provider 是 `AsyncNotifier` / `Notifier`，包裹 Repository。Repository 调用 `MinosCoreProtocol`。UI 只 watch provider。协作发送唯一路径：`SocialConversation.sendMessage` → outbox → `sendChatMessage`。
+**模式**: 保留 Riverpod + codegen；复杂 feature 使用 **ViewModel 聚合 + Action 层 + freezed 状态机**。UI 优先 `socialChatViewModelProvider` / `socialChatActionsProvider`，而不是直接编排几十个细粒度 provider。协作发送唯一路径：`SocialChatActions.send` → `SocialConversation.sendMessage` → outbox → `sendChatMessage`。
 
 ## 路由系统
 

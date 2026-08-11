@@ -38,7 +38,16 @@ lib/
 ├── application/                 # Application Layer — ViewModels (Riverpod)
 │   ├── minos_providers.dart     # Connection / hosts / presence
 │   ├── auth_provider.dart       # Auth state controller
-│   ├── social_providers.dart    # Timeline + inbox + friends
+│   ├── social/                  # Conversation IM feature modules
+│   │   ├── social_conversation_state.dart  # freezed timeline state
+│   │   ├── social_conversation_notifier.dart
+│   │   ├── social_inbox_notifier.dart
+│   │   ├── social_chat_view_model.dart     # feature ViewModel
+│   │   ├── social_chat_actions.dart        # intentful actions
+│   │   ├── social_ui_state.dart
+│   │   ├── social_friends_providers.dart
+│   │   └── social_realtime_sync.dart
+│   ├── social_providers.dart    # Compatibility barrel for social/*
 │   ├── im_outbox_worker.dart    # Local IM outbox drain
 │   ├── agent_profiles_provider.dart  # Local bot cache for compose
 │   ├── agent_conversation_actions.dart # Create agent conversation
@@ -80,11 +89,12 @@ lib/
 - `ThreadRepository` remains as a thin residual for `uiEvents` (snapshot/presence/friend realtime), not a product send path.
 
 ### Application Layer (`lib/application/`)
-- Riverpod providers acting as ViewModels.
-- Manages UI state, handles user interactions, orchestrates data flow.
+- Riverpod providers acting as ViewModels (codegen `@riverpod` preferred).
+- Per-feature aggregation: UI watches feature ViewModels (e.g. `SocialChatViewModel`) and calls Action facades instead of many fine-grained providers.
+- Complex timeline state uses freezed immutable models (`SocialConversationState`).
 - Depends on `domain/` models and `data/repositories/`, never on `ui/` or `infrastructure/` directly.
 - Root dependency injection happens in `main()` by overriding `minosCoreServiceProvider`.
-- Collaboration send path: `SocialConversation` → outbox → `sendChatMessage`.
+- Collaboration send path: `SocialChatActions` → `SocialConversation` → outbox → `sendChatMessage`.
 
 ### UI Layer (`lib/ui/`)
 - `ui/` contains the actual widget implementations and feature barrels.

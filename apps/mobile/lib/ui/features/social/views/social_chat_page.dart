@@ -68,8 +68,9 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     // Focused for unread / markRead (distinct from timeline window open).
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      ref.read(focusedSocialConversationIdProvider.notifier).state =
-          widget.conversationId;
+      ref
+          .read(focusedSocialConversationIdProvider.notifier)
+          .set(widget.conversationId);
     });
   }
 
@@ -79,7 +80,7 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     // Clear focus if we still own it.
     final focused = ref.read(focusedSocialConversationIdProvider);
     if (focused == widget.conversationId) {
-      ref.read(focusedSocialConversationIdProvider.notifier).state = null;
+      ref.read(focusedSocialConversationIdProvider.notifier).clear();
     }
     _controller.dispose();
     _composerFocusNode.dispose();
@@ -94,12 +95,13 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     }
     // Near top of ASC list → load older page (before_seq).
     if (_isNearTop()) {
-      final notifier = ref.read(
-        socialConversationProvider(widget.conversationId).notifier,
-      );
-      final st = ref.read(socialConversationProvider(widget.conversationId));
+      final st = ref.read(socialChatViewModelProvider(widget.conversationId));
       if (st.hasOlder && !st.loadingOlder) {
-        unawaited(notifier.loadOlder());
+        unawaited(
+          ref
+              .read(socialChatActionsProvider(widget.conversationId))
+              .loadOlder(),
+        );
       }
     }
   }
@@ -114,16 +116,12 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     if (text.isEmpty) {
       return;
     }
-    final replyTarget = ref.read(
-      socialReplyMessageProvider(widget.conversationId),
-    );
     _controller.clear();
-    ref.read(socialReplyDraftProvider(widget.conversationId).notifier).clear();
     _jumpToBottom();
     try {
       await ref
-          .read(socialConversationProvider(widget.conversationId).notifier)
-          .sendMessage(text, replyToMessage: replyTarget);
+          .read(socialChatActionsProvider(widget.conversationId))
+          .send(text);
       if (!mounted) {
         return;
       }
@@ -152,7 +150,7 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
   /// Membership-first @ picker: only current conversation participants.
   Future<void> _showMentionPicker() async {
     final myAccountId = ref
-        .read(socialConversationProvider(widget.conversationId))
+        .read(socialChatViewModelProvider(widget.conversationId))
         .myAccountId;
     final participants = ref
         .read(groupMentionableMembersProvider(widget.conversationId))
@@ -298,7 +296,7 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     _syncKeyboardInset(keyboardInsetBottom);
 
     ref.listen<SocialConversationState>(
-      socialConversationProvider(widget.conversationId),
+      socialChatViewModelProvider(widget.conversationId),
       (previous, next) {
         final previousCount = previous?.messages.length ?? 0;
         if (next.messages.length > previousCount &&
@@ -312,7 +310,7 @@ class _SocialChatPageState extends ConsumerState<SocialChatPage> {
     );
 
     final messageCount = ref.watch(
-      socialConversationProvider(
+      socialChatViewModelProvider(
         widget.conversationId,
       ).select((SocialConversationState s) => s.messages.length),
     );
@@ -445,7 +443,7 @@ class _ConversationTitle extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.minosColors;
-    final conversation = ref.watch(socialConversationProvider(conversationId));
+    final conversation = ref.watch(socialChatViewModelProvider(conversationId));
     final conversationSummary = _findConversationSummary(
       ref.watch(conversationsProvider).asData?.value,
       conversationId,
@@ -628,8 +626,8 @@ class _ConversationMessagePane extends ConsumerWidget {
     switch (action) {
       case ConversationMessageAction.reply:
         ref
-            .read(socialReplyDraftProvider(conversationId).notifier)
-            .select(message.localId);
+            .read(socialChatActionsProvider(conversationId))
+            .selectReply(message);
         return;
       case ConversationMessageAction.copy:
         await copyMessageText(message.text);
@@ -639,8 +637,8 @@ class _ConversationMessagePane extends ConsumerWidget {
       case ConversationMessageAction.retry:
         try {
           await ref
-              .read(socialConversationProvider(conversationId).notifier)
-              .retryMessage(message.localId);
+              .read(socialChatActionsProvider(conversationId))
+              .retry(message.localId);
         } catch (error) {
           if (!context.mounted) return;
           _showError(context, '重试失败', error);
@@ -653,8 +651,8 @@ class _ConversationMessagePane extends ConsumerWidget {
         }
         try {
           await ref
-              .read(socialConversationProvider(conversationId).notifier)
-              .recallMessage(message.localId);
+              .read(socialChatActionsProvider(conversationId))
+              .recall(message.localId);
         } catch (error) {
           if (!context.mounted) {
             return;
@@ -667,11 +665,10 @@ class _ConversationMessagePane extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(socialConversationProvider(conversationId));
+    final state = ref.watch(socialChatViewModelProvider(conversationId));
     return RefreshIndicator(
-      onRefresh: () => ref
-          .read(socialConversationProvider(conversationId).notifier)
-          .refresh(),
+      onRefresh: () =>
+          ref.read(socialChatActionsProvider(conversationId)).refresh(),
       child: state.isLoading && state.messages.isEmpty
           ? ListView(
               controller: scrollController,
@@ -722,12 +719,8 @@ class _ConversationMessagePane extends ConsumerWidget {
                   final retryAction =
                       message.deliveryState == SocialMessageDeliveryState.failed
                       ? () => ref
-                            .read(
-                              socialConversationProvider(
-                                conversationId,
-                              ).notifier,
-                            )
-                            .retryMessage(message.localId)
+                            .read(socialChatActionsProvider(conversationId))
+                            .retry(message.localId)
                       : null;
                   final canShowActions =
                       !message.isRecalled &&
@@ -774,9 +767,9 @@ class _ConversationMessagePane extends ConsumerWidget {
                                   unawaited(
                                     ref
                                         .read(
-                                          socialConversationProvider(
+                                          socialChatActionsProvider(
                                             conversationId,
-                                          ).notifier,
+                                          ),
                                         )
                                         .toggleReaction(
                                           messageId: message.serverMessageId!,
@@ -823,7 +816,7 @@ class _ConversationComposer extends ConsumerWidget {
     final colors = context.minosColors;
     final replyTarget = ref.watch(socialReplyMessageProvider(conversationId));
     final myAccountId = ref.watch(
-      socialConversationProvider(
+      socialChatViewModelProvider(
         conversationId,
       ).select((SocialConversationState state) => state.myAccountId),
     );
@@ -850,8 +843,8 @@ class _ConversationComposer extends ConsumerWidget {
               text: replyTarget.text,
               isRecalled: replyTarget.recalledAtMs != null,
               onClear: () => ref
-                  .read(socialReplyDraftProvider(conversationId).notifier)
-                  .clear(),
+                  .read(socialChatActionsProvider(conversationId))
+                  .clearReply(),
             ),
             const SizedBox(height: 10),
           ],
