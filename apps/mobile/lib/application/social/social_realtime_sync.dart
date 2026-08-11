@@ -4,7 +4,7 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:minos/application/social/social_conversation_notifier.dart';
 import 'package:minos/application/social/social_inbox_notifier.dart';
-import 'package:minos/data/repositories/thread_repository.dart';
+import 'package:minos/data/repositories/realtime_events_repository.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
 /// Consume `snapshot_required` UiEvent (Rust realtime) → TimelineSync / InboxSync.
@@ -14,7 +14,7 @@ import 'package:minos/src/rust/api/minos.dart';
 /// race mark-read / clear-unread). Background: no-op; next open rebuilds.
 /// Account topic: full inbox hydrate is OK.
 final imSnapshotSyncProvider = Provider<void>((ref) {
-  final repo = ref.watch(threadRepositoryProvider);
+  final repo = ref.watch(realtimeEventsRepositoryProvider);
   final sub = repo.uiEvents.listen((frame) {
     final ui = frame.ui;
     if (ui is! UiEventMessage_Raw || ui.kind != 'snapshot_required') return;

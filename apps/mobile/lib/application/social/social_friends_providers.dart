@@ -3,8 +3,8 @@ import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:minos/application/social/social_ui_state.dart';
+import 'package:minos/data/repositories/realtime_events_repository.dart';
 import 'package:minos/data/repositories/social_repository.dart';
-import 'package:minos/data/repositories/thread_repository.dart';
 import 'package:minos/src/rust/api/minos.dart';
 
 final friendsProvider =
@@ -27,7 +27,7 @@ class FriendsController extends AsyncNotifier<FriendsResponse> {
 /// T2 FriendRequestUpdated durable → refresh friend list (HTTP).
 /// Also surfaces subscription_limit_exceeded for shell notice (R4).
 final friendRequestRealtimeSyncProvider = Provider<void>((ref) {
-  final repo = ref.watch(threadRepositoryProvider);
+  final repo = ref.watch(realtimeEventsRepositoryProvider);
   final sub = repo.uiEvents.listen((frame) {
     final ui = frame.ui;
     if (ui is! UiEventMessage_Raw) return;

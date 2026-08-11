@@ -286,13 +286,7 @@ impl MobileClient {
         self.0.my_profile().await
     }
 
-    pub async fn set_minos_id(&self, minos_id: String) -> Result<MyProfileResponse, MinosError> {
-        self.0.set_minos_id(minos_id).await
-    }
 
-    pub async fn search_users(&self, minos_id: String) -> Result<Vec<UserSummary>, MinosError> {
-        self.0.search_users(minos_id).await
-    }
 
     pub async fn friends(&self) -> Result<FriendsResponse, MinosError> {
         self.0.friends().await
@@ -356,30 +350,9 @@ impl MobileClient {
         self.0.list_agents().await
     }
 
-    pub async fn create_friend_request(
-        &self,
-        target_minos_id: String,
-    ) -> Result<FriendRequestSummary, MinosError> {
-        self.0.create_friend_request(target_minos_id).await
-    }
 
-    pub async fn friend_requests(&self) -> Result<FriendRequestsResponse, MinosError> {
-        self.0.friend_requests().await
-    }
 
-    pub async fn accept_friend_request(
-        &self,
-        request_id: String,
-    ) -> Result<FriendRequestSummary, MinosError> {
-        self.0.accept_friend_request(request_id).await
-    }
 
-    pub async fn reject_friend_request(
-        &self,
-        request_id: String,
-    ) -> Result<FriendRequestSummary, MinosError> {
-        self.0.reject_friend_request(request_id).await
-    }
 
     pub async fn conversations(&self) -> Result<ConversationsResponse, MinosError> {
         self.0.conversations().await
@@ -555,29 +528,6 @@ impl MobileClient {
         Ok(self.0.active_host().await?.map(|id| id.to_string()))
     }
 
-    /// Request a page of thread summaries.
-    pub async fn list_sessions(
-        &self,
-        req: ListSessionsParams,
-    ) -> Result<ListSessionsResponse, MinosError> {
-        self.0.list_sessions(req).await
-    }
-
-    pub async fn list_agent_sessions(
-        &self,
-        conversation_id: Option<String>,
-        limit: u32,
-    ) -> Result<Vec<AgentSessionSummaryDto>, MinosError> {
-        self.0
-            .list_agent_sessions(conversation_id, limit)
-            .await
-            .map(|sessions| sessions.into_iter().map(Into::into).collect())
-    }
-
-    pub async fn subscribe_agent_session(&self, session_id: String) -> Result<(), MinosError> {
-        self.0.subscribe_agent_session(session_id).await
-    }
-
     /// Open-chat live path: subscribe `conversation:{id}` for full T1 frames.
     pub async fn subscribe_conversation(&self, conversation_id: String) -> Result<(), MinosError> {
         self.0.subscribe_conversation(conversation_id).await
@@ -594,14 +544,6 @@ impl MobileClient {
     /// Advance durable topic cursor after Dart cache/reducer commit.
     pub async fn ack_durable_applied(&self, topic: String, topic_seq: i64) {
         self.0.ack_durable_applied(topic, topic_seq).await;
-    }
-
-    /// Read a window of translated UI events for one session.
-    pub async fn read_session(
-        &self,
-        req: ReadSessionParams,
-    ) -> Result<ReadSessionResponse, MinosError> {
-        self.0.read_session(req).await
     }
 
     /// Export the current pairing snapshot so Dart can mirror it into secure
@@ -738,96 +680,31 @@ impl MobileClient {
     }
 
     /// Send a follow-up user message to an existing agent session.
-    pub async fn send_user_message(
-        &self,
-        session_id: String,
-        text: String,
-    ) -> Result<(), MinosError> {
-        self.0.send_user_message(session_id, text).await
-    }
 
     /// Submit a user approval decision for a pending host request.
     ///
     /// `client_request_id` is the Hub Intent Outbox id. When omitted,
     /// the mobile client generates one so the wire body never hardcodes null.
-    pub async fn send_approval_decision(
-        &self,
-        request_id: String,
-        session_id: String,
-        decision_json: String,
-        client_request_id: Option<String>,
-    ) -> Result<(), MinosError> {
-        let decision =
-            serde_json::from_str(&decision_json).map_err(|error| MinosError::RpcCallFailed {
-                method: "send_approval_decision".into(),
-                message: format!("invalid approval decision json: {error}"),
-            })?;
-        self.0
-            .send_approval_decision(request_id, session_id, decision, client_request_id)
-            .await
-    }
 
     /// Submit an opencode question answer for a pending host request.
-    pub async fn respond_opencode_question(
-        &self,
-        session_id: String,
-        question_id: String,
-        answers_json: String,
-    ) -> Result<(), MinosError> {
-        let answers =
-            serde_json::from_str(&answers_json).map_err(|error| MinosError::RpcCallFailed {
-                method: "respond_opencode_question".into(),
-                message: format!("invalid opencode question answers json: {error}"),
-            })?;
-        self.0
-            .respond_opencode_question(session_id, question_id, answers)
-            .await
-    }
 
     /// Pause an in-flight turn on the given thread. Best-effort. The thread
     /// transitions to `Suspended { UserInterrupt }` regardless of whether the
     /// codex side acknowledges in time.
-    pub async fn interrupt_session(&self, session_id: String) -> Result<(), MinosError> {
-        self.0.interrupt_session(session_id).await
-    }
 
     /// Permanently close the given thread. Idempotent.
-    pub async fn close_session(&self, session_id: String) -> Result<(), MinosError> {
-        self.0.close_session(session_id).await
-    }
 
     // ─────────────────────────── project rpcs ──────────────────────────────
 
     /// Create a new project on the daemon.
-    pub async fn create_project(
-        &self,
-        req: CreateProjectRequest,
-    ) -> Result<CreateProjectResponse, MinosError> {
-        self.0.create_project(req).await
-    }
 
     /// List all projects on the daemon.
-    pub async fn list_projects(&self) -> Result<ListProjectsResponse, MinosError> {
-        self.0.list_projects().await
-    }
 
     /// Update a project's name.
-    pub async fn update_project(&self, req: UpdateProjectRequest) -> Result<(), MinosError> {
-        self.0.update_project(req).await
-    }
 
     /// Delete a project.
-    pub async fn delete_project(&self, req: DeleteProjectRequest) -> Result<(), MinosError> {
-        self.0.delete_project(req).await
-    }
 
     /// List sessions within a project.
-    pub async fn list_project_sessions(
-        &self,
-        req: ListProjectSessionsParams,
-    ) -> Result<ListProjectSessionsResponse, MinosError> {
-        self.0.list_project_sessions(req).await
-    }
 
     // ─────────────────────────── lifecycle hooks ───────────────────────────
 

@@ -61,10 +61,6 @@ class RuntimeRepository {
     return _core.setActiveHost(hostDeviceId);
   }
 
-  Future<void> setPeerDisplayName(String? displayName) {
-    return _core.setPeerDisplayName(displayName);
-  }
-
   void notifyForegrounded() {
     _core.notifyForegrounded();
   }

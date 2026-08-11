@@ -23,7 +23,7 @@ lib/
     auth_state.dart                  # 认证状态机
     agent_profile.dart               # 本地 bot cache / draft
     social_message.dart              # 协作消息模型
-    minos_core_protocol.dart         # 抽象 Dart 契约（~60 方法）
+    minos_core_protocol.dart         # 抽象 Dart 契约（IM/auth/hosts/realtime）
   infrastructure/                    # 具体实现
     minos_core.dart                  # FRB 实现
     secure_pairing_store.dart        # iOS Keychain 持久化
@@ -184,12 +184,13 @@ Rust crate (minos-mobile::MobileClient)
 
 - **认证**: `register`, `login`, `loginWithSupabase`, `refreshSession`, `logout`, `subscribeAuthState`
 - **Hosts**: `listPairedHosts`（内部 `GET /v1/hosts`）, `activeHost`, `setActiveHost`, `forgetHost`（`POST /v1/hosts/unlink`）
-- **社交**: `conversations`, `sendChatMessage`, `friends`, `friendRequests`, `searchUsers`
-- **项目**: `createProject`, `listProjects`, `updateProject`, `deleteProject`
-- **线程**: `listThreads`, `readThread`, `sendUserMessage`, `interruptThread`, `closeThread`
-- **Agent 请求**: `sendApprovalDecision`, `respondOpencodeQuestion`
-- **实时**: `subscribeState`, `subscribeUiEvents`, `subscribeSocialEvents`
+- **社交 IM**: `conversations`, `sendChatMessage`, `friends`, participants / membership
+- **实时**: `subscribeState`, `subscribeUiEvents`, `subscribeSocialEvents`, conversation topic subscribe/ack
+- **Hosts**: `listPairedHosts`, `activeHost`, `setActiveHost`, `forgetHost`
+- **Auth**: `loginWithSupabase`, `refreshSession`, `logout`, `subscribeAuthState`
 - **生命周期**: `notifyForegrounded`, `notifyBackgrounded`
+
+Mobile 不再暴露 thread transcript / project CRUD / agent-session compose / friend-search 管理 API；这些能力若存在于 backend/Desktop，也不再经 Mobile 协议面。
 
 ## 认证流程
 

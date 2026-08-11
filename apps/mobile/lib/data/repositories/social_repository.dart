@@ -31,14 +31,6 @@ class SocialRepository {
     return _core.myProfile();
   }
 
-  Future<List<UserSummary>> searchUsers({required String minosId}) {
-    return _core.searchUsers(minosId: minosId);
-  }
-
-  Future<void> setMinosId({required String minosId}) {
-    return _core.setMinosId(minosId: minosId);
-  }
-
   /// Unified participants (humans ∪ bot agents). Preferred for @ picker and
   /// membership-first roster reads (ADR 0021).
   Future<ConversationParticipantsResponse> listConversationParticipants({
@@ -242,20 +234,6 @@ class SocialRepository {
     return _cacheStore.reconcileSendingMessagesOnStartup();
   }
 
-  Future<List<AgentSessionSummaryDto>> listAgentSessions({
-    required String conversationId,
-    int limit = 5,
-  }) {
-    return _core.listAgentSessions(
-      conversationId: conversationId,
-      limit: limit,
-    );
-  }
-
-  Future<void> subscribeAgentSession({required String sessionId}) {
-    return _core.subscribeAgentSession(sessionId: sessionId);
-  }
-
   /// R3a: open-chat `conversation:{id}` full T1 frames.
   Future<void> subscribeConversation({required String conversationId}) {
     return _core.subscribeConversation(conversationId: conversationId);
@@ -329,10 +307,6 @@ class SocialRepository {
     );
   }
 
-  Future<FriendRequestsResponse> friendRequests() {
-    return _core.friendRequests();
-  }
-
   Future<FriendsResponse> friends() {
     return _core.friends();
   }
@@ -404,18 +378,6 @@ class SocialRepository {
 
   Future<void> saveConversations(List<ConversationSummary> conversations) {
     return _cacheStore.saveConversations(conversations);
-  }
-
-  Future<void> createFriendRequest({required String targetMinosId}) {
-    return _core.createFriendRequest(targetMinosId: targetMinosId);
-  }
-
-  Future<void> rejectFriendRequest({required String requestId}) {
-    return _core.rejectFriendRequest(requestId: requestId);
-  }
-
-  Future<void> acceptFriendRequest({required String requestId}) {
-    return _core.acceptFriendRequest(requestId: requestId);
   }
 
   Future<ConversationResponse> ensureDirectConversation({

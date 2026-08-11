@@ -86,7 +86,7 @@ lib/
 - `data/services/` contains provider-backed service/store access used by repositories.
 - `infrastructure/` contains raw concrete implementations such as `MinosCore` and persistence stores.
 - `MinosCore` implements `MinosCoreProtocol`; FRB remains isolated to infrastructure/generated code.
-- `ThreadRepository` remains as a thin residual for `uiEvents` (snapshot/presence/friend realtime), not a product send path.
+- `RealtimeEventsRepository` exposes Account `uiEvents` only (snapshot/presence/notices). Thread/project/agent-session compose APIs are not part of the Mobile contract.
 
 ### Application Layer (`lib/application/`)
 - Riverpod providers acting as ViewModels (codegen `@riverpod` preferred).

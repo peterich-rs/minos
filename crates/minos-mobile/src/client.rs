@@ -22,17 +22,13 @@ use std::time::{Duration, Instant};
 use http::{Method, Request};
 use minos_domain::{ConnectionState, DeviceId, MinosError};
 use minos_protocol::{
-    realtime::ClientFrame, AddAgentToGroupRequest, AddGroupMemberRequest, AgentSummary,
-    ApprovalDecisionRequest, AuthSummary, ChatMessageSummary, ConversationAgentMembersResponse,
+    realtime::ClientFrame, AddAgentToGroupRequest, AddGroupMemberRequest, AgentSummary, AuthSummary, ChatMessageSummary, ConversationAgentMembersResponse,
     ConversationMembersResponse, ConversationParticipantsResponse, ConversationReadResponse,
-    ConversationResponse, ConversationsResponse, CreateFriendRequestRequest,
-    CreateGroupConversationRequest, EnsureDirectConversationRequest, FriendRequestSummary,
-    FriendRequestsResponse, FriendsResponse, GetSessionLastSeqParams, GetSessionLastSeqResponse,
+    ConversationResponse, ConversationsResponse,
+    CreateGroupConversationRequest, EnsureDirectConversationRequest, FriendsResponse, GetSessionLastSeqParams, GetSessionLastSeqResponse,
     HostSummary, ListAgentsResponse, ListChatMessagesResponse, ListClisResponse,
-    ListHostSkillsResponse, ListSessionsParams, ListSessionsResponse, MyProfileResponse,
-    ReadSessionParams, ReadSessionResponse, RefreshResponse, RegisterAgentRequest,
-    RemoveAgentFromGroupRequest, RemoveGroupMemberRequest, SetMinosIdRequest, UpdateAgentRequest,
-    UserSummary, WriteHostSkillConfigResponse,
+    ListHostSkillsResponse, MyProfileResponse, RefreshResponse, RegisterAgentRequest,
+    RemoveAgentFromGroupRequest, RemoveGroupMemberRequest, UpdateAgentRequest, WriteHostSkillConfigResponse,
 };
 use minos_ui_protocol::UiEventMessage;
 use openwire::websocket::WebSocket;
@@ -402,35 +398,7 @@ impl MobileClient {
         Ok(())
     }
 
-    // ─────────────────────────── history rpcs ────────────────────────────
-
-    /// Request a page of thread summaries from the backend. Bearer-only.
-    pub async fn list_sessions(
-        &self,
-        req: ListSessionsParams,
-    ) -> Result<ListSessionsResponse, MinosError> {
-        auth_http_call!(self, |http, access| http.list_sessions(&access, req))
-    }
-
-    pub async fn list_agent_sessions(
-        &self,
-        conversation_id: Option<String>,
-        limit: u32,
-    ) -> Result<Vec<crate::http::AgentSessionSummary>, MinosError> {
-        auth_http_call!(self, |http, access| {
-            http.list_agent_sessions(&access, conversation_id, limit)
-        })
-    }
-
-    pub async fn subscribe_agent_session(&self, session_id: String) -> Result<(), MinosError> {
-        let topic = format!("agent_session:{session_id}");
-        let needs = self.subscription_mgr.desire_topic(&topic, 0).await;
-        if !needs || !matches!(*self.state_rx.borrow(), ConnectionState::Connected) {
-            return Ok(());
-        }
-        self.send_subscribe_topics(vec![topic]).await;
-        Ok(())
-    }
+    // ─────────────────────────── conversation realtime ───────────────────
 
     /// Open-chat live path: subscribe `conversation:{id}` for full T1
     /// message/reaction frames. Account topic remains digest-only for inbox.
@@ -524,14 +492,6 @@ impl MobileClient {
         }
     }
 
-    /// Read a window of translated UI events from one session.
-    pub async fn read_session(
-        &self,
-        req: ReadSessionParams,
-    ) -> Result<ReadSessionResponse, MinosError> {
-        auth_http_call!(self, |http, access| http.read_session(&access, req))
-    }
-
     /// Host-only helper (mobile rarely uses this; included for parity).
     pub async fn get_session_last_seq(
         &self,
@@ -552,18 +512,7 @@ impl MobileClient {
         auth_http_call!(self, |http, access| http.my_profile(&access))
     }
 
-    pub async fn set_minos_id(&self, minos_id: String) -> Result<MyProfileResponse, MinosError> {
-        auth_http_call!(self, |http, access| {
-            http.set_minos_id(&access, SetMinosIdRequest { minos_id })
-        })
-    }
 
-    pub async fn search_users(&self, minos_id: String) -> Result<Vec<UserSummary>, MinosError> {
-        let resp = auth_http_call!(self, |http, access| {
-            http.search_users(&access, &minos_id)
-        })?;
-        Ok(resp.users)
-    }
 
     pub async fn friends(&self) -> Result<FriendsResponse, MinosError> {
         auth_http_call!(self, |http, access| http.friends(&access))
@@ -657,36 +606,9 @@ impl MobileClient {
         auth_http_call!(self, |http, access| http.list_agents(&access))
     }
 
-    pub async fn create_friend_request(
-        &self,
-        target_minos_id: String,
-    ) -> Result<FriendRequestSummary, MinosError> {
-        auth_http_call!(self, |http, access| {
-            http.create_friend_request(&access, CreateFriendRequestRequest { target_minos_id })
-        })
-    }
 
-    pub async fn friend_requests(&self) -> Result<FriendRequestsResponse, MinosError> {
-        auth_http_call!(self, |http, access| http.friend_requests(&access))
-    }
 
-    pub async fn accept_friend_request(
-        &self,
-        request_id: String,
-    ) -> Result<FriendRequestSummary, MinosError> {
-        auth_http_call!(self, |http, access| {
-            http.accept_friend_request(&access, &request_id)
-        })
-    }
 
-    pub async fn reject_friend_request(
-        &self,
-        request_id: String,
-    ) -> Result<FriendRequestSummary, MinosError> {
-        auth_http_call!(self, |http, access| {
-            http.reject_friend_request(&access, &request_id)
-        })
-    }
 
     pub async fn conversations(&self) -> Result<ConversationsResponse, MinosError> {
         auth_http_call!(self, |http, access| http.conversations(&access))
@@ -1152,115 +1074,6 @@ impl MobileClient {
                     enabled,
                 },
             )
-        })
-    }
-
-    /// Send a user message into an existing agent session via REST.
-    pub async fn send_user_message(
-        &self,
-        session_id: String,
-        text: String,
-    ) -> Result<(), MinosError> {
-        auth_http_call!(self, |http, access| {
-            http.send_agent_input(&access, &session_id, &text)
-        })?;
-        Ok(())
-    }
-
-    /// Submit a user approval decision back to the backend relay.
-    ///
-    /// `client_request_id` is the Hub Intent Outbox id. When `None`, a
-    /// fresh id is generated so the wire body never hardcodes null (retries
-    /// from callers that stable-id should pass the same value).
-    pub async fn send_approval_decision(
-        &self,
-        request_id: String,
-        session_id: String,
-        decision: serde_json::Value,
-        client_request_id: Option<String>,
-    ) -> Result<(), MinosError> {
-        let client_request_id = client_request_id
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| format!("approval-{}", uuid::Uuid::new_v4()));
-        auth_http_call!(self, |http, access| {
-            http.submit_approval_decision(
-                &access,
-                ApprovalDecisionRequest {
-                    request_id: request_id.clone(),
-                    session_id: session_id.clone(),
-                    decision: decision.clone(),
-                },
-                Some(&client_request_id),
-            )
-        })
-    }
-
-    /// Submit an opencode question answer back to the host that owns the
-    /// agent session.
-    pub async fn respond_opencode_question(
-        &self,
-        session_id: String,
-        question_id: String,
-        answers: Vec<Vec<String>>,
-    ) -> Result<(), MinosError> {
-        auth_http_call!(self, |http, access| {
-            http.respond_opencode_question(&access, &session_id, &question_id, answers)
-        })
-    }
-
-    /// Pause an in-flight turn on the named thread via REST.
-    pub async fn interrupt_session(&self, session_id: String) -> Result<(), MinosError> {
-        auth_http_call!(self, |http, access| {
-            http.stop_agent_session(&access, &session_id)
-        })
-    }
-
-    /// Permanently close the named thread via REST. Idempotent.
-    pub async fn close_session(&self, session_id: String) -> Result<(), MinosError> {
-        auth_http_call!(self, |http, access| {
-            http.stop_agent_session(&access, &session_id)
-        })
-    }
-
-    // ─────────────────────────── project rpcs ──────────────────────────────
-
-    /// Create a project in the account-scoped backend store.
-    pub async fn create_project(
-        &self,
-        req: minos_protocol::CreateProjectRequest,
-    ) -> Result<minos_protocol::CreateProjectResponse, MinosError> {
-        auth_http_call!(self, |http, access| http.create_project(&access, req))
-    }
-
-    /// List account-scoped projects from the backend.
-    pub async fn list_projects(&self) -> Result<minos_protocol::ListProjectsResponse, MinosError> {
-        auth_http_call!(self, |http, access| http.list_projects(&access))
-    }
-
-    /// Update a project's name in the backend.
-    pub async fn update_project(
-        &self,
-        req: minos_protocol::UpdateProjectRequest,
-    ) -> Result<(), MinosError> {
-        auth_http_call!(self, |http, access| http.update_project(&access, req))
-    }
-
-    /// Delete a project from the backend.
-    pub async fn delete_project(
-        &self,
-        req: minos_protocol::DeleteProjectRequest,
-    ) -> Result<(), MinosError> {
-        auth_http_call!(self, |http, access| http.delete_project(&access, req))
-    }
-
-    /// List backend-known sessions within a project.
-    pub async fn list_project_sessions(
-        &self,
-        req: minos_protocol::ListProjectSessionsParams,
-    ) -> Result<minos_protocol::ListProjectSessionsResponse, MinosError> {
-        auth_http_call!(self, |http, access| {
-            http.list_project_sessions(&access, req)
         })
     }
 
@@ -2257,24 +2070,6 @@ mod tests {
         assert_eq!(url, "wss://edge.example/ws/client?ticket=edge-ticket");
     }
 
-    #[tokio::test]
-    async fn list_sessions_without_persisted_state_errors_unauthorized() {
-        // list_sessions is bearer-only. With no auth_session it surfaces
-        // Unauthorized (not StoreCorrupt — device-secret is not required).
-        let client = MobileClient::new_with_in_memory_store("test".into());
-        let err = client
-            .list_sessions(ListSessionsParams {
-                limit: 10,
-                before_ts_ms: None,
-                agent: None,
-            })
-            .await
-            .expect_err("HTTP query with no creds must error");
-        assert!(
-            matches!(err, MinosError::Unauthorized { .. }),
-            "unexpected error: {err:?}"
-        );
-    }
 
     #[test]
     fn forbidden_handshake_maps_to_unauthorized_with_status_in_reason() {
@@ -2373,35 +2168,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn send_user_message_requires_authentication() {
-        let client = MobileClient::new_with_in_memory_store("iPhone".into());
-        let res = client
-            .send_user_message("thr_1".into(), "ping".into())
-            .await;
-        assert!(matches!(res, Err(MinosError::Unauthorized { .. })));
-    }
 
-    #[tokio::test]
-    async fn close_session_requires_authentication() {
-        let client = MobileClient::new_with_in_memory_store("iPhone".into());
-        let res = client.close_session("thr".into()).await;
-        assert!(matches!(res, Err(MinosError::Unauthorized { .. })));
-    }
 
-    #[tokio::test]
-    async fn send_approval_decision_requires_authentication() {
-        let client = MobileClient::new_with_in_memory_store("iPhone".into());
-        let res = client
-            .send_approval_decision(
-                "req-1".into(),
-                "thr-1".into(),
-                serde_json::json!({ "decision": "accept" }),
-                Some("approval-op-1".into()),
-            )
-            .await;
-        assert!(matches!(res, Err(MinosError::Unauthorized { .. })));
-    }
 
     #[tokio::test]
     async fn subscribe_auth_state_emits_unauthenticated_initially() {

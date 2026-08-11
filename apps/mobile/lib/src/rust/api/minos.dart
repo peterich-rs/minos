@@ -9,7 +9,7 @@ import 'package:freezed_annotation/freezed_annotation.dart' hide protected;
 part 'minos.freezed.dart';
 
 // These functions are ignored because they are not marked as `pub`: `frb_runtime`, `parse_device_id`, `spawn_state_forwarder`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `StartAgentResponse`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `AgentSessionSummaryDto`, `CreateProjectRequest`, `CreateProjectResponse`, `DeleteProjectRequest`, `FriendRequestStatus`, `FriendRequestSummary`, `FriendRequestsResponse`, `ListProjectSessionsParams`, `ListProjectSessionsResponse`, `ListProjectsResponse`, `ListSessionsParams`, `ListSessionsResponse`, `ProjectSummary`, `ReadSessionParams`, `ReadSessionResponse`, `StartAgentResponse`, `UpdateProjectRequest`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`, `from`
 
 /// Initialize mobile-side Rust logging with the given directory (supplied by
@@ -57,8 +57,6 @@ Stream<RequestTraceRecord> subscribeRequestTraces() =>
 
 // Rust type: RustOpaqueMoi<flutter_rust_bridge::for_generated::RustAutoOpaqueInner<MobileClient>>
 abstract class MobileClient implements RustOpaqueInterface {
-  Future<FriendRequestSummary> acceptFriendRequest({required String requestId});
-
   /// Advance durable topic cursor after Dart cache/reducer commit.
   Future<void> ackDurableApplied({
     required String topic,
@@ -79,27 +77,15 @@ abstract class MobileClient implements RustOpaqueInterface {
     required String memberAccountId,
   });
 
-  /// Permanently close the given thread. Idempotent.
-  Future<void> closeSession({required String sessionId});
-
   Future<ConversationMembersResponse> conversationMembers({
     required String conversationId,
   });
 
   Future<ConversationsResponse> conversations();
 
-  Future<FriendRequestSummary> createFriendRequest({
-    required String targetMinosId,
-  });
-
   Future<ConversationResponse> createGroupConversation({
     required String title,
     required List<String> memberAccountIds,
-  });
-
-  /// Create a new project on the daemon.
-  Future<CreateProjectResponse> createProject({
-    required CreateProjectRequest req,
   });
 
   /// Current connection state, read from the watch-channel cache. Cheap and
@@ -107,9 +93,6 @@ abstract class MobileClient implements RustOpaqueInterface {
   ConnectionState currentState();
 
   Future<void> deleteConversation({required String conversationId});
-
-  /// Delete a project.
-  Future<void> deleteProject({required DeleteProjectRequest req});
 
   Future<ConversationResponse> ensureDirectConversation({
     required String friendAccountId,
@@ -119,19 +102,7 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// when it matches. Idempotent.
   Future<void> forgetHost({required String hostDeviceId});
 
-  Future<FriendRequestsResponse> friendRequests();
-
   Future<FriendsResponse> friends();
-
-  /// Pause an in-flight turn on the given thread. Best-effort. The thread
-  /// transitions to `Suspended { UserInterrupt }` regardless of whether the
-  /// codex side acknowledges in time.
-  Future<void> interruptSession({required String sessionId});
-
-  Future<List<AgentSessionSummaryDto>> listAgentSessions({
-    String? conversationId,
-    required int limit,
-  });
 
   Future<ListAgentsResponse> listAgents();
 
@@ -168,17 +139,6 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// List every Mac linked to the caller's account (`GET /v1/hosts`).
   Future<List<HostSummaryDto>> listPairedHosts();
 
-  /// List sessions within a project.
-  Future<ListProjectSessionsResponse> listProjectSessions({
-    required ListProjectSessionsParams req,
-  });
-
-  /// List all projects on the daemon.
-  Future<ListProjectsResponse> listProjects();
-
-  /// Request a page of thread summaries.
-  Future<ListSessionsResponse> listSessions({required ListSessionsParams req});
-
   /// Exchange a Supabase access token for Minos access/refresh tokens and
   /// adopt the resulting session.
   Future<AuthSummary> loginWithSupabase({required String supabaseAccessToken});
@@ -213,6 +173,21 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// don't poke the backend while the OS is freezing the process.
   void notifyBackgrounded();
 
+  /// Send a follow-up user message to an existing agent session.
+  /// Submit a user approval decision for a pending host request.
+  ///
+  /// `client_request_id` is the Hub Intent Outbox id. When omitted,
+  /// the mobile client generates one so the wire body never hardcodes null.
+  /// Submit an opencode question answer for a pending host request.
+  /// Pause an in-flight turn on the given thread. Best-effort. The thread
+  /// transitions to `Suspended { UserInterrupt }` regardless of whether the
+  /// codex side acknowledges in time.
+  /// Permanently close the given thread. Idempotent.
+  /// Create a new project on the daemon.
+  /// List all projects on the daemon.
+  /// Update a project's name.
+  /// Delete a project.
+  /// List sessions within a project.
   /// Mark the app as foregrounded. Resets the reconnect backoff so the
   /// next connect attempt happens promptly.
   void notifyForegrounded();
@@ -220,9 +195,6 @@ abstract class MobileClient implements RustOpaqueInterface {
   /// Export the current pairing snapshot so Dart can mirror it into secure
   /// storage after pairing succeeds.
   Future<PersistedPairingState> persistedPairingState();
-
-  /// Read a window of translated UI events for one session.
-  Future<ReadSessionResponse> readSession({required ReadSessionParams req});
 
   Future<ChatMessageSummary> recallChatMessage({
     required String conversationId,
@@ -245,8 +217,6 @@ abstract class MobileClient implements RustOpaqueInterface {
     String? systemPrompt,
   });
 
-  Future<FriendRequestSummary> rejectFriendRequest({required String requestId});
-
   Future<void> removeAgentFromConversation({
     required String conversationId,
     required String agentId,
@@ -257,29 +227,9 @@ abstract class MobileClient implements RustOpaqueInterface {
     required String memberAccountId,
   });
 
-  /// Submit an opencode question answer for a pending host request.
-  Future<void> respondOpencodeQuestion({
-    required String sessionId,
-    required String questionId,
-    required String answersJson,
-  });
-
   /// Reconnect using the durable session snapshot already loaded from the
   /// Dart-side secure store.
   Future<void> resumePersistedSession();
-
-  Future<List<UserSummary>> searchUsers({required String minosId});
-
-  /// Submit a user approval decision for a pending host request.
-  ///
-  /// `client_request_id` is the Hub Intent Outbox id. When omitted,
-  /// the mobile client generates one so the wire body never hardcodes null.
-  Future<void> sendApprovalDecision({
-    required String requestId,
-    required String sessionId,
-    required String decisionJson,
-    String? clientRequestId,
-  });
 
   /// `mentions_json` is an optional JSON array of wire `MentionTarget` objects.
   Future<ChatMessageSummary> sendChatMessage({
@@ -290,18 +240,8 @@ abstract class MobileClient implements RustOpaqueInterface {
     String? mentionsJson,
   });
 
-  /// Send a follow-up user message to an existing agent session.
-  Future<void> sendUserMessage({
-    required String sessionId,
-    required String text,
-  });
-
   /// Override the active Mac the next forward-RPC routes to.
   Future<void> setActiveHost({required String hostDeviceId});
-
-  Future<MyProfileResponse> setMinosId({required String minosId});
-
-  Future<void> subscribeAgentSession({required String sessionId});
 
   /// Subscribe to auth-state transitions. Emits the current cached frame
   /// immediately, then every subsequent change. The spawned task exits
@@ -347,9 +287,6 @@ abstract class MobileClient implements RustOpaqueInterface {
     String? systemPrompt,
     String? status,
   });
-
-  /// Update a project's name.
-  Future<void> updateProject({required UpdateProjectRequest req});
 
   /// Enable or disable one host-side skill.
   Future<WriteHostSkillConfigResponse> writeHostSkillConfig({
@@ -453,65 +390,6 @@ class AgentDescriptor {
 }
 
 enum AgentName { codex, claude, gemini, opencode, grok }
-
-class AgentSessionSummaryDto {
-  final String sessionId;
-  final String conversationId;
-  final String? agentId;
-  final AgentName? agent;
-  final String status;
-  final PlatformInt64 startedAtMs;
-  final PlatformInt64? endedAtMs;
-  final String? title;
-  final PlatformInt64 lastActivityAtMs;
-  final int messageCount;
-  final SessionEndReason? endReason;
-
-  const AgentSessionSummaryDto({
-    required this.sessionId,
-    required this.conversationId,
-    this.agentId,
-    this.agent,
-    required this.status,
-    required this.startedAtMs,
-    this.endedAtMs,
-    this.title,
-    required this.lastActivityAtMs,
-    required this.messageCount,
-    this.endReason,
-  });
-
-  @override
-  int get hashCode =>
-      sessionId.hashCode ^
-      conversationId.hashCode ^
-      agentId.hashCode ^
-      agent.hashCode ^
-      status.hashCode ^
-      startedAtMs.hashCode ^
-      endedAtMs.hashCode ^
-      title.hashCode ^
-      lastActivityAtMs.hashCode ^
-      messageCount.hashCode ^
-      endReason.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is AgentSessionSummaryDto &&
-          runtimeType == other.runtimeType &&
-          sessionId == other.sessionId &&
-          conversationId == other.conversationId &&
-          agentId == other.agentId &&
-          agent == other.agent &&
-          status == other.status &&
-          startedAtMs == other.startedAtMs &&
-          endedAtMs == other.endedAtMs &&
-          title == other.title &&
-          lastActivityAtMs == other.lastActivityAtMs &&
-          messageCount == other.messageCount &&
-          endReason == other.endReason;
-}
 
 @freezed
 sealed class AgentStatus with _$AgentStatus {
@@ -963,63 +841,6 @@ class ConversationsResponse {
           conversations == other.conversations;
 }
 
-class CreateProjectRequest {
-  final String name;
-  final String workspaceSlug;
-  final String? workspacePath;
-
-  const CreateProjectRequest({
-    required this.name,
-    required this.workspaceSlug,
-    this.workspacePath,
-  });
-
-  @override
-  int get hashCode =>
-      name.hashCode ^ workspaceSlug.hashCode ^ workspacePath.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is CreateProjectRequest &&
-          runtimeType == other.runtimeType &&
-          name == other.name &&
-          workspaceSlug == other.workspaceSlug &&
-          workspacePath == other.workspacePath;
-}
-
-class CreateProjectResponse {
-  final ProjectSummary project;
-
-  const CreateProjectResponse({required this.project});
-
-  @override
-  int get hashCode => project.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is CreateProjectResponse &&
-          runtimeType == other.runtimeType &&
-          project == other.project;
-}
-
-class DeleteProjectRequest {
-  final String projectId;
-
-  const DeleteProjectRequest({required this.projectId});
-
-  @override
-  int get hashCode => projectId.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is DeleteProjectRequest &&
-          runtimeType == other.runtimeType &&
-          projectId == other.projectId;
-}
-
 @freezed
 sealed class DisplayPayload with _$DisplayPayload {
   const DisplayPayload._();
@@ -1080,68 +901,6 @@ enum ErrorKind {
   invalidCredentials,
   agentStartFailed,
   pairingTokenExpired,
-}
-
-enum FriendRequestStatus { pending, accepted, rejected, canceled }
-
-class FriendRequestSummary {
-  final String requestId;
-  final UserSummary from;
-  final UserSummary to;
-  final FriendRequestStatus status;
-  final PlatformInt64 createdAtMs;
-  final PlatformInt64? resolvedAtMs;
-
-  const FriendRequestSummary({
-    required this.requestId,
-    required this.from,
-    required this.to,
-    required this.status,
-    required this.createdAtMs,
-    this.resolvedAtMs,
-  });
-
-  @override
-  int get hashCode =>
-      requestId.hashCode ^
-      from.hashCode ^
-      to.hashCode ^
-      status.hashCode ^
-      createdAtMs.hashCode ^
-      resolvedAtMs.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is FriendRequestSummary &&
-          runtimeType == other.runtimeType &&
-          requestId == other.requestId &&
-          from == other.from &&
-          to == other.to &&
-          status == other.status &&
-          createdAtMs == other.createdAtMs &&
-          resolvedAtMs == other.resolvedAtMs;
-}
-
-class FriendRequestsResponse {
-  final List<FriendRequestSummary> incoming;
-  final List<FriendRequestSummary> outgoing;
-
-  const FriendRequestsResponse({
-    required this.incoming,
-    required this.outgoing,
-  });
-
-  @override
-  int get hashCode => incoming.hashCode ^ outgoing.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is FriendRequestsResponse &&
-          runtimeType == other.runtimeType &&
-          incoming == other.incoming &&
-          outgoing == other.outgoing;
 }
 
 class FriendSummary {
@@ -1410,100 +1169,6 @@ class ListHostWorkspacesResponse {
           workspaces == other.workspaces;
 }
 
-class ListProjectSessionsParams {
-  final String projectId;
-  final int limit;
-  final PlatformInt64? beforeTsMs;
-
-  const ListProjectSessionsParams({
-    required this.projectId,
-    required this.limit,
-    this.beforeTsMs,
-  });
-
-  @override
-  int get hashCode => projectId.hashCode ^ limit.hashCode ^ beforeTsMs.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ListProjectSessionsParams &&
-          runtimeType == other.runtimeType &&
-          projectId == other.projectId &&
-          limit == other.limit &&
-          beforeTsMs == other.beforeTsMs;
-}
-
-class ListProjectSessionsResponse {
-  final List<SessionSummary> sessions;
-
-  const ListProjectSessionsResponse({required this.sessions});
-
-  @override
-  int get hashCode => sessions.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ListProjectSessionsResponse &&
-          runtimeType == other.runtimeType &&
-          sessions == other.sessions;
-}
-
-class ListProjectsResponse {
-  final List<ProjectSummary> projects;
-
-  const ListProjectsResponse({required this.projects});
-
-  @override
-  int get hashCode => projects.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ListProjectsResponse &&
-          runtimeType == other.runtimeType &&
-          projects == other.projects;
-}
-
-class ListSessionsParams {
-  final int limit;
-  final PlatformInt64? beforeTsMs;
-  final AgentName? agent;
-
-  const ListSessionsParams({required this.limit, this.beforeTsMs, this.agent});
-
-  @override
-  int get hashCode => limit.hashCode ^ beforeTsMs.hashCode ^ agent.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ListSessionsParams &&
-          runtimeType == other.runtimeType &&
-          limit == other.limit &&
-          beforeTsMs == other.beforeTsMs &&
-          agent == other.agent;
-}
-
-class ListSessionsResponse {
-  final List<SessionSummary> sessions;
-  final PlatformInt64? nextBeforeTsMs;
-
-  const ListSessionsResponse({required this.sessions, this.nextBeforeTsMs});
-
-  @override
-  int get hashCode => sessions.hashCode ^ nextBeforeTsMs.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ListSessionsResponse &&
-          runtimeType == other.runtimeType &&
-          sessions == other.sessions &&
-          nextBeforeTsMs == other.nextBeforeTsMs;
-}
-
 /// Severity tag mirrored from `minos_mobile::log_capture::LogLevel`.
 enum LogLevel { trace, debug, info, warn, error }
 
@@ -1747,49 +1412,6 @@ class PersistedPairingState {
           accountEmail == other.accountEmail;
 }
 
-class ProjectSummary {
-  final String projectId;
-  final String name;
-  final String workspaceSlug;
-  final String? workspacePath;
-  final PlatformInt64 createdAtMs;
-  final PlatformInt64 updatedAtMs;
-  final int threadCount;
-
-  const ProjectSummary({
-    required this.projectId,
-    required this.name,
-    required this.workspaceSlug,
-    this.workspacePath,
-    required this.createdAtMs,
-    required this.updatedAtMs,
-    required this.threadCount,
-  });
-
-  @override
-  int get hashCode =>
-      projectId.hashCode ^
-      name.hashCode ^
-      workspaceSlug.hashCode ^
-      workspacePath.hashCode ^
-      createdAtMs.hashCode ^
-      updatedAtMs.hashCode ^
-      threadCount.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ProjectSummary &&
-          runtimeType == other.runtimeType &&
-          projectId == other.projectId &&
-          name == other.name &&
-          workspaceSlug == other.workspaceSlug &&
-          workspacePath == other.workspacePath &&
-          createdAtMs == other.createdAtMs &&
-          updatedAtMs == other.updatedAtMs &&
-          threadCount == other.threadCount;
-}
-
 class ReactionActor {
   final String actorId;
   final String actorKind;
@@ -1841,55 +1463,6 @@ class ReactionGroup {
           count == other.count &&
           reactedByMe == other.reactedByMe &&
           actors == other.actors;
-}
-
-class ReadSessionParams {
-  final String sessionId;
-  final BigInt? fromSeq;
-  final int limit;
-
-  const ReadSessionParams({
-    required this.sessionId,
-    this.fromSeq,
-    required this.limit,
-  });
-
-  @override
-  int get hashCode => sessionId.hashCode ^ fromSeq.hashCode ^ limit.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ReadSessionParams &&
-          runtimeType == other.runtimeType &&
-          sessionId == other.sessionId &&
-          fromSeq == other.fromSeq &&
-          limit == other.limit;
-}
-
-class ReadSessionResponse {
-  final List<UiEventMessage> uiEvents;
-  final BigInt? nextSeq;
-  final SessionEndReason? sessionEndReason;
-
-  const ReadSessionResponse({
-    required this.uiEvents,
-    this.nextSeq,
-    this.sessionEndReason,
-  });
-
-  @override
-  int get hashCode =>
-      uiEvents.hashCode ^ nextSeq.hashCode ^ sessionEndReason.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ReadSessionResponse &&
-          runtimeType == other.runtimeType &&
-          uiEvents == other.uiEvents &&
-          nextSeq == other.nextSeq &&
-          sessionEndReason == other.sessionEndReason;
 }
 
 class RequestTraceRecord {
@@ -2161,24 +1734,6 @@ sealed class UiEventMessage with _$UiEventMessage {
     required String kind,
     required String payloadJson,
   }) = UiEventMessage_Raw;
-}
-
-class UpdateProjectRequest {
-  final String projectId;
-  final String name;
-
-  const UpdateProjectRequest({required this.projectId, required this.name});
-
-  @override
-  int get hashCode => projectId.hashCode ^ name.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is UpdateProjectRequest &&
-          runtimeType == other.runtimeType &&
-          projectId == other.projectId &&
-          name == other.name;
 }
 
 class UserSummary {

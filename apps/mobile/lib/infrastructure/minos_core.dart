@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter/foundation.dart';
 import 'package:minos/domain/minos_core_protocol.dart';
 import 'package:minos/infrastructure/frb_external_library.dart';
@@ -126,37 +124,7 @@ class MinosCore implements MinosCoreProtocol {
   Future<String?> peerDisplayName() => _secure.loadPeerDisplayName();
 
   @override
-  Future<void> setPeerDisplayName(String? name) =>
-      _secure.savePeerDisplayName(name);
-
-  @override
   Future<MyProfileResponse> myProfile() => _client.myProfile();
-
-  @override
-  Future<MyProfileResponse> setMinosId({required String minosId}) =>
-      _client.setMinosId(minosId: minosId);
-
-  @override
-  Future<List<UserSummary>> searchUsers({required String minosId}) =>
-      _client.searchUsers(minosId: minosId);
-
-  @override
-  Future<FriendRequestSummary> createFriendRequest({
-    required String targetMinosId,
-  }) => _client.createFriendRequest(targetMinosId: targetMinosId);
-
-  @override
-  Future<FriendRequestsResponse> friendRequests() => _client.friendRequests();
-
-  @override
-  Future<FriendRequestSummary> acceptFriendRequest({
-    required String requestId,
-  }) => _client.acceptFriendRequest(requestId: requestId);
-
-  @override
-  Future<FriendRequestSummary> rejectFriendRequest({
-    required String requestId,
-  }) => _client.rejectFriendRequest(requestId: requestId);
 
   @override
   Future<FriendsResponse> friends() => _client.friends();
@@ -332,73 +300,12 @@ class MinosCore implements MinosCoreProtocol {
   );
 
   @override
-  Future<ListSessionsResponse> listThreads(ListSessionsParams params) =>
-      _client.listSessions(req: params);
-
-  @override
-  Future<List<AgentSessionSummaryDto>> listAgentSessions({
-    String? conversationId,
-    int limit = 20,
-  }) => _client.listAgentSessions(conversationId: conversationId, limit: limit);
-
-  @override
-  Future<void> subscribeAgentSession({required String sessionId}) =>
-      _client.subscribeAgentSession(sessionId: sessionId);
-
-  @override
   Future<void> subscribeConversation({required String conversationId}) =>
       _client.subscribeConversation(conversationId: conversationId);
 
   @override
   Future<void> unsubscribeConversation({required String conversationId}) =>
       _client.unsubscribeConversation(conversationId: conversationId);
-
-  @override
-  Future<ReadSessionResponse> readThread(ReadSessionParams params) =>
-      _client.readSession(req: params);
-
-  // ---- Project forwarders ----
-
-  @override
-  Future<CreateProjectResponse> createProject({
-    required String name,
-    required String workspaceSlug,
-    String? workspacePath,
-  }) => _client.createProject(
-    req: CreateProjectRequest(
-      name: name,
-      workspaceSlug: workspaceSlug,
-      workspacePath: workspacePath,
-    ),
-  );
-
-  @override
-  Future<ListProjectsResponse> listProjects() => _client.listProjects();
-
-  @override
-  Future<void> updateProject({
-    required String projectId,
-    required String name,
-  }) => _client.updateProject(
-    req: UpdateProjectRequest(projectId: projectId, name: name),
-  );
-
-  @override
-  Future<void> deleteProject({required String projectId}) =>
-      _client.deleteProject(req: DeleteProjectRequest(projectId: projectId));
-
-  @override
-  Future<ListProjectSessionsResponse> listProjectThreads({
-    required String projectId,
-    int limit = 50,
-    int? beforeTsMs,
-  }) => _client.listProjectSessions(
-    req: ListProjectSessionsParams(
-      projectId: projectId,
-      limit: limit,
-      beforeTsMs: beforeTsMs == null ? null : platformInt64FromInt(beforeTsMs),
-    ),
-  );
 
   @override
   Stream<ConnectionState> get connectionStates => _client.subscribeState();
@@ -423,8 +330,6 @@ class MinosCore implements MinosCoreProtocol {
 
   // ---- Auth forwarders ----
 
-  @override
-  @override
   @override
   Future<AuthSummary> loginWithSupabase({
     required String supabaseAccessToken,
@@ -525,24 +430,6 @@ class MinosCore implements MinosCoreProtocol {
     enabled: enabled,
   );
 
-  @override
-  Future<void> sendUserMessage({
-    required String sessionId,
-    required String text,
-  }) => _client.sendUserMessage(sessionId: sessionId, text: text);
-
-  @override
-  Future<void> interruptThread({required String sessionId}) =>
-      _client.interruptSession(sessionId: sessionId);
-
-  @override
-  Future<void> closeThread({required String sessionId}) =>
-      _client.closeSession(sessionId: sessionId);
-
-  @override
-  Future<void> deleteThread({required String sessionId}) =>
-      _client.closeSession(sessionId: sessionId);
-
   // ---- Lifecycle forwarders ----
 
   @override
@@ -573,30 +460,6 @@ class MinosCore implements MinosCoreProtocol {
     await _client.resumePersistedSession();
     await _saveClientStateBestEffort(_secure, _client);
   }
-
-  @override
-  Future<void> sendApprovalDecision({
-    required String requestId,
-    required String sessionId,
-    required Map<String, dynamic> decision,
-    String? clientRequestId,
-  }) => _client.sendApprovalDecision(
-    requestId: requestId,
-    sessionId: sessionId,
-    decisionJson: jsonEncode(decision),
-    clientRequestId: clientRequestId,
-  );
-
-  @override
-  Future<void> respondOpencodeQuestion({
-    required String sessionId,
-    required String questionId,
-    required List<List<String>> answers,
-  }) => _client.respondOpencodeQuestion(
-    sessionId: sessionId,
-    questionId: questionId,
-    answersJson: jsonEncode(answers),
-  );
 
   static bool _shouldDiscardPersistedState(Object error) {
     return error is MinosError_DeviceNotTrusted ||

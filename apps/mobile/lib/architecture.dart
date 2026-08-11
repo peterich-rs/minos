@@ -42,7 +42,7 @@
 /// │  │   ├── runtime_repository  Pairing / host state       │
 /// │  │   ├── hosts_repository    Linked hosts HTTP          │
 /// │  │   ├── social_repository   Social remote + cache      │
-/// │  │   ├── thread_repository   uiEvents + residual APIs   │
+/// │  │   ├── realtime_events_repository  Account uiEvents stream    │
 /// │  │   ├── agent_profile_repository  Device cache of bots │
 /// │  │   └── group_agent_repository  Conversation agents    │
 /// │  ├── services/           Service providers / wrappers   │
