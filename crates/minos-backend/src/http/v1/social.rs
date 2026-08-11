@@ -22,11 +22,6 @@ use minos_protocol::{
 };
 use serde_json::json;
 
-/// Known Host runtime bins that Mobile/Desktop may @-mention for dispatch.
-
-/// Max bot→bot automation hops from a root human (or unknown) message.
-/// Exceeding this skips enqueue (loop control).
-
 pub fn router() -> Router<BackendState> {
     Router::new()
         // ─── Agent routes ───
@@ -2422,13 +2417,13 @@ async fn unmatched_structured_agent_intent_error(
         )));
     }
     // Structured ids present but none planned (stale/removed between write and plan).
-    return Ok(Some((
+    Ok(Some((
         "agent_not_in_conversation",
         format!(
             "未匹配到会话成员里的 Agent（{}）。请确认 Agent 已加入本会话。",
             mentioned_agent_ids[0]
         ),
-    )));
+    )))
 }
 
 /// Expire CompletionWatch rows past `deadline_at_ms`: user-visible failure + remove.
